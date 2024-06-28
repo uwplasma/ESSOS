@@ -2,7 +2,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import random
-from jax import jit
+from jax import jit, pmap, vmap
 from jax.lax import fori_loop, select
 
 import matplotlib.pyplot as plt
@@ -12,13 +12,17 @@ from jax.experimental.ode import odeint
 import matplotlib.pyplot as plt
 from jax.scipy.optimize import minimize
 
+from jax.experimental import mesh_utils
+from jax.experimental.shard_map import shard_map
+from jax.sharding import Mesh, PartitionSpec as P
+
 from functools import partial
 from jax import tree_util
 from time import time
 
 from MagneticField import B_norm
 from Dynamics import GuidingCenter
-
+import optax
 
 
 def CreateEquallySpacedCurves(n_curves:  int,
@@ -101,10 +105,10 @@ def apply_symmetries_to_currents(base_currents, nfp, stellsym):
 class Particles:
     """
         Args:
-    number: jnp.int32: Number of particles
-    energy: jnp.float32: Energy of the particles in eV
-    charge: jnp.float32: Charge of the particles in e    
-    mass: jnp.float32: Mass of the particles in amu
+    number: int: Number of particles
+    energy: float: Energy of the particles in eV
+    charge: float: Charge of the particles in e    
+    mass: float: Mass of the particles in amu
     """
     def __init__(self, number: int, mass: float = 4, charge: float = 2, energy: float = 3.52e6) :
         self.number = number
@@ -375,12 +379,12 @@ class Coils(Curves):
         return (children, aux_data)
 
     @partial(jit, static_argnums=(1, 3, 4, 5))
-    def trace_trajectories(self,
-                           particles: Particles,
-                           initial_values: jnp.ndarray,
-                           maxtime: float = 1e-7,
-                           timesteps: int = 200,
-                           n_segments: int = 100) -> jnp.ndarray:
+    def non_sharded_trace_trajectories(self,
+                                       particles: Particles,
+                                       initial_values: jnp.ndarray,
+                                       maxtime: float = 1e-7,
+                                       timesteps: int = 200,
+                                       n_segments: int = 100) -> jnp.ndarray:
         
         """ Traces the trajectories of the particles in the given coils
             Attributes:
@@ -408,13 +412,83 @@ class Coils(Curves):
         trajectories = jnp.empty((n_particles, timesteps, 4))
         times = jnp.linspace(0, maxtime, timesteps)
 
+        
         def aux_trajectory(particle: int, trajectories: jnp.ndarray) -> jnp.ndarray:
             return trajectories.at[particle,:,:].set(odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100))
         
+        #def aux_trajectory(particle: int) -> jnp.ndarray:
+        #    return odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100)
+        #
+        # @jax.jit
+        # def foo(arr):
+        #     arr = arr + rank
+        #     # note: this could also use mpi4jax.sendrecv
+        #     if rank == 0:
+        #         # send, then receive
+        #         token = mpi4jax.send(arr, dest=1, comm=comm)
+        #         other_arr, token = mpi4jax.recv(arr, source=1, comm=comm, token=token)
+        #     else:
+        #         # receive, then send
+        #         other_arr, token = mpi4jax.recv(arr, source=0, comm=comm)
+        #         arr = 
+        #         token = mpi4jax.send(arr, dest=0, comm=comm, token=token)
+
+        #     return other_arr
+        
         trajectories = fori_loop(0, n_particles, aux_trajectory, trajectories)
+        #trajectories = vmap(aux_trajectory)(jnp.arange(n_particles))
+
+        #print(trajectories.shape)
 
         return trajectories
 
+ 
+    @partial(jit, static_argnums=(1, 3, 4, 5, 6))
+    def trace_trajectories(self,
+                                   particles: Particles,
+                                   initial_values: jnp.ndarray,
+                                   maxtime: float = 1e-7,
+                                   timesteps: int = 200,
+                                   n_segments: int = 100,
+                                   n_cores: int = 4) -> jnp.ndarray:
+        
+        """ Traces the trajectories of the particles in the given coils
+            Attributes:
+        self: Coils object
+        particles: Particles object
+        initial_values: Initial values of the particles - shape (5, n_particles)
+        maxtime: Maximum time of the simulation
+        timesteps: Number of timesteps
+        n_segments: Number of segments to divide each coil
+            Returns:
+        trajectories: Trajectories of the particles - shape (n_particles, timesteps, 4)
+        """
+
+        mesh = Mesh(mesh_utils.create_device_mesh(n_cores,), axis_names=('i',))
+
+        curves_points = self.gamma(n_segments)
+        currents = self._currents
+
+        vperp = initial_values[4, :]
+        normB = jnp.apply_along_axis(B_norm, 0, initial_values[:3, :], curves_points, currents)
+
+        m = particles.mass
+        n_particles = particles.number
+
+        μ = m*vperp**2/(2*normB)
+
+        times = jnp.linspace(0, maxtime, timesteps)
+
+        def aux_trajectory(particles: jnp.ndarray) -> jnp.ndarray:
+            trajectories = jnp.empty((n_particles//n_cores, timesteps, 4))
+            for particle in particles:
+                trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100))
+            return trajectories
+            #return vmap(lambda particle: odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particles], atol=1e-8, rtol=1e-8, mxstep=100))(particles)
+
+        trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
+
+        return trajectories
 
 tree_util.register_pytree_node(Coils,
                                Coils._tree_flatten,
@@ -422,12 +496,13 @@ tree_util.register_pytree_node(Coils,
 
 
 
-@partial(jit, static_argnums=(2, 3, 4, 6, 7, 8))
+@partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9))
 def loss(dofs:           jnp.ndarray,
          dofs_currents:  jnp.ndarray,
          old_coils:      Coils,
          particles:      Particles,
          R:              float,
+         r_init:         float,
          initial_values: jnp.ndarray,
          maxtime:        float,
          timesteps:      int,
@@ -464,11 +539,12 @@ def loss(dofs:           jnp.ndarray,
         )-R
     )+trajectories[:, :, 2]**2
 
-    return jnp.mean(distances_squared)
+    return jnp.mean(distances_squared)/r_init**2
 
 def optimize(coils:          Coils,
              particles:      Particles,
              R:              float,
+             r_init:         float,
              initial_values: jnp.ndarray,
              maxtime:        float = 1e-7,
              timesteps:      int = 200,
@@ -479,6 +555,7 @@ def optimize(coils:          Coils,
     coils: Coils object to be optimized
     particles: Particles object to optimize the trajectories
     R: Major radius of the loss torus
+    r_init: Minor radius of the loss torus
     initial_values: Initial values of the particles - shape (5, n_particles)
     maxtime: Maximum time of the simulation
     timesteps: Number of timesteps
@@ -491,7 +568,7 @@ def optimize(coils:          Coils,
     dofs_currents = coils.dofs_currents
 
     start = time()
-    opt_dofs = minimize(loss, dofs, args=(dofs_currents, coils, particles, R, initial_values, maxtime, timesteps, n_segments), method='BFGS', options={'maxiter': 20})
+    opt_dofs = minimize(loss, dofs, args=(dofs_currents, coils, particles, R, r_init, initial_values, maxtime, timesteps, n_segments), method='BFGS', options={'maxiter': 20})
     end = time()
 
     coils.dofs = jnp.reshape(opt_dofs.x, (-1, 3, 1+2*coils.order))
@@ -499,11 +576,10 @@ def optimize(coils:          Coils,
     print(f"Loss function final value: {opt_dofs.fun:.5f}")
     print(f"Optimization took: {end-start:.1f} seconds") 
 
-import optax
-
 def optimize_adam(coils:          Coils,
                   particles:      Particles,
                   R:              float,
+                  r_init:         float,
                   initial_values: jnp.ndarray,
                   maxtime:        float = 1e-7,
                   timesteps:      int = 200,
@@ -514,6 +590,7 @@ def optimize_adam(coils:          Coils,
     coils: Coils object to be optimized
     particles: Particles object to optimize the trajectories
     R: Major radius of the loss torus
+    r_init: Minor radius of the loss torus
     initial_values: Initial values of the particles - shape (5, n_particles)
     maxtime: Maximum time of the simulation
     timesteps: Number of timesteps
@@ -527,18 +604,84 @@ def optimize_adam(coils:          Coils,
     dofs = jnp.ravel(coils.dofs)
     dofs_currents = coils.dofs_currents
 
-    args = (dofs, dofs_currents, coils, particles, R, initial_values, maxtime, timesteps, n_segments)
+    args = (dofs, dofs_currents, coils, particles, R, r_init, initial_values, maxtime, timesteps, n_segments)
 
-    solver.init(*args) #
+    solver_state = solver.init(dofs) #
 
     start = time()
-    for _ in range(2):
+    for _ in range(30):
+        start_loop = time()
         grad = jax.grad(loss)(*args)
-        updates, solver_state = solver.update(grad, solver_state)
-        args = solver.apply_updates(*args, updates)
+        updates, solver_state = solver.update(grad, solver_state, dofs)
+        dofs = optax.apply_updates(dofs, updates)
+        args = (dofs, dofs_currents, coils, particles, R, r_init, initial_values, maxtime, timesteps, n_segments)
+        print(f"Loss function value: {loss(*args):.5f}, took {time()-start_loop:.1f} seconds")
+
     end = time()
 
-    coils.dofs = jnp.reshape(args[0], (-1, 3, 1+2*coils.order))
+    coils.dofs = jnp.reshape(dofs, (-1, 3, 1+2*coils.order))
 
-    print(f"Loss function final value: {loss(*args):.5f}")
     print(f"Optimization took: {end-start:.1f} seconds") 
+
+
+import numpy as np
+
+def projection2D(R, r, r_init, Trajectories: jnp.ndarray, show=True, save_as=None):
+    fig, ax = plt.subplots()
+    for i in range(len(Trajectories)):
+        d = np.linalg.norm(Trajectories[i, :, :3], axis=1)
+        y = Trajectories[i, :, 2]
+        x = np.sqrt(d**2 - y**2)
+        ax.plot(x, y)
+
+    theta = np.linspace(0, 2*np.pi, 100)
+    x = r_init*np.cos(theta)+R
+    y = r_init*np.sin(theta)
+    ax.plot(x, y, color="lightgrey", linestyle="dashed")
+    x = r*np.cos(theta)+R
+    y = r*np.sin(theta)
+    ax.plot(x, y, color="lightgrey", linestyle="dashed")
+    
+    ax.set_aspect('equal')
+
+    plt.title("Projection of the Trajectories (poloidal view)")
+    plt.xlabel("r [m]")
+    plt.ylabel("z [m]")
+
+    # Save the plot
+    if save_as is not None:
+        plt.savefig(save_as)
+
+    # Show the plot
+    if show:
+        plt.show()
+
+def projection2D_top(R, r, Trajectories: jnp.ndarray, show=True, save_as=None):
+    fig, ax = plt.subplots()
+    theta = np.linspace(0, 2*np.pi, 100)
+    x = (R-r)*np.cos(theta)
+    y = (R-r)*np.sin(theta)
+    ax.plot(x, y, color="lightgrey")
+    x = (R+r)*np.cos(theta)
+    y = (R+r)*np.sin(theta)
+    ax.plot(x, y, color="lightgrey")
+
+    for i in range(len(Trajectories)):
+        d = np.linalg.norm(Trajectories[i, :, :3], axis=1)
+        y = Trajectories[i, :, 1]
+        x = Trajectories[i, :, 0]
+        ax.plot(x, y)
+    
+    ax.set_aspect('equal')
+
+    plt.title("Projection of the Trajectories (top view)")
+    plt.xlabel("x [m]")
+    plt.ylabel("y [m]")
+
+    # Save the plot
+    if save_as is not None:
+        plt.savefig(save_as)
+
+    # Show the plot
+    if show:
+        plt.show()
