@@ -21,8 +21,8 @@ A = 6. # Aspect ratio
 R = A*r
 
 r_init = r/5
-maxtime = 1e-6
-timesteps=200
+maxtime = 1e-5
+timesteps=2000
 
 particles = Particles(24)
 
@@ -91,10 +91,16 @@ grad_loss_value = grad(loss, argnums=0)(stel.dofs, stel.dofs_currents, stel, par
 end = time()
 print(f"Compiled took: {end-start:.2f} seconds")
 
-
-optimize_adam(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100)
+start = time()
+optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100)
 #optimize_adam(stel, particles, R, r_init, initial_values, maxtime=maxtime*10, timesteps=timesteps, n_segments=100)
+end = time()
 
+print(f"Optimization took: {end-start:.1f} seconds") 
+
+stel.save_coils("Optimizations.txt")
+
+raise SystemExit
 curves_segments = stel.gamma()
 trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100)
 
@@ -104,7 +110,7 @@ projection2D_top(R, r, trajectories, show=False, save_as="examples/opt_trajector
 plt.figure()
 for i in range(len(trajectories)):
     plt.plot(jnp.arange(jnp.size(trajectories, 1))*maxtime/timesteps, trajectories[i, :, 3])
-plt.title("Parallel Velocity")
+plt.title("Optimized Parallel Velocity")
 plt.xlabel("time [s]")
 plt.ylabel(r"parallel velocity [ms$^{-1}$]")
 plt.savefig("examples/opt_v_par.png")
@@ -116,7 +122,7 @@ plt.figure()
 for i in range(len(trajectories)):
     normB = jnp.apply_along_axis(B_norm, 1, trajectories[i, :, :3], curves_segments, stel.currents)
     plt.plot(jnp.arange(jnp.size(trajectories, 1))*maxtime/timesteps, (μ[i]*normB + 0.5*particles.mass*trajectories[i, :, 3]**2)/particles.energy)
-plt.title("Energy Conservation")
+plt.title("Optimized Energy Conservation")
 plt.xlabel("time [s]")
 plt.ylabel(r"$\frac{E}{E_\alpha}$")
 plt.savefig("examples/opt_energy.png")
