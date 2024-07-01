@@ -1,4 +1,4 @@
-# NovosTalentos
+# ESSOS
 
 by Estêvão Gomes ([@EstevaoMGomes](https://github.com/EstevaoMGomes))
 
@@ -52,4 +52,4 @@ Then you can create a conda environment with
 ```
 conda create --name myenv --file dependencies-file.yml python=3.12.2
 ```
-where "myenv" is the name you want your environment to have and "dependencies-file.yml" can be dependencies-GPU.yml or dependencies-CPU.yml, whether you want to run the scripts in CPU or GPU.
+where "myenv" is the name you want your environment to have and "dependencies-file.yml" can be dependencies-GPU.yml or dependencies-CPU.yml, whether you want to run the scripts on CPU or GPU.
