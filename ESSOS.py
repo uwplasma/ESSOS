@@ -337,6 +337,18 @@ class Curves:
     def animation(self, trajectories, show=False, title="Curves"):
         pass
 
+    def save_curves(self, filename: str):
+        """
+        Save the curves to a file
+        """
+        with open(filename, "a") as file:
+            file.write(f"nfp stellsym order\n")
+            file.write(f"{self._nfp} {self._stellsym} {self._order}\n")
+            file.write(f"Degrees of freedom\n")
+            file.write(f"{self._dofs}\n")
+            file.write(f"Fourier coefficients\n")
+            file.write(f"{self._curves}\n\n")
+
 tree_util.register_pytree_node(Curves,
                                Curves._tree_flatten,
                                Curves._tree_unflatten)
@@ -443,15 +455,15 @@ class Coils(Curves):
         return trajectories
 
  
-    @partial(jit, static_argnums=(1, 3, 4, 5, 6))
+    #@partial(jit, static_argnums=(1, 3, 4, 5, 6))
     def trace_trajectories(self,
-                                   particles: Particles,
-                                   initial_values: jnp.ndarray,
-                                   maxtime: float = 1e-7,
-                                   timesteps: int = 200,
-                                   n_segments: int = 100,
-                                   n_cores: int = 4) -> jnp.ndarray:
-        
+                           particles: Particles,
+                           initial_values: jnp.ndarray,
+                           maxtime: float = 1e-7,
+                           timesteps: int = 200,
+                           n_segments: int = 100,
+                           n_cores: int = 4) -> jnp.ndarray:
+    
         """ Traces the trajectories of the particles in the given coils
             Attributes:
         self: Coils object
@@ -484,11 +496,29 @@ class Coils(Curves):
             for particle in particles:
                 trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100))
             return trajectories
-            #return vmap(lambda particle: odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particles], atol=1e-8, rtol=1e-8, mxstep=100))(particles)
+            #print(particles)
+            #print(vmap(lambda particle: odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particles], atol=1e-8, rtol=1e-8, mxstep=100))(particles))
 
         trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
 
         return trajectories
+    
+    def save_coils(self, filename: str):
+        """
+        Save the coils to a file
+        """
+        with open(filename, "a") as file:
+            file.write(f"nfp stellsym order\n")
+            file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
+            file.write(f"Degrees of freedom\n")
+            file.write(f"{self.dofs}\n")
+            file.write(f"Fourier coefficients\n")
+            file.write(f"{self.curves}\n")
+            file.write(f"Currents degrees of freedom\n")
+            file.write(f"{self._dofs_currents}\n")
+            file.write(f"Currents Fourier coefficients\n")
+            file.write(f"{self._currents}\n\n")
+
 
 tree_util.register_pytree_node(Coils,
                                Coils._tree_flatten,
@@ -567,14 +597,11 @@ def optimize(coils:          Coils,
     dofs = jnp.ravel(coils.dofs)
     dofs_currents = coils.dofs_currents
 
-    start = time()
     opt_dofs = minimize(loss, dofs, args=(dofs_currents, coils, particles, R, r_init, initial_values, maxtime, timesteps, n_segments), method='BFGS', options={'maxiter': 20})
-    end = time()
 
     coils.dofs = jnp.reshape(opt_dofs.x, (-1, 3, 1+2*coils.order))
 
     print(f"Loss function final value: {opt_dofs.fun:.5f}")
-    print(f"Optimization took: {end-start:.1f} seconds") 
 
 def optimize_adam(coils:          Coils,
                   particles:      Particles,
