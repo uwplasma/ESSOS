@@ -300,15 +300,15 @@ class Curves:
         gamma = self.gamma()
         for i in range(n_coils):
             color = "orangered" if i < n_coils/((1+int(self._stellsym))*self._nfp) else "lightgrey"
-            ax.plot3D(gamma[i, :, 0], gamma[i, :,  1], gamma[i, :, 2], color=color)
+            ax.plot3D(gamma[i, :, 0], gamma[i, :,  1], gamma[i, :, 2], color=color, zorder=10)
 
         if trajectories is not None:
             assert isinstance(trajectories, jnp.ndarray)
             for i in range(jnp.size(trajectories, 0)):
-                ax.plot3D(trajectories[i, :, 0], trajectories[i, :, 1], trajectories[i, :, 2])
+                ax.plot3D(trajectories[i, :, 0], trajectories[i, :, 1], trajectories[i, :, 2], zorder=0)
 
 
-        ax.set_title(title)
+        #ax.set_title(title)
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("z")
@@ -323,12 +323,12 @@ class Curves:
         ax.xaxis.pane.set_edgecolor('w')
         ax.yaxis.pane.set_edgecolor('w')
         ax.zaxis.pane.set_edgecolor('w')
-
+        ax.axis('off')
         ax.grid(False)
 
         # Save the plot
         if save_as is not None:
-            plt.savefig(save_as)
+            plt.savefig(save_as, transparent=True)
         
         # Show the plot
         if show:
@@ -427,42 +427,19 @@ class Coils(Curves):
         
         def aux_trajectory(particle: int, trajectories: jnp.ndarray) -> jnp.ndarray:
             return trajectories.at[particle,:,:].set(odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100))
-        
-        #def aux_trajectory(particle: int) -> jnp.ndarray:
-        #    return odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100)
-        #
-        # @jax.jit
-        # def foo(arr):
-        #     arr = arr + rank
-        #     # note: this could also use mpi4jax.sendrecv
-        #     if rank == 0:
-        #         # send, then receive
-        #         token = mpi4jax.send(arr, dest=1, comm=comm)
-        #         other_arr, token = mpi4jax.recv(arr, source=1, comm=comm, token=token)
-        #     else:
-        #         # receive, then send
-        #         other_arr, token = mpi4jax.recv(arr, source=0, comm=comm)
-        #         arr = 
-        #         token = mpi4jax.send(arr, dest=0, comm=comm, token=token)
-
-        #     return other_arr
-        
         trajectories = fori_loop(0, n_particles, aux_trajectory, trajectories)
-        #trajectories = vmap(aux_trajectory)(jnp.arange(n_particles))
-
-        #print(trajectories.shape)
 
         return trajectories
 
- 
-    #@partial(jit, static_argnums=(1, 3, 4, 5, 6))
+    #TODO: Vectorize loop for each core
+    @partial(jit, static_argnums=(1, 3, 4, 5, 6))
     def trace_trajectories(self,
                            particles: Particles,
                            initial_values: jnp.ndarray,
                            maxtime: float = 1e-7,
                            timesteps: int = 200,
                            n_segments: int = 100,
-                           n_cores: int = 4) -> jnp.ndarray:
+                           n_cores: int = len(jax.devices())) -> jnp.ndarray:
     
         """ Traces the trajectories of the particles in the given coils
             Attributes:
@@ -496,8 +473,6 @@ class Coils(Curves):
             for particle in particles:
                 trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100))
             return trajectories
-            #print(particles)
-            #print(vmap(lambda particle: odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particles], atol=1e-8, rtol=1e-8, mxstep=100))(particles))
 
         trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
 

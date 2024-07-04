@@ -56,7 +56,7 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
     gradB = grad_B(r, curve_segments, currents)
 
     # Position derivative of the particle
-    Dx = vpar*b + (vpar*vpar/Ω+μ/q)*jnp.cross(b, gradB)/normB
+    Dx = vpar*b + (vpar**2/Ω+μ/q)*jnp.cross(b, gradB)/normB
     # Parallel velocity derivative of the particle
     Dvpar = -μ/m*jnp.dot(b,gradB)
 
