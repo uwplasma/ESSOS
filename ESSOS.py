@@ -544,7 +544,7 @@ def loss(dofs:           jnp.ndarray,
         )-R
     )+trajectories[:, :, 2]**2
 
-    return jnp.mean(distances_squared)/r_init**2
+    return jnp.mean(1/(1+jnp.exp(-30*(distances_squared-r_init**2))))
 
 def optimize(coils:          Coils,
              particles:      Particles,
@@ -609,21 +609,24 @@ def optimize_adam(coils:          Coils,
     args = (dofs, dofs_currents, coils, particles, R, r_init, initial_values, maxtime, timesteps, n_segments)
 
     solver_state = solver.init(dofs) #
-
+    losses = []
     start = time()
-    for _ in range(30):
+    for _ in range(50):
         start_loop = time()
         grad = jax.grad(loss)(*args)
         updates, solver_state = solver.update(grad, solver_state, dofs)
         dofs = optax.apply_updates(dofs, updates)
         args = (dofs, dofs_currents, coils, particles, R, r_init, initial_values, maxtime, timesteps, n_segments)
-        print(f"Loss function value: {loss(*args):.5f}, took {time()-start_loop:.1f} seconds")
+        current_loss = loss(*args)
+        losses += [current_loss]
+        print(f"Loss function value: {current_loss:.5f}, took {time()-start_loop:.1f} seconds")
 
     end = time()
 
     coils.dofs = jnp.reshape(dofs, (-1, 3, 1+2*coils.order))
 
     print(f"Optimization took: {end-start:.1f} seconds") 
+    return jnp.array(losses)
 
 
 import numpy as np
