@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from matplotlib import cm
 from functools import partial
 import matplotlib.pyplot as plt
+from scipy.optimize import least_squares
 from bayes_opt import BayesianOptimization
 os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=14'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
@@ -24,7 +25,7 @@ R = A*r
 r_init = r/5
 maxtime = 1e-5
 timesteps=1000
-nparticles = len(jax.devices())*2
+nparticles = len(jax.devices())*1
 n_segments=100
 
 particles = Particles(nparticles)
@@ -60,26 +61,38 @@ loss_partial = partial(loss, dofs_currents=stel.dofs_currents, old_coils=stel,
                        maxtime=maxtime, timesteps=timesteps, n_segments=n_segments, model=model)
 
 @jit
-def loss_partial_dofs(*args, **kwargs):
+def loss_partial_dofs_max(*args, **kwargs):
     x = jnp.array(list(kwargs.values()))
     dofs = jnp.reshape(x, shape=stel.dofs.shape)
     return -loss_partial(dofs)
 
-min_val = -3
-max_val = 15
-initial_points = 20
-n_iterations = 20
+@jit
+def loss_partial_dofs_min(x):
+    dofs = jnp.reshape(x, shape=stel.dofs.shape)
+    return loss_partial(dofs)
+
+method = 'BFGS'#'Bayesian'# 'BFGS'
 
 all_dofs = jnp.ravel(stel.dofs)
 print(f'Number of dofs: {len(all_dofs)}')
-pbounds = {}
-for i in range(1, len(all_dofs) + 1):
-    param = f'x{i}'
-    pbounds[param] = (min_val, max_val)
-
-optimizer = BayesianOptimization(f=loss_partial_dofs,pbounds=pbounds,random_state=1)
-optimizer.maximize(init_points=initial_points,n_iter=n_iterations)
-print(optimizer.max)
+if method == 'Bayesian':
+    min_val = -3
+    max_val = 15
+    initial_points = 20
+    n_iterations = 20
+    pbounds = {}
+    for i in range(1, len(all_dofs) + 1):
+        param = f'x{i}'
+        pbounds[param] = (min_val, max_val)
+    optimizer = BayesianOptimization(f=loss_partial_dofs_max,pbounds=pbounds,random_state=1)
+    optimizer.maximize(init_points=initial_points,n_iter=n_iterations)
+    print(optimizer.max)
+    x = jnp.array(list(optimizer.max['params'].values()))
+else:
+    res_gc = least_squares(loss_partial_dofs_min, x0=all_dofs, verbose=2, ftol=1e-6, max_nfev=30)
+    x = jnp.array(res_gc.x)
+    
+print(f'Resulting dofs: {repr(x.tolist())}')
 
 time0 = time()
 if model=='Lorentz':
@@ -88,8 +101,6 @@ else:
     trajectories_initial = stel.trace_trajectories(particles, initial_values=jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime=maxtime, timesteps=timesteps, n_segments=n_segments)
 print(f"Time to trace trajectories: {time()-time0:.2f} seconds")
 
-x = jnp.array(list(optimizer.max['params'].values()))
-print(f'Resulting dofs: {repr(x.tolist())}')
 dofs = jnp.reshape(x, shape=stel.dofs.shape)
 stel.dofs = dofs
 
