@@ -8,28 +8,28 @@ import matplotlib.pyplot as plt
 os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
 sys.path.append("..")
-from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal
+from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, remove_3D_axes
 from MagneticField import B, B_norm
 
 n_curves=2
-order=1
 nfp=5
-r = 1.7
-A = 6. # Aspect ratio
+order=2
+r = 2
+A = 3. # Aspect ratio
 R = A*r
 
-r_init = r/5
-maxtime = 1e-5
+r_init = r/4
+maxtime = 6e-6
 timesteps=1000
 nparticles = len(jax.devices())*1
-n_segments=100
+n_segments=120
 
 particles = Particles(nparticles)
 
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
 stel = Coils(curves, jnp.array([3e6]*n_curves))
 
-x = [10.079587427194943, 1.122863000267699, 2.907328295420131, 1.5998643461488353, 0.02626007651272216, 0.25905672210431535, 0.04564879798786802, -2.562297450094322, -0.01682551629916378, 9.294225769606797, 0.5836407986438034, 4.45371468509117, 4.893531853273665, 0.6751075586506592, 1.472411126324177, 0.30563312003758925, -1.9335920133261997, -0.012623988302193818]
+x = [10.18841761318241, -1.7420575041592528, 1.7335015372520943, -0.07780540386779447, 0.2392176948103393, 1.6690463964293745, -0.12293829657928407, 0.26410918281360046, 0.01435873408507752, 0.0024852368487359583, 0.08593469245911049, -1.8186072470157508, -0.04039537760061793, -0.09904011753346484, -0.13030811814100388, 9.25807140436481, -0.03739159112427811, 1.820939140729657, 0.044499759397502364, 0.05032292469237421, 4.762999272601821, 0.08490565322751119, 0.7722397340598012, 0.043427552061386814, -0.23846522905171272, -0.040646380209994656, -1.9799319512929874, -0.09829488989860954, -0.016972847838880877, 0.12459681585239084]
 dofs = jnp.reshape(jnp.array(x), shape=stel.dofs.shape)
 stel.dofs = dofs
 
@@ -59,8 +59,9 @@ def setup_plots():
     fig, axs = plt.subplots(2, 3, figsize=(14, 8))
     
     # 3D subplot for x, y, z
-    ax11 = fig.add_subplot(331, projection='3d')
-    axs[0, 0] = ax11
+    ax00 = fig.add_subplot(331, projection='3d')
+    axs[0, 0].remove()  # Remove the existing 2D subplot
+    axs[0, 0] = ax00  # Replace it with the 3D subplot
     axs[0, 0].set_xlabel("x [m]")
     axs[0, 0].set_ylabel("y [m]")
     axs[0, 0].set_zlabel("z [m]")
@@ -133,12 +134,14 @@ colors = cm.viridis(jnp.linspace(0, 1, nparticles))
 plot_trajectories(axs, times, trajectories_lorentz, trajectories_guiding_center, colors)
 
 gamma = curves.gamma()
-ax11 = axs[0, 0]
 for i in range(n_curves * 2 * curves._nfp):
     color = "orangered" if i < n_curves else "lightgrey"
-    ax11.plot(gamma[i, :, 0], gamma[i, :, 1], gamma[i, :, 2], color=color, zorder=10)
+    axs[0, 0].plot(gamma[i, :, 0], gamma[i, :, 1], gamma[i, :, 2], color=color, zorder=10)
 
-set_axes_equal(ax11)
+set_axes_equal(axs[0, 0])
+axs[0, 0].view_init(elev=20., azim=30)
+axs[0, 0].set_box_aspect([1,1,1], zoom=2)
+remove_3D_axes(axs[0,0])
 # plt.tight_layout()
 
 print(f"Plotting trajectories: {time()-time0:.2f} seconds")

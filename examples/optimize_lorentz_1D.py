@@ -16,21 +16,22 @@ sys.path.append("..")
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, loss
 from MagneticField import B, B_norm
 
-n_curves=3
-order=4
-r = 1.7
-A = 6. # Aspect ratio
+n_curves=2
+nfp=5
+order=2
+r = 2
+A = 3. # Aspect ratio
 R = A*r
 
-r_init = r/5
-maxtime = 1e-6
+r_init = r/4
+maxtime = 6e-6
 timesteps=1000
 nparticles = len(jax.devices())*1
-n_segments=100
+n_segments=120
 
 particles = Particles(nparticles)
 
-curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
+curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
 stel = Coils(curves, jnp.array([3e6]*n_curves))
 
 times = jnp.linspace(0, maxtime, timesteps)
@@ -82,13 +83,13 @@ def loss_partial_gc_x0_min(x):
     dofs = stel.dofs.at[0,0,2].set(x[0])
     return loss_partial_gc(dofs)
 
-x0 = jnp.array([10.])
+x0 = jnp.array([5.])
 
-xmin = 1
-xmax = 20
+xmin = 0
+xmax = 10
 pbounds = {'x': (xmin, xmax)}
 
-method = 'BFGS'#'Bayesian'# 'BFGS'
+method = 'least_squares' # 'BFGS', 'Bayesian' or 'least_squares'
 
 if method=='Bayesian':
     print('Guiding Center Optimization')
@@ -104,20 +105,21 @@ if method=='Bayesian':
 else:
     print('Guiding Center Optimization')
     time0_gc = time()
-    # res_gc = minimize(loss_partial_gc_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
-    res_gc = least_squares(loss_partial_gc_x0_min, x0=x0, verbose=2, ftol=1e-5)
-    # res_gc = jax_minimize(loss_partial_gc_x0_min, x0=jnp.array([10.]), method=method)
+    if method == 'least_squares':
+        res_gc = least_squares(loss_partial_gc_x0_min, x0=x0, verbose=2, ftol=1e-5)
+        print('Lorentz Optimization');time0_l = time()
+        res_lorentz = least_squares(loss_partial_lorentz_x0_min, x0=x0, verbose=2, ftol=1e-5)
+    else:
+        res_gc = minimize(loss_partial_gc_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
+        print('Lorentz Optimization');time0_l = time()
+        res_lorentz = minimize(loss_partial_lorentz_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
     sol_gc = res_gc.x
-    print('Lorentz Optimization')
-    time0_l = time()
-    # res_lorentz = minimize(loss_partial_lorentz_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
-    res_lorentz = least_squares(loss_partial_lorentz_x0_min, x0=x0, verbose=2, ftol=1e-5)
-    # res_lorentz = jax_minimize(loss_partial_lorentz_x0_min, x0=jnp.array([10.]), method=method, options={'disp': True})
     sol_lorentz = res_lorentz.x
 print(f'  Time to optimize Guiding Center with {method} optimization: {time0_l-time0_gc:.2f} seconds with x={sol_gc}')
 print(f'  Time to optimize Lorentz with {method} optimization: {time()-time0_l:.2f} seconds with x={sol_lorentz}')
 
 dofs_array = jnp.linspace(xmin,xmax,30)
+plt.figure()
 plt.plot(dofs_array, [loss_partial_lorentz_x0_min([x]) for x in dofs_array], color='r', label='Lorentz')
 plt.axvline(x=sol_lorentz, linestyle='--', color='r', linewidth=2, label='Lorentz Optimum')
 plt.plot(dofs_array, [loss_partial_gc_x0_min([x]) for x in dofs_array], color='b', label='Guiding Center')
