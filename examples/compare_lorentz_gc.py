@@ -1,37 +1,40 @@
 import os
 import jax
+import sys
 from time import time
 import jax.numpy as jnp
 from matplotlib import cm
 import matplotlib.pyplot as plt
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=4'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
+sys.path.append("..")
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal
 from MagneticField import B, B_norm
 
-n_curves=3
-order=4
+n_curves=2
+order=1
+nfp=5
 r = 1.7
 A = 6. # Aspect ratio
 R = A*r
 
 r_init = r/5
-maxtime = 1e-6
+maxtime = 1e-5
 timesteps=1000
 nparticles = len(jax.devices())*1
 n_segments=100
 
 particles = Particles(nparticles)
 
-curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
+curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
 stel = Coils(curves, jnp.array([3e6]*n_curves))
 
+x = [-2.720260731345371, 10.818872926379909, 1.900619703670942, -1.0819439114465697, 12.682248599075724, 1.7790830195065228, 10.3695796057807, 9.614159457644664, 11.335029024669913, 8.285497318859655, 7.869898386912075, 2.4248017515294795, 0.24907181395405847, 12.782879181416376, 3.6886609908893915, 13.316697105668597, 8.258064624971407, 5.320775901630834]
+dofs = jnp.reshape(jnp.array(x), shape=stel.dofs.shape)
+stel.dofs = dofs
+
 times = jnp.linspace(0, maxtime, timesteps)
-# x0, y0, z0, vx0, vy0, vz0 = stel.initial_conditions(particles, R, r_init, model='Lorentz')
-# v0 = jnp.array([vx0, vy0, vz0])
 x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
-# vpar0  = jnp.zeros((nparticles,))
-# vperp0 = jnp.zeros((nparticles,))
 v0 = jnp.zeros((3, nparticles))
 for i in range(nparticles):
     B0 = B(jnp.array([x0[i],y0[i],z0[i]]), curve_segments=curves.gamma(n_segments), currents=stel.currents)
@@ -40,8 +43,6 @@ for i in range(nparticles):
     perp_vector_1_normalized = perp_vector_1/jnp.linalg.norm(perp_vector_1)
     perp_vector_2 = jnp.cross(b0, perp_vector_1)
     v0 = v0.at[:,i].set(vpar0[i]*b0 + vperp0[i]*(perp_vector_1_normalized/jnp.sqrt(2)+perp_vector_2/jnp.sqrt(2)))
-#     vpar0 = vpar0.at[i].set(jnp.dot(jnp.array([vx0[i], vy0[i], vz0[i]]), B0)/jnp.linalg.norm(B0))
-#     vperp0 = vperp0.at[i].set(jnp.sqrt(vx0[i]**2 + vy0[i]**2 + vz0[i]**2 - vpar0[i]**2))
 normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), stel.currents)
 μ = particles.mass*vperp0**2/(2*normB0)
 
