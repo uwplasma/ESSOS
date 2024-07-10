@@ -4,9 +4,11 @@ import sys
 from jax import jit
 from time import time
 import jax.numpy as jnp
+from jax.scipy.optimize import minimize as jax_minimize
 from matplotlib import cm
 from functools import partial
 import matplotlib.pyplot as plt
+from scipy.optimize import minimize, least_squares
 from bayes_opt import BayesianOptimization
 os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=14'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
@@ -61,43 +63,66 @@ loss_partial_gc = partial(loss, dofs_currents=stel.dofs_currents, old_coils=stel
                        maxtime=maxtime, timesteps=timesteps, n_segments=n_segments, model='Guiding Center')
 
 @jit
-def loss_partial_lorentz_x0(x):
+def loss_partial_lorentz_x0_max(x):
     dofs = stel.dofs.at[0,0,2].set(x)
     return -loss_partial_lorentz(dofs)
 
 @jit
-def loss_partial_gc_x0(x):
+def loss_partial_lorentz_x0_min(x):
+    dofs = stel.dofs.at[0,0,2].set(x[0])
+    return loss_partial_lorentz(dofs)
+
+@jit
+def loss_partial_gc_x0_max(x):
     dofs = stel.dofs.at[0,0,2].set(x)
     return -loss_partial_gc(dofs)
+
+@jit
+def loss_partial_gc_x0_min(x):
+    dofs = stel.dofs.at[0,0,2].set(x[0])
+    return loss_partial_gc(dofs)
+
+x0 = jnp.array([10.])
 
 xmin = 1
 xmax = 20
 pbounds = {'x': (xmin, xmax)}
 
-print('Guiding Center Optimization')
-optimizer_gc = BayesianOptimization(f=loss_partial_gc_x0,pbounds=pbounds,random_state=1)
-optimizer_gc.maximize(init_points=5,n_iter=10)
-print(optimizer_gc.max)
+method = 'BFGS'#'Bayesian'# 'BFGS'
 
-print('Lorentz Optimization')
-optimizer_lorentz = BayesianOptimization(f=loss_partial_lorentz_x0,pbounds=pbounds,random_state=1)
-optimizer_lorentz.maximize(init_points=5,n_iter=10)
-print(optimizer_lorentz.max)
+if method=='Bayesian':
+    print('Guiding Center Optimization')
+    time0_gc = time()
+    optimizer_gc = BayesianOptimization(f=loss_partial_gc_x0_max,pbounds=pbounds,random_state=1)
+    optimizer_gc.maximize(init_points=5,n_iter=10)
+    sol_gc = optimizer_gc.max['params']['x']
+    print('Lorentz Optimization')
+    time0_l = time()
+    optimizer_lorentz = BayesianOptimization(f=loss_partial_lorentz_x0_max,pbounds=pbounds,random_state=1)
+    optimizer_lorentz.maximize(init_points=5,n_iter=10)
+    sol_lorentz = optimizer_lorentz.max['params']['x']
+else:
+    print('Guiding Center Optimization')
+    time0_gc = time()
+    # res_gc = minimize(loss_partial_gc_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
+    res_gc = least_squares(loss_partial_gc_x0_min, x0=x0, verbose=2, ftol=1e-5)
+    # res_gc = jax_minimize(loss_partial_gc_x0_min, x0=jnp.array([10.]), method=method)
+    sol_gc = res_gc.x
+    print('Lorentz Optimization')
+    time0_l = time()
+    # res_lorentz = minimize(loss_partial_lorentz_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
+    res_lorentz = least_squares(loss_partial_lorentz_x0_min, x0=x0, verbose=2, ftol=1e-5)
+    # res_lorentz = jax_minimize(loss_partial_lorentz_x0_min, x0=jnp.array([10.]), method=method, options={'disp': True})
+    sol_lorentz = res_lorentz.x
+print(f'  Time to optimize Guiding Center with {method} optimization: {time0_l-time0_gc:.2f} seconds with x={sol_gc}')
+print(f'  Time to optimize Lorentz with {method} optimization: {time()-time0_l:.2f} seconds with x={sol_lorentz}')
 
 dofs_array = jnp.linspace(xmin,xmax,30)
-plt.plot(dofs_array, [-loss_partial_lorentz_x0(x) for x in dofs_array], color='r', label='Lorentz')
-plt.axvline(x=optimizer_lorentz.max['params']['x'], linestyle='--', color='r', linewidth=2, label='Lorentz Optimum')
-plt.plot(dofs_array, [-loss_partial_gc_x0(x) for x in dofs_array], color='b', label='Guiding Center')
-plt.axvline(x=optimizer_gc.max['params']['x'], linestyle='--', color='b', linewidth=2, label='Guiding Center Optimum')
+plt.plot(dofs_array, [loss_partial_lorentz_x0_min([x]) for x in dofs_array], color='r', label='Lorentz')
+plt.axvline(x=sol_lorentz, linestyle='--', color='r', linewidth=2, label='Lorentz Optimum')
+plt.plot(dofs_array, [loss_partial_gc_x0_min([x]) for x in dofs_array], color='b', label='Guiding Center')
+plt.axvline(x=sol_gc, linestyle='--', color='b', linewidth=2, label='Guiding Center Optimum')
 plt.xlabel("x0")
 plt.ylabel("Loss function")
 plt.legend()
 plt.show()
-
-# # time0 = time()
-# # trajectories_lorentz = stel.trace_trajectories_lorentz(particles, initial_values=jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime=maxtime, timesteps=timesteps, n_segments=n_segments)
-# # print(f"Time to trace trajectories Lorentz: {time()-time0:.2f} seconds")
-
-# # time0 = time()
-# # trajectories_guiding_center = stel.trace_trajectories(particles, initial_values=jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime=maxtime, timesteps=timesteps, n_segments=n_segments)
-# # print(f"Time to trace trajectories Guiding Center: {time()-time0:.2f} seconds")
