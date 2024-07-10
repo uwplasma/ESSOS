@@ -596,7 +596,7 @@ tree_util.register_pytree_node(Coils,
 
 
 
-@partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9))
+@partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9, 10))
 def loss(dofs:           jnp.ndarray,
          dofs_currents:  jnp.ndarray,
          old_coils:      Coils,
@@ -606,7 +606,8 @@ def loss(dofs:           jnp.ndarray,
          initial_values: jnp.ndarray,
          maxtime:        float,
          timesteps:      int,
-         n_segments:     int) -> float:
+         n_segments:     int,
+         model:          str = 'Guiding Center') -> float:
              
     """ Loss function to be minimized
         Attributes:
@@ -631,7 +632,12 @@ def loss(dofs:           jnp.ndarray,
     curves = Curves(dofs, nfp=nfp, stellsym=stellsym)
     coils = Coils(curves, dofs_currents)
 
-    trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps, n_segments)
+    if model=='Guiding Center':
+        trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps, n_segments)
+    elif model=='Lorentz':
+        trajectories = coils.trace_trajectories_lorentz(particles, initial_values, maxtime, timesteps, n_segments)
+    else:
+        raise ValueError("Model must be 'Guiding Center' or 'Lorentz'")
     
     distances_squared = jnp.square(
         jnp.sqrt(
