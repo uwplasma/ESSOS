@@ -1,14 +1,15 @@
 import os
 import jax
 import sys
+import pybobyqa
 from jax import jit
 from time import time
 import jax.numpy as jnp
 from matplotlib import cm
 from functools import partial
 import matplotlib.pyplot as plt
-from scipy.optimize import least_squares
 from bayes_opt import BayesianOptimization
+from scipy.optimize import least_squares, minimize
 os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=14'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
 sys.path.append("..")
@@ -17,16 +18,16 @@ from MagneticField import B, B_norm
 
 n_curves=2
 nfp=5
-order=1
-r = 1.7
-A = 6. # Aspect ratio
+order=2
+r = 2
+A = 3. # Aspect ratio
 R = A*r
 
-r_init = r/5
-maxtime = 1e-5
+r_init = r/4
+maxtime = 6e-6
 timesteps=1000
-nparticles = len(jax.devices())*1
-n_segments=100
+nparticles = len(jax.devices())*2
+n_segments=120
 
 particles = Particles(nparticles)
 
@@ -46,14 +47,13 @@ for i in range(nparticles):
 normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), stel.currents)
 μ = particles.mass*vperp0**2/(2*normB0)
 
-model = 'Lorentz'
+model = 'Lorentz' # 'Guiding Center' or 'Lorentz'
 
 start = time()
 loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps, n_segments, model=model)
 print(f"Loss function initial value: {loss_value:.8f}")
 end = time()
 print(f"Took: {end-start:.2f} seconds")
-
 
 loss_partial = partial(loss, dofs_currents=stel.dofs_currents, old_coils=stel,
                        particles=particles, R=R, r_init=r_init,
@@ -71,15 +71,15 @@ def loss_partial_dofs_min(x):
     dofs = jnp.reshape(x, shape=stel.dofs.shape)
     return loss_partial(dofs)
 
-method = 'BFGS'#'Bayesian'# 'BFGS'
+method = 'BOBYQA' # 'Bayesian', 'BOBYQA', 'least_squares' or one of scipy.optimize.minimize methods such as 'BFGS'
 
 all_dofs = jnp.ravel(stel.dofs)
 print(f'Number of dofs: {len(all_dofs)}')
+min_val = -11
+max_val = 15
 if method == 'Bayesian':
-    min_val = -3
-    max_val = 15
     initial_points = 20
-    n_iterations = 20
+    n_iterations = 40
     pbounds = {}
     for i in range(1, len(all_dofs) + 1):
         param = f'x{i}'
@@ -89,8 +89,17 @@ if method == 'Bayesian':
     print(optimizer.max)
     x = jnp.array(list(optimizer.max['params'].values()))
 else:
-    res_gc = least_squares(loss_partial_dofs_min, x0=all_dofs, verbose=2, ftol=1e-6, max_nfev=30)
-    x = jnp.array(res_gc.x)
+    if method == 'least_squares':
+        res = least_squares(loss_partial_dofs_min, x0=all_dofs, verbose=2, ftol=1e-5)
+    else:
+        if method == 'BOBYQA':
+            max_nfev = 200
+            lower = jnp.array([min_val]*len(all_dofs))
+            upper = jnp.array([max_val]*len(all_dofs))
+            res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, bounds=(lower,upper), rhoend=1e-5, maxfun=max_nfev)
+        else:
+            res = minimize(loss_partial_dofs_min, x0=all_dofs, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
+    x = jnp.array(res.x)
     
 print(f'Resulting dofs: {repr(x.tolist())}')
 
