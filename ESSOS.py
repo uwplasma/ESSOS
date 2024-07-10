@@ -261,7 +261,7 @@ class Curves:
         initial_conditions: Initial conditions for the particles - shape (5, n_particles) (or (5, n_particles) for Lorentz)
         """
 
-        seed = 0
+        seed = 3
         key = jax.random.PRNGKey(seed)
 
         #final = jnp.zeros(0)

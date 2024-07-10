@@ -4,7 +4,7 @@ from time import time
 import jax.numpy as jnp
 from matplotlib import cm
 import matplotlib.pyplot as plt
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=14'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=4'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal
 from MagneticField import B, B_norm
@@ -16,7 +16,7 @@ A = 6. # Aspect ratio
 R = A*r
 
 r_init = r/5
-maxtime = 1e-5
+maxtime = 1e-6
 timesteps=1000
 nparticles = len(jax.devices())*1
 n_segments=100
@@ -24,7 +24,7 @@ n_segments=100
 particles = Particles(nparticles)
 
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
-stel = Coils(curves, jnp.array([1e7]*n_curves))
+stel = Coils(curves, jnp.array([3e6]*n_curves))
 
 times = jnp.linspace(0, maxtime, timesteps)
 # x0, y0, z0, vx0, vy0, vz0 = stel.initial_conditions(particles, R, r_init, model='Lorentz')
@@ -35,9 +35,11 @@ x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model=
 v0 = jnp.zeros((3, nparticles))
 for i in range(nparticles):
     B0 = B(jnp.array([x0[i],y0[i],z0[i]]), curve_segments=curves.gamma(n_segments), currents=stel.currents)
-    perp_vector_1 = jnp.array([0, B0[2], -B0[1]])/jnp.linalg.norm(jnp.array([0, B0[2], -B0[1]]))
-    perp_vector_2 = jnp.array([-B0[2], 0, B0[0]])/jnp.linalg.norm(jnp.array([-B0[2], 0, B0[0]]))
-    v0 = v0.at[:,i].set(vpar0[i]*B0/jnp.linalg.norm(B0) + vperp0[i]*(perp_vector_1/jnp.sqrt(2)+perp_vector_2/jnp.sqrt(2)))
+    b0 = B0/jnp.linalg.norm(B0)
+    perp_vector_1 = jnp.array([0, b0[2], -b0[1]])
+    perp_vector_1_normalized = perp_vector_1/jnp.linalg.norm(perp_vector_1)
+    perp_vector_2 = jnp.cross(b0, perp_vector_1)
+    v0 = v0.at[:,i].set(vpar0[i]*b0 + vperp0[i]*(perp_vector_1_normalized/jnp.sqrt(2)+perp_vector_2/jnp.sqrt(2)))
 #     vpar0 = vpar0.at[i].set(jnp.dot(jnp.array([vx0[i], vy0[i], vz0[i]]), B0)/jnp.linalg.norm(B0))
 #     vperp0 = vperp0.at[i].set(jnp.sqrt(vx0[i]**2 + vy0[i]**2 + vz0[i]**2 - vpar0[i]**2))
 normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), stel.currents)
@@ -67,7 +69,7 @@ def setup_plots():
     axs[0, 1].set_ylabel("relative error in energy")
     
     axs[0, 2].set_xlabel("time [s]")
-    axs[0, 2].set_ylabel("v_par [m/s]")
+    axs[0, 2].set_ylabel("v_par/v_th [m/s]")
     
     axs[1, 0].set_xlabel("time [s]")
     axs[1, 0].set_ylabel("x, y [m]")
@@ -106,10 +108,11 @@ def plot_trajectories(axs, times, trajectories_lorentz, trajectories_guiding_cen
         ax_3D.plot(x_L, y_L, z_L, color=color)
         ax_3D.plot(x_gc, y_gc, z_gc, color=color)
         
-        ax_vpar.plot(times, vpar_gc, ':', color=color)
+        vth = jnp.sqrt(2*particles.energy/particles.mass)
+        ax_vpar.plot(times, vpar_gc/vth, ':', color=color)
         B_L = jnp.apply_along_axis(B, 1, trajectories_lorentz[i, :, :3], stel.gamma(), stel.currents)
         vpar_L = jnp.sum(jnp.array([vx_L, vy_L, vz_L])*B_L.transpose(), axis=0)/jnp.linalg.norm(B_L, axis=1)
-        ax_vpar.plot(times, vpar_L, '-', color=color)
+        ax_vpar.plot(times, vpar_L/vth, '-', color=color)
         
         v02_L = vx_L[0]**2 + vy_L[0]**2 + vz_L[0]**2
         ax_E.plot(times, (vx_L**2 + vy_L**2 + vz_L**2 - v02_L) / v02_L, color=color)
