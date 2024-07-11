@@ -275,7 +275,8 @@ class Curves:
         vth = jnp.sqrt(2*energy/mass)
 
         # Initializing pitch angle
-        pitch = jax.random.uniform(key,shape=(n_particles,), minval=-1, maxval=1)
+        # DOING MOSTLY TRAPPED PARTICLES
+        pitch = jax.random.uniform(key,shape=(n_particles,), minval=-0.1, maxval=0.1)
         # pitch = jnp.linspace(-0.0001, 0.0001, n_particles)
         if model=='Lorentz':
             gyroangle = jax.random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi)
@@ -287,7 +288,7 @@ class Curves:
         # Initializing positions
         r = random.uniform(key,shape=(n_particles,), minval=0, maxval=r_init)
         Θ = random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi)
-        ϕ = random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi/((1+int(self.stellsym))*self.nfp))
+        ϕ = random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi/self.nfp)#((1+int(self.stellsym))*self.nfp))
             
         x = (r*jnp.cos(Θ)+R_init)*jnp.cos(ϕ)
         y = (r*jnp.cos(Θ)+R_init)*jnp.sin(ϕ)
@@ -844,3 +845,4 @@ def remove_3D_axes(ax):
     ax.xaxis.pane.set_edgecolor('none')
     ax.yaxis.pane.set_edgecolor('none')
     ax.zaxis.pane.set_edgecolor('none')
+    ax.set_axis_off()
