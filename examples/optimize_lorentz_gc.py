@@ -11,32 +11,33 @@ import matplotlib.pyplot as plt
 from bayes_opt import BayesianOptimization
 from scipy.optimize import least_squares, minimize
 #### INPUT PARAMETERS START HERE ####
-number_of_cores = 25
+number_of_cores = 20
 number_of_particles_per_core = 1
 #### Some other imports
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
-sys.path.append("..")
+sys.path.insert(1, os.getcwd())
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, loss
 from MagneticField import B, B_norm
 #### Input parameters continue here
 n_curves=2
 nfp=4
 order=2
-r = 2
-A = 3. # Aspect ratio
+r = 3
+A = 2 # Aspect ratio
 R = A*r
 r_init = r/4
-maxtime = 2.0e-5
+maxtime = 1.5e-5
 timesteps=int(maxtime/1.0e-8)
 nparticles = number_of_cores*number_of_particles_per_core
-n_segments=100
+n_segments=80
 coil_current = 7e6
 change_currents = False
 model = 'Guiding Center' # 'Guiding Center' or 'Lorentz'
-method = 'least_squares' # 'Bayesian', 'BOBYQA', 'least_squares' or one of scipy.optimize.minimize methods such as 'BFGS'
+method = 'least_squares' # 'least_squares','L-BFGS-B','Bayesian','BOBYQA', or one of scipy.optimize.minimize methods such as 'BFGS'
 max_function_evaluations = 30
 max_iterations_BFGS = 20
+max_function_evaluations_BFGS = 400
 max_function_evaluations_BOBYQA = 550
 tolerance_to_terminace_optimization = 1e-6
 min_val = -11 # minimum coil dof value
@@ -136,10 +137,10 @@ else:
                 upper = jnp.array([max_val]*len_dofs)
                 res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=tolerance_to_terminace_optimization, maxfun=max_function_evaluations)#, bounds=(lower,upper))
         else:            
-            res = minimize(loss_partial_dofs_min, x0=all_dofs, method=method, options={'disp': True, 'maxiter':max_iterations_BFGS, 'gtol':tolerance_to_terminace_optimization})
+            res = minimize(loss_partial_dofs_min, x0=all_dofs, method=method, options={'disp': True, 'maxiter':max_iterations_BFGS, 'maxfun':max_function_evaluations_BFGS, 'gtol':tolerance_to_terminace_optimization})
     x = jnp.array(res.x)
     
-print(f'Resulting dofs: {repr(x.tolist())}')
+print(f'Resulting dofs (past in compare_lorentz_gc.py): {repr(x.tolist())}')
 
 time0 = time()
 if model=='Lorentz':

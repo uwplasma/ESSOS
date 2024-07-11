@@ -15,25 +15,26 @@ number_of_cores = 14
 number_of_particles_per_core = 1
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
-sys.path.append("..")
+sys.path.insert(1, os.getcwd())
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, loss
 from MagneticField import B, B_norm
 
 n_curves=2
-nfp=5
-order=3
-r = 2
-A = 3. # Aspect ratio
+nfp=4
+order=2
+r = 3
+A = 2 # Aspect ratio
 R = A*r
 r_init = r/4
-maxtime = 1e-5
+maxtime = 4e-6
 timesteps=int(maxtime/1.0e-8)
 nparticles = len(jax.devices())*1
-n_segments=100
+n_segments=80
 coil_current = 7e6
+max_function_evaluations = 30
+method = 'L-BFGS-B' # 'Bayesian', 'least_squares' or one of scipy.optimize.minimize methods such as 'L-BFGS-B'
 
 particles = Particles(nparticles)
-
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
 stel = Coils(curves, jnp.array([coil_current]*n_curves))
 
@@ -121,11 +122,9 @@ else:
     xmin = 1.5
     xmax = 8
     x0 = stel.dofs[0, 0, 2]
+print(f'Initial guess: {x0} with bounds: {xmin} and {xmax}')
 
 pbounds = {'x': (xmin, xmax)}
-max_function_evaluations = 20
-
-method = 'least_squares' # 'Bayesian', 'least_squares' or one of scipy.optimize.minimize methods such as 'BFGS'
 
 if method=='Bayesian':
     print('Guiding Center Optimization')
@@ -146,9 +145,9 @@ else:
         print('Lorentz Optimization');time0_l = time()
         res_lorentz = least_squares(loss_partial_lorentz_x0_min, x0=x0, verbose=2, ftol=1e-5, max_nfev=max_function_evaluations)#, diff_step=1e-4)
     else:
-        res_gc = minimize(loss_partial_gc_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
+        res_gc = minimize(loss_partial_gc_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':10, 'maxfun':max_function_evaluations, 'gtol':1e-5})
         print('Lorentz Optimization');time0_l = time()
-        res_lorentz = minimize(loss_partial_lorentz_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
+        res_lorentz = minimize(loss_partial_lorentz_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':10, 'maxfun':max_function_evaluations, 'gtol':1e-5})
     sol_gc = res_gc.x
     sol_lorentz = res_lorentz.x
 print(f'  Time to optimize Guiding Center with {method} optimization: {time0_l-time0_gc:.2f} seconds with x={sol_gc}')
@@ -161,7 +160,7 @@ plt.plot(dofs_array, [loss_partial_lorentz_x0_min([x]) for x in tqdm(dofs_array)
 plt.axvline(x=sol_lorentz, linestyle='--', color='r', linewidth=2, label='Lorentz Optimum')
 plt.plot(dofs_array, [loss_partial_gc_x0_min([x]) for x in tqdm(dofs_array)], color='b', label='Guiding Center')
 plt.axvline(x=sol_gc, linestyle='--', color='b', linewidth=2, label='Guiding Center Optimum')
-plt.xlabel("x0")
+plt.xlabel("dof")
 plt.ylabel("Loss function")
 plt.legend()
 plt.show()
