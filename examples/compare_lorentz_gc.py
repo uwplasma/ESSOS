@@ -9,7 +9,7 @@ number_of_cores = 14
 number_of_particles_per_core = 1
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
-sys.path.append("..")
+sys.path.insert(1, os.getcwd())
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, remove_3D_axes
 from MagneticField import B, B_norm
 
