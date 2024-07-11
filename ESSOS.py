@@ -527,7 +527,7 @@ class Coils(Curves):
             for particle in particles:
                 trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
                     odeint(
-                        GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100#, hmax=maxtime/timesteps/10.
+                        GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
                            )
                     )
             return trajectories
@@ -573,7 +573,7 @@ class Coils(Curves):
             for particle in particles:
                 trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
                     odeint(
-                        Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-8, rtol=1e-8, mxstep=100#, hmax=maxtime/timesteps/10.
+                        Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
                         # GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100
                         )
                     )

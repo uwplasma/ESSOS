@@ -5,7 +5,9 @@ from time import time
 import jax.numpy as jnp
 from matplotlib import cm
 import matplotlib.pyplot as plt
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
+number_of_cores = 14
+number_of_particles_per_core = 1
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
 sys.path.append("..")
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, remove_3D_axes
@@ -27,15 +29,17 @@ n_segments=100
 particles = Particles(nparticles)
 
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
-stel = Coils(curves, jnp.array([3e6]*n_curves))
+stel = Coils(curves, jnp.array([1e7]*n_curves))
 
 # If there is a previous optimization, use the following x to set the dofs and currents
-x = [5.926130043570827, 0.0, 1.9753766811902755, 0.0, 0.0, 0.0, 0.0, 0.9386067902413853, 0.0, 0.31286893008046174, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.346039145130208, 0.0, 1.7820130483767358, 0.0, 0.0, 0.0, 0.0, 2.723942998437281, 0.0, 0.9079809994790936, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3000000.0, 3000000.0]
+x = [5.924702620314064, -0.0025519824337822145, 1.9745555877622545, 0.004077400730383376, 8.668008416872513e-05, 0.0034401995743134992, 1.796247508439101e-05, 4.298691119635643e-05, 0.0008401643249744287, 0.9379368992260929, 0.018098380157840842, 0.31300470559201754, -0.04087018312708382, -0.002655274674303366, -0.019306099340735728, -0.00015807353477626462, 0.0009538130813538795, 0.00016009458962658942, 0.004944042080719642, -1.9994608872184694, -0.00025544998157077327, 0.0016116019011788475, -0.0025502098991872437, 0.0015062491556655025, 0.0002353264645362859, 0.00107182365489318, 1.275056963582103e-05, 5.349208162900211, -0.004662648498102098, 1.7865107907581779, 0.017320250409466748, 0.002670438026381779, 0.0091904275163497, 0.0011876340035089595, -0.0003347171710933947, 0.00041658258327954937, 2.7227551260788028, 0.010135499377536931, 0.9017534355512505, -0.035742880945879574, -0.0019559059555094324, -0.016855551396964426, 9.2710296168846e-06, 0.0013500924496970927, 0.00036574620086413773, 0.001927819368657137, -1.9993801895347771, -0.00045623599427501804, -0.0006626854693094752, -0.0010561432434404775, -2.9632102413688948e-06, 0.0004554209377657044, 0.0008101938557124701, 0.00014615004859748506]
 len_dofs = len(jnp.ravel(stel.dofs))
 dofs = jnp.reshape(jnp.array(x)[:len_dofs], shape=stel.dofs.shape)
 stel.dofs = dofs
-currents = jnp.array(x)[len_dofs:]
-stel.currents = currents
+if len(x)>len_dofs:
+    print("Setting currents")
+    currents = jnp.array(x)[len_dofs:]
+    stel.currents = currents
 
 times = jnp.linspace(0, maxtime, timesteps)
 x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
