@@ -15,7 +15,7 @@ try:
 except FileExistsError:
     pass
 
-sys.path.insert(1, os.getcwd())
+sys.path.insert(1, os.path.dirname(os.getcwd()))
 
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, optimize, loss, optimize_adam, projection2D, projection2D_top
 from MagneticField import B_norm

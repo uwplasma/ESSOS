@@ -10,13 +10,13 @@ from functools import partial
 import matplotlib.pyplot as plt
 from bayes_opt import BayesianOptimization
 from scipy.optimize import least_squares, minimize
-#### INPUT PARAMETERS START HERE ####
-number_of_cores = 20
+#### INPUT PARAMETERS START HERE - NUMBER OF PARTICLES ####
+number_of_cores = 3
 number_of_particles_per_core = 1
 #### Some other imports
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
-sys.path.insert(1, os.getcwd())
+sys.path.insert(1, os.path.dirname(os.getcwd()))
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, loss
 from MagneticField import B, B_norm
 #### Input parameters continue here
@@ -27,7 +27,7 @@ r = 3
 A = 2 # Aspect ratio
 R = A*r
 r_init = r/4
-maxtime = 1.5e-5
+maxtime = 3.0e-5
 timesteps=int(maxtime/1.0e-8)
 nparticles = number_of_cores*number_of_particles_per_core
 n_segments=80

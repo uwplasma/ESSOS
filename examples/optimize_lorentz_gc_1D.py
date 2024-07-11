@@ -11,11 +11,11 @@ from functools import partial
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize, least_squares
 from bayes_opt import BayesianOptimization
-number_of_cores = 14
+number_of_cores = 5
 number_of_particles_per_core = 1
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
-sys.path.insert(1, os.getcwd())
+sys.path.insert(1, os.path.dirname(os.getcwd()))
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, loss
 from MagneticField import B, B_norm
 
@@ -27,12 +27,12 @@ A = 2 # Aspect ratio
 R = A*r
 r_init = r/4
 maxtime = 4e-6
-timesteps=int(maxtime/1.0e-8)
+timesteps=int(min(1000,maxtime/1.0e-8))
 nparticles = len(jax.devices())*1
 n_segments=80
 coil_current = 7e6
-max_function_evaluations = 30
-method = 'L-BFGS-B' # 'Bayesian', 'least_squares' or one of scipy.optimize.minimize methods such as 'L-BFGS-B'
+max_function_evaluations = 25
+method = 'least_squares' # 'L-BFGS-B','least_squares','Bayesian' or one of scipy.optimize.minimize methods such as 'BFGS'
 
 particles = Particles(nparticles)
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
@@ -121,7 +121,7 @@ if change_currents:
 else:
     xmin = 1.5
     xmax = 8
-    x0 = stel.dofs[0, 0, 2]
+    x0 = stel.dofs[0, 0, 2]*1.5
 print(f'Initial guess: {x0} with bounds: {xmin} and {xmax}')
 
 pbounds = {'x': (xmin, xmax)}
@@ -153,7 +153,7 @@ else:
 print(f'  Time to optimize Guiding Center with {method} optimization: {time0_l-time0_gc:.2f} seconds with x={sol_gc}')
 print(f'  Time to optimize Lorentz with {method} optimization: {time()-time0_l:.2f} seconds with x={sol_lorentz}')
 
-dofs_array = jnp.linspace(xmin,xmax,20)
+dofs_array = jnp.linspace(min(min(sol_lorentz[0]*0.95,xmin),sol_gc[0]*0.95),max(max(sol_lorentz[0]*1.03,xmax),sol_gc[0]*1.03),20)
 plt.figure()
 plt.axvline(x=x0, linestyle='--', color='k', linewidth=2, label='Initial Guess')
 plt.plot(dofs_array, [loss_partial_lorentz_x0_min([x]) for x in tqdm(dofs_array)], color='r', label='Lorentz')
