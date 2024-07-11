@@ -25,17 +25,17 @@ order=3
 r = 2
 A = 3. # Aspect ratio
 R = A*r
-
 r_init = r/4
 maxtime = 1e-5
-timesteps=1000
+timesteps=int(maxtime/1.0e-8)
 nparticles = len(jax.devices())*1
 n_segments=100
+coil_current = 7e6
 
 particles = Particles(nparticles)
 
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
-stel = Coils(curves, jnp.array([1e7]*n_curves))
+stel = Coils(curves, jnp.array([coil_current]*n_curves))
 
 times = jnp.linspace(0, maxtime, timesteps)
 x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
@@ -125,7 +125,7 @@ else:
 pbounds = {'x': (xmin, xmax)}
 max_function_evaluations = 20
 
-method = 'least_squares' # 'BFGS', 'Bayesian' or 'least_squares'
+method = 'least_squares' # 'Bayesian', 'least_squares' or one of scipy.optimize.minimize methods such as 'BFGS'
 
 if method=='Bayesian':
     print('Guiding Center Optimization')
