@@ -150,13 +150,12 @@ class Curves:
         self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
 
     def __str__(self):
-        return f"Curve with {self._order} orders on the Fourier series, {self._nfp} field periods"\
-              + " and stellsym.\nIndependent curves: \n" + self._dofs.__str__() if self._stellsym else ".\nIndependent coils: \n" + self._dofs
+        return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
+             + f"Degrees of freedom\n{jnp.ravel(self.dofs)}\n"
                 
     def __repr__(self):
-        return f"Curve with {self._order} orders on the Fourier series, {self._nfp} field periods"\
-              + " and stellsym.\nIndependent curves: \n" + self._dofs.__repr__() if self._stellsym else ".\nIndependent coils: \n" + self._dofs
- 
+        return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
+             + f"Degrees of freedom\n{jnp.ravel(self.dofs)}\n"
 
     def _tree_flatten(self):
         children = (self._dofs,)  # arrays / dynamic values
@@ -264,9 +263,6 @@ class Curves:
         seed = 3
         key = jax.random.PRNGKey(seed)
 
-        #final = jnp.zeros(0)
-        #for species in ParticleEnsemble:
-
         energy = particles.energy
         mass = particles.mass
         n_particles = particles.number
@@ -294,14 +290,14 @@ class Curves:
         y = (r*jnp.cos(Θ)+R_init)*jnp.sin(ϕ)
         z = r*jnp.sin(Θ)
 
-        #concatenate final, (x y z vpar vperp)
-
-        if model == 'Guiding Center':
+        if model == "Guiding Center" or model == "GC":
             return jnp.array((x, y, z, vpar, vperp))
-        else:
+        elif model == "Lorentz":
             return jnp.array((x, y, z, vperp*jnp.cos(gyroangle), vpar, vperp*jnp.sin(gyroangle)))
+        else:
+            raise ValueError(f'Model {model} is not supported. Choose "Guiding Center" or "Lorentz"')
 
-    def plot(self, trajectories = None, show=False, title="Curves", save_as=None):
+    def plot(self, trajectories = None, show=False, title="", save_as=None):
         fig = plt.figure()
         ax = fig.add_subplot(projection='3d')
 
@@ -316,8 +312,7 @@ class Curves:
             for i in range(jnp.size(trajectories, 0)):
                 ax.plot3D(trajectories[i, :, 0], trajectories[i, :, 1], trajectories[i, :, 2], zorder=0)
 
-
-        #ax.set_title(title)
+        ax.set_title(title)
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("z")
@@ -372,15 +367,14 @@ class Coils(Curves):
         self._currents = apply_symmetries_to_currents(self._dofs_currents, self.nfp, self.stellsym)
 
     def __str__(self):
-        return f"Coils with {self.order} orders on the Fourier series, {self.nfp} field periods"\
-             + f" and stellsym.\nIndependent coils: \n{self.dofs}\nIndependent currents: \n{self._dofs_currents}" \
-             if self.stellsym else f".\nIndependent coils: \n{self.dofs}\nIndependent currents: \n{self._dofs_currents}"
+        return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
+             + f"Degrees of freedom\n{jnp.ravel(self.dofs)}\n" \
+             + f"Currents degrees of freedom\n{jnp.ravel(self._dofs_currents)}\n"
                 
     def __repr__(self):
-        return f"Coils with {self.order} orders on the Fourier series, {self.nfp} field periods"\
-             + f" and stellsym.\nIndependent coils: \n{self.dofs}\nIndependent currents: \n{self._dofs_currents}" \
-             if self.stellsym else f".\nIndependent coils: \n{self.dofs}\nIndependent currents: \n{self._dofs_currents}"
-
+        return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
+             + f"Degrees of freedom\n{jnp.ravel(self.dofs)}\n" \
+             + f"Currents degrees of freedom\n{jnp.ravel(self._dofs_currents)}\n"
     @property
     def dofs_currents(self):
         return self._dofs_currents
@@ -394,99 +388,11 @@ class Coils(Curves):
     def currents(self):
         return self._currents
     
-    @currents.setter
-    def currents(self, new_dofs_currents):
-        self._dofs_currents = new_dofs_currents
-        self._currents = apply_symmetries_to_currents(self._dofs_currents, self.nfp, self.stellsym)
-    
-        
     def _tree_flatten(self):
         children = (Curves(self.dofs, self.nfp, self.stellsym), self._dofs_currents)  # arrays / dynamic values
         aux_data = {}  # static values
         return (children, aux_data)
 
-    @partial(jit, static_argnums=(1, 3, 4, 5))
-    def non_sharded_trace_trajectories(self,
-                                       particles: Particles,
-                                       initial_values: jnp.ndarray,
-                                       maxtime: float = 1e-7,
-                                       timesteps: int = 200,
-                                       n_segments: int = 100) -> jnp.ndarray:
-        
-        """ Traces the trajectories of the particles in the given coils
-            Attributes:
-        self: Coils object
-        particles: Particles object
-        initial_values: Initial values of the particles - shape (5, n_particles)
-        maxtime: Maximum time of the simulation
-        timesteps: Number of timesteps
-        n_segments: Number of segments to divide each coil
-            Returns:
-        trajectories: Trajectories of the particles - shape (n_particles, timesteps, 4)
-        """
-
-        curves_points = self.gamma(n_segments)
-        currents = self._currents
-
-        vperp = initial_values[4, :]
-        normB = jnp.apply_along_axis(B_norm, 0, initial_values[:3, :], curves_points, currents)
-
-        m = particles.mass
-        n_particles = particles.number
-
-        μ = m*vperp**2/(2*normB)
-
-        trajectories = jnp.empty((n_particles, timesteps, 4))
-        times = jnp.linspace(0, maxtime, timesteps)
-
-        
-        def aux_trajectory(particle: int, trajectories: jnp.ndarray) -> jnp.ndarray:
-            return trajectories.at[particle,:,:].set(odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100))
-        trajectories = fori_loop(0, n_particles, aux_trajectory, trajectories)
-
-        return trajectories
-    
-    @partial(jit, static_argnums=(1, 3, 4, 5))
-    def non_sharded_trace_trajectories_lorentz(self,
-                                       particles: Particles,
-                                       initial_values: jnp.ndarray,
-                                       maxtime: float = 1e-7,
-                                       timesteps: int = 200,
-                                       n_segments: int = 100) -> jnp.ndarray:
-        
-        """ Traces the trajectories of the particles in the given coils
-            Attributes:
-        self: Coils object
-        particles: Particles object
-        initial_values: Initial values of the particles - shape (6, n_particles)
-        maxtime: Maximum time of the simulation
-        timesteps: Number of timesteps
-        n_segments: Number of segments to divide each coil
-            Returns:
-        trajectories: Trajectories of the particles - shape (n_particles, timesteps, 6)
-        """
-
-        curves_points = self.gamma(n_segments)
-        currents = self._currents
-
-        m = particles.mass
-        n_particles = particles.number
-
-        trajectories = jnp.empty((n_particles, timesteps, 6))
-        times = jnp.linspace(0, maxtime, timesteps)
-
-        def aux_trajectory(particle: int, trajectories: jnp.ndarray) -> jnp.ndarray:
-            return trajectories.at[particle,:,:].set(
-                odeint(
-                    Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-8, rtol=1e-8, mxstep=100
-                    # GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100
-                    )
-                )
-        trajectories = fori_loop(0, n_particles, aux_trajectory, trajectories)
-
-        return trajectories
-
-    #TODO: Vectorize loop for each core
     @partial(jit, static_argnums=(1, 3, 4, 5, 6))
     def trace_trajectories(self,
                            particles: Particles,
@@ -522,7 +428,7 @@ class Coils(Curves):
         μ = m*vperp**2/(2*normB)
 
         times = jnp.linspace(0, maxtime, timesteps)
-
+      
         def aux_trajectory(particles: jnp.ndarray) -> jnp.ndarray:
             trajectories = jnp.empty((n_particles//n_cores, timesteps, 4))
             for particle in particles:
@@ -532,12 +438,60 @@ class Coils(Curves):
                            )
                     )
             return trajectories
-
+        
         trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
+    
+        #def aux_trajectory(particle: int) -> jnp.ndarray:
+        #    return odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-7, rtol=1e-7, mxstep=60)
+    #
+        #trajectories = shard_map(vmap(aux_trajectory), mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
 
         return trajectories
     
-    #TODO: Vectorize loop for each core
+    @partial(jit, static_argnums=(1, 3, 4, 5, 6))
+    def trace_trajectories_vec(self,
+                           particles: Particles,
+                           initial_values: jnp.ndarray,
+                           maxtime: float = 1e-7,
+                           timesteps: int = 200,
+                           n_segments: int = 100,
+                           n_cores: int = len(jax.devices())) -> jnp.ndarray:
+    
+        """ Traces the trajectories of the particles in the given coils
+            Attributes:
+        self: Coils object
+        particles: Particles object
+        initial_values: Initial values of the particles - shape (5, n_particles)
+        maxtime: Maximum time of the simulation
+        timesteps: Number of timesteps
+        n_segments: Number of segments to divide each coil
+            Returns:
+        trajectories: Trajectories of the particles - shape (n_particles, timesteps, 4)
+        """
+
+        mesh = Mesh(mesh_utils.create_device_mesh(n_cores,), axis_names=('i',))
+
+        curves_points = self.gamma(n_segments)
+        currents = self._currents
+
+        vperp = initial_values[4, :]
+        normB = jnp.apply_along_axis(B_norm, 0, initial_values[:3, :], curves_points, currents)
+
+        m = particles.mass
+        n_particles = particles.number
+
+        μ = m*vperp**2/(2*normB)
+
+        times = jnp.linspace(0, maxtime, timesteps)
+      
+        @jit
+        def aux_trajectory(particle: int) -> jnp.ndarray:
+            return odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-7, rtol=1e-7, mxstep=60)
+    
+        trajectories = shard_map(vmap(aux_trajectory), mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
+
+        return trajectories
+    
     @partial(jit, static_argnums=(1, 3, 4, 5, 6))
     def trace_trajectories_lorentz(self,
                            particles: Particles,
@@ -569,18 +523,10 @@ class Coils(Curves):
 
         times = jnp.linspace(0, maxtime, timesteps)
 
-        def aux_trajectory(particles: jnp.ndarray) -> jnp.ndarray:
-            trajectories = jnp.empty((n_particles//n_cores, timesteps, 6))
-            for particle in particles:
-                trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
-                    odeint(
-                        Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
-                        # GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100
-                        )
-                    )
-            return trajectories
+        def aux_trajectory(particle: int) -> jnp.ndarray:
+            return odeint(Lorentz, initial_values[:4, :].T[particle], times, currents, curves_points, atol=1e-7, rtol=1e-7, mxstep=60)
 
-        trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
+        trajectories = shard_map(vmap(aux_trajectory), mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
 
         return trajectories
     
@@ -592,13 +538,9 @@ class Coils(Curves):
             file.write(f"nfp stellsym order\n")
             file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
             file.write(f"Degrees of freedom\n")
-            file.write(f"{self.dofs}\n")
-            file.write(f"Fourier coefficients\n")
-            file.write(f"{self.curves}\n")
+            file.write(f"{jnp.ravel(self.dofs)}\n")
             file.write(f"Currents degrees of freedom\n")
-            file.write(f"{self._dofs_currents}\n")
-            file.write(f"Currents Fourier coefficients\n")
-            file.write(f"{self._currents}\n\n")
+            file.write(f"{jnp.ravel(self._dofs_currents)}")
 
 
 tree_util.register_pytree_node(Coils,
@@ -656,7 +598,7 @@ def loss(dofs:           jnp.ndarray,
         )-R
     )+trajectories[:, :, 2]**2
 
-    return jnp.mean(distances_squared)#jnp.mean(1/(1+jnp.exp(-30*(distances_squared-r_init**2))))
+    return jnp.mean(distances_squared)/r_init**2#jnp.mean(1/(1+jnp.exp(-30*(distances_squared-r_init**2))))
 
 def optimize(coils:          Coils,
              particles:      Particles,
