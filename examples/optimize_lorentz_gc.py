@@ -10,29 +10,39 @@ from functools import partial
 import matplotlib.pyplot as plt
 from bayes_opt import BayesianOptimization
 from scipy.optimize import least_squares, minimize
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=14'
+#### INPUT PARAMETERS START HERE ####
+number_of_cores = 14
+number_of_particles_per_core = 1
+#### Some other imports
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
 sys.path.append("..")
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, loss
 from MagneticField import B, B_norm
-
+#### Input parameters continue here
 n_curves=2
 nfp=5
 order=3
 r = 2
 A = 3. # Aspect ratio
 R = A*r
-
 r_init = r/4
 maxtime = 1e-5
 timesteps=1000
-nparticles = len(jax.devices())*1
+nparticles = len(jax.devices())*number_of_particles_per_core
 n_segments=100
-
+change_currents = False
+model = 'Guiding Center' # 'Guiding Center' or 'Lorentz'
+method = 'least_squares' # 'Bayesian', 'BOBYQA', 'least_squares' or one of scipy.optimize.minimize methods such as 'BFGS'
+max_function_evaluations = 30
+min_val = -11 # minimum coil dof value
+max_val =  15 # maximum coil dof value
+max_function_evaluations_BOBYQA = 150
+coil_current = 1e7
+##### Input parameters stop here
 particles = Particles(nparticles)
-
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
-stel = Coils(curves, jnp.array([3e6]*n_curves))
+stel = Coils(curves, jnp.array([coil_current]*n_curves))
 
 times = jnp.linspace(0, maxtime, timesteps)
 x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
@@ -46,8 +56,6 @@ for i in range(nparticles):
     v0 = v0.at[:,i].set(vpar0[i]*b0 + vperp0[i]*(perp_vector_1_normalized/jnp.sqrt(2)+perp_vector_2/jnp.sqrt(2)))
 normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), stel.currents)
 μ = particles.mass*vperp0**2/(2*normB0)
-
-model = 'Guiding Center' # 'Guiding Center' or 'Lorentz'
 
 start = time()
 loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps, n_segments, model=model)
@@ -65,30 +73,39 @@ len_dofs = len(jnp.ravel(stel.dofs))
 @jit
 def loss_partial_dofs_max(*args, **kwargs):
     x = jnp.array(list(kwargs.values()))
-    dofs = jnp.reshape(x[:len_dofs], shape=stel.dofs.shape)
-    currents = x[len_dofs:]
+    dofs, currents = jax.lax.cond(
+        change_currents,
+        lambda _: (jnp.reshape(x[:len_dofs], shape=stel.dofs.shape), x[-n_curves:]),
+        lambda _: (jnp.reshape(x, shape=stel.dofs.shape), stel.currents[:n_curves]),
+        operand=None
+    )
     return -loss_partial(dofs, currents)
 
 @jit
 def loss_partial_dofs_min(x):
-    dofs = jnp.reshape(x[:len_dofs], shape=stel.dofs.shape)
-    currents = x[len_dofs:]
+    dofs, currents = jax.lax.cond(
+        change_currents,
+        lambda _: (jnp.reshape(x[:len_dofs], shape=stel.dofs.shape), x[-n_curves:]),
+        lambda _: (jnp.reshape(x, shape=stel.dofs.shape), stel.currents[:n_curves]),
+        operand=None
+    )
     return loss_partial(dofs, currents)
 
-method = 'least_squares' # 'Bayesian', 'BOBYQA', 'least_squares' or one of scipy.optimize.minimize methods such as 'BFGS'
-
-all_dofs = jnp.concatenate((jnp.ravel(stel.dofs), jnp.ravel(stel.currents)[:n_curves]))
+if change_currents:
+    all_dofs = jnp.concatenate((jnp.ravel(stel.dofs), jnp.ravel(stel.currents)[:n_curves]))
+else:
+    all_dofs = jnp.ravel(stel.dofs)
 print(f'Number of dofs: {len(all_dofs)}')
-min_val = -11
-max_val = 15
-max_function_evaluations = 20
 
 if method == 'Bayesian':
     initial_points = 20
     pbounds = {}
     for i in range(1, len(all_dofs) + 1):
         param = f'x{i}'
-        pbounds[param] = (min_val, max_val) if i < len(stel.dofs) else (1e5, 1e8)
+        if i<=len(jnp.ravel(stel.dofs)):
+            pbounds[param] = (min_val, max_val)
+        else:
+            pbounds[param] = (1e5, 1e8)
     optimizer = BayesianOptimization(f=loss_partial_dofs_max,pbounds=pbounds,random_state=1)
     optimizer.maximize(init_points=initial_points,n_iter=max_function_evaluations)
     print(optimizer.max)
@@ -98,10 +115,15 @@ else:
         res = least_squares(loss_partial_dofs_min, x0=all_dofs, verbose=2, ftol=1e-5, max_nfev=max_function_evaluations)
     else:
         if method == 'BOBYQA':
-            lower = jnp.concatenate((jnp.array([min_val]*len_dofs), jnp.array([1e5]*n_curves)))
-            upper = jnp.concatenate((jnp.array([max_val]*len_dofs), jnp.array([1e8]*n_curves)))
-            max_function_evaluations = 150
-            res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=1e-5, maxfun=max_function_evaluations)#, bounds=(lower,upper))
+            max_function_evaluations = max_function_evaluations_BOBYQA
+            if change_currents:
+                lower = jnp.concatenate((jnp.array([min_val]*len_dofs), jnp.array([1e5]*n_curves)))
+                upper = jnp.concatenate((jnp.array([max_val]*len_dofs), jnp.array([1e8]*n_curves)))
+                res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=1e-5, maxfun=max_function_evaluations, bounds=(lower,upper))
+            else:
+                lower = jnp.array([min_val]*len_dofs)
+                upper = jnp.array([max_val]*len_dofs)
+                res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=1e-5, maxfun=max_function_evaluations)#, bounds=(lower,upper))
         else:            
             res = minimize(loss_partial_dofs_min, x0=all_dofs, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
     x = jnp.array(res.x)
@@ -118,8 +140,9 @@ print(f"Time to trace trajectories: {time()-time0:.2f} seconds")
 len_dofs = len(jnp.ravel(stel.dofs))
 dofs = jnp.reshape(jnp.array(x)[:len_dofs], shape=stel.dofs.shape)
 stel.dofs = dofs
-currents = jnp.array(x)[len_dofs:]
-stel.currents = currents
+if change_currents:
+    currents = jnp.array(x)[len_dofs:]
+    stel.currents = currents
 
 time0 = time()
 if model=='Lorentz':
