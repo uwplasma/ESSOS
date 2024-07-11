@@ -89,7 +89,7 @@ def Lorentz(InitialValues: jnp.ndarray,
     """
 
     assert isinstance(InitialValues, jnp.ndarray), "initial values must be a jnp.ndarray"
-    assert InitialValues.shape == (6,), "initial values must have shape (4,) with x, y, z, vpar"
+    assert InitialValues.shape == (6,), "initial values must have shape (6,) with x, y, z, vx, vy, vz"
     assert InitialValues.dtype == float, "initial values must be a float"
     #assert isinstance(t, float), f"time must be a float, not a {type(t)}"
     #assert t >= 0, "time must be positive"
