@@ -271,8 +271,8 @@ class Curves:
         vth = jnp.sqrt(2*energy/mass)
 
         # Initializing pitch angle
-        # DOING MOSTLY TRAPPED PARTICLES
-        pitch = jax.random.uniform(key,shape=(n_particles,), minval=-0.1, maxval=0.1)
+        # !! DOING MOSTLY TRAPPED PARTICLES with pitch between -0.15 and 0.15 !!
+        pitch = jax.random.uniform(key,shape=(n_particles,), minval=-0.15, maxval=0.15)
         # pitch = jnp.linspace(-0.0001, 0.0001, n_particles)
         if model=='Lorentz':
             gyroangle = jax.random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi)
