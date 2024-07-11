@@ -43,24 +43,35 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
 
     # Calculationg the magentic field
     x, y, z, vpar = InitialValues
-    r =jnp.array([x,y,z])
+    
+   # Condition to check if any of x, y, z is greater than 10
+    condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 3)
 
-    B_field = B(r, curve_segments, currents)
-    normB = jnp.linalg.norm(B_field)
-    b = B_field/normB
+    def compute_derivatives(_):
+        r = jnp.array(InitialValues[:3])
+        vpar = InitialValues[3]
+        
+        B_field = B(r, curve_segments, currents)
+        normB = jnp.linalg.norm(B_field)
+        b = B_field/normB
+        
+        # Gyrofrequency
+        Ω = q*normB/m
+        
+        # Gradient of the magnetic field
+        gradB = grad_B(r, curve_segments, currents)
 
-    # Gyrofrequency
-    Ω = q*normB/m
+        # Position derivative of the particle
+        Dx = vpar*b + (vpar**2/Ω+μ/q)*jnp.cross(b, gradB)/normB
+        # Parallel velocity derivative of the particle
+        Dvpar = -μ/m*jnp.dot(b,gradB)
 
-    # Gradient of the magnetic field
-    gradB = grad_B(r, curve_segments, currents)
+        return jnp.append(Dx,Dvpar)
 
-    # Position derivative of the particle
-    Dx = vpar*b + (vpar**2/Ω+μ/q)*jnp.cross(b, gradB)/normB
-    # Parallel velocity derivative of the particle
-    Dvpar = -μ/m*jnp.dot(b,gradB)
+    def zero_derivatives(_):
+        return jnp.zeros(4, dtype=float)
 
-    return jnp.append(Dx,Dvpar)
+    return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 @jit
 def Lorentz(InitialValues:  jnp.ndarray,
@@ -99,13 +110,34 @@ def Lorentz(InitialValues:  jnp.ndarray,
 
     # Calculationg the magentic field
     x, y, z, vx, vy, vz = InitialValues
-    r =jnp.array([x,y,z])
+    
+   # Condition to check if any of x, y, z is greater than 10
+    condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 3)
 
-    B_field = B(r, curve_segments, currents)
+    def compute_derivatives(_):
+        r = jnp.array(InitialValues[:3])
+        B_field = B(r, curve_segments, currents)
 
-    # Position derivative of the particle
-    Dx = jnp.array([vx, vy, vz])
-    # Parallel velocity derivative of the particle
-    Dv = q/m*jnp.cross(Dx, B_field)
+        # Position derivative of the particle
+        Dx = InitialValues[3:6]
+        # Parallel velocity derivative of the particle
+        Dv = q / m * jnp.cross(Dx, B_field)
 
-    return jnp.concatenate((Dx,Dv))
+        return jnp.concatenate((Dx, Dv))
+
+    def zero_derivatives(_):
+        return jnp.zeros(6, dtype=float)
+
+    return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
+
+    
+    # r =jnp.array([x,y,z])
+
+    # B_field = B(r, curve_segments, currents)
+
+    # # Position derivative of the particle
+    # Dx = jnp.array([vx, vy, vz])
+    # # Parallel velocity derivative of the particle
+    # Dv = q/m*jnp.cross(Dx, B_field)
+
+    # return jnp.concatenate((Dx,Dv))

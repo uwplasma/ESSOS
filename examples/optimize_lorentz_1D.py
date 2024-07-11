@@ -18,16 +18,16 @@ from MagneticField import B, B_norm
 
 n_curves=2
 nfp=5
-order=2
+order=3
 r = 2
 A = 3. # Aspect ratio
 R = A*r
 
 r_init = r/4
-maxtime = 6e-6
+maxtime = 1e-5
 timesteps=1000
 nparticles = len(jax.devices())*1
-n_segments=120
+n_segments=100
 
 particles = Particles(nparticles)
 
@@ -48,30 +48,17 @@ normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), 
 μ = particles.mass*vperp0**2/(2*normB0)
 
 start = time()
-loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps, 100, model='Lorentz')
-print(f"Loss function initial value: {loss_value:.8f}")
-end = time()
-print(f"Took: {end-start:.2f} seconds")
+loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime, timesteps, n_segments, model='Guiding Center')
+print(f"Loss function initial value with Guiding Center: {loss_value:.8f} took: {time()-start:.2f} seconds")
 
-loss_partial_lorentz = partial(loss, dofs_currents=stel.dofs_currents, old_coils=stel,
-                       particles=particles, R=R, r_init=r_init,
-                       initial_values=jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]),
-                       maxtime=maxtime, timesteps=timesteps, n_segments=n_segments, model='Lorentz')
-
+start = time()
+loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps, n_segments, model='Lorentz')
+print(f"Loss function initial value with Lorentz: {loss_value:.8f} took: {time()-start:.2f} seconds")
+##############
 loss_partial_gc = partial(loss, dofs_currents=stel.dofs_currents, old_coils=stel,
                        particles=particles, R=R, r_init=r_init,
                        initial_values=jnp.array([x0, y0, z0, vpar0, vperp0]),
                        maxtime=maxtime, timesteps=timesteps, n_segments=n_segments, model='Guiding Center')
-
-@jit
-def loss_partial_lorentz_x0_max(x):
-    dofs = stel.dofs.at[0,0,2].set(x)
-    return -loss_partial_lorentz(dofs)
-
-@jit
-def loss_partial_lorentz_x0_min(x):
-    dofs = stel.dofs.at[0,0,2].set(x[0])
-    return loss_partial_lorentz(dofs)
 
 @jit
 def loss_partial_gc_x0_max(x):
@@ -83,11 +70,30 @@ def loss_partial_gc_x0_min(x):
     dofs = stel.dofs.at[0,0,2].set(x[0])
     return loss_partial_gc(dofs)
 
+##############
+
+loss_partial_lorentz = partial(loss, dofs_currents=stel.dofs_currents, old_coils=stel,
+                       particles=particles, R=R, r_init=r_init,
+                       initial_values=jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]),
+                       maxtime=maxtime, timesteps=timesteps, n_segments=n_segments, model='Lorentz')
+@jit
+def loss_partial_lorentz_x0_max(x):
+    dofs = stel.dofs.at[0,0,2].set(x)
+    return -loss_partial_lorentz(dofs)
+
+@jit
+def loss_partial_lorentz_x0_min(x):
+    dofs = stel.dofs.at[0,0,2].set(x[0])
+    return loss_partial_lorentz(dofs)
+
+##############
+
 x0 = jnp.array([5.])
 
-xmin = 0
-xmax = 10
+xmin = 2
+xmax = 8
 pbounds = {'x': (xmin, xmax)}
+max_function_evaluations = 20
 
 method = 'least_squares' # 'BFGS', 'Bayesian' or 'least_squares'
 
@@ -95,20 +101,20 @@ if method=='Bayesian':
     print('Guiding Center Optimization')
     time0_gc = time()
     optimizer_gc = BayesianOptimization(f=loss_partial_gc_x0_max,pbounds=pbounds,random_state=1)
-    optimizer_gc.maximize(init_points=5,n_iter=10)
+    optimizer_gc.maximize(init_points=5,n_iter=max_function_evaluations)
     sol_gc = optimizer_gc.max['params']['x']
     print('Lorentz Optimization')
     time0_l = time()
     optimizer_lorentz = BayesianOptimization(f=loss_partial_lorentz_x0_max,pbounds=pbounds,random_state=1)
-    optimizer_lorentz.maximize(init_points=5,n_iter=10)
+    optimizer_lorentz.maximize(init_points=5,n_iter=max_function_evaluations)
     sol_lorentz = optimizer_lorentz.max['params']['x']
 else:
     print('Guiding Center Optimization')
     time0_gc = time()
     if method == 'least_squares':
-        res_gc = least_squares(loss_partial_gc_x0_min, x0=x0, verbose=2, ftol=1e-5)
+        res_gc = least_squares(loss_partial_gc_x0_min, x0=x0, verbose=2, ftol=1e-5, max_nfev=max_function_evaluations)
         print('Lorentz Optimization');time0_l = time()
-        res_lorentz = least_squares(loss_partial_lorentz_x0_min, x0=x0, verbose=2, ftol=1e-5)
+        res_lorentz = least_squares(loss_partial_lorentz_x0_min, x0=x0, verbose=2, ftol=1e-5, max_nfev=max_function_evaluations)
     else:
         res_gc = minimize(loss_partial_gc_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
         print('Lorentz Optimization');time0_l = time()
@@ -118,8 +124,9 @@ else:
 print(f'  Time to optimize Guiding Center with {method} optimization: {time0_l-time0_gc:.2f} seconds with x={sol_gc}')
 print(f'  Time to optimize Lorentz with {method} optimization: {time()-time0_l:.2f} seconds with x={sol_lorentz}')
 
-dofs_array = jnp.linspace(xmin,xmax,30)
+dofs_array = jnp.linspace(xmin,xmax,20)
 plt.figure()
+plt.axvline(x=sol_gc, linestyle='--', color='k', linewidth=2, label='Initial Guess')
 plt.plot(dofs_array, [loss_partial_lorentz_x0_min([x]) for x in dofs_array], color='r', label='Lorentz')
 plt.axvline(x=sol_lorentz, linestyle='--', color='r', linewidth=2, label='Lorentz Optimum')
 plt.plot(dofs_array, [loss_partial_gc_x0_min([x]) for x in dofs_array], color='b', label='Guiding Center')

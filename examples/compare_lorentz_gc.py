@@ -13,25 +13,29 @@ from MagneticField import B, B_norm
 
 n_curves=2
 nfp=5
-order=2
+order=3
 r = 2
 A = 3. # Aspect ratio
 R = A*r
 
 r_init = r/4
-maxtime = 6e-6
+maxtime = 1e-5
 timesteps=1000
 nparticles = len(jax.devices())*1
-n_segments=120
+n_segments=100
 
 particles = Particles(nparticles)
 
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
 stel = Coils(curves, jnp.array([3e6]*n_curves))
 
-x = [10.18841761318241, -1.7420575041592528, 1.7335015372520943, -0.07780540386779447, 0.2392176948103393, 1.6690463964293745, -0.12293829657928407, 0.26410918281360046, 0.01435873408507752, 0.0024852368487359583, 0.08593469245911049, -1.8186072470157508, -0.04039537760061793, -0.09904011753346484, -0.13030811814100388, 9.25807140436481, -0.03739159112427811, 1.820939140729657, 0.044499759397502364, 0.05032292469237421, 4.762999272601821, 0.08490565322751119, 0.7722397340598012, 0.043427552061386814, -0.23846522905171272, -0.040646380209994656, -1.9799319512929874, -0.09829488989860954, -0.016972847838880877, 0.12459681585239084]
-dofs = jnp.reshape(jnp.array(x), shape=stel.dofs.shape)
+# If there is a previous optimization, use the following x to set the dofs and currents
+x = [5.926130043570827, 0.0, 1.9753766811902755, 0.0, 0.0, 0.0, 0.0, 0.9386067902413853, 0.0, 0.31286893008046174, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.346039145130208, 0.0, 1.7820130483767358, 0.0, 0.0, 0.0, 0.0, 2.723942998437281, 0.0, 0.9079809994790936, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3000000.0, 3000000.0]
+len_dofs = len(jnp.ravel(stel.dofs))
+dofs = jnp.reshape(jnp.array(x)[:len_dofs], shape=stel.dofs.shape)
 stel.dofs = dofs
+currents = jnp.array(x)[len_dofs:]
+stel.currents = currents
 
 times = jnp.linspace(0, maxtime, timesteps)
 x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
@@ -89,16 +93,17 @@ def plot_trajectories(axs, times, trajectories_lorentz, trajectories_guiding_cen
     ax_3D, ax_E, ax_vpar, ax_xy, ax_z, ax_B = axs[0, 0], axs[0, 1], axs[0, 2], axs[1, 0], axs[1, 1], axs[1, 2]
     
     for i, color in enumerate(colors):
+        # if i==0: continue
         x_L, y_L, z_L, vx_L, vy_L, vz_L = trajectories_lorentz[i, :, :].transpose()
         x_gc, y_gc, z_gc, vpar_gc = trajectories_guiding_center[i, :, :].transpose()
         
-        x_L = jnp.where(jnp.abs(x_L) > R, jnp.nan, x_L)
-        y_L = jnp.where(jnp.abs(y_L) > R, jnp.nan, y_L)
-        z_L = jnp.where(jnp.abs(z_L) > r, jnp.nan, z_L)
+        # x_L = jnp.where(jnp.abs(x_L) > R, jnp.nan, x_L)
+        # y_L = jnp.where(jnp.abs(y_L) > R, jnp.nan, y_L)
+        # z_L = jnp.where(jnp.abs(z_L) > r, jnp.nan, z_L)
         
-        x_gc = jnp.where(jnp.abs(x_gc) > R, jnp.nan, x_gc)
-        y_gc = jnp.where(jnp.abs(y_gc) > R, jnp.nan, y_gc)
-        z_gc = jnp.where(jnp.abs(z_gc) > r, jnp.nan, z_gc)
+        # x_gc = jnp.where(jnp.abs(x_gc) > R, jnp.nan, x_gc)
+        # y_gc = jnp.where(jnp.abs(y_gc) > R, jnp.nan, y_gc)
+        # z_gc = jnp.where(jnp.abs(z_gc) > r, jnp.nan, z_gc)
 
         ax_xy.plot(times, x_gc, ':', color=color)
         ax_xy.plot(times, x_L, '-', color=color)
@@ -133,7 +138,7 @@ colors = cm.viridis(jnp.linspace(0, 1, nparticles))
 
 plot_trajectories(axs, times, trajectories_lorentz, trajectories_guiding_center, colors)
 
-gamma = curves.gamma()
+gamma = stel.gamma()
 for i in range(n_curves * 2 * curves._nfp):
     color = "orangered" if i < n_curves else "lightgrey"
     axs[0, 0].plot(gamma[i, :, 0], gamma[i, :, 1], gamma[i, :, 2], color=color, zorder=10)
