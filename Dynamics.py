@@ -44,12 +44,11 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
     # Calculationg the magentic field
     x, y, z, vpar = InitialValues
     
-   # Condition to check if x, y, z is greater than a threshold
-    condition = (jnp.sqrt(x**2 + y**2) > 50) | (jnp.abs(z) > 20)
+   # Condition to check if any of x, y, z is greater than 10
+    condition = (jnp.sqrt(x**2 + y**2) > 100) | (jnp.abs(z) > 20)
 
     def compute_derivatives(_):
-        r = jnp.array(InitialValues[:3])
-        vpar = InitialValues[3]
+        r = jnp.array([x, y, z])
         
         B_field = B(r, curve_segments, currents)
         normB = jnp.linalg.norm(B_field)
@@ -74,10 +73,10 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
     return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 @jit
-def Lorentz(InitialValues:  jnp.ndarray,
-                  t:              float,
-                  currents:       jnp.ndarray,
-                  curve_segments: jnp.ndarray) -> jnp.ndarray:
+def Lorentz(InitialValues: jnp.ndarray,
+            t: float,
+            currents: jnp.ndarray,
+            curve_segments: jnp.ndarray) -> jnp.ndarray:
     
     """ Calculates the motion derivatives with the full gyromotion aproximation
         Attributes:
@@ -90,7 +89,7 @@ def Lorentz(InitialValues:  jnp.ndarray,
     """
 
     assert isinstance(InitialValues, jnp.ndarray), "initial values must be a jnp.ndarray"
-    assert InitialValues.shape == (6,), "initial values must have shape (4,) with x, y, z, vpar"
+    assert InitialValues.shape == (6,), "initial values must have shape (6,) with x, y, z, vx, vy, vz"
     assert InitialValues.dtype == float, "initial values must be a float"
     #assert isinstance(t, float), f"time must be a float, not a {type(t)}"
     #assert t >= 0, "time must be positive"
@@ -102,7 +101,6 @@ def Lorentz(InitialValues:  jnp.ndarray,
     assert curve_segments.shape[0] == currents.size, "number of coils must match number of currents"
     assert curve_segments.shape[2] == 3, "curve segments must have shape (n_coils, n_segments, 3)"
     assert curve_segments.dtype == float, "curve segments must be a float"
-    #assert isinstance(μ, float), f"μ must be a float, not a {type(μ)}"
 
     # Charge and mass for alpha particles in SI units
     q = 2*1.602176565e-19
@@ -115,11 +113,11 @@ def Lorentz(InitialValues:  jnp.ndarray,
     condition = (jnp.sqrt(x**2 + y**2) > 50) | (jnp.abs(z) > 20)
 
     def compute_derivatives(_):
-        r = jnp.array(InitialValues[:3])
+        r = jnp.array([x, y, z])
         B_field = B(r, curve_segments, currents)
 
         # Position derivative of the particle
-        Dx = InitialValues[3:6]
+        Dx = jnp.array([vx, vy, vz])
         # Parallel velocity derivative of the particle
         Dv = q / m * jnp.cross(Dx, B_field)
 
@@ -129,15 +127,3 @@ def Lorentz(InitialValues:  jnp.ndarray,
         return jnp.zeros(6, dtype=float)
 
     return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
-
-    
-    # r =jnp.array([x,y,z])
-
-    # B_field = B(r, curve_segments, currents)
-
-    # # Position derivative of the particle
-    # Dx = jnp.array([vx, vy, vz])
-    # # Parallel velocity derivative of the particle
-    # Dv = q/m*jnp.cross(Dx, B_field)
-
-    # return jnp.concatenate((Dx,Dv))
