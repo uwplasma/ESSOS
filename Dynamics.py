@@ -45,7 +45,7 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
     x, y, z, vpar = InitialValues
     
    # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 3)
+    condition = (jnp.sqrt(x**2 + y**2) > 15) | (jnp.abs(z) > 4)
 
     def compute_derivatives(_):
         r = jnp.array(InitialValues[:3])
@@ -112,7 +112,7 @@ def Lorentz(InitialValues:  jnp.ndarray,
     x, y, z, vx, vy, vz = InitialValues
     
    # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 3)
+    condition = (jnp.sqrt(x**2 + y**2) > 15) | (jnp.abs(z) > 4)
 
     def compute_derivatives(_):
         r = jnp.array(InitialValues[:3])
