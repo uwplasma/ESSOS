@@ -392,6 +392,12 @@ class Coils(Curves):
     @property
     def currents(self):
         return self._currents
+    
+    @currents.setter
+    def currents(self, new_dofs_currents):
+        self._dofs_currents = new_dofs_currents
+        self._currents = apply_symmetries_to_currents(self._dofs_currents, self.nfp, self.stellsym)
+    
         
     def _tree_flatten(self):
         children = (Curves(self.dofs, self.nfp, self.stellsym), self._dofs_currents)  # arrays / dynamic values
@@ -519,7 +525,11 @@ class Coils(Curves):
         def aux_trajectory(particles: jnp.ndarray) -> jnp.ndarray:
             trajectories = jnp.empty((n_particles//n_cores, timesteps, 4))
             for particle in particles:
-                trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(odeint(GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100))
+                trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
+                    odeint(
+                        GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100#, hmax=maxtime/timesteps/10.
+                           )
+                    )
             return trajectories
 
         trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
@@ -563,7 +573,7 @@ class Coils(Curves):
             for particle in particles:
                 trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
                     odeint(
-                        Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-8, rtol=1e-8, mxstep=100
+                        Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-8, rtol=1e-8, mxstep=100#, hmax=maxtime/timesteps/10.
                         # GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-8, rtol=1e-8, mxstep=100
                         )
                     )
@@ -645,7 +655,7 @@ def loss(dofs:           jnp.ndarray,
         )-R
     )+trajectories[:, :, 2]**2
 
-    return jnp.mean(1/(1+jnp.exp(-30*(distances_squared-r_init**2))))
+    return jnp.mean(distances_squared)#jnp.mean(1/(1+jnp.exp(-30*(distances_squared-r_init**2))))
 
 def optimize(coils:          Coils,
              particles:      Particles,
