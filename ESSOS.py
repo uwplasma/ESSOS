@@ -518,13 +518,56 @@ class Coils(Curves):
         curves_points = self.gamma(n_segments)
         currents = self._currents
 
-        m = particles.mass
+        n_particles = particles.number
+
+        times = jnp.linspace(0, maxtime, timesteps)
+
+        def aux_trajectory(particles: jnp.ndarray) -> jnp.ndarray:
+            trajectories = jnp.empty((n_particles//n_cores, timesteps, 6))
+            for particle in particles:
+                trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
+                    odeint(
+                        Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
+                        )
+                    )
+            return trajectories
+
+        trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
+
+        return trajectories
+    
+    @partial(jit, static_argnums=(1, 3, 4, 5, 6))
+    def trace_trajectories_lorentz_vec(self,
+                           particles: Particles,
+                           initial_values: jnp.ndarray,
+                           maxtime: float = 1e-7,
+                           timesteps: int = 200,
+                           n_segments: int = 100,
+                           n_cores: int = len(jax.devices())) -> jnp.ndarray:
+    
+        """ Traces the trajectories of the particles in the given coils
+            Attributes:
+        self: Coils object
+        particles: Particles object
+        initial_values: Initial values of the particles - shape (6, n_particles)
+        maxtime: Maximum time of the simulation
+        timesteps: Number of timesteps
+        n_segments: Number of segments to divide each coil
+            Returns:
+        trajectories: Trajectories of the particles - shape (n_particles, timesteps, 6)
+        """
+
+        mesh = Mesh(mesh_utils.create_device_mesh(n_cores,), axis_names=('i',))
+
+        curves_points = self.gamma(n_segments)
+        currents = self._currents
+
         n_particles = particles.number
 
         times = jnp.linspace(0, maxtime, timesteps)
 
         def aux_trajectory(particle: int) -> jnp.ndarray:
-            return odeint(Lorentz, initial_values[:4, :].T[particle], times, currents, curves_points, atol=1e-7, rtol=1e-7, mxstep=60)
+            return odeint(Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-7, rtol=1e-7, mxstep=60)
 
         trajectories = shard_map(vmap(aux_trajectory), mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
 
