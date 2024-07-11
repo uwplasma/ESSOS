@@ -44,8 +44,8 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
     # Calculationg the magentic field
     x, y, z, vpar = InitialValues
     
-   # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 15) | (jnp.abs(z) > 4)
+   # Condition to check if x, y, z is greater than a threshold
+    condition = (jnp.sqrt(x**2 + y**2) > 50) | (jnp.abs(z) > 20)
 
     def compute_derivatives(_):
         r = jnp.array(InitialValues[:3])
@@ -111,8 +111,8 @@ def Lorentz(InitialValues:  jnp.ndarray,
     # Calculationg the magentic field
     x, y, z, vx, vy, vz = InitialValues
     
-   # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 15) | (jnp.abs(z) > 4)
+   # Condition to check if x, y, z is greater than a threshold
+    condition = (jnp.sqrt(x**2 + y**2) > 50) | (jnp.abs(z) > 20)
 
     def compute_derivatives(_):
         r = jnp.array(InitialValues[:3])

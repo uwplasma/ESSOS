@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 from bayes_opt import BayesianOptimization
 from scipy.optimize import least_squares, minimize
 #### INPUT PARAMETERS START HERE ####
-number_of_cores = 14
-number_of_particles_per_core = 2
+number_of_cores = 25
+number_of_particles_per_core = 1
 #### Some other imports
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
@@ -20,32 +20,34 @@ sys.path.append("..")
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, loss
 from MagneticField import B, B_norm
 #### Input parameters continue here
-n_curves=3
+n_curves=2
 nfp=4
-order=3
+order=2
 r = 2
 A = 3. # Aspect ratio
 R = A*r
 r_init = r/4
-maxtime = 1.0e-5
-timesteps=1000
-nparticles = len(jax.devices())*number_of_particles_per_core
+maxtime = 2.0e-5
+timesteps=int(maxtime/1.0e-8)
+nparticles = number_of_cores*number_of_particles_per_core
 n_segments=100
-coil_current = 1e7
+coil_current = 7e6
 change_currents = False
 model = 'Guiding Center' # 'Guiding Center' or 'Lorentz'
 method = 'least_squares' # 'Bayesian', 'BOBYQA', 'least_squares' or one of scipy.optimize.minimize methods such as 'BFGS'
 max_function_evaluations = 30
+max_iterations_BFGS = 20
+max_function_evaluations_BOBYQA = 550
+tolerance_to_terminace_optimization = 1e-6
 min_val = -11 # minimum coil dof value
 max_val =  15 # maximum coil dof value
-max_function_evaluations_BOBYQA = 150
 ##### Input parameters stop here
 particles = Particles(nparticles)
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
 stel = Coils(curves, jnp.array([coil_current]*n_curves))
 
 # If there is a previous optimization, use the following x to set the dofs and currents
-# x = [5.761005018206357, -0.03217874387454478, 2.1523026880117087, -0.056394290858425, -0.02670514231469476, 0.015223740575546827, 0.016962232236878434, 0.011142162350601857, 0.03220289079562492, 1.0679336076895585, 0.3346908609647495, -0.05220035728901279, -0.0901512362478669, -0.18614321908151527, -0.024297725459829677, 0.027173903654063306, -0.01860025439798505, 0.03669747690774177, 0.1879019266794462, -2.091736886412198, -0.05392483502340483, 0.08912911428267228, -0.10111848598983585, 0.04629800524586173, 0.010678637591110996, 0.06204574085058528, 0.0044765973154110615, 5.74960658184721, -0.054461086556134575, 1.8727504160944906, -0.06794331153376382, 0.11602416578531412, 0.0038426400254395043, 0.06703670114570646, 0.03590987831645892, -0.001442262509199517, 2.242105275434312, 0.06102291717623049, 0.3333577991752048, -0.06426005433019982, 0.020420214260041033, 0.004396710432917432, 0.04773346847156976, 0.003605034838076655, 0.018344412877616446, 0.18006068264684005, -1.7205651824068793, -0.02865963818533225, -0.08910711847676438, -0.11783143645339124, -0.08206090969971559, -0.012962330585414388, 0.03714291494689949, 0.03280914892389674, 5.2190719441478794, -0.30416794091004506, 1.5010103887299697, -0.11391829312212226, 0.087148139491984, -0.038617224358240804, 0.010769947460525826, 0.02889572569755693, 0.03930168791321329, 3.6790278529819664, 0.39266418087374577, 1.615032428279713, 0.23486110051072231, 0.09094227716074844, 0.11533185302232794, -0.001191251536658603, -0.0026942433010710472, 0.06803584521313358, -0.02154419964486222, -2.2717082398949286, 0.08685187920776022, -0.09525254803135513, 0.19037270526124922, 0.01939872750376672, 0.08289485318647245, -0.017833863082218595, 0.03517967586686895]
+# x = [5.917514679782369, -0.018043653568238477, 2.1481038849593226, 0.03610260062432803, 0.05485476474526704, -0.05199731517128024, -0.04776564003104174, 0.8220817386685608, 0.2129805547942142, 0.18432678923495804, -0.2823974402531586, -0.11824526433960911, -0.07715640792796873, -0.02134814497830885, 0.18469614690080047, -2.171725738123829, -0.022080642890552483, 0.009181195080468212, -0.034927041834743176, 0.08104645637253573, 0.020262903494154126, 6.632389348841481, -0.044673906621729716, 1.8512967395328466, 0.01223901455707906, 0.14224544736446207, 0.09708615949391493, -0.06879483096386668, 2.483860477094187, 0.1509942188433968, 0.4098045970720524, -0.03857444136144707, -0.008438277794243753, 0.10837189442554016, 0.06515636393347102, 0.18875217630397131, -1.9763778076482876, -0.016584666597470932, -0.6971098639737342, -0.05951905036590062, 0.08563086608155779, 0.0426430917984742, 4.810015704845074, 0.06831797983825921, 1.5250533634686867, 0.0014369109851227971, 0.03208221607596379, 0.07266621950928244, -0.03379022330640202, 3.6797279488230203, -0.054005014518301336, 1.307750656865198, 0.004220933762682051, -0.1457065178330639, 0.06346009380300277, -0.0082751392261705, 0.04785747259882162, -2.0128279122321504, 0.09466219318210314, -0.011346931996750844, 0.06256356234845359, -0.026073605442442645, 0.021718240493309584]
 # len_dofs = len(jnp.ravel(stel.dofs))
 # dofs = jnp.reshape(jnp.array(x)[:len_dofs], shape=stel.dofs.shape)
 # stel.dofs = dofs
@@ -66,7 +68,6 @@ for i in range(nparticles):
     v0 = v0.at[:,i].set(vpar0[i]*b0 + vperp0[i]*(perp_vector_1_normalized/jnp.sqrt(2)+perp_vector_2/jnp.sqrt(2)))
 normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), stel.currents)
 μ = particles.mass*vperp0**2/(2*normB0)
-
 start = time()
 loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps, n_segments, model=model)
 print(f"Loss function initial value: {loss_value:.8f}")
@@ -122,20 +123,20 @@ if method == 'Bayesian':
     x = jnp.array(list(optimizer.max['params'].values()))
 else:
     if method == 'least_squares':
-        res = least_squares(loss_partial_dofs_min, x0=all_dofs, verbose=2, ftol=1e-5, max_nfev=max_function_evaluations)
+        res = least_squares(loss_partial_dofs_min, x0=all_dofs, verbose=2, ftol=tolerance_to_terminace_optimization, max_nfev=max_function_evaluations)
     else:
         if method == 'BOBYQA':
             max_function_evaluations = max_function_evaluations_BOBYQA
             if change_currents:
                 lower = jnp.concatenate((jnp.array([min_val]*len_dofs), jnp.array([1e5]*n_curves)))
                 upper = jnp.concatenate((jnp.array([max_val]*len_dofs), jnp.array([1e8]*n_curves)))
-                res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=1e-5, maxfun=max_function_evaluations, bounds=(lower,upper))
+                res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=tolerance_to_terminace_optimization, maxfun=max_function_evaluations, bounds=(lower,upper))
             else:
                 lower = jnp.array([min_val]*len_dofs)
                 upper = jnp.array([max_val]*len_dofs)
-                res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=1e-5, maxfun=max_function_evaluations)#, bounds=(lower,upper))
+                res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=tolerance_to_terminace_optimization, maxfun=max_function_evaluations)#, bounds=(lower,upper))
         else:            
-            res = minimize(loss_partial_dofs_min, x0=all_dofs, method=method, options={'disp': True, 'maxiter':3, 'gtol':1e-5, 'xrtol':1e-5})
+            res = minimize(loss_partial_dofs_min, x0=all_dofs, method=method, options={'disp': True, 'maxiter':max_iterations_BFGS, 'gtol':tolerance_to_terminace_optimization})
     x = jnp.array(res.x)
     
 print(f'Resulting dofs: {repr(x.tolist())}')
