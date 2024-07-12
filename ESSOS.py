@@ -151,11 +151,11 @@ class Curves:
 
     def __str__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
-             + f"Degrees of freedom\n{jnp.ravel(self.dofs)}\n"
+             + f"Degrees of freedom\n{repr(self.dofs.tolist())}\n"
                 
     def __repr__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
-             + f"Degrees of freedom\n{jnp.ravel(self.dofs)}\n"
+             + f"Degrees of freedom\n{repr(self.dofs.tolist())}\n"
 
     def _tree_flatten(self):
         children = (self._dofs,)  # arrays / dynamic values
@@ -347,11 +347,9 @@ class Curves:
         """
         with open(filename, "a") as file:
             file.write(f"nfp stellsym order\n")
-            file.write(f"{self._nfp} {self._stellsym} {self._order}\n")
+            file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
             file.write(f"Degrees of freedom\n")
-            file.write(f"{self._dofs}\n")
-            file.write(f"Fourier coefficients\n")
-            file.write(f"{self._curves}\n\n")
+            file.write(f"{repr(self.dofs.tolist())}\n")
 
 tree_util.register_pytree_node(Curves,
                                Curves._tree_flatten,
@@ -368,13 +366,13 @@ class Coils(Curves):
 
     def __str__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
-             + f"Degrees of freedom\n{jnp.ravel(self.dofs)}\n" \
-             + f"Currents degrees of freedom\n{jnp.ravel(self._dofs_currents)}\n"
+             + f"Degrees of freedom\n{repr(self.dofs.tolist())}\n" \
+             + f"Currents degrees of freedom\n{repr(self.dofs_currents.tolist())}\n"
                 
     def __repr__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
-             + f"Degrees of freedom\n{jnp.ravel(self.dofs)}\n" \
-             + f"Currents degrees of freedom\n{jnp.ravel(self._dofs_currents)}\n"
+             + f"Degrees of freedom\n{repr(self.dofs.tolist())}\n" \
+             + f"Currents degrees of freedom\n{repr(self.dofs_currents.tolist())}\n"
     @property
     def dofs_currents(self):
         return self._dofs_currents
@@ -581,9 +579,9 @@ class Coils(Curves):
             file.write(f"nfp stellsym order\n")
             file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
             file.write(f"Degrees of freedom\n")
-            file.write(f"{jnp.ravel(self.dofs)}\n")
+            file.write(f"{repr(self.dofs.tolist())}\n")
             file.write(f"Currents degrees of freedom\n")
-            file.write(f"{jnp.ravel(self._dofs_currents)}")
+            file.write(f"{repr(self._dofs_currents.tolist())}\n")
 
 
 tree_util.register_pytree_node(Coils,
