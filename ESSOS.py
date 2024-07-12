@@ -1,8 +1,7 @@
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-from jax import random
-from jax import jit, pmap, vmap
+from jax import random, lax,jit, pmap, vmap, tree_util
 from jax.lax import fori_loop, select
 
 import matplotlib.pyplot as plt
@@ -17,10 +16,9 @@ from jax.experimental.shard_map import shard_map
 from jax.sharding import Mesh, PartitionSpec as P
 
 from functools import partial
-from jax import tree_util
 from time import time
 
-from MagneticField import B_norm
+from MagneticField import B_norm, B
 from Dynamics import GuidingCenter, Lorentz
 import optax
 
@@ -525,11 +523,49 @@ class Coils(Curves):
         def aux_trajectory(particles: jnp.ndarray) -> jnp.ndarray:
             trajectories = jnp.empty((n_particles//n_cores, timesteps, 6))
             for particle in particles:
-                trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
-                    odeint(
-                        Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
-                        )
-                    )
+                # trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
+                #     odeint(
+                #         Lorentz, initial_values.T[particle], times, currents, curves_points, atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
+                #         )
+                #     )
+                
+                ## BORIS ALGORITHM
+                dt = times[1]-times[0]
+                x1, x2, x3, v1, v2, v3 = initial_values.T[particle]
+                x = jnp.array([x1, x2, x3])
+                v = jnp.array([v1, v2, v3])
+                charge = 2*1.602176565e-19
+                mass   = 4*1.660538921e-27
+                
+                # for i, time in enumerate(times):
+                #     # B_field = B(x, curves_points, currents)
+                #     # t = charge / mass * B_field * 0.5 * dt
+                #     # s = 2. * t / (1. + t*t)
+                #     # v += jnp.cross(v + jnp.cross(v,t),s)
+                #     # x += v * dt
+                #     trajectories = trajectories.at[particle%(n_particles//n_cores),i,:].set(jnp.concatenate((x,v)))
+                
+                @jit
+                def update_state(state, _):
+                    x, v = state
+                    def update_fn(state):
+                        x, v = state
+                        B_field = B(x, curves_points, currents)
+                        t = charge / mass * B_field * 0.5 * dt
+                        s = 2. * t / (1. + jnp.dot(t,t))
+                        vprime = v + jnp.cross(v, t)
+                        v += jnp.cross(vprime, s)
+                        x += v * dt
+                        return (x, v), jnp.concatenate((x, v))
+                    def no_update_fn(state):
+                        x, v = state
+                        return (x, v), jnp.concatenate((x, v))
+                    condition = (jnp.sqrt(x1**2 + x2**2) > 50) | (jnp.abs(x3) > 20)
+                    return lax.cond(condition, no_update_fn, update_fn, state)
+                _, new_trajectories = lax.scan(update_state,  (x, v), jnp.arange(len(times)))
+                trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(new_trajectories)
+
+                
             return trajectories
 
         trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))

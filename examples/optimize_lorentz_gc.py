@@ -28,7 +28,8 @@ A = 2 # Aspect ratio
 R = A*r
 r_init = r/4
 maxtime = 3.0e-5
-timesteps=int(maxtime/1.0e-8)
+timesteps_guiding_center=max(1000,int(maxtime/1.0e-8))
+timesteps_lorentz=int(maxtime/1.0e-10)
 nparticles = number_of_cores*number_of_particles_per_core
 n_segments=80
 coil_current = 7e6
@@ -46,6 +47,7 @@ max_val =  15 # maximum coil dof value
 particles = Particles(nparticles)
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
 stel = Coils(curves, jnp.array([coil_current]*n_curves))
+timesteps = timesteps_lorentz if model=='Lorentz' else timesteps_guiding_center
 
 # If there is a previous optimization, use the following x to set the dofs and currents
 # x = [5.917514679782369, -0.018043653568238477, 2.1481038849593226, 0.03610260062432803, 0.05485476474526704, -0.05199731517128024, -0.04776564003104174, 0.8220817386685608, 0.2129805547942142, 0.18432678923495804, -0.2823974402531586, -0.11824526433960911, -0.07715640792796873, -0.02134814497830885, 0.18469614690080047, -2.171725738123829, -0.022080642890552483, 0.009181195080468212, -0.034927041834743176, 0.08104645637253573, 0.020262903494154126, 6.632389348841481, -0.044673906621729716, 1.8512967395328466, 0.01223901455707906, 0.14224544736446207, 0.09708615949391493, -0.06879483096386668, 2.483860477094187, 0.1509942188433968, 0.4098045970720524, -0.03857444136144707, -0.008438277794243753, 0.10837189442554016, 0.06515636393347102, 0.18875217630397131, -1.9763778076482876, -0.016584666597470932, -0.6971098639737342, -0.05951905036590062, 0.08563086608155779, 0.0426430917984742, 4.810015704845074, 0.06831797983825921, 1.5250533634686867, 0.0014369109851227971, 0.03208221607596379, 0.07266621950928244, -0.03379022330640202, 3.6797279488230203, -0.054005014518301336, 1.307750656865198, 0.004220933762682051, -0.1457065178330639, 0.06346009380300277, -0.0082751392261705, 0.04785747259882162, -2.0128279122321504, 0.09466219318210314, -0.011346931996750844, 0.06256356234845359, -0.026073605442442645, 0.021718240493309584]
@@ -57,17 +59,16 @@ stel = Coils(curves, jnp.array([coil_current]*n_curves))
 #     currents = jnp.array(x)[len_dofs:]
 #     stel.currents = currents
 
-times = jnp.linspace(0, maxtime, timesteps)
 x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
 v0 = jnp.zeros((3, nparticles))
 for i in range(nparticles):
-    B0 = B(jnp.array([x0[i],y0[i],z0[i]]), curve_segments=curves.gamma(n_segments), currents=stel.currents)
+    B0 = B(jnp.array([x0[i],y0[i],z0[i]]), curve_segments=stel.gamma(n_segments), currents=stel.currents)
     b0 = B0/jnp.linalg.norm(B0)
     perp_vector_1 = jnp.array([0, b0[2], -b0[1]])
     perp_vector_1_normalized = perp_vector_1/jnp.linalg.norm(perp_vector_1)
-    perp_vector_2 = jnp.cross(b0, perp_vector_1)
+    perp_vector_2 = jnp.cross(b0, perp_vector_1_normalized)
     v0 = v0.at[:,i].set(vpar0[i]*b0 + vperp0[i]*(perp_vector_1_normalized/jnp.sqrt(2)+perp_vector_2/jnp.sqrt(2)))
-normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), stel.currents)
+normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(n_segments), stel.currents)
 μ = particles.mass*vperp0**2/(2*normB0)
 start = time()
 loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps, n_segments, model=model)
@@ -75,9 +76,10 @@ print(f"Loss function initial value: {loss_value:.8f}")
 end = time()
 print(f"Took: {end-start:.2f} seconds")
 
+initial_values = jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]) if model=='Lorentz' else jnp.array([x0, y0, z0, vpar0, vperp0])
+
 loss_partial = partial(loss, old_coils=stel,
-                       particles=particles, R=R, r_init=r_init,
-                       initial_values=jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]) if model=='Lorentz' else jnp.array([x0, y0, z0, vpar0, vperp0]),
+                       particles=particles, R=R, r_init=r_init, initial_values=initial_values,
                        maxtime=maxtime, timesteps=timesteps, n_segments=n_segments, model=model)
 
 len_dofs = len(jnp.ravel(stel.dofs))

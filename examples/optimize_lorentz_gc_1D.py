@@ -27,9 +27,10 @@ A = 2 # Aspect ratio
 R = A*r
 r_init = r/4
 maxtime = 4e-6
-timesteps=int(min(1000,maxtime/1.0e-8))
+timesteps_guiding_center=max(1000,int(maxtime/1.0e-8))
+timesteps_lorentz=int(maxtime/1.0e-10)
 nparticles = len(jax.devices())*1
-n_segments=80
+n_segments=100
 coil_current = 7e6
 max_function_evaluations = 25
 method = 'least_squares' # 'L-BFGS-B','least_squares','Bayesian' or one of scipy.optimize.minimize methods such as 'BFGS'
@@ -38,31 +39,30 @@ particles = Particles(nparticles)
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
 stel = Coils(curves, jnp.array([coil_current]*n_curves))
 
-times = jnp.linspace(0, maxtime, timesteps)
 x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
 v0 = jnp.zeros((3, nparticles))
 for i in range(nparticles):
-    B0 = B(jnp.array([x0[i],y0[i],z0[i]]), curve_segments=curves.gamma(n_segments), currents=stel.currents)
+    B0 = B(jnp.array([x0[i],y0[i],z0[i]]), curve_segments=stel.gamma(n_segments), currents=stel.currents)
     b0 = B0/jnp.linalg.norm(B0)
     perp_vector_1 = jnp.array([0, b0[2], -b0[1]])
     perp_vector_1_normalized = perp_vector_1/jnp.linalg.norm(perp_vector_1)
-    perp_vector_2 = jnp.cross(b0, perp_vector_1)
+    perp_vector_2 = jnp.cross(b0, perp_vector_1_normalized)
     v0 = v0.at[:,i].set(vpar0[i]*b0 + vperp0[i]*(perp_vector_1_normalized/jnp.sqrt(2)+perp_vector_2/jnp.sqrt(2)))
-normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), stel.currents)
+normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(n_segments), stel.currents)
 μ = particles.mass*vperp0**2/(2*normB0)
 
 start = time()
-loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime, timesteps, n_segments, model='Guiding Center')
+loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime, timesteps_guiding_center, n_segments, model='Guiding Center')
 print(f"Loss function initial value with Guiding Center: {loss_value:.8f} took: {time()-start:.2f} seconds")
 
 start = time()
-loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps, n_segments, model='Lorentz')
+loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps_lorentz, n_segments, model='Lorentz')
 print(f"Loss function initial value with Lorentz: {loss_value:.8f} took: {time()-start:.2f} seconds")
 ##############
 loss_partial_gc = partial(loss, old_coils=stel,
                        particles=particles, R=R, r_init=r_init,
                        initial_values=jnp.array([x0, y0, z0, vpar0, vperp0]),
-                       maxtime=maxtime, timesteps=timesteps, n_segments=n_segments, model='Guiding Center')
+                       maxtime=maxtime, timesteps=timesteps_guiding_center, n_segments=n_segments, model='Guiding Center')
 
 change_currents = False
 
@@ -91,7 +91,7 @@ def loss_partial_gc_x0_min(x):
 loss_partial_lorentz = partial(loss, old_coils=stel,
                        particles=particles, R=R, r_init=r_init,
                        initial_values=jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]),
-                       maxtime=maxtime, timesteps=timesteps, n_segments=n_segments, model='Lorentz')
+                       maxtime=maxtime, timesteps=timesteps_lorentz, n_segments=n_segments, model='Lorentz')
 @jit
 def loss_partial_lorentz_x0_max(x):
     dofs, currents = jax.lax.cond(
@@ -121,7 +121,7 @@ if change_currents:
 else:
     xmin = 1.5
     xmax = 8
-    x0 = stel.dofs[0, 0, 2]*1.5
+    x0 = stel.dofs[0, 0, 2]*0.7
 print(f'Initial guess: {x0} with bounds: {xmin} and {xmax}')
 
 pbounds = {'x': (xmin, xmax)}
