@@ -33,7 +33,8 @@ nparticles = len(jax.devices())*1
 n_segments=100
 coil_current = 7e6
 max_function_evaluations = 25
-method = 'least_squares' # 'L-BFGS-B','least_squares','Bayesian' or one of scipy.optimize.minimize methods such as 'BFGS'
+n_points_scan = 120
+method = 'Bayesian' # 'L-BFGS-B','least_squares','Bayesian' or one of scipy.optimize.minimize methods such as 'BFGS'
 
 particles = Particles(nparticles)
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True)
@@ -131,29 +132,29 @@ if method=='Bayesian':
     time0_gc = time()
     optimizer_gc = BayesianOptimization(f=loss_partial_gc_x0_max,pbounds=pbounds,random_state=1)
     optimizer_gc.maximize(init_points=5,n_iter=max_function_evaluations)
-    sol_gc = optimizer_gc.max['params']['x']
+    sol_gc = [optimizer_gc.max['params']['x']]
     print('Lorentz Optimization')
     time0_l = time()
     optimizer_lorentz = BayesianOptimization(f=loss_partial_lorentz_x0_max,pbounds=pbounds,random_state=1)
     optimizer_lorentz.maximize(init_points=5,n_iter=max_function_evaluations)
-    sol_lorentz = optimizer_lorentz.max['params']['x']
+    sol_lorentz = [optimizer_lorentz.max['params']['x']]
 else:
     print('Guiding Center Optimization')
     time0_gc = time()
     if method == 'least_squares':
-        res_gc = least_squares(loss_partial_gc_x0_min, x0=x0, verbose=2, ftol=1e-5, max_nfev=max_function_evaluations)#, diff_step=1e-4)
+        res_gc = least_squares(loss_partial_gc_x0_min, x0=x0, verbose=2, ftol=1e-6, max_nfev=max_function_evaluations)#, diff_step=1e-2)
         print('Lorentz Optimization');time0_l = time()
-        res_lorentz = least_squares(loss_partial_lorentz_x0_min, x0=x0, verbose=2, ftol=1e-5, max_nfev=max_function_evaluations)#, diff_step=1e-4)
+        res_lorentz = least_squares(loss_partial_lorentz_x0_min, x0=x0, verbose=2, ftol=1e-6, max_nfev=max_function_evaluations)#, diff_step=1e-2)
     else:
-        res_gc = minimize(loss_partial_gc_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':10, 'maxfun':max_function_evaluations, 'gtol':1e-5})
+        res_gc = minimize(loss_partial_gc_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':15, 'maxfun':max_function_evaluations, 'gtol':1e-6})
         print('Lorentz Optimization');time0_l = time()
-        res_lorentz = minimize(loss_partial_lorentz_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':10, 'maxfun':max_function_evaluations, 'gtol':1e-5})
+        res_lorentz = minimize(loss_partial_lorentz_x0_min, x0=x0, method=method, options={'disp': True, 'maxiter':15, 'maxfun':max_function_evaluations, 'gtol':1e-6})
     sol_gc = res_gc.x
     sol_lorentz = res_lorentz.x
 print(f'  Time to optimize Guiding Center with {method} optimization: {time0_l-time0_gc:.2f} seconds with x={sol_gc}')
 print(f'  Time to optimize Lorentz with {method} optimization: {time()-time0_l:.2f} seconds with x={sol_lorentz}')
 
-dofs_array = jnp.linspace(min(min(sol_lorentz[0]*0.95,xmin),sol_gc[0]*0.95),max(max(sol_lorentz[0]*1.03,xmax),sol_gc[0]*1.03),20)
+dofs_array = jnp.linspace(min(min(sol_lorentz[0]*0.95,xmin),sol_gc[0]*0.95),max(max(sol_lorentz[0]*1.03,xmax),sol_gc[0]*1.03),n_points_scan)
 plt.figure()
 plt.axvline(x=x0, linestyle='--', color='k', linewidth=2, label='Initial Guess')
 plt.plot(dofs_array, [loss_partial_lorentz_x0_min([x]) for x in tqdm(dofs_array)], color='r', label='Lorentz')
