@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from bayes_opt import BayesianOptimization
 from scipy.optimize import least_squares, minimize
 #### INPUT PARAMETERS START HERE - NUMBER OF PARTICLES ####
-number_of_cores = 3
+number_of_cores = 5
 number_of_particles_per_core = 1
 #### Some other imports
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
