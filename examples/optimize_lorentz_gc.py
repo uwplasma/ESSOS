@@ -29,21 +29,21 @@ from MagneticField import B, B_norm
 #### Input parameters continue here
 n_curves=2
 nfp=4
-order=2
+order=3
 r = 3
 A = 2 # Aspect ratio
 R = A*r
 r_init = r/4
 maxtime = 3.0e-5
-timesteps_guiding_center=max(1000,int(maxtime/1.0e-8))
-timesteps_lorentz=int(maxtime/1.0e-10)
+timesteps_guiding_center=max(1000,int(maxtime/1.0e-6))
+timesteps_lorentz=int(maxtime/2.0e-8)
 nparticles = number_of_cores*number_of_particles_per_core
-n_segments=80
+n_segments=100
 coil_current = 7e6
 change_currents = False
 model = 'Lorentz' # 'Guiding Center' or 'Lorentz'
-method = 'least_squares' # 'least_squares','L-BFGS-B','Bayesian','BOBYQA', or one of scipy.optimize.minimize methods such as 'BFGS'
-max_function_evaluations = 30
+method = 'BOBYQA' # 'least_squares','L-BFGS-B','Bayesian','BOBYQA', or one of scipy.optimize.minimize methods such as 'BFGS'
+max_function_evaluations = 50
 max_iterations_BFGS = 20
 max_function_evaluations_BFGS = 400
 max_function_evaluations_BOBYQA = 550
@@ -131,25 +131,28 @@ if method == 'Bayesian':
     optimizer.maximize(init_points=initial_points,n_iter=max_function_evaluations)
     print(optimizer.max)
     x = jnp.array(list(optimizer.max['params'].values()))
-else:
-    if method == 'least_squares':
-        res = least_squares(loss_partial_dofs_min, x0=all_dofs, verbose=2, ftol=tolerance_to_terminace_optimization, max_nfev=max_function_evaluations)
-    else:
-        if method == 'BOBYQA':
-            max_function_evaluations = max_function_evaluations_BOBYQA
-            if change_currents:
-                lower = jnp.concatenate((jnp.array([min_val]*len_dofs), jnp.array([1e5]*n_curves)))
-                upper = jnp.concatenate((jnp.array([max_val]*len_dofs), jnp.array([1e8]*n_curves)))
-                res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=tolerance_to_terminace_optimization, maxfun=max_function_evaluations, bounds=(lower,upper))
-            else:
-                lower = jnp.array([min_val]*len_dofs)
-                upper = jnp.array([max_val]*len_dofs)
-                res = pybobyqa.solve(loss_partial_dofs_min, x0=all_dofs, print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=tolerance_to_terminace_optimization, maxfun=max_function_evaluations)#, bounds=(lower,upper))
-        else:            
-            res = minimize(loss_partial_dofs_min, x0=all_dofs, method=method, options={'disp': True, 'maxiter':max_iterations_BFGS, 'maxfun':max_function_evaluations_BFGS, 'gtol':tolerance_to_terminace_optimization})
+elif method == 'least_squares':
+    res = least_squares(loss_partial_dofs_min, x0=all_dofs, verbose=2, ftol=tolerance_to_terminace_optimization, max_nfev=max_function_evaluations)
     x = jnp.array(res.x)
-    
-print(f'Resulting dofs (past in compare_lorentz_gc.py): {repr(x.tolist())}')
+elif method == 'BOBYQA':    
+    max_function_evaluations = max_function_evaluations_BOBYQA
+    if change_currents:
+        lower = jnp.concatenate((jnp.array([min_val]*len_dofs), jnp.array([1e5]*n_curves)))
+        upper = jnp.concatenate((jnp.array([max_val]*len_dofs), jnp.array([1e8]*n_curves)))
+        res = pybobyqa.solve(loss_partial_dofs_min, x0=list(all_dofs), print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=tolerance_to_terminace_optimization, maxfun=max_function_evaluations, bounds=(lower,upper))
+    else:
+        lower = jnp.array([min_val]*len_dofs)
+        upper = jnp.array([max_val]*len_dofs)
+        res = pybobyqa.solve(loss_partial_dofs_min, x0=list(all_dofs), print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=tolerance_to_terminace_optimization, maxfun=max_function_evaluations)#, bounds=(lower,upper))
+    x = jnp.array(res.x)
+elif 'scipy' in method:
+    method = method.replace("scipy", "").replace("optimize", "").replace("minimize", "").replace(".", "")
+    res = minimize(loss_partial_dofs_min, x0=all_dofs, method=method, options={'disp': True, 'maxiter':max_iterations_BFGS, 'maxfun':max_function_evaluations_BFGS, 'gtol':tolerance_to_terminace_optimization})
+    x = jnp.array(res.x)
+else:
+    raise ValueError(f"Method {method} not recognized")
+
+print(f'Resulting dofs (paste to compare_lorentz_gc.py): {repr(x.tolist())}')
 
 time0 = time()
 if model=='Lorentz':
