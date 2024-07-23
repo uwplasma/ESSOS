@@ -1,6 +1,7 @@
 import os
 import jax
 import sys
+import logging
 import pybobyqa # type: ignore
 from jax import jit
 from time import time
@@ -10,15 +11,21 @@ from functools import partial
 import matplotlib.pyplot as plt
 from bayes_opt import BayesianOptimization
 from scipy.optimize import least_squares, minimize
+
 #### INPUT PARAMETERS START HERE - NUMBER OF PARTICLES ####
-number_of_cores = 5
+number_of_cores = 32
 number_of_particles_per_core = 1
+
 #### Some other imports
+#logging.getLogger("jax._src.xla_bridge").addFilter(logging.Filter("This thread has been waiting for 5000ms for and may be stuck:"))
+#logging.getLogger("jax._src.xla_bridge").addFilter(logging.Filter("Thread is unstuck! Warning above was a false-positive. Perhaps the timeout is too short:"))
+#logging.getLogger("jax._src.xla_bridge").setLevel(logging.WARNING)
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
 sys.path.insert(1, os.path.dirname(os.getcwd()))
 from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, loss
 from MagneticField import B, B_norm
+
 #### Input parameters continue here
 n_curves=2
 nfp=4
@@ -34,7 +41,7 @@ nparticles = number_of_cores*number_of_particles_per_core
 n_segments=80
 coil_current = 7e6
 change_currents = False
-model = 'Guiding Center' # 'Guiding Center' or 'Lorentz'
+model = 'Lorentz' # 'Guiding Center' or 'Lorentz'
 method = 'least_squares' # 'least_squares','L-BFGS-B','Bayesian','BOBYQA', or one of scipy.optimize.minimize methods such as 'BFGS'
 max_function_evaluations = 30
 max_iterations_BFGS = 20
