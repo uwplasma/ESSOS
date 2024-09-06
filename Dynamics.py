@@ -13,13 +13,13 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
     
     """ Calculates the motion derivatives with the Guiding Center aproximation
         Attributes:
-    InitialValues: jnp.ndarray: Point in phase space where we want to calculate the derivatives - shape (4,)
-    t: float: Time when the Guiding Center is calculated
-    currents: jnp.ndarray: Currents of the coils - shape (n_coils,)
-    curve_segments: jnp.ndarray: Points of the coils - shape (n_coils, n_segments, 3)
-    μ: float: Magnetic moment, the 1st adiabatic constant
+    InitialValues: Point in phase space where we want to calculate the derivatives - shape (4,)
+    t: Time when the Guiding Center is calculated
+    currents: Currents of the coils - shape (n_coils,)
+    curve_segments: Points of the coils - shape (n_coils, n_segments, 3)
+    μ: Magnetic moment, the 1st adiabatic constant
         Returns:
-    Dx, Dvpar: jnp.ndarray: Derivatives of position and parallel velocity at time t due to the given coils
+    Dx, Dvpar: Derivatives of the position and parallel velocity at time t due to the given coils
     """
 
     assert isinstance(InitialValues, jnp.ndarray), "initial values must be a jnp.ndarray"
@@ -80,12 +80,12 @@ def Lorentz(InitialValues: jnp.ndarray,
     
     """ Calculates the motion derivatives with the full gyromotion aproximation
         Attributes:
-    InitialValues: jnp.ndarray: Point in phase space where we want to calculate the derivatives - shape (6,)
-    t: float: Time when the full gyromotion is calculated
-    currents: jnp.ndarray: Currents of the coils - shape (n_coils,)
-    curve_segments: jnp.ndarray: Points of the coils - shape (n_coils, n_segments, 3)
+    InitialValues: Point in phase space where we want to calculate the derivatives - shape (6,)
+    t: Time when the full gyromotion is calculated
+    currents: Currents of the coils - shape (n_coils,)
+    curve_segments: Points of the coils - shape (n_coils, n_segments, 3)
         Returns:
-    Dx, Dv: jnp.ndarray: Derivatives of position and parallel velocity at time t due to the given coils
+    Dx, Dv: Derivatives of the position and parallel velocity at time t due to the given coils
     """
 
     assert isinstance(InitialValues, jnp.ndarray), "initial values must be a jnp.ndarray"
@@ -125,5 +125,59 @@ def Lorentz(InitialValues: jnp.ndarray,
 
     def zero_derivatives(_):
         return jnp.zeros(6, dtype=float)
+
+    return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
+
+@jit
+def FieldLine(InitialValues:  jnp.ndarray,
+              t:              float,
+              currents:       jnp.ndarray,
+              curve_segments: jnp.ndarray) -> jnp.ndarray:
+    
+    """ Calculates the motion derivatives for a certain field line 
+        Attributes:
+    InitialValues: Point in phase space where we want to calculate the derivatives - shape (4,)
+    t: Time when the field line is calculated
+    currents: Currents of the coils - shape (n_coils,)
+    curve_segments: Points of the coils - shape (n_coils, n_segments, 3)
+        Returns:
+    Dx, Dvpar: Derivatives of the position and parallel velocity at time t due to the given coils
+    """
+
+    assert isinstance(InitialValues, jnp.ndarray), "initial values must be a jnp.ndarray"
+    assert InitialValues.shape == (3,), "initial values must have shape (3,) with x, y, z"
+    assert InitialValues.dtype == float, "initial values must be a float"
+    #assert isinstance(t, float), f"time must be a float, not a {type(t)}"
+    #assert t >= 0, "time must be positive"
+    assert isinstance(currents, jnp.ndarray), "currents must be a jnp.ndarray"
+    assert currents.ndim == 1, "currents must be a 1D array"
+    assert currents.dtype == float, "currents must be a float"
+    assert isinstance(curve_segments, jnp.ndarray), "curve segments must be a jnp.ndarray"
+    assert curve_segments.ndim == 3, "curve segments must be a 3D array"
+    assert curve_segments.shape[0] == currents.size, "number of coils must match number of currents"
+    assert curve_segments.shape[2] == 3, "curve segments must have shape (n_coils, n_segments, 3)"
+    assert curve_segments.dtype == float, "curve segments must be a float"
+
+    # Calculationg the magentic field
+    x, y, z = InitialValues
+    vpar = 299792458
+    
+   # Condition to check if any of x, y, z is greater than 10
+    condition = (jnp.sqrt(x**2 + y**2) > 100) | (jnp.abs(z) > 20)
+
+    def compute_derivatives(_):
+        r = jnp.array([x, y, z])
+        
+        B_field = B(r, curve_segments, currents)
+        normB = jnp.linalg.norm(B_field)
+        b = B_field/normB
+        
+        # Position derivative of the particle
+        Dx = vpar*b
+
+        return Dx
+
+    def zero_derivatives(_):
+        return jnp.zeros(3, dtype=float)
 
     return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
