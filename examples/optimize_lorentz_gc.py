@@ -13,7 +13,7 @@ from bayes_opt import BayesianOptimization
 from scipy.optimize import least_squares, minimize
 
 #### INPUT PARAMETERS START HERE - NUMBER OF PARTICLES ####
-number_of_cores = 32
+number_of_cores = 5
 number_of_particles_per_core = 1
 
 #### Some other imports
@@ -23,7 +23,7 @@ number_of_particles_per_core = 1
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
 sys.path.insert(1, os.path.dirname(os.getcwd()))
-from ESSOS import CreateEquallySpacedCurves, Coils, Particles, set_axes_equal, loss
+from ESSOS import CreateEquallySpacedCurves, Coils, Particles, loss, loss_discrete
 from MagneticField import B, B_norm
 
 #### Input parameters continue here
@@ -35,18 +35,19 @@ A = 2 # Aspect ratio
 R = A*r
 r_init = r/4
 maxtime = 3.0e-5
-timesteps_guiding_center=max(1000,int(maxtime/1.0e-6))
-timesteps_lorentz=int(maxtime/2.0e-8)
+timesteps_guiding_center=max(1000,int(maxtime/2.0e-8))
+timesteps_guiding_center=30
+timesteps_lorentz=int(maxtime/5.0e-10)
 nparticles = number_of_cores*number_of_particles_per_core
 n_segments=100
 coil_current = 7e6
 change_currents = False
-model = 'Lorentz' # 'Guiding Center' or 'Lorentz'
-method = 'BOBYQA' # 'least_squares','L-BFGS-B','Bayesian','BOBYQA', or one of scipy.optimize.minimize methods such as 'BFGS'
+model = 'Guiding Center' # 'Guiding Center' or 'Lorentz'
+method = 'BOBYQA' # 'least_squares','scipy.L-BFGS-B','Bayesian','BOBYQA', or one of scipy.optimize.minimize methods such as 'BFGS'
 max_function_evaluations = 50
 max_iterations_BFGS = 20
 max_function_evaluations_BFGS = 400
-max_function_evaluations_BOBYQA = 550
+max_function_evaluations_BOBYQA = 1050
 tolerance_to_terminace_optimization = 1e-6
 min_val = -11 # minimum coil dof value
 max_val =  15 # maximum coil dof value
@@ -78,15 +79,15 @@ for i in range(nparticles):
 normB0 = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(n_segments), stel.currents)
 μ = particles.mass*vperp0**2/(2*normB0)
 start = time()
-loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps, n_segments, model=model)
+loss_value = loss_discrete(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime, timesteps, n_segments, model=model)
 print(f"Loss function initial value: {loss_value:.8f}")
 end = time()
 print(f"Took: {end-start:.2f} seconds")
 
 initial_values = jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]) if model=='Lorentz' else jnp.array([x0, y0, z0, vpar0, vperp0])
 
-loss_partial = partial(loss, old_coils=stel,
-                       particles=particles, R=R, r_init=r_init, initial_values=initial_values,
+loss_partial = partial(loss_discrete, old_coils=stel,
+                       particles=particles, R=R, r_loss=r_init, initial_values=initial_values,
                        maxtime=maxtime, timesteps=timesteps, n_segments=n_segments, model=model)
 
 len_dofs = len(jnp.ravel(stel.dofs))
@@ -197,4 +198,3 @@ plt.show()
 # # time0 = time()
 # # trajectories_lorentz = stel.trace_trajectories_lorentz(particles, initial_values=jnp.array([x0, y0, z0, v0[0], v0[1], v0[2]]), maxtime=maxtime, timesteps=timesteps, n_segments=n_segments)
 # # print(f"Time to trace trajectories Lorentz: {time()-time0:.2f} seconds")
-
