@@ -4,8 +4,11 @@ import jax.numpy as jnp
 from jax import random, lax, jit, tree_util
 from jax.lax import fori_loop, select
 
-import matplotlib.pyplot as plt
 from functools import partial
+import matplotlib.pyplot as plt
+
+plt.rcParams['font.size'] = 20
+plt.rcParams['figure.figsize'] = 11, 7
 
 from jax.experimental.ode import odeint
 import matplotlib.pyplot as plt
@@ -67,16 +70,17 @@ def apply_symmetries_to_curves(base_curves, nfp, stellsym):
     applying rotations and flipping corresponding to ``nfp`` fold rotational
     symmetry and optionally stellarator symmetry.
     """
-    #n_indepentdent_curves = base_curves.shape[0] # = len(base_curves)
-    #curves = jnp.zeros((n_indepentdent_curves*nfp*stellsym, 3, base_curves.shape[2]))
+
     flip_list = jnp.array([False, True]) if stellsym else jnp.array([False])
 
     fliped_base_curves = jnp.einsum("aic,ib->abc", base_curves, jnp.array([[1, 0, 0],
                                                                            [0, -1, 0],
                                                                            [0, 0, -1]]))
-    #print("Fliped Base Curves: ", fliped_base_curves.shape)
-    curves = jnp.append(base_curves, fliped_base_curves, axis=0)
-    #print("Curves: ", curves.shape)
+
+    if stellsym:
+        curves = jnp.append(base_curves, fliped_base_curves, axis=0)
+    else:
+        curves = base_curves
 
     for fp in jnp.arange(1, nfp):
         for flip in flip_list:
@@ -184,13 +188,12 @@ class Curves:
         assert isinstance(n_segments, int), f"n_segments must be an integer"
         assert n_segments > 1
 
-        #quadpoints = jnp.linspace(0, 1, n_segments + 1)[:-1] # Like Simopt
+        # quadpoints = jnp.linspace(0, 1, n_segments + 1)[:-1] # Like Simopt
         quadpoints = jnp.linspace(0, 1, n_segments)          # Complete coil
                 
         
         def fori_createdata(order_index: int, data: jnp.ndarray) -> jnp.ndarray:
-            return data + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], jnp.sin(2 * jnp.pi * order_index * quadpoints)) + \
-                          jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], jnp.cos(2 * jnp.pi * order_index * quadpoints))
+            return data + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], jnp.sin(2 * jnp.pi * order_index * quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], jnp.cos(2 * jnp.pi * order_index * quadpoints))
         
         data = jnp.einsum("ij,k->ikj", self._curves[:, :, 0], jnp.ones(n_segments))
         data = fori_loop(1, self._order+1, fori_createdata, data) 
@@ -262,7 +265,7 @@ class Curves:
         r_init: Minor radius of the torus where the particles are initialized
         model: Choose physical model 'Guiding Center' or 'Lorentz'
             Returns:
-        initial_conditions: Initial conditions for the particles - shape (5, n_particles) (or (5, n_particles) for Lorentz)
+        initial_conditions: Initial conditions for the particles - shape (5, n_particles) for GC or (6, n_particles) for Lorentz
         """
 
         seed = 1
@@ -347,6 +350,8 @@ class Curves:
         ax.axis('off')
         ax.grid(False)
 
+        plt.tight_layout()
+
         # Save the plot
         if save_as is not None:
             plt.savefig(save_as, transparent=True)
@@ -407,59 +412,6 @@ class Coils(Curves):
         children = (Curves(self.dofs, self.nfp, self.stellsym), self._dofs_currents)  # arrays / dynamic values
         aux_data = {}  # static values
         return (children, aux_data)
-
-    @partial(jit, static_argnums=(1, 3, 4, 5, 6))
-    def trace_trajectories(self,
-                           particles: Particles,
-                           initial_values: jnp.ndarray,
-                           maxtime: float = 1e-7,
-                           timesteps: int = 200,
-                           n_segments: int = 100,
-                           n_cores: int = len(jax.devices())) -> jnp.ndarray:
-    
-        """ Traces the trajectories of the particles in the given coils
-            Attributes:
-        self: Coils object
-        particles: Particles object
-        initial_values: Initial values of the particles - shape (5, n_particles) for Guiding Center or (6, n_particles) for Lorentz
-        maxtime: Maximum time of the simulation
-        timesteps: Number of timesteps
-        n_segments: Number of segments to divide each coil
-        n_cores: Number of cores to be used
-        model: Choose physical model 'Guiding Center' or 'Lorentz'
-            Returns:
-        trajectories: Trajectories of the particles - shape (n_particles, timesteps, 4)
-        """
-
-        mesh = Mesh(mesh_utils.create_device_mesh(n_cores,), axis_names=('i',))
-
-        curves_points = self.gamma(n_segments)
-        currents = self._currents
-
-        m = particles.mass
-        q = particles.charge
-        n_particles = particles.number
-
-        times = jnp.linspace(0, maxtime, timesteps)
-
-        vperp = initial_values[4, :]
-        normB = jnp.apply_along_axis(B_norm, 0, initial_values[:3, :], curves_points, currents)
-        μ = m*vperp**2/(2*normB)
-      
-        def aux_trajectory(particles: jnp.ndarray) -> jnp.ndarray:
-            trajectories = jnp.empty((n_particles//n_cores, timesteps, 4))
-            for particle in particles:
-                trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
-                    odeint(
-                        GuidingCenter, initial_values[:4, :].T[particle], times, currents, curves_points, μ[particle], atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
-                           )
-                    )
-            return trajectories
-        
-        
-        trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
-    
-        return trajectories
     
     @partial(jit, static_argnums=(1, 3, 4, 5, 6))
     def trace_trajectories(self,
@@ -508,7 +460,6 @@ class Coils(Curves):
                            )
                     )
             return trajectories
-        
         
         trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
     
