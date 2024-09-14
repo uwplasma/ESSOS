@@ -13,7 +13,7 @@ from jax import grad
 # Show on which platform JAX is running.
 print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
 
-from ESSOS import CreateEquallySpacedCurves, Coils, Particles, optimize, loss, loss_discrete, projection2D, projection2D_top
+from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, optimize, loss, loss_discrete, projection2D, projection2D_top
 from MagneticField import B_norm
 
 import matplotlib.pyplot as plt
@@ -31,16 +31,21 @@ r = R/A
 r_init = r/4
 
 maxtime = 1.0e-5
-model = "Guiding Center"
 
-timesteps = 50#int(maxtime/2.0e-8)
+timesteps = 100#int(maxtime/2.0e-8)
 
 particles = Particles(len(jax.devices())*5)
 
-curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
+#curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
+dofs = jnp.reshape(jnp.array(
+    [[[7.598977262977724, -0.06204381206588949, 1.960221489212042, 0.08087152956300107, 0.0824068756276288, -0.21685516830513563, 0.3358566890272415], [1.643112294525154, 0.0912255777501672, 0.4457002547274044, -0.23749612023036357, 0.12921698758506556, -0.16179225016869853, 0.04368567029061642], [0.017466078442610288, -1.74050056132967, 0.11873499033931252, 0.00562604695481728, 0.06847095039356701, -0.2542865018166823, -0.29519101366213796]], [[6.507785380593552, 0.041043785605086446, 1.3362598919646926, 0.05966847653297775, -0.10388002720663599, 0.16216731032336307, 0.19986238498578562], [4.353566352639947, 0.048370947976885036, 0.9705972658743076, -0.1043723970417417, 0.4309250671302714, 0.3159408392783848, 0.15054974401945123], [0.15817477627995258, -1.5667258867991969, -0.25808048023312474, -0.048571112771940525, 0.13705497165272865, 0.22698993288243674, 0.2160013309861985]]]
+), (n_curves, 3, 2*order+1))
+
+#curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
+curves = Curves(dofs, nfp=4, stellsym=True)
 stel = Coils(curves, jnp.array([7e6]*n_curves))
 
-initial_values = stel.initial_conditions(particles, R, r_init, model=model)
+initial_values = stel.initial_conditions(particles, R, r_init, model="Guiding Center")
 initial_vperp = initial_values[4, :]
 
 time0 = time()
