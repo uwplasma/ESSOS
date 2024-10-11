@@ -1,7 +1,7 @@
 import os
 os.mkdir("images") if not os.path.exists("images") else None
 os.mkdir("images/tracing") if not os.path.exists("images/tracing") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=1'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=4'
 import simsopt
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
@@ -31,21 +31,21 @@ R = 6
 A = 3 # Aspect ratio
 r = R/A
 
-angle = jnp.pi
-r_init = 1.8
+angle = jnp.pi/3
+r_init = 0.25
 R_shift = 0
 
-maxtime = 4e-6
+maxtime = 5e-5
 timesteps = int(maxtime/5.0e-10)
 
-n_fieldlines = len(jax.devices())
+n_fieldlines = len(jax.devices()*3)
 
-# dofs = jnp.reshape(jnp.array(
-#     [[[7.708887597321577, -0.006094701754433561, 1.6897133930532025, 0.034810448014697716, 0.0012021910952789599, 0.039853560898489494, 0.08589586840766783], [1.4914899184060677, 0.0061928725937056015, 0.4092044003536702, -0.06681685016135837, 0.05744489363288336, -0.05715948276840147, 0.025828081464924563], [-0.0007030409084648945, -1.7189823668095454, -0.008277740399682326, -0.005869396188064093, 0.0026421210366835623, 0.009937006637304834, 0.133301929177133]], [[6.432726856624144, 0.0658311730762483, 1.4351783762194215, 0.010641026125979981, -0.05781617933245728, 0.09416577100135277, 0.10612878695627287], [4.318264895508168, -0.012599294303966163, 0.9453539311970913, -0.010370566926823303, 0.05564630630886973, -0.059384629677086666, 0.05816943387707402], [0.14917270224805584, -1.7029325472791736, -0.1456811058650651, 0.08376203460919907, -0.09357010251065327, 0.10827131523416901, 0.19338876563952245]]]
-# ), (n_curves, 3, 2*order+1))
+dofs = jnp.reshape(jnp.array(
+    [[[5.9384044813744925, 0.38553626248074174, 1.9764594325055334, 0.13422861800908142, -0.10081529235028806, 0.197527564265499, 0.19605246865372378], [1.2994688522847921, 0.07714734376326711, 0.4677087208102816, -0.20967907534652885, 0.2937211728652511, 0.07960006465910975, 0.21894503025137765], [0.17767471557933787, -1.8296525366984087, -0.3135170941969634, -0.009016329423814171, -0.15777101884167344, -0.0068998898710156955, 0.3213557664766061]], [[4.854558939862609, -0.005573963774216239, 1.339706864040931, -0.18353940894128923, 0.10852276906828726, -0.07697720491988251, 0.02086123807989991], [3.556471823911645, 0.0012120062449074102, 1.387832515613724, 0.06816378884850019, -0.04942242815604072, 0.05450353329241083, 0.050199301035013556], [0.08317005404205846, -1.8567261798440318, -0.09426814066350327, -0.025203436931972575, 0.06659424616163043, 0.4565275468428372, 0.15888975990095813]]]
+), (n_curves, 3, 2*order+1))
 
-#curves = Curves(dofs, nfp=4, stellsym=True)
-curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
+curves = Curves(dofs, nfp=4, stellsym=True)
+# curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
 
 stel = Coils(curves, jnp.array([coil_current]*n_curves))
 
@@ -53,7 +53,6 @@ stel = Coils(curves, jnp.array([coil_current]*n_curves))
 # Initializing positions
 
 r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
-r_ = jnp.zeros(1)
 ϕ = jnp.ones(n_fieldlines)*angle
 
 
@@ -73,16 +72,18 @@ print(f"Time to trace trajectories: {time()-start:.2f} seconds")
 colors = cm.rainbow(np.linspace(0, 1, n_fieldlines))
 plt.figure()
 # ploting Angle and angle + pi -> TODO change to only have one of the angles
+
+theta = np.linspace(0, 2*np.pi, 100)
+x = r_init*np.cos(theta)-R_shift+R
+y = r_init*np.sin(theta)
+plt.plot(x, y, color="whitesmoke", linestyle="dashed")
+
 condition = jnp.isclose(trajectories[:, :, 0]*jnp.cos(angle) + trajectories[:, :, 1]*jnp.sin(angle), 0, atol=1e-2, rtol=0)
 for i, j in jnp.array(jnp.nonzero(condition)).T:
     z_plot = trajectories[i, j, 2]
     r_plot = jnp.sqrt(trajectories[i, j, 0]**2 + trajectories[i, j, 1]**2)
     plt.plot(r_plot, z_plot, ".", color=colors[i], markersize=3)
 
-theta = np.linspace(0, 2*np.pi, 100)
-x = r_init*np.cos(theta)-R_shift+R
-y = r_init*np.sin(theta)
-plt.plot(x, y, color="whitesmoke", linestyle="dashed")
 x = r*np.cos(theta)+R
 y = r*np.sin(theta)
 plt.plot(x, y, color="lightgrey")
@@ -92,12 +93,12 @@ plt.xlim(R-r/zoom, R+r/zoom)
 plt.ylim(-r/zoom, r/zoom)
 plt.gca().set_aspect('equal')
 
-plt.title("Poincaré Plot")
+plt.title(r"Poincaré plot at $\phi=\pi /3$")
 plt.xlabel("r [m]")
 plt.ylabel("z [m]")
 
 # Save the plot
-plt.savefig("images/tracing/poincare.pdf")
+plt.savefig(f"images/tracing/poincare_phi{angle:.2f}.pdf")
 
 
-stel.plot(trajectories=trajectories, title="Starting configuration", save_as="images/tracing/initial.pdf", show=True)
+stel.plot(trajectories=trajectories, title="Optimized stellarator", save_as="images/tracing/stel_field_lines.pdf", show=True)
