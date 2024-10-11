@@ -714,7 +714,8 @@ def optimize(coils:          Coils,
              maxtime:        float = 1e-7,
              timesteps:      int = 200,
              n_segments:     int = 200,
-             method: dict = {"method":'JAX minimize', "maxiter": 20}):
+             method:         dict = {"method":'JAX minimize', "maxiter": 20},
+             print_loss:     bool = True) -> None:
     
     """ Optimizes the coils by minimizing the loss function
         Attributes:
@@ -752,7 +753,7 @@ def optimize(coils:          Coils,
     # Optimization using OPTAX adam method
     elif method["method"] == "OPTAX adam":
         solver = optax.adam(learning_rate=0.003) #
-
+        best_loss = jnp.inf
         args = (dofs,)
 
         solver_state = solver.init(dofs) #
@@ -765,9 +766,13 @@ def optimize(coils:          Coils,
             args = (dofs,)
             current_loss = loss_partial(*args)
             losses += [current_loss]
-            print(f"Iteration: {iter+1:>5}     loss: {current_loss:.5f}     took {time()-start_loop:.1f} seconds")
+            if current_loss < best_loss:
+                best_loss = current_loss
+                best_dofs = dofs
+            if print_loss:
+                print(f"Iteration: {iter+1:>5}     loss: {current_loss:.5f}     took {time()-start_loop:.1f} seconds")
 
-        coils.dofs = jnp.reshape(dofs, (-1, 3, 1+2*coils.order))
+        coils.dofs = jnp.reshape(best_dofs, (-1, 3, 1+2*coils.order))
         return jnp.array(losses)
     
     #TODO: Fix the loss for the Bayesian optimization
