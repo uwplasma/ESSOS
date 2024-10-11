@@ -30,15 +30,15 @@ R = 6
 r = R/A
 r_init = r/4
 
-maxtime = 2.e-5
+maxtime = 1.0e-5
 model = "Guiding Center"
 
-timesteps = 200#int(maxtime/2.0e-8)
+timesteps = 100#int(maxtime/2.0e-8)
 
 particles = Particles(len(jax.devices()))
 
 dofs = jnp.reshape(jnp.array(
-    [[[5.85721512578458, 0.150023770349955, 1.8398384572174729, 0.012801371295933416, -0.05940493124211967, 0.2745081658275982, 0.35424492913905203], [1.3536705912920592, 0.06197858484374306, 0.5934873150457475, -0.16452162895003594, 0.18439116915289458, 0.16184469182312552, 0.2035105919998774], [0.2504829444409511, -1.7460698121540987, -0.3617158172013022, 0.09964116422819566, -0.43327499226198923, 0.014159843896582303, 0.5525356612294253]], [[4.926649868657168, -0.06421011831853891, 1.366917138846978, 0.11266614290894303, 0.7723316415165112, -0.06874132904064484, -0.08864105913545219], [3.6223952092023257, 0.01112420173867613, 1.1587586184501026, 0.02668972726082938, -0.19974315877656582, -0.024506483939156068, 0.23798802759145848], [0.0454161231393845, -1.7388239555035732, -0.013028941167930816, -0.00755860957601509, -0.06666798480840358, 0.3914503897511418, 0.1711925997103193]]]
+    [[[5.898075463501548, -0.012096412006829699, 1.9586654258049225, 0.016127004254851272, 0.013450988841925395, 0.011510978858787501, 0.015447183544435394], [1.1583382399467697, 0.012173937110101585, 0.40364989096633375, -0.016038681818501842, 0.010849500768155114, -0.011324545587278741, 0.016111621083972565], [0.012353748126028775, -1.9901408791946145, -0.013381145818550187, -0.016558883184900675, -0.015574045115638115, 0.016449771924888328, 0.016623513311186264]], [[4.972916794891354, -0.012078112030868785, 1.6500092050703141, 0.016033830811015014, 0.016500555848661103, 0.011370801274677577, 0.008131924367416306], [3.3492350799524746, 0.012081034881482693, 1.12438304507541, -0.016355050110679094, -0.013239850720451363, -0.01129016967862203, 0.015974940886591397], [0.013251928864861174, -2.0133465167505173, -0.01348316025411456, 0.013046522310126965, -0.013122906253886893, 0.01648559992464199, 0.013136904519618315]]]
 ), (n_curves, 3, 2*order+1))
 curves = Curves(dofs, nfp=4, stellsym=True)
 
@@ -94,10 +94,33 @@ print(f"Loss function initial value: {loss_value:.8f}, took: {time()-start:.2f} 
 start = time()
 grad_loss_value = grad(loss, argnums=0)(stel.dofs, stel.dofs_currents, stel, particles, R, r_init, initial_values, maxtime, timesteps, 100)
 print(f"Grad loss function initial value:\n{jnp.ravel(grad_loss_value)}")
-print(f"Grad shape: {grad_loss_value.shape}, took: {time()-start:.2f} seconds")
+print(f"Grad shape: {grad_loss_value.shape}, took: {time()-start:.2f} seconds\n")
 
 start = time()
-optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 10})
+optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 250}, print_loss=False)
+print(stel)
+optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 250}, print_loss=False)
+print(stel)
+optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 250}, print_loss=False)
+print(stel)
+optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 250}, print_loss=False)
+print(stel)
+# optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 250}, print_loss=False)
+# print(stel)
+maxtime = 1.1e-5
+timesteps = 110
+optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 250}, print_loss=False)
+print(stel)
+maxtime = 1.15e-5
+optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 250}, print_loss=False)
+print(stel)
+optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 250}, print_loss=False)
+print(stel)
+maxtime = 2.e-5
+timesteps = 200
+optimize(stel, particles, R, r_init, initial_values, maxtime=maxtime, timesteps=timesteps, n_segments=100, method={"method": "OPTAX adam", "iterations": 10}, print_loss=False)
+print(stel)
+
 print(f"Optimization took: {time()-start:.1f} seconds") 
 
 stel.save_coils("Optimizations.txt")
