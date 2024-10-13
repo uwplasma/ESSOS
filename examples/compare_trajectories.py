@@ -15,13 +15,7 @@ print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(ja
 
 from time import time
 import matplotlib.pyplot as plt
-plt.rcParams['font.size'] = 20
-plt.rcParams['figure.figsize'] = 11, 7
-
-
-
-
-
+plt.rcParams['font.size'] = 16
 
 from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, projection2D, projection2D_top
 from MagneticField import B_norm, B
@@ -80,12 +74,12 @@ plt.figure()
 for i in range(n_particles):
     normB = jnp.apply_along_axis(B_norm, 1, trajectories_gc[i, :, :3], stel.gamma(), stel.currents)
     normalized_energy = (μ[i]*normB + 0.5*particles.mass*trajectories_gc[i, :, 3]**2)/particles.energy-1
-    plt.plot(jnp.arange(timesteps)*maxtime/timesteps, normalized_energy)
+    plt.plot(jnp.arange(timesteps)*maxtime/timesteps, normalized_energy, color="blue", linewidth=1.7)
     y_limit = max(y_limit, jnp.abs(jnp.max(normalized_energy)), jnp.abs(jnp.min(normalized_energy)))
-plt.title("Energy Conservation GC")
 plt.xlabel("time [s]")
 plt.ylabel(r"$\frac{E-E_\alpha}{E_\alpha}$")
-plt.ylim(-1.2*y_limit, 1.2*y_limit)
+plt.ylim(-8e-7, 8e-7)
+plt.grid(axis="y", linestyle="--") 
 plt.tight_layout()
 plt.savefig("images/comparison/energy_gc.pdf", transparent=True)
 
@@ -94,13 +88,13 @@ plt.figure()
 for i in range(n_particles):
     normB = jnp.apply_along_axis(B_norm, 1, trajectories_lorentz[i, :, :3], stel.gamma(), stel.currents)
     normalized_energy = 0.5*particles.mass*(jnp.sum(trajectories_lorentz[i, :, 3:]**2, axis=1))/particles.energy-1
-    plt.plot(jnp.arange(timesteps)*maxtime/timesteps, normalized_energy)
+    plt.plot(jnp.arange(timesteps)*maxtime/timesteps, normalized_energy, color="blue", linewidth=1.7)
     y_limit = max(y_limit, jnp.abs(jnp.max(normalized_energy)), jnp.abs(jnp.min(normalized_energy)))
 
-plt.title("Energy Conservation Lorentz")
 plt.xlabel("time [s]")
 plt.ylabel(r"$\frac{E-E_\alpha}{E_\alpha}$")
-plt.ylim(-1.2*y_limit, 1.2*y_limit)
+plt.ylim(-3e-15, 3e-15)
+plt.grid(axis="y", linestyle="--") 
 plt.tight_layout()
 plt.savefig("images/comparison/energy_lorentz.pdf", transparent=True)
 
@@ -129,7 +123,6 @@ for i in range(jnp.size(trajectories_gc, 0)):
 for i in range(jnp.size(trajectories_lorentz, 0)):
     ax.plot3D(trajectories_lorentz[i, :, 0], trajectories_lorentz[i, :, 1], trajectories_lorentz[i, :, 2], zorder=0, color= "blue")
 
-ax.set_title("Comparison between GC and Lorentz trajectories")
 ax.set_xlabel("x")
 ax.set_ylabel("y")
 ax.set_zlabel("z")
