@@ -1,7 +1,7 @@
 import os
 os.mkdir("images") if not os.path.exists("images") else None
 os.mkdir("images/tracing") if not os.path.exists("images/tracing") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=4'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=32'
 
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jax import grad
 
 # Show on which platform JAX is running.
-print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
+print("JAX running on", len(jax.devices()), jax.devices()[0].platform.upper())
 
 from time import time
 import matplotlib.pyplot as plt
@@ -30,24 +30,25 @@ order=3
 coil_current=7e6
 n_segments=100
 
-A = 4.5 # Aspect ratio
-R = 7.75
+A = 3 # Aspect ratio
+R = 6
 r = R/A
-
 r_init = r/4
-maxtime = 1.5e-5
-timesteps = 100#int(maxtime/5.0e-10)
+
+maxtime = 2.e-5
+timesteps = 2000 #int(maxtime/5.0e-10)
 
 n_particles = len(jax.devices())
 particles = Particles(n_particles)
 
-#dofs = jnp.reshape(jnp.array(
-#    [[[7.659175987226048, -0.04041399248053201, 1.9000419191055233, 0.09984825794723749, 0.12141277775953799, -0.1802613655260083, 0.31285398985391266], [1.6347473551588028, 0.10374265613747131, 0.5484620451498052, -0.2467564733908836, -0.012948835384266454, -0.2428340210279131, 0.0309345404359862], [-0.0016659721547670797, -1.722966622710651, 0.15334408422046225, -0.017781357517937517, 0.053890811586643765, -0.16312627482765366, -0.30200232777424296]], [[6.509310482871267, 0.04243770546820939, 1.3554276067256248, 0.09364112697926023, -0.06182844844102781, 0.13594928751305274, 0.1503271683030747], [4.345736292458465, 0.03856793707689319, 0.9649080561894142, -0.13168653236561864, 0.4565006970796698, 0.34350580255001223, 0.17158207991691418], [0.22993997525979984, -1.554508114311937, -0.25129611645158545, -0.07479651705652306, 0.1756537051472456, 0.25196472260154, 0.18388052641444086]]]
-#), (n_curves, 3, 2*order+1))
-#curves = Curves(dofs, nfp=4, stellsym=True)
+dofs = jnp.reshape(jnp.array(
+   [[[5.985254982928303, 0.26581044356679034, 1.8754815286562527, -0.002343217483557303, -0.13669786810588033, 0.274432599186244, 0.4160476648834756], [1.2574374960252934, 0.10979241260668832, 0.6942665166154958, -0.19713961137146607, 0.35333705125214127, 9.050297716582071e-05, 0.1744407039128007], [0.11723510813683916, -1.8482324850625271, -0.39166704965539123, 0.04617678339000649, -0.1448873074461018, 0.276807890403535, 0.5368756261731553]], [[4.873073395434523, 0.06763789699865053, 1.3084718949379763, -0.08748655977036536, 0.47029037378652094, 0.004441953215590499, -0.09071496636936334], [3.546339051540446, -0.08897437925830792, 1.374811798081262, -0.07208518124148725, -0.23604204056271447, 0.04266176781494097, 0.10802499314056253], [0.03854159493794037, -1.8433393610727444, 0.044055864631221346, 0.13116427637178907, -0.10285257651452304, 0.30317131125725527, -0.038550567788503076]]]
+), (n_curves, 3, 2*order+1))
+curves = Curves(dofs, nfp=4, stellsym=True)
 
-curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
+# curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
 stel = Coils(curves, jnp.array([coil_current]*n_curves))
+
 
 x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
 
@@ -62,9 +63,16 @@ trajectories = stel.trace_trajectories(particles, initial_values=jnp.array([x0, 
 print(f"Time to trace trajectories: {time()-start:.2f} seconds")
 
 ########################################
+# Calculating the loss
 
-projection2D(R, r, trajectories, show=False, save_as="images/optimization/init_pol_trajectories.pdf")
-projection2D_top(R, r, trajectories, show=False, save_as="images/optimization/init_tor_trajectories.pdf")
+start = time()
+loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r, jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime, timesteps)
+print(f"Loss function value: {loss_value:.8f}, took: {time()-start:.2f} seconds")
+
+########################################
+
+projection2D(R, r, trajectories, show=False, save_as="images/tracing/pol_trajectories.pdf")
+projection2D_top(R, r, trajectories, show=False, save_as="images/tracing/tor_trajectories.pdf")
 
 plt.figure()
 for i in range(n_particles):
@@ -90,6 +98,6 @@ plt.title("Energy Conservation")
 plt.xlabel("time [s]")
 plt.ylabel(r"$\frac{E-E_\alpha}{E_\alpha}$")
 plt.ylim(-y_limit, y_limit)
-plt.savefig("images/tracing/energy_non_opt.pdf", transparent=True)
+plt.savefig("images/tracing/energy.pdf", transparent=True)
 
 stel.plot(trajectories=trajectories, title="Stellator", save_as="images/tracing/stellator.pdf", show=True)
