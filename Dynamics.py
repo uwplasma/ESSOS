@@ -5,44 +5,51 @@ import jax.numpy as jnp
 from MagneticField import B, grad_B
 
 @jit
-def GuidingCenter(InitialValues:  jnp.ndarray,
+def GuidingCenter(inital_values:  jnp.ndarray,
                   t:              float,
+                  gamma:          jnp.ndarray,
+                  gamma_dash:     jnp.ndarray,
                   currents:       jnp.ndarray,
-                  curve_segments: jnp.ndarray,
                   μ:              float) -> jnp.ndarray:
     
-    """ Calculates the motion derivatives with the Guiding Center aproximation
-        Attributes:
-    InitialValues: Point in phase space where we want to calculate the derivatives - shape (4,)
-    t: Time when the Guiding Center is calculated
-    currents: Currents of the coils - shape (n_coils,)
-    curve_segments: Points of the coils - shape (n_coils, n_segments, 3)
-    μ: Magnetic moment, the 1st adiabatic constant
-        Returns:
-    Dx, Dvpar: Derivatives of the position and parallel velocity at time t due to the given coils
+    """Calculates the motion derivatives with the Guiding Center aproximation
+    Attributes:
+        inital_values (jnp.array - shape (4,)): Point in phase space where we want to calculate the derivatives
+        t (float): Time when the Guiding Center is calculated
+        gamma (jnp.array - shape (n_coils, n_segments, 3)): Points of the coils
+        gamma_dash (jnp.array - shape (n_coils, n_segments, 3)): Points of the coils
+        currents (jnp.array - shape (n_coils,)): Currents of the coils
+        μ (float): Magnetic moment, the 1st adiabatic constant
+    Returns:
+        Dx, Dvpar: Derivatives of the position and parallel velocity at time t due to the given coils
     """
 
-    assert isinstance(InitialValues, jnp.ndarray), "initial values must be a jnp.ndarray"
-    assert InitialValues.shape == (4,), "initial values must have shape (4,) with x, y, z, vpar"
-    assert InitialValues.dtype == float, "initial values must be a float"
-    #assert isinstance(t, float), f"time must be a float, not a {type(t)}"
-    #assert t >= 0, "time must be positive"
+    assert isinstance(inital_values, jnp.ndarray), "initial values must be a jnp.ndarray"
+    assert inital_values.shape == (4,), "initial values must have shape (4,) with x, y, z, vpar"
+    assert inital_values.dtype == float, "initial values must be a float"
+    # assert isinstance(t, float), f"time must be a float, not a {type(t)}"
+    # assert t >= 0, "time must be positive"
+    assert isinstance(gamma, jnp.ndarray), "gamma must be a jnp.ndarray"
+    assert gamma.ndim == 3, "gamma must be a 3D array"
+    assert gamma.shape[0] == currents.size, "number of coils must match number of currents"
+    assert gamma.shape[2] == 3, "gamma must have shape (n_coils, n_segments, 3)"
+    assert gamma.dtype == float, "gamma must be a float"
+    assert isinstance(gamma_dash, jnp.ndarray), "gamma_dash must be a jnp.ndarray"
+    assert gamma_dash.ndim == 3, "gamma_dash must be a 3D array"
+    assert gamma_dash.shape[0] == currents.size, "number of coils must match number of currents"
+    assert gamma_dash.shape[2] == 3, "gamma_dash must have shape (n_coils, n_segments, 3)"
+    assert gamma_dash.dtype == float, "gamma_dash must be a float"
     assert isinstance(currents, jnp.ndarray), "currents must be a jnp.ndarray"
     assert currents.ndim == 1, "currents must be a 1D array"
     assert currents.dtype == float, "currents must be a float"
-    assert isinstance(curve_segments, jnp.ndarray), "curve segments must be a jnp.ndarray"
-    assert curve_segments.ndim == 3, "curve segments must be a 3D array"
-    assert curve_segments.shape[0] == currents.size, "number of coils must match number of currents"
-    assert curve_segments.shape[2] == 3, "curve segments must have shape (n_coils, n_segments, 3)"
-    assert curve_segments.dtype == float, "curve segments must be a float"
-    #assert isinstance(μ, float), f"μ must be a float, not a {type(μ)}"
+    # assert isinstance(μ, float), f"μ must be a float, not a {type(μ)}"
 
     # Charge and mass for alpha particles in SI units
     q = 2*1.602176565e-19
     m = 4*1.660538921e-27
 
     # Calculationg the magentic field
-    x, y, z, vpar = InitialValues
+    x, y, z, vpar = inital_values
     
    # Condition to check if any of x, y, z is greater than 10
     condition = (jnp.sqrt(x**2 + y**2) > 100) | (jnp.abs(z) > 20)
@@ -50,7 +57,7 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
     def compute_derivatives(_):
         r = jnp.array([x, y, z])
         
-        B_field = B(r, curve_segments, currents)
+        B_field = B(r, gamma, gamma_dash, currents)
         normB = jnp.linalg.norm(B_field)
         b = B_field/normB
         
@@ -58,7 +65,7 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
         Ω = q*normB/m
         
         # Gradient of the magnetic field
-        gradB = grad_B(r, curve_segments, currents)
+        gradB = grad_B(r, gamma, gamma_dash, currents)
 
         # Position derivative of the particle
         Dx = vpar*b + (vpar**2/Ω+μ/q)*jnp.cross(b, gradB)/normB
@@ -73,48 +80,55 @@ def GuidingCenter(InitialValues:  jnp.ndarray,
     return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 @jit
-def Lorentz(InitialValues: jnp.ndarray,
-            t: float,
-            currents: jnp.ndarray,
-            curve_segments: jnp.ndarray) -> jnp.ndarray:
+def Lorentz(inital_values: jnp.ndarray,
+            t:             float,
+            gamma:         jnp.ndarray,
+            gamma_dash:    jnp.ndarray,
+            currents:      jnp.ndarray) -> jnp.ndarray:
     
-    """ Calculates the motion derivatives with the full gyromotion aproximation
-        Attributes:
-    InitialValues: Point in phase space where we want to calculate the derivatives - shape (6,)
-    t: Time when the full gyromotion is calculated
-    currents: Currents of the coils - shape (n_coils,)
-    curve_segments: Points of the coils - shape (n_coils, n_segments, 3)
-        Returns:
-    Dx, Dv: Derivatives of the position and parallel velocity at time t due to the given coils
+    """Calculates the motion derivatives following the full gyromotion
+    Attributes:
+        inital_values (jnp.array - shape (6,)): Point in phase space where we want to calculate the derivatives
+        t (float): Time when the Guiding Center is calculated
+        gamma (jnp.array - shape (n_coils, n_segments, 3)): Points of the coils
+        gamma_dash (jnp.array - shape (n_coils, n_segments, 3)): Points of the coils
+        currents (jnp.array - shape (n_coils,)): Currents of the coils
+    Returns:
+        Dx, Dvpar: Derivatives of the position and parallel velocity at time t due to the given coils
     """
 
-    assert isinstance(InitialValues, jnp.ndarray), "initial values must be a jnp.ndarray"
-    assert InitialValues.shape == (6,), "initial values must have shape (6,) with x, y, z, vx, vy, vz"
-    assert InitialValues.dtype == float, "initial values must be a float"
+    assert isinstance(inital_values, jnp.ndarray), "initial values must be a jnp.ndarray"
+    assert inital_values.shape == (6,), "initial values must have shape (6,) with x, y, z, vx, vy, vz"
+    assert inital_values.dtype == float, "initial values must be a float"
     #assert isinstance(t, float), f"time must be a float, not a {type(t)}"
     #assert t >= 0, "time must be positive"
+    assert isinstance(gamma, jnp.ndarray), "gamma must be a jnp.ndarray"
+    assert gamma.ndim == 3, "gamma must be a 3D array"
+    assert gamma.shape[0] == currents.size, "number of coils must match number of currents"
+    assert gamma.shape[2] == 3, "gamma must have shape (n_coils, n_segments, 3)"
+    assert gamma.dtype == float, "gamma must be a float"
+    assert isinstance(gamma_dash, jnp.ndarray), "gamma_dash must be a jnp.ndarray"
+    assert gamma_dash.ndim == 3, "gamma_dash must be a 3D array"
+    assert gamma_dash.shape[0] == currents.size, "number of coils must match number of currents"
+    assert gamma_dash.shape[2] == 3, "gamma_dash must have shape (n_coils, n_segments, 3)"
+    assert gamma_dash.dtype == float, "gamma_dash must be a float"
     assert isinstance(currents, jnp.ndarray), "currents must be a jnp.ndarray"
     assert currents.ndim == 1, "currents must be a 1D array"
     assert currents.dtype == float, "currents must be a float"
-    assert isinstance(curve_segments, jnp.ndarray), "curve segments must be a jnp.ndarray"
-    assert curve_segments.ndim == 3, "curve segments must be a 3D array"
-    assert curve_segments.shape[0] == currents.size, "number of coils must match number of currents"
-    assert curve_segments.shape[2] == 3, "curve segments must have shape (n_coils, n_segments, 3)"
-    assert curve_segments.dtype == float, "curve segments must be a float"
 
     # Charge and mass for alpha particles in SI units
     q = 2*1.602176565e-19
     m = 4*1.660538921e-27
 
     # Calculationg the magentic field
-    x, y, z, vx, vy, vz = InitialValues
+    x, y, z, vx, vy, vz = inital_values
     
    # Condition to check if x, y, z is greater than a threshold
     condition = (jnp.sqrt(x**2 + y**2) > 50) | (jnp.abs(z) > 20)
 
     def compute_derivatives(_):
         r = jnp.array([x, y, z])
-        B_field = B(r, curve_segments, currents)
+        B_field = B(r, gamma, gamma_dash, currents)
 
         # Position derivative of the particle
         Dx = jnp.array([vx, vy, vz])
@@ -129,38 +143,44 @@ def Lorentz(InitialValues: jnp.ndarray,
     return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 @jit
-def FieldLine(InitialValues:  jnp.ndarray,
-              t:              float,
-              currents:       jnp.ndarray,
-              curve_segments: jnp.ndarray) -> jnp.ndarray:
+def FieldLine(inital_values: jnp.ndarray,
+              t:             float,
+              gamma:         jnp.ndarray,
+              gamma_dash:    jnp.ndarray,
+              currents:      jnp.ndarray) -> jnp.ndarray:
     
     """ Calculates the motion derivatives for a certain field line 
         Attributes:
-    InitialValues: Point in phase space where we want to calculate the derivatives - shape (4,)
+    inital_values: Point in phase space where we want to calculate the derivatives - shape (4,)
     t: Time when the field line is calculated
     currents: Currents of the coils - shape (n_coils,)
-    curve_segments: Points of the coils - shape (n_coils, n_segments, 3)
+    gamma: Points of the coils - shape (n_coils, n_segments, 3)
         Returns:
     Dx, Dvpar: Derivatives of the position and parallel velocity at time t due to the given coils
     """
 
-    assert isinstance(InitialValues, jnp.ndarray), "initial values must be a jnp.ndarray"
-    assert InitialValues.shape == (3,), "initial values must have shape (3,) with x, y, z"
-    assert InitialValues.dtype == float, "initial values must be a float"
+    assert isinstance(inital_values, jnp.ndarray), "initial values must be a jnp.ndarray"
+    assert inital_values.shape == (3,), "initial values must have shape (3,) with x, y, z"
+    assert inital_values.dtype == float, "initial values must be a float"
     #assert isinstance(t, float), f"time must be a float, not a {type(t)}"
     #assert t >= 0, "time must be positive"
+    assert isinstance(gamma, jnp.ndarray), "gamma must be a jnp.ndarray"
+    assert gamma.ndim == 3, "gamma must be a 3D array"
+    assert gamma.shape[0] == currents.size, "number of coils must match number of currents"
+    assert gamma.shape[2] == 3, "gamma must have shape (n_coils, n_segments, 3)"
+    assert gamma.dtype == float, "gamma must be a float"
+    assert isinstance(gamma_dash, jnp.ndarray), "gamma_dash must be a jnp.ndarray"
+    assert gamma_dash.ndim == 3, "gamma_dash must be a 3D array"
+    assert gamma_dash.shape[0] == currents.size, "number of coils must match number of currents"
+    assert gamma_dash.shape[2] == 3, "gamma_dash must have shape (n_coils, n_segments, 3)"
+    assert gamma_dash.dtype == float, "gamma_dash must be a float"
     assert isinstance(currents, jnp.ndarray), "currents must be a jnp.ndarray"
     assert currents.ndim == 1, "currents must be a 1D array"
     assert currents.dtype == float, "currents must be a float"
-    assert isinstance(curve_segments, jnp.ndarray), "curve segments must be a jnp.ndarray"
-    assert curve_segments.ndim == 3, "curve segments must be a 3D array"
-    assert curve_segments.shape[0] == currents.size, "number of coils must match number of currents"
-    assert curve_segments.shape[2] == 3, "curve segments must have shape (n_coils, n_segments, 3)"
-    assert curve_segments.dtype == float, "curve segments must be a float"
 
     # Calculationg the magentic field
-    x, y, z = InitialValues
-    vpar = 299792458
+    x, y, z = inital_values
+    vpar = 299792458 # speed of light
     
    # Condition to check if any of x, y, z is greater than 10
     condition = (jnp.sqrt(x**2 + y**2) > 100) | (jnp.abs(z) > 20)
@@ -168,7 +188,7 @@ def FieldLine(InitialValues:  jnp.ndarray,
     def compute_derivatives(_):
         r = jnp.array([x, y, z])
         
-        B_field = B(r, curve_segments, currents)
+        B_field = B(r, gamma, gamma_dash, currents)
         normB = jnp.linalg.norm(B_field)
         b = B_field/normB
         

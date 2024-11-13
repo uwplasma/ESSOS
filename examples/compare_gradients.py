@@ -71,7 +71,7 @@ rel_error_list_1order = []
 rel_error_list_2order = []
 rel_error_list_4order = []
 rel_error_list_6order = []
-start_h = 3
+start_h = 4
 end_h = 13
 for up in range(start_h, end_h):
     h = 10**-up
@@ -148,7 +148,7 @@ plt.plot(x_axis, rel_error_list_2order, marker = 's', color='red', label="2nd or
 plt.plot(x_axis, rel_error_list_4order, marker = 'D', color='blue', label="4th order")
 plt.plot(x_axis, rel_error_list_6order, marker = '^', color='green', label="6th order")
 
-plt.xlabel("h")
+plt.xlabel(r"Stepsize $h$")
 plt.ylabel("Relative error")
 plt.xscale("log")
 plt.yscale("log")
