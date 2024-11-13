@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 plt.rcParams['font.size'] = 16
 
 from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, projection2D, projection2D_top
-from MagneticField import B_norm, B
+from MagneticField import norm_B, B
 
 n_curves=1
 order=3
@@ -38,31 +38,31 @@ particles = Particles(n_particles)
 m = particles.mass
 q = particles.charge
 
-curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=1, stellsym=False)
+curves = CreateEquallySpacedCurves(n_curves, order, R, r, n_segments=n_segments, nfp=1, stellsym=False)
 stel = Coils(curves, jnp.array([coil_current]*n_curves))
 
 _, _, _, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
 x0, y0, z0 = jnp.array([-R]), jnp.array([0]), jnp.array([0])
 v0 = jnp.empty((3, n_particles))
-norm_B = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), stel.currents)
-μ = m*vperp0**2/(2*norm_B)
+B_norm = jnp.apply_along_axis(norm_B, 0, jnp.array([x0, y0, z0]), stel.gamma, stel.gamma_dash, stel.currents)
+μ = m*vperp0**2/(2*B_norm)
 for i in range(n_particles):
-    B0 = B(jnp.array([x0[i],y0[i],z0[i]]), curve_segments=stel.gamma(n_segments), currents=stel.currents)
+    B0 = B(jnp.array([x0[i],y0[i],z0[i]]), stel.gamma, stel.gamma_dash, stel.currents)
     b0 = B0/jnp.linalg.norm(B0)
     perp_vector_1 = jnp.array([0, b0[2], -b0[1]])
     perp_versor_1 = perp_vector_1/jnp.linalg.norm(perp_vector_1)
     perp_versor_2 = jnp.cross(b0, perp_versor_1)
     v0 = v0.at[:, i].set(vpar0[i]*b0 + vperp0[i]*(perp_versor_1+perp_versor_2)/jnp.sqrt(2))
 gyroangle = -jnp.pi/4
-x0_lorentz, y0_lorentz, z0_lorentz = jnp.array([x0, y0, z0]) + jnp.array([perp_versor_1*jnp.sin(gyroangle)+perp_versor_2*jnp.cos(gyroangle)]).T * m/q*vperp0/norm_B
+x0_lorentz, y0_lorentz, z0_lorentz = jnp.array([x0, y0, z0]) + jnp.array([perp_versor_1*jnp.sin(gyroangle)+perp_versor_2*jnp.cos(gyroangle)]).T * m/q*vperp0/B_norm
 
 
 ########################################
 # Tracing trajectories
 
 start = time()
-trajectories_gc = stel.trace_trajectories(particles, initial_values=jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime=maxtime, timesteps=timesteps, n_segments=100)
-trajectories_lorentz = stel.trace_trajectories_lorentz(particles, initial_values=jnp.array([x0_lorentz, y0_lorentz, z0_lorentz, v0[0], v0[1], v0[2]]), maxtime=maxtime, timesteps=timesteps, n_segments=100)
+trajectories_gc = stel.trace_trajectories(particles, initial_values=jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime=maxtime, timesteps=timesteps)
+trajectories_lorentz = stel.trace_trajectories_lorentz(particles, initial_values=jnp.array([x0_lorentz, y0_lorentz, z0_lorentz, v0[0], v0[1], v0[2]]), maxtime=maxtime, timesteps=timesteps)
 
 end = time()
 print(f"Time to trace trajectories: {end-start:.2f} seconds")
@@ -72,7 +72,7 @@ print(f"Time to trace trajectories: {end-start:.2f} seconds")
 y_limit = 0
 plt.figure()
 for i in range(n_particles):
-    normB = jnp.apply_along_axis(B_norm, 1, trajectories_gc[i, :, :3], stel.gamma(), stel.currents)
+    normB = jnp.apply_along_axis(norm_B, 1, trajectories_gc[i, :, :3], stel.gamma, stel.gamma_dash, stel.currents)
     normalized_energy = (μ[i]*normB + 0.5*particles.mass*trajectories_gc[i, :, 3]**2)/particles.energy-1
     plt.plot(jnp.arange(timesteps)*maxtime/timesteps, normalized_energy, color="blue", linewidth=1.7)
     y_limit = max(y_limit, jnp.abs(jnp.max(normalized_energy)), jnp.abs(jnp.min(normalized_energy)))
@@ -86,7 +86,7 @@ plt.savefig("images/comparison/energy_gc.pdf", transparent=True)
 y_limit = 0
 plt.figure()
 for i in range(n_particles):
-    normB = jnp.apply_along_axis(B_norm, 1, trajectories_lorentz[i, :, :3], stel.gamma(), stel.currents)
+    normB = jnp.apply_along_axis(norm_B, 1, trajectories_lorentz[i, :, :3], stel.gamma, stel.gamma_dash, stel.currents)
     normalized_energy = 0.5*particles.mass*(jnp.sum(trajectories_lorentz[i, :, 3:]**2, axis=1))/particles.energy-1
     plt.plot(jnp.arange(timesteps)*maxtime/timesteps, normalized_energy, color="blue", linewidth=1.7)
     y_limit = max(y_limit, jnp.abs(jnp.max(normalized_energy)), jnp.abs(jnp.min(normalized_energy)))
@@ -101,7 +101,7 @@ plt.savefig("images/comparison/energy_lorentz.pdf", transparent=True)
 fig = plt.figure()
 ax = fig.add_subplot(projection='3d')
 
-gamma = stel.gamma()
+gamma = stel.gamma
 xlims = []
 ylims = []
 zlims = []

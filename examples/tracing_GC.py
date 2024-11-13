@@ -16,12 +16,14 @@ print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(ja
 from time import time
 import matplotlib.pyplot as plt
 
+# jax.config.update("jax_traceback_filtering", "on")
 
 
 
 
-from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, projection2D, projection2D_top
-from MagneticField import B_norm, B
+
+from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, projection2D, projection2D_top, loss
+from MagneticField import norm_B, B
 
 n_curves=2
 order=3
@@ -33,10 +35,10 @@ R = 7.75
 r = R/A
 
 r_init = r/4
-maxtime = 1e-5
-timesteps = int(maxtime/5.0e-10)
+maxtime = 1.5e-5
+timesteps = 100#int(maxtime/5.0e-10)
 
-n_particles = len(jax.devices()*10)
+n_particles = len(jax.devices())
 particles = Particles(n_particles)
 
 #dofs = jnp.reshape(jnp.array(
@@ -49,19 +51,19 @@ stel = Coils(curves, jnp.array([coil_current]*n_curves))
 
 x0, y0, z0, vpar0, vperp0 = stel.initial_conditions(particles, R, r_init, model='Guiding Center')
 
-norm_B = jnp.apply_along_axis(B_norm, 0, jnp.array([x0, y0, z0]), stel.gamma(), stel.currents)
-μ = particles.mass*vperp0**2/(2*norm_B)
+B_norm = jnp.apply_along_axis(norm_B, 0, jnp.array([x0, y0, z0]), stel.gamma, stel.gamma_dash, stel.currents)
+μ = particles.mass*vperp0**2/(2*B_norm)
 
 ########################################
 # Tracing trajectories
 
 start = time()
-trajectories = stel.trace_trajectories(particles, initial_values=jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime=maxtime, timesteps=timesteps, n_segments=100)
+trajectories = stel.trace_trajectories(particles, initial_values=jnp.array([x0, y0, z0, vpar0, vperp0]), maxtime=maxtime, timesteps=timesteps)
 print(f"Time to trace trajectories: {time()-start:.2f} seconds")
 
 ########################################
 
-projection2D(R, r, r_init, trajectories, show=False, save_as="images/optimization/init_pol_trajectories.pdf")
+projection2D(R, r, trajectories, show=False, save_as="images/optimization/init_pol_trajectories.pdf")
 projection2D_top(R, r, trajectories, show=False, save_as="images/optimization/init_tor_trajectories.pdf")
 
 plt.figure()
@@ -79,7 +81,7 @@ plt.savefig("images/tracing/v_par.pdf", transparent=True)
 y_limit = 0
 plt.figure()
 for i in range(n_particles):
-    normB = jnp.apply_along_axis(B_norm, 1, trajectories[i, :, :3], stel.gamma(), stel.currents)
+    normB = jnp.apply_along_axis(norm_B, 1, trajectories[i, :, :3], stel.gamma, stel.gamma_dash, stel.currents)
     normalized_energy = (μ[i]*normB + 0.5*particles.mass*trajectories[i, :, 3]**2)/particles.energy-1
     plt.plot(jnp.arange(jnp.size(trajectories, 1))*maxtime/timesteps, normalized_energy)
     y_limit = max(y_limit, jnp.abs(jnp.max(normalized_energy)), jnp.abs(jnp.min(normalized_energy)))
