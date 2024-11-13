@@ -756,7 +756,8 @@ def optimize(coils:          Coils,
     
     # Optimization using OPTAX adam method
     elif method["method"] == "OPTAX adam":
-        solver = optax.adam(learning_rate=0.003) #
+        learning_rate = method["learning_rate"] if "learning_rate" in method.keys() else 0.003
+        solver = optax.adam(learning_rate=learning_rate) #
         best_loss = jnp.inf
         args = (dofs,)
 

@@ -1,7 +1,7 @@
 import os
 os.mkdir("images") if not os.path.exists("images") else None
 os.mkdir("images/optimization") if not os.path.exists("images/optimization") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=2'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=32'
 
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jax import grad
 
 # Show on which platform JAX is running.
-print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
+print("JAX running on", len(jax.devices()), jax.devices()[0].platform.upper())
 
 from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, optimize, loss, loss_discrete, projection2D, projection2D_top
 from MagneticField import norm_B
@@ -30,19 +30,19 @@ R = 6
 r = R/A
 r_init = r/4
 
-maxtime = 1.e-5
+maxtime = 2.e-5
 model = "Guiding Center"
 
-timesteps = 100#int(maxtime/2.0e-8)
+timesteps = 200#int(maxtime/2.0e-8)
 
 particles = Particles(len(jax.devices()))
 
-# dofs = jnp.reshape(jnp.array(
-#     [[[5.85721512578458, 0.150023770349955, 1.8398384572174729, 0.012801371295933416, -0.05940493124211967, 0.2745081658275982, 0.35424492913905203], [1.3536705912920592, 0.06197858484374306, 0.5934873150457475, -0.16452162895003594, 0.18439116915289458, 0.16184469182312552, 0.2035105919998774], [0.2504829444409511, -1.7460698121540987, -0.3617158172013022, 0.09964116422819566, -0.43327499226198923, 0.014159843896582303, 0.5525356612294253]], [[4.926649868657168, -0.06421011831853891, 1.366917138846978, 0.11266614290894303, 0.7723316415165112, -0.06874132904064484, -0.08864105913545219], [3.6223952092023257, 0.01112420173867613, 1.1587586184501026, 0.02668972726082938, -0.19974315877656582, -0.024506483939156068, 0.23798802759145848], [0.0454161231393845, -1.7388239555035732, -0.013028941167930816, -0.00755860957601509, -0.06666798480840358, 0.3914503897511418, 0.1711925997103193]]]
-# ), (n_curves, 3, 2*order+1))
-# curves = Curves(dofs, nfp=4, stellsym=True)
+dofs = jnp.reshape(jnp.array(
+    [[[5.985254982928303, 0.26581044356679034, 1.8754815286562527, -0.002343217483557303, -0.13669786810588033, 0.274432599186244, 0.4160476648834756], [1.2574374960252934, 0.10979241260668832, 0.6942665166154958, -0.19713961137146607, 0.35333705125214127, 9.050297716582071e-05, 0.1744407039128007], [0.11723510813683916, -1.8482324850625271, -0.39166704965539123, 0.04617678339000649, -0.1448873074461018, 0.276807890403535, 0.5368756261731553]], [[4.873073395434523, 0.06763789699865053, 1.3084718949379763, -0.08748655977036536, 0.47029037378652094, 0.004441953215590499, -0.09071496636936334], [3.546339051540446, -0.08897437925830792, 1.374811798081262, -0.07208518124148725, -0.23604204056271447, 0.04266176781494097, 0.10802499314056253], [0.03854159493794037, -1.8433393610727444, 0.044055864631221346, 0.13116427637178907, -0.10285257651452304, 0.30317131125725527, -0.038550567788503076]]]
+), (n_curves, 3, 2*order+1))
+curves = Curves(dofs, nfp=4, stellsym=True)
 
-curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
+# curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
 stel = Coils(curves, jnp.array([7e6]*n_curves))
 
 initial_values = stel.initial_conditions(particles, R, r_init, model=model)
@@ -97,9 +97,8 @@ print(f"Grad loss function initial value:\n{jnp.ravel(grad_loss_value)}")
 print(f"Grad shape: {grad_loss_value.shape}, took: {time()-start:.2f} seconds")
 
 start = time()
-optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "iterations": 50})
-optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "iterations": 50})
-optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "iterations": 50})
+for i in range(1):
+    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.005, "iterations": 150})
 print(f"Optimization took: {time()-start:.1f} seconds") 
 
 stel.save_coils("Optimizations.txt")

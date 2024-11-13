@@ -9,6 +9,8 @@ sys.path.insert(1, os.path.dirname(os.getcwd()))
 import jax
 import jax.numpy as jnp
 
+print("JAX running on", len(jax.devices()), jax.devices()[0].platform.upper())
+
 import numpy as np
 
 from simsopt.field import BiotSavart, Current, Coil
@@ -21,9 +23,8 @@ import matplotlib
 
 
 
-from ESSOS import Curves, Coils, CreateEquallySpacedCurves, Particles
-from Dynamics import GuidingCenter
-from MagneticField import B, norm_B, grad_B, grad_B_vector
+from ESSOS import Coils, CreateEquallySpacedCurves, Particles
+from MagneticField import grad_B_vector
 
 
 matplotlib.rcParams.update({'font.size': 16})

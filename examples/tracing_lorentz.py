@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jax import grad
 
 # Show on which platform JAX is running.
-print("JAX running on", [jax.devices()[i].platform.upper() for i in range(len(jax.devices()))])
+print("JAX running on", len(jax.devices()), jax.devices()[0].platform.upper())
 
 from time import time
 import matplotlib.pyplot as plt
