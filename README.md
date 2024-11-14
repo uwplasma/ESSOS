@@ -50,6 +50,6 @@ source .bashrc
 ```
 Then you can create a conda environment with
 ```
-conda create --name myenv --file dependencies-file.yml python=3.12.2
+conda env create -f depenencies_file.yml
 ```
-where "myenv" is the name you want your environment to have and "dependencies-file.yml" can be dependencies-gpu.yml or dependencies-cpu.yml, whether you want to run the scripts on CPU or GPU.
+where "dependencies_file.yml" can be dependencies_gpu.yml or dependencies_cpu.yml, whether you want to run the scripts on CPU or GPU.
