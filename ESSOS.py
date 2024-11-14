@@ -11,6 +11,7 @@ plt.rcParams['font.size'] = 20
 plt.rcParams['figure.figsize'] = 11, 7
 
 from jax.experimental.ode import odeint
+from diffrax import diffeqsolve, ODETerm, Dopri5, Tsit5, Dopri8
 import matplotlib.pyplot as plt
 
 from jax.experimental import mesh_utils
@@ -465,10 +466,25 @@ class Coils(Curves):
         def aux_trajectory(particles: jnp.ndarray) -> jnp.ndarray:
             trajectories = jnp.empty((n_particles//n_cores, timesteps, 4))
             for particle in particles:
+                args = (self.gamma, self.gamma_dash, self.currents, μ[particle])
                 trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
-                    odeint(
-                        GuidingCenter, initial_values[:4, :].T[particle], times, self.gamma, self.gamma_dash, self.currents, μ[particle], atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
-                    )
+                    
+                    diffeqsolve(
+                        ODETerm(GuidingCenter),
+                        t0=0.0,
+                        t1=maxtime,
+                        dt0=maxtime/timesteps,
+                        y0=initial_values[:4, :].T[particle],
+                        solver=Tsit5(),
+                        args=args
+                        # stepsize_controller=PIDController(rtol=1.4e-8, atol=1.4e-8),
+                        # adjoint=BacksolveAdjoint(),
+                        # max_steps=200,
+                    ).ys
+                    
+                    # odeint(
+                    #     GuidingCenter, initial_values[:4, :].T[particle], times, self.gamma, self.gamma_dash, self.currents, μ[particle], atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
+                    # )
                 )
             return trajectories
         
