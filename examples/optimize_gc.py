@@ -19,30 +19,27 @@ from MagneticField import norm_B
 import matplotlib.pyplot as plt
 from time import time
 
-
-
-
 n_curves=2
-order=3
+order=4
 
 A = 3 # Aspect ratio
 R = 6
 r = R/A
 r_init = r/4
 
-maxtime = 1.e-5
+maxtime = 5.e-6
 model = "Guiding Center"
 
-timesteps = 100#int(maxtime/2.0e-8)
+timesteps = 200#int(maxtime/2.0e-8)
 
 particles = Particles(len(jax.devices()))
 
-dofs = jnp.reshape(jnp.array(
-    [[[5.985254982928303, 0.26581044356679034, 1.8754815286562527, -0.002343217483557303, -0.13669786810588033, 0.274432599186244, 0.4160476648834756], [1.2574374960252934, 0.10979241260668832, 0.6942665166154958, -0.19713961137146607, 0.35333705125214127, 9.050297716582071e-05, 0.1744407039128007], [0.11723510813683916, -1.8482324850625271, -0.39166704965539123, 0.04617678339000649, -0.1448873074461018, 0.276807890403535, 0.5368756261731553]], [[4.873073395434523, 0.06763789699865053, 1.3084718949379763, -0.08748655977036536, 0.47029037378652094, 0.004441953215590499, -0.09071496636936334], [3.546339051540446, -0.08897437925830792, 1.374811798081262, -0.07208518124148725, -0.23604204056271447, 0.04266176781494097, 0.10802499314056253], [0.03854159493794037, -1.8433393610727444, 0.044055864631221346, 0.13116427637178907, -0.10285257651452304, 0.30317131125725527, -0.038550567788503076]]]
-), (n_curves, 3, 2*order+1))
-curves = Curves(dofs, nfp=4, stellsym=True)
+# dofs = jnp.reshape(jnp.array(
+#     [[[5.985254982928303, 0.26581044356679034, 1.8754815286562527, -0.002343217483557303, -0.13669786810588033, 0.274432599186244, 0.4160476648834756], [1.2574374960252934, 0.10979241260668832, 0.6942665166154958, -0.19713961137146607, 0.35333705125214127, 9.050297716582071e-05, 0.1744407039128007], [0.11723510813683916, -1.8482324850625271, -0.39166704965539123, 0.04617678339000649, -0.1448873074461018, 0.276807890403535, 0.5368756261731553]], [[4.873073395434523, 0.06763789699865053, 1.3084718949379763, -0.08748655977036536, 0.47029037378652094, 0.004441953215590499, -0.09071496636936334], [3.546339051540446, -0.08897437925830792, 1.374811798081262, -0.07208518124148725, -0.23604204056271447, 0.04266176781494097, 0.10802499314056253], [0.03854159493794037, -1.8433393610727444, 0.044055864631221346, 0.13116427637178907, -0.10285257651452304, 0.30317131125725527, -0.038550567788503076]]]
+# ), (n_curves, 3, 2*order+1))
+# curves = Curves(dofs, nfp=4, stellsym=True)
 
-# curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
+curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=4, stellsym=True)
 stel = Coils(curves, jnp.array([7e6]*n_curves))
 
 initial_values = stel.initial_conditions(particles, R, r_init, model=model)
@@ -82,7 +79,8 @@ plt.ylabel(r"$\frac{E-E_\alpha}{E_\alpha}$")
 plt.ylim(-1.2*y_limit, 1.2*y_limit)
 plt.savefig("images/optimization/init_energy.pdf", transparent=True)
 
-stel.plot(trajectories=trajectories, title="Initial Stellator", save_as="images/optimization/init_stellator.pdf", show=True)
+stel.plot(trajectories=trajectories, title="Initial Stellator", save_as="images/optimization/init_stellator.pdf", show=False)
+plt.close()
 
 ############################################################################################################
 
@@ -98,12 +96,11 @@ print(f"Grad shape: {grad_loss_value.shape}, took: {time()-start:.2f} seconds")
 
 start = time()
 for i in range(4):
-    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.01, "iterations": 10})
-    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.003, "iterations": 50})
-    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.001, "iterations": 100})
-
+    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.03, "iterations": 20})
+    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.005, "iterations": 20})
+    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.001, "iterations": 20})
     maxtime *= 1.1
-    timesteps *= 1.1
+    timesteps = int(timesteps*1.1)
 
 print(f"Optimization took: {time()-start:.1f} seconds") 
 

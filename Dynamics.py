@@ -3,15 +3,18 @@ jax.config.update("jax_enable_x64", True)
 from jax import jit
 import jax.numpy as jnp
 from MagneticField import B, grad_B
+from time import time
 
 @jit
-def GuidingCenter(inital_values:  jnp.ndarray,
-                  t:              float,
-                  gamma:          jnp.ndarray,
-                  gamma_dash:     jnp.ndarray,
-                  currents:       jnp.ndarray,
-                  μ:              float) -> jnp.ndarray:
-    
+def GuidingCenter(t:              float,
+                  inital_values:  jnp.ndarray,
+                  args:           tuple
+                #   gamma:          jnp.ndarray,
+                #   gamma_dash:     jnp.ndarray,
+                #   currents:       jnp.ndarray,
+                #   μ:              float
+                  ) -> jnp.ndarray:
+    gamma, gamma_dash, currents, μ = args
     """Calculates the motion derivatives with the Guiding Center aproximation
     Attributes:
         inital_values (jnp.array - shape (4,)): Point in phase space where we want to calculate the derivatives
@@ -57,7 +60,9 @@ def GuidingCenter(inital_values:  jnp.ndarray,
     def compute_derivatives(_):
         r = jnp.array([x, y, z])
         
+        # start_time = time()
         B_field = B(r, gamma, gamma_dash, currents)
+        # print(f"Time to calculate B: {time()-start_time:.2f} seconds")
         normB = jnp.linalg.norm(B_field)
         b = B_field/normB
         
@@ -65,7 +70,9 @@ def GuidingCenter(inital_values:  jnp.ndarray,
         Ω = q*normB/m
         
         # Gradient of the magnetic field
+        # start_time = time()
         gradB = grad_B(r, gamma, gamma_dash, currents)
+        # print(f"Time to calculate gradB: {time()-start_time:.2f} seconds")
 
         # Position derivative of the particle
         Dx = vpar*b + (vpar**2/Ω+μ/q)*jnp.cross(b, gradB)/normB
