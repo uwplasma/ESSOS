@@ -11,7 +11,7 @@ plt.rcParams['font.size'] = 20
 plt.rcParams['figure.figsize'] = 11, 7
 
 from jax.experimental.ode import odeint
-from diffrax import diffeqsolve, ODETerm, Dopri5, Tsit5, Dopri8
+from diffrax import diffeqsolve, ODETerm, Dopri5, Tsit5, Dopri8, SaveAt, PIDController, Kvaerno5
 import matplotlib.pyplot as plt
 
 from jax.experimental import mesh_utils
@@ -277,6 +277,7 @@ class Curves:
                            R_init: float,
                            r_init: float,
                            seed: int = 1,
+                           more_trapped_particles = True,
                            model: str = "Guiding Center") -> jnp.ndarray:
     
         """ Creates the initial conditions for the particles
@@ -301,7 +302,10 @@ class Curves:
         vth = jnp.sqrt(2*energy/mass)
 
         # Initializing pitch angle
-        pitch = jax.random.uniform(key,shape=(n_particles,), minval=-1, maxval=1)
+        if more_trapped_particles:
+            pitch = jax.random.uniform(key,shape=(n_particles,), minval=-0.5, maxval=0.5)
+        else:
+            pitch = jax.random.uniform(key,shape=(n_particles,), minval=-1, maxval=1)
         if model=='Lorentz':
             gyroangle = jax.random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi)
 
@@ -334,12 +338,24 @@ class Curves:
         ylims = [jnp.min(self.gamma[0, :, 1]), jnp.max(self.gamma[0, :, 1])]
         zlims = [jnp.min(self.gamma[0, :, 2]), jnp.max(self.gamma[0, :, 2])]
         for i in range(0, n_coils):
-            color = "orangered" if i < n_coils/((1+int(self._stellsym))*self._nfp) else "lightgrey"
-            ax.plot3D(self.gamma[i, :, 0], self.gamma[i, :,  1], self.gamma[i, :, 2], color=color, zorder=10)
+            color = "orangered" if i < n_coils/((1+int(self._stellsym))*self._nfp) else "darkgray"
+            ax.plot3D(self.gamma[i, :, 0], self.gamma[i, :,  1], self.gamma[i, :, 2], color=color, zorder=10, linewidth=5)
             if i != 0:
                 xlims = [min(xlims[0], jnp.min(self.gamma[i, :, 0])), max(xlims[1], jnp.max(self.gamma[i, :, 0]))]
                 ylims = [min(ylims[0], jnp.min(self.gamma[i, :, 1])), max(ylims[1], jnp.max(self.gamma[i, :, 1]))]
                 zlims = [min(zlims[0], jnp.min(self.gamma[i, :, 2])), max(zlims[1], jnp.max(self.gamma[i, :, 2]))]
+
+        # Calculate zoomed limits
+        zoom_factor=0.7
+        x_center = (xlims[0] + xlims[1]) / 2
+        y_center = (ylims[0] + ylims[1]) / 2
+        z_center = (zlims[0] + zlims[1]) / 2
+        x_range = (xlims[1] - xlims[0]) * zoom_factor / 2
+        y_range = (ylims[1] - ylims[0]) * zoom_factor / 2
+        z_range = (zlims[1] - zlims[0]) * zoom_factor / 2
+        ax.set_xlim([x_center - x_range, x_center + x_range])
+        ax.set_ylim([y_center - y_range, y_center + y_range])
+        ax.set_zlim([z_center - z_range, z_center + z_range])
 
         if trajectories is not None:
             assert isinstance(trajectories, jnp.ndarray)
@@ -350,9 +366,9 @@ class Curves:
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("z")
-        ax.set_xlim(xlims)
-        ax.set_ylim(ylims)
-        ax.set_zlim(zlims)
+        # ax.set_xlim(xlims)
+        # ax.set_ylim(ylims)
+        # ax.set_zlim(zlims)
 
         ax.set_aspect('equal')
         ax.locator_params(axis='z', nbins=3)
@@ -476,7 +492,9 @@ class Coils(Curves):
                         dt0=maxtime/timesteps,
                         y0=initial_values[:4, :].T[particle],
                         solver=Tsit5(),
-                        args=args
+                        args=args,
+                        saveat=SaveAt(ts=times),
+                        # stepsize_controller=PIDController(rtol=1e-4, atol=1e-4),
                         # stepsize_controller=PIDController(rtol=1.4e-8, atol=1.4e-8),
                         # adjoint=BacksolveAdjoint(),
                         # max_steps=200,
@@ -594,7 +612,7 @@ class Coils(Curves):
     
         return trajectories
     
-    def save_coils(self, filename: str):
+    def save_coils(self, filename: str, text=""):
         """
         Save the coils to a file
         """
@@ -605,6 +623,8 @@ class Coils(Curves):
             file.write(f"{repr(self.dofs.tolist())}\n")
             file.write(f"Currents degrees of freedom\n")
             file.write(f"{repr(self._dofs_currents.tolist())}\n")
+            file.write(f"Loss\n")
+            file.write(f"{text}\n")
 
 
 tree_util.register_pytree_node(Coils,
@@ -613,9 +633,11 @@ tree_util.register_pytree_node(Coils,
 
 
 
-@partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9))
-def loss(dofs:           jnp.ndarray,
-         dofs_currents:  jnp.ndarray,
+# @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9))
+@partial(jit, static_argnums=(1, 2, 3, 4, 6, 7, 8))
+def loss(dofs_with_currents:           jnp.ndarray,
+# def loss(dofs:  jnp.ndarray,
+        #  dofs_currents:  jnp.ndarray,
          old_coils:      Coils,
          particles:      Particles,
          R:              float,
@@ -645,10 +667,14 @@ def loss(dofs:           jnp.ndarray,
     n_segments = old_coils.n_segments
     nfp = old_coils.nfp
     stellsym = old_coils.stellsym
+    old_current_dofs = old_coils.dofs_currents
+    
+    dofs = dofs_with_currents[:old_coils.dofs.size].reshape(old_coils.dofs.shape)  # reshape to match original shape
+    dofs_currents = dofs_with_currents[old_coils.dofs.size:]
 
-    dofs = jnp.reshape(dofs, (n_indcoils, 3, -1))
+    # dofs = jnp.reshape(dofs_with_currents[:old_current_dofs], (n_indcoils, 3, -1))
     curves = Curves(dofs, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
-    coils = Coils(curves, dofs_currents)
+    coils = Coils(curves, jnp.concatenate((jnp.array([old_coils.dofs_currents[0]]),dofs_currents)))
 
     #TODO: Check size if initial_values instead of model
     trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps)
@@ -667,7 +693,7 @@ def loss(dofs:           jnp.ndarray,
     )+trajectories[:, :, 2]**2
 
     #return jnp.mean(distances_squared)/r_coil**2
-    return jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))
+    return jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r)))) + 1e-1*jnp.sum(jnp.array([jnp.abs(current-old_coils.dofs_currents[0]) for current in dofs_currents]))
 
 @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9, 10))
 def loss_discrete(dofs:           jnp.ndarray,
@@ -749,7 +775,7 @@ def optimize(coils:          Coils,
         timesteps (int): Number of timesteps
     """
 
-    print("Optimizing ...")
+    # print("Optimizing ...")
 
     if jnp.size(initial_values, 0) == 5:
         model = 'Guiding Center'
@@ -758,16 +784,21 @@ def optimize(coils:          Coils,
     else:
         raise ValueError("Initial values must have shape (5, n_particles) or (6, n_particles)")
 
-    dofs = jnp.ravel(coils.dofs)
-    dofs_currents = coils.dofs_currents
+    dofs = jnp.concatenate((jnp.ravel(coils.dofs), coils.dofs_currents[1:]))
+    # dofs_currents = coils.dofs_currents
 
-    loss_partial = partial(loss, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
-    loss_discrete_partial = partial(loss_discrete, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
+    # loss_partial = partial(loss, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
+    # loss_discrete_partial = partial(loss_discrete, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
+    loss_partial = partial(loss, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
+    loss_discrete_partial = partial(loss_discrete, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
 
     # Optimization using JAX minimize method
     if method["method"] == "JAX minimize":
-        opt_dofs = jax_minimize(loss_partial, dofs, args=(), method='BFGS', options={'maxiter': 20})
-        coils.dofs = jnp.reshape(opt_dofs.x, (-1, 3, 1+2*coils.order))
+        opt_dofs = jax_minimize(loss_partial, dofs, args=(), method='BFGS', options={'maxiter': 20})    
+        dofs_coils = opt_dofs[:coils.dofs.size].reshape(coils.dofs.shape)
+        dofs_currents = opt_dofs[coils.dofs.size:]
+        coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
+        coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
         print(f"Loss function final value: {opt_dofs.fun:.5f}")
     
     # Optimization using OPTAX adam method
@@ -791,9 +822,13 @@ def optimize(coils:          Coils,
                 best_loss = current_loss
                 best_dofs = dofs
             if print_loss:
-                print(f"Iteration: {iter+1:>5}     loss: {current_loss:.5f}     took {time()-start_loop:.1f} seconds")
+                print(f"   Iteration: {iter+1:>5}     loss: {current_loss:.5f}     took {time()-start_loop:.1f} seconds")
 
-        coils.dofs = jnp.reshape(best_dofs, (-1, 3, 1+2*coils.order))
+        # coils.dofs = jnp.reshape(best_dofs, (-1, 3, 1+2*coils.order))
+        dofs_coils = best_dofs[:coils.dofs.size].reshape(coils.dofs.shape)
+        dofs_currents = best_dofs[coils.dofs.size:]
+        coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
+        coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
         return jnp.array(losses)
     
     #TODO: Fix the loss for the Bayesian optimization
@@ -805,20 +840,44 @@ def optimize(coils:          Coils,
 
         optimizer = BayesianOptimization(f=-loss_partial,pbounds=pbounds,random_state=1)
         optimizer.maximize(init_points=method["init_points"],n_iter=method["n_iter"])
-        coils.dofs = jnp.array(list(optimizer.max['params'].values()))
+        
+        best_dofs = jnp.array(list(optimizer.max['params'].values()))
+        dofs_coils = best_dofs[:coils.dofs.size].reshape(coils.dofs.shape)
+        dofs_currents = best_dofs[coils.dofs.size:]
+        coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
+        coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
+        
+        # coils.dofs = jnp.array(list(optimizer.max['params'].values()))
         print(f"Loss function final value: {optimizer.max['target']:.5f}")
+        
+        return jnp.array(optimizer.max['target'])
     
     # Optimization using least squares method
     elif method["method"] == 'least_squares':
         opt_dofs = least_squares(loss_partial, x0=dofs, verbose=2, ftol=method["ftol"], max_nfev=method["max_nfev"])
-        coils.dofs = jnp.reshape(jnp.array(opt_dofs.x), (-1, 3, 1+2*coils.order))
-        print(f"Loss function final value: {loss_partial(coils.dofs):.5f}")
+        dofs_coils = jnp.array(opt_dofs.x[:coils.dofs.size].reshape(coils.dofs.shape))
+        dofs_currents = jnp.array(opt_dofs.x[coils.dofs.size:])
+        coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
+        coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
+        
+        # coils.dofs = jnp.reshape(jnp.array(opt_dofs.x), (-1, 3, 1+2*coils.order))
+        print(f"Loss function final value: {opt_dofs.cost:.5f}")
+        
+        return jnp.array(opt_dofs.cost)
     
     # Optimization using BOBYQA method
     elif method["method"] == 'BOBYQA':
         opt_dofs = pybobyqa.solve(loss_partial, x0=list(dofs), print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=method["rhoend"], maxfun=method["maxfun"], bounds=method["bounds"])
-        coils.dofs = jnp.reshape(jnp.array(opt_dofs.x), (-1, 3, 1+2*coils.order))
-        print(f"Loss function final value: {loss_discrete_partial(coils.dofs):.5f}")
+        
+        dofs_coils = jnp.array(opt_dofs.x[:coils.dofs.size].reshape(coils.dofs.shape))
+        dofs_currents = jnp.array(opt_dofs.x[coils.dofs.size:])
+        coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
+        coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
+        
+        # coils.dofs = jnp.reshape(jnp.array(opt_dofs.x), (-1, 3, 1+2*coils.order))
+        # print(f"Loss function final value: {loss_discrete_partial(coils.dofs):.5f}")
+        print(f"Loss function final value: {opt_dofs.cost:.5f}")
+        return opt_dofs.f
     
     else:
         raise ValueError("Method not supported. Choose 'JAX minimize', 'OPTAX adam', 'Bayesian', 'least_squares' or 'BOBYQA'")
