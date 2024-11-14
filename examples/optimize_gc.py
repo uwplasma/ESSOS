@@ -30,10 +30,10 @@ R = 6
 r = R/A
 r_init = r/4
 
-maxtime = 2.e-5
+maxtime = 1.e-5
 model = "Guiding Center"
 
-timesteps = 200#int(maxtime/2.0e-8)
+timesteps = 100#int(maxtime/2.0e-8)
 
 particles = Particles(len(jax.devices()))
 
@@ -97,8 +97,14 @@ print(f"Grad loss function initial value:\n{jnp.ravel(grad_loss_value)}")
 print(f"Grad shape: {grad_loss_value.shape}, took: {time()-start:.2f} seconds")
 
 start = time()
-for i in range(1):
-    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.005, "iterations": 150})
+for i in range(4):
+    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.01, "iterations": 10})
+    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.003, "iterations": 50})
+    optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": 0.001, "iterations": 100})
+
+    maxtime *= 1.1
+    timesteps *= 1.1
+
 print(f"Optimization took: {time()-start:.1f} seconds") 
 
 stel.save_coils("Optimizations.txt")
