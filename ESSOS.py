@@ -693,7 +693,7 @@ def loss(dofs_with_currents:           jnp.ndarray,
     )+trajectories[:, :, 2]**2
 
     #return jnp.mean(distances_squared)/r_coil**2
-    return jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r)))) + 1e-1*jnp.sum(jnp.array([jnp.abs(current-old_coils.dofs_currents[0]) for current in dofs_currents]))
+    return jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r)))) + 1e-2*jnp.sum(jnp.array([jnp.abs(current-old_coils.dofs_currents[0]) for current in dofs_currents]))
 
 @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9, 10))
 def loss_discrete(dofs:           jnp.ndarray,
