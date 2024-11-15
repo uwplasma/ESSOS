@@ -303,7 +303,7 @@ class Curves:
 
         # Initializing pitch angle
         if more_trapped_particles:
-            pitch = jax.random.uniform(key,shape=(n_particles,), minval=-0.5, maxval=0.5)
+            pitch = jax.random.uniform(key,shape=(n_particles,), minval=-0.2, maxval=0.2)
         else:
             pitch = jax.random.uniform(key,shape=(n_particles,), minval=-1, maxval=1)
         if model=='Lorentz':
@@ -623,7 +623,7 @@ class Coils(Curves):
             file.write(f"{repr(self.dofs.tolist())}\n")
             file.write(f"Currents degrees of freedom\n")
             file.write(f"{repr(self._dofs_currents.tolist())}\n")
-            file.write(f"Loss\n")
+            # file.write(f"Loss\n")
             file.write(f"{text}\n")
 
 
@@ -693,7 +693,7 @@ def loss(dofs_with_currents:           jnp.ndarray,
     )+trajectories[:, :, 2]**2
 
     #return jnp.mean(distances_squared)/r_coil**2
-    return jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r)))) + 1e-2*jnp.sum(jnp.array([jnp.abs(current-old_coils.dofs_currents[0]) for current in dofs_currents]))
+    return jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))# + 3e-2*jnp.sum(jnp.array([jnp.abs((current-old_coils.dofs_currents[0])/old_coils.dofs_currents[0]) for current in dofs_currents]))
 
 @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9, 10))
 def loss_discrete(dofs:           jnp.ndarray,
@@ -799,7 +799,7 @@ def optimize(coils:          Coils,
         dofs_currents = opt_dofs[coils.dofs.size:]
         coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
         coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
-        print(f"Loss function final value: {opt_dofs.fun:.5f}")
+        print(f"Loss function final value: {opt_dofs.fun:.5f}, currents={dofs_currents}")
     
     # Optimization using OPTAX adam method
     elif method["method"] == "OPTAX adam":
@@ -822,7 +822,7 @@ def optimize(coils:          Coils,
                 best_loss = current_loss
                 best_dofs = dofs
             if print_loss:
-                print(f"   Iteration: {iter+1:>5}     loss: {current_loss:.5f}     took {time()-start_loop:.1f} seconds")
+                print(f"   Iteration: {iter+1:>5}     loss: {current_loss:.5f}     took {time()-start_loop:.1f} seconds, currents={best_dofs[coils.dofs.size:]}")
 
         # coils.dofs = jnp.reshape(best_dofs, (-1, 3, 1+2*coils.order))
         dofs_coils = best_dofs[:coils.dofs.size].reshape(coils.dofs.shape)
@@ -854,7 +854,7 @@ def optimize(coils:          Coils,
     
     # Optimization using least squares method
     elif method["method"] == 'least_squares':
-        opt_dofs = least_squares(loss_partial, x0=dofs, verbose=2, ftol=method["ftol"], max_nfev=method["max_nfev"])
+        opt_dofs = least_squares(loss_partial, x0=dofs, verbose=2, ftol=method["ftol"], max_nfev=method["max_nfev"], diff_step=method["diff_step"])
         dofs_coils = jnp.array(opt_dofs.x[:coils.dofs.size].reshape(coils.dofs.shape))
         dofs_currents = jnp.array(opt_dofs.x[coils.dofs.size:])
         coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
