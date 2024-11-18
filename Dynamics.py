@@ -150,12 +150,10 @@ def Lorentz(inital_values: jnp.ndarray,
     return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 @jit
-def FieldLine(inital_values: jnp.ndarray,
-              t:             float,
-              gamma:         jnp.ndarray,
-              gamma_dash:    jnp.ndarray,
-              currents:      jnp.ndarray) -> jnp.ndarray:
-    
+def FieldLine(t:             float,
+              inital_values: jnp.ndarray,
+              args) -> jnp.ndarray:
+    gamma, gamma_dash, currents = args
     """ Calculates the motion derivatives for a certain field line 
         Attributes:
     inital_values: Point in phase space where we want to calculate the derivatives - shape (4,)
@@ -190,7 +188,7 @@ def FieldLine(inital_values: jnp.ndarray,
     vpar = 299792458 # speed of light
     
    # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 100) | (jnp.abs(z) > 20)
+    condition = (jnp.sqrt(x**2 + y**2) > 12) | (jnp.abs(z) > 6)
 
     def compute_derivatives(_):
         r = jnp.array([x, y, z])
