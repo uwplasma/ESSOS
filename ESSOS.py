@@ -704,6 +704,17 @@ def loss(dofs_with_currents:           jnp.ndarray,
 
     #TODO: Check size if initial_values instead of model
     trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps)
+    
+    # r_init = r/3
+    # n_fieldlines = len(trajectories)
+    # angle = 0
+    # r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
+    # ϕ = jnp.ones(n_fieldlines)*angle
+
+    # x_fl = (r_+R)*jnp.cos(ϕ)
+    # y_fl = (r_+R)*jnp.sin(ϕ)
+    # z_fl = jnp.zeros(n_fieldlines)
+    # trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/10, timesteps, n_segments)
 
         # if model=='Guiding Center':
         #     trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps, n_segments)
@@ -717,9 +728,19 @@ def loss(dofs_with_currents:           jnp.ndarray,
             trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2
         )-R
     )+trajectories[:, :, 2]**2
+    
+    # distances_squared_fl = jnp.square(
+    #     jnp.sqrt(
+    #         trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
+    #     )-R
+    # )+trajectories_fieldlines[:, :, 2]**2
 
     #return jnp.mean(distances_squared)/r_coil**2
-    return jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r)))) + 5e-2*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)# + 3e-2*jnp.sum(jnp.array([jnp.abs((current-old_coils.dofs_currents[0])/old_coils.dofs_currents[0]) for current in dofs_currents]))
+    return ( jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))
+           + 5e-2*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)
+        #    + jnp.mean(distances_squared_fl)/r**2
+           # + 3e-2*jnp.sum(jnp.array([jnp.abs((current-old_coils.dofs_currents[0])/old_coils.dofs_currents[0]) for current in dofs_currents]))
+           )
 
 @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9, 10))
 def loss_discrete(dofs:           jnp.ndarray,
