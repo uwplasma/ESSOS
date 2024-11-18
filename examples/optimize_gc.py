@@ -129,13 +129,15 @@ start = time()
 for i in range(n_total_optimizations):
     ## USING SCIPY AND LEAST SQUARES
     if optimize_least_squares:
-        for j, diff_step in enumerate(diff_step_least_squares):
-            print(f"Optimization {i+1}/{n_total_optimizations}: iteration {j+1} of {len(n_iteration_least_squares)} with {n_iteration_least_squares[j]} iterations, ftol={ftol_least_squares}, maxtime={maxtime}, timesteps={timesteps}, diff_step={diff_step}, jax_grad={jax_grad_least_squares[j]}")
-            res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "least_squares", "ftol": ftol_least_squares, "max_nfev": n_iteration_least_squares[j], "diff_step": diff_step, "jax_grad": jax_grad_least_squares[j]})
+        for j, n_it in enumerate(n_iteration_least_squares):
+            print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iteration_least_squares)} with {n_it} iterations, ftol={ftol_least_squares}, maxtime={maxtime}, timesteps={timesteps}, diff_step={diff_step_least_squares[j]}, jax_grad={jax_grad_least_squares[j]}")
+            start_time=time();loss_value = loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps);print(f"Loss function value: {loss_value:.8f}, took: {time()-start_time:.2f} seconds")
+            res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "least_squares", "ftol": ftol_least_squares, "max_nfev": n_iteration_least_squares[j], "diff_step": diff_step_least_squares[j], "jax_grad": jax_grad_least_squares[j]})
+            start_time=time();loss_value = loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps);print(f"Loss function value: {loss_value:.8f}, took: {time()-start_time:.2f} seconds")
     # USING ADAM AND OPTAX
     if optimize_adam:
         for n_it, lr in zip(n_iterations_adam, learning_rates_adam):
-            print(f"Optimization {i+1}/{n_total_optimizations}: iteration {j+1} of {len(n_iterations_adam)} with learning rate {lr}, {n_it} iterations, maxtime={maxtime}, timesteps={timesteps}")
+            print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iterations_adam)} with learning rate {lr}, {n_it} iterations, maxtime={maxtime}, timesteps={timesteps}")
             res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": lr, "iterations": n_it})
     
     stel.save_coils(f"output/Optimization_{i+1}.txt", text=f"loss={res}, maxtime={maxtime}, timesteps={timesteps}, lengths={stel.length[:n_curves]}")

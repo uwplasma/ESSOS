@@ -188,19 +188,19 @@ def FieldLine(t:             float,
     vpar = 299792458 # speed of light
     
    # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 12) | (jnp.abs(z) > 6)
+    condition = (jnp.sqrt(x**2 + y**2) > 25) | (jnp.abs(z) > 15)
 
-    def compute_derivatives(_):
-        r = jnp.array([x, y, z])
-        
-        B_field = B(r, gamma, gamma_dash, currents)
-        normB = jnp.linalg.norm(B_field)
-        b = B_field/normB
-        
-        # Position derivative of the particle
-        Dx = vpar*b
+    # def compute_derivatives(_):
+    r = jnp.array([x, y, z])
+    
+    B_field = B(r, gamma, gamma_dash, currents)
+    normB = jnp.linalg.norm(B_field)
+    b = B_field/normB
+    
+    # Position derivative of the particle
+    Dx = vpar*b
 
-        return Dx
+    return Dx
 
     def zero_derivatives(_):
         return jnp.zeros(3, dtype=float)
