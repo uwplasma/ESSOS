@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=42'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=32'
 
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
@@ -22,7 +22,7 @@ from simsopt.geo import CurveXYZFourier, curves_to_vtk
 from simsopt.field import particles_to_vtk
 
 n_curves=2
-order=5
+order=6
 nfp = 4
 
 A = 1.6 # Aspect ratio
@@ -30,24 +30,28 @@ R = 6
 r = R/A
 r_init = r/3
 n_total_optimizations = 14
+
+optimize_adam = False
 n_iterations_adam   = [5, 20, 30, 10]
 learning_rates_adam = [0.01, 0.005, 0.001, 0.0005]
-# n_iteration_least_squares = [20, 20, 20]
-# diff_step_least_squares = [1e-2, 1e-3, 1e-4]
-# jax_grad_least_squares = [False, False, True]
-n_iteration_least_squares = [50]*7
-diff_step_least_squares = [None, 1e-2, 1e-2,  1e-3,  1e-4,  1e-5, None]
-jax_grad_least_squares =  [True, False, False, False, False, False, True]
-ftol_least_squares = 1e-10
+
+optimize_least_squares = True
+n_iteration_least_squares = [150]*7
+diff_step_least_squares =   [None, 1e-1,  1e-2,  1e-3,  1e-4,  1e-5,  None]
+jax_grad_least_squares =    [True, False, False, False, False, False, True]
+ftol_least_squares = 1e-7
+
+optimize_scipy_minimize = False
+n_iteration_scipy_minimize = [10]*7
+diff_step_scipy_minimize =   [None, 1e-1,  1e-2,  1e-3,  1e-4,  1e-5,  None]
+jax_grad_scipy_minimize =    [True, False, False, False, False, False, True]
+ftol_scipy_minimize = 1e-7
 
 model = "Guiding Center"
 
 maxtime = 2.0e-5 # seconds
 timesteps = int(maxtime*1.2e7)
 advance_factor_each_optimization = 1.2
-
-optimize_least_squares = True
-optimize_adam = False
 
 particles = Particles(len(jax.devices()))
 
@@ -61,7 +65,7 @@ curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True
 
 stel = Coils(curves, jnp.array([1.0]*n_curves))
 
-initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=True)
+initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=True, trapped_fraction_more=0.2)
 initial_vperp = initial_values[4, :]
 
 time0 = time()
@@ -125,6 +129,12 @@ grad_loss_value = grad(loss)(dofs_with_currents, stel, particles, R, r, initial_
 # print(f"Grad loss function initial value:\n{jnp.ravel(grad_loss_value)}")
 print(f"Grad shape: {grad_loss_value.shape}, took: {time()-start:.2f} seconds")
 
+def save_all(stel,res,maxtime,timesteps,i):
+    stel.save_coils(f"output/Optimization_{i+1}.txt", text=f"loss={res}, maxtime={maxtime}, timesteps={timesteps}, lengths={stel.length[:n_curves]}")
+    curves_to_vtk(create_simsopt_curves(stel._curves), f"output/curves_{i+1}", close=True)
+    trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
+    particles_to_vtk(res_tys=jnp.concatenate([trajectories[:, :, 3:4], trajectories[:, :, :3]], axis=2), filename=f"output/particles_{i+1}")
+
 start = time()
 for i in range(n_total_optimizations):
     ## USING SCIPY AND LEAST SQUARES
@@ -134,17 +144,21 @@ for i in range(n_total_optimizations):
             start_time=time();loss_value = loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps);print(f"Loss function value: {loss_value:.8f}, took: {time()-start_time:.2f} seconds")
             res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "least_squares", "ftol": ftol_least_squares, "max_nfev": n_iteration_least_squares[j], "diff_step": diff_step_least_squares[j], "jax_grad": jax_grad_least_squares[j]})
             start_time=time();loss_value = loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps);print(f"Loss function value: {loss_value:.8f}, took: {time()-start_time:.2f} seconds")
+            save_all(stel,res,maxtime,timesteps,i)
+    if optimize_scipy_minimize:
+        for j, n_it in enumerate(n_iteration_scipy_minimize):
+            print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iteration_scipy_minimize)} with {n_it} iterations, ftol={ftol_scipy_minimize}, maxtime={maxtime}, timesteps={timesteps}, diff_step={diff_step_scipy_minimize[j]}, jax_grad={jax_grad_scipy_minimize[j]}")
+            start_time=time();loss_value = loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps);print(f"Loss function value: {loss_value:.8f}, took: {time()-start_time:.2f} seconds")
+            res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "scipy_minimize", "ftol": ftol_scipy_minimize, "max_nfev": n_iteration_scipy_minimize[j], "diff_step": diff_step_scipy_minimize[j], "jax_grad": jax_grad_scipy_minimize[j]})
+            start_time=time();loss_value = loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps);print(f"Loss function value: {loss_value:.8f}, took: {time()-start_time:.2f} seconds")
+            save_all(stel,res,maxtime,timesteps,i)
     # USING ADAM AND OPTAX
     if optimize_adam:
-        for n_it, lr in zip(n_iterations_adam, learning_rates_adam):
-            print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iterations_adam)} with learning rate {lr}, {n_it} iterations, maxtime={maxtime}, timesteps={timesteps}")
-            res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": lr, "iterations": n_it})
-    
-    stel.save_coils(f"output/Optimization_{i+1}.txt", text=f"loss={res}, maxtime={maxtime}, timesteps={timesteps}, lengths={stel.length[:n_curves]}")
-    curves_to_vtk(create_simsopt_curves(stel._curves), f"output/curves_{i+1}", close=True)
-    trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
-    particles_to_vtk(res_tys=jnp.concatenate([trajectories[:, :, 3:4], trajectories[:, :, :3]], axis=2), filename=f"output/particles_{i+1}")
-    
+        for j, n_it in enumerate(n_iterations_adam):
+            print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iterations_adam)} with learning rate {learning_rates_adam[j]}, {n_it} iterations, maxtime={maxtime}, timesteps={timesteps}")
+            res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": learning_rates_adam[j], "iterations": n_it})
+            save_all(stel,res,maxtime,timesteps,i)
+
     maxtime *= advance_factor_each_optimization
     timesteps = int(timesteps*advance_factor_each_optimization)
 
