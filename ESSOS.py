@@ -24,9 +24,6 @@ from time import time
 from MagneticField import norm_B, B
 from Dynamics import GuidingCenter, Lorentz, FieldLine
 
-import optax
-import pybobyqa
-from bayes_opt import BayesianOptimization
 from scipy.optimize import  minimize as scipy_minimize, least_squares
 from jax.scipy.optimize import minimize as jax_minimize
 
@@ -285,6 +282,7 @@ class Curves:
                            r_init: float,
                            seed: int = 1,
                            more_trapped_particles = False,
+                           trapped_fraction_more = 0.5,
                            model: str = "Guiding Center") -> jnp.ndarray:
     
         """ Creates the initial conditions for the particles
@@ -310,7 +308,9 @@ class Curves:
 
         # Initializing pitch angle
         if more_trapped_particles:
-            pitch = jax.random.uniform(key,shape=(n_particles,), minval=-0.3, maxval=0.3)
+            pitch = jax.random.uniform(key,shape=(n_particles,), minval=-trapped_fraction_more, maxval=trapped_fraction_more)
+            pitch = pitch.at[-1].set(0.95)
+            pitch = pitch.at[1].set(-0.95)
         else:
             pitch = jax.random.uniform(key,shape=(n_particles,), minval=-1, maxval=1)
         if model=='Lorentz':
@@ -736,9 +736,9 @@ def loss(dofs_with_currents:           jnp.ndarray,
     # )+trajectories_fieldlines[:, :, 2]**2
 
     #return jnp.mean(distances_squared)/r_coil**2
-    return ( jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))
+    return ( 1e+0*jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))
            + 5e-2*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)
-        #    + jnp.mean(distances_squared_fl)/r**2
+        #    + 1e-1*jnp.mean(distances_squared_fl)/r**2
            # + 3e-2*jnp.sum(jnp.array([jnp.abs((current-old_coils.dofs_currents[0])/old_coils.dofs_currents[0]) for current in dofs_currents]))
            )
 
@@ -847,19 +847,34 @@ def optimize(coils:          Coils,
         coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
         coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
         print(f"Loss function final value: {opt_dofs.fun:.5f}, currents={dofs_currents}")
-    
+
+    # Optimization using JAX minimize method
+    if method["method"] == "scipy_minimize":
+        if method["jax_grad"]==True:
+            grad = jit(jax.grad(loss_partial))
+            opt_dofs = scipy_minimize(loss_partial, dofs, args=(), jac=grad, method='L-BFGS-B', options={'maxcor': 300, 'iprint': 1, "ftol":method["ftol"], "gtol":method["ftol"], "maxfun":method["max_nfev"]})
+        else:
+            opt_dofs = scipy_minimize(loss_partial, dofs, args=(), method='L-BFGS-B', options={'maxcor': 300, 'iprint': 1, "ftol":method["ftol"], "gtol":method["ftol"], "maxfun":method["max_nfev"], "finite_diff_rel_step":method["diff_step"]})
+        dofs_coils = jnp.array(opt_dofs.x[:coils.dofs.size].reshape(coils.dofs.shape))
+        dofs_currents = jnp.array(opt_dofs.x[coils.dofs.size:])
+        coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
+        coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
+
+        print(f"Loss function final value: {opt_dofs.fun:.5f}, currents={dofs_currents}")
+
     # Optimization using OPTAX adam method
     elif method["method"] == "OPTAX adam":
+        import optax
         learning_rate = method["learning_rate"] if "learning_rate" in method.keys() else 0.003
         solver = optax.adam(learning_rate=learning_rate) #
+        # solver = optax.sgd(learning_rate=learning_rate) #
         best_loss = jnp.inf
-        args = (dofs,)
-        grad_func = jit(jax.grad(loss_partial))
+        # args = (dofs,)
         solver_state = solver.init(dofs) #
         losses = []
         for iter in range(method["iterations"]):
             start_loop = time()
-            grad = grad_func(dofs)
+            grad = jax.grad(loss_partial)(dofs)
             updates, solver_state = solver.update(grad, solver_state, dofs)
             dofs = optax.apply_updates(dofs, updates)
             # args = (dofs,)
@@ -882,6 +897,7 @@ def optimize(coils:          Coils,
     #TODO: Fix the loss for the Bayesian optimization
     # Optimization using Bayesian Optimization
     elif method["method"] == 'Bayesian':
+        from bayes_opt import BayesianOptimization
         pbounds = {}
         for i in range(1, len(dofs) + 1):
             pbounds[f'x{i}'] = (method["min_val"], method["max_val"])
@@ -919,6 +935,7 @@ def optimize(coils:          Coils,
     
     # Optimization using BOBYQA method
     elif method["method"] == 'BOBYQA':
+        import pybobyqa
         opt_dofs = pybobyqa.solve(loss_partial, x0=list(dofs), print_progress=True, objfun_has_noise=False, seek_global_minimum=False, rhoend=method["rhoend"], maxfun=method["maxfun"], bounds=method["bounds"])
         
         dofs_coils = jnp.array(opt_dofs.x[:coils.dofs.size].reshape(coils.dofs.shape))
