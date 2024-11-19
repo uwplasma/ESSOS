@@ -309,8 +309,8 @@ class Curves:
         # Initializing pitch angle
         if more_trapped_particles:
             pitch = jax.random.uniform(key,shape=(n_particles,), minval=-trapped_fraction_more, maxval=trapped_fraction_more)
-            pitch = pitch.at[-1].set(0.95)
-            pitch = pitch.at[1].set(-0.95)
+            pitch = pitch.at[-1].set(0.90)
+            pitch = pitch.at[1].set(-0.90)
         else:
             pitch = jax.random.uniform(key,shape=(n_particles,), minval=-1, maxval=1)
         if model=='Lorentz':
@@ -703,42 +703,70 @@ def loss(dofs_with_currents:           jnp.ndarray,
     coils = Coils(curves, jnp.concatenate((jnp.array([old_coils.dofs_currents[0]]),dofs_currents)))
 
     #TODO: Check size if initial_values instead of model
-    trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps)
-    
-    # r_init = r/3
-    # n_fieldlines = len(trajectories)
-    # angle = 0
-    # r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
-    # ϕ = jnp.ones(n_fieldlines)*angle
-
-    # x_fl = (r_+R)*jnp.cos(ϕ)
-    # y_fl = (r_+R)*jnp.sin(ϕ)
-    # z_fl = jnp.zeros(n_fieldlines)
-    # trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/10, timesteps, n_segments)
-
         # if model=='Guiding Center':
         #     trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps, n_segments)
         # elif model=='Lorentz':
         #     trajectories = coils.trace_trajectories_lorentz(particles, initial_values, maxtime, timesteps, n_segments)
         # else:
         #     raise ValueError("Model must be 'Guiding Center' or 'Lorentz'")
-    
+        
+    trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps)
     distances_squared = jnp.square(
         jnp.sqrt(
             trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2
         )-R
     )+trajectories[:, :, 2]**2
+    # costheta = (jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2)-R)/jnp.sqrt(distances_squared)
+    # sintheta = trajectories[:, :, 2]/jnp.sqrt(distances_squared)
+    # theta = jnp.arctan2(sintheta,costheta)
+    # theta_derivative = jnp.gradient(theta, axis=1)
+    # z_second_derivative = jnp.gradient(jnp.gradient(trajectories[:, :, 2], axis=1), axis=1)
+    # R_second_derivative = jnp.gradient(jnp.gradient(jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2), axis=1), axis=1)
     
+    # r_init = r/3
+    # n_fieldlines = particles.number
+    # angle = 0
+    # r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
+    # ϕ = jnp.ones(n_fieldlines)*angle
+    # x_fl = (r_+R)*jnp.cos(ϕ)
+    # y_fl = (r_+R)*jnp.sin(ϕ)
+    # z_fl = jnp.zeros(n_fieldlines)
+    # trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, timesteps, n_segments)
     # distances_squared_fl = jnp.square(
     #     jnp.sqrt(
     #         trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
     #     )-R
     # )+trajectories_fieldlines[:, :, 2]**2
+    # z_first_derivative_fl = jnp.gradient(trajectories_fieldlines[:, :, 2], axis=1)+1e-5
+    # z_second_derivative_fl = jnp.gradient(z_first_derivative_fl, axis=1)+1e-5
+    # R_first_derivative_fl = jnp.gradient(jnp.sqrt(trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2), axis=1)+1e-5
+    # R_second_derivative_fl = jnp.gradient(R_first_derivative_fl, axis=1)+1e-5
 
     #return jnp.mean(distances_squared)/r_coil**2
-    return ( 1e+0*jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))
-           + 5e-2*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)
-        #    + 1e-1*jnp.mean(distances_squared_fl)/r**2
+    return (
+           + 1e+0*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)/len(curves.length)
+           + 1e+0*jnp.sum(distances_squared/r**2)/len(jnp.ravel(distances_squared))
+        #    + 1e+0*jnp.mean(distances_squared_fl/r**2)/len(jnp.ravel(distances_squared_fl))
+           
+        #    + 1e-10*jnp.sum(1/z_second_derivative**2)/len(jnp.ravel(z_second_derivative))
+        #    + 1e-10*jnp.sum(1/R_second_derivative**2)/len(jnp.ravel(R_second_derivative))
+        #    + 2e+0*jnp.sum(jnp.sqrt(distances_squared.transpose()/distances_squared[:,0])-1)**2/len(jnp.ravel(distances_squared))
+        #    + 1e+0*jnp.max(jnp.abs(trajectories[:, :, 2])/r)
+        
+        #    + 1e-9*jnp.sum(1/theta_derivative**2)/len(jnp.ravel(theta_derivative))
+        #    + 1e-2*jnp.sum(trajectories[:, :, 2]**2/r**2)/len(trajectories)
+        #    + 1e+1*jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))
+        
+        #    + 1e-11*jnp.sum(1/z_second_derivative_fl**2)/len(jnp.ravel(z_second_derivative_fl))
+        #    + 1e-11*jnp.sum(1/z_first_derivative_fl**2)/len(jnp.ravel(z_first_derivative_fl))
+        #    + 1e-11*jnp.sum(1/R_second_derivative_fl**2)/len(jnp.ravel(R_second_derivative_fl))
+        #    + 1e-11*jnp.sum(1/R_first_derivative_fl**2)/len(jnp.ravel(R_first_derivative_fl))
+        #    + 1e+3*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared_fl)/r))))/len(jnp.ravel(distances_squared_fl))
+        #    + 1e-2*jnp.sum(trajectories_fieldlines[:, :, 2]**2/r**2)/len(trajectories_fieldlines)
+        
+        #    + 1e+2*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))/len(jnp.ravel(distances_squared))
+           
+        #    + 1e+1*jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared_fl)/r))))
            # + 3e-2*jnp.sum(jnp.array([jnp.abs((current-old_coils.dofs_currents[0])/old_coils.dofs_currents[0]) for current in dofs_currents]))
            )
 
@@ -841,15 +869,15 @@ def optimize(coils:          Coils,
 
     # Optimization using JAX minimize method
     if method["method"] == "JAX minimize":
-        opt_dofs = jax_minimize(loss_partial, dofs, args=(), method='BFGS', options={'maxiter': 20})    
-        dofs_coils = opt_dofs[:coils.dofs.size].reshape(coils.dofs.shape)
-        dofs_currents = opt_dofs[coils.dofs.size:]
+        opt_dofs = jax_minimize(loss_partial, dofs, args=(), method='BFGS', tol=method["ftol"], options={'maxiter': method["max_nfev"]})    
+        dofs_coils = opt_dofs.x[:coils.dofs.size].reshape(coils.dofs.shape)
+        dofs_currents = opt_dofs.x[coils.dofs.size:]
         coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
         coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
         print(f"Loss function final value: {opt_dofs.fun:.5f}, currents={dofs_currents}")
 
     # Optimization using JAX minimize method
-    if method["method"] == "scipy_minimize":
+    elif method["method"] == "scipy_minimize":
         if method["jax_grad"]==True:
             grad = jit(jax.grad(loss_partial))
             opt_dofs = scipy_minimize(loss_partial, dofs, args=(), jac=grad, method='L-BFGS-B', options={'maxcor': 300, 'iprint': 1, "ftol":method["ftol"], "gtol":method["ftol"], "maxfun":method["max_nfev"]})
@@ -868,10 +896,12 @@ def optimize(coils:          Coils,
         learning_rate = method["learning_rate"] if "learning_rate" in method.keys() else 0.003
         solver = optax.adam(learning_rate=learning_rate) #
         # solver = optax.sgd(learning_rate=learning_rate) #
-        best_loss = jnp.inf
+        best_loss = loss_partial(dofs)
         # args = (dofs,)
         solver_state = solver.init(dofs) #
-        losses = []
+        best_dofs = dofs
+        losses = [best_loss]
+        print(f" Initial loss: {best_loss:.5f}")
         for iter in range(method["iterations"]):
             start_loop = time()
             grad = jax.grad(loss_partial)(dofs)
