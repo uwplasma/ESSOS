@@ -56,7 +56,7 @@ ftol_least_squares = 1e-7
 
 model = "Guiding Center"
 
-maxtime = 3.0e-5 # seconds
+maxtime = 2.5e-5 # seconds
 timesteps = int(maxtime*3.0e7)
 advance_factor_each_optimization = 1.2
 current_on_axis = 5.7 # Tesla
