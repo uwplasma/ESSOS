@@ -3,7 +3,7 @@ jax.config.update("jax_enable_x64", True)
 from jax import jit
 import jax.numpy as jnp
 from MagneticField import B, grad_B
-from time import time
+import uuid
 
 @jit
 def GuidingCenter(t:              float,
@@ -55,7 +55,7 @@ def GuidingCenter(t:              float,
     x, y, z, vpar = inital_values
     
    # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 100) | (jnp.abs(z) > 20)
+    condition = (jnp.sqrt(x**2 + y**2) > 200) | (jnp.abs(z) > 50)
 
     def compute_derivatives(_):
         r = jnp.array([x, y, z])
@@ -185,7 +185,9 @@ def FieldLine(t:             float,
 
     # Calculationg the magentic field
     x, y, z = inital_values
-    vpar = 299792458 # speed of light
+    # Generate a single random value of 1 or -1
+    random_value = jax.random.choice(jax.random.PRNGKey(int(uuid.uuid4().int % (2**32))), jnp.array([-1.0, 1.0]))
+    vpar = random_value*299792458 # speed of light
     
    # Condition to check if any of x, y, z is greater than 10
     condition = (jnp.sqrt(x**2 + y**2) > 25) | (jnp.abs(z) > 15)
