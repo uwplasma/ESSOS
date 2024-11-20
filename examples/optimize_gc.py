@@ -58,7 +58,7 @@ model = "Guiding Center"
 
 maxtime = 1.5e-5 # seconds
 timesteps = int(maxtime*1.0e7)
-advance_factor_each_optimization = 1.1
+advance_factor_each_optimization = 1.11
 current_on_axis = 5.7 # Tesla
 
 n_segments = int(order*9)

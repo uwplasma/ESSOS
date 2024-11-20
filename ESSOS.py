@@ -746,11 +746,31 @@ def loss(dofs_with_currents:           jnp.ndarray,
     B_theta_particles  = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories[:, 0, :3].transpose(),                                coils.gamma, coils.gamma_dash, coils.currents, R)))
     # B_theta_fieldlines = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories_fieldlines[int(n_fieldlines/2)+1:, 2, :].transpose(), coils.gamma, coils.gamma_dash, coils.currents, R)))
     
+    # r_0 = jnp.linspace(start=1e-3, stop=r/4, num=particles.number)
+    # phi_array = jnp.linspace(start=0, stop=2*jnp.pi, num=particles.number)
+    ## TODO do not do it along every phi, perhaps only close to phi=0
+    # # B_theta_fieldlines_0=jnp.sum(jnp.abs(jnp.array([[
+    # #         BdotGradTheta(jnp.array([(r_00+R)*jnp.cos(phi),(r_00+R)*jnp.sin(phi),0]), coils.gamma, coils.gamma_dash, coils.currents, R)
+    # #     for phi in phi_array] for r_00 in r_0])))
+    # # Create grid using meshgrid
+    # r_0_grid, phi_grid = jnp.meshgrid(r_0, phi_array, indexing='ij')
+    # x = (r_0_grid + R) * jnp.cos(phi_grid)
+    # y = (r_0_grid + R) * jnp.sin(phi_grid)
+    # z = jnp.zeros_like(x)  # Assume z = 0 for all points
+    # positions = jnp.stack((x, y, z), axis=-1)
+    # vectorized_BdotGradTheta = jax.vmap(
+    #     jax.vmap(lambda pos: BdotGradTheta(pos, coils.gamma, coils.gamma_dash, coils.currents, R), 
+    #             in_axes=0),  # Inner vmap over phi
+    #     in_axes=0  # Outer vmap over r
+    # )
+    # B_theta_fieldlines_0 = jnp.sum(jnp.abs(vectorized_BdotGradTheta(positions)))
+    
     #return jnp.mean(distances_squared)/r_coil**2
     return (
            + 1e+2*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)/len(curves.length)
            + 1e+0*jnp.sum(distances_squared/r**2)/len(jnp.ravel(distances_squared))
            + 2e+1*1/B_theta_particles
+        #    + 1e+2*1/B_theta_fieldlines_0
         #    + 1e+0*1/B_theta_fieldlines
         #    + 1e+0*jnp.sum(distances_squared_fl/r**2)/len(jnp.ravel(distances_squared_fl))
            
