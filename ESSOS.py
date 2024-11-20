@@ -21,7 +21,7 @@ from jax.sharding import Mesh, PartitionSpec as P
 from functools import partial
 from time import time
 
-from MagneticField import norm_B, B
+from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta
 from Dynamics import GuidingCenter, Lorentz, FieldLine
 
 from scipy.optimize import  minimize as scipy_minimize, least_squares
@@ -723,7 +723,7 @@ def loss(dofs_with_currents:           jnp.ndarray,
     # z_second_derivative = jnp.gradient(jnp.gradient(trajectories[:, :, 2], axis=1), axis=1)
     # R_second_derivative = jnp.gradient(jnp.gradient(jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2), axis=1), axis=1)
     
-    # r_init = r/6
+    # r_init = r/4
     # n_fieldlines = particles.number
     # angle = 0
     # r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
@@ -737,16 +737,22 @@ def loss(dofs_with_currents:           jnp.ndarray,
     #         trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
     #     )-R
     # )+trajectories_fieldlines[:, :, 2]**2
+    
     # z_first_derivative_fl = jnp.gradient(trajectories_fieldlines[:, :, 2], axis=1)+1e-5
     # z_second_derivative_fl = jnp.gradient(z_first_derivative_fl, axis=1)+1e-5
     # R_first_derivative_fl = jnp.gradient(jnp.sqrt(trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2), axis=1)+1e-5
     # R_second_derivative_fl = jnp.gradient(R_first_derivative_fl, axis=1)+1e-5
 
+    B_theta_particles  = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories[:, 0, :3].transpose(),                                coils.gamma, coils.gamma_dash, coils.currents, R)))
+    # B_theta_fieldlines = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories_fieldlines[int(n_fieldlines/2)+1:, 2, :].transpose(), coils.gamma, coils.gamma_dash, coils.currents, R)))
+    
     #return jnp.mean(distances_squared)/r_coil**2
     return (
-           + 1e+0*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)/len(curves.length)
+           + 1e+2*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)/len(curves.length)
            + 1e+0*jnp.sum(distances_squared/r**2)/len(jnp.ravel(distances_squared))
-        #    + 1e+0*jnp.mean(distances_squared_fl/r**2)/len(jnp.ravel(distances_squared_fl))
+           + 2e+1*1/B_theta_particles
+        #    + 1e+0*1/B_theta_fieldlines
+        #    + 1e+0*jnp.sum(distances_squared_fl/r**2)/len(jnp.ravel(distances_squared_fl))
            
         #    + 1e-10*jnp.sum(1/z_second_derivative**2)/len(jnp.ravel(z_second_derivative))
         #    + 1e-10*jnp.sum(1/R_second_derivative**2)/len(jnp.ravel(R_second_derivative))

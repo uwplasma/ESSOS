@@ -24,6 +24,23 @@ def B(R: jnp.array, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array,
     return jnp.mean(dB_sum, axis=0)
 
 @jit
+def BdotGradTheta(r, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array, R0=6):
+    x, y, z = r
+    sqrtx2y2 = jnp.sqrt(x**2 + y**2)
+    denom = (sqrtx2y2-R0)**2+z**2
+    gradtheta = jnp.array([-x*z/sqrtx2y2/denom,-y*z/sqrtx2y2/denom,1/(-R0+sqrtx2y2)/(1+z**2/(R0-sqrtx2y2)**2)])
+    B_field = B(r, gamma, gamma_dash, currents)
+    return jnp.dot(B_field, gradtheta)
+
+@jit
+def BdotGradPhi(r, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array):
+    x, y, z = r
+    denom = x**2+y**2
+    gradphi = jnp.array([-y/denom, x/denom, 0])
+    B_field = B(r, gamma, gamma_dash, currents)
+    return jnp.dot(B_field, gradphi)
+
+@jit
 def norm_B(R: jnp.array, gamma: jnp.array, gamma_dash:jnp.array, currents: jnp.array) -> float:
     """Calculates the magnetic field norm at a point R from linearized coils with Biot-Savart
     

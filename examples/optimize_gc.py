@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=36'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=13'
 
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
@@ -13,7 +13,7 @@ from jax import grad
 print("JAX running on", len(jax.devices()), jax.devices()[0].platform.upper())
 
 from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, optimize, loss, loss_discrete, projection2D, projection2D_top
-from MagneticField import norm_B
+from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta
 
 import matplotlib.pyplot as plt
 from time import time
@@ -24,15 +24,15 @@ from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
-n_curves=2
-order=5
-nfp = 2
+n_curves=3
+order=8
+nfp = 3
 
 A = 1.6 # Aspect ratio
 R = 7.75 # Major Radius
 r = R/A
-r_init = r/5
-n_total_optimizations = 28
+r_init = r/3
+n_total_optimizations = 24
 
 optimize_adam = False
 n_iterations_adam   = [10, 10, 10, 10]
@@ -45,20 +45,20 @@ jax_grad_scipy_minimize =    [True]*1#[True, False, False, False, False, True]
 ftol_scipy_minimize = 1e-7
 
 optimize_least_squares = True
-# n_iteration_least_squares = [30]*1
-# diff_step_least_squares =   [None]*1
-# jax_grad_least_squares =    [True]*1
-n_iteration_least_squares = [50]*7 #[150] + [50]*5 + [150]
-diff_step_least_squares =   [None, 1e-2,  1e-3,  1e-4,  1e-5, 1e-6,  None]
-jax_grad_least_squares =    [True, False, False, False, False, False, True]
+n_iteration_least_squares = [30]*1
+diff_step_least_squares =   [None]*1
+jax_grad_least_squares =    [True]*1
+# n_iteration_least_squares = [50]*7 #[150] + [50]*5 + [150]
+# diff_step_least_squares =   [None, 1e-2,  1e-3,  1e-4,  1e-5, 1e-6,  None]
+# jax_grad_least_squares =    [True, False, False, False, False, False, True]
 ftol_break_opt=5e-2
 ftol_least_squares = 1e-7
 
 model = "Guiding Center"
 
-maxtime = 2.5e-5 # seconds
-timesteps = int(maxtime*3.0e7)
-advance_factor_each_optimization = 1.2
+maxtime = 1.5e-5 # seconds
+timesteps = int(maxtime*1.0e7)
+advance_factor_each_optimization = 1.1
 current_on_axis = 5.7 # Tesla
 
 n_segments = int(order*9)
@@ -74,13 +74,23 @@ particles = Particles(len(jax.devices()))
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True, n_segments=n_segments)
 stel = Coils(curves, jnp.array([5.7*current_on_axis/len(curves._curves)]*n_curves))
 key = jax.random.PRNGKey(42)
-stel.dofs += jax.random.normal(key, stel.dofs.shape)*r*5e-2
+stel.dofs += jax.random.normal(key, stel.dofs.shape)*r*1e-2
 
 initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=False)#True, trapped_fraction_more=0.4)
 initial_vperp = initial_values[4, :]
 
 time0 = time()
 trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
+
+# print("Trajectories shape:", trajectories.shape)
+# id = 0
+# print(BdotGradTheta(trajectories[id, :3, 0], stel.gamma, stel.gamma_dash, stel.currents, R))
+# print(BdotGradPhi(trajectories[id, :3, 0], stel.gamma, stel.gamma_dash, stel.currents))
+# B_theta_all = jnp.ravel(jnp.array([jnp.apply_along_axis(BdotGradTheta, 0, trajectories[i, :, :3].transpose(), stel.gamma, stel.gamma_dash, stel.currents, R) for i in range(len(trajectories))]))
+# B_phi_all = jnp.ravel(jnp.array([jnp.apply_along_axis(BdotGradPhi, 0, trajectories[i, :, :3].transpose(), stel.gamma, stel.gamma_dash, stel.currents) for i in range(len(trajectories))]))
+# print()
+# print(jnp.abs(B_phi_all)/B_theta_all)
+# exit()
 
 # distances_squared = jnp.square(jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2)-R)+trajectories[:, :, 2]**2
 # costheta = (jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2)-R)/jnp.sqrt(distances_squared)
