@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=25'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=36'
 
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
@@ -141,7 +141,7 @@ def create_field_lines(stel, maxtime, timesteps, n_segments, filename):
         ppl = np.asarray([xyz.shape[0] for xyz in res_tys])
         data = np.concatenate([i*np.ones((res_tys[i].shape[0], )) for i in range(len(res_tys))])
         polyLinesToVTK(filename, x, y, z, pointsPerLine=ppl, pointData={'idx': data})
-    r_init = r/3
+    # r_init = r/3
     n_fieldlines = len(trajectories)
     angle = 0
     r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)

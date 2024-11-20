@@ -723,7 +723,7 @@ def loss(dofs_with_currents:           jnp.ndarray,
     # z_second_derivative = jnp.gradient(jnp.gradient(trajectories[:, :, 2], axis=1), axis=1)
     # R_second_derivative = jnp.gradient(jnp.gradient(jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2), axis=1), axis=1)
     
-    # r_init = r/3
+    # r_init = r/6
     # n_fieldlines = particles.number
     # angle = 0
     # r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
