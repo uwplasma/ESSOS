@@ -13,7 +13,7 @@ from jax import grad
 print("JAX running on", len(jax.devices()), jax.devices()[0].platform.upper())
 
 from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, optimize, loss, loss_discrete, projection2D, projection2D_top
-from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta
+from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta, BdotGradr
 
 import matplotlib.pyplot as plt
 from time import time
@@ -24,8 +24,8 @@ from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
-n_curves=3
-order=8
+n_curves=2
+order=5
 nfp = 3
 
 A = 1.6 # Aspect ratio
@@ -56,9 +56,9 @@ ftol_least_squares = 1e-7
 
 model = "Guiding Center"
 
-maxtime = 1.5e-5 # seconds
+maxtime = 2.0e-5 # seconds
 timesteps = int(maxtime*1.0e7)
-advance_factor_each_optimization = 1.11
+advance_factor_each_optimization = 1.15
 current_on_axis = 5.7 # Tesla
 
 n_segments = int(order*9)
@@ -76,35 +76,34 @@ stel = Coils(curves, jnp.array([5.7*current_on_axis/len(curves._curves)]*n_curve
 key = jax.random.PRNGKey(42)
 stel.dofs += jax.random.normal(key, stel.dofs.shape)*r*1e-2
 
+# print(stel.gamma.shape)
+# print(jnp.mean(stel.gamma[2, :, 2]))
+# exit()
+
 initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=False)#True, trapped_fraction_more=0.4)
 initial_vperp = initial_values[4, :]
 
 time0 = time()
 trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
 
-# print("Trajectories shape:", trajectories.shape)
-# id = 0
-# print(BdotGradTheta(trajectories[id, :3, 0], stel.gamma, stel.gamma_dash, stel.currents, R))
-# print(BdotGradPhi(trajectories[id, :3, 0], stel.gamma, stel.gamma_dash, stel.currents))
-# B_theta_all = jnp.ravel(jnp.array([jnp.apply_along_axis(BdotGradTheta, 0, trajectories[i, :, :3].transpose(), stel.gamma, stel.gamma_dash, stel.currents, R) for i in range(len(trajectories))]))
-# B_phi_all = jnp.ravel(jnp.array([jnp.apply_along_axis(BdotGradPhi, 0, trajectories[i, :, :3].transpose(), stel.gamma, stel.gamma_dash, stel.currents) for i in range(len(trajectories))]))
-# print()
-# print(jnp.abs(B_phi_all)/B_theta_all)
-# exit()
-
-# distances_squared = jnp.square(jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2)-R)+trajectories[:, :, 2]**2
-# costheta = (jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2)-R)/jnp.sqrt(distances_squared)
-# sintheta = trajectories[:, :, 2]/jnp.sqrt(distances_squared)
-# theta = jnp.arctan2(sintheta,costheta)
-# theta_derivative = jnp.gradient(theta, axis=1)
-# z_second_derivative = jnp.gradient(jnp.gradient(trajectories[:, :, 2], axis=1), axis=1)
-# particle_id=1
-# plt.figure();plt.plot((trajectories[particle_id, :, 2].transpose()/trajectories[particle_id, 0, 2]-1)**2)
-# # plt.figure();plt.plot(jnp.sqrt(distances_squared[particle_id]/distances_squared[particle_id,0])-1)
-# # plt.figure();plt.plot(z_second_derivative[particle_id])
-# # plt.figure();plt.plot(jnp.sqrt(trajectories[particle_id, :, 0]**2 + trajectories[particle_id, :, 1]**2));plt.plot(trajectories[particle_id, :, 2])
-# plt.figure();plt.plot(jnp.sqrt(trajectories[particle_id, :, 0]**2 + trajectories[particle_id, :, 1]**2), trajectories[particle_id, :, 2])
-# plt.show()
+# nr = 4;nphi = 4;nz = 4;
+# r_max = r/5;phi_min = 1e-3;phi_max = 1e-4#2*jnp.pi-1e-3
+# r_0 = jnp.linspace(start=-r_max, stop=r_max, num=nr)
+# phi_array = jnp.linspace(start=phi_min, stop=phi_max, num=nphi)
+# z_array = jnp.linspace(start=-r_max, stop=r_max, num=nz)
+# r_0_grid, phi_grid, z_grid = jnp.meshgrid(r_0, phi_array, z_array)
+# xyz_array = jnp.stack([(r_0_grid + R) * jnp.cos(phi_grid),
+#                             (r_0_grid + R) * jnp.sin(phi_grid),
+#                             z_grid], axis=-1).reshape(-1, 3)
+# # B_z = jax.vmap(lambda rphi: B(rphi, coils.gamma, coils.gamma_dash, coils.currents, R)[2])(r_phi_array_plus)
+# B_iota_fieldlines  = jax.vmap(lambda xyz: 
+#                                         BdotGradTheta(xyz, stel.gamma, stel.gamma_dash, stel.currents, R)
+#                                         /BdotGradPhi( xyz, stel.gamma, stel.gamma_dash, stel.currents, R)
+#                                         )(xyz_array)
+# B_r_fieldlines  = jax.vmap(lambda rphi: BdotGradr(rphi, stel.gamma, stel.gamma_dash, stel.currents, R))(xyz_array)/len(xyz_array)
+# print(f"xyz array: {xyz_array}")
+# print(f"Biota: {B_iota_fieldlines}")
+# print(f"Br: {B_r_fieldlines}")
 # exit()
 
 print("Trajectories shape:", trajectories.shape)

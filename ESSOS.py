@@ -21,7 +21,7 @@ from jax.sharding import Mesh, PartitionSpec as P
 from functools import partial
 from time import time
 
-from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta
+from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta, BcrossGradBdotGradTheta, BdotGradr
 from Dynamics import GuidingCenter, Lorentz, FieldLine
 
 from scipy.optimize import  minimize as scipy_minimize, least_squares
@@ -743,34 +743,39 @@ def loss(dofs_with_currents:           jnp.ndarray,
     # R_first_derivative_fl = jnp.gradient(jnp.sqrt(trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2), axis=1)+1e-5
     # R_second_derivative_fl = jnp.gradient(R_first_derivative_fl, axis=1)+1e-5
 
-    B_theta_particles  = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories[:, 0, :3].transpose(),                                coils.gamma, coils.gamma_dash, coils.currents, R)))
+    # B_theta_particles  = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories[:, 0, :3].transpose(), coils.gamma, coils.gamma_dash, coils.currents, R)))
+    # BcrossGradBdotGradTheta_particles  = jnp.sum(jnp.abs(jnp.apply_along_axis(BcrossGradBdotGradTheta, 0, trajectories[:, 0, :3].transpose(), coils.gamma, coils.gamma_dash, coils.currents, R)))
+
     # B_theta_fieldlines = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories_fieldlines[int(n_fieldlines/2)+1:, 2, :].transpose(), coils.gamma, coils.gamma_dash, coils.currents, R)))
     
-    # r_0 = jnp.linspace(start=1e-3, stop=r/4, num=particles.number)
-    # phi_array = jnp.linspace(start=0, stop=2*jnp.pi, num=particles.number)
-    ## TODO do not do it along every phi, perhaps only close to phi=0
-    # # B_theta_fieldlines_0=jnp.sum(jnp.abs(jnp.array([[
-    # #         BdotGradTheta(jnp.array([(r_00+R)*jnp.cos(phi),(r_00+R)*jnp.sin(phi),0]), coils.gamma, coils.gamma_dash, coils.currents, R)
-    # #     for phi in phi_array] for r_00 in r_0])))
-    # # Create grid using meshgrid
-    # r_0_grid, phi_grid = jnp.meshgrid(r_0, phi_array, indexing='ij')
-    # x = (r_0_grid + R) * jnp.cos(phi_grid)
-    # y = (r_0_grid + R) * jnp.sin(phi_grid)
-    # z = jnp.zeros_like(x)  # Assume z = 0 for all points
-    # positions = jnp.stack((x, y, z), axis=-1)
-    # vectorized_BdotGradTheta = jax.vmap(
-    #     jax.vmap(lambda pos: BdotGradTheta(pos, coils.gamma, coils.gamma_dash, coils.currents, R), 
-    #             in_axes=0),  # Inner vmap over phi
-    #     in_axes=0  # Outer vmap over r
-    # )
-    # B_theta_fieldlines_0 = jnp.sum(jnp.abs(vectorized_BdotGradTheta(positions)))
-    
+    nr = 4;nphi = 4;nz = 4
+    r_max = r/6;phi_min = 0;phi_max = 2*jnp.pi/15
+    r_0 = jnp.linspace(start=-r_max, stop=r_max, num=nr)
+    phi_array = jnp.linspace(start=phi_min, stop=phi_max, num=nphi)
+    z_array = jnp.linspace(start=-r_max, stop=r_max, num=nz)
+    r_0_grid, phi_grid, z_grid = jnp.meshgrid(r_0, phi_array, z_array)
+    xyz_array = jnp.stack([(r_0_grid + R) * jnp.cos(phi_grid),
+                             (r_0_grid + R) * jnp.sin(phi_grid),
+                             z_grid], axis=-1).reshape(-1, 3)
+    # B_z = jax.vmap(lambda rphi: B(rphi, coils.gamma, coils.gamma_dash, coils.currents, R)[2])(r_phi_array_plus)
+    B_iota_fieldlines  = jax.vmap(lambda xyz: 
+                                         BdotGradTheta(xyz, coils.gamma, coils.gamma_dash, coils.currents, R)
+                                         /BdotGradPhi( xyz, coils.gamma, coils.gamma_dash, coils.currents, R)
+                          )(xyz_array)
+    # B_r_fieldlines  = jax.vmap(lambda rphi: BdotGradr(rphi, coils.gamma, coils.gamma_dash, coils.currents, R))(xyz_array)
+
     #return jnp.mean(distances_squared)/r_coil**2
     return (
            + 1e+2*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)/len(curves.length)
-           + 1e+0*jnp.sum(distances_squared/r**2)/len(jnp.ravel(distances_squared))
-           + 2e+1*1/B_theta_particles
-        #    + 1e+2*1/B_theta_fieldlines_0
+        #    + 1e+0*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))/len(jnp.ravel(distances_squared))
+        #    + (2e+1)*1/B_theta_particles
+
+           + 1e+1*jnp.sum(distances_squared/r**2)/len(jnp.ravel(distances_squared))
+        #    + 1e+1*jnp.sum(jnp.square(B_r_fieldlines))/len(jnp.ravel(B_r_fieldlines))
+           + 1e-2*(1/(jnp.sum(jnp.square(B_iota_fieldlines))/len(jnp.ravel(B_iota_fieldlines))))
+        #    + 1e-1*jnp.abs(1/jnp.mean(B_iota_fieldlines))
+        #    + 1e+0*jnp.sum(distances_squared_fl/r**2)/len(jnp.ravel(distances_squared_fl))
+        #    + 1e+3*(B_iota_sum_fieldlines)
         #    + 1e+0*1/B_theta_fieldlines
         #    + 1e+0*jnp.sum(distances_squared_fl/r**2)/len(jnp.ravel(distances_squared_fl))
            
@@ -790,7 +795,6 @@ def loss(dofs_with_currents:           jnp.ndarray,
         #    + 1e+3*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared_fl)/r))))/len(jnp.ravel(distances_squared_fl))
         #    + 1e-2*jnp.sum(trajectories_fieldlines[:, :, 2]**2/r**2)/len(trajectories_fieldlines)
         
-        #    + 1e+2*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))/len(jnp.ravel(distances_squared))
            
         #    + 1e+1*jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared_fl)/r))))
            # + 3e-2*jnp.sum(jnp.array([jnp.abs((current-old_coils.dofs_currents[0])/old_coils.dofs_currents[0]) for current in dofs_currents]))
