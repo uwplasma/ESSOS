@@ -6,7 +6,8 @@ from MagneticField import B, grad_B
 import uuid
 
 @jit
-def GuidingCenter(t:              float,
+def GuidingCenter(
+                  t:              float,
                   inital_values:  jnp.ndarray,
                   args:           tuple
                 #   gamma:          jnp.ndarray,

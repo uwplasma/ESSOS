@@ -26,7 +26,7 @@ from Dynamics import GuidingCenter, Lorentz, FieldLine
 
 from scipy.optimize import  minimize as scipy_minimize, least_squares
 from jax.scipy.optimize import minimize as jax_minimize
-
+from simsopt.geo import CurveRZFourier
 
 def CreateEquallySpacedCurves(n_curves:   int,
                               order:      int,
@@ -34,7 +34,8 @@ def CreateEquallySpacedCurves(n_curves:   int,
                               r:          float,
                               n_segments: int = 100,
                               nfp:        int  = 1,
-                              stellsym:   bool = False) -> jnp.ndarray:
+                              stellsym:   bool = False,
+                              axis_rc_zs = None) -> jnp.ndarray:
     """ Create a toroidal set of cruves equally spaced with an outer radius R and inner radius r.
     Attributes:
         n_curves (int): Number of curves
@@ -46,17 +47,35 @@ def CreateEquallySpacedCurves(n_curves:   int,
     Returns:
         curves (Curves): Equally spaced curves
     """
-    curves = jnp.zeros((n_curves, 3, 1+2*order))
-    for i in range(n_curves):
-        angle = (i+0.5)*(2*jnp.pi)/((1+int(stellsym))*nfp*n_curves)
-        curves = curves.at[i, 0, 0].set(jnp.cos(angle)*R)
-        curves = curves.at[i, 0, 2].set(jnp.cos(angle)*r)
-        curves = curves.at[i, 1, 0].set(jnp.sin(angle)*R)
-        curves = curves.at[i, 1, 2].set(jnp.sin(angle)*r)
-        curves = curves.at[i, 2, 1].set(-r)
-        # In the previous line, the minus sign is for consistency with
-        # Vmec.external_current(), so the coils create a toroidal field of the
-        # proper sign and free-boundary equilibrium works following stage-2 optimization.
+    if axis_rc_zs is not None:
+        angle_locations = 1/((1+int(stellsym))*nfp*n_curves)/2+np.linspace(0,1,(n_curves)*(1+int(stellsym))*nfp, endpoint=False)
+        ma = CurveRZFourier(angle_locations, len(axis_rc_zs[0])-1, nfp, False)
+        ma.rc[:] = axis_rc_zs[0]
+        ma.zs[:] = axis_rc_zs[1, 1:]
+        ma.x = ma.get_dofs()
+        gamma_curves = ma.gamma()
+        
+        curves = jnp.zeros((n_curves, 3, 1+2*order))
+        for i in range(n_curves):
+            angle = (i+0.5)*(2*jnp.pi)/((1+int(stellsym))*nfp*n_curves)
+            curves = curves.at[i, 0, 0].set(gamma_curves[i,0])
+            curves = curves.at[i, 0, 2].set(jnp.cos(angle)*r)
+            curves = curves.at[i, 1, 0].set(gamma_curves[i,1])
+            curves = curves.at[i, 1, 2].set(jnp.sin(angle)*r)
+            curves = curves.at[i, 2, 0].set(gamma_curves[i,2])
+            curves = curves.at[i, 2, 1].set(-r)
+    else:
+        curves = jnp.zeros((n_curves, 3, 1+2*order))
+        for i in range(n_curves):
+            angle = (i+0.5)*(2*jnp.pi)/((1+int(stellsym))*nfp*n_curves)
+            curves = curves.at[i, 0, 0].set(jnp.cos(angle)*R)
+            curves = curves.at[i, 0, 2].set(jnp.cos(angle)*r)
+            curves = curves.at[i, 1, 0].set(jnp.sin(angle)*R)
+            curves = curves.at[i, 1, 2].set(jnp.sin(angle)*r)
+            curves = curves.at[i, 2, 1].set(-r)
+            # In the previous line, the minus sign is for consistency with
+            # Vmec.external_current(), so the coils create a toroidal field of the
+            # proper sign and free-boundary equilibrium works following stage-2 optimization.
     return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
 
 def apply_symmetries_to_curves(base_curves, nfp, stellsym):
@@ -723,20 +742,20 @@ def loss(dofs_with_currents:           jnp.ndarray,
     # z_second_derivative = jnp.gradient(jnp.gradient(trajectories[:, :, 2], axis=1), axis=1)
     # R_second_derivative = jnp.gradient(jnp.gradient(jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2), axis=1), axis=1)
     
-    # r_init = r/4
-    # n_fieldlines = particles.number
-    # angle = 0
-    # r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
-    # ϕ = jnp.ones(n_fieldlines)*angle
-    # x_fl = (r_+R)*jnp.cos(ϕ)
-    # y_fl = (r_+R)*jnp.sin(ϕ)
-    # z_fl = jnp.zeros(n_fieldlines)
-    # trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, timesteps, n_segments)
-    # distances_squared_fl = jnp.square(
-    #     jnp.sqrt(
-    #         trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
-    #     )-R
-    # )+trajectories_fieldlines[:, :, 2]**2
+    r_init = r/4
+    n_fieldlines = particles.number
+    angle = 0
+    r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
+    ϕ = jnp.ones(n_fieldlines)*angle
+    x_fl = (r_+R)*jnp.cos(ϕ)
+    y_fl = (r_+R)*jnp.sin(ϕ)
+    z_fl = jnp.zeros(n_fieldlines)
+    trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, timesteps, n_segments)
+    distances_squared_fl = jnp.square(
+        jnp.sqrt(
+            trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
+        )-R
+    )+trajectories_fieldlines[:, :, 2]**2
     
     # z_first_derivative_fl = jnp.gradient(trajectories_fieldlines[:, :, 2], axis=1)+1e-5
     # z_second_derivative_fl = jnp.gradient(z_first_derivative_fl, axis=1)+1e-5
@@ -748,31 +767,40 @@ def loss(dofs_with_currents:           jnp.ndarray,
 
     # B_theta_fieldlines = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories_fieldlines[int(n_fieldlines/2)+1:, 2, :].transpose(), coils.gamma, coils.gamma_dash, coils.currents, R)))
     
-    nr = 4;nphi = 4;nz = 4
-    r_max = r/6;phi_min = 0;phi_max = 2*jnp.pi/15
-    r_0 = jnp.linspace(start=-r_max, stop=r_max, num=nr)
-    phi_array = jnp.linspace(start=phi_min, stop=phi_max, num=nphi)
-    z_array = jnp.linspace(start=-r_max, stop=r_max, num=nz)
-    r_0_grid, phi_grid, z_grid = jnp.meshgrid(r_0, phi_array, z_array)
-    xyz_array = jnp.stack([(r_0_grid + R) * jnp.cos(phi_grid),
-                             (r_0_grid + R) * jnp.sin(phi_grid),
-                             z_grid], axis=-1).reshape(-1, 3)
-    # B_z = jax.vmap(lambda rphi: B(rphi, coils.gamma, coils.gamma_dash, coils.currents, R)[2])(r_phi_array_plus)
-    B_iota_fieldlines  = jax.vmap(lambda xyz: 
-                                         BdotGradTheta(xyz, coils.gamma, coils.gamma_dash, coils.currents, R)
-                                         /BdotGradPhi( xyz, coils.gamma, coils.gamma_dash, coils.currents, R)
-                          )(xyz_array)
-    # B_r_fieldlines  = jax.vmap(lambda rphi: BdotGradr(rphi, coils.gamma, coils.gamma_dash, coils.currents, R))(xyz_array)
+    # nr = 4;nphi = 4;nz = 4
+    # r_max = r/6;phi_min = 0;phi_max = 2*jnp.pi/30
+    # r_0 = jnp.linspace(start=-r_max, stop=r_max, num=nr)
+    # phi_array = jnp.linspace(start=phi_min, stop=phi_max, num=nphi)
+    # # phi_array += jnp.linspace(start=phi_min+2*jnp.pi/nfp/2, stop=phi_max+2*jnp.pi/nfp/2, num=nphi)
+    # phi_array += jnp.linspace(start=phi_min+2*jnp.pi/nfp, stop=phi_max+2*jnp.pi/nfp, num=nphi)
+    # z_array = jnp.linspace(start=-r_max, stop=r_max, num=nz)
+    # r_0_grid, phi_grid, z_grid = jnp.meshgrid(r_0, phi_array, z_array)
+    # xyz_array = jnp.stack([(r_0_grid + R) * jnp.cos(phi_grid),
+    #                          (r_0_grid + R) * jnp.sin(phi_grid),
+    #                          z_grid], axis=-1).reshape(-1, 3)
+    # # B_z_fieldlines  = jax.vmap(lambda rphi: B(rphi, coils.gamma, coils.gamma_dash, coils.currents, R)[2])(xyz_array)
+    # B_iota_fieldlines  = jax.vmap(lambda xyz: 
+    #                                      BdotGradTheta(xyz, coils.gamma, coils.gamma_dash, coils.currents, R)
+    #                                      /BdotGradPhi( xyz, coils.gamma, coils.gamma_dash, coils.currents, R)
+    #                       )(xyz_array)
+    # # B_r_fieldlines  = jax.vmap(lambda rphi: BdotGradr(rphi, coils.gamma, coils.gamma_dash, coils.currents, R))(xyz_array)
 
     #return jnp.mean(distances_squared)/r_coil**2
-    return (
-           + 1e+2*jnp.sum((curves.length/(2*jnp.pi*r)-1)**2)/len(curves.length)
+    return jnp.concatenate([
+           + 1e+2*jnp.ravel(curves.length/(2*jnp.pi*r)-1),
+             jnp.ravel(distances_squared/r**2),
+             jnp.ravel(trajectories[:, :, 2]/r),
+             jnp.ravel(distances_squared_fl/r**2),
+            #  1e-1*jnp.ravel(trajectories_fieldlines[:, :, 2]/r),
         #    + 1e+0*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))/len(jnp.ravel(distances_squared))
         #    + (2e+1)*1/B_theta_particles
 
-           + 1e+1*jnp.sum(distances_squared/r**2)/len(jnp.ravel(distances_squared))
+        #    + 1e+1*jnp.sum(distances_squared/r**2)/len(jnp.ravel(distances_squared))
+        #    + 1e+1*jnp.sum(jnp.ravel(trajectories[:, :, 2]**2)/r**2)/len(jnp.ravel(trajectories[:, :, 2]))
+        #    + 1e+1*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(jnp.square(trajectories[:, :, 2]))/r))))/len(jnp.ravel(trajectories[:, :, 2]))
         #    + 1e+1*jnp.sum(jnp.square(B_r_fieldlines))/len(jnp.ravel(B_r_fieldlines))
-           + 1e-2*(1/(jnp.sum(jnp.square(B_iota_fieldlines))/len(jnp.ravel(B_iota_fieldlines))))
+        #    + 1e-1*(1/(jnp.sum(jnp.square(B_iota_fieldlines))/len(jnp.ravel(B_iota_fieldlines))))
+        #    + 1e-14*(1/(jnp.sum(jnp.square(B_z_fieldlines))/len(jnp.ravel(B_z_fieldlines))))
         #    + 1e-1*jnp.abs(1/jnp.mean(B_iota_fieldlines))
         #    + 1e+0*jnp.sum(distances_squared_fl/r**2)/len(jnp.ravel(distances_squared_fl))
         #    + 1e+3*(B_iota_sum_fieldlines)
@@ -798,7 +826,7 @@ def loss(dofs_with_currents:           jnp.ndarray,
            
         #    + 1e+1*jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared_fl)/r))))
            # + 3e-2*jnp.sum(jnp.array([jnp.abs((current-old_coils.dofs_currents[0])/old_coils.dofs_currents[0]) for current in dofs_currents]))
-           )
+           ])
 
 @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9, 10))
 def loss_discrete(dofs:           jnp.ndarray,
@@ -934,7 +962,8 @@ def optimize(coils:          Coils,
         print(f" Initial loss: {best_loss:.5f}")
         for iter in range(method["iterations"]):
             start_loop = time()
-            grad = jax.grad(loss_partial)(dofs)
+            # grad = jax.grad(loss_partial)(dofs)
+            grad = jax.jacrev(loss_partial)(dofs)
             updates, solver_state = solver.update(grad, solver_state, dofs)
             dofs = optax.apply_updates(dofs, updates)
             # args = (dofs,)
@@ -979,7 +1008,8 @@ def optimize(coils:          Coils,
     # Optimization using least squares method
     elif method["method"] == 'least_squares':
         if method["jax_grad"]==True:
-            grad = jit(jax.grad(loss_partial))
+            # grad = jit(jax.grad(loss_partial))
+            grad = jit(jax.jacrev(loss_partial))
             opt_dofs = least_squares(loss_partial, jac=grad, x0=dofs, verbose=2, ftol=method["ftol"], gtol=method["ftol"], xtol=method["ftol"], max_nfev=method["max_nfev"])
         else:
             opt_dofs = least_squares(loss_partial, x0=dofs, verbose=2, ftol=method["ftol"], gtol=method["ftol"], xtol=method["ftol"], max_nfev=method["max_nfev"], diff_step=method["diff_step"])
