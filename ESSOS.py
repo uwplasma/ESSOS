@@ -11,7 +11,7 @@ plt.rcParams['font.size'] = 20
 plt.rcParams['figure.figsize'] = 11, 7
 
 from jax.experimental.ode import odeint
-from diffrax import diffeqsolve, ODETerm, Dopri5, Tsit5, Dopri8, SaveAt, PIDController, Kvaerno5
+from diffrax import diffeqsolve, ODETerm, Dopri5, Tsit5, Dopri8, SaveAt, PIDController, Kvaerno5, DirectAdjoint, RecursiveCheckpointAdjoint
 import matplotlib.pyplot as plt
 
 from jax.experimental import mesh_utils
@@ -473,13 +473,14 @@ class Coils(Curves):
         aux_data = {}  # static values
         return (children, aux_data)
         
-    @partial(jit, static_argnums=(1, 3, 4, 5))
+    @partial(jit, static_argnums=(1, 3, 4, 5, 6))
     def trace_trajectories(self,
                            particles: Particles,
                            initial_values: jnp.ndarray,
                            maxtime: float = 1e-7,
                            timesteps: int = 200,
-                           n_cores: int = len(jax.devices())) -> jnp.ndarray:
+                           n_cores: int = len(jax.devices()),
+                           adjoint = RecursiveCheckpointAdjoint()) -> jnp.ndarray:
         
         """Traces the trajectories of the particles in the given coils
         Attributes:
@@ -521,6 +522,7 @@ class Coils(Curves):
                         args=args,
                         saveat=SaveAt(ts=times),
                         throw=False,
+                        adjoint=adjoint#DirectAdjoint(),
                         # stepsize_controller=PIDController(rtol=1e-4, atol=1e-4),
                         # stepsize_controller=PIDController(rtol=1.4e-8, atol=1.4e-8),
                         # adjoint=BacksolveAdjoint(),
@@ -599,13 +601,14 @@ class Coils(Curves):
 
         return trajectories
     
-    @partial(jit, static_argnums=(2, 3, 4, 5))
+    @partial(jit, static_argnums=(2, 3, 4, 5, 6))
     def trace_fieldlines(self,
                          initial_values: jnp.ndarray,
                          maxtime: float = 1e-7,
                          timesteps: int = 200,
                          n_segments: int = 100,
-                         n_cores: int = len(jax.devices())) -> jnp.ndarray:
+                         n_cores: int = len(jax.devices()),
+                         adjoint = RecursiveCheckpointAdjoint()) -> jnp.ndarray:
     
         """Traces the field lines produced by the given coils
         Attributes:
@@ -640,6 +643,7 @@ class Coils(Curves):
                         solver=Tsit5(),
                         saveat=SaveAt(ts=times),
                         args=args,
+                        adjoint=adjoint#DirectAdjoint(),
                         # stepsize_controller=PIDController(rtol=1e-4, atol=1e-4),
                         # stepsize_controller=PIDController(rtol=1.4e-8, atol=1.4e-8),
                         # adjoint=BacksolveAdjoint(),
@@ -679,7 +683,7 @@ tree_util.register_pytree_node(Coils,
 
 
 # @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9))
-@partial(jit, static_argnums=(1, 2, 3, 4, 6, 7, 8))
+@partial(jit, static_argnums=(1, 2, 3, 4, 6, 7, 8, 9))
 def loss(dofs_with_currents:           jnp.ndarray,
 # def loss(dofs:  jnp.ndarray,
         #  dofs_currents:  jnp.ndarray,
@@ -690,7 +694,8 @@ def loss(dofs_with_currents:           jnp.ndarray,
          initial_values: jnp.ndarray,
          maxtime:        float,
          timesteps:      int,
-         model:          str = 'Guiding Center') -> float:
+         model:          str = 'Guiding Center',
+         adjoint = RecursiveCheckpointAdjoint()) -> float:
              
     """Loss function to be minimized
     Attributes:
@@ -729,20 +734,14 @@ def loss(dofs_with_currents:           jnp.ndarray,
         # else:
         #     raise ValueError("Model must be 'Guiding Center' or 'Lorentz'")
         
-    trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps)
+    trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps, adjoint=adjoint)
     distances_squared = jnp.square(
         jnp.sqrt(
             trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2
         )-R
     )+trajectories[:, :, 2]**2
-    # costheta = (jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2)-R)/jnp.sqrt(distances_squared)
-    # sintheta = trajectories[:, :, 2]/jnp.sqrt(distances_squared)
-    # theta = jnp.arctan2(sintheta,costheta)
-    # theta_derivative = jnp.gradient(theta, axis=1)
-    # z_second_derivative = jnp.gradient(jnp.gradient(trajectories[:, :, 2], axis=1), axis=1)
-    # R_second_derivative = jnp.gradient(jnp.gradient(jnp.sqrt(trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2), axis=1), axis=1)
-    
-    r_init = r/4
+
+    r_init = r/3
     n_fieldlines = particles.number
     angle = 0
     r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
@@ -750,23 +749,15 @@ def loss(dofs_with_currents:           jnp.ndarray,
     x_fl = (r_+R)*jnp.cos(ϕ)
     y_fl = (r_+R)*jnp.sin(ϕ)
     z_fl = jnp.zeros(n_fieldlines)
-    trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, timesteps, n_segments)
+    trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, timesteps, n_segments, adjoint=adjoint)
     distances_squared_fl = jnp.square(
         jnp.sqrt(
             trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
         )-R
     )+trajectories_fieldlines[:, :, 2]**2
     
-    # z_first_derivative_fl = jnp.gradient(trajectories_fieldlines[:, :, 2], axis=1)+1e-5
-    # z_second_derivative_fl = jnp.gradient(z_first_derivative_fl, axis=1)+1e-5
-    # R_first_derivative_fl = jnp.gradient(jnp.sqrt(trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2), axis=1)+1e-5
-    # R_second_derivative_fl = jnp.gradient(R_first_derivative_fl, axis=1)+1e-5
-
-    # B_theta_particles  = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories[:, 0, :3].transpose(), coils.gamma, coils.gamma_dash, coils.currents, R)))
-    # BcrossGradBdotGradTheta_particles  = jnp.sum(jnp.abs(jnp.apply_along_axis(BcrossGradBdotGradTheta, 0, trajectories[:, 0, :3].transpose(), coils.gamma, coils.gamma_dash, coils.currents, R)))
-
-    # B_theta_fieldlines = jnp.sum(jnp.abs(jnp.apply_along_axis(BdotGradTheta, 0, trajectories_fieldlines[int(n_fieldlines/2)+1:, 2, :].transpose(), coils.gamma, coils.gamma_dash, coils.currents, R)))
-    
+    ### THE FUNCTION BELOW CALCULATES B.dot.grad(theta) and B.dot.grad(phi) for a grid of points in the poloidal plane
+    ### May be worth putting it as a separate function to assess equilibrium quality
     # nr = 4;nphi = 4;nz = 4
     # r_max = r/6;phi_min = 0;phi_max = 2*jnp.pi/30
     # r_0 = jnp.linspace(start=-r_max, stop=r_max, num=nr)
@@ -785,47 +776,18 @@ def loss(dofs_with_currents:           jnp.ndarray,
     #                       )(xyz_array)
     # # B_r_fieldlines  = jax.vmap(lambda rphi: BdotGradr(rphi, coils.gamma, coils.gamma_dash, coils.currents, R))(xyz_array)
 
-    #return jnp.mean(distances_squared)/r_coil**2
-    return jnp.concatenate([
-           + 1e+2*jnp.ravel(curves.length/(2*jnp.pi*r)-1),
-             jnp.ravel(distances_squared/r**2),
-             jnp.ravel(trajectories[:, :, 2]/r),
-             jnp.ravel(distances_squared_fl/r**2),
-            #  1e-1*jnp.ravel(trajectories_fieldlines[:, :, 2]/r),
-        #    + 1e+0*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))/len(jnp.ravel(distances_squared))
-        #    + (2e+1)*1/B_theta_particles
-
-        #    + 1e+1*jnp.sum(distances_squared/r**2)/len(jnp.ravel(distances_squared))
-        #    + 1e+1*jnp.sum(jnp.ravel(trajectories[:, :, 2]**2)/r**2)/len(jnp.ravel(trajectories[:, :, 2]))
+    length_loss = curves.length/(2*jnp.pi*r)-1
+    distances_loss = distances_squared/r**2
+    z_trajectories_loss = trajectories[:, :, 2]/r
+    distances_fieldlines_loss = distances_squared_fl/r**2
+    return jnp.concatenate([ # ravel to create a 1D array and divide by the square root of the length of the array to normalize before sending to least squares
+             1e2*jnp.ravel(length_loss)/jnp.sqrt(len(length_loss)),
+             1e0*jnp.ravel(distances_loss)/jnp.sqrt(len(distances_loss)),
+             1e0*jnp.ravel(z_trajectories_loss)/jnp.sqrt(len(z_trajectories_loss)),
+             1e0*jnp.ravel(distances_fieldlines_loss)/jnp.sqrt(len(distances_fieldlines_loss))
+            ##
+            ##
         #    + 1e+1*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(jnp.square(trajectories[:, :, 2]))/r))))/len(jnp.ravel(trajectories[:, :, 2]))
-        #    + 1e+1*jnp.sum(jnp.square(B_r_fieldlines))/len(jnp.ravel(B_r_fieldlines))
-        #    + 1e-1*(1/(jnp.sum(jnp.square(B_iota_fieldlines))/len(jnp.ravel(B_iota_fieldlines))))
-        #    + 1e-14*(1/(jnp.sum(jnp.square(B_z_fieldlines))/len(jnp.ravel(B_z_fieldlines))))
-        #    + 1e-1*jnp.abs(1/jnp.mean(B_iota_fieldlines))
-        #    + 1e+0*jnp.sum(distances_squared_fl/r**2)/len(jnp.ravel(distances_squared_fl))
-        #    + 1e+3*(B_iota_sum_fieldlines)
-        #    + 1e+0*1/B_theta_fieldlines
-        #    + 1e+0*jnp.sum(distances_squared_fl/r**2)/len(jnp.ravel(distances_squared_fl))
-           
-        #    + 1e-10*jnp.sum(1/z_second_derivative**2)/len(jnp.ravel(z_second_derivative))
-        #    + 1e-10*jnp.sum(1/R_second_derivative**2)/len(jnp.ravel(R_second_derivative))
-        #    + 2e+0*jnp.sum(jnp.sqrt(distances_squared.transpose()/distances_squared[:,0])-1)**2/len(jnp.ravel(distances_squared))
-        #    + 1e+0*jnp.max(jnp.abs(trajectories[:, :, 2])/r)
-        
-        #    + 1e-9*jnp.sum(1/theta_derivative**2)/len(jnp.ravel(theta_derivative))
-        #    + 1e-2*jnp.sum(trajectories[:, :, 2]**2/r**2)/len(trajectories)
-        #    + 1e+1*jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared)/r))))
-        
-        #    + 1e-11*jnp.sum(1/z_second_derivative_fl**2)/len(jnp.ravel(z_second_derivative_fl))
-        #    + 1e-11*jnp.sum(1/z_first_derivative_fl**2)/len(jnp.ravel(z_first_derivative_fl))
-        #    + 1e-11*jnp.sum(1/R_second_derivative_fl**2)/len(jnp.ravel(R_second_derivative_fl))
-        #    + 1e-11*jnp.sum(1/R_first_derivative_fl**2)/len(jnp.ravel(R_first_derivative_fl))
-        #    + 1e+3*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared_fl)/r))))/len(jnp.ravel(distances_squared_fl))
-        #    + 1e-2*jnp.sum(trajectories_fieldlines[:, :, 2]**2/r**2)/len(trajectories_fieldlines)
-        
-           
-        #    + 1e+1*jnp.mean(1/(1+jnp.exp(6.91-(14*jnp.sqrt(distances_squared_fl)/r))))
-           # + 3e-2*jnp.sum(jnp.array([jnp.abs((current-old_coils.dofs_currents[0])/old_coils.dofs_currents[0]) for current in dofs_currents]))
            ])
 
 @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9, 10))
@@ -909,6 +871,15 @@ def optimize(coils:          Coils,
     """
 
     # print("Optimizing ...")
+    # check if method has JAX_grad
+    if "jax_grad" not in method.keys():
+        method["jax_grad"] = False
+        adjoint = RecursiveCheckpointAdjoint()
+        
+    if method["jax_grad"]==True:
+        adjoint = DirectAdjoint()
+    else:
+        adjoint = RecursiveCheckpointAdjoint()
 
     if jnp.size(initial_values, 0) == 5:
         model = 'Guiding Center'
@@ -922,8 +893,8 @@ def optimize(coils:          Coils,
 
     # loss_partial = partial(loss, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
     # loss_discrete_partial = partial(loss_discrete, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
-    loss_partial = jit(partial(loss, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model))
-    loss_discrete_partial = partial(loss_discrete, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
+    loss_partial = jit(partial(loss, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model, adjoint=adjoint))
+    # loss_discrete_partial = partial(loss_discrete, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model, adjoint=adjoint)
 
     # Optimization using JAX minimize method
     if method["method"] == "JAX minimize":
@@ -937,7 +908,7 @@ def optimize(coils:          Coils,
     # Optimization using JAX minimize method
     elif method["method"] == "scipy_minimize":
         if method["jax_grad"]==True:
-            grad = jit(jax.grad(loss_partial))
+            grad = jit(jax.jacfwd(loss_partial))
             opt_dofs = scipy_minimize(loss_partial, dofs, args=(), jac=grad, method='L-BFGS-B', options={'maxcor': 300, 'iprint': 1, "ftol":method["ftol"], "gtol":method["ftol"], "maxfun":method["max_nfev"]})
         else:
             opt_dofs = scipy_minimize(loss_partial, dofs, args=(), method='L-BFGS-B', options={'maxcor': 300, 'iprint': 1, "ftol":method["ftol"], "gtol":method["ftol"], "maxfun":method["max_nfev"], "finite_diff_rel_step":method["diff_step"]})
@@ -963,7 +934,7 @@ def optimize(coils:          Coils,
         for iter in range(method["iterations"]):
             start_loop = time()
             # grad = jax.grad(loss_partial)(dofs)
-            grad = jax.jacrev(loss_partial)(dofs)
+            grad = jax.jacfwd(loss_partial)(dofs)
             updates, solver_state = solver.update(grad, solver_state, dofs)
             dofs = optax.apply_updates(dofs, updates)
             # args = (dofs,)
@@ -1009,7 +980,7 @@ def optimize(coils:          Coils,
     elif method["method"] == 'least_squares':
         if method["jax_grad"]==True:
             # grad = jit(jax.grad(loss_partial))
-            grad = jit(jax.jacrev(loss_partial))
+            grad = jit(jax.jacfwd(loss_partial))
             opt_dofs = least_squares(loss_partial, jac=grad, x0=dofs, verbose=2, ftol=method["ftol"], gtol=method["ftol"], xtol=method["ftol"], max_nfev=method["max_nfev"])
         else:
             opt_dofs = least_squares(loss_partial, x0=dofs, verbose=2, ftol=method["ftol"], gtol=method["ftol"], xtol=method["ftol"], max_nfev=method["max_nfev"], diff_step=method["diff_step"])
