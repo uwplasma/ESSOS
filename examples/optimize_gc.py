@@ -1,38 +1,31 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=12'
-
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=13'
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
-
 import jax
 import jax.numpy as jnp
 from jax import grad, jacfwd, jacobian, jacrev
-
-# Show on which platform JAX is running.
 print("JAX running on", len(jax.devices()), jax.devices()[0].platform.upper())
-
 from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, optimize, loss, loss_discrete, projection2D, projection2D_top
 from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta, BdotGradr
-
 import matplotlib.pyplot as plt
 from time import time
-
 from simsopt.geo import CurveXYZFourier, curves_to_vtk
 from simsopt.field import particles_to_vtk
-
 from pyevtk.hl import polyLinesToVTK
+from diffrax import DirectAdjoint
 import numpy as np
 
-n_curves=2
-order=5
+n_curves=3
+order=7
 nfp = 4
 
 A = 1.6 # Aspect ratio
 R = 7.75 # Major Radius
 r = R/A
-r_init = r/4
-n_total_optimizations = 24
+r_init = r/3
+n_total_optimizations = 4
 axis_rc_zs = jnp.array([[1, 0.0], [0, 0.0]])*R
 energy = 3.52e6 # eV
 current_on_axis = 5.7 # Tesla
@@ -50,9 +43,12 @@ jax_grad_scipy_minimize =    [True]*1#[True, False, False, False, False, True]
 ftol_scipy_minimize = 1e-7
 
 optimize_least_squares = True
-n_iteration_least_squares = [20]*3
-diff_step_least_squares =   [1e-2, 1e-3, 1e-4]*1
-jax_grad_least_squares =    [False]*3
+# n_iteration_least_squares = [20]*1
+# diff_step_least_squares =   [None]*1
+# jax_grad_least_squares =    [True]*1
+n_iteration_least_squares = [20]*4
+diff_step_least_squares =   [1e-1, 1e-2, 1e-3, 1e-4]*1
+jax_grad_least_squares =    [False]*4
 # n_iteration_least_squares = [30]*7 #[150] + [50]*5 + [150]
 # diff_step_least_squares =   [None, 1e-2,  1e-3,  1e-4,  1e-5, 1e-6,  None]
 # jax_grad_least_squares =    [True, False, False, False, False, False, True]
@@ -61,7 +57,7 @@ ftol_least_squares = 1e-7
 
 model = "Guiding Center"
 
-advance_factor_each_optimization = 1.15
+advance_factor_each_optimization = 1.3
 
 n_segments = int(min(50,order*10))
 
@@ -74,13 +70,14 @@ particles = Particles(len(jax.devices()))
 # stel = Coils(curves, jnp.array([1.0, 1.0017654275184882]))
 
 curves = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=nfp, stellsym=True, n_segments=n_segments, axis_rc_zs=axis_rc_zs)
-stel = Coils(curves, jnp.array([5.7*current_on_axis/len(curves._curves)]*n_curves))
+stel = Coils(curves, jnp.array([5.6*current_on_axis/len(curves._curves)]*n_curves))
+## This function randomizes the initial coils, can be worth putting it into a separate function
 # key = jax.random.PRNGKey(42)
 # stel.dofs += jax.random.normal(key, stel.dofs.shape)*r*1e-2
 # stel.dofs = stel.dofs*(1+jax.random.normal(key, stel.dofs.shape)*1e-1)
 print(f"Dofs shape: {stel.dofs.shape}")
 
-initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=False)#True, trapped_fraction_more=0.4)
+initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=True, trapped_fraction_more=0.1)
 initial_vperp = initial_values[4, :]
 
 time0 = time()
@@ -103,7 +100,7 @@ plt.ylim(-1.2*y_limit, 1.2*y_limit)
 plt.savefig("output/init_vpar.pdf", transparent=True)
 
 normB = jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], stel.gamma, stel.gamma_dash, stel.currents)
-print(f"normB for a particle at t=0: {normB[0]:2f} T")
+print(f"Mean normB for all particles at t=0: {jnp.mean(normB):2f} T")
 μ = particles.mass*initial_vperp**2/(2*normB)
 
 y_limit = 0
@@ -159,10 +156,9 @@ dofs_with_currents = jnp.array(jnp.concatenate((jnp.ravel(stel.dofs), stel.dofs_
 loss_value = jnp.sum(jnp.square(loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps)))
 print(f"Loss function initial value: {loss_value:.8f}, took: {time()-start:.2f} seconds")
 
-
 start = time()
 # grad_loss_value = grad(loss)(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps)
-# grad_loss_value = jacrev(loss)(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps)
+# grad_loss_value = jacfwd(loss)(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps, adjoint=DirectAdjoint())
 # print(f"Grad shape: {grad_loss_value.shape}, took: {time()-start:.2f} seconds")
 
 def save_all(stel,res,maxtime,timesteps,i):
