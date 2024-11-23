@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=20'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=25'
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
 import jax
@@ -17,7 +17,7 @@ from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
 n_curves=3
-order=5
+order=6
 nfp = 4
 
 A = 1.6 # Aspect ratio
@@ -29,7 +29,7 @@ axis_rc_zs = jnp.array([[1, 0.1], [0, 0.2]])*R
 energy = 3.52e6 # eV
 current_on_axis = 5.7 # Tesla
 maxtime = 7.0e-5 # seconds
-timesteps = int(maxtime*8e6)
+timesteps = int(maxtime*7e6)
 
 optimize_adam = False
 n_iterations_adam   = [10, 10, 10, 10]
