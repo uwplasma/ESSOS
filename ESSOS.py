@@ -302,8 +302,10 @@ class Curves:
                            seed: int = 1,
                            more_trapped_particles = False,
                            trapped_fraction_more = 0.5,
-                           model: str = "Guiding Center") -> jnp.ndarray:
-    
+                           model: str = "Guiding Center",
+                           axis_rc_zs = None,
+                           nfp = 1) -> jnp.ndarray:
+
         """ Creates the initial conditions for the particles
         Attributes:
             self (Curves): Curves object
@@ -343,10 +345,20 @@ class Curves:
         r = random.uniform(key,shape=(n_particles,), minval=0, maxval=r_init)
         Θ = random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi)
         ϕ = random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi/self.nfp)#((1+int(self.stellsym))*self.nfp))
-            
-        x = (r*jnp.cos(Θ)+R_init)*jnp.cos(ϕ)
-        y = (r*jnp.cos(Θ)+R_init)*jnp.sin(ϕ)
-        z = r*jnp.sin(Θ)
+        
+        if axis_rc_zs is not None:
+            i = jnp.arange(len(axis_rc_zs[0]))  # Index array
+            cos_terms = jnp.cos(i[:, None] * ϕ * nfp)
+            sin_terms = jnp.sin(i[:, None] * ϕ * nfp)
+            R_axis = jnp.sum(axis_rc_zs[0][:, None] * cos_terms, axis=0)  # Sum over `i` (first axis)
+            Z_axis = jnp.sum(axis_rc_zs[1][:, None] * sin_terms, axis=0)  # Sum over `i` (first axis)
+            x = (r*jnp.cos(Θ)+R_axis)*jnp.cos(ϕ)
+            y = (r*jnp.cos(Θ)+R_axis)*jnp.sin(ϕ)
+            z = Z_axis + r*jnp.sin(Θ)
+        else:
+            x = (r*jnp.cos(Θ)+R_init)*jnp.cos(ϕ)
+            y = (r*jnp.cos(Θ)+R_init)*jnp.sin(ϕ)
+            z = r*jnp.sin(Θ)
 
         if model == "Guiding Center" or model == "GC":
             return jnp.array((x, y, z, vpar, vperp))
@@ -682,9 +694,7 @@ tree_util.register_pytree_node(Coils,
                                Coils._tree_unflatten)
 
 
-
-# @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9))
-@partial(jit, static_argnums=(1, 2, 3, 4, 6, 7, 8, 9))
+@partial(jit, static_argnums=(1, 2, 3, 4, 6, 7, 8, 9, 10))
 def loss(dofs_with_currents:           jnp.ndarray,
 # def loss(dofs:  jnp.ndarray,
         #  dofs_currents:  jnp.ndarray,
@@ -697,7 +707,8 @@ def loss(dofs_with_currents:           jnp.ndarray,
          timesteps:      int,
          model:          str = 'Guiding Center',
          adjoint = RecursiveCheckpointAdjoint(),
-         target_B = 5.7) -> float:
+         target_B = 5.7,
+         axis_rc_zs = None) -> float:
              
     """Loss function to be minimized
     Attributes:
@@ -737,13 +748,8 @@ def loss(dofs_with_currents:           jnp.ndarray,
         #     raise ValueError("Model must be 'Guiding Center' or 'Lorentz'")
         
     trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps, adjoint=adjoint)
-    distances_squared = jnp.square(
-        jnp.sqrt(
-            trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2
-        )-R
-    )+trajectories[:, :, 2]**2
-
-    r_init = r/3
+    
+    r_init = r/5
     n_fieldlines = particles.number
     angle = 0
     r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
@@ -751,12 +757,40 @@ def loss(dofs_with_currents:           jnp.ndarray,
     x_fl = (r_+R)*jnp.cos(ϕ)
     y_fl = (r_+R)*jnp.sin(ϕ)
     z_fl = jnp.zeros(n_fieldlines)
-    trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, timesteps, n_segments, adjoint=adjoint)
-    distances_squared_fl = jnp.square(
-        jnp.sqrt(
-            trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
-        )-R
-    )+trajectories_fieldlines[:, :, 2]**2
+    trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, int(timesteps), n_segments, adjoint=adjoint)
+    
+    if axis_rc_zs is not None:
+        i = jnp.arange(len(axis_rc_zs[0]))  # Index array
+        
+        phi_particles = jnp.arctan2(trajectories[:, :, 1], trajectories[:, :, 0])
+        cos_terms = jnp.cos(i[:, None, None] * phi_particles * nfp)  # Shape: (len(axis_rc_zs[0]), n_batch, n_particles)
+        sin_terms = jnp.sin(i[:, None, None] * phi_particles * nfp)  # Shape: (len(axis_rc_zs[1]), n_batch, n_particles)
+        R_axis_particles = jnp.sum(axis_rc_zs[0][:, None, None] * cos_terms, axis=0)  # Broadcasting and summing over the first axis
+        Z_axis_particles = jnp.sum(axis_rc_zs[1][:, None, None] * sin_terms, axis=0)  # Broadcasting and summing over the first axis
+        pos_axis_particles = jnp.array([R_axis_particles*jnp.cos(phi_particles), R_axis_particles*jnp.sin(phi_particles), Z_axis_particles]).transpose(1, 2, 0)
+        trajectories_minus_axis = trajectories[:, :, :3] - pos_axis_particles
+        distances_particles = jnp.sum(jnp.square(trajectories_minus_axis), axis=2)
+        
+        phi_fieldlines = jnp.arctan2(trajectories_fieldlines[:, :, 1], trajectories_fieldlines[:, :, 0])
+        cos_terms_fieldlines = jnp.cos(i[:, None, None] * phi_fieldlines * nfp)  # Shape: (len(axis_rc_zs[0]), n_batch, n_particles)
+        sin_terms_fieldlines = jnp.sin(i[:, None, None] * phi_fieldlines * nfp)  # Shape: (len(axis_rc_zs[1]), n_batch, n_particles)
+        R_axis_fieldlines = jnp.sum(axis_rc_zs[0][:, None, None] * cos_terms_fieldlines, axis=0)  # Broadcasting and summing over the first axis
+        Z_axis_fieldlines = jnp.sum(axis_rc_zs[1][:, None, None] * sin_terms_fieldlines, axis=0)  # Broadcasting and summing over the first axis
+        pos_axis_fieldlines = jnp.array([R_axis_fieldlines*jnp.cos(phi_fieldlines), R_axis_fieldlines*jnp.sin(phi_fieldlines), Z_axis_fieldlines]).transpose(1, 2, 0)
+        fieldlines_minus_axis = trajectories_fieldlines - pos_axis_fieldlines
+        distances_fieldlines = jnp.sum(jnp.square(fieldlines_minus_axis), axis=2)
+    else:
+        distances_particles = jnp.square(
+            jnp.sqrt(
+                trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2
+            )-R
+        )+trajectories[:, :, 2]**2
+
+        distances_fieldlines = jnp.square(
+            jnp.sqrt(
+                trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
+            )-R
+        )+trajectories_fieldlines[:, :, 2]**2
     
     ### THE FUNCTION BELOW CALCULATES B.dot.grad(theta) and B.dot.grad(phi) for a grid of points in the poloidal plane
     ### May be worth putting it as a separate function to assess equilibrium quality
@@ -778,16 +812,29 @@ def loss(dofs_with_currents:           jnp.ndarray,
     #                       )(xyz_array)
     # # B_r_fieldlines  = jax.vmap(lambda rphi: BdotGradr(rphi, coils.gamma, coils.gamma_dash, coils.currents, R))(xyz_array)
 
+    ## ADD TERM TO MAKE NORM OF B ALONG THE AXIS TO BE A GIVEN FUNCTION OF PHI -> B = B0*(1+eps*cos(n*phi)), epsi=0 for quasisymmetry
+    if axis_rc_zs is not None:
+        phi_axis = jnp.linspace(0, 2 * jnp.pi, 50)
+        i = jnp.arange(len(axis_rc_zs[0]))  # Index array
+        cos_terms = jnp.cos(i[:, None] * phi_axis * nfp)  # Shape: (len(axis_rc_zs[0]), 30)
+        sin_terms = jnp.sin(i[:, None] * phi_axis * nfp)  # Shape: (len(axis_rc_zs[1]), 30)
+        R_axis = jnp.sum(axis_rc_zs[0][:, None] * cos_terms, axis=0)  # Sum over `i` (first axis)
+        Z_axis = jnp.sum(axis_rc_zs[1][:, None] * sin_terms, axis=0)  # Sum over `i` (first axis)
+        pos_axis = jnp.array([R_axis*jnp.cos(phi_axis), R_axis*jnp.sin(phi_axis), Z_axis])
+        normB_axis = jnp.apply_along_axis(norm_B, 0, pos_axis, coils.gamma, coils.gamma_dash, coils.currents)
+        normB_loss = jnp.square(normB_axis-target_B)
+    else:
+        normB_loss = jnp.array([jnp.mean(jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], coils.gamma, coils.gamma_dash, coils.currents))-target_B])
+
     length_loss = curves.length/(2*jnp.pi*r)-1
-    distances_loss = distances_squared/r**2
+    distances_loss = distances_particles/r**2
     # z_trajectories_loss = trajectories[:, :, 2]/r
-    distances_fieldlines_loss = distances_squared_fl/r**2
-    normB_loss = jnp.array([jnp.mean(jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], coils.gamma, coils.gamma_dash, coils.currents))-target_B])
+    distances_fieldlines_loss = distances_fieldlines/r**2
     return jnp.concatenate([ # ravel to create a 1D array and divide by the square root of the length of the array to normalize before sending to least squares
              1e2*jnp.ravel(length_loss)/jnp.sqrt(len(length_loss)),
              1e0*jnp.ravel(distances_loss)/jnp.sqrt(len(distances_loss)),
              1e0*jnp.ravel(distances_fieldlines_loss)/jnp.sqrt(len(distances_fieldlines_loss)),
-             1e1*jnp.ravel(normB_loss)/jnp.sqrt(len(normB_loss))
+             1e1*jnp.ravel(normB_loss)/jnp.sqrt(len(normB_loss)),
             #  1e0*jnp.ravel(z_trajectories_loss)/jnp.sqrt(len(z_trajectories_loss)),
             ##
             ##
@@ -861,7 +908,8 @@ def optimize(coils:          Coils,
              maxtime:        float = 1e-7,
              timesteps:      int = 200,
              method:         dict = {"method":'JAX minimize', "maxiter": 20},
-             print_loss:     bool = True) -> None:
+             print_loss:     bool = True,
+             axis_rc_zs = None) -> None:
     
     """Optimizes the coils by minimizing the loss function
     Attributes:
@@ -897,7 +945,7 @@ def optimize(coils:          Coils,
 
     # loss_partial = partial(loss, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
     # loss_discrete_partial = partial(loss_discrete, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
-    loss_partial = jit(partial(loss, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model, adjoint=adjoint))
+    loss_partial = jit(partial(loss, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model, adjoint=adjoint, axis_rc_zs=axis_rc_zs))
     # loss_discrete_partial = partial(loss_discrete, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model, adjoint=adjoint)
 
     # Optimization using JAX minimize method
@@ -1018,17 +1066,18 @@ def optimize(coils:          Coils,
 
 import numpy as np
 
-def projection2D(R, r, Trajectories: jnp.ndarray, show=True, save_as=None):
+def projection2D(R, r, Trajectories: jnp.ndarray, show=True, save_as=None, close=False):
     plt.figure()
     for i in range(len(Trajectories)):
-        d = np.linalg.norm(Trajectories[i, :, :3], axis=1)
-        y = Trajectories[i, :, 2]
-        x = np.sqrt(d**2 - y**2)
-        plt.plot(x, y)
+        X_particle = Trajectories[i, :, 0]
+        Y_particle = Trajectories[i, :, 1]
+        Z_particle = Trajectories[i, :, 2]
+        R_particle = jnp.sqrt(X_particle**2 + Y_particle**2)
+        plt.plot(R_particle, Z_particle)
 
-    theta = np.linspace(0, 2*np.pi, 100)
-    x = r*np.cos(theta)+R
-    y = r*np.sin(theta)
+    theta = jnp.linspace(0, 2*np.pi, 100)
+    x = r*jnp.cos(theta)+R
+    y = r*jnp.sin(theta)
     plt.plot(x, y, color="lightgrey")
     
     plt.xlim(R-1.2*r, R+1.2*r)
@@ -1046,8 +1095,11 @@ def projection2D(R, r, Trajectories: jnp.ndarray, show=True, save_as=None):
     # Show the plot
     if show:
         plt.show()
+        
+    if close:
+        plt.close()
 
-def projection2D_top(R, r, Trajectories: jnp.ndarray, show=True, save_as=None):
+def projection2D_top(R, r, Trajectories: jnp.ndarray, show=True, save_as=None, close=False):
     plt.figure()
     theta = np.linspace(0, 2*np.pi, 100)
     x = (R-r)*np.cos(theta)
@@ -1077,4 +1129,7 @@ def projection2D_top(R, r, Trajectories: jnp.ndarray, show=True, save_as=None):
     # Show the plot
     if show:
         plt.show()
+        
+    if close:
+        plt.close()
 
