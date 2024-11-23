@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=13'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=20'
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
 import jax
@@ -8,56 +8,43 @@ import jax.numpy as jnp
 from jax import grad, jacfwd, jacobian, jacrev
 print("JAX running on", len(jax.devices()), jax.devices()[0].platform.upper())
 from ESSOS import CreateEquallySpacedCurves, Curves, Coils, Particles, optimize, loss, loss_discrete, projection2D, projection2D_top
-from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta, BdotGradr
+from MagneticField import norm_B
 import matplotlib.pyplot as plt
 from time import time
 from simsopt.geo import CurveXYZFourier, curves_to_vtk
 from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
-from diffrax import DirectAdjoint
 import numpy as np
 
 n_curves=3
-order=7
+order=5
 nfp = 4
 
 A = 1.6 # Aspect ratio
 R = 7.75 # Major Radius
 r = R/A
 r_init = r/3
-n_total_optimizations = 4
-axis_rc_zs = jnp.array([[1, 0.0], [0, 0.0]])*R
+n_total_optimizations = 10
+axis_rc_zs = jnp.array([[1, 0.1], [0, 0.2]])*R
 energy = 3.52e6 # eV
 current_on_axis = 5.7 # Tesla
-maxtime = 4.5e-5 # seconds
-timesteps = int(maxtime*1.0e7)
+maxtime = 7.0e-5 # seconds
+timesteps = int(maxtime*8e6)
 
 optimize_adam = False
 n_iterations_adam   = [10, 10, 10, 10]
 learning_rates_adam = [1e-2, 1e-3, 1e-4, 1e-5]
 
-optimize_scipy_minimize = False
-n_iteration_scipy_minimize = [30]*1#[150]*6
-diff_step_scipy_minimize =   [None]*1#[None, 1e-2,  1e-3,  1e-4,  1e-5,  None]
-jax_grad_scipy_minimize =    [True]*1#[True, False, False, False, False, True]
-ftol_scipy_minimize = 1e-7
-
 optimize_least_squares = True
-# n_iteration_least_squares = [20]*1
-# diff_step_least_squares =   [None]*1
-# jax_grad_least_squares =    [True]*1
-n_iteration_least_squares = [20]*4
-diff_step_least_squares =   [1e-1, 1e-2, 1e-3, 1e-4]*1
-jax_grad_least_squares =    [False]*4
-# n_iteration_least_squares = [30]*7 #[150] + [50]*5 + [150]
-# diff_step_least_squares =   [None, 1e-2,  1e-3,  1e-4,  1e-5, 1e-6,  None]
-# jax_grad_least_squares =    [True, False, False, False, False, False, True]
+n_iteration_least_squares = [20]*7 #[150] + [50]*5 + [150]
+diff_step_least_squares =   [None, 1e-2,  1e-3,  1e-4,  1e-5, 1e-6,  None]
+jax_grad_least_squares =    [True, False, False, False, False, False, True]
 ftol_break_opt=5e-2
 ftol_least_squares = 1e-7
 
 model = "Guiding Center"
 
-advance_factor_each_optimization = 1.3
+advance_factor_each_optimization = 1.1
 
 n_segments = int(min(50,order*10))
 
@@ -77,47 +64,46 @@ stel = Coils(curves, jnp.array([5.6*current_on_axis/len(curves._curves)]*n_curve
 # stel.dofs = stel.dofs*(1+jax.random.normal(key, stel.dofs.shape)*1e-1)
 print(f"Dofs shape: {stel.dofs.shape}")
 
-initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=True, trapped_fraction_more=0.1)
+initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=True, trapped_fraction_more=0.3)
 initial_vperp = initial_values[4, :]
 
 time0 = time()
 trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
-
 print("Trajectories shape:", trajectories.shape)
 print(f"Time to trace trajectories: {time()-time0:.2f} seconds")
 
-projection2D(R, r, trajectories, show=False, save_as="output/init_pol_trajectories.pdf")
-projection2D_top(R, r, trajectories, show=False, save_as="output/init_tor_trajectories.pdf")
+def create_trajectory_plots(trajectories, text):
+    projection2D(R, r, trajectories, show=False, save_as=f"output/pol_{text}.pdf")
+    projection2D_top(R, r, trajectories, show=False, save_as=f"output/tor_{text}.pdf")
 
-plt.figure()
-for i in range(len(trajectories)):
-    plt.plot(jnp.arange(jnp.size(trajectories, 1))*maxtime/timesteps, trajectories[i, :, 3])
-plt.title("Parallel Velocity")
-plt.xlabel("time [s]")
-plt.ylabel(r"parallel velocity [ms$^{-1}$]")
-y_limit = max(jnp.abs(jnp.max(trajectories[:, :, 3])), jnp.abs(jnp.min(trajectories[:, :, 3])))
-plt.ylim(-1.2*y_limit, 1.2*y_limit)
-plt.savefig("output/init_vpar.pdf", transparent=True)
+    plt.figure()
+    for i in range(len(trajectories)):
+        plt.plot(jnp.arange(jnp.size(trajectories, 1))*maxtime/timesteps, trajectories[i, :, 3])
+    plt.title("Parallel Velocity")
+    plt.xlabel("time [s]")
+    plt.ylabel(r"parallel velocity [ms$^{-1}$]")
+    y_limit = max(jnp.abs(jnp.max(trajectories[:, :, 3])), jnp.abs(jnp.min(trajectories[:, :, 3])))
+    plt.ylim(-1.2*y_limit, 1.2*y_limit)
+    plt.savefig(f"output/vpar_{text}.pdf", transparent=True)
+    plt.close()
 
-normB = jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], stel.gamma, stel.gamma_dash, stel.currents)
-print(f"Mean normB for all particles at t=0: {jnp.mean(normB):2f} T")
-μ = particles.mass*initial_vperp**2/(2*normB)
+    normB = jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], stel.gamma, stel.gamma_dash, stel.currents)
+    print(f"Mean normB for all particles at t=0: {jnp.mean(normB):2f} T")
+    μ = particles.mass*initial_vperp**2/(2*normB)
 
-y_limit = 0
-plt.figure()
-for i in range(len(trajectories)):
-    normB = jnp.apply_along_axis(norm_B, 1, trajectories[i, :, :3], stel.gamma, stel.gamma_dash, stel.currents)
-    normalized_energy = (μ[i]*normB + 0.5*particles.mass*trajectories[i, :, 3]**2)/particles.energy-1
-    plt.plot(jnp.arange(jnp.size(trajectories, 1))*maxtime/timesteps, normalized_energy)
-    y_limit = max(y_limit, jnp.abs(jnp.max(normalized_energy)), jnp.abs(jnp.min(normalized_energy)))
-plt.title("Energy Conservation")
-plt.xlabel("time [s]")
-plt.ylabel(r"$\frac{E-E_\alpha}{E_\alpha}$")
-plt.ylim(-1.2*y_limit, 1.2*y_limit)
-plt.savefig("output/init_energy.pdf", transparent=True)
+    y_limit = 0
+    plt.figure()
+    for i in range(len(trajectories)):
+        normB = jnp.apply_along_axis(norm_B, 1, trajectories[i, :, :3], stel.gamma, stel.gamma_dash, stel.currents)
+        normalized_energy = jnp.abs((μ[i]*normB + 0.5*particles.mass*trajectories[i, :, 3]**2)/particles.energy-1)
+        plt.plot(jnp.arange(jnp.size(trajectories, 1))*maxtime/timesteps, normalized_energy)
+        y_limit = max(y_limit, jnp.abs(jnp.max(normalized_energy)), jnp.abs(jnp.min(normalized_energy)))
+    plt.yscale('log');plt.title("Energy Conservation")
+    plt.xlabel("time [s]");plt.ylabel(r"$\frac{E-E_\alpha}{E_\alpha}$")
+    plt.savefig(f"output/energy_{text}.pdf", transparent=True)
 
-stel.plot(trajectories=trajectories, title="Initial Stellator", save_as="output/init_stellator.pdf", show=False)
-plt.close()
+    stel.plot(trajectories=trajectories, title="Initial Stellator", save_as=f"output/3D_{text}.pdf", show=False)
+    plt.close()
 
 def create_field_lines(stel, maxtime, timesteps, n_segments, filename):
     def particles_to_vtk_fl(res_tys, filename):
@@ -145,28 +131,28 @@ def create_simsopt_curves(curves):
         curves_simsopt[i].x = jnp.ravel(curve)
     return curves_simsopt
 
-curves_to_vtk(create_simsopt_curves(stel._curves), "output/curves_init", close=True)
-particles_to_vtk(res_tys=jnp.concatenate([trajectories[:, :, 3:4], trajectories[:, :, :3]], axis=2), filename="output/particles_init")
-create_field_lines(stel, maxtime, timesteps, n_segments, filename=f"output/field_lines_init")
+def save_all(stel,text,extra_text=""):
+    trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
+    stel.save_coils(f"output/Optimization_{text}.txt", text=extra_text)
+    create_trajectory_plots(trajectories, text=text)
+    curves_to_vtk(create_simsopt_curves(stel._curves), f"output/curves_{text}", close=True)
+    particles_to_vtk(res_tys=jnp.concatenate([trajectories[:, :, 3:4], trajectories[:, :, :3]], axis=2), filename=f"output/particles_{text}")
+    create_field_lines(stel, maxtime, timesteps, n_segments, filename=f"output/field_lines_{text}")
+
 ############################################################################################################
 
 start = time()
 dofs_with_currents = jnp.array(jnp.concatenate((jnp.ravel(stel.dofs), stel.dofs_currents[1:])))
-# loss_value = loss(stel.dofs, stel.dofs_currents, stel, particles, R, r, initial_values, maxtime, timesteps)
 loss_value = jnp.sum(jnp.square(loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps)))
 print(f"Loss function initial value: {loss_value:.8f}, took: {time()-start:.2f} seconds")
 
 start = time()
-# grad_loss_value = grad(loss)(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps)
 # grad_loss_value = jacfwd(loss)(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps, adjoint=DirectAdjoint())
 # print(f"Grad shape: {grad_loss_value.shape}, took: {time()-start:.2f} seconds")
 
-def save_all(stel,res,maxtime,timesteps,i):
-    stel.save_coils(f"output/Optimization_{i+1}.txt", text=f"loss={res}, maxtime={maxtime}, timesteps={timesteps}, lengths={stel.length[:n_curves]}")
-    curves_to_vtk(create_simsopt_curves(stel._curves), f"output/curves_{i+1}", close=True)
-    trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
-    particles_to_vtk(res_tys=jnp.concatenate([trajectories[:, :, 3:4], trajectories[:, :, :3]], axis=2), filename=f"output/particles_{i+1}")
-    create_field_lines(stel, maxtime, timesteps, n_segments, filename=f"output/field_lines_{i+1}")
+start = time()
+save_all(stel,"init", extra_text=f"loss={loss_value}, maxtime={maxtime}, timesteps={timesteps}, lengths={stel.length[:n_curves]}")
+print(f"Save all took: {time()-start:.2f} seconds")
 
 start = time()
 for i in range(n_total_optimizations):
@@ -180,62 +166,18 @@ for i in range(n_total_optimizations):
                 res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "least_squares", "ftol": ftol_least_squares, "max_nfev": n_iteration_least_squares[j], "diff_step": diff_step_least_squares[j], "jax_grad": jax_grad_least_squares[j]})
                 dofs_with_currents = jnp.array(jnp.concatenate((jnp.ravel(stel.dofs), stel.dofs_currents[1:])))
                 new_loss_value = jnp.sum(jnp.square(loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps)))
-                save_all(stel,res,maxtime,timesteps,i)            
+                save_all(stel,i+1,extra_text=f"loss={new_loss_value}, maxtime={maxtime}, timesteps={timesteps}, lengths={stel.length[:n_curves]}")            
                 print(f"Loss function value: {new_loss_value:.8f}, took: {time()-start_time:.2f} seconds and is {jnp.abs(1-jnp.abs(new_loss_value/loss_value)):.2f} smaller than previous")
             loss_value = new_loss_value
-    if optimize_scipy_minimize:
-        for j, n_it in enumerate(n_iteration_scipy_minimize):
-            print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iteration_scipy_minimize)} with {n_it} iterations, ftol={ftol_scipy_minimize}, maxtime={maxtime}, timesteps={timesteps}, diff_step={diff_step_scipy_minimize[j]}, jax_grad={jax_grad_scipy_minimize[j]}")
-            res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "scipy_minimize", "ftol": ftol_scipy_minimize, "max_nfev": n_iteration_scipy_minimize[j], "diff_step": diff_step_scipy_minimize[j], "jax_grad": jax_grad_scipy_minimize[j]})
-            dofs_with_currents = jnp.array(jnp.concatenate((jnp.ravel(stel.dofs), stel.dofs_currents[1:])))
-            start_time=time();loss_value = loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps);print(f"Loss function value: {loss_value:.8f}, took: {time()-start_time:.2f} seconds")
-            save_all(stel,res,maxtime,timesteps,i)
     # USING ADAM AND OPTAX
     if optimize_adam:
         for j, n_it in enumerate(n_iterations_adam):
             print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iterations_adam)} with learning rate {learning_rates_adam[j]}, {n_it} iterations, maxtime={maxtime}, timesteps={timesteps}")
             res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": learning_rates_adam[j], "iterations": n_it})
-            save_all(stel,res,maxtime,timesteps,i)
+            save_all(stel,i+1,extra_text=f"loss={new_loss_value}, maxtime={maxtime}, timesteps={timesteps}, lengths={stel.length[:n_curves]}")
 
     maxtime *= advance_factor_each_optimization
     timesteps = int(timesteps*advance_factor_each_optimization)
 
 print(f"Optimization took: {time()-start:.1f} seconds") 
-
-stel.save_coils("Optimizations.txt")
-
-trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
-
-projection2D(R, r, trajectories, show=False, save_as="output/opt_pol_trajectories.pdf")
-projection2D_top(R, r, trajectories, show=False, save_as="output/opt_tor_trajectories.pdf")
-
-plt.figure()
-for i in range(len(trajectories)):
-    plt.plot(jnp.arange(jnp.size(trajectories, 1))*maxtime/timesteps, trajectories[i, :, 3])
-plt.title("Optimized Parallel Velocity")
-plt.xlabel("time [s]")
-plt.ylabel(r"parallel velocity [ms$^{-1}$]")
-y_limit = max(jnp.abs(jnp.max(trajectories[:, :, 3])), jnp.abs(jnp.min(trajectories[:, :, 3])))
-plt.ylim(-1.2*y_limit, 1.2*y_limit)
-plt.savefig("output/opt_vpar.pdf", transparent=True)
-
-normB = jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], stel.gamma, stel.gamma_dash, stel.currents)
-μ = particles.mass*initial_vperp**2/(2*normB)
-
-y_limit = 0
-plt.figure()
-for i in range(len(trajectories)):
-    normB = jnp.apply_along_axis(norm_B, 1, trajectories[i, :, :3], stel.gamma, stel.gamma_dash, stel.currents)
-    normalized_energy = (μ[i]*normB + 0.5*particles.mass*trajectories[i, :, 3]**2)/particles.energy-1
-    plt.plot(jnp.arange(jnp.size(trajectories, 1))*maxtime/timesteps, normalized_energy)
-    y_limit = max(y_limit, jnp.abs(jnp.max(normalized_energy)), jnp.abs(jnp.min(normalized_energy)))
-plt.title("Optimized Energy Conservation")
-plt.xlabel("time [s]")
-plt.ylabel(r"$\frac{E-E_\alpha}{E_\alpha}$")
-plt.ylim(-1.2*y_limit, 1.2*y_limit)
-plt.savefig("output/opt_energy.pdf", transparent=True)
-
-stel.plot(show=True, trajectories=trajectories, title="Optimized Stellator", save_as="output/opt_stellator.pdf")
-
-curves_to_vtk(create_simsopt_curves(stel._curves), f"output/curves_opt", close=True)
-particles_to_vtk(res_tys=jnp.concatenate([trajectories[:, :, 3:4], trajectories[:, :, :3]], axis=2), filename="output/particles_opt")
+save_all(stel,"opt")
