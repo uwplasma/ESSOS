@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=25'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=13'
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
 import jax
@@ -16,7 +16,7 @@ from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
-n_curves=3
+n_curves=2
 order=6
 nfp = 4
 
@@ -29,7 +29,7 @@ axis_rc_zs = jnp.array([[1, 0.1], [0, 0.2]])*R
 energy = 3.52e6 # eV
 current_on_axis = 5.7 # Tesla
 maxtime = 7.0e-5 # seconds
-timesteps = int(maxtime*7e6)
+timesteps = int(maxtime*6e6)
 
 optimize_adam = False
 n_iterations_adam   = [10, 10, 10, 10]
@@ -101,9 +101,10 @@ def create_trajectory_plots(trajectories, text):
     plt.yscale('log');plt.title("Energy Conservation")
     plt.xlabel("time [s]");plt.ylabel(r"$\frac{E-E_\alpha}{E_\alpha}$")
     plt.savefig(f"output/energy_{text}.pdf", transparent=True)
+    plt.close()
 
     stel.plot(trajectories=trajectories, title="Initial Stellator", save_as=f"output/3D_{text}.pdf", show=False)
-    plt.close()
+    plt.close('all')
 
 def create_field_lines(stel, maxtime, timesteps, n_segments, filename):
     def particles_to_vtk_fl(res_tys, filename):

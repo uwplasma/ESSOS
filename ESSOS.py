@@ -11,7 +11,7 @@ plt.rcParams['font.size'] = 20
 plt.rcParams['figure.figsize'] = 11, 7
 
 from jax.experimental.ode import odeint
-from diffrax import diffeqsolve, ODETerm, Dopri5, Tsit5, Dopri8, SaveAt, PIDController, Kvaerno5, DirectAdjoint, RecursiveCheckpointAdjoint
+from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, DirectAdjoint, RecursiveCheckpointAdjoint
 import matplotlib.pyplot as plt
 
 from jax.experimental import mesh_utils
@@ -418,6 +418,7 @@ class Curves:
         # Show the plot
         if show:
             plt.show()
+        plt.close()
 
     def animation(self, trajectories = None, show=False, title="", save_as=None):
         pass
@@ -695,7 +696,8 @@ def loss(dofs_with_currents:           jnp.ndarray,
          maxtime:        float,
          timesteps:      int,
          model:          str = 'Guiding Center',
-         adjoint = RecursiveCheckpointAdjoint()) -> float:
+         adjoint = RecursiveCheckpointAdjoint(),
+         target_B = 5.7) -> float:
              
     """Loss function to be minimized
     Attributes:
@@ -778,12 +780,14 @@ def loss(dofs_with_currents:           jnp.ndarray,
 
     length_loss = curves.length/(2*jnp.pi*r)-1
     distances_loss = distances_squared/r**2
-    z_trajectories_loss = trajectories[:, :, 2]/r
+    # z_trajectories_loss = trajectories[:, :, 2]/r
     distances_fieldlines_loss = distances_squared_fl/r**2
+    normB_loss = jnp.array([jnp.mean(jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], coils.gamma, coils.gamma_dash, coils.currents))-target_B])
     return jnp.concatenate([ # ravel to create a 1D array and divide by the square root of the length of the array to normalize before sending to least squares
              1e2*jnp.ravel(length_loss)/jnp.sqrt(len(length_loss)),
              1e0*jnp.ravel(distances_loss)/jnp.sqrt(len(distances_loss)),
-             1e0*jnp.ravel(distances_fieldlines_loss)/jnp.sqrt(len(distances_fieldlines_loss))
+             1e0*jnp.ravel(distances_fieldlines_loss)/jnp.sqrt(len(distances_fieldlines_loss)),
+             1e1*jnp.ravel(normB_loss)/jnp.sqrt(len(normB_loss))
             #  1e0*jnp.ravel(z_trajectories_loss)/jnp.sqrt(len(z_trajectories_loss)),
             ##
             ##
@@ -903,7 +907,7 @@ def optimize(coils:          Coils,
         dofs_currents = opt_dofs.x[coils.dofs.size:]
         coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
         coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
-        print(f"Loss function final value: {opt_dofs.fun:.5f}, currents={dofs_currents}")
+        # print(f"Loss function final value: {opt_dofs.fun:.5f}, currents={dofs_currents}")
 
     # Optimization using JAX minimize method
     elif method["method"] == "scipy_minimize":
@@ -916,8 +920,7 @@ def optimize(coils:          Coils,
         dofs_currents = jnp.array(opt_dofs.x[coils.dofs.size:])
         coils.dofs = jnp.reshape(dofs_coils, (-1, 3, 1+2*coils.order))
         coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
-
-        print(f"Loss function final value: {opt_dofs.fun:.5f}, currents={dofs_currents}")
+        # print(f"Loss function final value: {opt_dofs.fun:.5f}, currents={dofs_currents}")
 
     # Optimization using OPTAX adam method
     elif method["method"] == "OPTAX adam":
@@ -930,7 +933,7 @@ def optimize(coils:          Coils,
         solver_state = solver.init(dofs) #
         best_dofs = dofs
         losses = [best_loss]
-        print(f" Initial loss: {best_loss:.5f}")
+        # print(f" Initial loss: {best_loss:.5f}")
         for iter in range(method["iterations"]):
             start_loop = time()
             # grad = jax.grad(loss_partial)(dofs)
@@ -972,7 +975,7 @@ def optimize(coils:          Coils,
         coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
         
         # coils.dofs = jnp.array(list(optimizer.max['params'].values()))
-        print(f"Loss function final value: {optimizer.max['target']:.5f}")
+        # print(f"Loss function final value: {optimizer.max['target']:.5f}")
         
         return jnp.array(optimizer.max['target'])
     
@@ -990,7 +993,7 @@ def optimize(coils:          Coils,
         coils.dofs_currents=coils.dofs_currents.at[1:].set(jnp.array(dofs_currents))
         
         # coils.dofs = jnp.reshape(jnp.array(opt_dofs.x), (-1, 3, 1+2*coils.order))
-        print(f"Loss function final value: {opt_dofs.cost:.5f}")
+        # print(f"Loss function final value: {opt_dofs.cost:.5f}")
         
         return jnp.array(opt_dofs.cost)
     
@@ -1006,7 +1009,7 @@ def optimize(coils:          Coils,
         
         # coils.dofs = jnp.reshape(jnp.array(opt_dofs.x), (-1, 3, 1+2*coils.order))
         # print(f"Loss function final value: {loss_discrete_partial(coils.dofs):.5f}")
-        print(f"Loss function final value: {opt_dofs.cost:.5f}")
+        # print(f"Loss function final value: {opt_dofs.cost:.5f}")
         return opt_dofs.f
     
     else:
