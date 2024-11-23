@@ -16,28 +16,28 @@ from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
-n_curves=3
-order=3
-nfp = 4
+n_curves=2
+order=2
+nfp = 2
 
 A = 2.0 # Aspect ratio
 R = 7.75 # Major Radius
 r = R/A
 r_init = r/5
-n_total_optimizations = 12
+n_total_optimizations = 6
 axis_rc_zs = jnp.array([[1, 0.05], [0, 0.05]])*R
 optimize_with_respect_to_axis = True
 energy = 3.52e6 # eV
 B_on_axis = 5.7 # Tesla
 maxtime = 3.0e-5 # seconds
-timesteps = int(maxtime*2.0e7)
+timesteps = int(maxtime*1.0e7)
 
 optimize_adam = False
 n_iterations_adam   = [10, 10, 10, 10]
 learning_rates_adam = [1e-2, 1e-3, 1e-4, 1e-5]
 
 optimize_least_squares = True
-n_iteration_least_squares = [20]*7 #[150] + [50]*5 + [150]
+n_iteration_least_squares = [20]*1 #[150] + [50]*5 + [150]
 diff_step_least_squares =   [None, 1e-2,  1e-3,  1e-4,  1e-5, 1e-6,  None]
 jax_grad_least_squares =    [True, False, False, False, False, False, True]
 ftol_break_opt=5e-2

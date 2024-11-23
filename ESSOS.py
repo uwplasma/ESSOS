@@ -814,7 +814,7 @@ def loss(dofs_with_currents:           jnp.ndarray,
 
     ## ADD TERM TO MAKE NORM OF B ALONG THE AXIS TO BE A GIVEN FUNCTION OF PHI -> B = B0*(1+eps*cos(n*phi)), epsi=0 for quasisymmetry
     if axis_rc_zs is not None:
-        phi_axis = jnp.linspace(0, 2 * jnp.pi, 50)
+        phi_axis = jnp.linspace(0, 2 * jnp.pi, 100)
         i = jnp.arange(len(axis_rc_zs[0]))  # Index array
         cos_terms = jnp.cos(i[:, None] * phi_axis * nfp)  # Shape: (len(axis_rc_zs[0]), 30)
         sin_terms = jnp.sin(i[:, None] * phi_axis * nfp)  # Shape: (len(axis_rc_zs[1]), 30)
