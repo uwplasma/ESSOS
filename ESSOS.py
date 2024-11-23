@@ -328,8 +328,8 @@ class Curves:
         # Initializing pitch angle
         if more_trapped_particles:
             pitch = jax.random.uniform(key,shape=(n_particles,), minval=-trapped_fraction_more, maxval=trapped_fraction_more)
-            pitch = pitch.at[-1].set(0.90)
-            pitch = pitch.at[1].set(-0.90)
+            # pitch = pitch.at[-1].set(0.90)
+            # pitch = pitch.at[1].set(-0.90)
         else:
             pitch = jax.random.uniform(key,shape=(n_particles,), minval=-1, maxval=1)
         if model=='Lorentz':
@@ -783,8 +783,8 @@ def loss(dofs_with_currents:           jnp.ndarray,
     return jnp.concatenate([ # ravel to create a 1D array and divide by the square root of the length of the array to normalize before sending to least squares
              1e2*jnp.ravel(length_loss)/jnp.sqrt(len(length_loss)),
              1e0*jnp.ravel(distances_loss)/jnp.sqrt(len(distances_loss)),
-             1e0*jnp.ravel(z_trajectories_loss)/jnp.sqrt(len(z_trajectories_loss)),
              1e0*jnp.ravel(distances_fieldlines_loss)/jnp.sqrt(len(distances_fieldlines_loss))
+            #  1e0*jnp.ravel(z_trajectories_loss)/jnp.sqrt(len(z_trajectories_loss)),
             ##
             ##
         #    + 1e+1*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(jnp.square(trajectories[:, :, 2]))/r))))/len(jnp.ravel(trajectories[:, :, 2]))
