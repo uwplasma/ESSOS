@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=15'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
 import jax
@@ -16,8 +16,8 @@ from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
-n_curves=2
-order=2
+n_curves=4
+order=4
 nfp = 2
 
 A = 2.0 # Aspect ratio
@@ -63,7 +63,6 @@ stel = Coils(curves, jnp.array([5.6*B_on_axis/len(curves._curves)]*n_curves))
 # key = jax.random.PRNGKey(42)
 # stel.dofs += jax.random.normal(key, stel.dofs.shape)*r*1e-2
 # stel.dofs = stel.dofs*(1+jax.random.normal(key, stel.dofs.shape)*1e-1)
-print(f"Dofs shape: {stel.dofs.shape}")
 
 initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=False, trapped_fraction_more=0.2, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None, nfp=nfp)
 initial_vperp = initial_values[4, :]
