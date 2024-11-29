@@ -1,7 +1,7 @@
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-from jax import random, lax, jit, tree_util, grad
+from jax import random, lax, jit, tree_util, grad, vmap
 from jax.lax import fori_loop, select
 
 from functools import partial
@@ -488,68 +488,83 @@ class Coils(Curves):
         
     @partial(jit, static_argnums=(1, 3, 4, 5, 6))
     def trace_trajectories(self,
-                           particles: Particles,
-                           initial_values: jnp.ndarray,
-                           maxtime: float = 1e-7,
-                           timesteps: int = 200,
-                           n_cores: int = len(jax.devices()),
-                           adjoint = RecursiveCheckpointAdjoint()) -> jnp.ndarray:
-        
-        """Traces the trajectories of the particles in the given coils
-        Attributes:
-            self (Coils): Coils where the particles are traced
-            particles (Particles): Particles to be traced
-            initial_values (jnp.array - shape (6,)): Initial conditions of the particles
-            maxtime: Maximum time of the simulation
-            timesteps: Number of timesteps
-            n_cores: Number of cores to be used
-        Returns:
-            trajectories (jnp.array - shape (n_particles, timesteps, 4)): Trajectories of the particles
+                        particles: Particles,
+                        initial_values: jnp.ndarray,
+                        maxtime: float = 1e-7,
+                        timesteps: int = 200,
+                        n_cores: int = len(jax.devices()),
+                        adjoint=RecursiveCheckpointAdjoint()) -> jnp.ndarray:
         """
-
-        mesh = Mesh(mesh_utils.create_device_mesh(n_cores,), axis_names=('i',))
+        Traces the trajectories of the particles in the given coils.
+        """
+        # Create a device mesh for parallelization
+        mesh = Mesh(mesh_utils.create_device_mesh(n_cores), axis_names=('i',))
 
         m = particles.mass
         q = particles.charge
         n_particles = particles.number
 
+        # Ensure particles are divisible among cores
+        particles_per_core = n_particles // n_cores
+        assert n_particles % n_cores == 0, "Number of particles must be divisible by n_cores."
+
         times = jnp.linspace(0, maxtime, timesteps)
 
         vperp = initial_values[4, :]
         normB = jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], self.gamma, self.gamma_dash, self.currents)
-        μ = m*vperp**2/(2*normB)
-      
-        def aux_trajectory(particles: jnp.ndarray) -> jnp.ndarray:
-            trajectories = jnp.empty((n_particles//n_cores, timesteps, 4))
-            for particle in particles:
-                args = (self.gamma, self.gamma_dash, self.currents, μ[particle])
-                trajectories = trajectories.at[particle%(n_particles//n_cores),:,:].set(
-                    
-                    diffeqsolve(
-                        ODETerm(GuidingCenter),
-                        t0=0.0,
-                        t1=maxtime,
-                        dt0=maxtime/timesteps,
-                        y0=initial_values[:4, :].T[particle],
-                        solver=Tsit5(),
-                        args=args,
-                        saveat=SaveAt(ts=times),
-                        throw=False,
-                        adjoint=adjoint#DirectAdjoint(),
-                        # stepsize_controller=PIDController(rtol=1e-4, atol=1e-4),
-                        # stepsize_controller=PIDController(rtol=1.4e-8, atol=1.4e-8),
-                        # adjoint=BacksolveAdjoint(),
-                        # max_steps=200,
-                    ).ys
-                    
-                    # odeint(
-                    #     GuidingCenter, initial_values[:4, :].T[particle], times, self.gamma, self.gamma_dash, self.currents, μ[particle], atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
-                    # )
-                )
+        μ = m * vperp**2 / (2 * normB)
+
+        def aux_trajectory(particle_indices: jnp.ndarray) -> jnp.ndarray:
+            """
+            Process a batch of particles assigned to a single core.
+            """
+            def process_particle(carry, particle_idx):
+                """
+                Computes the trajectory for a single particle.
+                """
+                # Extract initial conditions and arguments for the solver
+                y0 = initial_values[:4, particle_idx][:,0]
+                args = (self.gamma, self.gamma_dash, self.currents, μ[particle_idx])
+
+                # Solve the ODE
+                trajectory = diffeqsolve(
+                    ODETerm(GuidingCenter),
+                    t0=0.0,
+                    t1=maxtime,
+                    dt0=maxtime / timesteps,
+                    y0=y0,
+                    solver=Tsit5(),
+                    args=args,
+                    saveat=SaveAt(ts=times),
+                    throw=False,
+                    adjoint=adjoint,
+                ).ys
+
+                # Append trajectory to results
+                carry = carry.at[particle_idx % particles_per_core, :, :].set(trajectory)
+                return carry, None
+
+            # Initialize trajectories array for this shard
+            initial_trajectories = jnp.zeros((particles_per_core, timesteps, 4))
+
+            # Use lax.scan to process particles sequentially within the shard
+            trajectories, _ = lax.scan(process_particle, initial_trajectories, particle_indices)
             return trajectories
-        
-        trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
-    
+
+        # Partition particles across cores
+        particle_indices = jnp.arange(n_particles).reshape((n_cores, particles_per_core))
+
+        # Use shard_map to parallelize across devices
+        trajectories = shard_map(
+            aux_trajectory,
+            mesh=mesh,
+            in_specs=P('i'),  # Each shard gets a subset of particles
+            out_specs=P('i'),  # Each shard returns a subset of trajectories
+            check_rep=False,
+        )(particle_indices)
+
+        # Combine results from all shards
+        trajectories = trajectories.reshape((n_particles, timesteps, 4))
         return trajectories
     
     @partial(jit, static_argnums=(1, 3, 4, 5))
@@ -616,62 +631,77 @@ class Coils(Curves):
     
     @partial(jit, static_argnums=(2, 3, 4, 5, 6))
     def trace_fieldlines(self,
-                         initial_values: jnp.ndarray,
-                         maxtime: float = 1e-7,
-                         timesteps: int = 200,
-                         n_segments: int = 100,
-                         n_cores: int = len(jax.devices()),
-                         adjoint = RecursiveCheckpointAdjoint()) -> jnp.ndarray:
-    
-        """Traces the field lines produced by the given coils
-        Attributes:
-            self (Coils): Coils where the particles are traced
-            particles (Particles): Particles to be traced
-            initial_values (jnp.array - shape (6,)): Initial conditions of the particles
-            maxtime: Maximum time of the simulation
-            timesteps: Number of timesteps
-            n_cores: Number of cores to be used
-        Returns:
-            trajectories (jnp.array - shape (n_particles, timesteps, 4)): Trajectories of the particles
+                        initial_values: jnp.ndarray,
+                        maxtime: float = 1e-7,
+                        timesteps: int = 200,
+                        n_segments: int = 100,
+                        n_cores: int = len(jax.devices()),
+                        adjoint=RecursiveCheckpointAdjoint()) -> jnp.ndarray:
         """
-
-        mesh = Mesh(mesh_utils.create_device_mesh(n_cores,), axis_names=('i',))
+        Traces the field lines produced by the given coils.
+        """
+        # Create a device mesh for parallelization
+        mesh = Mesh(mesh_utils.create_device_mesh(n_cores), axis_names=('i',))
 
         n_fieldlines = jnp.size(initial_values, 1)
+
+        # Ensure fieldlines are divisible among cores
+        fieldlines_per_core = n_fieldlines // n_cores
+        assert n_fieldlines % n_cores == 0, "Number of fieldlines must be divisible by n_cores."
+
         times = jnp.linspace(0, maxtime, timesteps)
-      
-        def aux_trajectory(fieldlines: jnp.ndarray) -> jnp.ndarray:
-            trajectories = jnp.empty((n_fieldlines//n_cores, timesteps, 3))
-            # field_line_func = jit(partial(FieldLine, gamma=self.gamma, gamma_dash=self.gamma_dash, currents=self.currents))
-            args = (self.gamma, self.gamma_dash, self.currents)
-            for fieldline in fieldlines:
-                trajectories = trajectories.at[fieldline%(n_fieldlines//n_cores),:,:].set(
-                    
-                    diffeqsolve(
-                        ODETerm(FieldLine),
-                        t0=0.0,
-                        t1=maxtime,
-                        dt0=maxtime/timesteps,
-                        y0=initial_values.T[fieldline],
-                        solver=Tsit5(),
-                        saveat=SaveAt(ts=times),
-                        args=args,
-                        adjoint=adjoint#DirectAdjoint(),
-                        # stepsize_controller=PIDController(rtol=1e-4, atol=1e-4),
-                        # stepsize_controller=PIDController(rtol=1.4e-8, atol=1.4e-8),
-                        # adjoint=BacksolveAdjoint(),
-                        # max_steps=200,
-                    ).ys
-                    
-                    # odeint(
-                    #     FieldLine, initial_values.T[fieldline], times, self.gamma, self.gamma_dash, self.currents, atol=1e-7, rtol=1e-7, mxstep=60#, hmax=maxtime/timesteps/10.
-                    # )
-                )
+
+        def aux_trajectory(fieldline_indices: jnp.ndarray) -> jnp.ndarray:
+            """
+            Process a batch of fieldlines assigned to a single core.
+            """
+            def process_fieldline(carry, fieldline_idx):
+                """
+                Computes the trajectory for a single fieldline.
+                """
+                # Extract initial condition and arguments for the solver
+                y0 = initial_values[:, fieldline_idx][:,1]
+                args = (self.gamma, self.gamma_dash, self.currents)
+
+                # Solve the ODE
+                trajectory = diffeqsolve(
+                    ODETerm(FieldLine),
+                    t0=0.0,
+                    t1=maxtime,
+                    dt0=maxtime / timesteps,
+                    y0=y0,
+                    solver=Tsit5(),
+                    args=args,
+                    saveat=SaveAt(ts=times),
+                    throw=False,
+                    adjoint=adjoint,
+                ).ys
+
+                # Append trajectory to results
+                carry = carry.at[fieldline_idx % fieldlines_per_core, :, :].set(trajectory)
+                return carry, None
+
+            # Initialize trajectories array for this shard
+            initial_trajectories = jnp.zeros((fieldlines_per_core, timesteps, 3))
+
+            # Use lax.scan to process fieldlines sequentially within the shard
+            trajectories, _ = lax.scan(process_fieldline, initial_trajectories, fieldline_indices)
             return trajectories
-        
-        
-        trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_fieldlines))
-    
+
+        # Partition fieldlines across cores
+        fieldline_indices = jnp.arange(n_fieldlines).reshape((n_cores, fieldlines_per_core))
+
+        # Use shard_map to parallelize across devices
+        trajectories = shard_map(
+            aux_trajectory,
+            mesh=mesh,
+            in_specs=P('i'),  # Each shard gets a subset of fieldlines
+            out_specs=P('i'),  # Each shard returns a subset of trajectories
+            check_rep=False,
+        )(fieldline_indices)
+
+        # Combine results from all shards
+        trajectories = trajectories.reshape((n_fieldlines, timesteps, 3))
         return trajectories
     
     def save_coils(self, filename: str, text=""):
