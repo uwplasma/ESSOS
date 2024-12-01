@@ -867,7 +867,7 @@ def loss(dofs_with_currents:           jnp.ndarray,
              1e2*jnp.ravel(length_loss)/jnp.sqrt(len(length_loss)),
              1e0*jnp.ravel(distances_loss)/jnp.sqrt(len(distances_loss)),
              1e0*jnp.ravel(distances_fieldlines_loss)/jnp.sqrt(len(distances_fieldlines_loss)),
-             1e1*jnp.ravel(normB_loss)/jnp.sqrt(len(normB_loss)),
+            #  1e1*jnp.ravel(normB_loss)/jnp.sqrt(len(normB_loss)),
             #  1e0*jnp.ravel(z_trajectories_loss)/jnp.sqrt(len(z_trajectories_loss)),
             ##
             ##
