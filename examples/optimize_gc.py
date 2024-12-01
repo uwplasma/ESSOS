@@ -39,8 +39,8 @@ n_iterations_adam   = [10, 10, 10, 10]
 learning_rates_adam = [1e-2, 1e-3, 1e-4, 1e-5]
 
 optimize_least_squares = True
-n_iteration_least_squares = [20]*7 #[150] + [50]*5 + [150]
-diff_step_least_squares =   [None, 1e-2, 1e-3,  1e-4,  1e-5,  1e-6,  None]
+n_iteration_least_squares = [20]*6 #[150] + [50]*5 + [150]
+diff_step_least_squares =   [None, 1e-3,  1e-4,  1e-5,  1e-6,  None]
 ftol_break_opt=5e-2
 ftol_least_squares = 1e-7
 
