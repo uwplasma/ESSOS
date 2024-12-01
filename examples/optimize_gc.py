@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=10'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=13'
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
 import jax
@@ -16,9 +16,9 @@ from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
-n_curves=3
+n_curves=4
 order=2
-nfp = 4
+nfp = 3
 
 A = 2.0 # Aspect ratio
 R = 7.75 # Major Radius
@@ -39,8 +39,8 @@ n_iterations_adam   = [10, 10, 10, 10]
 learning_rates_adam = [1e-2, 1e-3, 1e-4, 1e-5]
 
 optimize_least_squares = True
-n_iteration_least_squares = [20]*6 #[150] + [50]*5 + [150]
-diff_step_least_squares =   [None, 1e-3,  1e-4,  1e-5,  1e-6,  None]
+n_iteration_least_squares = [25]*1 #[150] + [50]*5 + [150]
+diff_step_least_squares =   [None, 1e-3, 1e-4,  1e-5,  1e-6,  None]
 ftol_break_opt=5e-2
 ftol_least_squares = 1e-7
 
