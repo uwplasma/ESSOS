@@ -11,7 +11,7 @@ plt.rcParams['font.size'] = 20
 plt.rcParams['figure.figsize'] = 11, 7
 
 from jax.experimental.ode import odeint
-from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, DirectAdjoint, RecursiveCheckpointAdjoint
+from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, DirectAdjoint, RecursiveCheckpointAdjoint, PIDController
 import matplotlib.pyplot as plt
 
 from jax.experimental import mesh_utils
@@ -486,14 +486,15 @@ class Coils(Curves):
         aux_data = {}  # static values
         return (children, aux_data)
         
-    @partial(jit, static_argnums=(1, 3, 4, 5, 6))
+    @partial(jit, static_argnums=(1, 3, 4, 5, 6, 7))
     def trace_trajectories(self,
                         particles: Particles,
                         initial_values: jnp.ndarray,
                         maxtime: float = 1e-7,
                         timesteps: int = 200,
                         n_cores: int = len(jax.devices()),
-                        adjoint=RecursiveCheckpointAdjoint()) -> jnp.ndarray:
+                        adjoint=RecursiveCheckpointAdjoint(),
+                        tol_step_size = 5e-5) -> jnp.ndarray:
         """
         Traces the trajectories of the particles in the given coils.
         """
@@ -538,6 +539,7 @@ class Coils(Curves):
                     saveat=SaveAt(ts=times),
                     throw=False,
                     adjoint=adjoint,
+                    stepsize_controller = PIDController(rtol=tol_step_size, atol=tol_step_size)
                 ).ys
 
                 # Append trajectory to results
@@ -636,7 +638,8 @@ class Coils(Curves):
                         timesteps: int = 200,
                         n_segments: int = 100,
                         n_cores: int = len(jax.devices()),
-                        adjoint=RecursiveCheckpointAdjoint()) -> jnp.ndarray:
+                        adjoint=RecursiveCheckpointAdjoint(),
+                        tol_step_size=5e-5) -> jnp.ndarray:
         """
         Traces the field lines produced by the given coils.
         """
@@ -675,6 +678,7 @@ class Coils(Curves):
                     saveat=SaveAt(ts=times),
                     throw=False,
                     adjoint=adjoint,
+                    stepsize_controller = PIDController(rtol=tol_step_size, atol=tol_step_size)
                 ).ys
 
                 # Append trajectory to results
@@ -724,10 +728,8 @@ tree_util.register_pytree_node(Coils,
                                Coils._tree_unflatten)
 
 
-@partial(jit, static_argnums=(1, 2, 3, 4, 6, 7, 8, 9, 10))
+@partial(jit, static_argnums=(1, 2, 3, 4, 6, 7, 8, 9, 10, 12))
 def loss(dofs_with_currents:           jnp.ndarray,
-# def loss(dofs:  jnp.ndarray,
-        #  dofs_currents:  jnp.ndarray,
          old_coils:      Coils,
          particles:      Particles,
          R:              float,
@@ -738,7 +740,8 @@ def loss(dofs_with_currents:           jnp.ndarray,
          model:          str = 'Guiding Center',
          adjoint = RecursiveCheckpointAdjoint(),
          target_B = 5.7,
-         axis_rc_zs = None) -> float:
+         axis_rc_zs = None,
+         tol_step_size = 5e-5) -> float:
              
     """Loss function to be minimized
     Attributes:
@@ -777,7 +780,7 @@ def loss(dofs_with_currents:           jnp.ndarray,
         # else:
         #     raise ValueError("Model must be 'Guiding Center' or 'Lorentz'")
         
-    trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps, adjoint=adjoint)
+    trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps, adjoint=adjoint, tol_step_size=tol_step_size)
     
     r_init = r/5
     n_fieldlines = particles.number
@@ -787,7 +790,7 @@ def loss(dofs_with_currents:           jnp.ndarray,
     x_fl = (r_+R)*jnp.cos(ϕ)
     y_fl = (r_+R)*jnp.sin(ϕ)
     z_fl = jnp.zeros(n_fieldlines)
-    trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, int(timesteps), n_segments, adjoint=adjoint)
+    trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, int(timesteps), n_segments, adjoint=adjoint, tol_step_size=tol_step_size)
     
     if axis_rc_zs is not None:
         i = jnp.arange(len(axis_rc_zs[0]))  # Index array
@@ -939,7 +942,8 @@ def optimize(coils:          Coils,
              timesteps:      int = 200,
              method:         dict = {"method":'JAX minimize', "maxiter": 20},
              print_loss:     bool = True,
-             axis_rc_zs = None) -> None:
+             axis_rc_zs = None,
+             tol_step_size = 5e-5) -> None:
     
     """Optimizes the coils by minimizing the loss function
     Attributes:
@@ -975,7 +979,7 @@ def optimize(coils:          Coils,
 
     # loss_partial = partial(loss, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
     # loss_discrete_partial = partial(loss_discrete, dofs_currents=dofs_currents, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model)
-    loss_partial = jit(partial(loss, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model, adjoint=adjoint, axis_rc_zs=axis_rc_zs))
+    loss_partial = jit(partial(loss, old_coils=coils, particles=particles, R=R, r=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model, adjoint=adjoint, axis_rc_zs=axis_rc_zs, tol_step_size=tol_step_size))
     # loss_discrete_partial = partial(loss_discrete, old_coils=coils, particles=particles, R=R, r_loss=r, initial_values=initial_values, maxtime=maxtime, timesteps=timesteps, model=model, adjoint=adjoint)
 
     # Optimization using JAX minimize method
