@@ -56,7 +56,7 @@ def GuidingCenter(
     x, y, z, vpar = inital_values
     
    # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 20) | (jnp.abs(z) > 20)
+    condition = (jnp.sqrt(x**2 + y**2) > 14) | (jnp.abs(z) > 5)
 
     def compute_derivatives(_):
         r = jnp.array([x, y, z])

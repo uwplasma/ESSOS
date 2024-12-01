@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=10'
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
 import jax
@@ -16,40 +16,41 @@ from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
-n_curves=4
-order=4
-nfp = 2
+n_curves=3
+order=2
+nfp = 4
 
 A = 2.0 # Aspect ratio
 R = 7.75 # Major Radius
 r = R/A
 r_init = r/5
-n_total_optimizations = 6
-axis_rc_zs = jnp.array([[1, 0.05], [0, 0.05]])*R
+n_total_optimizations = 8
+axis_rc_zs = jnp.array([[1, 0.1], [0, 0.1]])*R
 optimize_with_respect_to_axis = True
 energy = 3.52e6 # eV
 B_on_axis = 5.7 # Tesla
-maxtime = 3.0e-5 # seconds
+maxtime = 5.5e-5 # seconds
 timesteps = int(maxtime*1.0e7)
+tol_step_size = 3e-6
+number_of_particles_over_number_of_cores = 1
 
 optimize_adam = False
 n_iterations_adam   = [10, 10, 10, 10]
 learning_rates_adam = [1e-2, 1e-3, 1e-4, 1e-5]
 
 optimize_least_squares = True
-n_iteration_least_squares = [20]*1 #[150] + [50]*5 + [150]
-diff_step_least_squares =   [None, 1e-2,  1e-3,  1e-4,  1e-5, 1e-6,  None]
-jax_grad_least_squares =    [True, False, False, False, False, False, True]
+n_iteration_least_squares = [20]*7 #[150] + [50]*5 + [150]
+diff_step_least_squares =   [None, 1e-2, 1e-3,  1e-4,  1e-5,  1e-6,  None]
 ftol_break_opt=5e-2
 ftol_least_squares = 1e-7
 
 model = "Guiding Center"
 
-advance_factor_each_optimization = 1.15
+advance_factor_each_optimization = 1.2
 
-n_segments = int(min(50,order*10))
+n_segments = int(max(50,order*10))
 
-particles = Particles(len(jax.devices()))
+particles = Particles(len(jax.devices())*number_of_particles_over_number_of_cores)
 
 # dofs = jnp.reshape(jnp.array(
 #     [[[5.884646365152857, -0.006966333266796913, 3.9232541897919755, -0.0010264920955900733, -6.067892763040939e-06, 0.0018722717253900393, -1.8236185511322842e-05, -0.00026234739026347894, -5.3896539420907005e-06, -0.00020557093647479178, 1.914205305631024e-05, -5.7085273431708875e-05, -6.7150177142536006e-06], [1.170750894459735, 0.0350464847261024, 0.7803773655254461, 0.004294172560803225, 4.181280897514952e-06, -0.00939485233801154, -1.6192074744714683e-05, 0.0013545887856467088, -3.906021902689677e-06, 0.0010241093063451988, 4.128938422449541e-06, 0.0002932983193410755, -1.0942373043147827e-06], [0.00035146985887338493, -4.000086199108211, -4.792998877239866e-06, 1.403980449008426e-05, -0.00018167008189412715, 1.1420551667236116e-05, 6.321750009217482e-06, -6.545698466671377e-06, 5.013406431260768e-06, -1.3162282903677286e-05, -9.447949286193992e-07, 6.251865938105334e-06, 8.311336236438015e-07]], [[4.988623020260489, -0.019395970135114664, 3.3257630130074816, -0.0025539994504142987, 1.5026220936024754e-05, 0.0053169222873849405, -8.088241806055982e-06, -0.0007596858459847748, 1.0834688311771722e-06, -0.0005837377828511828, 1.5494833378778795e-05, -0.00016416368074109974, -5.800328496401407e-06], [3.3337018351146024, 0.029065495166206545, 2.222234761832781, 0.003559344963302599, -3.1807167499988598e-06, -0.007926241618039386, -2.102172277983952e-05, 0.001151097068369355, 9.027071608931016e-07, 0.0008664368096924012, 1.0129819613287715e-05, 0.00024747672157938934, -3.7114376565492085e-06], [0.0003092885875381999, -3.99984653672012, -2.0779262231424474e-05, 1.283580579885897e-05, -0.0001619928142811235, 7.888203837649906e-06, 2.4634411135559413e-05, -1.4026108970183353e-05, 6.976868494072207e-06, -1.2262192546230949e-05, -3.2674641862872915e-06, 6.117638310954991e-06, 1.367103375155425e-07]]]
@@ -64,11 +65,11 @@ stel = Coils(curves, jnp.array([5.6*B_on_axis/len(curves._curves)]*n_curves))
 # stel.dofs += jax.random.normal(key, stel.dofs.shape)*r*1e-2
 # stel.dofs = stel.dofs*(1+jax.random.normal(key, stel.dofs.shape)*1e-1)
 
-initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=False, trapped_fraction_more=0.2, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None, nfp=nfp)
+initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=True, trapped_fraction_more=0.2, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None, nfp=nfp)
 initial_vperp = initial_values[4, :]
 
 time0 = time()
-trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
+trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps, tol_step_size=tol_step_size)
 print("Trajectories shape:", trajectories.shape)
 print(f"Time to trace trajectories: {time()-time0:.2f} seconds")
 
@@ -143,7 +144,7 @@ def create_simsopt_curves(curves):
     return curves_simsopt
 
 def save_all(stel,text,extra_text=""):
-    trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps)
+    trajectories = stel.trace_trajectories(particles, initial_values, maxtime=maxtime, timesteps=timesteps, tol_step_size=tol_step_size)
     stel.save_coils(f"output/Optimization_{text}.txt", text=extra_text)
     create_trajectory_plots(trajectories, text=text)
     curves_to_vtk(create_simsopt_curves(stel._curves), f"output/curves_{text}", close=True)
@@ -154,7 +155,7 @@ def save_all(stel,text,extra_text=""):
 
 start = time()
 dofs_with_currents = jnp.array(jnp.concatenate((jnp.ravel(stel.dofs), stel.dofs_currents[1:])))
-loss_value = jnp.sum(jnp.square(loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps, target_B=B_on_axis, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None)))
+loss_value = jnp.sum(jnp.square(loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps, target_B=B_on_axis, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None, tol_step_size=tol_step_size)))
 print(f"Loss function initial value: {loss_value:.8f}, took: {time()-start:.2f} seconds")
 
 start = time()
@@ -172,12 +173,16 @@ for i in range(n_total_optimizations):
     if optimize_least_squares:
         for j, n_it in enumerate(n_iteration_least_squares):
             new_loss_value = 0
+            if diff_step_least_squares[j] is None:
+                jax_grad = True
+            else:
+                jax_grad = False
             while jnp.abs(1-jnp.abs(new_loss_value/loss_value)) > ftol_break_opt:
                 start_time=time();loss_value = new_loss_value
-                print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iteration_least_squares)} with {n_it} iterations, ftol={ftol_least_squares}, maxtime={maxtime}, timesteps={timesteps}, diff_step={diff_step_least_squares[j]}, jax_grad={jax_grad_least_squares[j]}")
-                res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "least_squares", "ftol": ftol_least_squares, "max_nfev": n_iteration_least_squares[j], "diff_step": diff_step_least_squares[j], "jax_grad": jax_grad_least_squares[j]}, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None)
+                print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iteration_least_squares)} with {n_it} iterations, ftol={ftol_least_squares}, maxtime={maxtime}, timesteps={timesteps}, diff_step={diff_step_least_squares[j]}, jax_grad={jax_grad}")
+                res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "least_squares", "ftol": ftol_least_squares, "max_nfev": n_iteration_least_squares[j], "diff_step": diff_step_least_squares[j], "jax_grad": jax_grad}, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None, tol_step_size=tol_step_size)
                 dofs_with_currents = jnp.array(jnp.concatenate((jnp.ravel(stel.dofs), stel.dofs_currents[1:])))
-                new_loss_value = jnp.sum(jnp.square(loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps, target_B=B_on_axis, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None)))
+                new_loss_value = jnp.sum(jnp.square(loss(dofs_with_currents, stel, particles, R, r, initial_values, maxtime, timesteps, target_B=B_on_axis, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None, tol_step_size=tol_step_size)))
                 save_all(stel,i+1,extra_text=f"loss={new_loss_value}, maxtime={maxtime}, timesteps={timesteps}, lengths={stel.length[:n_curves]}")            
                 print(f"Loss function value: {new_loss_value:.8f}, took: {time()-start_time:.2f} seconds and is {jnp.abs(1-jnp.abs(new_loss_value/loss_value)):.2f} smaller than previous")
             loss_value = new_loss_value
@@ -185,11 +190,11 @@ for i in range(n_total_optimizations):
     if optimize_adam:
         for j, n_it in enumerate(n_iterations_adam):
             print(f"Optimization {i+1}/{n_total_optimizations}: Iteration {j+1} of {len(n_iterations_adam)} with learning rate {learning_rates_adam[j]}, {n_it} iterations, maxtime={maxtime}, timesteps={timesteps}")
-            res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": learning_rates_adam[j], "iterations": n_it}, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None)
+            res=optimize(stel, particles, R, r, initial_values, maxtime=maxtime, timesteps=timesteps, method={"method": "OPTAX adam", "learning_rate": learning_rates_adam[j], "iterations": n_it}, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None, tol_step_size=tol_step_size)
             save_all(stel,i+1,extra_text=f"loss={new_loss_value}, maxtime={maxtime}, timesteps={timesteps}, lengths={stel.length[:n_curves]}")
 
     maxtime *= advance_factor_each_optimization
-    timesteps = int(timesteps*advance_factor_each_optimization)
+    # timesteps = int(timesteps*advance_factor_each_optimization)
 
 print(f"Optimization took: {time()-start:.1f} seconds") 
 save_all(stel,"opt")
