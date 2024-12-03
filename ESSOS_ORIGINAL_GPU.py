@@ -586,9 +586,7 @@ class Coils(Curves):
         Traces the trajectories of the particles in the given coils.
         """
         # Create a device mesh for parallelization
-        devices=mesh_utils.create_device_mesh(n_cores)
-        mesh = Mesh(devices, axis_names=('i',))
-        sharding = jax.sharding.NamedSharding(mesh, P('i',))
+        mesh = Mesh(mesh_utils.create_device_mesh(n_cores), axis_names=('i',))
 
         m = particles.mass
         q = particles.charge
@@ -600,40 +598,21 @@ class Coils(Curves):
 
         times = jnp.linspace(0, maxtime, timesteps)
 
-        x = initial_values[0, :]        
-        y = initial_values[1, :] 
-        z = initial_values[2, :] 
-        vpar = initial_values[3, :] 
         vperp = initial_values[4, :]
-        # normB = jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], self.gamma, self.gamma_dash, self.currents)
-        # μ = m * vperp**2 / (2 * normB)
-        particle_indeces=jnp.arange(n_particles)
-        
+        normB = jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], self.gamma, self.gamma_dash, self.currents)
+        μ = m * vperp**2 / (2 * normB)
 
-
-        particles_indeces_part=jax.device_put(particle_indeces, sharding)
-        #initial_values_part=jax.device_put(initial_values.T, sharding)
-        x_part=jax.device_put(x, sharding)
-        y_part=jax.device_put(y, sharding)
-        z_part=jax.device_put(z, sharding)
-        vpar_part=jax.device_put(vpar, sharding)
-        vperp_part=jax.device_put(vperp, sharding)
-        
         #def aux_trajectory(particle_indices: jnp.ndarray) -> jnp.ndarray:
         #    """
         #    Process a batch of particles assigned to a single core.
         #    """
-        def aux_trajectory_device(particle_idx: jnp.ndarray,x_idx: jnp.ndarray,
-                                  y_idx: jnp.ndarray,z_idx: jnp.ndarray,vpar_idx: jnp.ndarray,vperp_idx: jnp.ndarray) -> jnp.ndarray:
+        def aux_trajectory_device(particle_idx: jnp.ndarray) -> jnp.ndarray:
             """
             Computes the trajectory for a single particle.
             """
             # Extract initial conditions and arguments for the solver
-            #normB = jnp.apply_along_axis(norm_B, 0, jnp.array((x_idx,y_idx,z_idx))[:3], self.gamma, self.gamma_dash, self.currents)
-            modB=norm_B(jnp.array((x_idx,y_idx,z_idx)), self.gamma, self.gamma_dash, self.currents)
-            μ = m * vperp_idx**2 / (2 * modB)
-            y0 = jnp.array((x_idx,y_idx,z_idx,vpar_idx))
-            args = (self.gamma, self.gamma_dash, self.currents, μ)
+            y0 = initial_values[:4,:].T[particle_idx]
+            args = (self.gamma, self.gamma_dash, self.currents, μ[particle_idx])
 
             # Solve the ODE
             trajectory = diffeqsolve(
@@ -662,7 +641,7 @@ class Coils(Curves):
             # Use lax.scan to process particles sequentially within the shard
             #trajectories, _ = lax.scan(process_particle, initial_trajectories, particle_indices)
             #return trajectories
-        trajectories = vmap(aux_trajectory_device,in_axes=(0,0,0,0,0,0))(particles_indeces_part,x_part,y_part,z_part,vpar_part,vperp_part)
+        trajectories = vmap(aux_trajectory_device)(jnp.arange(n_particles))
 
         return trajectories
 
@@ -759,9 +738,7 @@ class Coils(Curves):
         Traces the field lines produced by the given coils.
         """
         # Create a device mesh for parallelization
-        devices=mesh_utils.create_device_mesh(n_cores)
-        mesh = Mesh(devices, axis_names=('i',))
-        sharding = jax.sharding.NamedSharding(mesh, P('i',))
+        mesh = Mesh(mesh_utils.create_device_mesh(n_cores), axis_names=('i',))
 
         n_fieldlines = jnp.size(initial_values, 1)
 
@@ -771,27 +748,16 @@ class Coils(Curves):
 
         times = jnp.linspace(0, maxtime, timesteps)
 
-        fieldlines=jnp.arange(n_fieldlines)
-        x = initial_values[0, :]        
-        y = initial_values[1, :] 
-        z = initial_values[2, :] 
- 
-        x_part=jax.device_put(x, sharding)
-        y_part=jax.device_put(y, sharding)
-        z_part=jax.device_put(z, sharding)
-        fieldlines_part=jax.device_put(fieldlines, sharding)
-
         #def aux_trajectory_device(particle_idx: jnp.ndarray) -> jnp.ndarray:
         #    """
         #    Process a batch of fieldlines assigned to a single core.
         #    """
-        def aux_trajectory_device(fieldline_idx: jnp.ndarray,x_idx: jnp.ndarray,
-                                  y_idx: jnp.ndarray,z_idx: jnp.ndarray) -> jnp.ndarray:
+        def aux_trajectory_device(fieldline_idx: jnp.ndarray) -> jnp.ndarray:
             """
             Computes the trajectory for a single fieldline.
             """
             # Extract initial condition and arguments for the solver
-            y0 = jnp.array((x_idx,y_idx,z_idx))
+            y0 = initial_values.T[fieldline_idx]
             args = (self.gamma, self.gamma_dash, self.currents)
 
             # Solve the ODE
@@ -832,7 +798,7 @@ class Coils(Curves):
         #    out_specs=P('i'),  # Each shard returns a subset of trajectories
         #    check_rep=False,
         #)(fieldline_indices)
-        trajectories = vmap(aux_trajectory_device,in_axes=(0,0,0,0))(fieldlines_part,x_part,y_part,z_part)
+        trajectories = vmap(aux_trajectory_device)(jnp.arange(n_fieldlines))
 
         return trajectories
 
