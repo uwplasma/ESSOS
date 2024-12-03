@@ -23,19 +23,24 @@ from time import time
 
 from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta, BcrossGradBdotGradTheta, BdotGradr
 from Dynamics import GuidingCenter, Lorentz, FieldLine
+from Axis import r_axis, z_axis, axis_del_phi
 
 from scipy.optimize import  minimize as scipy_minimize, least_squares
 from jax.scipy.optimize import minimize as jax_minimize
-from simsopt.geo import CurveRZFourier
+#from simsopt.geo import CurveRZFourier
 
-def CreateEquallySpacedCurves(n_curves:   int,
-                              order:      int,
-                              R:          float,
-                              r:          float,
-                              n_segments: int = 100,
-                              nfp:        int  = 1,
-                              stellsym:   bool = False,
-                              axis_rc_zs = None) -> jnp.ndarray:
+def CreateEquallySpacedCurves(n_curves:     int,
+                              order:        int,
+                              R:            float,
+                              r_maj:        float,
+                              r_min:        float = -1, # Allow for specification of r_min instead of radius_ratio
+                              radius_ratio: float = 1,
+                              n_segments:   int = 100,
+                              nfp:          int  = 1,
+                              stellsym:     bool = False,
+                              maj_min_swap: bool = False,
+                              axis_rc_zs = None,
+                              axis_rs_zc = None) -> jnp.ndarray:
     """ Create a toroidal set of cruves equally spaced with an outer radius R and inner radius r.
     Attributes:
         n_curves (int): Number of curves
@@ -47,35 +52,36 @@ def CreateEquallySpacedCurves(n_curves:   int,
     Returns:
         curves (Curves): Equally spaced curves
     """
-    if axis_rc_zs is not None:
-        angle_locations = 1/((1+int(stellsym))*nfp*n_curves)/2+np.linspace(0,1,(n_curves)*(1+int(stellsym))*nfp, endpoint=False)
-        ma = CurveRZFourier(angle_locations, len(axis_rc_zs[0])-1, nfp, False)
-        ma.rc[:] = axis_rc_zs[0]
-        ma.zs[:] = axis_rc_zs[1, 1:]
-        ma.x = ma.get_dofs()
-        gamma_curves = ma.gamma()
-        
-        curves = jnp.zeros((n_curves, 3, 1+2*order))
-        for i in range(n_curves):
-            angle = (i+0.5)*(2*jnp.pi)/((1+int(stellsym))*nfp*n_curves)
-            curves = curves.at[i, 0, 0].set(gamma_curves[i,0])
-            curves = curves.at[i, 0, 2].set(jnp.cos(angle)*r)
-            curves = curves.at[i, 1, 0].set(gamma_curves[i,1])
-            curves = curves.at[i, 1, 2].set(jnp.sin(angle)*r)
-            curves = curves.at[i, 2, 0].set(gamma_curves[i,2])
-            curves = curves.at[i, 2, 1].set(-r)
+    if r_min == -1:
+        assert 0 < radius_ratio <= 1, 'Ratio of minor and major radii must be between 0 and 1 (1 inclusive).'
+        r_min = radius_ratio * r_maj
     else:
-        curves = jnp.zeros((n_curves, 3, 1+2*order))
-        for i in range(n_curves):
-            angle = (i+0.5)*(2*jnp.pi)/((1+int(stellsym))*nfp*n_curves)
-            curves = curves.at[i, 0, 0].set(jnp.cos(angle)*R)
-            curves = curves.at[i, 0, 2].set(jnp.cos(angle)*r)
-            curves = curves.at[i, 1, 0].set(jnp.sin(angle)*R)
-            curves = curves.at[i, 1, 2].set(jnp.sin(angle)*r)
-            curves = curves.at[i, 2, 1].set(-r)
-            # In the previous line, the minus sign is for consistency with
-            # Vmec.external_current(), so the coils create a toroidal field of the
-            # proper sign and free-boundary equilibrium works following stage-2 optimization.
+        assert 0 < r_min <= r_maj, 'Minor radius must be between 0 and the major radius.'
+    if maj_min_swap:
+        r_maj, r_min = r_min, r_maj
+    if axis_rc_zs is None:
+        axis_rc_zs = jnp.array([[R],[0]])
+    if axis_rs_zc is None:
+        axis_rs_zc = jnp.array([[0],[0]])
+    curves = jnp.zeros((n_curves, 3, 1+2*order))
+    for i in range(n_curves):
+        angle = (i+0.5)*(2*jnp.pi)/((1+int(stellsym))*nfp*n_curves)
+        rotation_angle = nfp*angle/2
+        rax = r_axis(axis_rc_zs[0], nfp, angle, raxiscs=axis_rs_zc[0])
+        normal_vec = axis_del_phi(axis_rc_zs[0], axis_rc_zs[1], nfp, angle, raxiscs=axis_rs_zc[0], zaxiscc=axis_rs_zc[1])
+        toroidal_normal = jnp.atan2(normal_vec[1], normal_vec[0])
+        poloidal_normal = jnp.atan2(normal_vec[2], jnp.sqrt(normal_vec[0] ** 2 + normal_vec[1] ** 2))
+        vector_0 = jnp.array([jnp.sin(toroidal_normal), -jnp.cos(toroidal_normal), 0], float)
+        vector_1 = jnp.array([-jnp.cos(toroidal_normal)*jnp.sin(poloidal_normal), -jnp.sin(toroidal_normal)*jnp.sin(poloidal_normal), jnp.cos(poloidal_normal)], float)
+        curves = curves.at[i, 0, 0].set(rax*jnp.cos(angle))
+        curves = curves.at[i, 0, 1].set(vector_0[0]*r_maj*jnp.cos(rotation_angle) - vector_1[0]*r_maj*jnp.sin(rotation_angle))
+        curves = curves.at[i, 0, 2].set(vector_0[0]*r_min*jnp.sin(rotation_angle) + vector_1[0]*r_min*jnp.cos(rotation_angle))
+        curves = curves.at[i, 1, 0].set(rax*jnp.sin(angle))
+        curves = curves.at[i, 1, 1].set(vector_0[1]*r_maj*jnp.cos(rotation_angle) - vector_1[1]*r_maj*jnp.sin(rotation_angle))
+        curves = curves.at[i, 1, 2].set(vector_0[1]*r_min*jnp.sin(rotation_angle) + vector_1[1]*r_min*jnp.cos(rotation_angle))
+        curves = curves.at[i, 2, 0].set(z_axis(axis_rc_zs[1], nfp, angle, zaxiscc=axis_rs_zc[1]))
+        curves = curves.at[i, 2, 1].set(-vector_1[2]*r_maj*jnp.sin(rotation_angle))
+        curves = curves.at[i, 2, 2].set(vector_1[2]*r_min*jnp.cos(rotation_angle))
     return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
 
 def apply_symmetries_to_curves(base_curves, nfp, stellsym):
