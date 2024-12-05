@@ -18,14 +18,14 @@ import numpy as np
 
 n_particles=1000
 
-n_curves=2
+n_curves=4
 order=2
 nfp = 2
 
 A = 2.0 # Aspect ratio
 R = 7.75 # Major Radius
 r = R/A
-r_init = R/5
+r_init = r/5
 n_total_optimizations = 15
 axis_rc_zs = np.array([[1, 0.05], [0, 0.05]])*R
 optimize_with_respect_to_axis = True
