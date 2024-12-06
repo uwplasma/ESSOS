@@ -17,10 +17,9 @@ def B(R: jnp.array, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array,
     Returns:
         B (jnp.array - shape (3,)): Magnetic field at point R
     """
-
     dif_R = (R-gamma).T
     dB = jnp.cross(gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0)/jnp.linalg.norm(dif_R, axis=0)**3
-    dB_sum = jnp.einsum("i,bai", currents*1e-7, dB, optimize="greedy")*overal_factor
+    dB_sum = jnp.sum((currents[None, None, :] * dB) * 1e-7, axis=2).T * overal_factor
     return jnp.mean(dB_sum, axis=0)
 
 @jit
