@@ -2,3 +2,4 @@
 *.pdf
 optimize_lorentz_gc.py
 optimize_lorentz_gc_1D.py
+.DS_Store

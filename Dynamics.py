@@ -3,10 +3,11 @@ jax.config.update("jax_enable_x64", True)
 from jax import jit
 import jax.numpy as jnp
 from MagneticField import B, grad_B
-from time import time
+import uuid
 
 @jit
-def GuidingCenter(t:              float,
+def GuidingCenter(
+                  t:              float,
                   inital_values:  jnp.ndarray,
                   args:           tuple
                 #   gamma:          jnp.ndarray,
@@ -55,7 +56,7 @@ def GuidingCenter(t:              float,
     x, y, z, vpar = inital_values
     
    # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 100) | (jnp.abs(z) > 20)
+    condition = (jnp.sqrt(x**2 + y**2) > 14) | (jnp.abs(z) > 5)
 
     def compute_derivatives(_):
         r = jnp.array([x, y, z])
@@ -150,12 +151,10 @@ def Lorentz(inital_values: jnp.ndarray,
     return jax.lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 @jit
-def FieldLine(inital_values: jnp.ndarray,
-              t:             float,
-              gamma:         jnp.ndarray,
-              gamma_dash:    jnp.ndarray,
-              currents:      jnp.ndarray) -> jnp.ndarray:
-    
+def FieldLine(t:             float,
+              inital_values: jnp.ndarray,
+              args) -> jnp.ndarray:
+    gamma, gamma_dash, currents = args
     """ Calculates the motion derivatives for a certain field line 
         Attributes:
     inital_values: Point in phase space where we want to calculate the derivatives - shape (4,)
@@ -187,22 +186,24 @@ def FieldLine(inital_values: jnp.ndarray,
 
     # Calculationg the magentic field
     x, y, z = inital_values
-    vpar = 299792458 # speed of light
+    # Generate a single random value of 1 or -1
+    random_value = jax.random.choice(jax.random.PRNGKey(int(uuid.uuid4().int % (2**32))), jnp.array([-1.0, 1.0]))
+    vpar = random_value*299792458 # speed of light
     
    # Condition to check if any of x, y, z is greater than 10
-    condition = (jnp.sqrt(x**2 + y**2) > 100) | (jnp.abs(z) > 20)
+    condition = (jnp.sqrt(x**2 + y**2) > 25) | (jnp.abs(z) > 15)
 
-    def compute_derivatives(_):
-        r = jnp.array([x, y, z])
-        
-        B_field = B(r, gamma, gamma_dash, currents)
-        normB = jnp.linalg.norm(B_field)
-        b = B_field/normB
-        
-        # Position derivative of the particle
-        Dx = vpar*b
+    # def compute_derivatives(_):
+    r = jnp.array([x, y, z])
+    
+    B_field = B(r, gamma, gamma_dash, currents)
+    normB = jnp.linalg.norm(B_field)
+    b = B_field/normB
+    
+    # Position derivative of the particle
+    Dx = vpar*b
 
-        return Dx
+    return Dx
 
     def zero_derivatives(_):
         return jnp.zeros(3, dtype=float)
