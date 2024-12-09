@@ -26,7 +26,7 @@ A = 2.0 # Aspect ratio
 R = 7.75 # Major Radius
 r = R/A
 r_init = 0.05#r/5
-n_total_optimizations = 5
+n_total_optimizations = 4
 axis_rc_zs = np.array([[1, 0.05], [0, 0.05]])*R
 optimize_with_respect_to_axis = True
 energy = 3.52e6 # eV
@@ -42,9 +42,9 @@ optimize_least_squares = True
 # n_iteration_least_squares = [20]*1
 # diff_step_least_squares =   [None]*1
 # jax_grad_least_squares =    [True]*1
-n_iteration_least_squares = [20]*5
-diff_step_least_squares =   [1e-1, 1e-2, 1e-3, 1e-4]*5
-jax_grad_least_squares =    [False]*5
+n_iteration_least_squares = [20]*4
+diff_step_least_squares =   [1e-1, 1e-2, 1e-3, 1e-4]*1
+jax_grad_least_squares =    [False]*4
 # n_iteration_least_squares = [30]*7 #[150] + [50]*5 + [150]
 # diff_step_least_squares =   [None, 1e-2,  1e-3,  1e-4,  1e-5, 1e-6,  None]
 # jax_grad_least_squares =    [True, False, False, False, False, False, True]
@@ -142,7 +142,7 @@ def create_field_lines(stel, maxtime, timesteps, n_segments, filename):
     x_fl = (r_+R)*jnp.cos(phi)
     y_fl = (r_+R)*jnp.sin(phi)
     z_fl = jnp.zeros(n_fieldlines)
-    trajectories_fieldlines = stel.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, timesteps, n_segments)
+    trajectories_fieldlines = stel.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/30, timesteps, n_segments)
     particles_to_vtk_fl(res_tys=trajectories_fieldlines, filename=filename)
 
 def create_simsopt_curves(curves):
