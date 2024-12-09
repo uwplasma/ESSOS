@@ -347,7 +347,7 @@ class Curves:
         #####!!!!Fixed r because otherwise particles are not uniform in theta, TO DO: At a grid of r's do uniform theta and phi
         r = r_init #random.uniform(key,shape=(n_particles,), minval=0, maxval=r_init)
         Θ = random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi)
-        ϕ = random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi/self.nfp)#((1+int(self.stellsym))*self.nfp))
+        ϕ = random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi)#/self.nfp)#((1+int(self.stellsym))*self.nfp))
         
         if axis_rc_zs is not None:
             i = jnp.arange(len(axis_rc_zs[0]))  # Index array
@@ -939,7 +939,8 @@ def loss(dofs_with_currents:           jnp.ndarray,
         #Trying some quick J/drift metrics
         r_cross_squared=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))-R)+jnp.square(trajectories[:,:,2]))
         r_cross_drift=jnp.sum(jnp.diff(r_cross_squared,axis=1)*maxtime/timesteps,axis=1)/jnp.max(jnp.diff(r_cross_squared,axis=1)*maxtime/timesteps)#-trajectories[:,:-1,3]*jax.vmap(BdotGradTheta(xyz, coils.gamma, coils.gamma_dash, coils.currents, R))
-        alpha_cross_drift=jnp.sum(jnp.diff(r_cross_squared,axis=1)*maxtime/timesteps,axis=1)/jnp.max(jnp.diff(r_cross_squared,axis=1)*maxtime/timesteps)
+        alpha_cross=theta_particles-phi_particles
+        alpha_cross_drift=jnp.sum(jnp.diff(alpha_cross,axis=1)*maxtime/timesteps,axis=1)/jnp.max(jnp.diff(alpha_cross,axis=1)*maxtime/timesteps)
         v_par_r=trajectories[:,:,3]
 
         J=jnp.sum(jnp.diff(v_par_r,axis=1)/jnp.diff(r_cross_squared,axis=1),axis=1)*maxtime/timesteps/jnp.max(v_par_r,axis=1)
@@ -1055,16 +1056,19 @@ def loss(dofs_with_currents:           jnp.ndarray,
     # z_trajectories_loss = trajectories[:, :, 2]/r
     distances_fieldlines_loss = distances_fieldlines/r**2
     return jnp.concatenate([ # ravel to create a 1D array and divide by the square root of the length of the array to normalize before sending to least squares
-             #1e2*jnp.ravel(length_loss)/jnp.sqrt(len(length_loss)),
+             #1e1*jnp.ravel(length_loss)/jnp.sqrt(len(length_loss)),
              #1e0*jnp.ravel(distances_loss)/jnp.sqrt(len(distances_loss)),
              #1e0*jnp.ravel(distances_fieldlines_loss)/jnp.sqrt(len(distances_fieldlines_loss)),
              #1e0*jnp.ravel(J)/jnp.sqrt(len(J)),
              #1e0*jnp.ravel(J_r)/jnp.sqrt(len(J_r)),
              #1e0*jnp.ravel(z_drift)/jnp.sqrt(len(z_drift)),
-             1e0*jnp.ravel(r_cross_drift)/jnp.sqrt(len(r_cross_drift)),
+            #1e0*jnp.ravel(r_cross_drift)/jnp.sqrt(len(r_cross_drift)),
+            1e0*jnp.ravel(r_cross_drift),
+             #1e0*(jnp.ravel(alpha_cross_drift)/jnp.sqrt(len(alpha_cross_drift))+0.01),             
              #1e0*jnp.ravel(r_cross_fieldline)/jnp.sqrt(len(r_cross_fieldline)),
-             1e0*jnp.ravel(fieldline_drift)/jnp.sqrt(len(fieldline_drift)),
+             #1e0*jnp.ravel(fieldline_drift)/jnp.sqrt(len(fieldline_drift)),
              ##1e0*(jnp.ravel(alpha_drift)/jnp.sqrt(len(alpha_drift))-(-0.1)),
+             1e1*jnp.ravel(normB_loss),#/jnp.sqrt(len(normB_loss)),
              #1e1*jnp.ravel(normB_loss)/jnp.sqrt(len(normB_loss)),
             #  1e0*jnp.ravel(z_trajectories_loss)/jnp.sqrt(len(z_trajectories_loss)),
             ##

@@ -16,18 +16,18 @@ from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
-n_particles=100
+n_particles=1000
 
-n_curves=2
-order=2
+n_curves=1
+order=4
 nfp = 2
 
 A = 2.0 # Aspect ratio
 R = 7.75 # Major Radius
 r = R/A
-r_init = 0.05#r/5
+r_init = 0.3#r/5
 n_total_optimizations = 4
-axis_rc_zs = np.array([[1, 0.05], [0, 0.05]])*R
+axis_rc_zs = np.array([[1, 0.0], [0, 0.0]])*R#np.array([[1, 0.05], [0, 0.05]])*R
 optimize_with_respect_to_axis = True
 energy = 3.52e6 # eV
 B_on_axis = 5.7 # Tesla
@@ -74,7 +74,7 @@ stel = Coils(curves, jnp.array([5.6*B_on_axis/len(curves._curves)]*n_curves))
 # stel.dofs = stel.dofs*(1+jax.random.normal(key, stel.dofs.shape)*1e-1)
 print(f"Dofs shape: {stel.dofs.shape}")
 
-initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=True, trapped_fraction_more=0.5, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None, nfp=nfp)
+initial_values = stel.initial_conditions(particles, R, r_init, model=model, more_trapped_particles=False, trapped_fraction_more=0.5, axis_rc_zs=axis_rc_zs if optimize_with_respect_to_axis else None, nfp=nfp)
 initial_vperp = initial_values[4, :]
 
 time0 = time()
@@ -134,7 +134,7 @@ def create_field_lines(stel, maxtime, timesteps, n_segments, filename):
         ppl = np.asarray([xyz.shape[0] for xyz in res_tys])
         data = np.concatenate([i*np.ones((res_tys[i].shape[0], )) for i in range(len(res_tys))])
         polyLinesToVTK(filename, x, y, z, pointsPerLine=ppl, pointData={'idx': data})
-    # r_init = r/3
+    r_init = 0.5#r/3
     n_fieldlines = len(trajectories)
     angle = 0
     r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
@@ -142,7 +142,7 @@ def create_field_lines(stel, maxtime, timesteps, n_segments, filename):
     x_fl = (r_+R)*jnp.cos(phi)
     y_fl = (r_+R)*jnp.sin(phi)
     z_fl = jnp.zeros(n_fieldlines)
-    trajectories_fieldlines = stel.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/30, timesteps, n_segments)
+    trajectories_fieldlines = stel.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, timesteps, n_segments)
     particles_to_vtk_fl(res_tys=trajectories_fieldlines, filename=filename)
 
 def create_simsopt_curves(curves):
