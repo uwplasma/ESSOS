@@ -18,7 +18,7 @@ import numpy as np
 
 n_particles=1000
 
-n_curves=4
+n_curves=1
 order=2
 nfp = 2
 
@@ -54,7 +54,7 @@ ftol_least_squares = 1e-7
 
 model = "Guiding Center"
 
-advance_factor_each_optimization = 2.#1.15
+advance_factor_each_optimization = 1.0001
 
 n_segments = order*25#100#int(max(50,order*10))
 
