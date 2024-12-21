@@ -916,128 +916,47 @@ def loss(dofs_with_currents:           jnp.ndarray,
         
     trajectories = coils.trace_trajectories(particles, initial_values, maxtime, timesteps, adjoint=adjoint, tol_step_size=tol_step_size)
     
-    r_init = 0.5#r/5
-    n_fieldlines = particles.number
-    angle = 0
-    r_ = jnp.linspace(start=-r_init, stop=r_init, num=n_fieldlines)
-    ϕ = jnp.ones(n_fieldlines)*angle
-    x_fl = (r_+R)*jnp.cos(ϕ)
-    y_fl = (r_+R)*jnp.sin(ϕ)
-    z_fl = jnp.zeros(n_fieldlines)
-    trajectories_fieldlines = coils.trace_fieldlines(jnp.array([x_fl, y_fl, z_fl]), maxtime/50, int(timesteps), n_segments, adjoint=adjoint, tol_step_size=tol_step_size)
     
     if axis_rc_zs is not None:
-        i = jnp.arange(len(axis_rc_zs[0]))  # Index array
-        
+
+        #Calculate theta,phi,R
+        R_particles=jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))
+        R_axis=R#jnp.average(R_particles[:,:])
+        Z_axis=0.0#jnp.average(trajectories[:,:,2])
         phi_particles = jnp.arctan2(trajectories[:, :, 1], trajectories[:, :, 0])
-        theta_particles = jnp.arctan2(trajectories[:, :, 2], jnp.sqrt(trajectories[:, :, 0]**2+trajectories[:, :, 1]**2))
-        cos_terms = jnp.cos(i[:, None, None] * phi_particles * nfp)  # Shape: (len(axis_rc_zs[0]), n_batch, n_particles)
-        sin_terms = jnp.sin(i[:, None, None] * phi_particles * nfp)  # Shape: (len(axis_rc_zs[1]), n_batch, n_particles)
-        #cos_terms_theta = jnp.cos(i[:, None, None] * theta_particles)  # Shape: (len(axis_rc_zs[0]), n_batch, n_particles)
-        #sin_terms_theta = jnp.sin(i[:, None, None] * theta_particles)  # Shape: (len(axis_rc_zs[1]), n_batch, n_particles)
+        theta_particles = jnp.arctan2(trajectories[:, :, 2]-Z_axis, jnp.sqrt(trajectories[:, :, 0]**2+trajectories[:, :, 1]**2)-R_axis)
 
-        #Trying some quick J/drift metrics
-        r_cross_squared=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))-R)+jnp.square(trajectories[:,:,2]))
-        r_cross_drift=jnp.sum(jnp.diff(r_cross_squared,axis=1)*maxtime/timesteps,axis=1)/jnp.max(jnp.diff(r_cross_squared,axis=1)*maxtime/timesteps)#-trajectories[:,:-1,3]*jax.vmap(BdotGradTheta(xyz, coils.gamma, coils.gamma_dash, coils.currents, R))
-        alpha_cross=theta_particles-phi_particles
-        alpha_cross_drift=jnp.sum(jnp.diff(alpha_cross,axis=1)*maxtime/timesteps,axis=1)/jnp.max(jnp.diff(alpha_cross,axis=1)*maxtime/timesteps)
-        v_par_r=trajectories[:,:,3]
-
-        J=jnp.sum(jnp.diff(v_par_r,axis=1)/jnp.diff(r_cross_squared,axis=1),axis=1)*maxtime/timesteps/jnp.max(v_par_r,axis=1)
-        J_r=jnp.sum(jnp.diff(v_par_r,axis=1)/(jnp.diff(theta_particles,axis=1)-jnp.diff(phi_particles,axis=1)),axis=1)*maxtime/timesteps/jnp.max(v_par_r,axis=1)
-        #vr_cross=jnp.gradient(r_cross_squared,axis=1)/2.
-        #r_cross_drift=jnp.sum(vr_cross,axis=1)/jnp.max(vr_cross)
-
-        #J=jnp.sum(trajectories[:,:,3],axis=1)*maxtime/timesteps#*v_th?
-
-
-        R_axis_particles = jnp.sum(axis_rc_zs[0][:, None, None] * cos_terms, axis=0)  # Broadcasting and summing over the first axis
-        Z_axis_particles = jnp.sum(axis_rc_zs[1][:, None, None] * sin_terms, axis=0)  # Broadcasting and summing over the first axis
-        pos_axis_particles = jnp.array([R_axis_particles*jnp.cos(phi_particles), R_axis_particles*jnp.sin(phi_particles), Z_axis_particles]).transpose(1, 2, 0)
-        trajectories_minus_axis = trajectories[:, :, :3] - pos_axis_particles
-        distances_particles = jnp.sum(jnp.square(trajectories_minus_axis), axis=2)
-        #distances_particles = jnp.square(
-        #    jnp.sqrt(
-        #        trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2
-        #    )-R
-        #)+trajectories[:, :, 2]**2
-
+       
+        #Calculate r which should be ~ psi(r) across flux surfaces
+        r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))-R_axis)+jnp.square(trajectories[:,:,2]-Z_axis))
+        #Calculate v_r average on time
+        #Z_drift=jnp.sum(jnp.diff(trajectories[:, :, 3],axis=1),axis=1)/jnp.max(jnp.diff(trajectories[:, :, 3],axis=1),axis=1)/timesteps
+        #R_drift=jnp.sum(jnp.diff(R_particles,axis=1),axis=1)/jnp.max(jnp.diff(R_particles,axis=1),axis=1)/timesteps
+        r_cross_drift=jnp.sum(jnp.diff(r_cross,axis=1),axis=1)/timesteps        
+        #r_cross_drift=jnp.sum(jnp.diff(r_cross,axis=1),axis=1)/jnp.max(jnp.diff(r_cross,axis=1),axis=1)/timesteps
+        #r_cross_drift=jnp.maximum(0,(jnp.sum(jnp.diff(r_cross,axis=1),axis=1)/jnp.max(jnp.diff(r_cross,axis=1),axis=1)/timesteps)-(-0.05))
         
-        phi_fieldlines = jnp.arctan2(trajectories_fieldlines[:, :, 1], trajectories_fieldlines[:, :, 0])
-        cos_terms_fieldlines = jnp.cos(i[:, None, None] * phi_fieldlines * nfp)  # Shape: (len(axis_rc_zs[0]), n_batch, n_particles)
-        sin_terms_fieldlines = jnp.sin(i[:, None, None] * phi_fieldlines * nfp)  # Shape: (len(axis_rc_zs[1]), n_batch, n_particles)
-        R_axis_fieldlines = jnp.sum(axis_rc_zs[0][:, None, None] * cos_terms_fieldlines, axis=0)  # Broadcasting and summing over the first axis
-        Z_axis_fieldlines = jnp.sum(axis_rc_zs[1][:, None, None] * sin_terms_fieldlines, axis=0)  # Broadcasting and summing over the first axis
-        pos_axis_fieldlines = jnp.array([R_axis_fieldlines*jnp.cos(phi_fieldlines), R_axis_fieldlines*jnp.sin(phi_fieldlines), Z_axis_fieldlines]).transpose(1, 2, 0)
-        fieldlines_minus_axis = trajectories_fieldlines - pos_axis_fieldlines
-        distances_fieldlines = jnp.sum(jnp.square(fieldlines_minus_axis), axis=2)
-        r_cross_fieldline=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(trajectories_fieldlines[:,:,0])+jnp.square(trajectories_fieldlines[:,:,1]))-R)+jnp.square(trajectories_fieldlines[:,:,2]))
-        fieldline_drift=jnp.diff(r_cross_fieldline,axis=1)/jnp.max(jnp.diff(r_cross_fieldline,axis=1))#-trajectories[:,:-1,3]*jax.vmap(BdotGradTheta(xyz, coils.gamma, coils.gamma_dash, coils.currents, R))
-        #v_par_r=trajectories[:,:,3]
-        #B_r_fieldlines  = jax.vmap(lambda rphi: BdotGradr(rphi, coils.gamma, coils.gamma_dash, coils.currents, R))(xyz_array)
-        #distances_fieldlines = jnp.sum(jnp.square(
-        #    jnp.sqrt(
-        #       trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
-        #    )-R
-        #)+trajectories_fieldlines[:, :, 2]**2)
-    else:
-        distances_particles = jnp.square(
-             jnp.sqrt(
-                 trajectories[:, :, 0]**2 + trajectories[:, :, 1]**2
-             )-R
-         )+trajectories[:, :, 2]**2
-        #distances_particles = jnp.square(
-        #    jnp.sqrt(
-        #        (trajectories[:, :, 0]-R)**2 + (trajectories[:, :, 1]-R)**2
-        #+trajectories[:, :, 2]**2))
-        distances_fieldlines = jnp.sum(jnp.square(
-            jnp.sqrt(
-               trajectories_fieldlines[:, :, 0]**2 + trajectories_fieldlines[:, :, 1]**2
-            )-R
-        )+trajectories_fieldlines[:, :, 2]**2)
-
-#        r_cross_squared=jnp.square((jnp.sqrt(trajectories[:,:,0]**2+jnp.square(trajectories[:,:,1]**2)-R)**2+jnp.square(trajectories[:,:,2])
-#        vr=jnp.gradient(r_cross_squared,axis=1)/2.
-#        r_cross_drift=jnp.sum(vr,axis=1)/jnp.max(vr)
-
-       # r_squared=jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1])
-       # vr=jnp.gradient(r_squared,axis=1)/2.
-       # r_drift=jnp.abs(jnp.sum(vr,axis=1)/jnp.max(vr))
-       # vz=jnp.gradient(jnp.square(trajectories[:,:,2]),axis=1)/2.
-       # z_drift=jnp.abs(jnp.sum(vz,axis=1)/jnp.max(vz))
-        #Some measure of r_drift
-        # distances_particles = jnp.square(
-        #     (jnp.sqrt(
-        #         (trajectories[:, -1, 0])**2 + (trajectories[:, -1, 1])**2
-        #     )-jnp.sqrt(trajectories[:,0, 0]**2 + trajectories[:, 0, 1]**2)
-        # +jnp.sqrt(jnp.squared(trajectories[:, -1, 2]-r_init)))/maxtime)
-
-        #Some measure of alpha drift (not working, probably units problem)
-        #alpha_drift=jnp.square((
-        #        (jnp.arcsin(trajectories[:, -1, 2]/((trajectories[:, -1, 0])**2 + (trajectories[:, -1, 1])**2)) - B_iota_fieldlines((trajectories[:, -1, 0],trajectories[:, -1, 1],trajectories[:, -1, 2]))*jnp.arctan((trajectories[:, -1, 1]-R)/(trajectories[:, -1, 0]-R)))-(jnp.arcsin(trajectories[:, 0, 2]/((trajectories[:, 0, 0])**2 + (trajectories[:, 0, 1])**2)) - B_iota_fieldlines((trajectories[:, 0, 0],trajectories[:, 0, 1],trajectories[:, 0, 2]))*jnp.arctan((trajectories[:, 0, 1]-R)/(trajectories[:, 0, 0]-R)))
-        #        )/maxtime)#+trajectories[:, -1, 2]**2B_iota_fieldlines 
+        #Same for alpha drift
+        B_theta  = jax.vmap(BdotGradTheta,in_axes=(0,None,None,None,None,None))(trajectories[:,:,0:3].reshape(trajectories.shape[0]*trajectories.shape[1],3), coils.gamma, coils.gamma_dash, coils.currents, R_axis,Z_axis)
+        B_phi = jax.vmap(BdotGradPhi,in_axes=(0,None,None,None,None))(trajectories[:,:,0:3].reshape(trajectories.shape[0]*trajectories.shape[1],3), coils.gamma, coils.gamma_dash, coils.currents, R_axis)
+        #B_mod = jax.vmap(norm_B,in_axes=(0,None,None,None))(trajectories[:,:,0:3].reshape(trajectories.shape[0]*trajectories.shape[1],3), coils.gamma, coils.gamma_dash, coils.currents)        
+        #B_iota=B_theta.reshape(trajectories.shape[0],trajectories.shape[1])/B_phi.reshape(trajectories.shape[0],trajectories.shape[1])
+        #alpha_cross=theta_particles-B_theta.reshape(trajectories.shape[0],trajectories.shape[1])/B_phi.reshape(trajectories.shape[0],trajectories.shape[1])*phi_particles
+        alpha_cross=theta_particles#-phi_particles
+        alpha_cross_drift=(jnp.sum(jnp.diff(alpha_cross,axis=1),axis=1))/timesteps        
+        #alpha_cross_drift=jnp.sum(jnp.diff(alpha_cross,axis=1),axis=1)/jnp.max(jnp.diff(alpha_cross,axis=1),axis=1)/timesteps
+        #alpha_cross_drift=jnp.maximum(0,(jnp.sum(jnp.diff(alpha_cross,axis=1),axis=1)/jnp.max(jnp.diff(alpha_cross,axis=1),axis=1)/timesteps)-(0.5))
     
-    ### THE FUNCTION BELOW CALCULATES B.dot.grad(theta) and B.dot.grad(phi) for a grid of points in the poloidal plane
-    ### May be worth putting it as a separate function to assess equilibrium quality
-    # nr = 4;nphi = 4;nz = 4
-    # r_max = r/6;phi_min = 0;phi_max = 2*jnp.pi/30
-    # r_0 = jnp.linspace(start=-r_max, stop=r_max, num=nr)
-    # phi_array = jnp.linspace(start=phi_min, stop=phi_max, num=nphi)
-    # # phi_array += jnp.linspace(start=phi_min+2*jnp.pi/nfp/2, stop=phi_max+2*jnp.pi/nfp/2, num=nphi)
-    # phi_array += jnp.linspace(start=phi_min+2*jnp.pi/nfp, stop=phi_max+2*jnp.pi/nfp, num=nphi)
-    # z_array = jnp.linspace(start=-r_max, stop=r_max, num=nz)
-    # r_0_grid, phi_grid, z_grid = jnp.meshgrid(r_0, phi_array, z_array)
-    # xyz_array = jnp.stack([(r_0_grid + R) * jnp.cos(phi_grid),
-    #                          (r_0_grid + R) * jnp.sin(phi_grid),
-    #                          z_grid], axis=-1).reshape(-1, 3)
-    # # B_z_fieldlines  = jax.vmap(lambda rphi: B(rphi, coils.gamma, coils.gamma_dash, coils.currents, R)[2])(xyz_array)
-    # B_iota_fieldlines  = jax.vmap(lambda xyz: 
-    #                                      BdotGradTheta(xyz, coils.gamma, coils.gamma_dash, coils.currents, R)
-    #                                      /BdotGradPhi( xyz, coils.gamma, coils.gamma_dash, coils.currents, R)
-    #                       )(xyz_array)
-    # B_r_fieldlines  = jax.vmap(lambda rphi: BdotGradr(rphi, coils.gamma, coils.gamma_dash, coils.currents, R))(xyz_array)
+       
+        #Mirror ratio?
+        ####mirror_ratio=jnp.maximum(0,(jnp.max(1./R_particles[:,-1])-jnp.min(1./R_particles[:,-1]))/(jnp.max(1./R_particles[:,-1])+jnp.min(1./R_particles[:,-1]))-0.29)
+        #aspect_ratio=jnp.maximum(0,(jnp.max(R_particles[:,-1])-jnp.min(R_particles[:,-1]))/(jnp.max(R_particles[:,-1])+jnp.min(R_particles[:,-1]))-0.1)
+        #Aspect ratio
+        aspect_ratio=jnp.maximum(0,((2.*jnp.max(r_cross[:,-1]))/(jnp.max(R_particles[:,-1])+jnp.min(R_particles[:,-1]))-0.1)/0.1)
+        #R_Max_constrain=jnp.maximum(0,(jnp.max(R_particles[:,-1])-(R+2.0)))
+        #R_Min_constrain=jnp.abs(jnp.minimum(0,jnp.min(R_particles[:,-1])-(R-2.0)))
 
-    ## ADD TERM TO MAKE NORM OF B ALONG THE AXIS TO BE A GIVEN FUNCTION OF PHI -> B = B0*(1+eps*cos(n*phi)), epsi=0 for quasisymmetry
+
     if axis_rc_zs is not None:
         phi_axis = jnp.linspace(0, 2 * jnp.pi, 100)
         i = jnp.arange(len(axis_rc_zs[0]))  # Index array
@@ -1047,33 +966,21 @@ def loss(dofs_with_currents:           jnp.ndarray,
         Z_axis = jnp.sum(axis_rc_zs[1][:, None] * sin_terms, axis=0)  # Sum over `i` (first axis)
         pos_axis = jnp.array([R_axis*jnp.cos(phi_axis), R_axis*jnp.sin(phi_axis), Z_axis])
         normB_axis = jnp.apply_along_axis(norm_B, 0, pos_axis, coils.gamma, coils.gamma_dash, coils.currents)
-        normB_loss = jnp.square(normB_axis-target_B)
+        normB_loss = (normB_axis-target_B)/target_B#jnp.square(normB_axis-target_B)
     else:
         normB_loss = jnp.array([jnp.mean(jnp.apply_along_axis(norm_B, 0, initial_values[:3, :], coils.gamma, coils.gamma_dash, coils.currents))-target_B])
 
     length_loss = curves.length/(2*jnp.pi*r)-1
-    distances_loss = distances_particles/r*2
-    # z_trajectories_loss = trajectories[:, :, 2]/r
-    distances_fieldlines_loss = distances_fieldlines/r**2
+
     return jnp.concatenate([ # ravel to create a 1D array and divide by the square root of the length of the array to normalize before sending to least squares
-             #1e1*jnp.ravel(length_loss)/jnp.sqrt(len(length_loss)),
-             #1e0*jnp.ravel(distances_loss)/jnp.sqrt(len(distances_loss)),
-             #1e0*jnp.ravel(distances_fieldlines_loss)/jnp.sqrt(len(distances_fieldlines_loss)),
-             #1e0*jnp.ravel(J)/jnp.sqrt(len(J)),
-             #1e0*jnp.ravel(J_r)/jnp.sqrt(len(J_r)),
-             #1e0*jnp.ravel(z_drift)/jnp.sqrt(len(z_drift)),
-            #1e0*jnp.ravel(r_cross_drift)/jnp.sqrt(len(r_cross_drift)),
-            1e0*jnp.ravel(r_cross_drift),
-             #1e0*(jnp.ravel(alpha_cross_drift)/jnp.sqrt(len(alpha_cross_drift))+0.01),             
-             #1e0*jnp.ravel(r_cross_fieldline)/jnp.sqrt(len(r_cross_fieldline)),
-             #1e0*jnp.ravel(fieldline_drift)/jnp.sqrt(len(fieldline_drift)),
-             ##1e0*(jnp.ravel(alpha_drift)/jnp.sqrt(len(alpha_drift))-(-0.1)),
-             1e1*jnp.ravel(normB_loss),#/jnp.sqrt(len(normB_loss)),
-             #1e1*jnp.ravel(normB_loss)/jnp.sqrt(len(normB_loss)),
-            #  1e0*jnp.ravel(z_trajectories_loss)/jnp.sqrt(len(z_trajectories_loss)),
-            ##
-            ##
-        #    + 1e+1*jnp.sum(1/(1+jnp.exp(6.91-(14*jnp.sqrt(jnp.square(trajectories[:, :, 2]))/r))))/len(jnp.ravel(trajectories[:, :, 2]))
+             1e0*jnp.ravel(length_loss)/jnp.sqrt(len(length_loss)),            
+             #1e0*jnp.ravel(r_cross_drift),
+             #1e0*(jnp.ravel(alpha_cross_drift)+0.3), #target a finite precession
+             #1.e0*jnp.ravel(jnp.abs(r_cross_drift/alpha_cross_drift)), #minimising ration of radial step to cross-fieldline precession
+             1.e0*jnp.ravel(2./jnp.pi*jnp.absolute(jnp.arctan(r_cross_drift/alpha_cross_drift))), #minimising ration of radial step to cross-fieldline precession             
+             1e0*jnp.ravel(normB_loss),#/jnp.sqrt(len(normB_loss)),
+             #1e0*jnp.ravel(mirror_ratio),#/jnp.sqrt(len(normB_loss)),
+             #1e0*jnp.ravel(aspect_ratio),#/jnp.sqrt(len(normB_loss)),
            ])
 
 @partial(jit, static_argnums=(2, 3, 4, 5, 7, 8, 9, 10))
@@ -1301,6 +1208,39 @@ def optimize(coils:          Coils,
 
 
 import numpy as np
+
+def projection2D_small(R, r, Trajectories: jnp.ndarray, show=True, save_as=None, close=False):
+    plt.figure()
+    for i in range(10):
+        X_particle = Trajectories[i, :, 0]
+        Y_particle = Trajectories[i, :, 1]
+        Z_particle = Trajectories[i, :, 2]
+        R_particle = jnp.sqrt(X_particle**2 + Y_particle**2)
+        plt.plot(R_particle, Z_particle)
+
+    theta = jnp.linspace(0, 2*np.pi, 100)
+    x = r*jnp.cos(theta)+R
+    y = r*jnp.sin(theta)
+    plt.plot(x, y, color="lightgrey")
+    
+    plt.xlim(R-1.2*r, R+1.2*r)
+    plt.ylim(-1.2*r, 1.2*r)
+    plt.gca().set_aspect('equal')
+
+    plt.title("Projection of the Trajectories (poloidal view)")
+    plt.xlabel("r [m]")
+    plt.ylabel("z [m]")
+
+    # Save the plot
+    if save_as is not None:
+        plt.savefig(save_as)
+
+    # Show the plot
+    if show:
+        plt.show()
+        
+    if close:
+        plt.close()
 
 def projection2D(R, r, Trajectories: jnp.ndarray, show=True, save_as=None, close=False):
     plt.figure()
