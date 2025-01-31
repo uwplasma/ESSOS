@@ -32,7 +32,7 @@ optimize_with_respect_to_axis = True
 energy = 3.52e6 # eV
 Aspect=0.1# Inverse aspect ration target
 B_on_axis = 5.7 # Tesla
-maxtime = 5.0e-6#3.0e-5 # seconds
+maxtime = 5.0e-5#3.0e-5 # seconds
 timesteps = int(maxtime*1.0e7)
 
 optimize_adam = False
