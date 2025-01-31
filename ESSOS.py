@@ -21,7 +21,6 @@ from jax import vmap
 
 from functools import partial
 from time import time
-import interpax
 
 from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta, BcrossGradBdotGradTheta, BdotGradr
 from Dynamics import GuidingCenter, Lorentz, FieldLine
@@ -302,7 +301,7 @@ class Curves:
                            R_init: float,
                            r_init: float,
                            seed: int = 1,
-                           more_trapped_particles = False,
+                           more_trapped_particles = 0,
                            trapped_fraction_more = 0.5,
                            model: str = "Guiding Center",
                            axis_rc_zs = None,
@@ -330,12 +329,18 @@ class Curves:
         vth = jnp.sqrt(2*energy/mass)
 
         # Initializing pitch angle
-        if more_trapped_particles:
+        if more_trapped_particles == 1:
             pitch = jax.random.uniform(key,shape=(n_particles,), minval=-trapped_fraction_more, maxval=trapped_fraction_more)
             # pitch = pitch.at[-1].set(0.90)
             # pitch = pitch.at[1].set(-0.90)
-        else:
+        elif more_trapped_particles==2:
+            pitch = jnp.ones((n_particles,))*trapped_fraction_more
+        elif more_trapped_particles==0:
             pitch = jax.random.uniform(key,shape=(n_particles,), minval=-1, maxval=1)
+        else:
+            print('Define the parameters more trapped_particles')
+            exit()
+
         if model=='Lorentz':
             gyroangle = jax.random.uniform(key,shape=(n_particles,), minval=0, maxval=2*jnp.pi)
 
@@ -575,7 +580,7 @@ class Coils(Curves):
     #     return trajectories
     
 
-    @partial(jit, static_argnums=(1, 3, 4, 5, 6, 7))
+    @partial(jit, static_argnums=(1, 3, 4, 5, 6, 7,8))
     def trace_trajectories(self,
                         particles: Particles,
                         initial_values: jnp.ndarray,
@@ -583,7 +588,8 @@ class Coils(Curves):
                         timesteps: int = 200,
                         n_cores: int = len(jax.devices()),
                         adjoint=RecursiveCheckpointAdjoint(),
-                        tol_step_size = 5e-5) -> jnp.ndarray:
+                        tol_step_size = 5e-5,
+                        num_adaptative_steps=100000) -> jnp.ndarray:
         """
         Traces the trajectories of the particles in the given coils.
         """
@@ -649,8 +655,8 @@ class Coils(Curves):
                 saveat=SaveAt(ts=times),
                 throw=False,
                 adjoint=adjoint,
-                stepsize_controller = PIDController(pcoeff=0.3, icoeff=0.4, rtol=1.e-5, atol=1.e-5, dtmax=None,dtmin=None),
-                max_steps=100000
+                stepsize_controller = PIDController(pcoeff=0.3, icoeff=0.4, rtol=tol_step_size, atol=tol_step_size, dtmax=None,dtmin=None),
+                max_steps=num_adaptative_steps
             ).ys
 
                 # Append trajectory to results
@@ -1309,3 +1315,73 @@ def projection2D_top(R, r, Trajectories: jnp.ndarray, show=True, save_as=None, c
     if close:
         plt.close()
 
+def Plot_3D_trajectories(R, r, Trajectories: jnp.ndarray, show=True, save_as=None, close=False):
+    from matplotlib import pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    from matplotlib.colors import cnames
+    from matplotlib import animation
+
+    x_par=Trajectories[:,:,0]
+    y_par=Trajectories[:,:,1]
+    z_par=Trajectories[:,:,2]
+    N_trajectories=x_par.shape[0]
+
+    # Set up figure & 3D axis for animation
+    fig = plt.figure()
+    ax = fig.add_axes([0, 0, 1, 1], projection='3d')
+    ax.axis('off')
+
+    # choose a different color for each trajectory
+    colors = plt.cm.jet(np.linspace(0, 1, N_trajectories))
+
+    # set up lines and points
+    lines = sum([ax.plot([], [], [], '-', c=c)
+                for c in colors], [])
+    pts = sum([ax.plot([], [], [], 'o', c=c)
+            for c in colors], [])
+
+    # prepare the axes limits
+    ax.set_xlim((-25, 25))
+    ax.set_ylim((-35, 35))
+    ax.set_zlim((0, 10))
+
+    # set point-of-view: specified by (altitude degrees, azimuth degrees)
+    ax.view_init(30, 0)
+
+    # initialization function: plot the background of each frame
+    def init():
+        for line, pt in zip(lines, pts):
+            line.set_data([], [])
+            line.set_3d_properties([])
+
+            pt.set_data([], [])
+            pt.set_3d_properties([])
+        return lines + pts
+
+    # animation function.  This will be called sequentially with the frame number
+    def animate(i):
+        # we'll step two time-steps per frame.  This leads to nice results.
+        i = (2 * i) % x_par.shape[1]
+
+        for line, pt, xi, yi,zi in zip(lines, pts, x_par,y_par,z_par):
+            x= xi[:i].T
+            y= yi[:i].T
+            z= zi[:i].T
+            line.set_data(x, y)
+            line.set_3d_properties(z)
+
+            pt.set_data(x[-1:], y[-1:])
+            pt.set_3d_properties(z[-1:])
+
+        ax.view_init(30, 0.3 * i)
+        fig.canvas.draw()
+        return lines + pts
+
+    # instantiate the animator.
+    anim = animation.FuncAnimation(fig, animate, init_func=init,
+                                frames=500, interval=30, blit=True)
+
+    # Save as mp4. This requires mplayer or ffmpeg to be installed
+    anim.save('lorentz_attractor.mp4', fps=15, extra_args=['-vcodec', 'libx264'])
+
+    plt.show()

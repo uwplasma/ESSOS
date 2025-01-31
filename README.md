@@ -53,3 +53,13 @@ Then you can create a conda environment with
 conda env create -f depenencies_file.yml
 ```
 where "dependencies_file.yml" can be dependencies_gpu.yml or dependencies_cpu.yml, whether you want to run the scripts on CPU or GPU.
+
+
+## Without environment, in a linux-like, the main pip packages required are: 
+pip install matplotlib
+pip install simsopt
+pip install -U "jax[cuda12]"==0.4.43
+pip install equinox==0.11.9
+pip install lineax==0.0.6
+pip install optimistix==0.0.8
+pip install diffrax==0.6.0
