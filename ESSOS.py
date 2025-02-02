@@ -1247,71 +1247,76 @@ def projection2D_small(R, r, Trajectories: jnp.ndarray, show=True, save_as=None,
         
     if close:
         plt.close()
+        
+from matplotlib.collections import LineCollection
 
 def projection2D(R, r, Trajectories: jnp.ndarray, show=True, save_as=None, close=False):
-    plt.figure()
-    for i in range(len(Trajectories)):
-        X_particle = Trajectories[i, :, 0]
-        Y_particle = Trajectories[i, :, 1]
-        Z_particle = Trajectories[i, :, 2]
-        R_particle = jnp.sqrt(X_particle**2 + Y_particle**2)
-        plt.plot(R_particle, Z_particle)
-
-    theta = jnp.linspace(0, 2*np.pi, 100)
-    x = r*jnp.cos(theta)+R
-    y = r*jnp.sin(theta)
-    plt.plot(x, y, color="lightgrey")
+    fig, ax = plt.subplots()
     
-    plt.xlim(R-1.2*r, R+1.2*r)
-    plt.ylim(-1.2*r, 1.2*r)
-    plt.gca().set_aspect('equal')
+    # Convert JAX arrays to NumPy (more compatible with Matplotlib)
+    Trajectories = np.asarray(Trajectories)
+    
+    # Compute cylindrical radius R_particle and use LineCollection
+    R_particle = np.sqrt(Trajectories[:, :, 0]**2 + Trajectories[:, :, 1]**2)
+    Z_particle = Trajectories[:, :, 2]
 
-    plt.title("Projection of the Trajectories (poloidal view)")
-    plt.xlabel("r [m]")
-    plt.ylabel("z [m]")
+    # Prepare line segments for faster plotting
+    segments = [np.column_stack([R_particle[i], Z_particle[i]]) for i in range(len(Trajectories))]
+    lc = LineCollection(segments, colors='b', linewidths=0.8)
+    ax.add_collection(lc)
 
-    # Save the plot
+    # Plot the reference circle
+    theta = np.linspace(0, 2 * np.pi, 100)
+    x = r * np.cos(theta) + R
+    y = r * np.sin(theta)
+    ax.plot(x, y, color="lightgrey")
+
+    ax.set_xlim(R - 1.2 * r, R + 1.2 * r)
+    ax.set_ylim(-1.2 * r, 1.2 * r)
+    ax.set_aspect('equal')
+    ax.set_title("Projection of the Trajectories (poloidal view)")
+    ax.set_xlabel("r [m]")
+    ax.set_ylabel("z [m]")
+
     if save_as is not None:
         plt.savefig(save_as)
 
-    # Show the plot
     if show:
         plt.show()
-        
+    
     if close:
         plt.close()
 
+
 def projection2D_top(R, r, Trajectories: jnp.ndarray, show=True, save_as=None, close=False):
-    plt.figure()
+    fig, ax = plt.subplots()
+
+    Trajectories = np.asarray(Trajectories)
+
+    # Precompute and plot the reference circles
     theta = np.linspace(0, 2*np.pi, 100)
-    x = (R-r)*np.cos(theta)
-    y = (R-r)*np.sin(theta)
-    plt.plot(x, y, color="lightgrey")
-    x = (R+r)*np.cos(theta)
-    y = (R+r)*np.sin(theta)
-    plt.plot(x, y, color="lightgrey")
+    for radius in [(R - r), (R + r)]:
+        x, y = radius * np.cos(theta), radius * np.sin(theta)
+        ax.plot(x, y, color="lightgrey")
 
-    for i in range(len(Trajectories)):
-        y = Trajectories[i, :, 1]
-        x = Trajectories[i, :, 0]
-        plt.plot(x, y)
-    
-    plt.xlim(-1.2*(R+r), 1.2*(R+r))
-    plt.ylim(-1.2*(R+r), 1.2*(R+r))
-    plt.gca().set_aspect('equal')
+    # Prepare line segments for faster plotting
+    segments = [np.column_stack([Trajectories[i, :, 0], Trajectories[i, :, 1]]) for i in range(len(Trajectories))]
+    lc = LineCollection(segments, colors='b', linewidths=0.8)
+    ax.add_collection(lc)
 
-    plt.title("Projection of the Trajectories (top view)")
-    plt.xlabel("x [m]")
-    plt.ylabel("y [m]")
+    ax.set_xlim(-1.2 * (R + r), 1.2 * (R + r))
+    ax.set_ylim(-1.2 * (R + r), 1.2 * (R + r))
+    ax.set_aspect('equal')
+    ax.set_title("Projection of the Trajectories (top view)")
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
 
-    # Save the plot
     if save_as is not None:
         plt.savefig(save_as)
 
-    # Show the plot
     if show:
         plt.show()
-        
+
     if close:
         plt.close()
 
