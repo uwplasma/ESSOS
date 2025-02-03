@@ -56,22 +56,44 @@ where "dependencies_file.yml" can be dependencies_gpu.yml or dependencies_cpu.ym
 
 
 ## Without setting an environment,the main pip packages required are: 
+```
 pip install matplotlib
 pip install simsopt
-## For GPU enable jax use this (it requires cuda12 installation, with the corresponding nvcc, see JAX documentation for more details on this):
+```
+For GPU enable jax use this (it requires cuda12 installation, with the corresponding nvcc, see JAX documentation for more details on this):
+```
 pip install -U "jax[cuda12]"==0.4.43
-## For CPU only usage use instead: 
+```
+For CPU only usage use instead: 
+```
 pip install -U jax==0.4.43
-## The following are packages that build on JAX
+```
+The following packages need the JAX package above
+```
 pip install equinox==0.11.9
 pip install lineax==0.0.6
 pip install optimistix==0.0.8
 pip install diffrax==0.6.0
-
-## An example script for tracing particles in a magnetic field generated from coils obtained
-## from a bio_savart_opt.json file of SIMSOPT can be found in the path ESSOS/examples/trace_particles_from_coils.py 
-## This can be run using the command: python trace_particles_from_coils.py 
-## More details on how to change the different aprameters can be seen inside the script trace_particles_from_coils.py 
-## The bio_savart_opt.json can be found inside the folder ESSOS/examples/inputs and represents a coils set obtained from 
-## a SIMSOPT two-stage coils optimisation using the VMEC configuration represented by the file
-## ESSOS/examples/inputs/wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc 
+```
+An example script for tracing particles in a magnetic field generated from coils obtained
+from a 
+```
+bio_savart_opt.json 
+```
+file of SIMSOPT can be found in the path 
+```
+ESSOS/examples/trace_particles_from_coils.py 
+```
+This can be run using the command: 
+```
+python trace_particles_from_coils.py 
+```
+More details on how to change the different aprameters can be seen inside the script 
+```
+trace_particles_from_coils.py 
+```
+The bio_savart_opt.json can be found inside the folder ESSOS/examples/inputs and represents a coils set obtained from 
+a SIMSOPT two-stage coils optimisation using the VMEC configuration represented by the file
+```
+ESSOS/examples/inputs/wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc 
+```
