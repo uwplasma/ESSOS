@@ -75,6 +75,7 @@ pip install lineax==0.0.6
 pip install optimistix==0.0.8
 pip install diffrax==0.6.0
 ```
+## Tracing particles from coils
 An example script for tracing particles in a magnetic field generated from coils obtained
 from a 
 ```
