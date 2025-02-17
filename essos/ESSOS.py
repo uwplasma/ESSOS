@@ -23,7 +23,7 @@ from functools import partial
 from time import time
 
 from MagneticField import norm_B, B, BdotGradPhi, BdotGradTheta, BcrossGradBdotGradTheta, BdotGradr
-from Dynamics import GuidingCenter, Lorentz, FieldLine
+from essos.Dynamics import GuidingCenter, Lorentz, FieldLine
 
 from scipy.optimize import  minimize as scipy_minimize, least_squares
 from jax.scipy.optimize import minimize as jax_minimize
