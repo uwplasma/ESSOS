@@ -2,7 +2,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 from jax import jit
 import jax.numpy as jnp
-from MagneticField import B, grad_B
+from essos.fields import B, grad_B
 import uuid
 
 @jit
