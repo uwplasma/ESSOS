@@ -2,6 +2,8 @@
 
 
 
+
+
 @partial(jit, static_argnums=(1, 2, 3, 4, 6, 7, 8, 9, 10, 12))
 def loss(dofs_with_currents:           jnp.ndarray,
          old_coils:      Coils,

@@ -1,105 +1,92 @@
-import jax
-jax.config.update("jax_enable_x64", True)
+# import jax
+# jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-import jax.scipy as jsp
-from jax import jit, grad, jacfwd
+# import jax.scipy as jsp
+from jax import jit, grad, jacfwd, vmap
+from functools import partial
 
-@jit # TODO: calculate for multiple positions
-def B(R: jnp.array, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array, overal_factor=7e6) -> jnp.array:
+class MagneticField():
+    def __add__(self, other):
+        """Add two magnetic fields."""
+        return MagneticFieldSum([self, other])
 
-    """Calculates the magnetic field at a point R from linearized coils with Biot-Savart
-        
-    Args:
-        R (jnp.array - shape (3,)): Point where B is calculated
-        gamma (jnp.array - shape (n_coils, n_segments, 3)): Discretized curve
-        gamma_dash (jnp.array - shape (n_coils, n_segments, 3)): Discretized derivative of the curve
-        currents (jnp.array - shape (n_coils,)): Currents of the coils
-    Returns:
-        B (jnp.array - shape (3,)): Magnetic field at point R
-    """
+    def __mul__(self, other):
+        """Multiply a field with a scalar."""
+        return MagneticFieldMultiply(other, self)
 
-    dif_R = (R-gamma).T
-    dB = jnp.cross(gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0)/jnp.linalg.norm(dif_R, axis=0)**3
-    dB_sum = jnp.einsum("i,bai", currents*1e-7, dB, optimize="greedy")*overal_factor
-    return jnp.mean(dB_sum, axis=0)
-
-@jit
-def BdotGradr(r, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array, R0=6):
-    x, y, z = r
-    sqrtx2y2 = jnp.sqrt(x**2 + y**2)
-    minor_radius = jnp.sqrt(jnp.square(sqrtx2y2-R0)+z**2)
-    num = -R0 + sqrtx2y2
-    gradr = jnp.array([x*num/sqrtx2y2/minor_radius, y*num/sqrtx2y2/minor_radius, z/minor_radius])
-    B_field = B(r, gamma, gamma_dash, currents)
-    return jnp.dot(B_field, gradr)
-
-@jit
-def BdotGradTheta(r, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array, R0=6,Z0=0):
-    x, y, z = r
-    sqrtx2y2 = jnp.sqrt(x**2 + y**2)
-    denom = (sqrtx2y2-R0)**2+(z-Z0)**2
-    minor_radius = jnp.sqrt(jnp.square(sqrtx2y2-R0)+(z-Z0)**2)
-    gradtheta = jnp.array([-x*(z-Z0)/sqrtx2y2/denom,-y*(z-Z0)/sqrtx2y2/denom,1/(-R0+sqrtx2y2)/(1+(z-Z0)**2/(R0-sqrtx2y2)**2)])#*minor_radius
-    B_field = B(r, gamma, gamma_dash, currents)
-    return jnp.dot(B_field, gradtheta)
-
-@jit
-def BdotGradPhi(r, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array, R0=6):
-    x, y, z = r
-    major_radius_squared = x**2+y**2
-    gradphi = jnp.array([-y/major_radius_squared, x/major_radius_squared, 0])#*jnp.sqrt(major_radius_squared)
-    B_field = B(r, gamma, gamma_dash, currents)
-    return jnp.dot(B_field, gradphi)
-
-@jit
-def BcrossGradBdotGradTheta(r, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array, R0=6):
-    B_field = B(r, gamma, gamma_dash, currents)
-    gradB = grad_B(r, gamma, gamma_dash, currents)
-    x, y, z = r
-    sqrtx2y2 = jnp.sqrt(x**2 + y**2)
-    minor_radius = jnp.sqrt(jnp.square(sqrtx2y2-R0)+z**2)
-    denom = (sqrtx2y2-R0)**2+z**2
-    gradtheta = jnp.array([-x*z/sqrtx2y2/denom,-y*z/sqrtx2y2/denom,1/(-R0+sqrtx2y2)/(1+z**2/(R0-sqrtx2y2)**2)])#*minor_radius
-    return jnp.dot(jnp.cross(B_field, gradB),gradtheta)
-
-@jit
-def norm_B(R: jnp.array, gamma: jnp.array, gamma_dash:jnp.array, currents: jnp.array) -> float:
-    """Calculates the magnetic field norm at a point R from linearized coils with Biot-Savart
+    def __rmul__(self, other):
+        """Multiply a field with a scalar."""
+        return MagneticFieldMultiply(other, self)
     
-    Args:
-        R (jnp.array - shape (3,)): Point where B is calculated
-        gamma (jnp.array - shape (n_coils, n_segments, 3)): Discretized curve
-        gamma_dash (jnp.array - shape (n_coils, n_segments, 3)): Discretized derivative of the curve
-        currents (jnp.array - shape (n_coils,)): Currents of the coils
-    Returns:
-        B (jnp.array - shape (3,)): Magnetic field at point R
-    """
-    return jnp.linalg.norm(B(R, gamma, gamma_dash, currents))
-
-@jit
-def grad_B(R: jnp.array, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array) -> jnp.array:
-    """Calculates the magnetic field gradient at a point R from linearized coils with Biot-Savart
+    def AbsB(self, points):
+        return jnp.linalg.norm(self.B(points), axis=-1)
     
-    Args:
-        R (jnp.array - shape (3,)): Point where B is calculated
-        gamma (jnp.array - shape (n_coils, n_segments, 3)): Discretized curve
-        gamma_dash (jnp.array - shape (n_coils, n_segments, 3)): Discretized derivative of the curve
-        currents (jnp.array - shape (n_coils,)): Currents of the coils
-    Returns:
-        B (jnp.array - shape (3,)): Magnetic field at point R
-    """
-    return grad(norm_B)(R, gamma, gamma_dash, currents)
+    def GradAbsB(self, points):
+        return grad(self.AbsB)(points)
 
-@jit
-def grad_B_vector(R: jnp.array, gamma: jnp.array, gamma_dash: jnp.array, currents:jnp.array) -> jnp.array:
-    """Calculates the magnetic field gradient at a point R from linearized coils with Biot-Savart
+    def to_vtk(self, filename, nr=10, nphi=10, nz=10, rmin=1.0, rmax=2.0, zmin=-0.5, zmax=0.5):
+        """Export the field evaluated on a regular grid for visualisation with e.g. Paraview."""
+        from pyevtk.hl import gridToVTK
+        rs = jnp.linspace(rmin, rmax, nr, endpoint=True)
+        phis = jnp.linspace(0, 2*jnp.pi, nphi, endpoint=True)
+        zs = jnp.linspace(zmin, zmax, nz, endpoint=True)
+
+        R, Phi, Z = jnp.meshgrid(rs, phis, zs)
+        X = R * jnp.cos(Phi)
+        Y = R * jnp.sin(Phi)
+        Z = Z
+
+        RPhiZ = jnp.zeros((R.size, 3))
+        RPhiZ[:, 0] = R.flatten()
+        RPhiZ[:, 1] = Phi.flatten()
+        RPhiZ[:, 2] = Z.flatten()
+
+        self.set_points_cyl(RPhiZ)
+        vals = self.B().reshape((R.shape[0], R.shape[1], R.shape[2], 3))
+        contig = jnp.ascontiguousarray
+        gridToVTK(filename, X, Y, Z, pointData={"B": (contig(vals[..., 0]), contig(vals[..., 1]), contig(vals[..., 2]))})
+
+
+class MagneticFieldMultiply(MagneticField):
+    def __init__(self, scalar, Bfield):
+        self.scalar = scalar
+        self.Bfield = Bfield
+
+    def _B(self, B):
+        B[:] = self.scalar*self.Bfield.B()
+
+    def _dB_by_dX(self, dB):
+        dB[:] = self.scalar*self.Bfield.dB_by_dX()
+
+    def _d2B_by_dXdX(self, ddB):
+        ddB[:] = self.scalar*self.Bfield.d2B_by_dXdX()
+
+class MagneticFieldSum(MagneticField):
+    def __init__(self, Bfields):
+        self.Bfields = Bfields
+
+    def _B(self, B):
+        B[:] = jnp.sum([bf.B() for bf in self.Bfields], axis=0)
+
+    def _dB_by_dX(self, dB):
+        dB[:] = jnp.sum([bf.dB_by_dX() for bf in self.Bfields], axis=0)
+
+    def _d2B_by_dXdX(self, ddB):
+        ddB[:] = jnp.sum([bf.d2B_by_dXdX() for bf in self.Bfields], axis=0)
+
+class BiotSavart(MagneticField):
+    @partial(jit, static_argnames=['self'])
+    def B(self, points, coils):
+        print(f"gamma shape {coils.gamma.shape}")
+        print(f"gamma_dash shape {coils.gamma_dash.shape}")
+        print(f"currents shape {coils.currents.shape}")
+        dif_R = (points-coils.gamma).T
+        dB = jnp.cross(coils.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0)/jnp.linalg.norm(dif_R, axis=0)**3
+        dB_sum = jnp.einsum("i,bai", coils.currents[0]*1e-7, dB, optimize="greedy")
+        return jnp.mean(dB_sum, axis=0)
     
-    Args:
-        R (jnp.array - shape (3,)): Point where B is calculated
-        gamma (jnp.array - shape (n_coils, n_segments, 3)): Discretized curve
-        gamma_dash (jnp.array - shape (n_coils, n_segments, 3)): Discretized derivative of the curve
-        currents (jnp.array - shape (n_coils,)): Currents of the coils
-    Returns:
-        B (jnp.array - shape (3,)): Magnetic field at point R
-    """
-    return jacfwd(B)(R, gamma, gamma_dash, currents)
+    @partial(jit, static_argnames=['self'])
+    def dB_by_dX(self, dB):
+        points = self.get_points_cart()
+        return jacfwd(self._B)()
+

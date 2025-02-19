@@ -11,7 +11,6 @@
 # plt.rcParams['figure.figsize'] = 11, 7
 
 # from jax.experimental.ode import odeint
-# from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, DirectAdjoint, RecursiveCheckpointAdjoint, PIDController
 # import matplotlib.pyplot as plt
 
 # from jax.experimental import mesh_utils
@@ -30,7 +29,10 @@
 # from simsopt.geo import CurveRZFourier
 
 import jax.numpy as jnp
-from jax import random, partial, jit, devices, sharding, device_put, vmap
+from jax import random, partial, jit, devices, sharding, device_put, vmap, lax
+from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, DirectAdjoint, RecursiveCheckpointAdjoint, PIDController
+from essos.fields import norm_B, B
+from essos.equations import GuidingCenter, FieldLine
     
 def initial_conditions(particles,
                         R_init: float,
@@ -114,6 +116,7 @@ def initial_conditions(particles,
 
 @partial(jit, static_argnums=(1, 3, 4, 5, 6, 7,8))
 def trace_trajectories(particles,
+                       field,
                        initial_values: jnp.ndarray,
                        maxtime: float = 1e-7,
                        timesteps: int = 200,
@@ -127,7 +130,7 @@ def trace_trajectories(particles,
     # Create a device mesh for parallelization
     devices = sharding.mesh_utils.create_device_mesh(n_cores)
     mesh = sharding.Mesh(devices, axis_names=('i',))
-    sharding_mesh = sharding.NamedSharding(mesh, P('i',))
+    sharding_mesh = sharding.NamedSharding(mesh, sharding.PartitionSpec('i',))
 
     m = particles.mass
     q = particles.charge
@@ -160,6 +163,7 @@ def trace_trajectories(particles,
     #    """
     #    Process a batch of particles assigned to a single core.
     #    """
+    
     def aux_trajectory_device(particle_idx: jnp.ndarray,x_idx: jnp.ndarray,
                                 y_idx: jnp.ndarray,z_idx: jnp.ndarray,vpar_idx: jnp.ndarray,vperp_idx: jnp.ndarray) -> jnp.ndarray:
         """
@@ -167,10 +171,10 @@ def trace_trajectories(particles,
         """
         # Extract initial conditions and arguments for the solver
         #normB = jnp.apply_along_axis(norm_B, 0, jnp.array((x_idx,y_idx,z_idx))[:3], self.gamma, self.gamma_dash, self.currents)
-        modB=norm_B(jnp.array((x_idx,y_idx,z_idx)), self.gamma, self.gamma_dash, self.currents)
-        μ = m * vperp_idx**2 / (2 * modB)
+        modB=field.norm_B(jnp.array((x_idx,y_idx,z_idx)))
+        mu = m * vperp_idx**2 / (2 * modB)
         y0 = jnp.array((x_idx,y_idx,z_idx,vpar_idx))
-        args = (self.gamma, self.gamma_dash, self.currents, μ)
+        args=(field, mu)
 
         # Solve the ODE
         trajectory = diffeqsolve(
@@ -222,12 +226,11 @@ def trace_trajectories(particles,
 
 
 @partial(jit, static_argnums=(1, 3, 4, 5))
-def trace_trajectories_lorentz(self,
-                        particles: Particles,
+def trace_trajectories_lorentz(particles,
                         initial_values: jnp.ndarray,
                         maxtime: float = 1e-7,
                         timesteps: int = 200,
-                        n_cores: int = len(jax.devices())) -> jnp.ndarray:
+                        n_cores: int = len(devices())) -> jnp.ndarray:
 
     """Traces the trajectories of the particles in the given coils
     Attributes:
@@ -241,7 +244,7 @@ def trace_trajectories_lorentz(self,
         trajectories (jnp.array - shape (n_particles, timesteps, 4)): Trajectories of the particles
     """
 
-    mesh = Mesh(mesh_utils.create_device_mesh(n_cores,), axis_names=('i',))
+    mesh = sharding.Mesh(sharding.mesh_utils.create_device_mesh(n_cores,), axis_names=('i',))
 
     n_particles = particles.number
     charge = particles.charge
@@ -279,7 +282,7 @@ def trace_trajectories_lorentz(self,
     
         return trajectories
 
-    trajectories = shard_map(aux_trajectory, mesh=mesh, in_specs=P('i'), out_specs=P('i'), check_rep=False)(jnp.arange(n_particles))
+    trajectories = sharding.shard_map(aux_trajectory, mesh=mesh, in_specs=sharding.PartitionSpec('i'), out_specs=sharding.PartitionSpec('i'), check_rep=False)(jnp.arange(n_particles))
 
     return trajectories
 
@@ -289,16 +292,15 @@ def trace_fieldlines(self,
                     maxtime: float = 1e-7,
                     timesteps: int = 200,
                     n_segments: int = 100,
-                    n_cores: int = len(jax.devices()),
-                    adjoint=RecursiveCheckpointAdjoint(),
+                    n_cores: int = len(devices()),
                     tol_step_size=5e-5) -> jnp.ndarray:
     """
     Traces the field lines produced by the given coils.
     """
     # Create a device mesh for parallelization
-    devices=mesh_utils.create_device_mesh(n_cores)
-    mesh = Mesh(devices, axis_names=('i',))
-    sharding_mesh = sharding.NamedSharding(mesh, P('i',))
+    devices=sharding.mesh_utils.create_device_mesh(n_cores)
+    mesh = sharding.Mesh(devices, axis_names=('i',))
+    sharding_mesh = sharding.NamedSharding(mesh, sharding.PartitionSpec('i',))
 
     n_fieldlines = jnp.size(initial_values, 1)
 
@@ -342,7 +344,7 @@ def trace_fieldlines(self,
             args=args,
             saveat=SaveAt(ts=times),
             throw=False,
-            adjoint=adjoint,
+            adjoint=RecursiveCheckpointAdjoint(),
             stepsize_controller = PIDController(pcoeff=0.3, icoeff=0.4, rtol=1.e-5, atol=1.e-5, dtmax=None,dtmin=None),
             max_steps=100000
         ).ys

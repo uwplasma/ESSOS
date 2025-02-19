@@ -1,6 +1,6 @@
-
-
-
+import jax.numpy as jnp
+from jax.lax import select, fori_loop
+from jax import tree_util, vmap
 
 class Curves:
     """
@@ -227,99 +227,53 @@ tree_util.register_pytree_node(Coils,
                                Coils._tree_unflatten)
 
 
-def CreateEquallySpacedCurves(n_curves:   int,
-                              order:      int,
-                              R:          float,
-                              r:          float,
+def CreateEquallySpacedCurves(n_curves: int,
+                              order: int,
+                              R: float,
+                              r: float,
                               n_segments: int = 100,
-                              nfp:        int  = 1,
-                              stellsym:   bool = False,
-                              axis_rc_zs = None) -> jnp.ndarray:
-    """ Create a toroidal set of cruves equally spaced with an outer radius R and inner radius r.
-    Attributes:
-        n_curves (int): Number of curves
-        order (int): Order of the Fourier series
-        R (float): Outer radius of the curves
-        r (float): Inner radius of the curves
-        nfp (int): Number of field periods
-        stellsym (bool): Stellarator symmetry
-    Returns:
-        curves (Curves): Equally spaced curves
-    """
-    if axis_rc_zs is not None:
-        angle_locations = 1/((1+int(stellsym))*nfp*n_curves)/2+np.linspace(0,1,(n_curves)*(1+int(stellsym))*nfp, endpoint=False)
-        ma = CurveRZFourier(angle_locations, len(axis_rc_zs[0])-1, nfp, False)
-        ma.rc[:] = axis_rc_zs[0]
-        ma.zs[:] = axis_rc_zs[1, 1:]
-        ma.x = ma.get_dofs()
-        gamma_curves = ma.gamma()
-        
-        curves = jnp.zeros((n_curves, 3, 1+2*order))
-        for i in range(n_curves):
-            angle = (i+0.5)*(2*jnp.pi)/((1+int(stellsym))*nfp*n_curves)
-            curves = curves.at[i, 0, 0].set(gamma_curves[i,0])
-            curves = curves.at[i, 0, 2].set(jnp.cos(angle)*r)
-            curves = curves.at[i, 1, 0].set(gamma_curves[i,1])
-            curves = curves.at[i, 1, 2].set(jnp.sin(angle)*r)
-            curves = curves.at[i, 2, 0].set(gamma_curves[i,2])
-            curves = curves.at[i, 2, 1].set(-r)
-    else:
-        curves = jnp.zeros((n_curves, 3, 1+2*order))
-        for i in range(n_curves):
-            angle = (i+0.5)*(2*jnp.pi)/((1+int(stellsym))*nfp*n_curves)
-            curves = curves.at[i, 0, 0].set(jnp.cos(angle)*R)
-            curves = curves.at[i, 0, 2].set(jnp.cos(angle)*r)
-            curves = curves.at[i, 1, 0].set(jnp.sin(angle)*R)
-            curves = curves.at[i, 1, 2].set(jnp.sin(angle)*r)
-            curves = curves.at[i, 2, 1].set(-r)
-            # In the previous line, the minus sign is for consistency with
-            # Vmec.external_current(), so the coils create a toroidal field of the
-            # proper sign and free-boundary equilibrium works following stage-2 optimization.
+                              nfp: int = 1,
+                              stellsym: bool = False) -> jnp.ndarray:
+    # Compute angles for all curves at once
+    angles = (jnp.arange(n_curves) + 0.5) * (2 * jnp.pi) / ((1 + int(stellsym)) * nfp * n_curves)
+
+    # Initialize curves array
+    curves = jnp.zeros((n_curves, 3, 1 + 2 * order))
+
+    # Compute x, y, and z components efficiently
+    curves = curves.at[:, 0, 0].set(jnp.cos(angles) * R)  # x[0]
+    curves = curves.at[:, 0, 2].set(jnp.cos(angles) * r)  # x[2]
+    curves = curves.at[:, 1, 0].set(jnp.sin(angles) * R)  # y[0]
+    curves = curves.at[:, 1, 2].set(jnp.sin(angles) * r)  # y[2]
+    curves = curves.at[:, 2, 1].set(-r)                   # z[1] (constant for all)
+
     return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
 
 def apply_symmetries_to_curves(base_curves, nfp, stellsym):
-    """
-    base_curves: shape - (n_indepentdent_curves, 3, 1+2*order)
-    """
-    """
-    Take a list of ``n`` :mod:`simsopt.geo.curve.Curve`s and return ``n * nfp *
-    (1+int(stellsym))`` :mod:`simsopt.geo.curve.Curve` objects obtained by
-    applying rotations and flipping corresponding to ``nfp`` fold rotational
-    symmetry and optionally stellarator symmetry.
-    """
-
-    flip_list = jnp.array([False, True]) if stellsym else jnp.array([False])
-
-    fliped_base_curves = jnp.einsum("aic,ib->abc", base_curves, jnp.array([[1, 0, 0],
-                                                                           [0, -1, 0],
-                                                                           [0, 0, -1]]))
-
+    flip_matrix = jnp.array([[1, 0, 0],
+                             [0, -1, 0],
+                             [0, 0, -1]])
     if stellsym:
-        curves = jnp.append(base_curves, fliped_base_curves, axis=0)
+        flipped_curves = jnp.einsum("aic,ib->abc", base_curves, flip_matrix)
+        curves = jnp.concatenate([base_curves, flipped_curves], axis=0)
     else:
         curves = base_curves
-
-    for fp in jnp.arange(1, nfp):
-        for flip in flip_list:
-            rotcurves = jnp.einsum("aic,ib->abc", base_curves, jnp.array([[jnp.cos(2*jnp.pi*fp/nfp), -jnp.sin(2*jnp.pi*fp/nfp), jnp.zeros_like(fp)],
-                                                                          [jnp.sin(2*jnp.pi*fp/nfp), jnp.cos(2*jnp.pi*fp/nfp), jnp.zeros_like(fp)],
-                                                                          [jnp.zeros_like(fp), jnp.zeros_like(fp), jnp.ones_like(fp)]]).T)
-            rotcurves = select(flip, jnp.einsum("aic,ib->abc", rotcurves, jnp.array([[1, 0, 0],
-                                                                                     [0, -1, 0],
-                                                                                     [0, 0, -1]])), rotcurves)
-            curves = jnp.append(curves, rotcurves, axis=0)
+    angles = jnp.linspace(0, 2 * jnp.pi * (nfp - 1) / nfp, nfp)[1:]
+    rotation_matrices = jnp.stack([
+        jnp.stack([jnp.cos(angles), -jnp.sin(angles), jnp.zeros_like(angles)], axis=-1),
+        jnp.stack([jnp.sin(angles), jnp.cos(angles), jnp.zeros_like(angles)], axis=-1),
+        jnp.stack([jnp.zeros_like(angles), jnp.zeros_like(angles), jnp.ones_like(angles)], axis=-1)
+    ], axis=-2)
+    rotated_curves = vmap(lambda R: jnp.einsum("aic,ib->abc", base_curves, R))(rotation_matrices)
+    rotated_curves = rotated_curves.reshape(-1, *base_curves.shape[1:])
+    if stellsym:
+        flipped_rotated_curves = jnp.einsum("aic,ib->abc", rotated_curves, flip_matrix)
+        rotated_curves = jnp.concatenate([rotated_curves, flipped_rotated_curves], axis=0)
+    curves = jnp.concatenate([curves, rotated_curves], axis=0)
     return curves
 
-def apply_symmetries_to_currents(base_currents, nfp, stellsym):
-    """
-    Take a list of ``n`` :mod:`Current`s and return ``n * nfp * (1+int(stellsym))``
-    :mod:`Current` objects obtained by copying (for ``nfp`` rotations) and
-    sign-flipping (optionally for stellarator symmetry).
-    """
-    flip_list = jnp.array([False, True]) if stellsym else jnp.array([False])
-    currents = jnp.array([])
-    for _ in range(0, nfp):
-        for flip in flip_list:
-            current = select(flip, base_currents * -1, base_currents)
-            currents = jnp.append(currents, current)
+def apply_symmetries_to_currents(base_currents, nfp, stellsym): 
+    flip_list = jnp.array([1, -1]) if stellsym else jnp.array([1])  # 1 for no flip, -1 for flip
+    flips = jnp.repeat(flip_list, nfp)  # Repeat for each field period
+    currents = jnp.tile(base_currents, len(flips)) * flips[:, None]  # Apply flips
     return currents
