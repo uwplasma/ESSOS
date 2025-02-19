@@ -32,7 +32,7 @@ import jax.numpy as jnp
 from jax import random, partial, jit, devices, sharding, device_put, vmap, lax
 from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, DirectAdjoint, RecursiveCheckpointAdjoint, PIDController
 from essos.fields import norm_B, B
-from essos.equations import GuidingCenter, FieldLine
+from essos.dynamics import GuidingCenter, FieldLine
     
 def initial_conditions(particles,
                         R_init: float,
