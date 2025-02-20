@@ -1,8 +1,8 @@
-from essos.fields import Vmec as Vmec_essos
-from simsopt.mhd import Vmec as Vmec_simsopt, vmec_compute_geometry
 from time import time
 import jax.numpy as jnp
 from jax import block_until_ready, random
+from essos.fields import Vmec as Vmec_essos
+from simsopt.mhd import Vmec as Vmec_simsopt, vmec_compute_geometry
 
 wout = "wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc"
 
@@ -10,7 +10,7 @@ vmec_essos = Vmec_essos(wout)
 
 vmec_simsopt = Vmec_simsopt(wout)
 
-s_array=jnp.linspace(0.1, 0.99, 10)
+s_array=jnp.linspace(0.2, 0.9, 10)
 key = random.key(42)
 
 def absB_simsopt_func(s, theta, phi):
@@ -60,11 +60,11 @@ average_time_modB_simsopt /= len(s_array)
 average_time_modB_essos /= len(s_array)
 average_time_B_essos /= len(s_array)
 average_time_B_simsopt /= len(s_array)
-print(f"Average time for modB simsopt: {average_time_modB_simsopt}")
-print(f"Average time for modB essos: {average_time_modB_essos}")
-print(f"Average time for B simsopt: {average_time_B_simsopt}")
-print(f"Average time for B essos: {average_time_B_essos}")
-print(f"Average error in modB: {error_modB*100}%")
-print(f"Max error in modB: {jnp.max(error_modB)*100}%")
-print(f"Average error in B: {error_B*100}%")
-print(f"Max error in B: {jnp.max(error_B)*100}%")
+print(f"Average time for modB simsopt: {average_time_modB_simsopt:.2e}s")
+print(f"Average time for modB essos: {average_time_modB_essos:.2e}s")
+print(f"Average time for B simsopt: {average_time_B_simsopt:.2e}s")
+print(f"Average time for B essos: {average_time_B_essos:.2e}s")
+print(f"Average relative error in modB: {(error_modB*100):.2e}%")
+print(f"Maximum relative error in modB: {(jnp.max(error_modB)*100):.2e}%")
+print(f"Average relative error in B: {error_B*100}%")
+print(f"Maximum relative error in B: {(jnp.max(error_B)*100):.2e}%")

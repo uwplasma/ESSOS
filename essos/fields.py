@@ -1,6 +1,6 @@
 import jax.numpy as jnp
-from jax import jit, jacfwd, grad, vmap
 from functools import partial
+from jax import jit, jacfwd, grad, vmap
 
 class BiotSavart():
     def __init__(self, coils):
@@ -15,6 +15,14 @@ class BiotSavart():
         dB = jnp.cross(self.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0)/jnp.linalg.norm(dif_R, axis=0)**3
         dB_sum = jnp.einsum("i,bai", self.currents*1e-7, dB, optimize="greedy")
         return jnp.mean(dB_sum, axis=0)
+    
+    @partial(jit, static_argnames=['self'])
+    def B_covariant(self, points):
+        return self.B(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, points):
+        return self.B(points)
     
     @partial(jit, static_argnames=['self'])
     def AbsB(self, points):
@@ -42,6 +50,8 @@ class Vmec():
         self.bsubsmns = jnp.array(self.nc.variables["bsubsmns"][:])
         self.bsubumnc = jnp.array(self.nc.variables["bsubumnc"][:])
         self.bsubvmnc = jnp.array(self.nc.variables["bsubvmnc"][:])
+        self.bsupumnc = jnp.array(self.nc.variables["bsupumnc"][:])
+        self.bsupvmnc = jnp.array(self.nc.variables["bsupvmnc"][:])
         self.gmnc = jnp.array(self.nc.variables["gmnc"][:])
         self.xm_nyq = jnp.array(self.nc.variables["xm_nyq"][:])
         self.xn_nyq = jnp.array(self.nc.variables["xn_nyq"][:])
@@ -52,11 +62,31 @@ class Vmec():
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
         
     @partial(jit, static_argnames=['self'])
+    def B_covariant(self, points):
+        s, theta, phi = points
+        bsubsmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row), in_axes=1)(self.bsubsmns)
+        bsubumnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsubumnc[1:])
+        bsubvmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsubvmnc[1:])
+        cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
+        sinangle_nyq = jnp.sin(self.xm_nyq * theta - self.xn_nyq * phi)
+        B_sub_s = jnp.dot(bsubsmns_interp, sinangle_nyq)
+        B_sub_theta = jnp.dot(bsubumnc_interp, cosangle_nyq)
+        B_sub_phi = jnp.dot(bsubvmnc_interp, cosangle_nyq)
+        return jnp.array([B_sub_s, B_sub_theta, B_sub_phi])
+    
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, points):
+        s, theta, phi = points
+        bsupumnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsupumnc[1:])
+        bsupvmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsupvmnc[1:])
+        cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
+        B_sup_theta = jnp.dot(bsupumnc_interp, cosangle_nyq)
+        B_sup_phi = jnp.dot(bsupvmnc_interp, cosangle_nyq)
+        return jnp.array([0*B_sup_theta, B_sup_theta, B_sup_phi])
+    
+    @partial(jit, static_argnames=['self'])
     def B(self, points):
         s, theta, phi = points
-        bsubsmns_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsubsmns[1:, :])
-        bsubumnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsubumnc[1:, :])
-        bsubvmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsubvmnc[1:, :])
         gmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.gmnc[1:])
         rmnc_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row), in_axes=1)(self.rmnc)
         zmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row), in_axes=1)(self.zmns)
@@ -64,10 +94,7 @@ class Vmec():
         d_zmns_d_s_interp = vmap(lambda row: grad(lambda s: jnp.interp(s, self.s_full_grid, row))(s), in_axes=1)(self.zmns)
         
         cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
-        sinangle_nyq = jnp.sin(self.xm_nyq * theta - self.xn_nyq * phi)
-        B_sub_s = jnp.dot(bsubsmns_interp, sinangle_nyq)
-        B_sub_theta = jnp.dot(bsubumnc_interp, cosangle_nyq)
-        B_sub_phi = jnp.dot(bsubvmnc_interp, cosangle_nyq)
+        B_sub_s, B_sub_theta, B_sub_phi = self.B_covariant(points)
         sqrt_g_vmec = jnp.dot(gmnc_interp, cosangle_nyq)
         
         cosangle  = jnp.cos(self.xm * theta - self.xn * phi)
