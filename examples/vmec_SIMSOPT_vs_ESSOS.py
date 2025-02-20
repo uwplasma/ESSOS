@@ -1,5 +1,6 @@
 from time import time
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 from jax import block_until_ready, random
 from essos.fields import Vmec as Vmec_essos
 from simsopt.mhd import Vmec as Vmec_simsopt, vmec_compute_geometry
@@ -7,7 +8,6 @@ from simsopt.mhd import Vmec as Vmec_simsopt, vmec_compute_geometry
 wout = "wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc"
 
 vmec_essos = Vmec_essos(wout)
-
 vmec_simsopt = Vmec_simsopt(wout)
 
 s_array=jnp.linspace(0.2, 0.9, 10)
@@ -68,3 +68,37 @@ print(f"Average relative error in modB: {(error_modB*100):.2e}%")
 print(f"Maximum relative error in modB: {(jnp.max(error_modB)*100):.2e}%")
 print(f"Average relative error in B: {error_B*100}%")
 print(f"Maximum relative error in B: {(jnp.max(error_B)*100):.2e}%")
+
+fig = plt.figure(figsize = (8, 6))
+X_axis = jnp.arange(4)
+Y_axis = [average_time_modB_simsopt, average_time_B_simsopt, average_time_modB_essos, average_time_B_essos]
+colors = ['blue', 'blue', 'red', 'red']
+hatches = ['/', '\\', '/', '\\']
+bars = plt.bar(X_axis, Y_axis, width=0.4, color=colors)
+for bar, hatch in zip(bars, hatches): bar.set_hatch(hatch)
+plt.xticks(X_axis, [r"$\boldsymbol{B}$ SIMSOPT", r"$\boldsymbol{B}$ SIMSOPT", r"$|\boldsymbol{B}|$ ESSOS", r"$\boldsymbol{B}$ ESSOS"], fontsize=16)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.tick_params(axis='both', which='minor', labelsize=14)
+plt.ylabel("Time to evaluate SIMSOPT vs ESSOS (s)", fontsize=14)
+plt.grid(axis='y')
+plt.yscale("log")
+plt.tight_layout()
+plt.savefig("time_VMEC_SIMSOPT_vs_ESSOS.pdf", transparent=True)
+
+fig = plt.figure(figsize = (8, 6))
+X_axis = jnp.arange(2)
+Y_axis = [jnp.mean(error_modB), jnp.mean(error_B)]
+colors = ['purple', 'orange']
+hatches = ['/', '//']
+bars = plt.bar(X_axis, Y_axis, width=0.4, color=colors)
+for bar, hatch in zip(bars, hatches): bar.set_hatch(hatch)
+plt.xticks(X_axis, [r"$|\boldsymbol{B}|$", r"$\boldsymbol{B}$"], fontsize=16)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.tick_params(axis='both', which='minor', labelsize=14)
+plt.ylabel("Relative error SIMSOPT vs ESSOS (%)", fontsize=14)
+plt.grid(axis='y')
+plt.yscale("log")
+plt.tight_layout()
+plt.savefig("error_VMEC_SIMSOPT_vs_ESSOS.pdf", transparent=True)
+
+plt.show()
