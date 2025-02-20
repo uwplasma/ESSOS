@@ -18,7 +18,7 @@ class Curves:
         gamma_dash (jnp.array - shape (n_coils, n_segments, 3)): Discretized curves derivatives
 
     """
-    def __init__(self, dofs: jnp.ndarray, n_segments: int = 100, nfp: int = 1, stellsym: bool = False):
+    def __init__(self, dofs: jnp.ndarray, n_segments: int = 100, nfp: int = 1, stellsym: bool = True):
         assert isinstance(dofs, jnp.ndarray), "dofs must be a jnp.ndarray"
         assert dofs.ndim == 3, "dofs must be a 3D array with shape (n_curves, 3, 2*order+1)"
         assert dofs.shape[1] == 3, "dofs must have shape (n_curves, 3, 2*order+1)"
@@ -163,8 +163,16 @@ class Curves:
             file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
             file.write(f"Degrees of freedom\n")
             file.write(f"{repr(self.dofs.tolist())}\n")
-
-
+    
+class Curves_from_simsopt(Curves):
+    def __init__(self, simsopt_curves):
+        dofs = jnp.reshape(jnp.array(
+            [curve.x for curve in simsopt_curves]
+        ), (len(simsopt_curves), 3, 2*simsopt_curves[0].order+1))
+        n_segments = len(simsopt_curves[0].quadpoints)
+        nfp = 1
+        stellsym = True
+        super().__init__(dofs, n_segments, nfp, stellsym)
 
 tree_util.register_pytree_node(Curves,
                                Curves._tree_flatten,
@@ -221,6 +229,11 @@ class Coils(Curves):
             # file.write(f"Loss\n")
             file.write(f"{text}\n")
 
+class Coils_from_simsopt(Coils):
+    def __init__(self, simsopt_coils):
+        curves = [c.curve for c in simsopt_coils]
+        currents = [c.current for c in simsopt_coils]
+        super().__init__(Curves_from_simsopt(curves), currents)
 
 tree_util.register_pytree_node(Coils,
                                Coils._tree_flatten,

@@ -3,9 +3,10 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from jax import block_until_ready
 from simsopt.geo import CurveXYZFourier
+from simsopt.configs import get_ncsx_data
 from essos.fields import BiotSavart as BiotSavart_essos
-from essos.coils import CreateEquallySpacedCurves, Coils
-from simsopt.field import BiotSavart as BiotSavart_simsopt, Current, Coil
+from essos.coils import CreateEquallySpacedCurves, Coils, Coils_from_simsopt, Curves_from_simsopt
+from simsopt.field import BiotSavart as BiotSavart_simsopt, Current, Coil, coils_via_symmetries
 
 n_curves = 4
 order = 1
@@ -37,6 +38,26 @@ def simsopt_create_coil(dofs: jnp.ndarray, n_segments: int, order: float) -> Cur
     curve = CurveXYZFourier(n_segments, order)
     curve.x = dofs
     return curve
+
+nfp = 3
+curves_ncsx, currents_ncsx, _ = get_ncsx_data()
+coils_simsopt  = coils_via_symmetries(curves_ncsx, currents_ncsx, nfp, True)
+curves_simsopt = [c.curve for c in coils_simsopt]
+currents_simsopt = [c.current for c in coils_simsopt]
+print(dir(coils_simsopt[0]))
+
+bs_simsopt = BiotSavart_simsopt(coils_simsopt)
+
+coils_essos = Coils_from_simsopt(coils_simsopt)
+curves_essos = Curves_from_simsopt(curves_simsopt)
+
+bs_essos = BiotSavart_essos(coils_essos)
+
+coils_essos_to_simsopt = coils_essos.to_simsopt()
+curves_essos_to_simsopt = curves_essos.to_simsopt()
+
+assert len(coils_essos_to_simsopt) == len(coils_simsopt)
+assert len(curves_essos_to_simsopt) == len(curves_simsopt)
 
 for index, n_segments in enumerate(list_segments):
     print(f"On iteration {index+1} of {len_list_segments}")
