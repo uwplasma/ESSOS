@@ -228,11 +228,23 @@ class Coils(Curves):
             file.write(f"{repr(self._dofs_currents.tolist())}\n")
             # file.write(f"Loss\n")
             file.write(f"{text}\n")
+    
+    def to_simsopt(self):
+        from simsopt.field import Coil as Coil_SIMSOPT, Current as Current_SIMSOPT
+        from simsopt.geo import CurveXYZFourier
+        coils_simsopt = []
+        print(self.dofs.shape)
+        for dofs, current in zip(self.dofs, self.dofs_currents):
+            print(dofs.shape)
+            curve = CurveXYZFourier(self.n_segments, self.order)
+            curve.x = dofs
+            coils_simsopt.append(Coil_SIMSOPT(curve, Current_SIMSOPT(current)))
+        return coils_simsopt
 
 class Coils_from_simsopt(Coils):
     def __init__(self, simsopt_coils):
         curves = [c.curve for c in simsopt_coils]
-        currents = [c.current for c in simsopt_coils]
+        currents = jnp.array([c.current.get_value() for c in simsopt_coils])
         super().__init__(Curves_from_simsopt(curves), currents)
 
 tree_util.register_pytree_node(Coils,

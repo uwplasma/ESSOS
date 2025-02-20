@@ -34,30 +34,31 @@ t_dB_by_dX_avg_essos = jnp.zeros(len_list_segments)
 t_dB_by_dX_avg_simsopt = jnp.zeros(len_list_segments)
 dB_by_dX_error_avg = jnp.zeros(len_list_segments)
 
-def simsopt_create_coil(dofs: jnp.ndarray, n_segments: int, order: float) -> CurveXYZFourier:
-    curve = CurveXYZFourier(n_segments, order)
-    curve.x = dofs
-    return curve
-
 nfp = 3
 curves_ncsx, currents_ncsx, _ = get_ncsx_data()
 coils_simsopt  = coils_via_symmetries(curves_ncsx, currents_ncsx, nfp, True)
 curves_simsopt = [c.curve for c in coils_simsopt]
 currents_simsopt = [c.current for c in coils_simsopt]
-print(dir(coils_simsopt[0]))
-
-bs_simsopt = BiotSavart_simsopt(coils_simsopt)
 
 coils_essos = Coils_from_simsopt(coils_simsopt)
 curves_essos = Curves_from_simsopt(curves_simsopt)
 
-bs_essos = BiotSavart_essos(coils_essos)
-
 coils_essos_to_simsopt = coils_essos.to_simsopt()
 curves_essos_to_simsopt = curves_essos.to_simsopt()
 
-assert len(coils_essos_to_simsopt) == len(coils_simsopt)
-assert len(curves_essos_to_simsopt) == len(curves_simsopt)
+bs_simsopt = BiotSavart_simsopt(coils_simsopt)
+bs_essos = BiotSavart_essos(coils_essos)
+bs_essos_to_simsopt = BiotSavart_essos(coils_essos_to_simsopt)
+
+position=jnp.array([0.1,0.1,0.1])
+bs_simsopt.set_points([position])
+bs_essos_to_simsopt.set_points([position])
+
+print(bs_simsopt.B())
+print(bs_essos_to_simsopt.B())
+print(bs_essos.B(position))
+
+exit()
 
 for index, n_segments in enumerate(list_segments):
     print(f"On iteration {index+1} of {len_list_segments}")
