@@ -2,11 +2,10 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from jax import block_until_ready
-from simsopt.geo import CurveXYZFourier
 from simsopt.configs import get_ncsx_data
 from essos.fields import BiotSavart as BiotSavart_essos
-from essos.coils import CreateEquallySpacedCurves, Coils, Coils_from_simsopt, Curves_from_simsopt
-from simsopt.field import BiotSavart as BiotSavart_simsopt, Current, Coil, coils_via_symmetries
+from essos.coils import Coils_from_simsopt, Curves_from_simsopt
+from simsopt.field import BiotSavart as BiotSavart_simsopt, coils_via_symmetries
 
 n_curves = 4
 order = 1
