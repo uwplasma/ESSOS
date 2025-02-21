@@ -48,36 +48,45 @@ curves_essos = Curves_from_simsopt(curves_simsopt[0:n_curves], nfp)
 coils_essos_to_simsopt = coils_essos.to_simsopt()
 curves_essos_to_simsopt = curves_essos.to_simsopt()
 
-idx = [0,1,2,3,4,5,9,10,11,15,16,17,6,7,8,12,13,14]
-for i, (coil_simsopt, coil_essos_gamma, coil_essos_to_simsopt) in enumerate(zip(coils_simsopt, coils_essos.gamma[idx,:], coils_essos_to_simsopt)):
-    print(i)
-    print(jnp.max(coil_simsopt.curve.gamma()-coil_essos_gamma))
-    print(jnp.max(coil_simsopt.curve.gamma()-coil_essos_to_simsopt.curve.gamma()))
+relative_error_simsopt_to_essos = 0
+relative_error_essos_to_simsopt = 0
+for i, (coil_simsopt, coil_essos_gamma, coil_essos_to_simsopt) in enumerate(zip(coils_simsopt, coils_essos.gamma, coils_essos_to_simsopt)):
+    gamma_error_simsopt_to_essos = jnp.linalg.norm(coil_simsopt.curve.gamma()-coil_essos_gamma)
+    gamma_error_essos_to_simsopt = jnp.linalg.norm(coil_simsopt.curve.gamma()-coil_essos_to_simsopt.curve.gamma())
 
-bs_simsopt = BiotSavart_simsopt(coils_simsopt)
-bs_essos = BiotSavart_essos(coils_essos)
-bs_essos_to_simsopt = BiotSavart_simsopt(coils_essos_to_simsopt)
+field_simsopt = BiotSavart_simsopt(coils_simsopt)
+field_essos = BiotSavart_essos(coils_essos)
+field_essos_to_simsopt = BiotSavart_simsopt(coils_essos_to_simsopt)
 
-position=jnp.array([0.1,0.1,0.1])
-bs_simsopt.set_points([position])
-bs_essos_to_simsopt.set_points([position])
+B_error_avg_simsopt_to_essos = 0
+B_error_avg_essos_to_simsopt = 0
+for j, position in enumerate(positions):
+    field_simsopt.set_points([position])
+    field_essos_to_simsopt.set_points([position])
+    B_simsopt = field_simsopt.B()
+    B_essos_to_simsopt = field_essos_to_simsopt.B()
+    B_simsopt_to_essos = field_essos.B(position)
+    B_error_avg_simsopt_to_essos = B_error_avg_simsopt_to_essos + jnp.abs(jnp.linalg.norm(B_simsopt) - jnp.linalg.norm(B_simsopt_to_essos))
+    B_error_avg_essos_to_simsopt = B_error_avg_essos_to_simsopt + jnp.abs(jnp.linalg.norm(B_simsopt) - jnp.linalg.norm(B_essos_to_simsopt))
+B_error_avg_simsopt_to_essos = B_error_avg_simsopt_to_essos/len(positions)
+B_error_avg_essos_to_simsopt = B_error_avg_essos_to_simsopt/len(positions)
 
-print(bs_simsopt.B())
-print(bs_essos_to_simsopt.B())
-print(bs_essos.B(position))
-
-exit()
+fig = plt.figure(figsize = (8, 6))
+X_axis = jnp.arange(2)
+plt.bar(X_axis[0] - 0.2, gamma_error_simsopt_to_essos+1e-19, 0.3, label='SIMSOPT to ESSOS coils', color='blue', edgecolor='black', hatch='/')
+plt.bar(X_axis[0] + 0.2, gamma_error_essos_to_simsopt+1e-19, 0.3, label='ESSOS to SIMSOPT coils', color='red', edgecolor='black', hatch='-')
+plt.bar(X_axis[1] - 0.2, B_error_avg_simsopt_to_essos+1e-19, 0.3, label=r'SIMSOPT to ESSOS $B$', color='blue', edgecolor='black', hatch='||')
+plt.bar(X_axis[1] + 0.2, B_error_avg_essos_to_simsopt+1e-19, 0.3, label=r'ESSOS to SIMSOPT $B$', color='red', edgecolor='black', hatch='*')
+plt.xticks(X_axis, ['Coil Error', 'B Error'])
+plt.xlabel('Error Type', fontsize=14)
+plt.ylabel('Error Magnitude', fontsize=14)
+plt.yscale('log')
+plt.legend(fontsize=14)
+plt.grid(axis='y')
+fig.tight_layout()
+plt.savefig("error_gamma_B_SIMSOPT_vs_ESSOS.pdf", transparent=True)
 
 for index, n_segments in enumerate(list_segments):
-    print(f"On iteration {index+1} of {len_list_segments}")
-    curves_essos = CreateEquallySpacedCurves(n_curves, order, R, r, nfp=1, stellsym=False, n_segments=n_segments)
-    coils_essos = Coils(curves_essos, jnp.array([coil_current]*n_curves))
-    field_essos = BiotSavart_essos(coils_essos)
-    dofs = jnp.reshape(coils_essos.dofs, (n_curves, -1))
-
-    coils_simsopt = [Coil(simsopt_create_coil(dofs[i], n_segments, order), Current(coil_current)) for i in range(n_curves)]
-    field_simsopt = BiotSavart_simsopt(coils_simsopt)
-
     for i in range(n_curves):
         curve = coils_simsopt[i].curve
         

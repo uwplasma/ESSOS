@@ -328,12 +328,25 @@ def apply_symmetries_to_curves(base_curves, nfp, stellsym):
     rotated_curves = rotated_curves.reshape(-1, *base_curves.shape[1:])
     if stellsym:
         flipped_rotated_curves = jnp.einsum("aic,ib->abc", rotated_curves, flip_matrix)
-        rotated_curves = jnp.concatenate([rotated_curves, flipped_rotated_curves], axis=0)
+        rotated_curves = jnp.concatenate([flipped_rotated_curves, rotated_curves], axis=0)
+    old_rotated_curves = rotated_curves
+    for i in range(len(base_curves)):
+        rotated_curves = rotated_curves.at[i].set(old_rotated_curves[-len(base_curves)+i])
+        rotated_curves = rotated_curves.at[-len(base_curves)+i].set(old_rotated_curves[i])
     curves = jnp.concatenate([curves, rotated_curves], axis=0)
     return curves
 
 def apply_symmetries_to_currents(base_currents, nfp, stellsym): 
-    flip_list = jnp.array([1, -1]) if stellsym else jnp.array([1])  # 1 for no flip, -1 for flip
-    flips = jnp.repeat(flip_list, nfp)  # Repeat for each field period
-    currents = jnp.tile(base_currents, len(flips)) * flips[:, None]  # Apply flips
-    return currents
+    # flip_list = jnp.array([1, -1]) if stellsym else jnp.array([1])  # 1 for no flip, -1 for flip
+    # flips = jnp.repeat(flip_list, nfp)  # Repeat for each field period
+    # currents = jnp.tile(base_currents, len(flips)) * flips[:, None]  # Apply flips
+    # return currents
+
+    flip_list = [False, True] if stellsym else [False]
+    currents = []
+    for k in range(0, nfp):
+        for flip in flip_list:
+            for i in range(len(base_currents)):
+                current = -base_currents[i] if flip else base_currents[i]
+                currents.append(current)
+    return jnp.array(currents)

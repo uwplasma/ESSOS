@@ -5,7 +5,7 @@ from jax import jit, jacfwd, grad, vmap
 class BiotSavart():
     def __init__(self, coils):
         self.coils = coils
-        self.currents = coils.currents[0]
+        self.currents = coils.currents
         self.gamma = coils.gamma
         self.gamma_dash = coils.gamma_dash
     
