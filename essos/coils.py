@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 from jax.lax import select, fori_loop
 from jax import tree_util, vmap
+from .plot import fix_matplotlib_3d
 
 class Curves:
     """
@@ -163,15 +164,49 @@ class Curves:
             file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
             file.write(f"Degrees of freedom\n")
             file.write(f"{repr(self.dofs.tolist())}\n")
+            
+    def to_simsopt(self):
+        from simsopt.geo import CurveXYZFourier
+        curves_simsopt = []
+        for dofs in self.dofs:
+            curve = CurveXYZFourier(self.n_segments, self.order)
+            curve.x = jnp.reshape(dofs, (curve.x.shape))
+            curves_simsopt.append(curve)
+        return curves_simsopt
+    
+    def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True, **kwargs):
+        def rep(data):
+            if close:
+                return jnp.concatenate((data, [data[0]]))
+            else:
+                return data
+
+        import matplotlib.pyplot as plt 
+        if ax is None or ax.name != "3d":
+            fig = plt.figure()
+            ax = fig.add_subplot(projection='3d')
+        for gamma, gammadash in zip(self.gamma, self.gamma_dash):
+            x = rep(gamma[:, 0])
+            y = rep(gamma[:, 1])
+            z = rep(gamma[:, 2])
+            if plot_derivative:
+                xt = rep(gammadash[:, 0])
+                yt = rep(gammadash[:, 1])
+                zt = rep(gammadash[:, 2])
+            ax.plot(x, y, z, **kwargs, color='green', linestyle='dashed', linewidth=2)
+            if plot_derivative:
+                ax.quiver(x, y, z, 0.1 * xt, 0.1 * yt, 0.1 * zt, arrow_length_ratio=0.1, color="r")
+        if axis_equal:
+            fix_matplotlib_3d(ax)
+        if show:
+            plt.show()
     
 class Curves_from_simsopt(Curves):
-    def __init__(self, simsopt_curves):
+    def __init__(self, simsopt_curves, nfp=1, stellsym=True):
         dofs = jnp.reshape(jnp.array(
             [curve.x for curve in simsopt_curves]
         ), (len(simsopt_curves), 3, 2*simsopt_curves[0].order+1))
         n_segments = len(simsopt_curves[0].quadpoints)
-        nfp = 1
-        stellsym = True
         super().__init__(dofs, n_segments, nfp, stellsym)
 
 tree_util.register_pytree_node(Curves,
@@ -230,22 +265,22 @@ class Coils(Curves):
             file.write(f"{text}\n")
     
     def to_simsopt(self):
-        from simsopt.field import Coil as Coil_SIMSOPT, Current as Current_SIMSOPT
+        from simsopt.field import Coil as Coil_SIMSOPT, Current as Current_SIMSOPT, coils_via_symmetries
         from simsopt.geo import CurveXYZFourier
-        coils_simsopt = []
-        print(self.dofs.shape)
+        cuves_simsopt = []
+        currents_simsopt = []
         for dofs, current in zip(self.dofs, self.dofs_currents):
-            print(dofs.shape)
             curve = CurveXYZFourier(self.n_segments, self.order)
-            curve.x = dofs
-            coils_simsopt.append(Coil_SIMSOPT(curve, Current_SIMSOPT(current)))
-        return coils_simsopt
+            curve.x = jnp.reshape(dofs, (curve.x.shape))
+            cuves_simsopt.append(curve)
+            currents_simsopt.append(Current_SIMSOPT(current))
+        return coils_via_symmetries(cuves_simsopt, currents_simsopt, self.nfp, self.stellsym)
 
 class Coils_from_simsopt(Coils):
-    def __init__(self, simsopt_coils):
+    def __init__(self, simsopt_coils, nfp=1, stellsym=True):
         curves = [c.curve for c in simsopt_coils]
         currents = jnp.array([c.current.get_value() for c in simsopt_coils])
-        super().__init__(Curves_from_simsopt(curves), currents)
+        super().__init__(Curves_from_simsopt(curves, nfp, stellsym), currents)
 
 tree_util.register_pytree_node(Coils,
                                Coils._tree_flatten,

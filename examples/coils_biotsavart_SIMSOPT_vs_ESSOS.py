@@ -35,20 +35,28 @@ t_dB_by_dX_avg_simsopt = jnp.zeros(len_list_segments)
 dB_by_dX_error_avg = jnp.zeros(len_list_segments)
 
 nfp = 3
+n_curves = 3
 curves_ncsx, currents_ncsx, _ = get_ncsx_data()
+
 coils_simsopt  = coils_via_symmetries(curves_ncsx, currents_ncsx, nfp, True)
 curves_simsopt = [c.curve for c in coils_simsopt]
 currents_simsopt = [c.current for c in coils_simsopt]
 
-coils_essos = Coils_from_simsopt(coils_simsopt)
-curves_essos = Curves_from_simsopt(curves_simsopt)
+coils_essos = Coils_from_simsopt(coils_simsopt[0:n_curves], nfp)
+curves_essos = Curves_from_simsopt(curves_simsopt[0:n_curves], nfp)
 
 coils_essos_to_simsopt = coils_essos.to_simsopt()
 curves_essos_to_simsopt = curves_essos.to_simsopt()
 
+idx = [0,1,2,3,4,5,9,10,11,15,16,17,6,7,8,12,13,14]
+for i, (coil_simsopt, coil_essos_gamma, coil_essos_to_simsopt) in enumerate(zip(coils_simsopt, coils_essos.gamma[idx,:], coils_essos_to_simsopt)):
+    print(i)
+    print(jnp.max(coil_simsopt.curve.gamma()-coil_essos_gamma))
+    print(jnp.max(coil_simsopt.curve.gamma()-coil_essos_to_simsopt.curve.gamma()))
+
 bs_simsopt = BiotSavart_simsopt(coils_simsopt)
 bs_essos = BiotSavart_essos(coils_essos)
-bs_essos_to_simsopt = BiotSavart_essos(coils_essos_to_simsopt)
+bs_essos_to_simsopt = BiotSavart_simsopt(coils_essos_to_simsopt)
 
 position=jnp.array([0.1,0.1,0.1])
 bs_simsopt.set_points([position])
