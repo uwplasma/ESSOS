@@ -6,6 +6,7 @@ from jax import block_until_ready
 from essos.fields import BiotSavart as BiotSavart_essos
 from essos.coils import Coils_from_simsopt, Curves_from_simsopt
 from simsopt import load
+from simsopt.geo import CurveXYZFourier
 from simsopt.field import BiotSavart as BiotSavart_simsopt, coils_via_symmetries
 from simsopt.configs import get_ncsx_data, get_w7x_data, get_hsx_data, get_giuliani_data
 
@@ -14,6 +15,9 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
     
 json_file = os.path.join(os.path.dirname(__file__), 'input', 'biot_savart_opt.json')
+
+
+list_segments = [30, 100, 300, 1000, 3000]
 
 nfp_array      = [3, 2, 5, 4, 2]
 curves_array   = [get_ncsx_data()[0], json_file, get_w7x_data()[0], get_hsx_data()[0], get_giuliani_data()[0]]
@@ -44,13 +48,13 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     curves_essos_to_simsopt = curves_essos.to_simsopt()
     field_essos_to_simsopt = BiotSavart_simsopt(coils_essos_to_simsopt)
 
+    base_coils_simsopt = coils_simsopt[:int(len(coils_simsopt)/2/nfp)]
     R = jnp.mean(jnp.array([jnp.sqrt(coil.curve.x[coil.curve.local_dof_names.index('xc(0)')]**2
                 +coil.curve.x[coil.curve.local_dof_names.index('yc(0)')]**2)
-        for coil in coils_simsopt[:int(len(coils_simsopt)/2/nfp)]]))
+        for coil in base_coils_simsopt]))
     x = jnp.array([R+0.01,R,R])
     y = jnp.array([R,R+0.01,R-0.01])
     z = jnp.array([0.05,0.06,0.07])
-    list_segments = [30, 100, 300, 1000, 3000]
 
     positions = jnp.array((x,y,z))
 
@@ -106,32 +110,42 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     plt.savefig(os.path.join(output_dir,f"error_gamma_B_SIMSOPT_vs_ESSOS_{name}.pdf"), transparent=True)
     plt.close()
 
+    def update_nsegments_simsopt(curve_simsopt, n_segments):
+        new_curve = CurveXYZFourier(n_segments, curve_simsopt.order)
+        new_curve.x = curve_simsopt.x
+        return new_curve
+   
     for index, n_segments in enumerate(list_segments):
-        for i in range(len(coils_simsopt)):
-            curve = coils_simsopt[i].curve
-            
-            curve.gamma()
-            curve.gammadash()
-            coils_essos.gamma[i]
-            coils_essos.gamma_dash[i]
-            t_gamma_avg_simsopt = t_gamma_avg_simsopt.at[index].set(t_gamma_avg_simsopt[index] + 0)
-            
-            time1 = time()
-            curves_points_simsopt = block_until_ready(curve.gamma())
-            t_gamma_avg_simsopt = t_gamma_avg_simsopt.at[index].set(t_gamma_avg_simsopt[index] + time() - time1)
-            time1 = time()
-            curves_points = block_until_ready(coils_essos.gamma[i])
-            t_gamma_avg_essos = t_gamma_avg_essos.at[index].set(t_gamma_avg_essos[index] + time() - time1)
-            time1 = time()
-            dash_points_simsopt = block_until_ready(curve.gammadash())
-            t_gammadash_avg_simsopt = t_gammadash_avg_simsopt.at[index].set(t_gammadash_avg_simsopt[index] + time() - time1)
-            time1 = time()
-            dash_points = block_until_ready(coils_essos.gamma_dash[i])
-            t_gammadash_avg_essos = t_gammadash_avg_essos.at[index].set(t_gammadash_avg_essos[index] + time() - time1)
-           
-            gamma_error_avg = gamma_error_avg.at[index].set(gamma_error_avg[index] + jnp.linalg.norm(curves_points - curves_points_simsopt))
-            gammadash_error_avg = gammadash_error_avg.at[index].set(gammadash_error_avg[index] + jnp.linalg.norm(dash_points - dash_points_simsopt))
+        coils_essos.n_segments = n_segments
+        coils_essos.n_segments = n_segments
+        coils_essos.n_segments = n_segments
+        
+        base_curves_simsopt = [update_nsegments_simsopt(coil_simsopt.curve, n_segments) for coil_simsopt in base_coils_simsopt]
+        coils_simsopt = coils_via_symmetries(base_curves_simsopt, currents_simsopt[0:len(base_coils_simsopt)], nfp, True)
+        curves_simsopt = [c.curve for c in coils_simsopt]
+        
+        start_time = time()
+        gamma_curves_simsopt = block_until_ready(jnp.array([curve.gamma() for curve in curves_simsopt]))
+        t_gamma_avg_simsopt = t_gamma_avg_simsopt.at[index].set(t_gamma_avg_simsopt[index] + time() - start_time)
+        
+        start_time = time()
+        gamma_curves_essos = block_until_ready(jnp.array(coils_essos.gamma))
+        t_gamma_avg_essos = t_gamma_avg_essos.at[index].set(t_gamma_avg_essos[index] + time() - start_time)
+        
+        start_time = time()
+        gammadash_curves_simsopt = block_until_ready(jnp.array([curve.gammadash() for curve in curves_simsopt]))
+        t_gammadash_avg_simsopt = t_gammadash_avg_simsopt.at[index].set(t_gammadash_avg_simsopt[index] + time() - start_time)
+        
+        start_time = time()
+        gammadash_curves_essos = block_until_ready(jnp.array(coils_essos.gamma_dash))
+        t_gammadash_avg_essos = t_gammadash_avg_essos.at[index].set(t_gammadash_avg_essos[index] + time() - start_time)
+        
+        gamma_error_avg = gamma_error_avg.at[index].set(gamma_error_avg[index] + jnp.linalg.norm(gamma_curves_essos - gamma_curves_simsopt))
+        gammadash_error_avg = gammadash_error_avg.at[index].set(gammadash_error_avg[index] + jnp.linalg.norm(gammadash_curves_essos - gammadash_curves_simsopt))
 
+        field_essos = BiotSavart_essos(coils_essos)
+        field_simsopt = BiotSavart_simsopt(coils_simsopt)
+        
         for j, position in enumerate(positions):
             field_essos.B(position)
             time1 = time()
@@ -201,7 +215,8 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     plt.xlabel("Number of segments of each coil", fontsize=14)
     plt.ylabel("Time to evaluate SIMSOPT vs ESSOS (s)", fontsize=14)
     plt.grid(axis='y')
-    plt.ylim(0, 6e-3)
+    plt.yscale("log")
+    # plt.ylim(top=0.035)
     plt.legend(fontsize=14)
     plt.title(f"{name}", fontsize=14)
     plt.tight_layout()

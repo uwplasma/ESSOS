@@ -147,17 +147,14 @@ class Curves:
         self._set_gamma()
     
     @property
-    @partial(jit, static_argnames=['self'])
     def gamma(self):
         return self._gamma
     
     @property
-    @partial(jit, static_argnames=['self'])
     def gamma_dash(self):
         return self._gamma_dash
     
     @property
-    @partial(jit, static_argnames=['self'])
     def length(self):
         return self._length
     
