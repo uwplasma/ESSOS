@@ -167,3 +167,5 @@ cython_debug/
 */output
 output/*
 essos/version.py
+*.json
+*.png

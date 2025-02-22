@@ -81,7 +81,7 @@ for name, wout in zip(name_array, wout_array):
     plt.xticks(X_axis, [r"$|\boldsymbol{B}|$ SIMSOPT", r"$\boldsymbol{B}$ SIMSOPT", r"$|\boldsymbol{B}|$ ESSOS", r"$\boldsymbol{B}$ ESSOS"], fontsize=16)
     plt.tick_params(axis='both', which='major', labelsize=14)
     plt.tick_params(axis='both', which='minor', labelsize=14)
-    plt.ylabel("Time to evaluate SIMSOPT vs ESSOS (s)", fontsize=14)
+    plt.ylabel("Time to evaluate VMEC field (s)", fontsize=14)
     plt.grid(axis='y')
     plt.yscale("log")
     plt.ylim(1e-5, 1)
