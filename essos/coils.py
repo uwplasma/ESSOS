@@ -1,6 +1,8 @@
 import jax.numpy as jnp
 from jax.lax import select, fori_loop
-from jax import tree_util, vmap
+from jax import tree_util, vmap, jit
+from functools import partial
+
 from .plot import fix_matplotlib_3d
 
 class Curves:
@@ -193,7 +195,7 @@ class Curves:
                 xt = rep(gammadash[:, 0])
                 yt = rep(gammadash[:, 1])
                 zt = rep(gammadash[:, 2])
-            ax.plot(x, y, z, **kwargs, color='green', linestyle='dashed', linewidth=2)
+            ax.plot(x, y, z, **kwargs, color='green', linestyle='dashed', linewidth=4)
             if plot_derivative:
                 ax.quiver(x, y, z, 0.1 * xt, 0.1 * yt, 0.1 * zt, arrow_length_ratio=0.1, color="r")
         if axis_equal:
@@ -309,44 +311,80 @@ def CreateEquallySpacedCurves(n_curves: int,
 
     return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
 
+
+
+
+# def RotatedCurve(curve, phi, flip):
+#     rotmat = jnp.array(
+#         [[jnp.cos(phi), -jnp.sin(phi), 0],
+#             [jnp.sin(phi), jnp.cos(phi), 0],
+#             [0, 0, 1]]).T
+#     if flip:
+#         rotmat = rotmat @ jnp.array(
+#             [[1, 0, 0],
+#                 [0, -1, 0],
+#                 [0, 0, -1]])
+#     return curve @ rotmat
+
+# def apply_symmetries_to_curves(base_curves, nfp, stellsym):
+#     flip_list = [False, True] if stellsym else [False]
+#     curves = []
+#     for k in range(0, nfp):
+#         for flip in flip_list:
+#             for i in range(len(base_curves)):
+#                 if k == 0 and not flip:
+#                     curves.append(base_curves[i])
+#                 else:
+#                     rotcurve = RotatedCurve(base_curves[i].transpose(), 2*jnp.pi*k/nfp, flip)
+#                     curves.append(rotcurve.transpose())
+#     return jnp.array(curves)
+
+# def apply_symmetries_to_currents(base_currents, nfp, stellsym): 
+#     flip_list = [False, True] if stellsym else [False]
+#     currents = []
+#     for k in range(0, nfp):
+#         for flip in flip_list:
+#             for i in range(len(base_currents)):
+#                 current = -base_currents[i] if flip else base_currents[i]
+#                 currents.append(current)
+#     return jnp.array(currents)
+
+partial(jit, static_argnames=['nfp', 'stellsym'])
+def precompute_rotation_matrices(nfp, stellsym):
+    angles = jnp.linspace(0, 2 * jnp.pi * (nfp - 1) / nfp, nfp)
+    rot_mats = jnp.stack([
+        jnp.array([
+            [jnp.cos(phi), -jnp.sin(phi), 0],
+            [jnp.sin(phi), jnp.cos(phi), 0],
+            [0, 0, 1]
+        ]).T for phi in angles
+    ]) 
+    flip_mat = jnp.array([
+        [1, 0, 0],
+        [0, -1, 0],
+        [0, 0, -1]
+    ])
+    flip_list = jnp.array([False, True]) if stellsym else jnp.array([False])
+    return rot_mats, flip_mat, flip_list
+
+@jit
+def RotatedCurve(curve, rot_mat, flip, flip_mat):
+    rot_mat = jnp.where(flip, rot_mat @ flip_mat, rot_mat)
+    return jnp.einsum('ij,...j->...i', rot_mat, curve)
+
+partial(jit, static_argnames=['nfp', 'stellsym'])
 def apply_symmetries_to_curves(base_curves, nfp, stellsym):
-    flip_matrix = jnp.array([[1, 0, 0],
-                             [0, -1, 0],
-                             [0, 0, -1]])
-    if stellsym:
-        flipped_curves = jnp.einsum("aic,ib->abc", base_curves, flip_matrix)
-        curves = jnp.concatenate([base_curves, flipped_curves], axis=0)
-    else:
-        curves = base_curves
-    angles = jnp.linspace(0, 2 * jnp.pi * (nfp - 1) / nfp, nfp)[1:]
-    rotation_matrices = jnp.stack([
-        jnp.stack([jnp.cos(angles), -jnp.sin(angles), jnp.zeros_like(angles)], axis=-1),
-        jnp.stack([jnp.sin(angles), jnp.cos(angles), jnp.zeros_like(angles)], axis=-1),
-        jnp.stack([jnp.zeros_like(angles), jnp.zeros_like(angles), jnp.ones_like(angles)], axis=-1)
-    ], axis=-2)
-    rotated_curves = vmap(lambda R: jnp.einsum("aic,ib->abc", base_curves, R))(rotation_matrices)
-    rotated_curves = rotated_curves.reshape(-1, *base_curves.shape[1:])
-    if stellsym:
-        flipped_rotated_curves = jnp.einsum("aic,ib->abc", rotated_curves, flip_matrix)
-        rotated_curves = jnp.concatenate([flipped_rotated_curves, rotated_curves], axis=0)
-    old_rotated_curves = rotated_curves
-    for i in range(len(base_curves)):
-        rotated_curves = rotated_curves.at[i].set(old_rotated_curves[-len(base_curves)+i])
-        rotated_curves = rotated_curves.at[-len(base_curves)+i].set(old_rotated_curves[i])
-    curves = jnp.concatenate([curves, rotated_curves], axis=0)
-    return curves
+    rot_mats, flip_mat, flip_list = precompute_rotation_matrices(nfp, stellsym)
+    def transform_curve(curve, rot_mat, flip):
+        return jnp.where((rot_mat == rot_mats[0]).all() & ~flip, curve, RotatedCurve(curve.T, rot_mat, flip, flip_mat).T)
+    curves = vmap(lambda rot_mat: vmap(lambda flip: vmap(lambda curve: transform_curve(curve, rot_mat, flip))(base_curves))(flip_list))(rot_mats)
+    return curves.reshape(-1, *base_curves.shape[1:])
 
-def apply_symmetries_to_currents(base_currents, nfp, stellsym): 
-    # flip_list = jnp.array([1, -1]) if stellsym else jnp.array([1])  # 1 for no flip, -1 for flip
-    # flips = jnp.repeat(flip_list, nfp)  # Repeat for each field period
-    # currents = jnp.tile(base_currents, len(flips)) * flips[:, None]  # Apply flips
-    # return currents
-
-    flip_list = [False, True] if stellsym else [False]
-    currents = []
-    for k in range(0, nfp):
-        for flip in flip_list:
-            for i in range(len(base_currents)):
-                current = -base_currents[i] if flip else base_currents[i]
-                currents.append(current)
-    return jnp.array(currents)
+partial(jit, static_argnames=['nfp', 'stellsym'])
+def apply_symmetries_to_currents(base_currents, nfp, stellsym):
+    flip_list = jnp.array([False, True]) if stellsym else jnp.array([False])
+    def transform_current(current, flip):
+        return jnp.where(flip, -current, current)
+    flipped_currents = vmap(lambda flip: vmap(transform_current, in_axes=(0, None))(base_currents, flip))(flip_list)
+    currents = jnp.tile(flipped_currents, (nfp, 1)).reshape(-1)
+    return currents
