@@ -170,12 +170,17 @@ class Curves:
             
     def to_simsopt(self):
         from simsopt.geo import CurveXYZFourier
-        curves_simsopt = []
+        from simsopt.field import coils_via_symmetries, Current as Current_SIMSOPT
+
+        cuves_simsopt = []
+        currents_simsopt = []
         for dofs in self.dofs:
             curve = CurveXYZFourier(self.n_segments, self.order)
             curve.x = jnp.reshape(dofs, (curve.x.shape))
-            curves_simsopt.append(curve)
-        return curves_simsopt
+            cuves_simsopt.append(curve)
+            currents_simsopt.append(Current_SIMSOPT(1))
+        coils = coils_via_symmetries(cuves_simsopt, currents_simsopt, self.nfp, self.stellsym)
+        return [c.curve for c in coils]
     
     def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True, **kwargs):
         def rep(data):
@@ -204,13 +209,44 @@ class Curves:
         if show:
             plt.show()
     
+    def to_vtk(self, filename: str, close: bool = True, extra_data=None):
+        from pyevtk.hl import polyLinesToVTK
+
+        def wrap(data):
+            return jnp.concatenate([data, jnp.array([data[0]])])
+
+        gammas = self.gamma
+        
+        if close:
+            x = jnp.concatenate([wrap(gamma[:, 0]) for gamma in gammas])
+            y = jnp.concatenate([wrap(gamma[:, 1]) for gamma in gammas])
+            z = jnp.concatenate([wrap(gamma[:, 2]) for gamma in gammas])
+            ppl = jnp.asarray([gamma.shape[0]+1 for gamma in gammas])
+        else:
+            x = jnp.concatenate([gamma[:, 0] for gamma in gammas])
+            y = jnp.concatenate([gamma[:, 1] for gamma in gammas])
+            z = jnp.concatenate([gamma[:, 2] for gamma in gammas])
+            ppl = jnp.asarray([gamma.shape[0] for gamma in gammas])
+        data = jnp.concatenate([i*jnp.ones((ppl[i], )) for i in range(len(gammas))])
+        
+        import numpy as np
+        pointData = {'idx': np.array(data)}
+
+        if extra_data is not None:
+            pointData = {**pointData, **extra_data}
+
+        polyLinesToVTK(str(filename), np.array(x), np.array(y), np.array(z), pointsPerLine=np.array(ppl), pointData=pointData)
+
+    
 class Curves_from_simsopt(Curves):
+    # This assumes curves have all nfp and stellsym symmetries
     def __init__(self, simsopt_curves, nfp=1, stellsym=True):
         if isinstance(simsopt_curves, str):
             from simsopt import load
             bs = load(simsopt_curves)
             simsopt_coils = bs.coils
-            simsopt_curves = [c.curve for c in simsopt_coils][0:int(len(simsopt_curves)/nfp/(1+stellsym))]
+            simsopt_curves = [c.curve for c in simsopt_coils]
+        simsopt_curves = simsopt_curves[0:int(len(simsopt_curves)/nfp/(1+stellsym))]
         dofs = jnp.reshape(jnp.array(
             [curve.x for curve in simsopt_curves]
         ), (len(simsopt_curves), 3, 2*simsopt_curves[0].order+1))
@@ -285,12 +321,13 @@ class Coils(Curves):
         return coils_via_symmetries(cuves_simsopt, currents_simsopt, self.nfp, self.stellsym)
 
 class Coils_from_simsopt(Coils):
+    # This assumes coils have all nfp and stellsym symmetries
     def __init__(self, simsopt_coils, nfp=1, stellsym=True):
         if isinstance(simsopt_coils, str):
             from simsopt import load
             bs = load(simsopt_coils)
             simsopt_coils = bs.coils
-        curves = [c.curve for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]]
+        curves = [c.curve for c in simsopt_coils]
         currents = jnp.array([c.current.get_value() for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]])
         super().__init__(Curves_from_simsopt(curves, nfp, stellsym), currents)
 

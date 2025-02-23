@@ -6,7 +6,7 @@ from jax import block_until_ready
 from essos.fields import BiotSavart as BiotSavart_essos
 from essos.coils import Coils_from_simsopt, Curves_from_simsopt
 from simsopt import load
-from simsopt.geo import CurveXYZFourier
+from simsopt.geo import CurveXYZFourier, curves_to_vtk
 from simsopt.field import BiotSavart as BiotSavart_simsopt, coils_via_symmetries
 from simsopt.configs import get_ncsx_data, get_w7x_data, get_hsx_data, get_giuliani_data
 
@@ -47,6 +47,10 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     coils_essos_to_simsopt = coils_essos.to_simsopt()
     curves_essos_to_simsopt = curves_essos.to_simsopt()
     field_essos_to_simsopt = BiotSavart_simsopt(coils_essos_to_simsopt)
+
+    curves_to_vtk(curves_simsopt, os.path.join(output_dir,f"curves_simsopt_{name}"))
+    curves_essos.to_vtk(os.path.join(output_dir,f"curves_essos_{name}"))
+    curves_to_vtk(curves_essos_to_simsopt, os.path.join(output_dir,f"curves_essos_to_simsopt_{name}"))
 
     base_coils_simsopt = coils_simsopt[:int(len(coils_simsopt)/2/nfp)]
     R = jnp.mean(jnp.array([jnp.sqrt(coil.curve.x[coil.curve.local_dof_names.index('xc(0)')]**2
@@ -117,12 +121,13 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
    
     for index, n_segments in enumerate(list_segments):
         coils_essos.n_segments = n_segments
-        coils_essos.n_segments = n_segments
-        coils_essos.n_segments = n_segments
         
         base_curves_simsopt = [update_nsegments_simsopt(coil_simsopt.curve, n_segments) for coil_simsopt in base_coils_simsopt]
         coils_simsopt = coils_via_symmetries(base_curves_simsopt, currents_simsopt[0:len(base_coils_simsopt)], nfp, True)
         curves_simsopt = [c.curve for c in coils_simsopt]
+        
+        [curve.gamma() for curve in curves_simsopt]
+        coils_essos.gamma
         
         start_time = time()
         gamma_curves_simsopt = block_until_ready(jnp.array([curve.gamma() for curve in curves_simsopt]))
@@ -163,7 +168,6 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
 
             B_error_avg = B_error_avg.at[index].set(B_error_avg[index] + jnp.abs(normB_essos - normB_simsopt))
             
-            field_simsopt.set_points(jnp.array([position]))
             field_essos.dB_by_dX(position)
             time1 = time()
             field_simsopt.set_points(jnp.array([position]))
@@ -173,6 +177,7 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
             
             field_simsopt.dB_by_dX()
             time3 = time()
+            field_simsopt.set_points(jnp.array([position]))
             result_dB_by_dX_simsopt = field_simsopt.dB_by_dX()
             t_dB_by_dX_avg_simsopt = t_dB_by_dX_avg_simsopt.at[index].set(t_dB_by_dX_avg_simsopt[index] + time() - time3)
             norm_dB_by_dX_simsopt = jnp.linalg.norm(jnp.array(result_dB_by_dX_simsopt))
@@ -215,8 +220,8 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     plt.xlabel("Number of segments of each coil", fontsize=14)
     plt.ylabel("Time to evaluate SIMSOPT vs ESSOS (s)", fontsize=14)
     plt.grid(axis='y')
+    # plt.gca().set_ylim((None,0.03))
     plt.yscale("log")
-    # plt.ylim(top=0.035)
     plt.legend(fontsize=14)
     plt.title(f"{name}", fontsize=14)
     plt.tight_layout()
