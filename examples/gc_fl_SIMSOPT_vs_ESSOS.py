@@ -10,8 +10,9 @@ from simsopt.field import (InterpolatedField, SurfaceClassifier, particles_to_vt
 import time
 
 tmax_fl = 1000
-nfieldlines = 3 
-R0 = jnp.linspace(1.2125346, 1.295, nfieldlines)
+nfieldlines = 2
+axis_shft=0.02
+R0 = jnp.linspace(1.2125346+axis_shft, 1.295-axis_shft, nfieldlines)
 nfp = 2
 
 Z0 = jnp.zeros(nfieldlines)
@@ -25,7 +26,7 @@ json_file = os.path.join(os.path.dirname(__file__), 'input', 'biot_savart_opt.js
 bs = load(json_file)
 
 t1 = time.time()
-fieldlines_tys, fieldlines_phi_hits = compute_fieldlines(bs, R0, Z0, tmax=tmax_fl, tol=1e-10, phis=phis)
+fieldlines_tys, fieldlines_phi_hits = compute_fieldlines(bs, R0, Z0, tmax=tmax_fl, tol=1e-11, phis=phis)
 t2 = time.time()
 print(f"Time for fieldline tracing={t2-t1:.3f}s. Num steps={sum([len(l) for l in fieldlines_tys])//nfieldlines}")
 

@@ -1,5 +1,7 @@
 import jax.numpy as jnp
 from jax import jit, lax, random
+from functools import partial
+from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController
 
 q = 2*1.602176565e-19
 m = 4*1.660538921e-27
@@ -88,3 +90,50 @@ def FieldLine(t:             float,
         return jnp.zeros(3, dtype=float)
 
     return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
+
+@partial(jit, static_argnums=(1, 3, 4, 5, 6, 7,8))
+def trace_trajectories(
+    maxtime: float = 1e-7,
+    timesteps: int = 200,
+    initial_conditions: jnp.array = None
+):
+                    #    particles,
+                    #    field,
+                    #    initial_values: jnp.ndarray,
+                    #    maxtime: float = 1e-7,
+                    #    timesteps: int = 200,
+                    #    n_cores: int = len(devices()),
+                    #    adjoint=RecursiveCheckpointAdjoint(),
+                    #    tol_step_size = 5e-5,
+                    #    num_adaptative_steps=100000) -> jnp.ndarray:
+
+    times = jnp.linspace(0, maxtime, timesteps)
+    
+    
+    def compute_trajectory(particle_idx: jnp.ndarray,x_idx: jnp.ndarray,
+                                y_idx: jnp.ndarray,z_idx: jnp.ndarray,vpar_idx: jnp.ndarray,vperp_idx: jnp.ndarray) -> jnp.ndarray:
+        modB=field.norm_B(jnp.array((x_idx,y_idx,z_idx)))
+        mu = m * vperp_idx**2 / (2 * modB)
+        y0 = jnp.array((x_idx,y_idx,z_idx,vpar_idx))
+        args=(field, mu)
+
+        trajectory = diffeqsolve(
+            ODETerm(GuidingCenter),
+            t0=0.0,
+            t1=maxtime,
+            dt0=maxtime / timesteps,
+            y0=y0,
+            solver=Tsit5(),
+            args=args,
+            saveat=SaveAt(ts=times),
+            throw=False,
+            adjoint=adjoint,
+            stepsize_controller = PIDController(pcoeff=0.3, icoeff=0.4, rtol=tol_step_size, atol=tol_step_size, dtmax=None,dtmin=None),
+            max_steps=num_adaptative_steps
+        ).ys
+
+        return trajectory
+
+    trajectories = vmap(aux_trajectory_device,in_axes=(0,0,0,0,0,0))(particles_indeces_part,x_part,y_part,z_part,vpar_part,vperp_part)
+
+    return trajectories
