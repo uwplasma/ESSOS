@@ -67,16 +67,16 @@ def FieldLine(t,
     # assert initial_condition.dtype == float, "initial values must be a float"
 
     x, y, z = initial_condition
-    velocity_signs = jnp.array([-1.0, 1.0])
-    plus1_minus1 = random.choice(random.PRNGKey(42), velocity_signs)
-    velocity = plus1_minus1*c # speed of light
+    # velocity_signs = jnp.array([-1.0, 1.0])
+    # plus1_minus1 = random.choice(random.PRNGKey(42), velocity_signs)
+    # velocity = plus1_minus1*c # speed of light
     # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
 
     # def compute_derivatives(_):
     position = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(position)
     AbsB = field.AbsB(position)
-    dxdt = velocity*B_contravariant/AbsB
+    dxdt = B_contravariant/AbsB
     return dxdt
 
     # def zero_derivatives(_):
@@ -112,7 +112,7 @@ class Tracing():
                         #    adjoint=RecursiveCheckpointAdjoint(),
                         #    tol_step_size = 5e-5,
                         #    num_adaptative_steps=100000) -> jnp.ndarray:
-        times = jnp.linspace(0, maxtime, timesteps)
+        self.times = jnp.linspace(0, maxtime, timesteps)
         
         def compute_trajectory(initial_condition) -> jnp.ndarray:
             # modB=field.norm_B(jnp.array((x_idx,y_idx,z_idx)))
@@ -128,7 +128,7 @@ class Tracing():
                 y0=initial_condition,
                 solver=Tsit5(),
                 args=self.field,
-                saveat=SaveAt(ts=times),
+                saveat=SaveAt(ts=self.times),
                 throw=False,
                 # adjoint=adjoint,
                 stepsize_controller = PIDController(pcoeff=0.3, icoeff=0.4, rtol=tol_step_size, atol=tol_step_size, dtmax=None,dtmin=None),
