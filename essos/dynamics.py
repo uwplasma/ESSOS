@@ -75,8 +75,7 @@ def FieldLine(t,
     # def compute_derivatives(_):
     position = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(position)
-    AbsB = field.AbsB(position)
-    dxdt = B_contravariant/AbsB
+    dxdt = B_contravariant
     return dxdt
 
     # def zero_derivatives(_):
@@ -85,10 +84,10 @@ def FieldLine(t,
     # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 class Tracing():
-    def __init__(self, field, model):
+    def __init__(self, field, model, times=None):
         self.field = field
         self.model = model
-        
+
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
         elif model == 'Lorentz':
@@ -101,7 +100,8 @@ class Tracing():
         initial_conditions,
         maxtime: float = 1e-7,
         timesteps: int = 200,
-        tol_step_size = 5e-5,
+        tol_step_size = 1e-7,
+        times=None,
     ):
                         #    particles,
                         #    field,
@@ -112,7 +112,9 @@ class Tracing():
                         #    adjoint=RecursiveCheckpointAdjoint(),
                         #    tol_step_size = 5e-5,
                         #    num_adaptative_steps=100000) -> jnp.ndarray:
-        self.times = jnp.linspace(0, maxtime, timesteps)
+        if times is None:
+            times = jnp.linspace(0, maxtime, timesteps)
+        self.times=times
         
         def compute_trajectory(initial_condition) -> jnp.ndarray:
             # modB=field.norm_B(jnp.array((x_idx,y_idx,z_idx)))
@@ -128,7 +130,7 @@ class Tracing():
                 y0=initial_condition,
                 solver=Tsit5(),
                 args=self.field,
-                saveat=SaveAt(ts=self.times),
+                saveat=SaveAt(ts=times),
                 throw=False,
                 # adjoint=adjoint,
                 stepsize_controller = PIDController(pcoeff=0.3, icoeff=0.4, rtol=tol_step_size, atol=tol_step_size, dtmax=None,dtmin=None),
@@ -140,3 +142,17 @@ class Tracing():
         trajectories = vmap(compute_trajectory,in_axes=(0))(initial_conditions)
 
         return trajectories
+    
+    def to_vtk(self, filename, trajectories):
+        """
+        Export particle tracing or field lines to a vtk file.
+        Expects that the xyz positions can be obtained by ``xyz[:, 1:4]``.
+        """
+        from pyevtk.hl import polyLinesToVTK
+        import numpy as np
+        x = np.concatenate([xyz[:, 0] for xyz in trajectories])
+        y = np.concatenate([xyz[:, 1] for xyz in trajectories])
+        z = np.concatenate([xyz[:, 2] for xyz in trajectories])
+        ppl = np.array([trajectories.shape[1]]*trajectories.shape[0])
+        data = np.array(jnp.concatenate([i*jnp.ones((trajectories[i].shape[0], )) for i in range(len(trajectories))]))
+        polyLinesToVTK(filename, x, y, z, pointsPerLine=ppl, pointData={'idx': data})
