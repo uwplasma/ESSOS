@@ -1,6 +1,5 @@
 import jax.numpy as jnp
-from jax.scipy.optimize import bisect
-from jax import jit, lax, random, vmap
+from jax import jit, lax, random, vmap, tree_util, block_until_ready
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController
 
@@ -85,9 +84,18 @@ def FieldLine(t,
     # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 class Tracing():
-    def __init__(self, field, model):
+    def __init__(self, trajectories_input=None, initial_conditions=None, times=None,
+                 field=None, model=None, maxtime: float = 1e-7, timesteps: int = 200,
+                 tol_step_size = 1e-7,):
+        
         self.field = field
         self.model = model
+        self.initial_conditions = initial_conditions
+        self.times = times
+        self.maxtime = maxtime
+        self.timesteps = timesteps
+        self.tol_step_size = tol_step_size
+        self._trajectories = trajectories_input
 
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
@@ -95,142 +103,163 @@ class Tracing():
             self.ODE_term = ODETerm(Lorentz)
         elif model == 'FieldLine':
             self.ODE_term = ODETerm(FieldLine)
+            
+        if self.times is None:
+            self.times = jnp.linspace(0, self.maxtime, self.timesteps)
+        else:
+            self.maxtime = jnp.max(self.times)
+            self.timesteps = len(self.times)
+            
+        self._trajectories = self.trace()
 
-    @partial(jit, static_argnums=(0, 2, 3))
-    def trace(self,
-        initial_conditions,
-        maxtime: float = 1e-7,
-        timesteps: int = 200,
-        tol_step_size = 1e-7,
-        times=None,
-    ):
-        if times is None:
-            times = jnp.linspace(0, maxtime, timesteps)
-        self.times=times
-        
+    @partial(jit, static_argnums=(0))
+    def trace(self):
+        @jit
         def compute_trajectory(initial_condition) -> jnp.ndarray:
 
             trajectory = diffeqsolve(
                 self.ODE_term,
                 t0=0.0,
-                t1=maxtime,
-                dt0=maxtime / timesteps,
+                t1=self.maxtime,
+                dt0=self.maxtime / self.timesteps,
                 y0=initial_condition,
                 solver=Tsit5(),
                 args=self.field,
-                saveat=SaveAt(ts=times),
+                saveat=SaveAt(ts=self.times),
                 throw=False,
                 # adjoint=adjoint,
-                stepsize_controller = PIDController(pcoeff=0.3, icoeff=0.4, rtol=tol_step_size, atol=tol_step_size, dtmax=None,dtmin=None),
+                stepsize_controller = PIDController(pcoeff=0.3, icoeff=0.4, rtol=self.tol_step_size, atol=self.tol_step_size, dtmax=None,dtmin=None),
                 # max_steps=num_adaptative_steps
             ).ys
 
             return trajectory
 
-        trajectories = vmap(compute_trajectory,in_axes=(0))(initial_conditions)
-
-        return trajectories
+        return jnp.array(vmap(compute_trajectory,in_axes=(0))(self.initial_conditions))
+        
+    @property
+    def trajectories(self):
+        return self._trajectories
     
-    def to_vtk(self, filename, trajectories):
+    @trajectories.setter
+    def trajectories(self, value):
+        self._trajectories = value
+    
+    def _tree_flatten(self):
+        children = (self.trajectories,)  # arrays / dynamic values
+        aux_data = {'field': self.field, 'model': self.model}  # static values
+        return (children, aux_data)
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(*children, **aux_data)
+    
+    def to_vtk(self, filename):
         from pyevtk.hl import polyLinesToVTK
         import numpy as np
-        x = np.concatenate([xyz[:, 0] for xyz in trajectories])
-        y = np.concatenate([xyz[:, 1] for xyz in trajectories])
-        z = np.concatenate([xyz[:, 2] for xyz in trajectories])
-        ppl = np.array([trajectories.shape[1]]*trajectories.shape[0])
-        data = np.array(jnp.concatenate([i*jnp.ones((trajectories[i].shape[0], )) for i in range(len(trajectories))]))
+        x = np.concatenate([xyz[:, 0] for xyz in self.trajectories])
+        y = np.concatenate([xyz[:, 1] for xyz in self.trajectories])
+        z = np.concatenate([xyz[:, 2] for xyz in self.trajectories])
+        ppl = np.asarray([xyz.shape[0] for xyz in self.trajectories])
+        # ppl = np.array([self.trajectories.shape[1]]*self.trajectories.shape[0])
+        data = np.array(jnp.concatenate([i*jnp.ones((self.trajectories[i].shape[0], )) for i in range(len(self.trajectories))]))
         polyLinesToVTK(filename, x, y, z, pointsPerLine=ppl, pointData={'idx': data})
-    
-    def get_phi(self, x, y, phi_last):
-        """Compute the toroidal angle phi with continuity correction."""
-        phi = jnp.arctan2(y, x)
-        phi += (phi_last - phi + jnp.pi) // (2 * jnp.pi) * (2 * jnp.pi)  # Ensure continuity
-        return phi
 
-    @partial(jit, static_argnums=(0))
-    def poincare(self, trajectories, phis_poincare):
-        """
-        Compute the points where trajectories cross the given Poincaré sections.
+    # def get_phi(x, y, phi_last):
+    #     """Compute the toroidal angle phi, ensuring continuity."""
+    #     phi = jnp.arctan2(y, x)
+    #     dphi = phi - phi_last
+    #     return phi - jnp.round(dphi / (2 * jnp.pi)) * (2 * jnp.pi)  # Ensure continuity
+
+    # @partial(jit, static_argnums=(0, 2))
+    # def find_poincare_hits(self, traj, phis_poincare):
+    #     """Find points where field lines cross specified phi values."""
+    #     x, y, z = traj[:, 0], traj[:, 1], traj[:, 2]
+    #     phi_values = jnp.unwrap(jnp.arctan2(y, x))  # Ensure continuity
+    #     t_steps = jnp.arange(len(x))
+
+    #     hits = []
         
-        Parameters:
-        - trajectories: jnp.ndarray of shape (num_particles, num_time_steps, 3) containing (x, y, z).
-        - phis_poincare: List of phi values where intersections are checked.
+    #     for phi_target in phis_poincare:
+    #         phi_shifted = phi_values - phi_target  # Shifted phi for comparison
+    #         sign_change = (phi_shifted[:-1] * phi_shifted[1:]) < 0  # Detect crossing
 
-        Returns:
-        - res_phi_hits: jnp.ndarray containing (t, phi_index, x, y, z) at intersection points.
-        """
-        num_particles, num_steps, _ = trajectories.shape
-        res_phi_hits = []
+    #         if jnp.any(sign_change):
+    #             crossing_indices = jnp.where(sign_change)[0]  # Get indices of crossings
+    #             for idx in crossing_indices:
+    #                 # Linear interpolation to estimate exact crossing
+    #                 w = (phi_target - phi_values[idx]) / (phi_values[idx + 1] - phi_values[idx])
+    #                 t_cross = t_steps[idx] + w * (t_steps[idx + 1] - t_steps[idx])
+    #                 x_cross = x[idx] + w * (x[idx + 1] - x[idx])
+    #                 y_cross = y[idx] + w * (y[idx + 1] - y[idx])
+    #                 z_cross = z[idx] + w * (z[idx + 1] - z[idx])
+                    
+    #                 hits.append([t_cross, x_cross, y_cross, z_cross])
 
-        for n in range(num_particles):
-            traj = trajectories[n]
-            x, y, z = traj[:, 0], traj[:, 1], traj[:, 2]
-            phi_last = self.get_phi(x[0], y[0], 0.0)
+    #     return jnp.array(hits)
 
-            for t_idx in range(1, num_steps):
-                phi_current = self.get_phi(x[t_idx], y[t_idx], phi_last)
-                t_last, t_current = t_idx - 1, t_idx  # Discrete time indices
+    # @partial(jit, static_argnums=(0))
+    # def poincare(self):
+    #     """Compute Poincaré section hits for multiple trajectories."""
+    #     trajectories = self.trajectories  # Pass trajectories directly into the function
+    #     phis_poincare = self.phis_poincare  # Similarly, use the direct attribute
 
-                for i, phi_target in enumerate(phis_poincare):
-                    if jnp.floor((phi_last - phi_target) / (2 * jnp.pi)) != jnp.floor((phi_current - phi_target) / (2 * jnp.pi)):
-                        # Root finding: interpolate t_root where phi crosses phi_target
-                        rootfun = lambda t: self.get_phi(jnp.interp(t, [t_last, t_current], [x[t_last], x[t_current]]),
-                                                    jnp.interp(t, [t_last, t_current], [y[t_last], y[t_current]]),
-                                                    phi_last) - phi_target
-                        
-                        t_root = bisect(rootfun, t_last, t_current)
-                        x_root = jnp.interp(t_root, [t_last, t_current], [x[t_last], x[t_current]])
-                        y_root = jnp.interp(t_root, [t_last, t_current], [y[t_last], y[t_current]])
-                        z_root = jnp.interp(t_root, [t_last, t_current], [z[t_last], z[t_current]])
+    #     # Use vmap to vectorize the calls for each trajectory
+    #     return vmap(self.find_poincare_hits, in_axes=(0, None))(trajectories, tuple(phis_poincare))
 
-                        res_phi_hits.append(jnp.array([t_root, i, x_root, y_root, z_root]))
+    # def poincare_plot(self, phis=None, filename=None, res_phi_hits=None, mark_lost=False, aspect='equal', dpi=300, xlims=None, 
+    #                 ylims=None, s=2, marker='o', show=True):
+    #     import matplotlib.pyplot as plt
+        
+    #     self.phis_poincare = phis
+    #     if res_phi_hits is None:
+    #         res_phi_hits = self.poincare()
+    #     self.res_phi_hits = res_phi_hits
+            
+    #     res_phi_hits = jnp.array(res_phi_hits)  # Ensure it's a JAX array
+        
+    #     # Determine number of rows/columns
+    #     nrowcol = int(jnp.ceil(jnp.sqrt(len(phis))))
+        
+    #     # Create subplots
+    #     fig, axs = plt.subplots(nrowcol, nrowcol, figsize=(8, 5))
+    #     axs = axs.ravel()  # Flatten for easier indexing
+        
+    #     # Loop over phi values and create plots
+    #     for i, phi in enumerate(phis):
+    #         ax = axs[i]
+    #         ax.set_aspect(aspect)
+    #         ax.set_title(f"$\\phi = {phi/jnp.pi:.2f}\\pi$", loc='left', y=0.0)
+    #         ax.set_xlabel("$r$")
+    #         ax.set_ylabel("$z$")
+            
+    #         if xlims:
+    #             ax.set_xlim(xlims)
+    #         if ylims:
+    #             ax.set_ylim(ylims)
+            
+    #         # Extract points corresponding to this phi
+    #         mask = res_phi_hits[:, 1] == i
+    #         data_this_phi = res_phi_hits[mask]
+            
+    #         if data_this_phi.shape[0] > 0:
+    #             r = jnp.sqrt(data_this_phi[:, 2]**2 + data_this_phi[:, 3]**2)
+    #             z = data_this_phi[:, 4]
+                
+    #             color = 'g'  # Default color
+    #             if mark_lost:
+    #                 lost = data_this_phi[-1, 1] < 0
+    #                 color = 'r' if lost else 'g'
+                    
+    #             ax.scatter(r, z, marker=marker, s=s, linewidths=0, c=color)
 
-                phi_last = phi_current
+    #         ax.grid(True, linewidth=0.5)
 
-        return jnp.array(res_phi_hits)
-
-    def poincare_plot(self, filename, res_phi_hits=None, phis=None, mark_lost=False, aspect='equal', dpi=300, xlims=None, 
-                        ylims=None, s=2, marker='o'):
-        if res_phi_hits is None:
-            res_phi_hits = self.poincare(self.trajectories, phis)
-        import matplotlib.pyplot as plt
-        from math import ceil, sqrt
-        nrowcol = ceil(sqrt(len(phis)))
-        plt.figure()
-        fig, axs = plt.subplots(nrowcol, nrowcol, figsize=(8, 5))
-        for ax in axs.ravel():
-            ax.set_aspect(aspect)
-        color = None
-        for i in range(len(phis)):
-            row = i//nrowcol
-            col = i % nrowcol
-            if i != len(phis) - 1:
-                if phis is not None: axs[row, col].set_title(f"$\\phi = {phis[i]/jnp.pi:.2f}\\pi$ ", loc='left', y=0.0)
-            else:
-                if phis is not None: axs[row, col].set_title(f"$\\phi = {phis[i]/jnp.pi:.2f}\\pi$ ", loc='right', y=0.0)
-            if row == nrowcol - 1:
-                axs[row, col].set_xlabel("$r$")
-            if col == 0:
-                axs[row, col].set_ylabel("$z$")
-            if col == 1:
-                axs[row, col].set_yticklabels([])
-            if xlims is not None:
-                axs[row, col].set_xlim(xlims)
-            if ylims is not None:
-                axs[row, col].set_ylim(ylims)
-            for j in range(len(fieldlines_phi_hits)):
-                lost = fieldlines_phi_hits[j][-1, 1] < 0
-                if mark_lost:
-                    color = 'r' if lost else 'g'
-                data_this_phi = fieldlines_phi_hits[j][jnp.where(fieldlines_phi_hits[j][:, 1] == i)[0], :]
-                if data_this_phi.size == 0:
-                    continue
-                r = jnp.sqrt(data_this_phi[:, 2]**2+data_this_phi[:, 3]**2)
-                axs[row, col].scatter(r, data_this_phi[:, 4], marker=marker, s=s, linewidths=0, c=color)
-
-            plt.rc('axes', axisbelow=True)
-            axs[row, col].grid(True, linewidth=0.5)
-
-        plt.tight_layout()
-        plt.savefig(filename, dpi=dpi)
-        plt.close()
+    #     # Adjust layout and save
+    #     plt.tight_layout()
+    #     if filename is not None: plt.savefig(filename, dpi=dpi)
+    #     if show: plt.show()
+    #     plt.close()
+        
+tree_util.register_pytree_node(Tracing,
+                               Tracing._tree_flatten,
+                               Tracing._tree_unflatten)

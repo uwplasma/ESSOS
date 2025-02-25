@@ -38,6 +38,7 @@ class Curves:
         self._stellsym = stellsym
         self._order = dofs.shape[2]//2
         self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
+        self.quadpoints = jnp.linspace(0, 1, self.n_segments, endpoint=False)
         self._set_gamma()
 
     def __str__(self):
@@ -59,15 +60,12 @@ class Curves:
     
     partial(jit, static_argnames=['self'])
     def _set_gamma(self):
-        """ Initializes the discritized curves and their derivatives"""
-
-        # Create the quadpoints
-        quadpoints = jnp.linspace(0, 1, self.n_segments, endpoint=False)
+        """ Initializes the discretized curves and their derivatives"""
                         
         # Create the gamma and gamma_dash
         def fori_createdata(order_index: int, data: jnp.ndarray) -> jnp.ndarray:
-            return data[0] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], jnp.sin(2 * jnp.pi * order_index * quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], jnp.cos(2 * jnp.pi * order_index * quadpoints)), \
-                   data[1] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], 2*jnp.pi*order_index*jnp.cos(2 * jnp.pi * order_index * quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], -2*jnp.pi*order_index*jnp.sin(2 * jnp.pi * order_index * quadpoints))
+            return data[0] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], jnp.sin(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], jnp.cos(2 * jnp.pi * order_index * self.quadpoints)), \
+                   data[1] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], 2*jnp.pi*order_index*jnp.cos(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], -2*jnp.pi*order_index*jnp.sin(2 * jnp.pi * order_index * self.quadpoints))
         
         gamma = jnp.einsum("ij,k->ikj", self._curves[:, :, 0], jnp.ones(self.n_segments))
         gamma_dash = jnp.zeros((jnp.size(self._curves, 0), self.n_segments, 3))
@@ -237,7 +235,6 @@ class Curves:
 
         polyLinesToVTK(str(filename), np.array(x), np.array(y), np.array(z), pointsPerLine=np.array(ppl), pointData=pointData)
 
-    
 class Curves_from_simsopt(Curves):
     # This assumes curves have all nfp and stellsym symmetries
     def __init__(self, simsopt_curves, nfp=1, stellsym=True):
