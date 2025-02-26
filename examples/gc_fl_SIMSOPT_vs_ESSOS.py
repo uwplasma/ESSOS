@@ -99,7 +99,33 @@ plt.legend()
 plt.xlabel('R')
 plt.ylabel('Z')
 plt.title('Fieldline')
-plt.show()
+plt.savefig(os.path.join(output_dir,f'fieldlines_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.close()
+
+plt.figure()
+
+for i in range(nfieldlines):
+    fieldline_SIMSOPT = jnp.array(fieldlines_SIMSOPT[i])[:, 1:]
+    fieldline_ESSOS = fieldlines_ESSOS_interp[i]
+    relative_errors = []
+
+    for fieldline_SIMSOPT, fieldline_ESSOS in zip(fieldline_SIMSOPT, fieldline_ESSOS):
+        relative_error_x = jnp.abs(fieldline_SIMSOPT[0] - fieldline_ESSOS[0]) / (jnp.abs(fieldline_SIMSOPT[0]) + 1e-12)
+        relative_error_y = jnp.abs(fieldline_SIMSOPT[1] - fieldline_ESSOS[1]) / (jnp.abs(fieldline_SIMSOPT[1]) + 1e-12)
+        relative_error_z = jnp.abs(fieldline_SIMSOPT[2] - fieldline_ESSOS[2]) / (jnp.abs(fieldline_SIMSOPT[2]) + 1e-12)
+        average_relative_error = (relative_error_x + relative_error_y + relative_error_z) / 3
+        relative_errors.append(average_relative_error)
+
+    plt.plot(jnp.linspace(0, tmax_fl, len(relative_errors)), relative_errors, label=f'Fieldline {i}')
+
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Relative Error')
+plt.title('Relative Error between SIMSOPT and ESSOS Fieldlines')
+plt.yscale('log')
+plt.tight_layout()
+plt.savefig(os.path.join(output_dir, 'relative_error_fieldlines_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.close()
 
 # error_fieldline_SIMSOPT_vs_ESSOS = jnp.array([jnp.linalg.norm(jnp.array(fieldlines_SIMSOPT[i])[:,1:] - fieldlines_ESSOS_interp[i]) for i in range(nfieldlines)])
 # print(f"Max difference between SIMSOPT and ESSOS fieldlines={jnp.max(error_fieldline_SIMSOPT_vs_ESSOS)}")
