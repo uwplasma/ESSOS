@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from jax import jit, lax, random, vmap, tree_util, block_until_ready
+from jax import jit, vmap, tree_util
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController
 
@@ -13,6 +13,9 @@ def GuidingCenter(t,
                   field) -> jnp.ndarray:
 
     x, y, z, vpar = initial_condition
+    
+    ### GET MU!
+    mu=1.0
     # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
 
     # def dxdt_dvdt(_):
@@ -128,7 +131,7 @@ class Tracing():
                 saveat=SaveAt(ts=self.times),
                 throw=False,
                 # adjoint=adjoint,
-                stepsize_controller = PIDController(pcoeff=0.3, icoeff=0.4, rtol=self.tol_step_size, atol=self.tol_step_size, dtmax=None,dtmin=None),
+                stepsize_controller = PIDController(rtol=self.tol_step_size, atol=self.tol_step_size),
                 # max_steps=num_adaptative_steps
             ).ys
 
