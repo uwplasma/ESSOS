@@ -1,3 +1,4 @@
 jax
 matplotlib
 scipy
+diffrax

@@ -1,18 +1,18 @@
-# import os
-# import time
-# import jax.numpy as jnp
-# from jax import block_until_ready
-# from simsopt import load
-# from simsopt.field import (particles_to_vtk, trace_particles_starting_on_curve, plot_poincare_data)
-# from essos.coils import Coils_from_simsopt
-# from essos.dynamics import Tracing
-# from essos.fields import BiotSavart as BiotSavart_essos
-# import matplotlib.pyplot as plt
+import os
+import time
+import jax.numpy as jnp
+from jax import block_until_ready
+from simsopt import load
+from simsopt.field import (particles_to_vtk, trace_particles, plot_poincare_data)
+from essos.coils import Coils_from_simsopt
+from essos.dynamics import Tracing
+from essos.fields import BiotSavart as BiotSavart_essos
+import matplotlib.pyplot as plt
 
-# tmax_fl = 150
-# nfieldlines = 3
-# axis_shft=0.02
-# R0 = jnp.linspace(1.2125346+axis_shft, 1.295-axis_shft, nfieldlines)
+tmax_fl = 1e-5
+nparticles = 3
+axis_shft=0.02
+R0 = jnp.linspace(1.2125346+axis_shft, 1.295-axis_shft, nparticles)
 # nfp = 2
 # trace_tolerance_SIMSOPT_array = [1e-5, 1e-7, 1e-9, 1e-11, 1e-13]#, 1e-15]
 # trace_tolerance_ESSOS = 1e-11

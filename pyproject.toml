@@ -27,7 +27,7 @@ keywords = ["Plasma",
      "Simulation",
      "JAX"]
  
-dependencies = [ "jax", "scipy", "matplotlib"]
+dependencies = [ "jax", "scipy", "matplotlib", "diffrax"]
  
 requires-python = ">=3.5"
 
