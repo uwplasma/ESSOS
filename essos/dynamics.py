@@ -2,62 +2,60 @@ import jax.numpy as jnp
 from jax import jit, vmap, tree_util
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController
+from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 
-q = 2*1.602176565e-19
-m = 4*1.660538921e-27
-c = 299792458
+class Particles():
+    def __init__(self, charge=ALPHA_PARTICLE_CHARGE, mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY):
+        self.charge = charge
+        self.mass = mass
+        self.energy = energy
 
 @partial(jit, static_argnums=(2))
 def GuidingCenter(t,
                   initial_condition,
-                  field) -> jnp.ndarray:
+                  args) -> jnp.ndarray:
 
     x, y, z, vpar = initial_condition
+    field, particles = args
+    q = particles.charge
+    m = particles.mass
+    E = particles.energy
     
-    ### GET MU!
-    mu=1.0
     # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-
     # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
-
     B_covariant = field.B_covariant(points)
     B_contravariant = field.B_contravariant(points)
     AbsB = field.AbsB(points)
     gradB = field.dAbsB_by_dX(points)
-
+    mu = (E - m*vpar**2/2)/AbsB
     omega = q*AbsB/m
-
     dxdt = vpar*B_contravariant/AbsB + (vpar**2/omega+mu/q)*jnp.cross(B_covariant, gradB)/AbsB/AbsB
     dvdt = -mu/m*jnp.dot(B_contravariant,gradB)/AbsB
-
     return jnp.append(dxdt,dvdt)
-
     # def zero_derivatives(_):
     #     return jnp.zeros(4, dtype=float)
-
     # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
 
 @partial(jit, static_argnums=(2))
 def Lorentz(t,
             initial_condition,
-            field) -> jnp.ndarray:
+            args) -> jnp.ndarray:
     
     x, y, z, vx, vy, vz = initial_condition
+    field, particles = args
+    q = particles.charge
+    m = particles.mass
+    
     # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-
     # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(points)
-
     dxdt = jnp.array([vx, vy, vz])
     dvdt = q / m * jnp.cross(dxdt, B_contravariant)
-
     return jnp.append((dxdt, dvdt))
-
     # def zero_derivatives(_):
     #     return jnp.zeros(6, dtype=float)
-
     # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
 
 @partial(jit, static_argnums=(2))
@@ -89,7 +87,7 @@ def FieldLine(t,
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times=None,
                  field=None, model=None, maxtime: float = 1e-7, timesteps: int = 200,
-                 tol_step_size = 1e-7,):
+                 tol_step_size = 1e-7, particles=None):
         
         self.field = field
         self.model = model
@@ -99,13 +97,17 @@ class Tracing():
         self.timesteps = timesteps
         self.tol_step_size = tol_step_size
         self._trajectories = trajectories_input
-
+        self.particles = particles
+        
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
+            self.args = (self.field, self.particles)
         elif model == 'Lorentz':
             self.ODE_term = ODETerm(Lorentz)
+            self.args = (self.field, self.particles)
         elif model == 'FieldLine':
             self.ODE_term = ODETerm(FieldLine)
+            self.args = self.field
             
         if self.times is None:
             self.times = jnp.linspace(0, self.maxtime, self.timesteps)
@@ -127,7 +129,7 @@ class Tracing():
                 dt0=self.maxtime / self.timesteps,
                 y0=initial_condition,
                 solver=Tsit5(),
-                args=self.field,
+                args=self.args,
                 saveat=SaveAt(ts=self.times),
                 throw=False,
                 # adjoint=adjoint,
