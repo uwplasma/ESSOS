@@ -119,6 +119,7 @@ class Curves:
         assert isinstance(new_n_segments, int)
         assert new_n_segments > 2
         self._n_segments = new_n_segments
+        self.quadpoints = jnp.linspace(0, 1, self._n_segments, endpoint=False)
         self._set_gamma()
     
     @property
