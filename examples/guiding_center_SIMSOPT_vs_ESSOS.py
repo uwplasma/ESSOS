@@ -9,15 +9,40 @@ from essos.dynamics import Tracing, Particles
 from essos.fields import BiotSavart as BiotSavart_essos
 import matplotlib.pyplot as plt
 
-tmax_fl = 1e-5
+tmax_gc = 1e-5
 nparticles = 3
 axis_shft=0.02
 R0 = jnp.linspace(1.2125346+axis_shft, 1.295-axis_shft, nparticles)
-
-# USE PARTICLES CLASS from SIMSSOPT
-
+trace_tolerance_ESSOS = 1e-11
 
 
+output_dir = os.path.join(os.path.dirname(__file__), 'output')
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+
+nfp=2
+json_file = os.path.join(os.path.dirname(__file__), 'input', 'biot_savart_opt.json')
+field_simsopt = load(json_file)
+field_essos = BiotSavart_essos(Coils_from_simsopt(json_file, nfp))
+
+Z0 = jnp.zeros(nparticles)
+phi0 = jnp.zeros(nparticles)
+initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
+initial_vparallel_over_v = jnp.linspace(-1, 1, nparticles)
+
+particles = Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=initial_vparallel_over_v)
+
+# Trace in ESSOS
+num_steps_essos = 1000
+time_essos = jnp.linspace(0, tmax_gc, num_steps_essos)
+
+print(f'Tracing ESSOS guiding center with tolerance={trace_tolerance_ESSOS}')
+t1 = time.time()
+tracing = block_until_ready(Tracing(field=field_essos, model='FieldLine', initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
+                                    maxtime=tmax_gc, timesteps=num_steps_essos, tol_step_size=trace_tolerance_ESSOS))
+trajectories_ESSOS = tracing.trajectories
+time_ESSOS = time.time()-t1
+print(f"  Time for ESSOS guiding center tracing={time.time()-t1:.3f}s with tolerance={trace_tolerance_ESSOS}. Num steps={len(trajectories_ESSOS[0])}")
 
 # nfp = 2
 # trace_tolerance_SIMSOPT_array = [1e-5, 1e-7, 1e-9, 1e-11, 1e-13]#, 1e-15]

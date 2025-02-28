@@ -51,8 +51,8 @@ time_essos = jnp.linspace(0, tmax_fl, num_steps_essos)
 
 print(f'Tracing ESSOS fieldlines with tolerance={trace_tolerance_ESSOS}')
 t1 = time.time()
-tracing = block_until_ready(Tracing(field=field_essos, model='FieldLine',
-                  initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T, maxtime=tmax_fl, timesteps=num_steps_essos, tol_step_size=trace_tolerance_ESSOS))
+tracing = block_until_ready(Tracing(field=field_essos, model='FieldLine', initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
+                                    maxtime=tmax_fl, timesteps=num_steps_essos, tol_step_size=trace_tolerance_ESSOS))
 fieldlines_ESSOS = tracing.trajectories
 time_ESSOS = time.time()-t1
 print(f"  Time for ESSOS fieldline tracing={time.time()-t1:.3f}s with tolerance={trace_tolerance_ESSOS}. Num steps={len(fieldlines_ESSOS[0])}")

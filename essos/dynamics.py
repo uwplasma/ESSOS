@@ -5,10 +5,28 @@ from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 
 class Particles():
-    def __init__(self, charge=ALPHA_PARTICLE_CHARGE, mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY):
+    def __init__(self, nparticles=None, initial_xyz=None, initial_vparallel_over_v=None, initial_R=1.23, final_R=1.27,
+                 charge=ALPHA_PARTICLE_CHARGE, mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY):
+        self.nparticles = nparticles
         self.charge = charge
         self.mass = mass
         self.energy = energy
+        
+        if initial_xyz is not None:
+            self.initial_xyzv = initial_xyz
+            self.initial_vparallel_over_v = initial_vparallel_over_v
+            self.nparticles = len(initial_xyz)
+        else:
+            self.nparticles = nparticles
+            R0 = jnp.linspace(initial_R, final_R, nparticles)
+            Z0 = jnp.zeros(nparticles)
+            phi0 = jnp.zeros(nparticles)
+            self.initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
+            self.initial_vparallel_over_v = jnp.linspace(-1, 1, nparticles)
+        
+        v = jnp.sqrt(2*self.energy/self.mass)
+        self.initial_vparallel = v*self.initial_vparallel_over_v
+        self.initial_vperpendicular = jnp.sqrt(v**2 - self.initial_vparallel**2)
 
 @partial(jit, static_argnums=(2))
 def GuidingCenter(t,
@@ -102,6 +120,7 @@ class Tracing():
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles)
+            self.initial_conditions = jnp.concatenate([self.initial_conditions[:, :3], self.particles.initial_vparallel], axis=1)
         elif model == 'Lorentz':
             self.ODE_term = ODETerm(Lorentz)
             self.args = (self.field, self.particles)
