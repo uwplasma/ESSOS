@@ -166,6 +166,9 @@ cython_debug/
 *.pdf
 */output
 output/*
+tests/comparisons_SIMSOPT/output/*
 essos/version.py
 *.json
 *.png
+*.vtu
+*.vts

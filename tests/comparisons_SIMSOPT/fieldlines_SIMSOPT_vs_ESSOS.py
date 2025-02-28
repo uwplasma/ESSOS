@@ -14,8 +14,8 @@ nfieldlines = 3
 axis_shft=0.02
 R0 = jnp.linspace(1.2125346+axis_shft, 1.295-axis_shft, nfieldlines)
 nfp = 2
-trace_tolerance_SIMSOPT_array = [1e-5, 1e-7, 1e-9, 1e-11, 1e-13]#, 1e-15]
-trace_tolerance_ESSOS = 1e-11
+trace_tolerance_SIMSOPT_array = [1e-5, 1e-7, 1e-9, 1e-11, 1e-13]
+trace_tolerance_ESSOS = 1e-7
 
 Z0 = jnp.zeros(nfieldlines)
 phi0 = jnp.zeros(nfieldlines)
@@ -26,7 +26,7 @@ output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
     
-json_file = os.path.join(os.path.dirname(__file__), 'input', 'biot_savart_opt.json')
+json_file = os.path.join(os.path.dirname(__file__), 'input', 'biot_savart_LandremanPaulQA.json')
 field_simsopt = load(json_file)
 field_essos = BiotSavart_essos(Coils_from_simsopt(json_file, nfp))
 
@@ -65,14 +65,14 @@ labels = [f'Tol={tol}' for tol in trace_tolerance_SIMSOPT_array] + [f'ESSOS\nTol
 times = time_SIMSOPT_array + [time_ESSOS]
 plt.figure()
 bars = plt.bar(labels, times, color=['blue']*len(trace_tolerance_SIMSOPT_array) + ['red'], edgecolor=['black']*len(trace_tolerance_SIMSOPT_array) + ['black'], hatch=['//']*len(trace_tolerance_SIMSOPT_array) + ['|'])
-plt.xlabel('Tracing Tolerance')
+plt.xlabel('Tracing Tolerance of SIMSOPT')
 plt.ylabel('Time (s)')
 plt.xticks(rotation=45)
 plt.tight_layout()
 blue_patch = plt.Line2D([0], [0], color='blue', lw=4, label='SIMSOPT', linestyle='--')
-orange_patch = plt.Line2D([0], [0], color='orange', lw=4, label=f'ESSOS', linestyle='-')
+orange_patch = plt.Line2D([0], [0], color='red', lw=4, label=f'ESSOS', linestyle='-')
 plt.legend(handles=[blue_patch, orange_patch])
-plt.savefig(os.path.join(output_dir, 'time_comparison_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'times_fieldlines_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
 plt.close()
 
 def interpolate_ESSOS_to_SIMSOPT(fieldine_SIMSOPT, fieldline_ESSOS):
@@ -97,13 +97,13 @@ for i, fieldlines_SIMSOPT in enumerate(fieldlines_SIMSOPT_array):
     relative_error_fieldlines_SIMSOPT_vs_ESSOS = []
     plt.figure()
     for j in range(nfieldlines):
-        fieldline_SIMSOPT = jnp.array(fieldlines_SIMSOPT[j])[:,1:]
-        fieldline_ESSOS = fieldlines_ESSOS_interp[j]
+        this_fieldline_SIMSOPT = jnp.array(fieldlines_SIMSOPT[j])[:,1:]
+        this_fieldlines_ESSOS = fieldlines_ESSOS_interp[j]
         average_relative_error = []
-        for fieldline_SIMSOPT, fieldline_ESSOS in zip(fieldline_SIMSOPT, fieldline_ESSOS):
-            relative_error_x = jnp.abs(fieldline_SIMSOPT[0] - fieldline_ESSOS[0])/(jnp.abs(fieldline_SIMSOPT[0])+1e-12)
-            relative_error_y = jnp.abs(fieldline_SIMSOPT[1] - fieldline_ESSOS[1])/(jnp.abs(fieldline_SIMSOPT[1])+1e-12)
-            relative_error_z = jnp.abs(fieldline_SIMSOPT[2] - fieldline_ESSOS[2])/(jnp.abs(fieldline_SIMSOPT[2])+1e-12)
+        for fieldline_SIMSOPT_t, fieldline_ESSOS_t in zip(this_fieldline_SIMSOPT, this_fieldlines_ESSOS):
+            relative_error_x = jnp.abs(fieldline_SIMSOPT_t[0] - fieldline_ESSOS_t[0])/(jnp.abs(fieldline_SIMSOPT_t[0])+1e-12)
+            relative_error_y = jnp.abs(fieldline_SIMSOPT_t[1] - fieldline_ESSOS_t[1])/(jnp.abs(fieldline_SIMSOPT_t[1])+1e-12)
+            relative_error_z = jnp.abs(fieldline_SIMSOPT_t[2] - fieldline_ESSOS_t[2])/(jnp.abs(fieldline_SIMSOPT_t[2])+1e-12)
             average_relative_error.append((relative_error_x + relative_error_y + relative_error_z)/3)
         average_relative_error = jnp.array(average_relative_error)
         relative_error_fieldlines_SIMSOPT_vs_ESSOS.append(average_relative_error)
@@ -147,13 +147,13 @@ bar_width = 0.15
 x = jnp.arange(len(trace_tolerance_SIMSOPT_array))
 for i in range(rms_error_array.shape[1]):
     plt.bar(x + i * bar_width, rms_error_array[:, i], bar_width, label=f'Fieldline {i}')
-plt.xlabel('Tracing Tolerance')
+plt.xlabel('Tracing Tolerance of SIMSOPT')
 plt.ylabel('RMS Error')
 plt.yscale('log')
 plt.xticks(x + bar_width * (rms_error_array.shape[1] - 1) / 2, [f'Tol={tol}' for tol in trace_tolerance_SIMSOPT_array], rotation=45)
 plt.legend()
 plt.tight_layout()
-plt.savefig(os.path.join(output_dir, 'rms_error_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'rms_error_fieldlines_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
 plt.close()
 
 # Calculate maximum error for each tolerance
@@ -164,13 +164,13 @@ bar_width = 0.15
 x = jnp.arange(len(trace_tolerance_SIMSOPT_array))
 for i in range(max_error_array.shape[1]):
     plt.bar(x + i * bar_width, max_error_array[:, i], bar_width, label=f'Fieldline {i}')
-plt.xlabel('Tracing Tolerance')
+plt.xlabel('Tracing Tolerance of SIMSOPT')
 plt.ylabel('Maximum Error')
 plt.yscale('log')
 plt.xticks(x + bar_width * (max_error_array.shape[1] - 1) / 2, [f'Tol={tol}' for tol in trace_tolerance_SIMSOPT_array], rotation=45)
 plt.legend()
 plt.tight_layout()
-plt.savefig(os.path.join(output_dir, 'max_error_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'max_error_fieldlines_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
 plt.close()
 
 # Calculate mean error for each tolerance
@@ -181,14 +181,11 @@ bar_width = 0.15
 x = jnp.arange(len(trace_tolerance_SIMSOPT_array))
 for i in range(mean_error_array.shape[1]):
     plt.bar(x + i * bar_width, mean_error_array[:, i], bar_width, label=f'Fieldline {i}')
-plt.xlabel('Tracing Tolerance')
+plt.xlabel('Tracing Tolerance of SIMSOPT')
 plt.ylabel('Mean Error')
 plt.yscale('log')
 plt.xticks(x + bar_width * (mean_error_array.shape[1] - 1) / 2, [f'Tol={tol}' for tol in trace_tolerance_SIMSOPT_array], rotation=45)
 plt.legend()
 plt.tight_layout()
-plt.savefig(os.path.join(output_dir, 'mean_error_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'mean_error_fieldlines_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
 plt.close()
-
-# error_fieldline_SIMSOPT_vs_ESSOS = jnp.array([jnp.linalg.norm(jnp.array(fieldlines_SIMSOPT[i])[:,1:] - fieldlines_ESSOS_interp[i]) for i in range(nfieldlines)])
-# print(f"Max difference between SIMSOPT and ESSOS fieldlines={jnp.max(error_fieldline_SIMSOPT_vs_ESSOS)}")
