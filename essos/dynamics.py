@@ -12,7 +12,7 @@ def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, ch
     parallel speeds, and total velocities using JAX for efficiency.
     """
     def compute_orbit_params(xyz, vpar):
-        Bs = field.B(xyz)
+        Bs = field.B_contravariant(xyz)
         AbsBs = jnp.linalg.norm(Bs)
         eB = Bs / AbsBs
         p1 = eB
@@ -225,7 +225,7 @@ class Tracing():
                     # def update_fn(state):
                     x = state[:3]
                     v = state[3:]
-                    t = self.particles.charge / self.particles.mass *  self.field.B(x) * 0.5 * dt
+                    t = self.particles.charge / self.particles.mass *  self.field.B_contravariant(x) * 0.5 * dt
                     s = 2. * t / (1. + jnp.dot(t,t))
                     vprime = v + jnp.cross(v, t)
                     v += jnp.cross(vprime, s)
