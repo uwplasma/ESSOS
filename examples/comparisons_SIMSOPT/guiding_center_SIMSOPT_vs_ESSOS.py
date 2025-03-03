@@ -10,7 +10,7 @@ from essos.dynamics import Tracing, Particles
 from essos.fields import BiotSavart as BiotSavart_essos
 import matplotlib.pyplot as plt
 
-tmax_gc = 1e-5
+tmax_gc = 1e-4
 nparticles = 5
 axis_shft=0.02
 R0 = jnp.linspace(1.2125346+axis_shft, 1.295-axis_shft, nparticles)
@@ -67,7 +67,7 @@ for trace_tolerance_SIMSOPT in trace_tolerance_SIMSOPT_array:
 particles_to_vtk(trajectories_SIMSOPT_this_tolerance, os.path.join(output_dir,f'guiding_center_SIMSOPT'))
 
 # Trace in ESSOS
-num_steps_essos = int(jnp.max(jnp.array([len(trajectories_SIMSOPT[0]) for trajectories_SIMSOPT in trajectories_SIMSOPT_array])))
+num_steps_essos = int(jnp.mean(jnp.array([len(trajectories_SIMSOPT[0]) for trajectories_SIMSOPT in trajectories_SIMSOPT_array])))
 time_essos = jnp.linspace(0, tmax_gc, num_steps_essos)
 
 print(f'Tracing ESSOS guiding center with tolerance={trace_tolerance_ESSOS}')
@@ -84,7 +84,6 @@ relative_energy_error_ESSOS = jnp.abs(tracing.energy-particles.energy)/particles
 plt.figure()
 SIMSOPT_energy_interp_this_particle = jnp.zeros((len(trace_tolerance_SIMSOPT_array), nparticles, len(trajectories_SIMSOPT_array[-1][-1][:,0])))
 for j in range(nparticles):
-    # plt.plot(time_essos[2:], relative_energy_error_ESSOS[j,2:], '-', label=f'ESSOS Particle {1+j} Tol={trace_tolerance_ESSOS}')
     for i, relative_energy_error_SIMSOPT in enumerate(relative_energy_error_SIMSOPT_array):
         SIMSOPT_energy_interp_this_particle = SIMSOPT_energy_interp_this_particle.at[i,j].set(jnp.interp(trajectories_SIMSOPT_array[-1][-1][:,0], trajectories_SIMSOPT_array[i][j][:,0], relative_energy_error_SIMSOPT[j][:]))
 plt.plot(time_essos[2:], jnp.mean(relative_energy_error_ESSOS, axis=0)[2:], '-', label=f'ESSOS Tol={trace_tolerance_ESSOS}')

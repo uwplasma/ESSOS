@@ -46,7 +46,7 @@ particles_to_vtk(fieldlines_SIMSOPT_this_tolerance, os.path.join(output_dir,f'fi
 # plot_poincare_data(fieldlines_phi_hits, phis_poincare, os.path.join(output_dir,f'poincare_fieldline_SIMSOPT.pdf'), dpi=150)
 
 # Trace in ESSOS
-num_steps_essos = int(jnp.max(jnp.array([len(fieldlines_SIMSOPT[0]) for fieldlines_SIMSOPT in fieldlines_SIMSOPT_array])))
+num_steps_essos = int(jnp.mean(jnp.array([len(fieldlines_SIMSOPT[0]) for fieldlines_SIMSOPT in fieldlines_SIMSOPT_array])))
 time_essos = jnp.linspace(0, tmax_fl, num_steps_essos)
 
 print(f'Tracing ESSOS fieldlines with tolerance={trace_tolerance_ESSOS}')

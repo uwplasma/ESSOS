@@ -1,5 +1,6 @@
 import os
 from jax import vmap
+from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
@@ -16,7 +17,7 @@ mass=PROTON_MASS
 energy=4000*ONE_EV
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), '..', 'tests', 'input_files', 'biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'biot_savart_LandremanPaulQA.json')
 coils = Coils_from_simsopt(json_file, nfp=2)
 field = BiotSavart(coils)
 
@@ -27,7 +28,9 @@ initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=field)
 
 # Trace in ESSOS
+time0 = time()
 tracing = Tracing(field=field, model='FullOrbit_Boris', particles=particles, maxtime=tmax, timesteps=num_steps)
+print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories_ESSOS = tracing.trajectories
 
 # Plot trajectories, velocity parallel to the magnetic field, and energy error

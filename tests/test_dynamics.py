@@ -7,13 +7,11 @@ def test_particles_initialization_all_params():
     nparticles = 100
     initial_xyz = jnp.array([[1.0, 0.0, 0.0]] * nparticles)
     initial_vparallel_over_v = jnp.linspace(-1, 1, nparticles)
-    initial_R = 1.23
-    final_R = 1.27
     charge = ALPHA_PARTICLE_CHARGE
     mass = ALPHA_PARTICLE_MASS
     energy = FUSION_ALPHA_PARTICLE_ENERGY
 
-    particles = Particles(nparticles, initial_xyz, initial_vparallel_over_v, initial_R, final_R, charge, mass, energy)
+    particles = Particles(initial_xyz, initial_vparallel_over_v, charge, mass, energy)
 
     assert particles.nparticles == nparticles
     assert particles.charge == charge
@@ -24,7 +22,7 @@ def test_particles_initialization_all_params():
 
 def test_particles_initialization_default_params():
     nparticles = 100
-    particles = Particles(nparticles)
+    particles = Particles(jnp.array([[1.0, 0.0, 0.0]] * nparticles))
 
     assert particles.nparticles == nparticles
     assert particles.charge == ALPHA_PARTICLE_CHARGE
@@ -44,7 +42,7 @@ def test_particles_initialization_with_initial_conditions():
 
 def test_particles_computed_attributes():
     nparticles = 100
-    particles = Particles(nparticles)
+    particles = Particles(jnp.array([[1.0, 0.0, 0.0]] * nparticles))
     v = jnp.sqrt(2 * particles.energy / particles.mass)
     expected_vparallel = v * particles.initial_vparallel_over_v
     expected_vperpendicular = jnp.sqrt(v**2 - expected_vparallel**2)
@@ -65,9 +63,12 @@ class MockField:
     def dAbsB_by_dX(self, points):
         return jnp.array([0.0, 0.0, 1.0])
 
+    def to_xyz(self, points):
+        return points
+
 @pytest.fixture
 def particles():
-    return Particles(nparticles=10)
+    return Particles(jnp.array([[1.0, 0.0, 0.0]] * 10))
 
 @pytest.fixture
 def field():

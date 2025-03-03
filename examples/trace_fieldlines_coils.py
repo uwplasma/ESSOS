@@ -1,4 +1,5 @@
 import os
+from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
@@ -13,7 +14,7 @@ trace_tolerance = 1e-7
 num_steps = 1500
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), '..', 'tests', 'input_files', 'biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'biot_savart_LandremanPaulQA.json')
 coils = Coils_from_simsopt(json_file, nfp=2)
 field = BiotSavart(coils)
 
@@ -23,8 +24,10 @@ phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 
 # Trace in ESSOS
+time0 = time()
 tracing = Tracing(field=field, model='FieldLine', initial_conditions=initial_xyz,
                   maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories_ESSOS = tracing.trajectories
 
 # Plot trajectories

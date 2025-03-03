@@ -86,9 +86,7 @@ for model_ESSOS in model_ESSOS_array:
 plt.figure()
 SIMSOPT_energy_interp_this_particle = jnp.zeros((len(trace_tolerance_SIMSOPT_array), nparticles, len(trajectories_SIMSOPT_array[-1][-1][:,0])))
 for j in range(nparticles):
-    # plt.plot(time_essos[2:], relative_energy_error_ESSOS[j,2:], '-', label=f'ESSOS Particle {1+j}'+(' Boris' if model_ESSOS=='FullOrbit_Boris' else f' Tol={trace_tolerance_ESSOS}'))
     for i, relative_energy_error_SIMSOPT in enumerate(relative_energy_error_SIMSOPT_array):
-        # plt.plot(trajectories_SIMSOPT_array[i][j][2:,0], relative_energy_error_SIMSOPT[j][2:], '--', label=f'SIMSOPT Particle {1+j} Tol={trace_tolerance_SIMSOPT_array[i]}')
         SIMSOPT_energy_interp_this_particle = SIMSOPT_energy_interp_this_particle.at[i,j].set(jnp.interp(trajectories_SIMSOPT_array[-1][-1][:,0], trajectories_SIMSOPT_array[i][j][:,0], relative_energy_error_SIMSOPT[j][:]))
 for i, SIMSOPT_energy_interp in enumerate(SIMSOPT_energy_interp_this_particle):
     plt.plot(trajectories_SIMSOPT_array[-1][-1][4:,0], jnp.mean(SIMSOPT_energy_interp, axis=0)[4:], '--', label=f'SIMSOPT Tol={trace_tolerance_SIMSOPT_array[i]}')

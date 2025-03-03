@@ -35,6 +35,10 @@ class BiotSavart():
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def to_xyz(self, points):
+        return points
 
 class Vmec():
     def __init__(self, wout):
@@ -64,9 +68,9 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
         s, theta, phi = points
-        bsubsmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row), in_axes=1)(self.bsubsmns)
-        bsubumnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsubumnc[1:])
-        bsubvmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsubvmnc[1:])
+        bsubsmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.bsubsmns)
+        bsubumnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bsubumnc[1:])
+        bsubvmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bsubvmnc[1:])
         cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
         sinangle_nyq = jnp.sin(self.xm_nyq * theta - self.xn_nyq * phi)
         B_sub_s = jnp.dot(bsubsmns_interp, sinangle_nyq)
@@ -77,8 +81,8 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def B_contravariant(self, points):
         s, theta, phi = points
-        bsupumnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsupumnc[1:])
-        bsupvmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bsupvmnc[1:])
+        bsupumnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bsupumnc[1:])
+        bsupvmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bsupvmnc[1:])
         cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
         B_sup_theta = jnp.dot(bsupumnc_interp, cosangle_nyq)
         B_sup_phi = jnp.dot(bsupvmnc_interp, cosangle_nyq)
@@ -87,9 +91,9 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def B(self, points):
         s, theta, phi = points
-        gmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.gmnc[1:])
-        rmnc_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row), in_axes=1)(self.rmnc)
-        zmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row), in_axes=1)(self.zmns)
+        gmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.gmnc[1:])
+        rmnc_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.rmnc)
+        zmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.zmns)
         d_rmnc_d_s_interp = vmap(lambda row: grad(lambda s: jnp.interp(s, self.s_full_grid, row))(s), in_axes=1)(self.rmnc)
         d_zmns_d_s_interp = vmap(lambda row: grad(lambda s: jnp.interp(s, self.s_full_grid, row))(s), in_axes=1)(self.zmns)
         
@@ -143,7 +147,7 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def AbsB(self, points):
         s, theta, phi = points
-        bmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row), in_axes=1)(self.bmnc[1:, :])
+        bmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bmnc[1:, :])
         cos_values = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
         return jnp.dot(bmnc_interp, cos_values)
     
@@ -154,3 +158,16 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def to_xyz(self, points):
+        s, theta, phi = points
+        rmnc_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.rmnc)
+        zmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.zmns)
+        cosangle = jnp.cos(self.xm * theta - self.xn * phi)
+        sinangle = jnp.sin(self.xm * theta - self.xn * phi)
+        R = jnp.dot(rmnc_interp, cosangle)
+        Z = jnp.dot(zmns_interp, sinangle)
+        X = R * jnp.cos(phi)
+        Y = R * jnp.sin(phi)
+        return jnp.array([X, Y, Z])

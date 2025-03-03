@@ -2,7 +2,8 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from jax import jit, vmap, tree_util, random, lax
 from functools import partial
-from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController
+from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
+from essos.fields import Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from .plot import fix_matplotlib_3d
 
@@ -34,32 +35,9 @@ def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, ch
     return xyz_inits_full, v_inits
 
 class Particles():
-    def __init__(self, initial_xyz=None, initial_vparallel_over_v=None, initial_vxvyvz=None,
-                 charge=ALPHA_PARTICLE_CHARGE, mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY,
-                 min_vparallel_over_v=-1, max_vparallel_over_v=1, field=None, initial_xyz_fullorbit=None):
-        """
-            Initialize the particle dynamics.
-            Parameters:
-            nparticles (int, optional): Number of particles. Defaults to None.
-            initial_xyz (nparticles, 3): Initial positions of particles. Defaults to None.
-            initial_vparallel_over_v (nparticles,): Initial parallel velocity components over total velocity. Defaults to None.
-            initial_vxvyvz (nparticles, 3): Initial velocities of particles. Defaults to None.
-            charge (float, optional): Charge of the particles. Defaults to ALPHA_PARTICLE_CHARGE.
-            mass (float, optional): Mass of the particles. Defaults to ALPHA_PARTICLE_MASS.
-            energy (float, optional): Energy of the particles. Defaults to FUSION_ALPHA_PARTICLE_ENERGY.
-            min_vparallel_over_v (float, optional): Minimum value for initial parallel velocity components over total velocity. Defaults to -1.
-            max_vparallel_over_v (float, optional): Maximum value for initial parallel velocity components over total velocity. Defaults to 1.
-            Attributes:
-            nparticles (int): Number of particles.
-            charge (float): Charge of the particles.
-            mass (float): Mass of the particles.
-            energy (float): Energy of the particles.
-            initial_xyz (jnp.ndarray): Initial positions of particles.
-            initial_vparallel_over_v (jnp.ndarray): Initial parallel velocity components over total velocity.
-            initial_vparallel (jnp.ndarray): Initial parallel velocities of particles.
-            initial_vperpendicular (jnp.ndarray): Initial perpendicular velocities of particles.
-        """
-        
+    def __init__(self, initial_xyz=None, initial_vparallel_over_v=None, charge=ALPHA_PARTICLE_CHARGE,
+                 mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY, min_vparallel_over_v=-1,
+                 max_vparallel_over_v=1, field=None, initial_vxvyvz=None, initial_xyz_fullorbit=None):
         self.charge = charge
         self.mass = mass
         self.energy = energy
@@ -88,13 +66,11 @@ class Particles():
 def GuidingCenter(t,
                   initial_condition,
                   args) -> jnp.ndarray:
-
     x, y, z, vpar = initial_condition
     field, particles = args
     q = particles.charge
     m = particles.mass
     E = particles.energy
-    
     # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
     # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
@@ -115,12 +91,10 @@ def GuidingCenter(t,
 def Lorentz(t,
             initial_condition,
             args) -> jnp.ndarray:
-    
     x, y, z, vx, vy, vz = initial_condition
     field, particles = args
     q = particles.charge
     m = particles.mass
-    
     # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
     # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
@@ -136,32 +110,21 @@ def Lorentz(t,
 def FieldLine(t,
               initial_condition,
               field) -> jnp.ndarray:
-
-    # assert isinstance(initial_condition, jnp.ndarray), "initial values must be a jnp.ndarray"
-    # assert initial_condition.shape == (3,), "initial values must have shape (3,) with x, y, z"
-    # assert initial_condition.dtype == float, "initial values must be a float"
-
     x, y, z = initial_condition
-    # velocity_signs = jnp.array([-1.0, 1.0])
-    # plus1_minus1 = random.choice(random.PRNGKey(42), velocity_signs)
-    # velocity = plus1_minus1*c # speed of light
     # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-
     # def compute_derivatives(_):
     position = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(position)
     dxdt = B_contravariant
     return dxdt
-
     # def zero_derivatives(_):
     #     return jnp.zeros(3, dtype=float)
-
     # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times=None,
                  field=None, model=None, maxtime: float = 1e-7, timesteps: int = 200,
-                 tol_step_size = 1e-7, particles=None):
+                 tol_step_size = 1e-7, particles=None, condition=None):
         
         self.field = field
         self.model = model
@@ -172,7 +135,13 @@ class Tracing():
         self.tol_step_size = tol_step_size
         self._trajectories = trajectories_input
         self.particles = particles
-        
+        if condition is None:
+            self.condition = lambda t, y, args, **kwargs: False
+            if isinstance(field, Vmec):
+                def condition_Vmec(t, y, args, **kwargs):
+                    s, _, _, _ = y
+                    return s-1
+                self.condition = condition_Vmec
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles)
@@ -201,24 +170,36 @@ class Tracing():
             self.energy = jnp.zeros((self.particles.nparticles, self.timesteps))
             
         if model == 'GuidingCenter':
-            for i, trajectory in enumerate(self._trajectories):
+            @jit
+            def compute_energy_gc(trajectory):
                 xyz = trajectory[:, :3]
                 vpar = trajectory[:, 3]
-                AbsB = jnp.array([self.field.AbsB(x) for x in xyz])
-                mu = (self.particles.energy - self.particles.mass*vpar[0]**2/2)/AbsB[0]
-                self.energy = self.energy.at[i].set(self.particles.mass*vpar**2/2+mu*AbsB)
+                AbsB = vmap(self.field.AbsB)(xyz)
+                mu = (self.particles.energy - self.particles.mass * vpar[0]**2 / 2) / AbsB[0]
+                return self.particles.mass * vpar**2 / 2 + mu * AbsB
+            self.energy = vmap(compute_energy_gc)(self._trajectories)
         elif model == 'FullOrbit' or model == 'FullOrbit_Boris':
-            for i, trajectory in enumerate(self._trajectories):
+            @jit
+            def compute_energy_fo(trajectory):
                 vxvyvz = trajectory[:, 3:]
-                self.energy = self.energy.at[i].set(self.particles.mass/2*(vxvyvz[:, 0]**2 + vxvyvz[:, 1]**2 + vxvyvz[:, 2]**2))
+                return self.particles.mass / 2 * (vxvyvz[:, 0]**2 + vxvyvz[:, 1]**2 + vxvyvz[:, 2]**2)
+            self.energy = vmap(compute_energy_fo)(self._trajectories)
         elif model == 'FieldLine':
             self.energy = jnp.ones((len(initial_conditions), self.timesteps))
+        
+        self.trajectories_xyz = vmap(lambda xyz: vmap(lambda point: self.field.to_xyz(point[:3]))(xyz))(self.trajectories)
+        
+        if isinstance(field, Vmec):
+            self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction()
+        else:
+            self.loss_fractions = None
+            self.total_particles_lost = None
+            self.loss_times = None
 
     @partial(jit, static_argnums=(0))
     def trace(self):
         @jit
         def compute_trajectory(initial_condition) -> jnp.ndarray:
-
             if self.model == 'FullOrbit_Boris':
                 dt=self.maxtime / self.timesteps
                 def update_state(state, _):
@@ -240,10 +221,6 @@ class Tracing():
                     # return update_fn(state)
                 _, trajectory = lax.scan(update_state, initial_condition, jnp.arange(len(self.times)-1))
                 trajectory = jnp.vstack([initial_condition, trajectory])
-                # from jax.debug import print as jprint
-                # jprint("trajectory0 {}",trajectory[0])
-                # jprint("initial_condition {}",initial_condition)
-                # exit()
             else:
                 trajectory = diffeqsolve(
                     self.ODE_term,
@@ -257,13 +234,12 @@ class Tracing():
                     throw=False,
                     # adjoint=adjoint,
                     stepsize_controller = PIDController(rtol=self.tol_step_size, atol=self.tol_step_size),
-                    # max_steps=num_adaptative_steps
+                    # max_steps=num_adaptative_steps,
+                    event = Event(self.condition)
                 ).ys
-
             return trajectory
-
         return jnp.array(vmap(compute_trajectory,in_axes=(0))(self.initial_conditions))
-        
+    
     @property
     def trajectories(self):
         return self._trajectories
@@ -284,11 +260,10 @@ class Tracing():
     def to_vtk(self, filename):
         from pyevtk.hl import polyLinesToVTK
         import numpy as np
-        x = np.concatenate([xyz[:, 0] for xyz in self.trajectories])
-        y = np.concatenate([xyz[:, 1] for xyz in self.trajectories])
-        z = np.concatenate([xyz[:, 2] for xyz in self.trajectories])
-        ppl = np.asarray([xyz.shape[0] for xyz in self.trajectories])
-        # ppl = np.array([self.trajectories.shape[1]]*self.trajectories.shape[0])
+        x = np.concatenate([xyz[:, 0] for xyz in self.trajectories_xyz])
+        y = np.concatenate([xyz[:, 1] for xyz in self.trajectories_xyz])
+        z = np.concatenate([xyz[:, 2] for xyz in self.trajectories_xyz])
+        ppl = np.asarray([xyz.shape[0] for xyz in self.trajectories_xyz])
         data = np.array(jnp.concatenate([i*jnp.ones((self.trajectories[i].shape[0], )) for i in range(len(self.trajectories))]))
         polyLinesToVTK(filename, x, y, z, pointsPerLine=ppl, pointData={'idx': data})
     
@@ -296,12 +271,25 @@ class Tracing():
         if ax is None or ax.name != "3d":
             fig = plt.figure()
             ax = fig.add_subplot(projection='3d')
-        for xyz in self.trajectories:
+        for xyz in self.trajectories_xyz:
             ax.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2], **kwargs, linestyle='dashed', linewidth=2)
         if axis_equal:
             fix_matplotlib_3d(ax)
         if show:
             plt.show()
+            
+    @partial(jit, static_argnums=(0))
+    def loss_fraction(self, r_max=0.99):
+        trajectories_r = jnp.array([traj[:, 0] for traj in self.trajectories])
+        lost_mask = trajectories_r >= r_max
+        lost_indices = jnp.argmax(lost_mask, axis=1)
+        lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
+        lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
+        safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
+        loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
+        loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
+        total_particles_lost = loss_fractions[-1] * len(self.trajectories)
+        return loss_fractions, total_particles_lost, lost_times
 
     # def get_phi(x, y, phi_last):
     #     """Compute the toroidal angle phi, ensuring continuity."""
