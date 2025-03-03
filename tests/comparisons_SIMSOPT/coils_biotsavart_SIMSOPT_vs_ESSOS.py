@@ -14,7 +14,7 @@ output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
     
-json_file = os.path.join(os.path.dirname(__file__), 'input', 'biot_savart_opt.json')
+json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'biot_savart_opt.json')
 
 
 list_segments = [30, 100, 300, 1000, 3000]

@@ -1,35 +1,87 @@
 import jax.numpy as jnp
-from jax import jit, vmap, tree_util, random
+from jax import jit, vmap, tree_util, random, lax
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 
+def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
+    """
+    Computes full orbit positions for given guiding center positions,
+    parallel speeds, and total velocities using JAX for efficiency.
+    """
+    def compute_orbit_params(xyz, vpar):
+        Bs = field.B(xyz)
+        AbsBs = jnp.linalg.norm(Bs)
+        eB = Bs / AbsBs
+        p1 = eB
+        p2 = jnp.array([0, 0, 1])
+        p3 = -jnp.cross(p1, p2)
+        p3 /= jnp.linalg.norm(p3)
+        q1 = p1
+        q2 = p2 - jnp.dot(q1, p2) * q1
+        q2 /= jnp.linalg.norm(q2)
+        q3 = p3 - jnp.dot(q1, p3) * q1 - jnp.dot(q2, p3) * q2
+        q3 /= jnp.linalg.norm(q3)
+        speed_perp = jnp.sqrt(total_speed**2 - vpar**2)
+        rg = mass * speed_perp / (jnp.abs(charge) * AbsBs)
+        xyz_full = xyz + rg * (jnp.sin(phase_angle_full_orbit) * q2 + jnp.cos(phase_angle_full_orbit) * q3)
+        vperp = -speed_perp * jnp.cos(phase_angle_full_orbit) * q2 + speed_perp * jnp.sin(phase_angle_full_orbit) * q3
+        v_init = vpar * q1 + vperp
+        return xyz_full, v_init
+    xyz_inits_full, v_inits = vmap(compute_orbit_params)(initial_xyz, initial_vparallel)
+    return xyz_inits_full, v_inits
+
 class Particles():
-    def __init__(self, nparticles=None, initial_xyz=None, initial_vparallel_over_v=None, initial_R=1.23, final_R=1.27,
+    def __init__(self, nparticles=None, initial_xyz=None, initial_vparallel_over_v=None, initial_vxvyvz=None,
                  charge=ALPHA_PARTICLE_CHARGE, mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY,
-                 min_vparallel_over_v=-1, max_vparallel_over_v=1):
+                 min_vparallel_over_v=-1, max_vparallel_over_v=1, field=None, initial_xyz_fullorbit=None):
+        """
+            Initialize the particle dynamics.
+            Parameters:
+            nparticles (int, optional): Number of particles. Defaults to None.
+            initial_xyz (nparticles, 3): Initial positions of particles. Defaults to None.
+            initial_vparallel_over_v (nparticles,): Initial parallel velocity components over total velocity. Defaults to None.
+            initial_vxvyvz (nparticles, 3): Initial velocities of particles. Defaults to None.
+            charge (float, optional): Charge of the particles. Defaults to ALPHA_PARTICLE_CHARGE.
+            mass (float, optional): Mass of the particles. Defaults to ALPHA_PARTICLE_MASS.
+            energy (float, optional): Energy of the particles. Defaults to FUSION_ALPHA_PARTICLE_ENERGY.
+            min_vparallel_over_v (float, optional): Minimum value for initial parallel velocity components over total velocity. Defaults to -1.
+            max_vparallel_over_v (float, optional): Maximum value for initial parallel velocity components over total velocity. Defaults to 1.
+            Attributes:
+            nparticles (int): Number of particles.
+            charge (float): Charge of the particles.
+            mass (float): Mass of the particles.
+            energy (float): Energy of the particles.
+            initial_xyz (jnp.ndarray): Initial positions of particles.
+            initial_vparallel_over_v (jnp.ndarray): Initial parallel velocity components over total velocity.
+            initial_vparallel (jnp.ndarray): Initial parallel velocities of particles.
+            initial_vperpendicular (jnp.ndarray): Initial perpendicular velocities of particles.
+        """
+        
         self.nparticles = nparticles
         self.charge = charge
         self.mass = mass
         self.energy = energy
+        self.initial_xyz = jnp.array(initial_xyz)
+        self.nparticles = len(initial_xyz)
+        self.initial_xyz_fullorbit =initial_xyz_fullorbit
+        self.initial_vxvyvz = initial_vxvyvz
+        self.phase_angle_full_orbit = 0
         
-        if initial_xyz is not None:
-            self.initial_xyz = jnp.array(initial_xyz)
-            self.nparticles = len(initial_xyz)
-        else:
-            self.nparticles = nparticles
-            R0 = jnp.linspace(initial_R, final_R, nparticles)
-            Z0 = jnp.zeros(nparticles)
-            phi0 = jnp.zeros(nparticles)
-            self.initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
         if initial_vparallel_over_v is not None:
             self.initial_vparallel_over_v = jnp.array(initial_vparallel_over_v)
         else:
             self.initial_vparallel_over_v = random.uniform(random.PRNGKey(42), (nparticles,), minval=min_vparallel_over_v, maxval=max_vparallel_over_v)
         
-        v = jnp.sqrt(2*self.energy/self.mass)
-        self.initial_vparallel = v*self.initial_vparallel_over_v
-        self.initial_vperpendicular = jnp.sqrt(v**2 - self.initial_vparallel**2)
+        self.total_speed = jnp.sqrt(2*self.energy/self.mass)
+        
+        self.initial_vparallel = self.total_speed*self.initial_vparallel_over_v
+        self.initial_vperpendicular = jnp.sqrt(self.total_speed**2 - self.initial_vparallel**2)
+        
+        if field is not None and initial_xyz_fullorbit is None:
+            self.initial_xyz_fullorbit, self.initial_vxvyvz = gc_to_fullorbit(field=field, initial_xyz=self.initial_xyz, initial_vparallel=self.initial_vparallel,
+                                                                              total_speed=self.total_speed, mass=self.mass, charge=self.charge,
+                                                                              phase_angle_full_orbit=self.phase_angle_full_orbit)
 
 @partial(jit, static_argnums=(2))
 def GuidingCenter(t,
@@ -123,10 +175,13 @@ class Tracing():
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles)
-            self.initial_conditions = jnp.concatenate([self.initial_conditions, self.particles.initial_vparallel[:, None]], axis=1)
-        elif model == 'Lorentz':
+            self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
+        elif model == 'FullOrbit' or model == 'FullOrbit_Boris':
             self.ODE_term = ODETerm(Lorentz)
             self.args = (self.field, self.particles)
+            self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
+            if field is None:
+                raise ValueError("Field parameter is required for FullOrbit model")
         elif model == 'FieldLine':
             self.ODE_term = ODETerm(FieldLine)
             self.args = self.field
@@ -138,26 +193,70 @@ class Tracing():
             self.timesteps = len(self.times)
             
         self._trajectories = self.trace()
+        
+        self.energy = jnp.zeros((self.particles.nparticles, self.timesteps))
+        if model == 'GuidingCenter':
+            for i, trajectory in enumerate(self._trajectories):
+                xyz = trajectory[:, :3]
+                vpar = trajectory[:, 3]
+                AbsB = jnp.array([self.field.AbsB(x) for x in xyz])
+                mu = (self.particles.energy - self.particles.mass*vpar[0]**2/2)/AbsB[0]
+                self.energy = self.energy.at[i].set(self.particles.mass*vpar**2/2+mu*AbsB)
+        elif model == 'FullOrbit' or model == 'FullOrbit_Boris':
+            for i, trajectory in enumerate(self._trajectories):
+                vxvyvz = trajectory[:, 3:]
+                self.energy = self.energy.at[i].set(self.particles.mass/2*(vxvyvz[:, 0]**2 + vxvyvz[:, 1]**2 + vxvyvz[:, 2]**2))
+        elif model == 'FieldLine':
+            self.energy = jnp.zeroes((self.particles.nparticles, self.timesteps))
+            for i, trajectory in enumerate(self._trajectories):
+                xyz = trajectory[:, :3]
+                self.energy = self.energy.at[i].set(jnp.array([self.field.AbsB(x) for x in xyz]))
 
     @partial(jit, static_argnums=(0))
     def trace(self):
         @jit
         def compute_trajectory(initial_condition) -> jnp.ndarray:
 
-            trajectory = diffeqsolve(
-                self.ODE_term,
-                t0=0.0,
-                t1=self.maxtime,
-                dt0=self.maxtime / self.timesteps,
-                y0=initial_condition,
-                solver=Tsit5(),
-                args=self.args,
-                saveat=SaveAt(ts=self.times),
-                throw=False,
-                # adjoint=adjoint,
-                stepsize_controller = PIDController(rtol=self.tol_step_size, atol=self.tol_step_size),
-                # max_steps=num_adaptative_steps
-            ).ys
+            if self.model == 'FullOrbit_Boris':
+                dt=self.maxtime / self.timesteps
+                def update_state(state, _):
+                    # def update_fn(state):
+                    x = state[:3]
+                    v = state[3:]
+                    t = self.particles.charge / self.particles.mass *  self.field.B(x) * 0.5 * dt
+                    s = 2. * t / (1. + jnp.dot(t,t))
+                    vprime = v + jnp.cross(v, t)
+                    v += jnp.cross(vprime, s)
+                    x += v * dt
+                    new_state = jnp.concatenate((x, v))
+                    return new_state, new_state
+                    # def no_update_fn(state):
+                    #     x, v = state
+                    #     return (x, v), jnp.concatenate((x, v))
+                    # condition = (jnp.sqrt(x1**2 + x2**2) > 50) | (jnp.abs(x3) > 20)
+                    # return lax.cond(condition, no_update_fn, update_fn, state)
+                    # return update_fn(state)
+                _, trajectory = lax.scan(update_state, initial_condition, jnp.arange(len(self.times)-1))
+                trajectory = jnp.vstack([initial_condition, trajectory])
+                # from jax.debug import print as jprint
+                # jprint("trajectory0 {}",trajectory[0])
+                # jprint("initial_condition {}",initial_condition)
+                # exit()
+            else:
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=self.maxtime / self.timesteps,
+                    y0=initial_condition,
+                    solver=Tsit5(),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=adjoint,
+                    stepsize_controller = PIDController(rtol=self.tol_step_size, atol=self.tol_step_size),
+                    # max_steps=num_adaptative_steps
+                ).ys
 
             return trajectory
 

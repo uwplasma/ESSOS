@@ -10,7 +10,7 @@ from essos.dynamics import Tracing, Particles
 from essos.fields import BiotSavart as BiotSavart_essos
 import matplotlib.pyplot as plt
 
-tmax_gc = 1e-4
+tmax_gc = 1e-5
 nparticles = 5
 axis_shft=0.02
 R0 = jnp.linspace(1.2125346+axis_shft, 1.295-axis_shft, nparticles)
@@ -24,14 +24,13 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 nfp=2
-json_file = os.path.join(os.path.dirname(__file__), 'input', 'biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'biot_savart_LandremanPaulQA.json')
 field_simsopt = load(json_file)
 field_essos = BiotSavart_essos(Coils_from_simsopt(json_file, nfp))
 
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-# initial_vparallel_over_v = #jnp.linspace(-1, 1, nparticles)
 initial_vparallel_over_v = random.uniform(random.PRNGKey(42), (nparticles,), minval=-1, maxval=1)
 
 phis_poincare = [(i/4)*(2*jnp.pi/nfp) for i in range(4)]
@@ -42,17 +41,28 @@ particles = Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=initial_
 time_SIMSOPT_array = []
 trajectories_SIMSOPT_array = []
 avg_steps_SIMSOPT = 0
+relative_energy_error_SIMSOPT_array = []
 for trace_tolerance_SIMSOPT in trace_tolerance_SIMSOPT_array:
     print(f'Tracing SIMSOPT guiding center with tolerance={trace_tolerance_SIMSOPT}')
     t1 = time.time()
     trajectories_SIMSOPT_this_tolerance, trajectories_SIMSOPT_phi_hits = block_until_ready(trace_particles(
                     field=field_simsopt, xyz_inits=particles.initial_xyz, mass=particles.mass,
-                    parallel_speeds=particles.initial_vparallel, tmax=tmax_gc,
+                    parallel_speeds=particles.initial_vparallel, tmax=tmax_gc, mode='gc_vac',
                     charge=particles.charge, Ekin=particles.energy, tol=trace_tolerance_SIMSOPT))
     time_SIMSOPT_array.append(time.time()-t1)
     avg_steps_SIMSOPT += sum([len(l) for l in trajectories_SIMSOPT_this_tolerance])//nparticles
     print(f"  Time for SIMSOPT guiding center tracing={time.time()-t1:.3f}s with tolerance={trace_tolerance_SIMSOPT}. Avg num steps={avg_steps_SIMSOPT}")
     trajectories_SIMSOPT_array.append(trajectories_SIMSOPT_this_tolerance)
+    
+    relative_energy_SIMSOPT = []
+    for i, trajectory in enumerate(trajectories_SIMSOPT_this_tolerance):
+        xyz = jnp.asarray(trajectory[:, 1:4])
+        vpar = trajectory[:, 4]
+        field_simsopt.set_points(xyz)
+        AbsB = field_simsopt.AbsB()[:,0]
+        mu = (particles.energy - particles.mass*vpar[0]**2/2)/AbsB[0]
+        relative_energy_SIMSOPT.append(jnp.abs(particles.mass*vpar**2/2+mu*AbsB-particles.energy)/particles.energy)
+    relative_energy_error_SIMSOPT_array.append(relative_energy_SIMSOPT)
 
 particles_to_vtk(trajectories_SIMSOPT_this_tolerance, os.path.join(output_dir,f'guiding_center_SIMSOPT'))
 
@@ -69,8 +79,27 @@ time_ESSOS = time.time()-t1
 print(f"  Time for ESSOS guiding center tracing={time.time()-t1:.3f}s with tolerance={trace_tolerance_ESSOS}. Num steps={len(trajectories_ESSOS[0])}")
 tracing.to_vtk(os.path.join(output_dir,f'guiding_center_ESSOS'))
 
+relative_energy_error_ESSOS = jnp.abs(tracing.energy-particles.energy)/particles.energy
+
+plt.figure()
+SIMSOPT_energy_interp_this_particle = jnp.zeros((len(trace_tolerance_SIMSOPT_array), nparticles, len(trajectories_SIMSOPT_array[-1][-1][:,0])))
+for j in range(nparticles):
+    # plt.plot(time_essos[2:], relative_energy_error_ESSOS[j,2:], '-', label=f'ESSOS Particle {1+j} Tol={trace_tolerance_ESSOS}')
+    for i, relative_energy_error_SIMSOPT in enumerate(relative_energy_error_SIMSOPT_array):
+        SIMSOPT_energy_interp_this_particle = SIMSOPT_energy_interp_this_particle.at[i,j].set(jnp.interp(trajectories_SIMSOPT_array[-1][-1][:,0], trajectories_SIMSOPT_array[i][j][:,0], relative_energy_error_SIMSOPT[j][:]))
+plt.plot(time_essos[2:], jnp.mean(relative_energy_error_ESSOS, axis=0)[2:], '-', label=f'ESSOS Tol={trace_tolerance_ESSOS}')
+for i, SIMSOPT_energy_interp in enumerate(SIMSOPT_energy_interp_this_particle):
+    plt.plot(trajectories_SIMSOPT_array[-1][-1][4:,0], jnp.mean(SIMSOPT_energy_interp, axis=0)[4:], '--', label=f'SIMSOPT Tol={trace_tolerance_SIMSOPT_array[i]}')
+plt.legend()
+plt.yscale('log')
+plt.xlabel('Time (s)')
+plt.ylabel('Average Relative Energy Error')
+plt.tight_layout()
+plt.savefig(os.path.join(output_dir, f'relative_energy_error_guiding_center_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.close()
+
 # Plot time comparison in a bar chart
-labels = [f'Tol={tol}' for tol in trace_tolerance_SIMSOPT_array] + [f'ESSOS\nTol={trace_tolerance_ESSOS}']
+labels = [f'SIMSOPT\nTol={tol}' for tol in trace_tolerance_SIMSOPT_array] + [f'ESSOS\nTol={trace_tolerance_ESSOS}']
 times = time_SIMSOPT_array + [time_ESSOS]
 plt.figure()
 bars = plt.bar(labels, times, color=['blue']*len(trace_tolerance_SIMSOPT_array) + ['red'], edgecolor=['black']*len(trace_tolerance_SIMSOPT_array) + ['black'], hatch=['//']*len(trace_tolerance_SIMSOPT_array) + ['|'])
@@ -85,7 +114,7 @@ plt.savefig(os.path.join(output_dir, 'times_guiding_center_SIMSOPT_vs_ESSOS.pdf'
 plt.close()
 
 def interpolate_ESSOS_to_SIMSOPT(trajectory_SIMSOPT, trajectory_ESSOS):
-    time_SIMSOPT = jnp.array(trajectory_SIMSOPT)[:, 0]  # Time values from guiding center_SIMSOPT
+    time_SIMSOPT = jnp.array(trajectory_SIMSOPT)[:, 0]  # Time values from guiding center SIMSOPT
     # coords_SIMSOPT = jnp.array(trajectory_SIMSOPT)[:, 1:]  # Coordinates (x, y, z) from guiding center SIMSOPT
     coords_ESSOS = jnp.array(trajectory_ESSOS)
 

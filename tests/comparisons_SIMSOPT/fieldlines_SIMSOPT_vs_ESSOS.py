@@ -26,7 +26,7 @@ output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
     
-json_file = os.path.join(os.path.dirname(__file__), 'input', 'biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'biot_savart_LandremanPaulQA.json')
 field_simsopt = load(json_file)
 field_essos = BiotSavart_essos(Coils_from_simsopt(json_file, nfp))
 
@@ -61,7 +61,7 @@ tracing.to_vtk(os.path.join(output_dir,f'fieldlines_ESSOS'))
 # tracing.poincare_plot(phis_poincare, show=False)
 
 # Plot time comparison in a bar chart
-labels = [f'Tol={tol}' for tol in trace_tolerance_SIMSOPT_array] + [f'ESSOS\nTol={trace_tolerance_ESSOS}']
+labels = [f'SIMSOPT\nTol={tol}' for tol in trace_tolerance_SIMSOPT_array] + [f'ESSOS\nTol={trace_tolerance_ESSOS}']
 times = time_SIMSOPT_array + [time_ESSOS]
 plt.figure()
 bars = plt.bar(labels, times, color=['blue']*len(trace_tolerance_SIMSOPT_array) + ['red'], edgecolor=['black']*len(trace_tolerance_SIMSOPT_array) + ['black'], hatch=['//']*len(trace_tolerance_SIMSOPT_array) + ['|'])
