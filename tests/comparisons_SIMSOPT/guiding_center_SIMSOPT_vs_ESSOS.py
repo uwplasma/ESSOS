@@ -72,7 +72,7 @@ time_essos = jnp.linspace(0, tmax_gc, num_steps_essos)
 
 print(f'Tracing ESSOS guiding center with tolerance={trace_tolerance_ESSOS}')
 t1 = time.time()
-tracing = block_until_ready(Tracing(field=field_essos, model='GuidingCenter', initial_conditions=initial_xyz, particles=particles,
+tracing = block_until_ready(Tracing(field=field_essos, model='GuidingCenter', particles=particles,
                                     maxtime=tmax_gc, timesteps=num_steps_essos, tol_step_size=trace_tolerance_ESSOS))
 trajectories_ESSOS = tracing.trajectories
 time_ESSOS = time.time()-t1

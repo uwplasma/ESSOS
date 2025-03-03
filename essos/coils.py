@@ -200,7 +200,7 @@ class Curves:
                 xt = rep(gammadash[:, 0])
                 yt = rep(gammadash[:, 1])
                 zt = rep(gammadash[:, 2])
-            ax.plot(x, y, z, **kwargs, color='green', linestyle='dashed', linewidth=4)
+            ax.plot(x, y, z, **kwargs, color='brown', linewidth=3)
             if plot_derivative:
                 ax.quiver(x, y, z, 0.1 * xt, 0.1 * yt, 0.1 * zt, arrow_length_ratio=0.1, color="r")
         if axis_equal:

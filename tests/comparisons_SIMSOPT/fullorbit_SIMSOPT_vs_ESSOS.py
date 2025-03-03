@@ -73,7 +73,7 @@ time_ESSOS_array = []
 for model_ESSOS in model_ESSOS_array:
     print(f'Tracing ESSOS full orbit '+('Boris' if model_ESSOS=='FullOrbit_Boris' else f'with tolerance={trace_tolerance_ESSOS}')+f' and plotting the result.')
     t1 = time.time()
-    tracing = block_until_ready(Tracing(field=field_essos, model=model_ESSOS, initial_conditions=initial_xyz, particles=particles,
+    tracing = block_until_ready(Tracing(field=field_essos, model=model_ESSOS, particles=particles,
                                         maxtime=tmax_full, timesteps=num_steps_essos, tol_step_size=trace_tolerance_ESSOS))
     trajectories_ESSOS = tracing.trajectories
     time_ESSOS = time.time()-t1

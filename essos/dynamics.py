@@ -1,8 +1,10 @@
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 from jax import jit, vmap, tree_util, random, lax
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
+from .plot import fix_matplotlib_3d
 
 def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
     """
@@ -32,7 +34,7 @@ def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, ch
     return xyz_inits_full, v_inits
 
 class Particles():
-    def __init__(self, nparticles=None, initial_xyz=None, initial_vparallel_over_v=None, initial_vxvyvz=None,
+    def __init__(self, initial_xyz=None, initial_vparallel_over_v=None, initial_vxvyvz=None,
                  charge=ALPHA_PARTICLE_CHARGE, mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY,
                  min_vparallel_over_v=-1, max_vparallel_over_v=1, field=None, initial_xyz_fullorbit=None):
         """
@@ -58,20 +60,19 @@ class Particles():
             initial_vperpendicular (jnp.ndarray): Initial perpendicular velocities of particles.
         """
         
-        self.nparticles = nparticles
         self.charge = charge
         self.mass = mass
         self.energy = energy
         self.initial_xyz = jnp.array(initial_xyz)
         self.nparticles = len(initial_xyz)
-        self.initial_xyz_fullorbit =initial_xyz_fullorbit
+        self.initial_xyz_fullorbit = initial_xyz_fullorbit
         self.initial_vxvyvz = initial_vxvyvz
         self.phase_angle_full_orbit = 0
         
         if initial_vparallel_over_v is not None:
             self.initial_vparallel_over_v = jnp.array(initial_vparallel_over_v)
         else:
-            self.initial_vparallel_over_v = random.uniform(random.PRNGKey(42), (nparticles,), minval=min_vparallel_over_v, maxval=max_vparallel_over_v)
+            self.initial_vparallel_over_v = random.uniform(random.PRNGKey(42), (self.nparticles,), minval=min_vparallel_over_v, maxval=max_vparallel_over_v)
         
         self.total_speed = jnp.sqrt(2*self.energy/self.mass)
         
@@ -179,6 +180,8 @@ class Tracing():
         elif model == 'FullOrbit' or model == 'FullOrbit_Boris':
             self.ODE_term = ODETerm(Lorentz)
             self.args = (self.field, self.particles)
+            if self.particles.initial_xyz_fullorbit is None:
+                raise ValueError("Initial full orbit positions require field input to Particles")
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
@@ -194,7 +197,9 @@ class Tracing():
             
         self._trajectories = self.trace()
         
-        self.energy = jnp.zeros((self.particles.nparticles, self.timesteps))
+        if self.particles is not None:
+            self.energy = jnp.zeros((self.particles.nparticles, self.timesteps))
+            
         if model == 'GuidingCenter':
             for i, trajectory in enumerate(self._trajectories):
                 xyz = trajectory[:, :3]
@@ -207,10 +212,7 @@ class Tracing():
                 vxvyvz = trajectory[:, 3:]
                 self.energy = self.energy.at[i].set(self.particles.mass/2*(vxvyvz[:, 0]**2 + vxvyvz[:, 1]**2 + vxvyvz[:, 2]**2))
         elif model == 'FieldLine':
-            self.energy = jnp.zeroes((self.particles.nparticles, self.timesteps))
-            for i, trajectory in enumerate(self._trajectories):
-                xyz = trajectory[:, :3]
-                self.energy = self.energy.at[i].set(jnp.array([self.field.AbsB(x) for x in xyz]))
+            self.energy = jnp.ones((len(initial_conditions), self.timesteps))
 
     @partial(jit, static_argnums=(0))
     def trace(self):
@@ -289,6 +291,17 @@ class Tracing():
         # ppl = np.array([self.trajectories.shape[1]]*self.trajectories.shape[0])
         data = np.array(jnp.concatenate([i*jnp.ones((self.trajectories[i].shape[0], )) for i in range(len(self.trajectories))]))
         polyLinesToVTK(filename, x, y, z, pointsPerLine=ppl, pointData={'idx': data})
+    
+    def plot(self, ax=None, show=True, axis_equal=True, **kwargs):
+        if ax is None or ax.name != "3d":
+            fig = plt.figure()
+            ax = fig.add_subplot(projection='3d')
+        for xyz in self.trajectories:
+            ax.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2], **kwargs, linestyle='dashed', linewidth=2)
+        if axis_equal:
+            fix_matplotlib_3d(ax)
+        if show:
+            plt.show()
 
     # def get_phi(x, y, phi_last):
     #     """Compute the toroidal angle phi, ensuring continuity."""
