@@ -1,3 +1,5 @@
+import jax
+jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax.lax import fori_loop
 from jax import tree_util, jit
@@ -22,7 +24,8 @@ class Curves:
 
     """
     def __init__(self, dofs: jnp.ndarray, n_segments: int = 100, nfp: int = 1, stellsym: bool = True):
-        assert isinstance(dofs, jnp.ndarray), "dofs must be a jnp.ndarray"
+        dofs = jnp.array(dofs)
+        # assert isinstance(dofs, jnp.ndarray), "dofs must be a jnp.ndarray"
         assert dofs.ndim == 3, "dofs must be a 3D array with shape (n_curves, 3, 2*order+1)"
         assert dofs.shape[1] == 3, "dofs must have shape (n_curves, 3, 2*order+1)"
         assert dofs.shape[2] % 2 == 1, "dofs must have shape (n_curves, 3, 2*order+1)"
@@ -64,18 +67,24 @@ class Curves:
                         
         # Create the gamma and gamma_dash
         def fori_createdata(order_index: int, data: jnp.ndarray) -> jnp.ndarray:
-            return data[0] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], jnp.sin(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], jnp.cos(2 * jnp.pi * order_index * self.quadpoints)), \
-                   data[1] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], 2*jnp.pi*order_index*jnp.cos(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], -2*jnp.pi*order_index*jnp.sin(2 * jnp.pi * order_index * self.quadpoints))
+            return data[0] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1],                             jnp.sin(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index],                             jnp.cos(2 * jnp.pi * order_index * self.quadpoints)), \
+                   data[1] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1],  2*jnp.pi   *order_index   *jnp.cos(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], -2*jnp.pi   *order_index   *jnp.sin(2 * jnp.pi * order_index * self.quadpoints)), \
+                   data[2] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], -4*jnp.pi**2*order_index**2*jnp.sin(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], -4*jnp.pi**2*order_index**2*jnp.cos(2 * jnp.pi * order_index * self.quadpoints))
         
-        gamma = jnp.einsum("ij,k->ikj", self._curves[:, :, 0], jnp.ones(self.n_segments))
-        gamma_dash = jnp.zeros((jnp.size(self._curves, 0), self.n_segments, 3))
-        gamma, gamma_dash = fori_loop(1, self._order+1, fori_createdata, (gamma, gamma_dash)) 
+        gamma          = jnp.einsum("ij,k->ikj", self._curves[:, :, 0], jnp.ones(self.n_segments))
+        gamma_dash     = jnp.zeros((jnp.size(self._curves, 0), self.n_segments, 3))
+        gamma_dashdash = jnp.zeros((jnp.size(self._curves, 0), self.n_segments, 3))
+        gamma, gamma_dash, gamma_dashdash = fori_loop(1, self._order+1, fori_createdata, (gamma, gamma_dash, gamma_dashdash)) 
         
         length = jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in gamma_dash])
+
+        curvature = jnp.linalg.norm(jnp.cross(gamma_dash, gamma_dash), axis=1)/jnp.linalg.norm(gamma_dash, axis=1)**3
 
         # Set the attributes
         self._gamma = gamma
         self._gamma_dash = gamma_dash
+        self._gamma_dashdash = gamma_dashdash
+        self._curvature = curvature
         self._length = length
     
     @property
@@ -154,8 +163,16 @@ class Curves:
         return self._gamma_dash
     
     @property
+    def gamma_dashdash(self):
+        return self._gamma_dashdash
+    
+    @property
     def length(self):
         return self._length
+    
+    @property
+    def curvature(self):
+        return self._curvature
     
     def save_curves(self, filename: str):
         """
@@ -256,12 +273,12 @@ tree_util.register_pytree_node(Curves,
                                Curves._tree_unflatten)
 
 class Coils(Curves):
-    def __init__(self, curves: Curves, dofs_currents: jnp.ndarray):
+    def __init__(self, curves: Curves, currents: jnp.ndarray):
         assert isinstance(curves, Curves)
-        assert isinstance(dofs_currents, jnp.ndarray)
-        assert jnp.size(dofs_currents) == jnp.size(curves.dofs, 0)
+        currents = jnp.array(currents)
+        assert jnp.size(currents) == jnp.size(curves.dofs, 0)
         super().__init__(curves.dofs, curves.n_segments, curves.nfp, curves.stellsym)
-        self._dofs_currents = dofs_currents
+        self._dofs_currents = currents
         self._currents = apply_symmetries_to_currents(self._dofs_currents, self.nfp, self.stellsym)
 
     def __str__(self):
@@ -273,6 +290,14 @@ class Coils(Curves):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
              + f"Degrees of freedom\n{repr(self.dofs.tolist())}\n" \
              + f"Currents degrees of freedom\n{repr(self.dofs_currents.tolist())}\n"
+
+    @property
+    def dofs_curves(self):
+        return self._dofs
+    
+    @dofs_curves.setter
+    def dofs_curves(self, new_dofs_curves):
+        self.dofs = new_dofs_curves    
     
     @property
     def dofs_currents(self):
@@ -282,6 +307,21 @@ class Coils(Curves):
     def dofs_currents(self, new_dofs_currents):
         self._dofs_currents = new_dofs_currents
         self._currents = apply_symmetries_to_currents(self._dofs_currents, self.nfp, self.stellsym)
+    
+    @property
+    def x(self):
+        dofs_curves = jnp.ravel(self.dofs_curves)
+        dofs_currents = jnp.ravel(self.dofs_currents)
+        return jnp.concatenate((dofs_curves, dofs_currents))
+
+    @x.setter
+    def x(self, new_dofs):
+        old_dofs_curves = jnp.ravel(self.dofs)
+        old_dofs_currents = jnp.ravel(self.dofs_currents)
+        new_dofs_curves = new_dofs[:old_dofs_curves.shape[0]]
+        new_dofs_currents = new_dofs[old_dofs_curves.shape[0]:]
+        self.dofs_curves = jnp.reshape(new_dofs_curves, (self.dofs_curves.shape))
+        self.dofs_currents = new_dofs_currents
     
     @property
     def currents(self):
@@ -334,30 +374,17 @@ tree_util.register_pytree_node(Coils,
                                Coils._tree_unflatten)
 
 
-def CreateEquallySpacedCurves(n_curves: int,
-                              order: int,
-                              R: float,
-                              r: float,
-                              n_segments: int = 100,
-                              nfp: int = 1,
-                              stellsym: bool = False) -> jnp.ndarray:
-    # Compute angles for all curves at once
+def CreateEquallySpacedCurves(n_curves: int, order: int, R: float, r: float, n_segments: int = 100,
+                              nfp: int = 1, stellsym: bool = False) -> jnp.ndarray:
     angles = (jnp.arange(n_curves) + 0.5) * (2 * jnp.pi) / ((1 + int(stellsym)) * nfp * n_curves)
-
-    # Initialize curves array
     curves = jnp.zeros((n_curves, 3, 1 + 2 * order))
 
-    # Compute x, y, and z components efficiently
     curves = curves.at[:, 0, 0].set(jnp.cos(angles) * R)  # x[0]
     curves = curves.at[:, 0, 2].set(jnp.cos(angles) * r)  # x[2]
     curves = curves.at[:, 1, 0].set(jnp.sin(angles) * R)  # y[0]
     curves = curves.at[:, 1, 2].set(jnp.sin(angles) * r)  # y[2]
     curves = curves.at[:, 2, 1].set(-r)                   # z[1] (constant for all)
-
     return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
-
-
-
 
 def RotatedCurve(curve, phi, flip):
     rotmat = jnp.array(

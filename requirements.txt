@@ -1,4 +1,4 @@
 jax
 matplotlib
-scipy
 diffrax
+scipy

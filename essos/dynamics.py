@@ -1,9 +1,12 @@
+import jax
+jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from jax import jit, vmap, tree_util, random, lax
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
-from essos.fields import Vmec
+from essos.coils import Coils
+from essos.fields import BiotSavart, Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from .plot import fix_matplotlib_3d
 
@@ -123,10 +126,13 @@ def FieldLine(t,
 
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times=None,
-                 field=None, model=None, maxtime: float = 1e-7, timesteps: int = 200,
+                 field=None, model=None, maxtime: float = 1e-7, timesteps: int = 500,
                  tol_step_size = 1e-7, particles=None, condition=None):
         
-        self.field = field
+        if isinstance(field, Coils):
+            self.field = BiotSavart(field)
+        else:
+            self.field = field
         self.model = model
         self.initial_conditions = initial_conditions
         self.times = times
@@ -233,8 +239,8 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=adjoint,
-                    stepsize_controller = PIDController(rtol=self.tol_step_size, atol=self.tol_step_size),
-                    # max_steps=num_adaptative_steps,
+                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
+                    # max_steps=1000000,
                     event = Event(self.condition)
                 ).ys
             return trajectory
