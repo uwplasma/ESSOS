@@ -226,7 +226,7 @@ class Vmec():
     def surface_normal(self, s, ntheta=30, nphi=30):
         gammadash1, gammadash2 = self.surface_gammadash(s, ntheta, nphi)
         normal = jnp.cross(gammadash1, gammadash2, axis=0)
-        return normal / jnp.linalg.norm(normal, axis=0)
+        return normal #/ jnp.linalg.norm(normal, axis=0)
 
     @partial(jit, static_argnames=['self', 'ntheta', 'nphi'])
     def surface_AbsB(self, s, ntheta=30, nphi=30):

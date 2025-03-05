@@ -2,10 +2,13 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax.lax import fori_loop
-from jax import tree_util, jit
+from jax import tree_util, jit, vmap
 from functools import partial
 
 from .plot import fix_matplotlib_3d
+
+def compute_curvature(gammadash, gammadashdash):
+    return jnp.linalg.norm(jnp.cross(gammadash, gammadashdash, axis=1), axis=1) / jnp.linalg.norm(gammadash, axis=1)**3
 
 class Curves:
     """
@@ -78,7 +81,7 @@ class Curves:
         
         length = jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in gamma_dash])
 
-        curvature = jnp.linalg.norm(jnp.cross(gamma_dash, gamma_dash), axis=1)/jnp.linalg.norm(gamma_dash, axis=1)**3
+        curvature = vmap(compute_curvature)(gamma_dash, gamma_dashdash)
 
         # Set the attributes
         self._gamma = gamma

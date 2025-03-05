@@ -39,12 +39,12 @@ def loss_normB_axis(field):
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
     return B_axis
 
-@partial(jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
-def loss_optimize_coils_for_particle_confinement(x, particles, len_dofs_curves, dofs_curves_shape, nfp,
+@partial(jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
+def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp,
                                                  n_segments=60, stellsym=True, target_B_on_axis=5.7, maxtime=1e-5,
                                                  max_coil_length=22, num_steps=300, trace_tolerance=1e-5):
-    dofs_curves = jnp.reshape(x[:len_dofs_curves], (dofs_curves_shape))
-    dofs_currents = x[len_dofs_curves:]
+    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
+    dofs_currents = x[len_dofs_curves_ravelled:]
     
     curves = Curves(dofs_curves, n_segments, nfp, stellsym)
     coils = Coils(curves=curves, currents=dofs_currents)
@@ -57,11 +57,11 @@ def loss_optimize_coils_for_particle_confinement(x, particles, len_dofs_curves, 
     loss = jnp.concatenate(((normB_axis-target_B_on_axis), coil_length-max_coil_length, particles_drift))
     return loss
 
-@partial(jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 8, 9))
-def loss_BdotN(x, vmec, len_dofs_curves, dofs_curves_shape, nfp, max_coil_length=22,
+@partial(jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 8))
+def loss_BdotN(x, vmec, dofs_curves, nfp, max_coil_length=22,
                n_segments=60, stellsym=True, ntheta=50, nphi=50):
-    dofs_curves = jnp.reshape(x[:len_dofs_curves], (dofs_curves_shape))
-    dofs_currents = x[len_dofs_curves:]
+    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
+    dofs_currents = x[len_dofs_curves_ravelled:]
     
     curves = Curves(dofs_curves, n_segments, nfp, stellsym)
     coils = Coils(curves=curves, currents=dofs_currents)
@@ -82,9 +82,7 @@ def optimize_loss_function(func, coils, tolerance_optimization=1e-4, maximum_fun
     n_segments = coils.n_segments
     dofs_curves_shape = coils.dofs_curves.shape
     
-    loss_partial = partial(func, len_dofs_curves=len_dofs_curves,
-                           dofs_curves_shape=dofs_curves_shape, nfp=nfp, n_segments=n_segments,
-                           stellsym=stellsym, **kwargs)
+    loss_partial = partial(func, dofs_curves=coils.dofs_curves, nfp=nfp, n_segments=n_segments, stellsym=stellsym, **kwargs)
     
     result = least_squares(loss_partial, x0=dofs, verbose=2, diff_step=diff_step,
                            ftol=tolerance_optimization, gtol=tolerance_optimization,
