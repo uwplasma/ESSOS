@@ -4,7 +4,8 @@ import jax.numpy as jnp
 from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
-from essos.fields import BiotSavart, BdotN_over_B
+from essos.fields import BiotSavart
+from essos.surfaces import BdotN_over_B, BdotN
 from essos.coils import Curves, Coils
 from scipy.optimize import least_squares
 
@@ -30,7 +31,7 @@ def loss_coil_length(field):
 
 @partial(jit, static_argnums=(0))
 def loss_coil_curvature(field):
-    return jnp.ravel(field.coils.curvature)
+    return jnp.mean(field.coils.curvature, axis=1)
 
 @partial(jit, static_argnums=(0))
 def loss_normB_axis(field):
@@ -44,6 +45,7 @@ def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp,
                                                  n_segments=60, stellsym=True, target_B_on_axis=5.7, maxtime=1e-5,
                                                  max_coil_length=22, num_steps=300, trace_tolerance=1e-5):
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
+    dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves.shape)
     dofs_currents = x[len_dofs_curves_ravelled:]
     
     curves = Curves(dofs_curves, n_segments, nfp, stellsym)
@@ -57,22 +59,23 @@ def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp,
     loss = jnp.concatenate(((normB_axis-target_B_on_axis), coil_length-max_coil_length, particles_drift))
     return loss
 
-@partial(jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 8))
-def loss_BdotN(x, vmec, dofs_curves, nfp, max_coil_length=22,
-               n_segments=60, stellsym=True, ntheta=50, nphi=50):
+@partial(jit, static_argnums=(1, 3, 4, 5, 6))
+def loss_BdotN(x, vmec, dofs_curves, nfp, target_coil_length=42,
+               n_segments=60, stellsym=True, target_coil_curvature=0.1):
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
+    dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], (dofs_curves.shape))
     dofs_currents = x[len_dofs_curves_ravelled:]
     
     curves = Curves(dofs_curves, n_segments, nfp, stellsym)
     coils = Coils(curves=curves, currents=dofs_currents)
     field = BiotSavart(coils)
     
-    bdotn_over_b = BdotN_over_B(vmec, field, ntheta, nphi)
+    bdotn_over_b = jnp.abs(BdotN_over_B(vmec.surface, field))
     coil_length = loss_coil_length(field)
     coil_curvature = loss_coil_curvature(field)
-    
+
     # return jnp.concatenate((jnp.ravel(bdotn_over_b), coil_length-max_coil_length))
-    return jnp.sum(bdotn_over_b)+jnp.sum(coil_length-max_coil_length)+jnp.sum(coil_curvature)
+    return 3e0*jnp.sum(bdotn_over_b)+jnp.sum(coil_length-target_coil_length)+jnp.sum(coil_curvature-target_coil_curvature)
 
 def optimize_loss_function(func, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, diff_step=1e-3, **kwargs):
     dofs = coils.x
@@ -103,9 +106,10 @@ def optimize_coils_for_particle_confinement(coils, particles, target_B_on_axis=5
                            target_B_on_axis=target_B_on_axis, max_coil_length=max_coil_length,
                            maxtime=maxtime, num_steps=num_steps, trace_tolerance=trace_tolerance)
 
-def optimize_coils_for_vmec_surface(vmec, coils, ntheta=50, nphi=50, tolerance_optimization=1e-10,
-                                    maximum_function_evaluations=30, diff_step=1e-3, max_coil_length=22):
+def optimize_coils_for_vmec_surface(vmec, coils, tolerance_optimization=1e-10,
+                                    maximum_function_evaluations=30, diff_step=1e-3,
+                                     target_coil_length=42, target_coil_curvature=0.1):
     return optimize_loss_function(loss_BdotN, coils, tolerance_optimization=tolerance_optimization,
-                                  maximum_function_evaluations=maximum_function_evaluations, max_coil_length=max_coil_length,
-                                  diff_step=diff_step, ntheta=ntheta, nphi=nphi, vmec=vmec)
+                                  maximum_function_evaluations=maximum_function_evaluations, target_coil_length=target_coil_length,
+                                  target_coil_curvature=target_coil_curvature, diff_step=diff_step, vmec=vmec)
                                     

@@ -3,14 +3,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from functools import partial
 from jax import jit, jacfwd, grad, vmap
-
-@partial(jit, static_argnums=(0, 1, 2, 3))
-def BdotN_over_B(vmec, field, ntheta=50, nphi=50):
-    surface = vmec.surface_gamma(s=1, ntheta=ntheta, nphi=nphi)
-    normal = vmec.surface_normal(s=1, ntheta=ntheta, nphi=nphi)
-    B_on_surface = vmap(lambda surf: vmap(lambda x: field.B(x))(surf))(surface.T).T
-    AbsB_on_surface = vmap(lambda surf: vmap(lambda x: field.AbsB(x))(surf))(surface.T)
-    return jnp.abs(jnp.einsum("ijk,ijk->jk", B_on_surface, normal))/AbsB_on_surface
+from essos.surfaces import SurfaceRZFourier
 
 class BiotSavart():
     def __init__(self, coils):
@@ -51,7 +44,7 @@ class BiotSavart():
         return points
     
 class Vmec():
-    def __init__(self, wout):
+    def __init__(self, wout, ntheta=30, nphi=30, close=True, range='full torus'):
         self.wout = wout
         from netCDF4 import Dataset
         self.nc = Dataset(self.wout)
@@ -75,6 +68,13 @@ class Vmec():
         self.ds = self.s_full_grid[1] - self.s_full_grid[0]
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
         self.r_axis = self.rmnc[0, 0]
+        self.mpol = int(jnp.max(self.xm))
+        self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
+        self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range=range)
+
+    @property
+    def surface(self):
+        return self._surface
         
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
