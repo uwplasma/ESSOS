@@ -2,7 +2,9 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from jax import jit, vmap, tree_util, random, lax
+from jax.experimental import mesh_utils
+from jax.sharding import Mesh, PartitionSpec as P
+from jax import jit, vmap, tree_util, random, lax, make_mesh
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
 from essos.coils import Coils
@@ -244,7 +246,11 @@ class Tracing():
                     event = Event(self.condition)
                 ).ys
             return trajectory
-        return jnp.array(vmap(compute_trajectory,in_axes=(0))(self.initial_conditions))
+        # return jnp.array(vmap(compute_trajectory)(self.initial_conditions))
+        mesh = make_mesh((len(jax.devices()),), ('i',))
+        sharding = jax.sharding.NamedSharding(mesh, P('i',))
+        initial_values_part=jax.device_put(self.initial_conditions, sharding)
+        return jnp.array(vmap(compute_trajectory,in_axes=(0))(initial_values_part))
     
     @property
     def trajectories(self):

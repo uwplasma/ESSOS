@@ -1,3 +1,5 @@
+import os
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=6'
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -8,7 +10,7 @@ from essos.dynamics import Particles, Tracing
 # Optimization parameters
 target_B_on_axis = 5.7
 max_coil_length = 22
-nparticles = 5
+nparticles = 6
 order_Fourier_series_coils = 5
 number_coil_points = 60
 function_evaluations_array = [30]*4
@@ -40,12 +42,13 @@ loss_scan = jnp.zeros_like(coil_parameter_scan)
 coils = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 print(f'Scan progress:');print('')
 for i in range(len(coil_parameter_scan)):
-    print(f'{i}/{len(coil_parameter_scan)}, ', end='', flush=True)
+    start_time = time()
     coils.x = coils.x.at[2].set(coil_parameter_scan[i])
     loss = loss_optimize_coils_for_particle_confinement(coils.x, particles,
               coils.dofs_curves, coils.nfp, num_steps=200,
               maxtime=maxtime_tracing_array[-1], trace_tolerance=1e-5)
     loss_scan = loss_scan.at[i].set(jnp.sum(loss**2))
+    print(f'{i}/{len(coil_parameter_scan)}, took {(time()-start_time):.2f}s.')# ', end='', flush=True)
 plt.plot(coil_parameter_scan, loss_scan)
 plt.xlabel('Coil parameter x[2]')
 plt.ylabel('Loss')

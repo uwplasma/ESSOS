@@ -1,4 +1,5 @@
 import os
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -9,7 +10,7 @@ from essos.dynamics import Tracing, Particles
 
 # Input parameters
 tmax = 1e-4
-nparticles = 5
+nparticles = 16
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
 num_steps = 1500
