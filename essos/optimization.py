@@ -40,7 +40,7 @@ def loss_normB_axis(field):
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
     return B_axis
 
-@partial(jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
+@partial(jit, static_argnums=(1, 3, 4, 5, 6, 7, 8, 9, 10))
 def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp,
                                                  n_segments=60, stellsym=True, target_B_on_axis=5.7, maxtime=1e-5,
                                                  max_coil_length=22, num_steps=300, trace_tolerance=1e-5):

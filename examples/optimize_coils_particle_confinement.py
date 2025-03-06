@@ -43,8 +43,8 @@ for i in range(len(coil_parameter_scan)):
     print(f'{i}/{len(coil_parameter_scan)}, ', end='', flush=True)
     coils.x = coils.x.at[2].set(coil_parameter_scan[i])
     loss = loss_optimize_coils_for_particle_confinement(coils.x, particles,
-              len(jnp.ravel(coils.dofs_curves)), coils.dofs_curves.shape, coils.nfp, num_steps=200,
-              n_segments=number_coil_points, maxtime=maxtime_tracing_array[-1], trace_tolerance=1e-5)
+              coils.dofs_curves, coils.nfp, num_steps=200,
+              maxtime=maxtime_tracing_array[-1], trace_tolerance=1e-5)
     loss_scan = loss_scan.at[i].set(jnp.sum(loss**2))
 plt.plot(coil_parameter_scan, loss_scan)
 plt.xlabel('Coil parameter x[2]')
