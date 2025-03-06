@@ -22,6 +22,9 @@ number_coils_per_half_field_period = 3
 vmec_file = os.path.join(os.path.dirname(__file__), '..', 'input_files',
              'wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc')
 vmec = Vmec(vmec_file)
+print(vmec.rmnc.shape)
+print(vmec.xm.shape)
+exit()
 
 # Initialize coils
 current_on_each_coil = 1
