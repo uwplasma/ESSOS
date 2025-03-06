@@ -1,0 +1,4 @@
+jax
+matplotlib
+diffrax
+scipy
