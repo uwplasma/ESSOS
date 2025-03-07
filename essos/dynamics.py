@@ -9,7 +9,7 @@ from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
 from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
-from .plot import fix_matplotlib_3d
+from essos.plot import fix_matplotlib_3d
 
 def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
     """
