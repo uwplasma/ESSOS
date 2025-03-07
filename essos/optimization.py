@@ -62,8 +62,8 @@ def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp,
     return jnp.sum(loss)
 
 @partial(jit, static_argnums=(1, 3, 4, 5, 6))
-def loss_BdotN(x, vmec, dofs_curves, nfp, target_coil_length=42,
-               n_segments=60, stellsym=True, target_coil_curvature=0.1):
+def loss_BdotN(x, vmec, dofs_curves, nfp, max_coil_length=42,
+               n_segments=60, stellsym=True, max_coil_curvature=0.1):
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
     dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], (dofs_curves.shape))
     dofs_currents = x[len_dofs_curves_ravelled:]
@@ -72,11 +72,23 @@ def loss_BdotN(x, vmec, dofs_curves, nfp, target_coil_length=42,
     coils = Coils(curves=curves, currents=dofs_currents)
     field = BiotSavart(coils)
     
-    bdotn_over_b = jnp.abs(BdotN_over_B(vmec.surface, field))
+    bdotn_over_b = BdotN_over_B(vmec.surface, field)
     coil_length = loss_coil_length(field)
     coil_curvature = loss_coil_curvature(field)
+    
+    bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
+    coil_length_loss    = jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
+    coil_curvature_loss = jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
+    
+    # from jax.debug import print as jprint
+    # jprint("#######################")
+    # jprint("{}",jnp.sum(jnp.abs(bdotn_over_b)))
+    # jprint("{}",coil_length)
+    # jprint("{}",coil_curvature)
+    # jprint("{}", target_coil_curvature)
+    # jprint("{}",3e0*jnp.sum(bdotn_over_b)+jnp.sum(jnp.abs(coil_length-target_coil_length))+jnp.sum(jnp.abs(coil_curvature-target_coil_curvature)))
 
-    return 3e0*jnp.sum(bdotn_over_b)+jnp.sum(coil_length-target_coil_length)+jnp.sum(coil_curvature-target_coil_curvature)
+    return bdotn_over_b_loss+coil_length_loss+coil_curvature_loss
 
 def optimize_loss_function(func, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, **kwargs):
     dofs = coils.x
@@ -95,9 +107,12 @@ def optimize_loss_function(func, coils, tolerance_optimization=1e-4, maximum_fun
     
     ## With JAX gradients
     jac_loss_partial = jit(grad(loss_partial))
-    result = least_squares(loss_partial, x0=dofs, verbose=2, jac=jac_loss_partial,
-                           ftol=tolerance_optimization, gtol=tolerance_optimization,
-                           xtol=1e-14, max_nfev=maximum_function_evaluations)
+    # result = least_squares(loss_partial, x0=dofs, verbose=2, jac=jac_loss_partial,
+    #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
+    #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
+    from scipy.optimize import minimize
+    result = minimize(loss_partial, x0=dofs, jac=jac_loss_partial, method='L-BFGS-B',
+                      tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True})
     
     dofs_curves = jnp.reshape(result.x[:len_dofs_curves], (dofs_curves_shape))
     dofs_currents = result.x[len_dofs_curves:]
@@ -116,8 +131,8 @@ def optimize_coils_for_particle_confinement(coils, particles, target_B_on_axis=5
 
 def optimize_coils_for_vmec_surface(vmec, coils, tolerance_optimization=1e-10,
                                     maximum_function_evaluations=30,
-                                    target_coil_length=42, target_coil_curvature=0.1):
+                                    max_coil_length=42, max_coil_curvature=0.1):
     return optimize_loss_function(loss_BdotN, coils, tolerance_optimization=tolerance_optimization,
-                                  maximum_function_evaluations=maximum_function_evaluations, target_coil_length=target_coil_length,
-                                  target_coil_curvature=target_coil_curvature, vmec=vmec)
+                                  maximum_function_evaluations=maximum_function_evaluations, vmec=vmec,
+                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
                                     

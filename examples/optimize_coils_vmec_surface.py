@@ -6,12 +6,13 @@ from essos.fields import Vmec
 from essos.optimization import optimize_coils_for_vmec_surface
 
 # Optimization parameters
-target_coil_length = 42
-target_coil_curvature = 0.1
-order_Fourier_series_coils = 5
-number_coil_points = 50
-maximum_function_evaluations = 100
+max_coil_length = 45
+max_coil_curvature = 0.5
+order_Fourier_series_coils = 6
+number_coil_points = order_Fourier_series_coils*10
+maximum_function_evaluations = 350
 number_coils_per_half_field_period = 3
+tolerance_optimization = 1e-5
 ntheta=30
 nphi=30
 
@@ -36,14 +37,16 @@ coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coil
 print('');print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
 time0 = time()
 coils_optimized = optimize_coils_for_vmec_surface(vmec, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
-                                                    target_coil_length=target_coil_length, target_coil_curvature=target_coil_curvature)
-print(f"  Optimization took {time()-time0:.2f} seconds")
+                                                    max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,
+                                                    tolerance_optimization=tolerance_optimization)
+print(f"Optimization took {time()-time0:.2f} seconds")
 
 ## Save results in vtk format to analyze in Paraview
-# vmec.surface.to_vtk('surface_initial', field=BiotSavart(coils_initial))
-# vmec.surface.to_vtk('surface_final',   field=BiotSavart(coils_optimized))
-# coils_initial.to_vtk('coils_initial')
-# coils_optimized.to_vtk('coils_optimized')
+from essos.fields import BiotSavart
+vmec.surface.to_vtk('surface_initial', field=BiotSavart(coils_initial))
+vmec.surface.to_vtk('surface_final',   field=BiotSavart(coils_optimized))
+coils_initial.to_vtk('coils_initial')
+coils_optimized.to_vtk('coils_optimized')
 
 # Plot coils, before and after optimization
 fig = plt.figure(figsize=(8, 4))
