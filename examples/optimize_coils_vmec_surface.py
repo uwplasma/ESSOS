@@ -41,12 +41,12 @@ coils_optimized = optimize_coils_for_vmec_surface(vmec, coils_initial, maximum_f
                                                     tolerance_optimization=tolerance_optimization)
 print(f"Optimization took {time()-time0:.2f} seconds")
 
-## Save results in vtk format to analyze in Paraview
-from essos.fields import BiotSavart
-vmec.surface.to_vtk('surface_initial', field=BiotSavart(coils_initial))
-vmec.surface.to_vtk('surface_final',   field=BiotSavart(coils_optimized))
-coils_initial.to_vtk('coils_initial')
-coils_optimized.to_vtk('coils_optimized')
+# ## Save results in vtk format to analyze in Paraview
+# from essos.fields import BiotSavart
+# vmec.surface.to_vtk('surface_initial', field=BiotSavart(coils_initial))
+# vmec.surface.to_vtk('surface_final',   field=BiotSavart(coils_optimized))
+# coils_initial.to_vtk('coils_initial')
+# coils_optimized.to_vtk('coils_optimized')
 
 # Plot coils, before and after optimization
 fig = plt.figure(figsize=(8, 4))

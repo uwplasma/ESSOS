@@ -7,7 +7,7 @@ from essos.dynamics import Tracing
 from essos.fields import BiotSavart
 from essos.surfaces import BdotN_over_B, BdotN
 from essos.coils import Curves, Coils
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, minimize
 
 def loss_particle_drift(field, particles, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5):
     tracing = Tracing(field=field, model='GuidingCenter', particles=particles,
@@ -15,17 +15,18 @@ def loss_particle_drift(field, particles, maxtime=1e-5, num_steps=300, trace_tol
     trajectories = tracing.trajectories
     
     R_axis = jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(field.coils.dofs_curves)))
+    radial_factor = jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))-R_axis
+    vertical_factor = trajectories[:,:,2]
     
-    # radial_drift=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))-R_axis)
-    #                      +jnp.square(trajectories[:,:,2]))
-    # radial_drift=jnp.sum(jnp.diff(radial_drift,axis=1),axis=1)/num_steps
+    radial_drift=(jnp.square(radial_factor)+jnp.square(vertical_factor))
+    radial_drift=jnp.sum(jnp.diff(radial_drift,axis=1),axis=1)/num_steps
     
-    # angular_drift = jnp.arctan2(trajectories[:, :, 2], jnp.sqrt(trajectories[:, :, 0]**2+trajectories[:, :, 1]**2)-R_axis)
-    # angular_drift=(jnp.sum(jnp.diff(angular_drift,axis=1),axis=1))/num_steps
+    # angular_drift = radial_factor/(vertical_factor+1e-10)
+    angular_drift = jnp.arctan2(trajectories[:, :, 2]+1e-10, jnp.sqrt(trajectories[:, :, 0]**2+trajectories[:, :, 1]**2)-R_axis)
+    angular_drift=(jnp.sum(jnp.diff(angular_drift,axis=1),axis=1))/num_steps
     
-    # return jnp.ravel(2./jnp.pi*jnp.absolute(jnp.arctan(radial_drift/angular_drift)))
-    return jnp.ravel(jnp.abs(jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))-R_axis))+jnp.ravel(jnp.abs(trajectories[:,:,2]))
-    ## return jnp.ravel(jnp.abs(radial_drift)) # This returns NaN gradients
+    return jnp.ravel(2./jnp.pi*jnp.absolute(jnp.arctan(radial_drift/angular_drift)))
+    # return jnp.ravel(jnp.abs(jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))-R_axis))+jnp.ravel(jnp.abs(trajectories[:,:,2]))
 
 @partial(jit, static_argnums=(0))
 def loss_coil_length(field):
@@ -80,14 +81,6 @@ def loss_BdotN(x, vmec, dofs_curves, nfp, max_coil_length=42,
     coil_length_loss    = jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
     coil_curvature_loss = jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
     
-    # from jax.debug import print as jprint
-    # jprint("#######################")
-    # jprint("{}",jnp.sum(jnp.abs(bdotn_over_b)))
-    # jprint("{}",coil_length)
-    # jprint("{}",coil_curvature)
-    # jprint("{}", target_coil_curvature)
-    # jprint("{}",3e0*jnp.sum(bdotn_over_b)+jnp.sum(jnp.abs(coil_length-target_coil_length))+jnp.sum(jnp.abs(coil_curvature-target_coil_curvature)))
-
     return bdotn_over_b_loss+coil_length_loss+coil_curvature_loss
 
 def optimize_loss_function(func, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, **kwargs):
@@ -110,7 +103,6 @@ def optimize_loss_function(func, coils, tolerance_optimization=1e-4, maximum_fun
     # result = least_squares(loss_partial, x0=dofs, verbose=2, jac=jac_loss_partial,
     #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
     #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
-    from scipy.optimize import minimize
     result = minimize(loss_partial, x0=dofs, jac=jac_loss_partial, method='L-BFGS-B',
                       tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True})
     
