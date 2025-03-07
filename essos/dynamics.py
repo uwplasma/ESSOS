@@ -2,8 +2,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from jax.experimental import mesh_utils
-from jax.sharding import Mesh, PartitionSpec as P
+from jax.sharding import PartitionSpec as P
 from jax import jit, vmap, tree_util, random, lax, make_mesh
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
@@ -240,17 +239,17 @@ class Tracing():
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
-                    # adjoint=adjoint,
+                    # adjoint=DirectAdjoint(),
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
                     # max_steps=1000000,
                     event = Event(self.condition)
                 ).ys
             return trajectory
-        # return jnp.array(vmap(compute_trajectory)(self.initial_conditions))
-        mesh = make_mesh((len(jax.devices()),), ('i',))
-        sharding = jax.sharding.NamedSharding(mesh, P('i',))
-        initial_values_part=jax.device_put(self.initial_conditions, sharding)
-        return jnp.array(vmap(compute_trajectory,in_axes=(0))(initial_values_part))
+        return jnp.array(vmap(compute_trajectory)(self.initial_conditions))
+        # mesh = make_mesh((len(jax.devices()),1), ('i', 'j'))
+        # sharding = jax.sharding.NamedSharding(mesh, P(('i'), None))
+        # initial_values_part=jax.device_put(self.initial_conditions, sharding)
+        # return jnp.array(vmap(compute_trajectory,in_axes=(0))(initial_values_part))
     
     @property
     def trajectories(self):
@@ -270,8 +269,10 @@ class Tracing():
         return cls(*children, **aux_data)
     
     def to_vtk(self, filename):
-        from pyevtk.hl import polyLinesToVTK
-        import numpy as np
+        try: import numpy as np
+        except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
+        try: from pyevtk.hl import polyLinesToVTK
+        except ImportError: raise ImportError("The 'pyevtk' library is required. Please install it using 'pip install pyevtk'.")
         x = np.concatenate([xyz[:, 0] for xyz in self.trajectories_xyz])
         y = np.concatenate([xyz[:, 1] for xyz in self.trajectories_xyz])
         z = np.concatenate([xyz[:, 2] for xyz in self.trajectories_xyz])

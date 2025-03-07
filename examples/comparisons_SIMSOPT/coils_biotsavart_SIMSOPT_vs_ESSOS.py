@@ -14,7 +14,7 @@ output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
     
-json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
 
 
 list_segments = [30, 100, 300, 1000, 3000]
@@ -225,7 +225,7 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     plt.legend(fontsize=14)
     plt.yscale("log")
     plt.grid(axis='y')
-    plt.ylim(1e-18, 1e-11)
+    plt.ylim(1e-18, 1e-10)
     plt.title(f"{name}", fontsize=14)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir,f"error_BiotSavart_SIMSOPT_vs_ESSOS_{name}.pdf"), transparent=True)

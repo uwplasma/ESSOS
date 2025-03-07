@@ -4,7 +4,7 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_simsopt
+from essos.coils import Coils_from_json
 from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 
@@ -17,8 +17,8 @@ mass=PROTON_MASS
 energy=4000*ONE_EV
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'biot_savart_LandremanPaulQA.json')
-coils = Coils_from_simsopt(json_file, nfp=2)
+json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+coils = Coils_from_json(json_file)
 field = BiotSavart(coils)
 
 # Initialize particles

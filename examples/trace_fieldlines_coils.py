@@ -3,7 +3,7 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_simsopt
+from essos.coils import Coils_from_json
 from essos.dynamics import Tracing
 
 # Input parameters
@@ -14,8 +14,8 @@ trace_tolerance = 1e-7
 num_steps = 1500
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'biot_savart_LandremanPaulQA.json')
-coils = Coils_from_simsopt(json_file, nfp=2)
+json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+coils = Coils_from_json(json_file)
 field = BiotSavart(coils)
 
 # Initialize particles

@@ -1,16 +1,15 @@
 import os
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_simsopt
+from essos.coils import Coils_from_json
 from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
 tmax = 1e-4
-nparticles = 16
+nparticles = 4
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
 num_steps = 1500
@@ -18,8 +17,8 @@ mass=PROTON_MASS
 energy=4000*ONE_EV
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'biot_savart_LandremanPaulQA.json')
-coils = Coils_from_simsopt(json_file, nfp=2)
+json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+coils = Coils_from_json(json_file)
 field = BiotSavart(coils)
 
 # Initialize particles

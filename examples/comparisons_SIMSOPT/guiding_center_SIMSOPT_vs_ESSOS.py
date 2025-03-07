@@ -24,7 +24,7 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 nfp=2
-json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
 field_simsopt = load(json_file)
 field_essos = BiotSavart_essos(Coils_from_simsopt(json_file, nfp))
 

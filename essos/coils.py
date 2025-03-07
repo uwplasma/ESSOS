@@ -207,7 +207,6 @@ class Curves:
                 return jnp.concatenate((data, [data[0]]))
             else:
                 return data
-
         import matplotlib.pyplot as plt 
         if ax is None or ax.name != "3d":
             fig = plt.figure()
@@ -229,13 +228,13 @@ class Curves:
             plt.show()
     
     def to_vtk(self, filename: str, close: bool = True, extra_data=None):
-        from pyevtk.hl import polyLinesToVTK
-
+        try: import numpy as np
+        except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
+        try: from pyevtk.hl import polyLinesToVTK
+        except ImportError: raise ImportError("The 'pyevtk' library is required. Please install it using 'pip install pyevtk'.")
         def wrap(data):
             return jnp.concatenate([data, jnp.array([data[0]])])
-
         gammas = self.gamma
-        
         if close:
             x = jnp.concatenate([wrap(gamma[:, 0]) for gamma in gammas])
             y = jnp.concatenate([wrap(gamma[:, 1]) for gamma in gammas])
@@ -247,13 +246,9 @@ class Curves:
             z = jnp.concatenate([gamma[:, 2] for gamma in gammas])
             ppl = jnp.asarray([gamma.shape[0] for gamma in gammas])
         data = jnp.concatenate([i*jnp.ones((ppl[i], )) for i in range(len(gammas))])
-        
-        import numpy as np
         pointData = {'idx': np.array(data)}
-
         if extra_data is not None:
             pointData = {**pointData, **extra_data}
-
         polyLinesToVTK(str(filename), np.array(x), np.array(y), np.array(z), pointsPerLine=np.array(ppl), pointData=pointData)
 
 class Curves_from_simsopt(Curves):
@@ -281,18 +276,21 @@ class Coils(Curves):
         currents = jnp.array(currents)
         assert jnp.size(currents) == jnp.size(curves.dofs, 0)
         super().__init__(curves.dofs, curves.n_segments, curves.nfp, curves.stellsym)
-        self._dofs_currents = currents
-        self._currents = apply_symmetries_to_currents(self._dofs_currents, self.nfp, self.stellsym)
+        self.currents_scale = jnp.mean(jnp.abs(currents))
+        self._dofs_currents = currents/self.currents_scale
+        self._currents = apply_symmetries_to_currents(self._dofs_currents*self.currents_scale, self.nfp, self.stellsym)
 
     def __str__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
              + f"Degrees of freedom\n{repr(self.dofs.tolist())}\n" \
-             + f"Currents degrees of freedom\n{repr(self.dofs_currents.tolist())}\n"
+             + f"Currents degrees of freedom\n{repr(self.dofs_currents.tolist())}\n" \
+             + f"Currents scaling factor\n{self.currents_scale}\n"
                 
     def __repr__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
              + f"Degrees of freedom\n{repr(self.dofs.tolist())}\n" \
-             + f"Currents degrees of freedom\n{repr(self.dofs_currents.tolist())}\n"
+             + f"Currents degrees of freedom\n{repr(self.dofs_currents.tolist())}\n" \
+             + f"Currents scaling factor\n{self.currents_scale}\n"
 
     @property
     def dofs_curves(self):
@@ -309,7 +307,7 @@ class Coils(Curves):
     @dofs_currents.setter
     def dofs_currents(self, new_dofs_currents):
         self._dofs_currents = new_dofs_currents
-        self._currents = apply_symmetries_to_currents(self._dofs_currents, self.nfp, self.stellsym)
+        self._currents = apply_symmetries_to_currents(self._dofs_currents*self.currents_scale, self.nfp, self.stellsym)
     
     @property
     def x(self):
@@ -346,6 +344,8 @@ class Coils(Curves):
             file.write(f"{repr(self.dofs.tolist())}\n")
             file.write(f"Currents degrees of freedom\n")
             file.write(f"{repr(self._dofs_currents.tolist())}\n")
+            file.write(f"Currents scaling factor\n")
+            file.write(f"{self.currents_scale}\n")
             # file.write(f"Loss\n")
             file.write(f"{text}\n")
     
@@ -354,12 +354,32 @@ class Coils(Curves):
         from simsopt.geo import CurveXYZFourier
         cuves_simsopt = []
         currents_simsopt = []
-        for dofs, current in zip(self.dofs, self.dofs_currents):
+        for dofs, current in zip(self.dofs_curves, self.dofs_currents*self.currents_scale):
             curve = CurveXYZFourier(self.n_segments, self.order)
             curve.x = jnp.reshape(dofs, (curve.x.shape))
             cuves_simsopt.append(curve)
             currents_simsopt.append(Current_SIMSOPT(current))
         return coils_via_symmetries(cuves_simsopt, currents_simsopt, self.nfp, self.stellsym)
+    
+    def to_json(self, filename: str):
+        data = {
+            "nfp": self.nfp,
+            "stellsym": self.stellsym,
+            "order": self.order,
+            "n_segments": self.n_segments,
+            "dofs_curves": self.dofs_curves.tolist(),
+            "currents": self.currents.tolist(),
+        }
+        import json
+        with open(filename, "w") as file:
+            json.dump(data, file)
+
+class Coils_from_json(Coils):
+    def __init__(self, filename: str):
+        import json
+        with open(filename , "r") as file:
+            data = json.load(file)
+        super().__init__(Curves(jnp.array(data["dofs_curves"]), data["n_segments"], data["nfp"], data["stellsym"]), data["currents"])
 
 class Coils_from_simsopt(Coils):
     # This assumes coils have all nfp and stellsym symmetries

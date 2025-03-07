@@ -2,3 +2,4 @@ jax
 matplotlib
 diffrax
 scipy
+netcdf4

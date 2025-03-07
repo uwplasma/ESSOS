@@ -154,8 +154,10 @@ class SurfaceRZFourier:
             plt.show()
     
     def to_vtk(self, filename, extra_data=None, field=None):
-        import numpy as np
-        from pyevtk.hl import gridToVTK
+        try: import numpy as np
+        except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
+        try: from pyevtk.hl import gridToVTK
+        except ImportError: raise ImportError("The 'pyevtk' library is required. Please install it using 'pip install pyevtk'.")
         boundary = np.array(self.gamma)
         Bmag = np.array(self.AbsB)
         x = boundary[:, :, 0].reshape((1, self.nphi, self.ntheta)).copy()
