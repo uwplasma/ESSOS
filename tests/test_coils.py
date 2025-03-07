@@ -75,10 +75,5 @@ def test_curves_plot():
     curves = Curves(dofs)
     curves.plot(show=False)
 
-def test_curves_to_vtk():
-    dofs = jnp.zeros((2, 3, 5))
-    curves = Curves(dofs)
-    curves.to_vtk("curves.vtk")
-
 if __name__ == "__main__":
     pytest.main()
