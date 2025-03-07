@@ -104,7 +104,7 @@ def optimize_loss_function(func, coils, tolerance_optimization=1e-4, maximum_fun
     #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
     #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
     result = minimize(loss_partial, x0=dofs, jac=jac_loss_partial, method='L-BFGS-B',
-                      tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True})
+                      tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
     
     dofs_curves = jnp.reshape(result.x[:len_dofs_curves], (dofs_curves_shape))
     dofs_currents = result.x[len_dofs_curves:]
