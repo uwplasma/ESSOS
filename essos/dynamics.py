@@ -2,8 +2,8 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from jax.sharding import PartitionSpec as P
-from jax import jit, vmap, tree_util, random, lax, make_mesh
+# from jax.sharding import PartitionSpec as P
+from jax import jit, vmap, tree_util, random, lax#, make_mesh
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
 from essos.coils import Coils
