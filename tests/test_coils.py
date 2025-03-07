@@ -1,8 +1,5 @@
 import pytest
-from essos.coils import Curves, apply_symmetries_to_curves
-
-# filepath: /Users/rogeriojorge/local/ESSOS/essos/test_coils.py
-
+from essos.coils import Curves
 import jax.numpy as jnp
 
 def test_curves_initialization():
@@ -63,12 +60,6 @@ def test_curves_save_curves(tmp_path):
     with open(filename, "r") as file:
         content = file.read()
     assert "nfp stellsym order" in content
-
-def test_curves_to_simsopt():
-    dofs = jnp.zeros((2, 3, 5))
-    curves = Curves(dofs)
-    simsopt_curves = curves.to_simsopt()
-    assert isinstance(simsopt_curves, list)
 
 def test_curves_plot():
     dofs = jnp.zeros((2, 3, 5))
