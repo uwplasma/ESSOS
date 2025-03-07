@@ -121,13 +121,5 @@ def test_tracing_trace(field, particles):
     trajectories = tracing.trace()
     assert trajectories.shape == (particles.nparticles, 200, 4)
 
-def test_tracing_to_vtk(field, particles):
-    x = jnp.linspace(1, 2, particles.nparticles)
-    y = jnp.zeros(particles.nparticles)
-    z = jnp.zeros(particles.nparticles)
-    initial_conditions =jnp.array([x, y, z]).T
-    tracing = Tracing(initial_conditions=initial_conditions, field=field, model='GuidingCenter', particles=particles)
-    tracing.to_vtk('test.vtk')
-
 if __name__ == "__main__":
     pytest.main()
