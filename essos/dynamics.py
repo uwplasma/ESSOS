@@ -2,8 +2,9 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-# from jax.sharding import PartitionSpec as P
-from jax import jit, vmap, tree_util, random, lax#, make_mesh
+from jax.experimental.shard_map import shard_map
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax import jit, vmap, tree_util, random, lax
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
 from essos.coils import Coils
@@ -245,12 +246,12 @@ class Tracing():
                     event = Event(self.condition)
                 ).ys
             return trajectory
-        return jnp.array(vmap(compute_trajectory)(self.initial_conditions))
-        # mesh = make_mesh((len(jax.devices()),1), ('i', 'j'))
-        # sharding = jax.sharding.NamedSharding(mesh, P(('i'), None))
-        # initial_values_part=jax.device_put(self.initial_conditions, sharding)
-        # return jnp.array(vmap(compute_trajectory,in_axes=(0))(initial_values_part))
-    
+        # return jnp.array(vmap(compute_trajectory)(self.initial_conditions))
+        mesh = Mesh(devices=jax.devices(), axis_names=('workers',))
+        in_spec = PartitionSpec('workers', None)
+        return shard_map(vmap(compute_trajectory), mesh, 
+                        in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.initial_conditions)
+        
     @property
     def trajectories(self):
         return self._trajectories

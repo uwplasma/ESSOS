@@ -1,25 +1,30 @@
+
+import os
+number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from essos.dynamics import Particles, Tracing
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.optimization import optimize_coils_for_particle_confinement
-from essos.dynamics import Particles, Tracing
 
 # Optimization parameters
 target_B_on_axis = 5.7
-max_coil_length = 26
-nparticles = 6
-order_Fourier_series_coils = 4
-number_coil_points = 20
-maximum_function_evaluations = 20
+max_coil_length = 30
+max_coil_curvature = 0.4
+nparticles = 8
+order_Fourier_series_coils = 6
+number_coil_points = 50
+maximum_function_evaluations = 29
 maxtime_tracing = 1.5e-5
-number_coils_per_half_field_period = 2
+number_coils_per_half_field_period = 3
 number_of_field_periods = 2
 
 # Initialize coils
 current_on_each_coil = 1.84e7
 major_radius_coils = 7.75
-minor_radius_coils = 4.0
+minor_radius_coils = 4.5
 curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
                                    R=major_radius_coils, r=minor_radius_coils,
@@ -37,7 +42,7 @@ tracing_initial = Tracing(field=coils_initial, model='GuidingCenter', particles=
 print('');print(f'Optimizing coils with {maximum_function_evaluations} function evaluations and maxtime_tracing={maxtime_tracing}')
 time0 = time()
 coils_optimized = optimize_coils_for_particle_confinement(coils_initial, particles, target_B_on_axis=target_B_on_axis, maxtime=maxtime_tracing,
-                                        max_coil_length=max_coil_length, maximum_function_evaluations=maximum_function_evaluations)
+                                        max_coil_length=max_coil_length, maximum_function_evaluations=maximum_function_evaluations, max_coil_curvature=max_coil_curvature)
 print(f"  Optimization took {time()-time0:.2f} seconds")
 tracing_optimized = Tracing(field=coils_optimized, model='GuidingCenter', particles=particles, maxtime=maxtime_tracing)
 

@@ -13,17 +13,13 @@ def loss_particle_drift(field, particles, maxtime=1e-5, num_steps=300, trace_tol
     tracing = Tracing(field=field, model='GuidingCenter', particles=particles,
                     maxtime=maxtime, timesteps=num_steps, tol_step_size=trace_tolerance)
     trajectories = tracing.trajectories
-    
     R_axis = jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(field.coils.dofs_curves)))
     radial_factor = jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))-R_axis
     vertical_factor = trajectories[:,:,2]
-    
     radial_drift=(jnp.square(radial_factor)+jnp.square(vertical_factor))
     radial_drift=jnp.sum(jnp.diff(radial_drift,axis=1),axis=1)/num_steps
-    
     angular_drift = jnp.arctan2(trajectories[:, :, 2]+1e-10, jnp.sqrt(trajectories[:, :, 0]**2+trajectories[:, :, 1]**2)-R_axis)
     angular_drift=(jnp.sum(jnp.diff(angular_drift,axis=1),axis=1))/num_steps
-    
     return jnp.ravel(2./jnp.pi*jnp.abs(jnp.arctan(radial_drift/(angular_drift+1e-10))))
 
 @partial(jit, static_argnums=(0))
@@ -42,7 +38,7 @@ def loss_normB_axis(field, npoints=15):
     return B_axis
 
 @partial(jit, static_argnums=(1, 3, 5, 6, 7, 8, 9, 10, 11))
-def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp, scale_current=1e5,
+def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp, scale_current=1e5, max_coil_curvature=0.5,
                                                  n_segments=60, stellsym=True, target_B_on_axis=5.7, maxtime=1e-5,
                                                  max_coil_length=22, num_steps=30, trace_tolerance=1e-5):
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
@@ -58,8 +54,10 @@ def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp,
     normB_axis_loss = jnp.abs(normB_axis-target_B_on_axis)
     coil_length = loss_coil_length(field)
     coil_length_loss = jnp.array([jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))])
+    coil_curvature = loss_coil_curvature(field)
+    coil_curvature_loss = jnp.array([jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))])
 
-    loss = jnp.concatenate((normB_axis_loss, coil_length_loss, particles_drift_loss))
+    loss = jnp.concatenate((normB_axis_loss, coil_length_loss, particles_drift_loss, coil_curvature_loss))
     return jnp.sum(loss)
 
 @partial(jit, static_argnums=(1, 3, 4, 5, 6))
@@ -114,10 +112,10 @@ def optimize_loss_function(func, coils, tolerance_optimization=1e-4, maximum_fun
 
 def optimize_coils_for_particle_confinement(coils, particles, target_B_on_axis=5.7, max_coil_length=22,
                                             maxtime=5e-6, num_steps=500, trace_tolerance=1e-5, tolerance_optimization=1e-4,
-                                            maximum_function_evaluations=30):
+                                            maximum_function_evaluations=30, max_coil_curvature=0.1):
     return optimize_loss_function(loss_optimize_coils_for_particle_confinement, coils,
                            tolerance_optimization=tolerance_optimization, particles=particles, scale_current=coils.currents_scale,
-                           maximum_function_evaluations=maximum_function_evaluations,
+                           maximum_function_evaluations=maximum_function_evaluations, max_coil_curvature=max_coil_curvature,
                            target_B_on_axis=target_B_on_axis, max_coil_length=max_coil_length,
                            maxtime=maxtime, num_steps=num_steps, trace_tolerance=trace_tolerance)
 
