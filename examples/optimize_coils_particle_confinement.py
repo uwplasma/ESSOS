@@ -5,13 +5,13 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.optimization import optimize_coils_for_particle_confinement
 from essos.dynamics import Particles, Tracing
 
-# Optim∂ization parameters
+# Optimization parameters
 target_B_on_axis = 5.7
 max_coil_length = 26
 nparticles = 6
-order_Fourier_series_coils = 6
-number_coil_points = 25
-maximum_function_evaluations = 60
+order_Fourier_series_coils = 4
+number_coil_points = 20
+maximum_function_evaluations = 20
 maxtime_tracing = 1.5e-5
 number_coils_per_half_field_period = 2
 number_of_field_periods = 2

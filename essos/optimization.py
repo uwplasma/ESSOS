@@ -21,12 +21,10 @@ def loss_particle_drift(field, particles, maxtime=1e-5, num_steps=300, trace_tol
     radial_drift=(jnp.square(radial_factor)+jnp.square(vertical_factor))
     radial_drift=jnp.sum(jnp.diff(radial_drift,axis=1),axis=1)/num_steps
     
-    # angular_drift = radial_factor/(vertical_factor+1e-10)
     angular_drift = jnp.arctan2(trajectories[:, :, 2]+1e-10, jnp.sqrt(trajectories[:, :, 0]**2+trajectories[:, :, 1]**2)-R_axis)
     angular_drift=(jnp.sum(jnp.diff(angular_drift,axis=1),axis=1))/num_steps
     
-    return jnp.ravel(2./jnp.pi*jnp.absolute(jnp.arctan(radial_drift/angular_drift)))
-    # return jnp.ravel(jnp.abs(jnp.sqrt(jnp.square(trajectories[:,:,0])+jnp.square(trajectories[:,:,1]))-R_axis))+jnp.ravel(jnp.abs(trajectories[:,:,2]))
+    return jnp.ravel(2./jnp.pi*jnp.abs(jnp.arctan(radial_drift/(angular_drift+1e-10))))
 
 @partial(jit, static_argnums=(0))
 def loss_coil_length(field):
@@ -46,7 +44,7 @@ def loss_normB_axis(field, npoints=15):
 @partial(jit, static_argnums=(1, 3, 5, 6, 7, 8, 9, 10, 11))
 def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp, scale_current=1e5,
                                                  n_segments=60, stellsym=True, target_B_on_axis=5.7, maxtime=1e-5,
-                                                 max_coil_length=22, num_steps=300, trace_tolerance=1e-6):
+                                                 max_coil_length=22, num_steps=30, trace_tolerance=1e-5):
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
     dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves.shape)
     dofs_currents = x[len_dofs_curves_ravelled:]
@@ -55,11 +53,13 @@ def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, nfp,
     coils = Coils(curves=curves, currents=dofs_currents*scale_current)
     field = BiotSavart(coils)
     
-    particles_drift = loss_particle_drift(field, particles, maxtime, num_steps, trace_tolerance)
-    coil_length = loss_coil_length(field)
+    particles_drift_loss = loss_particle_drift(field, particles, maxtime, num_steps, trace_tolerance)
     normB_axis = loss_normB_axis(field)
+    normB_axis_loss = jnp.abs(normB_axis-target_B_on_axis)
+    coil_length = loss_coil_length(field)
+    coil_length_loss = jnp.array([jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))])
 
-    loss = jnp.concatenate((jnp.abs(normB_axis-target_B_on_axis), jnp.abs(coil_length-max_coil_length), jnp.abs(particles_drift)))
+    loss = jnp.concatenate((normB_axis_loss, coil_length_loss, particles_drift_loss))
     return jnp.sum(loss)
 
 @partial(jit, static_argnums=(1, 3, 4, 5, 6))
