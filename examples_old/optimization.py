@@ -1,6 +1,6 @@
 import os
 os.mkdir("output") if not os.path.exists("output") else None
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=32'
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=16'
 import sys
 sys.path.insert(1, os.path.dirname(os.getcwd()))
 import jax
@@ -16,7 +16,7 @@ from simsopt.field import particles_to_vtk
 from pyevtk.hl import polyLinesToVTK
 import numpy as np
 
-n_particles=1000
+n_particles=16
 
 n_curves=1
 order=2
@@ -32,7 +32,7 @@ optimize_with_respect_to_axis = True
 energy = 3.52e6 # eV
 Aspect=0.1# Inverse aspect ration target
 B_on_axis = 5.7 # Tesla
-maxtime = 5.0e-5#3.0e-5 # seconds
+maxtime = 1.0e-5 # seconds
 timesteps = int(maxtime*1.0e7)
 
 optimize_adam = False
@@ -43,9 +43,9 @@ optimize_least_squares = True
 # n_iteration_least_squares = [20]*1
 # diff_step_least_squares =   [None]*1
 # jax_grad_least_squares =    [True]*1
-n_iteration_least_squares = [20]#*4
-diff_step_least_squares =   [1e-1]#, 1e-2, 1e-3, 1e-4]*1
-jax_grad_least_squares =    [True]#*4
+n_iteration_least_squares = [20, 20, 20]
+diff_step_least_squares =   [None, 1e-2, 1e-4]#[1e-1, 1e-2, 1e-3, 1e-4]*1
+jax_grad_least_squares =    [True, False, False]
 # n_iteration_least_squares = [30]*7 #[150] + [50]*5 + [150]
 # diff_step_least_squares =   [None, 1e-2,  1e-3,  1e-4,  1e-5, 1e-6,  None]
 # jax_grad_least_squares =    [True, False, False, False, False, False, True]

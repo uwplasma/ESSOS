@@ -10,7 +10,7 @@ number_of_particles_per_core = 1
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_cores}'
 print("JAX running on", len(jax.devices()), jax.devices()[0].platform.upper())
 sys.path.insert(1, os.path.dirname(os.getcwd()))
-from ESSOS import CreateEquallySpacedCurves, Coils, Particles
+from essos import CreateEquallySpacedCurves, Coils, Particles
 from MagneticField import B, B_norm
 
 os.mkdir("images") if not os.path.exists("images") else None
