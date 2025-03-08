@@ -1,4 +1,5 @@
 import os
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=10'
 from time import time
 import matplotlib.pyplot as plt
 from essos.coils import Coils, CreateEquallySpacedCurves
@@ -6,12 +7,12 @@ from essos.fields import Vmec
 from essos.optimization import optimize_coils_for_vmec_surface
 
 # Optimization parameters
-max_coil_length = 45
+max_coil_length = 40
 max_coil_curvature = 0.5
 order_Fourier_series_coils = 6
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 350
-number_coils_per_half_field_period = 3
+maximum_function_evaluations = 500
+number_coils_per_half_field_period = 4
 tolerance_optimization = 1e-5
 ntheta=30
 nphi=30

@@ -1,6 +1,7 @@
 from functools import partial
-from jax import jit, vmap
 import jax.numpy as jnp
+from jax import jit, vmap, devices, device_put
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from .plot import fix_matplotlib_3d
 
 @partial(jit, static_argnums=(0, 1))
@@ -8,7 +9,12 @@ def BdotN(surface, field):
     ntheta = surface.ntheta
     nphi = surface.nphi
     gamma = surface.gamma
-    B_on_surface = vmap(lambda surf: vmap(lambda x: field.B(x))(surf))(gamma)
+    mesh = Mesh(devices(), ("dev",))
+    sharding = NamedSharding(mesh, PartitionSpec("dev", None))
+    gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
+    gamma_sharded = device_put(gamma_reshaped, sharding)
+    B_on_surface = jit(vmap(field.B), in_shardings=sharding, out_shardings=sharding)(gamma_sharded)
+    B_on_surface = B_on_surface.reshape(nphi, ntheta, 3)
     B_dot_n = jnp.sum(B_on_surface.reshape((nphi, ntheta, 3)) * surface.unitnormal, axis=2)
     return B_dot_n
 
