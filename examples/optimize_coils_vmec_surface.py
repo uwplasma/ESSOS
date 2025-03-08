@@ -1,5 +1,6 @@
 import os
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=10'
+number_of_processors_to_use = 8 # Parallelization, this should divide ntheta*nphi
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import matplotlib.pyplot as plt
 from essos.coils import Coils, CreateEquallySpacedCurves
@@ -14,8 +15,8 @@ number_coil_points = order_Fourier_series_coils*10
 maximum_function_evaluations = 500
 number_coils_per_half_field_period = 4
 tolerance_optimization = 1e-5
-ntheta=30
-nphi=30
+ntheta=32
+nphi=32
 
 # Initialize VMEC field
 vmec = Vmec(os.path.join(os.path.dirname(__file__), 'input_files',

@@ -4,7 +4,6 @@ import jax.numpy as jnp
 from jax.lax import fori_loop
 from jax import tree_util, jit, vmap
 from functools import partial
-
 from .plot import fix_matplotlib_3d
 
 def compute_curvature(gammadash, gammadashdash):
@@ -66,24 +65,16 @@ class Curves:
     
     partial(jit, static_argnames=['self'])
     def _set_gamma(self):
-        """ Initializes the discretized curves and their derivatives"""
-                        
-        # Create the gamma and gamma_dash
         def fori_createdata(order_index: int, data: jnp.ndarray) -> jnp.ndarray:
             return data[0] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1],                             jnp.sin(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index],                             jnp.cos(2 * jnp.pi * order_index * self.quadpoints)), \
                    data[1] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1],  2*jnp.pi   *order_index   *jnp.cos(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], -2*jnp.pi   *order_index   *jnp.sin(2 * jnp.pi * order_index * self.quadpoints)), \
                    data[2] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1], -4*jnp.pi**2*order_index**2*jnp.sin(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index], -4*jnp.pi**2*order_index**2*jnp.cos(2 * jnp.pi * order_index * self.quadpoints))
-        
         gamma          = jnp.einsum("ij,k->ikj", self._curves[:, :, 0], jnp.ones(self.n_segments))
         gamma_dash     = jnp.zeros((jnp.size(self._curves, 0), self.n_segments, 3))
         gamma_dashdash = jnp.zeros((jnp.size(self._curves, 0), self.n_segments, 3))
         gamma, gamma_dash, gamma_dashdash = fori_loop(1, self._order+1, fori_createdata, (gamma, gamma_dash, gamma_dashdash)) 
-        
         length = jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in gamma_dash])
-
         curvature = vmap(compute_curvature)(gamma_dash, gamma_dashdash)
-
-        # Set the attributes
         self._gamma = gamma
         self._gamma_dash = gamma_dash
         self._gamma_dashdash = gamma_dashdash
