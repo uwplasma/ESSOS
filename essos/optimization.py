@@ -9,6 +9,38 @@ from essos.surfaces import BdotN_over_B, BdotN
 from essos.coils import Curves, Coils
 from scipy.optimize import least_squares, minimize
 
+@partial(jit, static_argnums=(1, 3, 4, 5, 6))
+def loss_coils_nearaxis(x, field_nearaxis, dofs_curves, nfp, max_coil_length=42,
+               n_segments=60, stellsym=True, max_coil_curvature=0.1):
+    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
+    dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], (dofs_curves.shape))
+    dofs_currents = x[len_dofs_curves_ravelled:]
+    
+    curves = Curves(dofs_curves, n_segments, nfp, stellsym)
+    coils = Coils(curves=curves, currents=dofs_currents)
+    field = BiotSavart(coils)
+    
+    Raxis = field_nearaxis.R0
+    Zaxis = field_nearaxis.Z0
+    phi = field_nearaxis.phi
+    Xaxis = Raxis*jnp.cos(phi)
+    Yaxis = Raxis*jnp.sin(phi)
+    points = jnp.array([Xaxis, Yaxis, Zaxis])
+    B_nearaxis = field_nearaxis.B_axis
+    B_coils = [field.AbsB(point) for point in points.T]
+    gradB_nearaxis = field_nearaxis.grad_B_axis.T
+    gradB_coils = [field.dB_by_dX(point) for point in points.T]
+    
+    coil_length = loss_coil_length(field)
+    coil_curvature = loss_coil_curvature(field)
+    
+    B_difference_loss = jnp.sum(jnp.abs(jnp.array(B_coils)-jnp.array(B_nearaxis)))
+    gradB_difference_loss = jnp.sum(jnp.abs(jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)))
+    coil_length_loss    = jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
+    coil_curvature_loss = jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
+    
+    return B_difference_loss+gradB_difference_loss+coil_length_loss+coil_curvature_loss
+
 def loss_particle_drift(field, particles, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenter'):
     particles.to_full_orbit(field)
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
@@ -125,5 +157,12 @@ def optimize_coils_for_vmec_surface(vmec, coils, tolerance_optimization=1e-10,
                                     max_coil_length=42, max_coil_curvature=0.1):
     return optimize_loss_function(loss_BdotN, coils, tolerance_optimization=tolerance_optimization,
                                   maximum_function_evaluations=maximum_function_evaluations, vmec=vmec,
+                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
+    
+def optimize_coils_for_nearaxis(field_nearaxis, coils, tolerance_optimization=1e-10,
+                                    maximum_function_evaluations=30,
+                                    max_coil_length=42, max_coil_curvature=0.1):
+    return optimize_loss_function(loss_coils_nearaxis, coils, tolerance_optimization=tolerance_optimization,
+                                  maximum_function_evaluations=maximum_function_evaluations, field_nearaxis=field_nearaxis,
                                   max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
                                     
