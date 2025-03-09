@@ -26,10 +26,10 @@ def loss_coils_nearaxis(x, field_nearaxis, dofs_curves, nfp, max_coil_length=42,
     Xaxis = Raxis*jnp.cos(phi)
     Yaxis = Raxis*jnp.sin(phi)
     points = jnp.array([Xaxis, Yaxis, Zaxis])
-    B_nearaxis = field_nearaxis.B_axis
-    B_coils = [field.AbsB(point) for point in points.T]
+    B_nearaxis = field_nearaxis.B_axis.T
+    B_coils = vmap(field.B)(points.T)
     gradB_nearaxis = field_nearaxis.grad_B_axis.T
-    gradB_coils = [field.dB_by_dX(point) for point in points.T]
+    gradB_coils = vmap(field.dB_by_dX)(points.T)
     
     coil_length = loss_coil_length(field)
     coil_curvature = loss_coil_curvature(field)

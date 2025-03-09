@@ -185,6 +185,7 @@ class Vmec():
         return jnp.array([X, Y, Z])
 
 class near_axis():
+    ## USE FUNCTIONS TO SET UP THE FIELD INSTEAD OF ALL IN INIT
     # @partial(jit, static_argnums=(0,4,5,6,7,8,9,10))
     def __init__(self, rc=jnp.array([1, 0.1]), zs=jnp.array([0, 0.1]), etabar=1.0,
                     nphi=31, sigma0=0, I2=0, spsi=1, sG=1, B0=1, nfp=2):
