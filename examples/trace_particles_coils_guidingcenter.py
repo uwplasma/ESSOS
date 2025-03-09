@@ -1,4 +1,6 @@
 import os
+number_of_processors_to_use = 4 # Parallelization, this should divide nparticles
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt

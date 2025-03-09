@@ -1,4 +1,6 @@
 import os
+number_of_processors_to_use = 5 # Parallelization, this should divide nfieldlines
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -8,8 +10,8 @@ from essos.dynamics import Tracing
 
 # Input parameters
 tmax = 150
-nparticles = 5
-R0 = jnp.linspace(1.23, 1.27, nparticles)
+nfieldlines = 5
+R0 = jnp.linspace(1.23, 1.27, nfieldlines)
 trace_tolerance = 1e-7
 num_steps = 1500
 
@@ -19,8 +21,8 @@ coils = Coils_from_json(json_file)
 field = BiotSavart(coils)
 
 # Initialize particles
-Z0 = jnp.zeros(nparticles)
-phi0 = jnp.zeros(nparticles)
+Z0 = jnp.zeros(nfieldlines)
+phi0 = jnp.zeros(nfieldlines)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 
 # Trace in ESSOS
