@@ -43,13 +43,6 @@ coils_optimized = optimize_coils_for_vmec_surface(vmec, coils_initial, maximum_f
                                                     tolerance_optimization=tolerance_optimization)
 print(f"Optimization took {time()-time0:.2f} seconds")
 
-# ## Save results in vtk format to analyze in Paraview
-# from essos.fields import BiotSavart
-# vmec.surface.to_vtk('surface_initial', field=BiotSavart(coils_initial))
-# vmec.surface.to_vtk('surface_final',   field=BiotSavart(coils_optimized))
-# coils_initial.to_vtk('coils_initial')
-# coils_optimized.to_vtk('coils_optimized')
-
 # Plot coils, before and after optimization
 fig = plt.figure(figsize=(8, 4))
 ax1 = fig.add_subplot(121, projection='3d')
@@ -60,3 +53,16 @@ coils_optimized.plot(ax=ax2, show=False)
 vmec.surface.plot(ax=ax2, show=False)
 plt.tight_layout()
 plt.show()
+
+# # Save the coils to a json file
+# coils_optimized.to_json("stellarator_coils.json")
+# # Load the coils from a json file
+# from essos.coils import Coils_from_json
+# coils = Coils_from_json("stellarator_coils.json")
+
+# # Save results in vtk format to analyze in Paraview
+# from essos.fields import BiotSavart
+# vmec.surface.to_vtk('surface_initial', field=BiotSavart(coils_initial))
+# vmec.surface.to_vtk('surface_final',   field=BiotSavart(coils_optimized))
+# coils_initial.to_vtk('coils_initial')
+# coils_optimized.to_vtk('coils_optimized')

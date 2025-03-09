@@ -63,9 +63,12 @@ class Particles():
         self.initial_vperpendicular = jnp.sqrt(self.total_speed**2 - self.initial_vparallel**2)
         
         if field is not None and initial_xyz_fullorbit is None:
-            self.initial_xyz_fullorbit, self.initial_vxvyvz = gc_to_fullorbit(field=field, initial_xyz=self.initial_xyz, initial_vparallel=self.initial_vparallel,
-                                                                              total_speed=self.total_speed, mass=self.mass, charge=self.charge,
-                                                                              phase_angle_full_orbit=self.phase_angle_full_orbit)
+            self.to_full_orbit(field)
+        
+    def to_full_orbit(self, field):
+        self.initial_xyz_fullorbit, self.initial_vxvyvz = gc_to_fullorbit(field=field, initial_xyz=self.initial_xyz, initial_vparallel=self.initial_vparallel,
+                                                                            total_speed=self.total_speed, mass=self.mass, charge=self.charge,
+                                                                            phase_angle_full_orbit=self.phase_angle_full_orbit)
 
 @partial(jit, static_argnums=(2))
 def GuidingCenter(t,

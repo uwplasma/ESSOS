@@ -44,7 +44,7 @@ class BiotSavart():
         return points
     
 class Vmec():
-    def __init__(self, wout, ntheta=30, nphi=30, close=True, range='full torus'):
+    def __init__(self, wout, ntheta=50, nphi=50, close=True, range='full torus'):
         self.wout = wout
         from netCDF4 import Dataset
         self.nc = Dataset(self.wout)
@@ -182,3 +182,7 @@ class Vmec():
         X = R * jnp.cos(phi)
         Y = R * jnp.sin(phi)
         return jnp.array([X, Y, Z])
+
+class near_axis():
+    def __init__(self):
+        self.rc = 1

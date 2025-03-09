@@ -28,7 +28,7 @@ time0 = time()
 tracing = Tracing(field=field, model='FieldLine', initial_conditions=initial_xyz,
                   maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
-trajectories_ESSOS = tracing.trajectories
+trajectories = tracing.trajectories
 
 # Plot trajectories
 fig = plt.figure(figsize=(9, 5))
@@ -38,10 +38,14 @@ ax2 = fig.add_subplot(122)
 coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False)
 
-for i, trajectory in enumerate(trajectories_ESSOS):
+for i, trajectory in enumerate(trajectories):
     ax2.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Fieldline {i+1}')
 ax2.set_xlabel('R (m)')
 ax2.set_ylabel('Z (m)')
 ax2.legend()
 plt.tight_layout()
 plt.show()
+
+# # Save results in vtk format to analyze in Paraview
+# tracing.to_vtk('trajectories')
+# coils.to_vtk('coils')

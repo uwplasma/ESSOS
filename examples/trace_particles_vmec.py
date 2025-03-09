@@ -1,4 +1,6 @@
 import os
+number_of_processors_to_use = 12 # Parallelization, this should divide ntheta*nphi
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -7,32 +9,32 @@ from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_A
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
-tmax = 1e-4
-nparticles = 50
+tmax = 1e-3
+nparticles = 120
 s = 0.25 # s-coordinate: flux surface label
 theta = jnp.linspace(0, 2*jnp.pi, nparticles)
 phi = jnp.linspace(0, 2*jnp.pi/2/3, nparticles)
-trace_tolerance = 1e-4
-num_steps = 500
-energy=FUSION_ALPHA_PARTICLE_ENERGY/5
+trace_tolerance = 1e-8
+num_steps_to_plot = 500
+energy=FUSION_ALPHA_PARTICLE_ENERGY/10
 
 # Load coils and field
 wout_file = os.path.join(os.path.dirname(__file__), 'input_files', "wout_n3are_R7.75B5.7.nc")
-field = Vmec(wout_file)
+vmec = Vmec(wout_file)
 
 # Initialize particles
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([[s]*nparticles, theta, phi]).T
 particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,
-                      charge=ALPHA_PARTICLE_CHARGE, energy=energy, field=field)
+                      charge=ALPHA_PARTICLE_CHARGE, energy=energy, field=vmec)
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenter', particles=particles, maxtime=tmax,
-                  timesteps=num_steps, tol_step_size=trace_tolerance)
+tracing = Tracing(field=vmec, model='GuidingCenter', particles=particles, maxtime=tmax,
+                  timesteps=num_steps_to_plot, tol_step_size=trace_tolerance)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
-trajectories_ESSOS = tracing.trajectories
+trajectories = tracing.trajectories
 
 # Plot trajectories, velocity parallel to the magnetic field, loss fractions and/or energy error
 fig = plt.figure(figsize=(9, 8))
@@ -42,7 +44,7 @@ ax3 = fig.add_subplot(223)
 ax4 = fig.add_subplot(224)
 ## Plot trajectories in 3D
 tracing.plot(ax=ax1, show=False)
-for i, trajectory in enumerate(trajectories_ESSOS):
+for i, trajectory in enumerate(trajectories):
     ## Plot energy error
     ax2.plot(tracing.times, jnp.abs(tracing.energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
     ## Plot velocity parallel to the magnetic field
@@ -63,3 +65,7 @@ ax3.set_xlabel('Time (s)')
 ax4.set_xlabel('Time (s)')
 plt.tight_layout()
 plt.show()
+
+# # Save results in vtk format to analyze in Paraview
+# vmec.surface.to_vtk('surface')
+# tracing.to_vtk('trajectories')

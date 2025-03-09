@@ -337,11 +337,10 @@ class Coils(Curves):
             file.write(f"{repr(self._dofs_currents.tolist())}\n")
             file.write(f"Currents scaling factor\n")
             file.write(f"{self.currents_scale}\n")
-            # file.write(f"Loss\n")
             file.write(f"{text}\n")
     
     def to_simsopt(self):
-        from simsopt.field import Coil as Coil_SIMSOPT, Current as Current_SIMSOPT, coils_via_symmetries
+        from simsopt.field import Current as Current_SIMSOPT, coils_via_symmetries
         from simsopt.geo import CurveXYZFourier
         cuves_simsopt = []
         currents_simsopt = []
@@ -359,7 +358,7 @@ class Coils(Curves):
             "order": self.order,
             "n_segments": self.n_segments,
             "dofs_curves": self.dofs_curves.tolist(),
-            "currents": self.currents.tolist(),
+            "dofs_currents": self.dofs_currents.tolist(),
         }
         import json
         with open(filename, "w") as file:
@@ -370,7 +369,7 @@ class Coils_from_json(Coils):
         import json
         with open(filename , "r") as file:
             data = json.load(file)
-        super().__init__(Curves(jnp.array(data["dofs_curves"]), data["n_segments"], data["nfp"], data["stellsym"]), data["currents"])
+        super().__init__(Curves(jnp.array(data["dofs_curves"]), data["n_segments"], data["nfp"], data["stellsym"]), data["dofs_currents"])
 
 class Coils_from_simsopt(Coils):
     # This assumes coils have all nfp and stellsym symmetries

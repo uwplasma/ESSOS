@@ -11,15 +11,16 @@ from essos.optimization import optimize_coils_for_particle_confinement
 
 # Optimization parameters
 target_B_on_axis = 5.7
-max_coil_length = 30
+max_coil_length = 31
 max_coil_curvature = 0.4
 nparticles = 8
-order_Fourier_series_coils = 6
-number_coil_points = 50
-maximum_function_evaluations = 29
-maxtime_tracing = 1.5e-5
+order_Fourier_series_coils = 4
+number_coil_points = 80
+maximum_function_evaluations = 100
+maxtime_tracing = 2e-5
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
+model = 'GuidingCenter'
 
 # Initialize coils
 current_on_each_coil = 1.84e7
@@ -36,18 +37,15 @@ coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coil
 phi_array = jnp.linspace(0, 2*jnp.pi, nparticles)
 initial_xyz=jnp.array([major_radius_coils*jnp.cos(phi_array), major_radius_coils*jnp.sin(phi_array), 0*phi_array]).T
 particles = Particles(initial_xyz=initial_xyz)
-tracing_initial = Tracing(field=coils_initial, model='GuidingCenter', particles=particles, maxtime=maxtime_tracing)
+tracing_initial = Tracing(field=coils_initial, particles=particles, maxtime=maxtime_tracing, model=model)
 
 # Optimize coils
 print('');print(f'Optimizing coils with {maximum_function_evaluations} function evaluations and maxtime_tracing={maxtime_tracing}')
 time0 = time()
-coils_optimized = optimize_coils_for_particle_confinement(coils_initial, particles, target_B_on_axis=target_B_on_axis, maxtime=maxtime_tracing,
+coils_optimized = optimize_coils_for_particle_confinement(coils_initial, particles, target_B_on_axis=target_B_on_axis, maxtime=maxtime_tracing, model=model,
                                         max_coil_length=max_coil_length, maximum_function_evaluations=maximum_function_evaluations, max_coil_curvature=max_coil_curvature)
 print(f"  Optimization took {time()-time0:.2f} seconds")
-tracing_optimized = Tracing(field=coils_optimized, model='GuidingCenter', particles=particles, maxtime=maxtime_tracing)
-
-print(f'Initial coil currents:   {coils_initial.currents}')
-print(f'Optimized coil currents: {coils_optimized.currents}')
+tracing_optimized = Tracing(field=coils_optimized, particles=particles, maxtime=maxtime_tracing, model=model)
 
 # Plot trajectories, before and after optimization
 fig = plt.figure(figsize=(9, 8))
@@ -68,3 +66,15 @@ for i, trajectory in enumerate(tracing_optimized.trajectories):
 ax4.set_xlabel('R (m)');ax4.set_ylabel('Z (m)');#ax4.legend()
 plt.tight_layout()
 plt.show()
+
+# # Save the coils to a json file
+# coils_optimized.to_json("stellarator_coils.json")
+# # Load the coils from a json file
+# from essos.coils import Coils_from_json
+# coils = Coils_from_json("stellarator_coils.json")
+
+# # Save results in vtk format to analyze in Paraview
+# tracing_initial.to_vtk('trajectories_initial')
+# tracing_optimized.to_vtk('trajectories_final')
+# coils_initial.to_vtk('coils_initial')
+# coils_optimized.to_vtk('coils_optimized')
