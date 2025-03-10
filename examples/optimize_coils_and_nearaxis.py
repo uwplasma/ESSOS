@@ -96,5 +96,7 @@ plt.show()
 # coils = Coils_from_json("stellarator_coils.json")
 
 # # Save results in vtk format to analyze in Paraview
-# coils_initial.to_vtk('coils_initial')
+# coils_optimized_initial_nearaxis.to_vtk('coils_initial')
 # coils_optimized.to_vtk('coils_optimized')
+# tracing_initial.to_vtk('trajectories_initial')
+# tracing_optimized.to_vtk('trajectories_final')

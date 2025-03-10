@@ -82,3 +82,5 @@ plt.show()
 # # Save results in vtk format to analyze in Paraview
 # coils_initial.to_vtk('coils_initial')
 # coils_optimized.to_vtk('coils_optimized')
+# tracing_initial.to_vtk('trajectories_initial')
+# tracing_optimized.to_vtk('trajectories_final')
