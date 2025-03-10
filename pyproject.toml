@@ -10,7 +10,7 @@ write_to = "essos/version.py"
 
 [project]
 name = "essos"
-description = "ESSOS: Easy Single-Stage Optimization of Stellarators"
+description = "ESSOS: e-Stellarator Simulation and Optimization Suite"
 readme = "README.md"
 authors = [{ name = "UWPlasma, UW-Madison group", email = "rogerio.jorge@wisc.edu" }]
 license = { file = "LICENSE" }
