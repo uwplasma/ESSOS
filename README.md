@@ -2,7 +2,7 @@
     <img src="https://raw.githubusercontent.com/uwplasma/ESSOS/refs/heads/main/docs/ESSOS_logo.png" align="center" width="30%">
 </p>
 <p align="center">
-    <em><code>❯ essos: Stellarator Coil Optimizer of alpha particles via differentiable JAX code</code></em>
+    <em><code>❯ ESSOS: e-Stellarator Simulation and Optimization Suite</code></em>
 </p>
 <p align="center">
     <img src="https://img.shields.io/github/license/uwplasma/ESSOS?style=default&logo=opensourceinitiative&logoColor=white&color=0080ff" alt="license">
