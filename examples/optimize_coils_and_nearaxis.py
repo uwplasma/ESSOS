@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import near_axis, BiotSavart
 from essos.dynamics import Tracing
-from essos.optimization import optimize_coils_for_nearaxis
+from essos.optimization import optimize_coils_and_nearaxis, optimize_coils_for_nearaxis
 
 # Optimization parameters
 max_coil_length = 5.0
@@ -20,12 +20,12 @@ rc=jnp.array([1, 0.045])
 zs=jnp.array([0,-0.045])
 etabar=-0.9
 nfp=3
-field = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
+field_nearaxis_initial = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
 
 # Initialize coils
-current_on_each_coil = 17e5*field.B0/nfp/2
+current_on_each_coil = 17e5*field_nearaxis_initial.B0/nfp/2
 number_of_field_periods = nfp
-major_radius_coils = field.R0[0]
+major_radius_coils = field_nearaxis_initial.R0[0]
 minor_radius_coils = major_radius_coils/1.5
 curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
@@ -35,12 +35,26 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 
 # Optimize coils
-print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
+print(f'Optimizing coils for initial near=axis with {maximum_function_evaluations} function evaluations.')
 time0 = time()
-coils_optimized = optimize_coils_for_nearaxis(field, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
+coils_optimized_initial_nearaxis = optimize_coils_for_nearaxis(field_nearaxis_initial, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
                                                     max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,
                                                     tolerance_optimization=tolerance_optimization)
 print(f"Optimization took {time()-time0:.2f} seconds")
+
+# Optimize coils
+print(f'Optimizing coils and near-axis with {maximum_function_evaluations} function evaluations.')
+time0 = time()
+coils_optimized, field_nearaxis_optimized = optimize_coils_and_nearaxis(field_nearaxis_initial, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
+                                                    max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,
+                                                    tolerance_optimization=tolerance_optimization)
+print(f"Optimization took {time()-time0:.2f} seconds")
+
+print(f'############################################')
+print(f'Iota for initial near-axis: {field_nearaxis_initial.iota}')
+print(f'Iota for optimized near-axis: {field_nearaxis_optimized.iota}')
+print(f'Maximum elongation for initial near-axis: {max(field_nearaxis_initial.elongation)}')
+print(f'Maximum elongation for optimized near-axis: {max(field_nearaxis_optimized.elongation)}')
 
 # Trace fieldlines
 nfieldlines = 6
@@ -48,15 +62,17 @@ num_steps = 1000
 tmax = 150
 trace_tolerance = 1e-7
 
-R0 = jnp.linspace(field.R0[0], 1.05*field.R0[0], nfieldlines)
+R0_initial   = jnp.linspace(field_nearaxis_initial.R0[0],   1.05*field_nearaxis_initial.R0[0],   nfieldlines)
+R0_optimized = jnp.linspace(field_nearaxis_optimized.R0[0], 1.05*field_nearaxis_optimized.R0[0], nfieldlines)
 Z0 = jnp.zeros(nfieldlines)
 phi0 = jnp.zeros(nfieldlines)
-initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
+initial_xyz_initial   = jnp.array([R0_initial*jnp.cos(phi0),   R0_initial*jnp.sin(phi0),   Z0]).T
+initial_xyz_optimized = jnp.array([R0_optimized*jnp.cos(phi0), R0_optimized*jnp.sin(phi0), Z0]).T
 
 time0 = time()
-tracing_initial = Tracing(field=BiotSavart(coils_initial), model='FieldLine', initial_conditions=initial_xyz,
+tracing_initial = Tracing(field=BiotSavart(coils_optimized_initial_nearaxis), model='FieldLine', initial_conditions=initial_xyz_initial,
                   maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
-tracing_optimized = Tracing(field=BiotSavart(coils_optimized), model='FieldLine', initial_conditions=initial_xyz,
+tracing_optimized = Tracing(field=BiotSavart(coils_optimized), model='FieldLine', initial_conditions=initial_xyz_optimized,
                   maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
 print(f"Tracing took {time()-time0:.2f} seconds")
 
@@ -64,11 +80,11 @@ print(f"Tracing took {time()-time0:.2f} seconds")
 fig = plt.figure(figsize=(8, 4))
 ax1 = fig.add_subplot(121, projection='3d')
 ax2 = fig.add_subplot(122, projection='3d')
-coils_initial.plot(ax=ax1, show=False)
-field.plot(ax=ax1, show=False)
+coils_optimized_initial_nearaxis.plot(ax=ax1, show=False)
+field_nearaxis_initial.plot(ax=ax1, show=False)
 tracing_initial.plot(ax=ax1, show=False)
 coils_optimized.plot(ax=ax2, show=False)
-field.plot(ax=ax2, show=False)
+field_nearaxis_optimized.plot(ax=ax2, show=False)
 tracing_optimized.plot(ax=ax2, show=False)
 plt.tight_layout()
 plt.show()

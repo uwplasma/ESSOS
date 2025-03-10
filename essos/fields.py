@@ -199,10 +199,34 @@ class near_axis():
         self.B0 = B0
         self.nfp = nfp
         
+        self._dofs = jnp.concatenate((jnp.ravel(rc), jnp.ravel(zs), jnp.array([etabar])))
+        
         self.phi = jnp.linspace(0, 2 * jnp.pi / self.nfp, self.nphi, endpoint=False)
         self.nfourier = max(len(self.rc), len(self.zs))
         
-        self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length = self.calculate()
+        parameters = self.calculate(self.rc, self.zs, self.etabar)
+        self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0 = parameters
+        
+    @property
+    def dofs(self):
+        return self._dofs
+    
+    @dofs.setter
+    def dofs(self, new_dofs):
+        self._dofs = new_dofs
+        self.rc = new_dofs[:len(self.rc)]
+        self.zs = new_dofs[len(self.rc):len(self.rc)+len(self.zs)]
+        self.etabar = new_dofs[-1]
+        parameters = self.calculate(self.rc, self.zs, self.etabar)
+        self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0 = parameters
+    
+    @property
+    def x(self):
+        return self._dofs
+    
+    @x.setter
+    def x(self, new_x):
+        self.dofs = new_x
         
     def _tree_flatten(self):
         children = (self.rc, self.zs, self.etabar, self.B0, self.sigma0, self.I2)  # arrays / dynamic values
@@ -212,11 +236,36 @@ class near_axis():
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         return cls(*children, **aux_data)
+    
+    @partial(jit, static_argnames=['self'])
+    def B_covariant(self, points):
+        r, theta, phi = points
+        Br = 0
+        Btheta = r*r*self.I2
+        Bphi = self.G0
+        return jnp.array([Br, Btheta, Bphi])
+    
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, points):
+        r, theta, phi = points
+        jac = self.jacobian(points)
+        AbsB = self.AbsB(points)
+        Bphi = r*AbsB/jac
+        return jnp.array([0, self.iotaN * Bphi, Bphi])
+    
+    @partial(jit, static_argnames=['self'])
+    def AbsB(self, points):
+        r, theta, phi = points
+        return self.B0*(1 + r*self.etabar*jnp.cos(theta))
+    
+    @partial(jit, static_argnames=['self'])
+    def jacobian(self, points):
+        r, theta, phi = points
+        AbsB = self.AbsB(points)
+        return r*self.B0*(self.G0+self.iota*self.I2)/(AbsB*AbsB)
         
     @partial(jit, static_argnames=['self'])
-    def calculate(self):
-        rc = self.rc
-        zs = self.zs
+    def calculate(self, rc, zs, etabar):
         phi = self.phi
         nphi = self.nphi
         nfp = self.nfp
@@ -226,7 +275,6 @@ class near_axis():
         B0 = self.B0
         sigma0 = self.sigma0
         I2 = self.I2
-        etabar = self.etabar
         d_phi = phi[1] - phi[0]
         
         n_values = jnp.arange(nfourier) * nfp
@@ -392,7 +440,7 @@ class near_axis():
             nablaB[2, 2]]
                 ])
         
-        return R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length
+        return R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length, iota, iotaN, G0
         
     def plot(self, ax=None, show=True, close=False, axis_equal=True, **kwargs):
         if close: raise NotImplementedError("close=True is not implemented, need to have closed surfaces")
