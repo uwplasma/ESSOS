@@ -58,10 +58,10 @@ jobs:
 
     - name: Upload coverage reports to Codecov
       if: github.repository_owner == 'uwplasma' && matrix.python-version == '3.12'
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        file: ./coverage.xml
+        files: ./coverage.xml
         flags: unittests
         env_vars: PYTHON
         name: codecov-umbrella
