@@ -36,7 +36,7 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 
 # Optimize coils
-print('');print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
+print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
 time0 = time()
 coils_optimized = optimize_coils_for_vmec_surface(vmec, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
                                                     max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,

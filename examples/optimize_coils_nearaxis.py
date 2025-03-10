@@ -14,7 +14,7 @@ max_coil_length = 3.5
 max_coil_curvature = 3
 order_Fourier_series_coils = 6
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 10
+maximum_function_evaluations = 50
 number_coils_per_half_field_period = 3
 tolerance_optimization = 1e-8
 
@@ -23,12 +23,10 @@ rc=jnp.array([1, 0.1])
 zs=jnp.array([0, 0.1])
 etabar=1.0
 nfp=2
-start_time = time()
 field = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
-print(f"Initialization of the field took {time()-start_time:.2f} seconds")
 
 # Initialize coils
-current_on_each_coil = 1e5
+current_on_each_coil = 17e5*field.B0/nfp/2
 number_of_field_periods = nfp
 major_radius_coils = rc[0]
 minor_radius_coils = major_radius_coils/2
@@ -40,7 +38,7 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 
 # Optimize coils
-print('');print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
+print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
 time0 = time()
 coils_optimized = optimize_coils_for_nearaxis(field, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
                                                     max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,
@@ -49,9 +47,9 @@ print(f"Optimization took {time()-time0:.2f} seconds")
 
 # Trace fieldlines
 nfieldlines = 8
-num_steps = 1500
-tmax = 150
-trace_tolerance = 1e-7
+num_steps = 1000
+tmax = 200
+trace_tolerance = 1e-5
 
 R0 = jnp.linspace(rc[0], rc[0]+2*rc[1], nfieldlines)
 Z0 = jnp.zeros(nfieldlines)

@@ -288,8 +288,10 @@ class Tracing():
         if ax is None or ax.name != "3d":
             fig = plt.figure()
             ax = fig.add_subplot(projection='3d')
-        for xyz in self.trajectories_xyz:
-            ax.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2], **kwargs, linestyle='dashed', linewidth=2)
+        trajectories_xyz = jnp.array(self.trajectories_xyz)
+        for i in range(trajectories_xyz.shape[0]):
+            ax.plot(trajectories_xyz[i, :, 0], trajectories_xyz[i, :, 1], trajectories_xyz[i, :, 2], linewidth=0.5, **kwargs)
+        ax.grid(False)
         if axis_equal:
             fix_matplotlib_3d(ax)
         if show:

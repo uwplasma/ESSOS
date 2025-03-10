@@ -2,7 +2,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from functools import partial
-from jax import jit, jacfwd, grad, vmap
+from jax import jit, jacfwd, grad, vmap, tree_util
 from essos.surfaces import SurfaceRZFourier
 from essos.plot import fix_matplotlib_3d
 
@@ -185,15 +185,50 @@ class Vmec():
         return jnp.array([X, Y, Z])
 
 class near_axis():
-    ## USE FUNCTIONS TO SET UP THE FIELD INSTEAD OF ALL IN INIT
-    # @partial(jit, static_argnums=(0,4,5,6,7,8,9,10))
     def __init__(self, rc=jnp.array([1, 0.1]), zs=jnp.array([0, 0.1]), etabar=1.0,
-                    nphi=31, sigma0=0, I2=0, spsi=1, sG=1, B0=1, nfp=2):
+                    B0=1, sigma0=0, I2=0, nphi=31, spsi=1, sG=1, nfp=2):
         assert nphi % 2 == 1, 'nphi must be odd'
+        self.rc = rc
+        self.zs = zs
+        self.etabar = etabar
         self.nphi = nphi
-        phi = jnp.linspace(0, 2 * jnp.pi / nfp, nphi, endpoint=False)
-        # d_phi = phi[1] - phi[0]
-        nfourier = max(len(rc), len(zs))
+        self.sigma0 = sigma0
+        self.I2 = I2
+        self.spsi = spsi
+        self.sG = sG
+        self.B0 = B0
+        self.nfp = nfp
+        
+        self.phi = jnp.linspace(0, 2 * jnp.pi / self.nfp, self.nphi, endpoint=False)
+        self.nfourier = max(len(self.rc), len(self.zs))
+        
+        self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length = self.calculate()
+        
+    def _tree_flatten(self):
+        children = (self.rc, self.zs, self.etabar, self.B0, self.sigma0, self.I2)  # arrays / dynamic values
+        aux_data = {"nphi": self.nphi, "spsi": self.spsi, "sG": self.sG, "nfp": self.nfp}  # static values
+        return (children, aux_data)
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(*children, **aux_data)
+        
+    @partial(jit, static_argnames=['self'])
+    def calculate(self):
+        rc = self.rc
+        zs = self.zs
+        phi = self.phi
+        nphi = self.nphi
+        nfp = self.nfp
+        nfourier = self.nfourier
+        spsi = self.spsi
+        sG = self.sG
+        B0 = self.B0
+        sigma0 = self.sigma0
+        I2 = self.I2
+        etabar = self.etabar
+        d_phi = phi[1] - phi[0]
+        
         n_values = jnp.arange(nfourier) * nfp
 
         @jit
@@ -237,9 +272,6 @@ class near_axis():
         summed_values = jnp.sum(jax.vmap(compute_terms)(jnp.arange(nfourier)), axis=0)
 
         R0, Z0, R0p, Z0p, R0pp, Z0pp, R0ppp, Z0ppp = summed_values
-        self.R0 = R0
-        self.Z0 = Z0
-        self.phi = phi
         d_l_d_phi = jnp.sqrt(R0 * R0 + R0p * R0p + Z0p * Z0p)
         d2_l_d_phi2 = (R0 * R0p + R0p * R0pp + Z0p * Z0pp) / d_l_d_phi
         B0_over_abs_G0 = nphi / jnp.sum(d_l_d_phi)
@@ -251,14 +283,14 @@ class near_axis():
         d2_r_d_phi2_cylindrical = jnp.stack([R0pp - R0, 2 * R0p, Z0pp]).T
         d3_r_d_phi3_cylindrical = jnp.stack([R0ppp - 3 * R0p, 3 * R0pp - R0, Z0ppp]).T
 
-        tangent_cylindrical = d_r_d_phi_cylindrical / d_l_d_phi[:, None]
+
         d_tangent_d_l_cylindrical = (-d_r_d_phi_cylindrical * d2_l_d_phi2[:, None] / d_l_d_phi[:, None] \
                                     +d2_r_d_phi2_cylindrical) / (d_l_d_phi[:, None] * d_l_d_phi[:, None])
-
         curvature = jnp.sqrt(jnp.sum(d_tangent_d_l_cylindrical**2, axis=1))
-        # axis_length = jnp.sum(d_l_d_phi) * d_phi * nfp
-        # varphi = jnp.concatenate([jnp.zeros(1), jnp.cumsum(d_l_d_phi[:-1] + d_l_d_phi[1:])]) * (0.5 * d_phi * 2 * jnp.pi / axis_length)
+        axis_length = jnp.sum(d_l_d_phi) * d_phi * nfp
+        varphi = jnp.concatenate([jnp.zeros(1), jnp.cumsum(d_l_d_phi[:-1] + d_l_d_phi[1:])]) * (0.5 * d_phi * 2 * jnp.pi / axis_length)
 
+        tangent_cylindrical = d_r_d_phi_cylindrical / d_l_d_phi[:, None]
         normal_cylindrical = d_tangent_d_l_cylindrical / curvature[:, None]
         binormal_cylindrical = jnp.cross(tangent_cylindrical, normal_cylindrical)
 
@@ -314,13 +346,13 @@ class near_axis():
         Y1c = sG * spsi * curvature * sigma / etabar
         p = + X1c * X1c + Y1s * Y1s + Y1c * Y1c
         q = - X1c * Y1s
-        self.elongation = (p + jnp.sqrt(p * p - 4 * q * q)) / (2 * jnp.abs(q))
+        elongation = (p + jnp.sqrt(p * p - 4 * q * q)) / (2 * jnp.abs(q))
         
         B_axis_cylindrical = sG * B0 * tangent_cylindrical.T
         B_x = jnp.cos(phi) * B_axis_cylindrical[0] - jnp.sin(phi) * B_axis_cylindrical[1]
         B_y = jnp.sin(phi) * B_axis_cylindrical[0] + jnp.cos(phi) * B_axis_cylindrical[1]
         B_z = B_axis_cylindrical[2]
-        self.B_axis = jnp.array([B_x, B_y, B_z])
+        B_axis = jnp.array([B_x, B_y, B_z])
 
         d_X1c_d_varphi = -etabar / curvature**2
         d_Y1s_d_varphi = jnp.matmul(d_d_varphi, Y1s)
@@ -346,9 +378,9 @@ class near_axis():
                             + tn * t[i] * n[j] + nt * n[i] * t[j] \
                             + tt * t[i] * t[j]
                         for i in range(3)] for j in range(3)])
-        cosphi = jnp.cos(self.phi)
-        sinphi = jnp.sin(self.phi)
-        self.grad_B_axis = jnp.array([
+        cosphi = jnp.cos(phi)
+        sinphi = jnp.sin(phi)
+        grad_B_axis = jnp.array([
             [cosphi**2*nablaB[0, 0] - cosphi*sinphi*(nablaB[0, 1] + nablaB[1, 0]) + 
             sinphi**2*nablaB[1, 1], cosphi**2*nablaB[0, 1] - sinphi**2*nablaB[1, 0] + 
             cosphi*sinphi*(nablaB[0, 0] - nablaB[1, 1]), cosphi*nablaB[0, 2] - 
@@ -360,11 +392,12 @@ class near_axis():
             nablaB[2, 2]]
                 ])
         
+        return R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length
+        
     def plot(self, ax=None, show=True, close=False, axis_equal=True, **kwargs):
         if close: raise NotImplementedError("close=True is not implemented, need to have closed surfaces")
 
         import matplotlib.pyplot as plt 
-        from matplotlib import cm
         if ax is None or ax.name != "3d":
             fig = plt.figure()
             ax = fig.add_subplot(projection='3d')
@@ -383,3 +416,7 @@ class near_axis():
             fix_matplotlib_3d(ax)
         if show:
             plt.show()
+            
+tree_util.register_pytree_node(near_axis,
+                               near_axis._tree_flatten,
+                               near_axis._tree_unflatten)

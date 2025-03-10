@@ -152,7 +152,8 @@ class SurfaceRZFourier:
         B_rescaled = (Bmag - Bmag.min()) / (Bmag.max() - Bmag.min())
         
         ax.plot_surface(boundary[:, :, 0], boundary[:, :, 1], boundary[:, :, 2], alpha=0.6, facecolors=cm.jet(B_rescaled), linewidth=0, antialiased=True, **kwargs)
-        ax.set_axis_off()
+        # ax.set_axis_off()
+        ax.grid(False)
 
         if axis_equal:
             fix_matplotlib_3d(ax)
