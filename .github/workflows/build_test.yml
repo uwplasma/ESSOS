@@ -41,11 +41,11 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=examples_old
 
     - name: Run tests with coverage
-      if: matrix.python-version == '3.12'
-      run: pytest --cov essos
+      run: |
+        pytest --cov-branch --cov-report=xml --cov=essos
 
     - name: Upload coverage reports to Codecov
-      if: github.repository_owner == 'uwplasma' && matrix.python-version == '3.12'
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
+        slug: uwplasma/ESSOS
