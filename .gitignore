@@ -172,3 +172,4 @@ essos/version.py
 *.png
 *.vtu
 *.vts
+*.xml

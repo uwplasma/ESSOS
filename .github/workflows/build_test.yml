@@ -42,10 +42,10 @@ jobs:
 
     - name: Run tests with coverage
       run: |
-        pytest --cov-branch --cov-report=xml --cov=essos
+        pytest --cov --junitxml=junit.xml -o junit_family=legacy
 
     - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v5
+      if: ${{ !cancelled() }}
+      uses: codecov/test-results-action@v1
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        slug: uwplasma/ESSOS
