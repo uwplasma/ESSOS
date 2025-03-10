@@ -10,32 +10,57 @@ from essos.dynamics import Tracing
 from essos.optimization import optimize_coils_for_nearaxis
 
 # Optimization parameters
-max_coil_length = 3.5
-max_coil_curvature = 3
-order_Fourier_series_coils = 6
+max_coil_length = 5.0
+max_coil_curvature = 4
+order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10
 maximum_function_evaluations = 50
 number_coils_per_half_field_period = 3
 tolerance_optimization = 1e-8
 
 # Initialize Near-Axis field
-rc=jnp.array([1, 0.1])
-zs=jnp.array([0, 0.1])
-etabar=1.0
-nfp=2
+rc=jnp.array([1, 0.045])
+zs=jnp.array([0,-0.045])
+etabar=-0.9
+nfp=3
 field = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
 
 # Initialize coils
 current_on_each_coil = 17e5*field.B0/nfp/2
 number_of_field_periods = nfp
 major_radius_coils = rc[0]
-minor_radius_coils = major_radius_coils/2
+minor_radius_coils = major_radius_coils/1.5
 curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
                                    R=major_radius_coils, r=minor_radius_coils,
                                    n_segments=number_coil_points,
                                    nfp=number_of_field_periods, stellsym=True)
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
+
+
+# from jax import vmap, debug
+# debug.print("length {}", coils_initial.length)
+# debug.print("curvature {}", coils_initial.curvature)
+# exit()
+# field_nearaxis = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
+# field_BiotSavart = BiotSavart(coils_initial)
+# Raxis = field_nearaxis.R0
+# Zaxis = field_nearaxis.Z0
+# phi = field_nearaxis.phi
+# Xaxis = Raxis*jnp.cos(phi)
+# Yaxis = Raxis*jnp.sin(phi)
+# points = jnp.array([Xaxis, Yaxis, Zaxis])
+# B_nearaxis = field_nearaxis.B_axis.T
+# B_coils = vmap(field_BiotSavart.B)(points.T)
+# plt.figure()
+# plt.plot(phi,(B_nearaxis[:,0]-B_coils[:,0]))
+# plt.plot(phi,(B_nearaxis[:,1]-B_coils[:,1]))
+# plt.plot(phi,(B_nearaxis[:,2]-B_coils[:,2]))
+# plt.legend([r'$B_x$',r'$B_y$',r'$B_z$'])
+# plt.xlabel(r'$\phi$')
+# plt.ylabel(r'$B_{nearaxis}-B_{coils}$')
+# plt.show()
+# exit()
 
 # Optimize coils
 print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
@@ -51,7 +76,7 @@ num_steps = 1000
 tmax = 200
 trace_tolerance = 1e-5
 
-R0 = jnp.linspace(rc[0], rc[0]+2*rc[1], nfieldlines)
+R0 = jnp.linspace(rc[0], 1.1*rc[0], nfieldlines)
 Z0 = jnp.zeros(nfieldlines)
 phi0 = jnp.zeros(nfieldlines)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
