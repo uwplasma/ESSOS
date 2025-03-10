@@ -48,14 +48,6 @@ jobs:
         coverage report
         coverage xml
 
-    # - name: Upload coverage to github
-    #   if: matrix.python-version == '3.12'
-    #   uses: actions/upload-artifact@v4
-    #   with:
-    #     name: tox-gh-actions-coverage
-    #     path: coverage.xml
-    #     if-no-files-found: error
-
     - name: Upload coverage reports to Codecov
       if: github.repository_owner == 'uwplasma' && matrix.python-version == '3.12'
       uses: codecov/codecov-action@v5
