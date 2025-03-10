@@ -42,10 +42,14 @@ jobs:
 
     - name: Run tests with coverage
       run: |
-        pytest --cov --junitxml=junit.xml -o junit_family=legacy
+        pip install coverage
+        coverage run --source=essos -m pytest .
+        coverage report
+        coverage xml
 
     - name: Upload coverage reports to Codecov
       if: ${{ !cancelled() }}
       uses: codecov/test-results-action@v1
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./coverage.xml
