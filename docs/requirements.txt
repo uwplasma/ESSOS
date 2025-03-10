@@ -1,5 +1,8 @@
 jax
-jax_tqdm
+jaxlib
+diffrax
+scipy
+netcdf4
 matplotlib
 sphinx
 sphinx-autoapi
