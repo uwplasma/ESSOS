@@ -5,9 +5,9 @@ from jax import vmap
 import jax.numpy as jnp
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import Vmec, BiotSavart
-from essos.surfaces import BdotN_over_B
+from essos.surfaces import BdotN_over_B, SurfaceRZFourier
 from simsopt.field import BiotSavart as BiotSavart_simsopt
-from simsopt.geo import SurfaceRZFourier
+from simsopt.geo import SurfaceRZFourier as SurfaceRZFourier_simsopt
 from simsopt.objectives import SquaredFlux
 
 # Optimization parameters
@@ -38,13 +38,13 @@ curves_essos = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_pe
                                    nfp=number_of_field_periods, stellsym=True)
 coils_essos = Coils(curves=curves_essos, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 field_essos = BiotSavart(coils_essos)
-surface_essos = vmec.surface(ntheta=ntheta, nphi=nphi, close=False)
+surface_essos = SurfaceRZFourier(vmec, ntheta=ntheta, nphi=nphi, close=False)
 # surface_essos.to_vtk("essos_surface")
 
 coils_simsopt = coils_essos.to_simsopt()
 curves_simsopt = curves_essos.to_simsopt()
 field_simsopt = BiotSavart_simsopt(coils_simsopt)
-surface_simsopt = SurfaceRZFourier.from_wout(vmec_file, range="full torus", nphi=nphi, ntheta=ntheta)
+surface_simsopt = SurfaceRZFourier_simsopt.from_wout(vmec_file, range="full torus", nphi=nphi, ntheta=ntheta)
 field_simsopt.set_points(surface_simsopt.gamma().reshape((-1, 3)))
 # surface_simsopt.to_vtk("simsopt_surface")
 
@@ -65,14 +65,14 @@ print(jnp.sum(jnp.abs(surface_simsopt.unitnormal()-surface_essos.unitnormal)))
 
 Jf = SquaredFlux(surface_simsopt, field_simsopt, definition="normalized")
 
-BdotN_over_B_ESSOS = BdotN_over_B(vmec, field_essos, ntheta=ntheta, nphi=nphi)
+BdotN_over_B_ESSOS = BdotN_over_B(surface_essos, field_essos)
 
 normal_simsopt = surface_simsopt.normal()
 B_on_surface_simsopt = field_simsopt.B().reshape(normal_simsopt.shape)
 
 
-normal_ESSOS = surface_essos.normal
-# B_on_surface_ESSOS = vmap(lambda surf: vmap(lambda x: field_essos.B(x))(surf))(surface).T
+# normal_ESSOS = surface_essos.normal
+# B_on_surface_ESSOS = vmap(lambda surf: vmap(lambda x: field_essos.B(x))(surf))(surface_essos.gamma).T
 
 # unit_vector_SIMSOPT = jnp.array([normal/jnp.linalg.norm(normal) for normal in normal_simsopt[0]])
 # unit_vector_ESSOS = jnp.array([normal/jnp.linalg.norm(normal) for normal in normal_ESSOS[0]])
