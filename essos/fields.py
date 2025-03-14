@@ -2,7 +2,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from functools import partial
-from jax import jit, jacfwd, grad, vmap, tree_util
+from jax import jit, jacfwd, grad, vmap, tree_util, lax
 from essos.surfaces import SurfaceRZFourier
 from essos.plot import fix_matplotlib_3d
 
@@ -184,6 +184,28 @@ class Vmec():
         Y = R * jnp.sin(phi)
         return jnp.array([X, Y, Z])
 
+def newton(f, x0):
+  """Newton's method for root-finding."""
+  initial_state = (0, x0)  # (iteration, x)
+
+  def cond(state):
+    it, x = state
+    # We fix 10 iterations for simplicity, this is plenty for convergence in our tests.
+    return (it < 10)
+
+  def body(state):
+    it, x = state
+    fx, dfx = f(x), jax.grad(f)(x)
+    step = fx / dfx
+    new_state = it + 1, x - step
+    return new_state
+
+  return jax.lax.while_loop(
+    cond,
+    body,
+    initial_state,
+  )[1]
+
 class near_axis():
     def __init__(self, rc=jnp.array([1, 0.1]), zs=jnp.array([0, 0.1]), etabar=1.0,
                     B0=1, sigma0=0, I2=0, nphi=31, spsi=1, sG=1, nfp=2):
@@ -205,7 +227,9 @@ class near_axis():
         self.nfourier = max(len(self.rc), len(self.zs))
         
         parameters = self.calculate(self.rc, self.zs, self.etabar)
-        self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0 = parameters
+        (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
+         self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
+         self.normal_R, self.normal_z, self.normal_phi, self.binormal_R, self.binormal_z, self.binormal_phi) = parameters
         
     @property
     def dofs(self):
@@ -218,7 +242,9 @@ class near_axis():
         self.zs = new_dofs[len(self.rc):len(self.rc)+len(self.zs)]
         self.etabar = new_dofs[-1]
         parameters = self.calculate(self.rc, self.zs, self.etabar)
-        self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0 = parameters
+        (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
+         self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
+         self.normal_R, self.normal_z, self.normal_phi, self.binormal_R, self.binormal_z, self.binormal_phi) = parameters
     
     @property
     def x(self):
@@ -440,26 +466,191 @@ class near_axis():
             nablaB[2, 2]]
                 ])
         
-        return R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length, iota, iotaN, G0
+        X1c_untwisted = jnp.where(helicity == 0, X1c, X1c * jnp.cos(-helicity * nfp * varphi))
+        X1s_untwisted = jnp.where(helicity == 0, 0 * X1c, X1c * jnp.sin(-helicity * nfp * varphi))
+        Y1s_untwisted = jnp.where(helicity == 0, Y1s, Y1s * jnp.cos(-helicity * nfp * varphi) + Y1c * jnp.sin(-helicity * nfp * varphi))
+        Y1c_untwisted = jnp.where(helicity == 0, Y1c, Y1s * (-jnp.sin(-helicity * nfp * varphi)) + Y1c * jnp.cos(-helicity * nfp * varphi))
         
-    def plot(self, ax=None, show=True, close=False, axis_equal=True, **kwargs):
-        if close: raise NotImplementedError("close=True is not implemented, need to have closed surfaces")
+        normal_R = normal_cylindrical[:,0]
+        normal_phi = normal_cylindrical[:,1]
+        normal_z = normal_cylindrical[:,2]
+        binormal_R = binormal_cylindrical[:,0]
+        binormal_phi = binormal_cylindrical[:,1]
+        binormal_z = binormal_cylindrical[:,2]
+        
+        return (R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length, iota, iotaN, G0,
+                helicity, X1c_untwisted, X1s_untwisted, Y1s_untwisted, Y1c_untwisted,
+                normal_R, normal_phi, normal_z, binormal_R, binormal_phi, binormal_z)
+        
+    @jit
+    def interpolated_array_at_point(self,array,point):
+        sp=jnp.interp(jnp.array([point]), jnp.append(self.phi,2*jnp.pi/self.nfp), jnp.append(array,array[0]), period=2*jnp.pi/self.nfp)
+        return sp
+        
+    @jit
+    def Frenet_to_cylindrical_residual_func(self,phi0, phi_target, X_at_this_theta, Y_at_this_theta):
+        sinphi0 = jnp.sin(phi0)
+        cosphi0 = jnp.cos(phi0)
+        R0_at_phi0   = self.interpolated_array_at_point(self.R0,phi0)
+        X_at_phi0    = self.interpolated_array_at_point(X_at_this_theta,phi0)
+        Y_at_phi0    = self.interpolated_array_at_point(Y_at_this_theta,phi0)
+        normal_R     = self.interpolated_array_at_point(self.normal_R,phi0)
+        normal_phi   = self.interpolated_array_at_point(self.normal_phi,phi0)
+        binormal_R   = self.interpolated_array_at_point(self.binormal_R,phi0)
+        binormal_phi = self.interpolated_array_at_point(self.binormal_phi,phi0)
+        normal_x   =   normal_R * cosphi0 -   normal_phi * sinphi0
+        normal_y   =   normal_R * sinphi0 +   normal_phi * cosphi0
+        binormal_x = binormal_R * cosphi0 - binormal_phi * sinphi0
+        binormal_y = binormal_R * sinphi0 + binormal_phi * cosphi0
+        total_x = R0_at_phi0 * cosphi0 + X_at_phi0 * normal_x + Y_at_phi0 * binormal_x
+        total_y = R0_at_phi0 * sinphi0 + X_at_phi0 * normal_y + Y_at_phi0 * binormal_y
+        Frenet_to_cylindrical_residual = jnp.arctan2(total_y, total_x) - phi_target
+        Frenet_to_cylindrical_residual = jnp.where(Frenet_to_cylindrical_residual > jnp.pi, Frenet_to_cylindrical_residual - 2 * jnp.pi, Frenet_to_cylindrical_residual)
+        Frenet_to_cylindrical_residual = jnp.where(Frenet_to_cylindrical_residual < -jnp.pi, Frenet_to_cylindrical_residual + 2 * jnp.pi, Frenet_to_cylindrical_residual)
+        return Frenet_to_cylindrical_residual[0]
 
+    @jit
+    def Frenet_to_cylindrical_1_point(self, phi0, X_at_this_theta, Y_at_this_theta):
+        sinphi0 = jnp.sin(phi0)
+        cosphi0 = jnp.cos(phi0)
+        R0_at_phi0   = self.interpolated_array_at_point(self.R0,phi0)
+        z0_at_phi0   = self.interpolated_array_at_point(self.Z0,phi0)
+        X_at_phi0    = self.interpolated_array_at_point(X_at_this_theta,phi0)
+        Y_at_phi0    = self.interpolated_array_at_point(Y_at_this_theta,phi0)
+        normal_R     = self.interpolated_array_at_point(self.normal_R,phi0)
+        normal_phi   = self.interpolated_array_at_point(self.normal_phi,phi0)
+        normal_z     = self.interpolated_array_at_point(self.normal_z,phi0)
+        binormal_R   = self.interpolated_array_at_point(self.binormal_R,phi0)
+        binormal_phi = self.interpolated_array_at_point(self.binormal_phi,phi0)
+        binormal_z   = self.interpolated_array_at_point(self.binormal_z,phi0)
+        normal_x   = normal_R   * cosphi0 - normal_phi * sinphi0
+        normal_y   = normal_R   * sinphi0 + normal_phi * cosphi0
+        binormal_x = binormal_R * cosphi0 - binormal_phi * sinphi0
+        binormal_y = binormal_R * sinphi0 + binormal_phi * cosphi0
+        total_x = R0_at_phi0 * cosphi0 + X_at_phi0 * normal_x + Y_at_phi0 * binormal_x
+        total_y = R0_at_phi0 * sinphi0 + X_at_phi0 * normal_y + Y_at_phi0 * binormal_y
+        total_z = z0_at_phi0           + X_at_phi0 * normal_z + Y_at_phi0 * binormal_z
+        total_R = jnp.sqrt(total_x * total_x + total_y * total_y)
+        total_phi=jnp.arctan2(total_y, total_x)
+        return total_R, total_z, total_phi
+    
+    @partial(jit, static_argnames=['ntheta'])
+    def Frenet_to_cylindrical(self, r, ntheta=20):
+        nphi_conversion = self.nphi
+        theta = jnp.linspace(0, 2 * jnp.pi, ntheta, endpoint=False)
+        phi_conversion = jnp.linspace(0, 2 * jnp.pi / self.nfp, nphi_conversion, endpoint=False)
+
+        def compute_for_theta(theta_j):
+            costheta = jnp.cos(theta_j)
+            sintheta = jnp.sin(theta_j)
+            X_at_this_theta = r * (self.X1c_untwisted * costheta + self.X1s_untwisted * sintheta)
+            Y_at_this_theta = r * (self.Y1c_untwisted * costheta + self.Y1s_untwisted * sintheta)
+
+            def compute_for_phi(phi_target):
+                residual = partial(self.Frenet_to_cylindrical_residual_func, phi_target=phi_target,
+                                X_at_this_theta=X_at_this_theta, Y_at_this_theta=Y_at_this_theta)
+                phi0_solution = lax.custom_root(residual, phi_target, newton, lambda g, y: y / g(1.0))
+                final_R, final_Z, _ = self.Frenet_to_cylindrical_1_point(phi0_solution, X_at_this_theta, Y_at_this_theta)
+                return final_R[0], final_Z[0], phi0_solution
+
+            return vmap(compute_for_phi)(phi_conversion)
+
+        R_2D, Z_2D, phi0_2D = vmap(compute_for_theta)(theta)
+        return R_2D, Z_2D, phi0_2D
+
+
+    @partial(jit, static_argnames=['mpol', 'ntor'])
+    def to_Fourier(self, R_2D, Z_2D, nfp, mpol, ntor):
+        ntheta, nphi_conversion = R_2D.shape
+        theta = jnp.linspace(0, 2 * jnp.pi, ntheta, endpoint=False)
+        phi_conversion = jnp.linspace(0, 2 * jnp.pi / nfp, nphi_conversion, endpoint=False)
+        
+        phi2d, theta2d = jnp.meshgrid(phi_conversion, theta, indexing='ij')
+        factor = 2 / (ntheta * nphi_conversion)
+
+        def compute_RBC_ZBS(m, n):
+            angle = m * theta2d - n * nfp * phi2d
+            sinangle, cosangle = jnp.sin(angle).T, jnp.cos(angle).T
+
+            # Conditional scaling of factor2
+            factor2 = jax.lax.cond(
+                (ntheta % 2 == 0) & (m == (ntheta // 2)),
+                lambda _: factor / 2,
+                lambda _: factor,
+                operand=None
+            )
+
+            factor2 = jax.lax.cond(
+                (nphi_conversion % 2 == 0) & (abs(n) == (nphi_conversion // 2)),
+                lambda _: factor2 / 2,
+                lambda _: factor2,
+                operand=None
+            )
+
+            return jnp.sum(R_2D * cosangle * factor2), jnp.sum(Z_2D * sinangle * factor2)
+
+        m_vals = jnp.arange(mpol + 1)
+        n_vals = jnp.arange(-ntor, ntor + 1)
+        RBC, ZBS = vmap(lambda m: vmap(lambda n: compute_RBC_ZBS(m, n))(n_vals))(m_vals)
+
+        RBC = RBC.at[ntor, 0].set(jnp.sum(R_2D) / (ntheta * nphi_conversion))
+        return RBC, ZBS
+
+
+    @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi'])
+    def get_boundary(self, r=0.1, ntheta=40, nphi=130, ntheta_fourier=20, mpol=13, ntor=25):
+        R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
+        RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
+
+        theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
+        phi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
+        phi2D, theta2D = jnp.meshgrid(phi1D, theta1D, indexing='ij')
+
+        def compute_RZ(m, n):
+            angle = m * theta2D - n * self.nfp * phi2D
+            return RBC[n + ntor, m] * jnp.cos(angle), ZBS[n + ntor, m] * jnp.sin(angle)
+
+        m_vals = jnp.arange(mpol + 1)
+        n_vals = jnp.arange(-ntor, ntor + 1)
+
+        R_2Dnew, Z_2Dnew = vmap(lambda m: vmap(lambda n: compute_RZ(m, n))(n_vals))(m_vals)
+        R_2Dnew, Z_2Dnew = R_2Dnew.sum(axis=(0, 1)), Z_2Dnew.sum(axis=(0, 1))
+
+        x_2D_plot = R_2Dnew.T * jnp.cos(phi1D)
+        y_2D_plot = R_2Dnew.T * jnp.sin(phi1D)
+        z_2D_plot = Z_2Dnew.T
+        return x_2D_plot, y_2D_plot, z_2D_plot, R_2Dnew.T
+
+    def plot(self, r=0.1, ntheta=80, nphi=150, ntheta_fourier=20, ax=None, show=True, close=False, axis_equal=True, **kwargs):
         import matplotlib.pyplot as plt 
+        from matplotlib import cm
+        import matplotlib.colors as clr
+        from matplotlib.colors import LightSource
         if ax is None or ax.name != "3d":
             fig = plt.figure()
-            ax = fig.add_subplot(projection='3d')
-        
-        x_plot = self.R0 * jnp.cos(self.phi)
-        y_plot = self.R0 * jnp.sin(self.phi)
-        z_plot = self.Z0
-        
-        plt.plot(x_plot, y_plot, z_plot)
+            ax = fig.add_subplot(projection='3d')   
+        x_2D_plot, y_2D_plot, z_2D_plot, _ = self.get_boundary(r=r, ntheta=ntheta, nphi=nphi, ntheta_fourier=ntheta_fourier)
+        theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
+        phi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
+        phi2D, theta2D = jnp.meshgrid(phi1D, theta1D)
+        import numpy as np
+        Bmag = np.array(self.B0*(1 + r * self.etabar * jnp.cos(theta2D - (self.iota - self.iotaN) * phi2D)))
+        norm = clr.Normalize(vmin=Bmag.min(), vmax=Bmag.max())
+        cmap = cm.viridis
+        ls = LightSource(azdeg=0, altdeg=10)
+        cmap_plot = ls.shade(Bmag, cmap, norm=norm)
+        ax.plot_surface(x_2D_plot, y_2D_plot, z_2D_plot, facecolors=cmap_plot,
+                        rstride=1, cstride=1, antialiased=False,
+                        linewidth=0, alpha=1, shade=False, **kwargs)
+        ax.dist = 7
+        ax.elev = 5
+        ax.azim = 45
+        cbar_ax = fig.add_axes([0.85, 0.2, 0.03, 0.6])
+        m = cm.ScalarMappable(cmap=cmap, norm=norm)
+        m.set_array([])
+        cbar = plt.colorbar(m, cax=cbar_ax)
+        cbar.ax.set_title(r'$|B| [T]$')
         ax.grid(False)
-        # ax.set_xlabel('X (meters)', fontsize=10)
-        # ax.set_ylabel('Y (meters)', fontsize=10)
-        # ax.set_zlabel('Z (meters)', fontsize=10)
-
         if axis_equal:
             fix_matplotlib_3d(ax)
         if show:
