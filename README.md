@@ -36,7 +36,7 @@
 - [Acknowledgments](#acknowledgments)
 
 ## Overview
-ESSOS is an open-source project in Python that uses JAX to optimize stellarator coils. Optimization can be applied to several objectives, such as alpha particle confinement, plasma boundaries and magnetic field equilibria. It leverages automatic differentiation and efficient numerical methods to streamline optimization efforts, creating a specialized and fast numerical tool for optimizing force-free stellarator equilibria. It is parallelized using JAX's sharding tools. It can be imported in a Python script using the **essos** package, or run directly in the command line as `essos`. To install it, use
+ESSOS is an open-source project in Python that uses JAX to optimize stellarator coils. Optimization can be applied to several objectives, such as alpha particle confinement, plasma boundaries and magnetic field equilibria (including near-axis expansions). It leverages automatic differentiation and efficient numerical methods to streamline optimization efforts, creating a specialized and fast numerical tool for optimizing force-free stellarator equilibria. It is parallelized using JAX's sharding tools. It can be imported in a Python script using the **essos** package, or run directly in the command line as `essos`. To install it, use
 
    ```sh
    pip install essos
