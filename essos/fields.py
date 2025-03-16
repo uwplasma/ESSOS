@@ -610,7 +610,7 @@ class near_axis():
 
 
     @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi'])
-    def get_boundary(self, r=0.1, ntheta=40, nphi=130, ntheta_fourier=20, mpol=13, ntor=25):
+    def get_boundary(self, r=0.1, ntheta=30, nphi=130, ntheta_fourier=20, mpol=5, ntor=5):
         R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
         # return R_2D*jnp.cos(self.phi), R_2D*jnp.sin(self.phi), Z_2D, R_2D
         RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
