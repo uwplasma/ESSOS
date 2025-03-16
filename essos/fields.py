@@ -208,10 +208,10 @@ def newton(f, x0):
 
 class near_axis():
     def __init__(self, rc=jnp.array([1, 0.1]), zs=jnp.array([0, 0.1]), etabar=1.0,
-                    B0=1, sigma0=0, I2=0, nphi=31, spsi=1, sG=1, nfp=2):
+                    B0=1, sigma0=0, I2=0, nphi=31, spsi=1, sG=1, nfp=2, order='r1', B2c=0, p2=0):
         assert nphi % 2 == 1, 'nphi must be odd'
-        self.rc = rc
-        self.zs = zs
+        self.rc = jnp.array(rc)
+        self.zs = jnp.array(zs)
         self.etabar = etabar
         self.nphi = nphi
         self.sigma0 = sigma0
@@ -220,8 +220,11 @@ class near_axis():
         self.sG = sG
         self.B0 = B0
         self.nfp = nfp
+        self.order = order # not used
+        self.B2c = B2c # not used
+        self.p2 = p2 # not used
         
-        self._dofs = jnp.concatenate((jnp.ravel(rc), jnp.ravel(zs), jnp.array([etabar])))
+        self._dofs = jnp.concatenate((jnp.ravel(self.rc), jnp.ravel(self.zs), jnp.array([etabar])))
         
         self.phi = jnp.linspace(0, 2 * jnp.pi / self.nfp, self.nphi, endpoint=False)
         self.nfourier = max(len(self.rc), len(self.zs))
@@ -229,7 +232,8 @@ class near_axis():
         parameters = self.calculate(self.rc, self.zs, self.etabar)
         (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
          self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
-         self.normal_R, self.normal_phi, self.normal_z, self.binormal_R, self.binormal_phi, self.binormal_z) = parameters
+         self.normal_R, self.normal_phi, self.normal_z, self.binormal_R, self.binormal_phi, self.binormal_z,
+         self.L_grad_B, self.inv_L_grad_B) = parameters
         
     @property
     def dofs(self):
@@ -244,7 +248,8 @@ class near_axis():
         parameters = self.calculate(self.rc, self.zs, self.etabar)
         (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
          self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
-         self.normal_R, self.normal_z, self.normal_phi, self.binormal_R, self.binormal_z, self.binormal_phi) = parameters
+         self.normal_R, self.normal_z, self.normal_phi, self.binormal_R, self.binormal_z, self.binormal_phi,
+         self.L_grad_B, self.inv_L_grad_B) = parameters
     
     @property
     def x(self):
@@ -256,7 +261,8 @@ class near_axis():
         
     def _tree_flatten(self):
         children = (self.rc, self.zs, self.etabar, self.B0, self.sigma0, self.I2)  # arrays / dynamic values
-        aux_data = {"nphi": self.nphi, "spsi": self.spsi, "sG": self.sG, "nfp": self.nfp}  # static values
+        aux_data = {"nphi": self.nphi, "spsi": self.spsi, "sG": self.sG,
+                    "nfp": self.nfp, "order": self.order, "B2c": self.B2c, "p2": self.p2}  # static values
         return (children, aux_data)
 
     @classmethod
@@ -466,6 +472,13 @@ class near_axis():
             nablaB[2, 2]]
                 ])
         
+        grad_B_colon_grad_B = tn * tn + nt * nt \
+                            + bb * bb + nn * nn \
+                            + nb * nb + bn * bn \
+                            + tt * tt
+        L_grad_B = self.B0 * jnp.sqrt(2 / grad_B_colon_grad_B)
+        inv_L_grad_B = 1.0 / L_grad_B
+        
         X1c_untwisted = jnp.where(helicity == 0, X1c, X1c * jnp.cos(-helicity * nfp * varphi))
         X1s_untwisted = jnp.where(helicity == 0, 0 * X1c, X1c * jnp.sin(-helicity * nfp * varphi))
         Y1s_untwisted = jnp.where(helicity == 0, Y1s, Y1s * jnp.cos(-helicity * nfp * varphi) + Y1c * jnp.sin(-helicity * nfp * varphi))
@@ -480,7 +493,8 @@ class near_axis():
         
         return (R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length, iota, iotaN, G0,
                 helicity, X1c_untwisted, X1s_untwisted, Y1s_untwisted, Y1c_untwisted,
-                normal_R, normal_phi, normal_z, binormal_R, binormal_phi, binormal_z)
+                normal_R, normal_phi, normal_z, binormal_R, binormal_phi, binormal_z,
+                L_grad_B, inv_L_grad_B)
         
     @jit
     def interpolated_array_at_point(self,array,point):
@@ -616,6 +630,10 @@ class near_axis():
         y_2D_plot = R_2Dnew.T * jnp.sin(phi1D)
         z_2D_plot = Z_2Dnew.T
         return x_2D_plot, y_2D_plot, z_2D_plot, R_2Dnew.T
+    
+    @partial(jit, static_argnames=['self'])
+    def B_mag(self, r, theta, phi):
+        return self.B0*(1 + r * self.etabar * jnp.cos(theta - (self.iota - self.iotaN) * phi))
 
     def plot(self, r=0.1, ntheta=80, nphi=150, ntheta_fourier=20, ax=None, show=True, close=False, axis_equal=True, **kwargs):
         kwargs.setdefault('alpha', 1)
@@ -631,7 +649,7 @@ class near_axis():
         phi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
         phi2D, theta2D = jnp.meshgrid(phi1D, theta1D)
         import numpy as np
-        Bmag = np.array(self.B0*(1 + r * self.etabar * jnp.cos(theta2D - (self.iota - self.iotaN) * phi2D)))
+        Bmag = np.array(self.B_mag(r, theta2D, phi2D))
         norm = clr.Normalize(vmin=Bmag.min(), vmax=Bmag.max())
         cmap = cm.viridis
         ls = LightSource(azdeg=0, altdeg=10)
