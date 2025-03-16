@@ -254,6 +254,11 @@ class Tracing():
         in_spec = PartitionSpec('workers', None)
         return shard_map(vmap(compute_trajectory), mesh, 
                         in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.initial_conditions)
+        # trajectories = []
+        # for initial_condition in self.initial_conditions:
+        #     trajectory = compute_trajectory(initial_condition)
+        #     trajectories.append(trajectory)
+        # return jnp.array(trajectories)
         
     @property
     def trajectories(self):
