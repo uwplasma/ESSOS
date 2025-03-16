@@ -42,7 +42,7 @@ ESSOS is an open-source project in Python that uses JAX to optimize stellarator 
    pip install essos
    ```
 
-Alternatively, you can install the Python dependencies and run the example scripts in the repository after downloading it as
+Alternatively, you can download it and run the example scripts in the repository after downloading it as
 
    ```sh
    git clone https://github.com/uwplasma/ESSOS
