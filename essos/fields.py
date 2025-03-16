@@ -191,8 +191,8 @@ def newton(f, x0):
 
   def cond(state):
     it, x = state
-    # We fix 10 iterations for simplicity, this is plenty for convergence in our tests.
-    return (it < 10)
+    # We fix 30 iterations for simplicity, this is plenty for convergence in our tests.
+    return (it < 30)
 
   def body(state):
     it, x = state
@@ -234,7 +234,7 @@ class near_axis():
         (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
          self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
          self.normal_R, self.normal_phi, self.normal_z, self.binormal_R, self.binormal_phi, self.binormal_z,
-         self.L_grad_B, self.inv_L_grad_B) = parameters
+         self.L_grad_B, self.inv_L_grad_B, self.torsion) = parameters
         
     @property
     def dofs(self):
@@ -250,7 +250,7 @@ class near_axis():
         (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
          self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
          self.normal_R, self.normal_z, self.normal_phi, self.binormal_R, self.binormal_z, self.binormal_phi,
-         self.L_grad_B, self.inv_L_grad_B) = parameters
+         self.L_grad_B, self.inv_L_grad_B, self.torsion) = parameters
     
     @property
     def x(self):
@@ -495,7 +495,7 @@ class near_axis():
         return (R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length, iota, iotaN, G0,
                 helicity, X1c_untwisted, X1s_untwisted, Y1s_untwisted, Y1c_untwisted,
                 normal_R, normal_phi, normal_z, binormal_R, binormal_phi, binormal_z,
-                L_grad_B, inv_L_grad_B)
+                L_grad_B, inv_L_grad_B, torsion)
         
     @jit
     def interpolated_array_at_point(self,array,point):
@@ -580,7 +580,7 @@ class near_axis():
         theta = jnp.linspace(0, 2 * jnp.pi, ntheta, endpoint=False)
         phi_conversion = jnp.linspace(0, 2 * jnp.pi / nfp, nphi_conversion, endpoint=False)
         
-        phi2d, theta2d = jnp.meshgrid(phi_conversion, theta, indexing='ij')
+        phi2d, theta2d = jnp.meshgrid(phi_conversion, theta, indexing='xy')
         factor = 2 / (ntheta * nphi_conversion)
 
         def compute_RBC_ZBS(m, n):
@@ -589,32 +589,31 @@ class near_axis():
 
             # Conditional scaling of factor2
             factor2 = jax.lax.cond(
-                (ntheta % 2 == 0) & (m == (ntheta // 2)),
-                lambda _: factor / 2,
-                lambda _: factor,
-                operand=None
-            )
+                (ntheta % 2 == 0) & (m == (ntheta / 2)),
+                lambda _: factor / 2, lambda _: factor,
+                operand=None)
 
             factor2 = jax.lax.cond(
-                (nphi_conversion % 2 == 0) & (abs(n) == (nphi_conversion // 2)),
-                lambda _: factor2 / 2,
-                lambda _: factor2,
-                operand=None
-            )
+                (nphi_conversion % 2 == 0) & (abs(n) == (nphi_conversion / 2)),
+                lambda _: factor2 / 2, lambda _: factor2,
+                operand=None)
 
             return jnp.sum(R_2D * cosangle * factor2), jnp.sum(Z_2D * sinangle * factor2)
 
         m_vals = jnp.arange(mpol + 1)
-        n_vals = jnp.arange(-ntor, ntor + 1)
-        RBC, ZBS = vmap(lambda m: vmap(lambda n: compute_RBC_ZBS(m, n))(n_vals))(m_vals)
+        n_vals = jnp.concatenate([jnp.array([1]), jnp.arange(-ntor, ntor + 1)]) if mpol == 0 else jnp.arange(-ntor, ntor + 1)
+        RBC, ZBS = vmap(lambda n: vmap(lambda m: compute_RBC_ZBS(m, n))(m_vals))(n_vals)
 
         RBC = RBC.at[ntor, 0].set(jnp.sum(R_2D) / (ntheta * nphi_conversion))
+        ZBS = ZBS.at[:ntor, 0].set(0)
+        RBC = RBC.at[:ntor, 0].set(0)
         return RBC, ZBS
 
 
     @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi'])
     def get_boundary(self, r=0.1, ntheta=40, nphi=130, ntheta_fourier=20, mpol=13, ntor=25):
         R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
+        # return R_2D*jnp.cos(self.phi), R_2D*jnp.sin(self.phi), Z_2D, R_2D
         RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
 
         theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
