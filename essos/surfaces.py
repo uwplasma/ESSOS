@@ -4,25 +4,31 @@ from jax import jit, vmap, devices, device_put
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from .plot import fix_matplotlib_3d
 
-@partial(jit, static_argnums=(0, 1))
-def BdotN(surface, field):
+mesh = Mesh(devices(), ("dev",))
+sharding = NamedSharding(mesh, PartitionSpec("dev", None))
+
+@partial(jit, static_argnames=['surface','field'])
+def B_on_surface(surface, field):
     ntheta = surface.ntheta
     nphi = surface.nphi
     gamma = surface.gamma
-    mesh = Mesh(devices(), ("dev",))
-    sharding = NamedSharding(mesh, PartitionSpec("dev", None))
     gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
     gamma_sharded = device_put(gamma_reshaped, sharding)
     B_on_surface = jit(vmap(field.B), in_shardings=sharding, out_shardings=sharding)(gamma_sharded)
     B_on_surface = B_on_surface.reshape(nphi, ntheta, 3)
-    B_dot_n = jnp.sum(B_on_surface.reshape((nphi, ntheta, 3)) * surface.unitnormal, axis=2)
+    return B_on_surface
+
+@partial(jit, static_argnames=['surface','field'])
+def BdotN(surface, field):
+    B_surface = B_on_surface(surface, field)
+    B_dot_n = jnp.sum(B_surface * surface.unitnormal, axis=2)
     return B_dot_n
 
-@partial(jit, static_argnums=(0, 1))
+@partial(jit, static_argnames=['surface','field'])
 def BdotN_over_B(surface, field):
-    B_dot_n = BdotN(surface, field)
-    B_on_surface = vmap(lambda surf: vmap(lambda x: field.AbsB(x))(surf))(surface.gamma)
-    return B_dot_n / B_on_surface
+    B_surface = B_on_surface(surface, field)
+    B_dot_n = jnp.sum(B_surface * surface.unitnormal, axis=2)
+    return B_dot_n / jnp.linalg.norm(B_surface, axis=2)
 
 class SurfaceRZFourier:
     def __init__(self, vmec, s=1, ntheta=30, nphi=30, close=True, range='full torus'):
