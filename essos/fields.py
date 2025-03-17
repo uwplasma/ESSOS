@@ -3,7 +3,6 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
-from jax import jit, jacfwd, grad, vmap, tree_util, lax
 from essos.surfaces import SurfaceRZFourier
 from essos.plot import fix_matplotlib_3d
 
@@ -641,9 +640,6 @@ class near_axis():
 
     def plot(self, r=0.1, ntheta=80, nphi=150, ntheta_fourier=20, ax=None, show=True, close=False, axis_equal=True, **kwargs):
         import matplotlib.pyplot as plt 
-        from matplotlib import cm
-        import matplotlib.colors as clr
-        from matplotlib.colors import LightSource
         from matplotlib import cm
         import matplotlib.colors as clr
         from matplotlib.colors import LightSource
