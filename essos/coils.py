@@ -168,6 +168,23 @@ class Curves:
     def curvature(self):
         return self._curvature
     
+    def __len__(self):
+        return jnp.size(self.dofs, 0)
+    
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return Curves(jnp.expand_dims(self.dofs[key], 0), self.n_segments, self.nfp, self.stellsym)
+        elif isinstance(key, (slice, jnp.ndarray)):
+            return Curves(self.dofs[key], self.n_segments, self.nfp, self.stellsym)
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(key)}, expected int, slice or jnp.ndarray.")
+        
+    def __add__(self, other):
+        if isinstance(other, Curves):
+            return Curves(jnp.concatenate((self.dofs, other.dofs), axis=0), self.n_segments, self.nfp, self.stellsym)
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Curves.")
+    
     def save_curves(self, filename: str):
         """
         Save the curves to a file
@@ -267,7 +284,7 @@ class Coils(Curves):
         currents = jnp.array(currents)
         assert jnp.size(currents) == jnp.size(curves.dofs, 0)
         super().__init__(curves.dofs, curves.n_segments, curves.nfp, curves.stellsym)
-        self.currents_scale = jnp.mean(jnp.abs(currents))
+        self._currents_scale = jnp.mean(jnp.abs(currents))
         self._dofs_currents = currents/self.currents_scale
         self._currents = apply_symmetries_to_currents(self._dofs_currents*self.currents_scale, self.nfp, self.stellsym)
 
@@ -301,6 +318,15 @@ class Coils(Curves):
         self._currents = apply_symmetries_to_currents(self._dofs_currents*self.currents_scale, self.nfp, self.stellsym)
     
     @property
+    def currents_scale(self):
+        return self._currents_scale
+    
+    @currents_scale.setter
+    def currents_scale(self, new_currents_scale):
+        self._currents_scale = new_currents_scale
+        self._currents = apply_symmetries_to_currents(self.dofs_currents*new_currents_scale, self.nfp, self.stellsym)
+
+    @property
     def x(self):
         dofs_curves = jnp.ravel(self.dofs_curves)
         dofs_currents = jnp.ravel(self.dofs_currents)
@@ -318,6 +344,20 @@ class Coils(Curves):
     @property
     def currents(self):
         return self._currents
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return Coils(Curves(jnp.expand_dims(self.dofs_curves[key], 0), self.n_segments, self.nfp, self.stellsym), jnp.expand_dims(self.dofs_currents[key], 0))
+        elif isinstance(key, (slice, jnp.ndarray)):
+            return Coils(Curves(self.dofs_curves[key], self.n_segments, self.nfp, self.stellsym), self.dofs_currents[key])
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(key)}, expected int, slice or jnp.ndarray.")
+    
+    def __add__(self, other):
+        if isinstance(other, Coils):
+            return Coils(Curves(jnp.concatenate((self.dofs_curves, other.dofs_curves), axis=0), self.n_segments, self.nfp, self.stellsym), jnp.concatenate((self.dofs_currents, other.dofs_currents), axis=0))
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils.")
     
     def _tree_flatten(self):
         children = (Curves(self.dofs, self.n_segments, self.nfp, self.stellsym), self._dofs_currents)  # arrays / dynamic values
