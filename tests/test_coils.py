@@ -1,6 +1,7 @@
 import pytest
 from essos.coils import Curves
 import jax.numpy as jnp
+import random
 
 def test_curves_initialization():
     dofs = jnp.zeros((2, 3, 5))
@@ -65,6 +66,54 @@ def test_curves_plot():
     dofs = jnp.zeros((2, 3, 5))
     curves = Curves(dofs)
     curves.plot(show=False)
+
+def test_curves_len():
+    dofs = jnp.zeros((2, 3, 5))
+    nfp = random.randint(1, 10)
+    curves = Curves(dofs, nfp=nfp)
+    assert len(curves) == 2*2*nfp
+
+def test_curves_getitem():
+    dofs = jnp.ones((2, 3, 5))
+    nfp = random.randint(4, 10)
+    curves = Curves(dofs, nfp=nfp)
+    assert curves[0].curves.shape == (1, 3, 5)
+    assert curves[1].curves.shape == (1, 3, 5)
+    assert curves[2].curves.shape == (1, 3, 5)
+    assert curves[3].curves.shape == (1, 3, 5)
+    assert curves[1:3].curves.shape == (2, 3, 5)
+    assert curves[jnp.array([0, 3])].curves.shape == (2, 3, 5)    
+
+def test_curves_add():
+    dofs = jnp.zeros((2, 3, 5))
+    curves1 = Curves(dofs, stellsym=False)
+    curves2 = Curves(dofs, stellsym=False)
+    curves3 = curves1 + curves2
+    assert curves3.dofs.shape == (4, 3, 5)
+
+def test_curves_contains():
+    dofs = jnp.zeros((2, 3, 5))
+    curves = Curves(dofs, stellsym=False)
+    assert curves[0] in curves
+    assert curves[1] in curves
+
+def test_curves_eq():
+    dofs = jnp.zeros((2, 3, 5))
+    curves1 = Curves(dofs, stellsym=False)
+    curves2 = Curves(dofs, stellsym=False)
+    assert curves1 == curves2
+
+def test_curves_ne():
+    dofs = jnp.zeros((2, 3, 5))
+    curves1 = Curves(dofs, stellsym=False)
+    curves2 = Curves(dofs, stellsym=True)
+    assert curves1 != curves2
+
+def test_curves_iter():
+    dofs = jnp.zeros((2, 3, 5))
+    curves = Curves(dofs, stellsym=False)
+    for curve in curves:
+        assert curve.curves.shape == (1, 3, 5)
 
 if __name__ == "__main__":
     pytest.main()
