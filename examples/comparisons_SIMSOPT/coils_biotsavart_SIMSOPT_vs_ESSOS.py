@@ -13,18 +13,19 @@ from simsopt.configs import get_ncsx_data, get_w7x_data, get_hsx_data, get_giuli
 output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
-    
-json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
-
 
 list_segments = [30, 100, 300, 1000, 3000]
 
+LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
 nfp_array      = [3, 2, 5, 4, 2]
-curves_array   = [get_ncsx_data()[0], json_file, get_w7x_data()[0], get_hsx_data()[0], get_giuliani_data()[0]]
+curves_array   = [get_ncsx_data()[0], LandremanPaulQA_json_file, get_w7x_data()[0], get_hsx_data()[0], get_giuliani_data()[0]]
 currents_array = [get_ncsx_data()[1], None, get_w7x_data()[1], get_hsx_data()[1], get_giuliani_data()[1]]
 name_array     = ["NCSX", "QA(json)", "W7-X", "HSX", "Giuliani"]
 
+print(f'Output being saved to {output_dir}')
+print(f'SIMSOPT LandremanPaulQA json file location: {LandremanPaulQA_json_file}')
 for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, currents_array, name_array):
+    print(f' Running {name} and saving to output directory...')
     if currents_stel is None:
         json_file_stel = curves_stel
         field_simsopt = load(json_file_stel)

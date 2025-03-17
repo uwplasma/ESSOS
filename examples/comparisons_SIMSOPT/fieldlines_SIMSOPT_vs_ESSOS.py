@@ -26,20 +26,23 @@ output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
     
-json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
-field_simsopt = load(json_file)
-field_essos = BiotSavart_essos(Coils_from_simsopt(json_file, nfp))
+LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
+field_simsopt = load(LandremanPaulQA_json_file)
+field_essos = BiotSavart_essos(Coils_from_simsopt(LandremanPaulQA_json_file, nfp))
 
 fieldlines_SIMSOPT_array = []
 time_SIMSOPT_array = []
 avg_steps_SIMSOPT = 0
+
+print(f'Output being saved to {output_dir}')
+print(f'SIMSOPT LandremanPaulQA json file location: {LandremanPaulQA_json_file}')
 for trace_tolerance_SIMSOPT in trace_tolerance_SIMSOPT_array:
-    print(f'Tracing SIMSOPT fieldlines with tolerance={trace_tolerance_SIMSOPT}')
+    print(f' Tracing SIMSOPT fieldlines with tolerance={trace_tolerance_SIMSOPT}')
     t1 = time.time()
     fieldlines_SIMSOPT_this_tolerance, fieldlines_SIMSOPT_phi_hits = block_until_ready(compute_fieldlines(field_simsopt, R0, Z0, tmax=tmax_fl, tol=trace_tolerance_SIMSOPT, phis=phis_poincare))
     time_SIMSOPT_array.append(time.time()-t1)
     avg_steps_SIMSOPT += sum([len(l) for l in fieldlines_SIMSOPT_this_tolerance])//nfieldlines
-    print(f"  Time for SIMSOPT fieldline tracing={time.time()-t1:.3f}s with tolerance={trace_tolerance_SIMSOPT}. Avg num steps={avg_steps_SIMSOPT}")
+    print(f"  Time for SIMSOPT tracing={time.time()-t1:.3f}s. Avg num steps={avg_steps_SIMSOPT}")
     fieldlines_SIMSOPT_array.append(fieldlines_SIMSOPT_this_tolerance)
 
 particles_to_vtk(fieldlines_SIMSOPT_this_tolerance, os.path.join(output_dir,f'fieldlines_SIMSOPT'))
@@ -55,11 +58,12 @@ tracing = block_until_ready(Tracing(field=field_essos, model='FieldLine', initia
                                     maxtime=tmax_fl, timesteps=num_steps_essos, tol_step_size=trace_tolerance_ESSOS))
 fieldlines_ESSOS = tracing.trajectories
 time_ESSOS = time.time()-t1
-print(f"  Time for ESSOS fieldline tracing={time.time()-t1:.3f}s with tolerance={trace_tolerance_ESSOS}. Num steps={len(fieldlines_ESSOS[0])}")
+print(f"  Time for ESSOS tracing={time.time()-t1:.3f}s. Num steps={len(fieldlines_ESSOS[0])}")
 
 tracing.to_vtk(os.path.join(output_dir,f'fieldlines_ESSOS'))
 # tracing.poincare_plot(phis_poincare, show=False)
 
+print('Plotting the results to output directory...')
 # Plot time comparison in a bar chart
 labels = [f'SIMSOPT\nTol={tol}' for tol in trace_tolerance_SIMSOPT_array] + [f'ESSOS\nTol={trace_tolerance_ESSOS}']
 times = time_SIMSOPT_array + [time_ESSOS]
