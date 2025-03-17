@@ -45,7 +45,7 @@ class BiotSavart():
         return points
     
 class Vmec():
-    def __init__(self, wout, ntheta=50, nphi=50, close=True, range='full torus'):
+    def __init__(self, wout, ntheta=50, nphi=50, close=False, range='full torus'):
         self.wout = wout
         from netCDF4 import Dataset
         self.nc = Dataset(self.wout)
@@ -610,12 +610,12 @@ class near_axis():
 
 
     @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi'])
-    def get_boundary(self, r=0.1, ntheta=30, nphi=130, ntheta_fourier=20, mpol=5, ntor=5):
+    def get_boundary(self, r=0.1, ntheta=30, nphi=130, ntheta_fourier=20, mpol=5, ntor=5, close=False):
         R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
         RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
 
-        theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
-        phi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
+        theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta, endpoint=(True if close else False))
+        phi1D = jnp.linspace(0, 2 * jnp.pi, nphi, endpoint=(True if close else False))
         phi2D, theta2D = jnp.meshgrid(phi1D, theta1D, indexing='ij')
 
         def compute_RZ(m, n):
@@ -646,7 +646,7 @@ class near_axis():
         if ax is None or ax.name != "3d":
             fig = plt.figure()
             ax = fig.add_subplot(projection='3d')   
-        x_2D_plot, y_2D_plot, z_2D_plot, _ = self.get_boundary(r=r, ntheta=ntheta, nphi=nphi, ntheta_fourier=ntheta_fourier)
+        x_2D_plot, y_2D_plot, z_2D_plot, _ = self.get_boundary(r=r, ntheta=ntheta, nphi=nphi, ntheta_fourier=ntheta_fourier, close=close)
         theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
         phi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
         phi2D, theta2D = jnp.meshgrid(phi1D, theta1D)
