@@ -25,9 +25,9 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 nfp=2
-json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
-field_simsopt = load(json_file)
-field_essos = BiotSavart_essos(Coils_from_simsopt(json_file, nfp))
+LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
+field_simsopt = load(LandremanPaulQA_json_file)
+field_essos = BiotSavart_essos(Coils_from_simsopt(LandremanPaulQA_json_file, nfp))
 
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
@@ -44,8 +44,10 @@ time_SIMSOPT_array = []
 trajectories_SIMSOPT_array = []
 avg_steps_SIMSOPT = 0
 relative_energy_error_SIMSOPT_array = []
+print(f'Output being saved to {output_dir}')
+print(f'SIMSOPT LandremanPaulQA json file location: {LandremanPaulQA_json_file}')
 for trace_tolerance_SIMSOPT in trace_tolerance_SIMSOPT_array:
-    print(f'Tracing SIMSOPT full orbit with tolerance={trace_tolerance_SIMSOPT}')
+    print(f' Tracing SIMSOPT full orbit with tolerance={trace_tolerance_SIMSOPT}')
     t1 = time.time()
     trajectories_SIMSOPT_this_tolerance, trajectories_SIMSOPT_phi_hits = block_until_ready(trace_particles(
                     field=field_simsopt, xyz_inits=particles.initial_xyz, mass=particles.mass,
@@ -53,7 +55,7 @@ for trace_tolerance_SIMSOPT in trace_tolerance_SIMSOPT_array:
                     charge=particles.charge, Ekin=particles.energy, tol=trace_tolerance_SIMSOPT))
     time_SIMSOPT_array.append(time.time()-t1)
     avg_steps_SIMSOPT += sum([len(l) for l in trajectories_SIMSOPT_this_tolerance])//nparticles
-    print(f"  Time for SIMSOPT full orbit tracing={time.time()-t1:.3f}s with tolerance={trace_tolerance_SIMSOPT}. Avg num steps={avg_steps_SIMSOPT}")
+    print(f"  Time for SIMSOPT tracing={time.time()-t1:.3f}s. Avg num steps={avg_steps_SIMSOPT}")
     trajectories_SIMSOPT_array.append(trajectories_SIMSOPT_this_tolerance)
     
     relative_energy_error_SIMSOPT_array.append([jnp.abs(mass*(trajectory[:,4]**2+trajectory[:,5]**2+trajectory[:,6]**2)/2-particles.energy)/particles.energy
@@ -77,12 +79,13 @@ for model_ESSOS in model_ESSOS_array:
                                         maxtime=tmax_full, timesteps=num_steps_essos, tol_step_size=trace_tolerance_ESSOS))
     trajectories_ESSOS = tracing.trajectories
     time_ESSOS = time.time()-t1
-    print(f"  Time for ESSOS full orbit tracing={time.time()-t1:.3f}s "+('Boris' if model_ESSOS=='FullOrbit_Boris' else f'with tolerance={trace_tolerance_ESSOS}')+f". Num steps={len(trajectories_ESSOS[0])}")
+    print(f"  Time for ESSOS tracing={time.time()-t1:.3f}s "+('Boris' if model_ESSOS=='FullOrbit_Boris' else f'')+f". Num steps={len(trajectories_ESSOS[0])}")
     tracing.to_vtk(os.path.join(output_dir,f'full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+'_ESSOS'))
     tracing_array.append(tracing)
     trajectories_ESSOS_array.append(trajectories_ESSOS)
     time_ESSOS_array.append(time_ESSOS)
 
+print('Plotting the results to output directory...')
 plt.figure()
 SIMSOPT_energy_interp_this_particle = jnp.zeros((len(trace_tolerance_SIMSOPT_array), nparticles, len(trajectories_SIMSOPT_array[-1][-1][:,0])))
 for j in range(nparticles):

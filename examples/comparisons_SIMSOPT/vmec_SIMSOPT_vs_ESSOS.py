@@ -6,7 +6,6 @@ from jax import block_until_ready, random
 from essos.fields import Vmec as Vmec_essos
 from simsopt.mhd import Vmec as Vmec_simsopt, vmec_compute_geometry
 
-input_dir = os.path.join(os.path.dirname(__file__), 'input')
 output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
@@ -15,7 +14,9 @@ wout_array = [os.path.join(os.path.dirname(__file__), '..', 'input_files', "wout
               os.path.join(os.path.dirname(__file__), '..', 'input_files', "wout_n3are_R7.75B5.7.nc")]
 name_array = ["LandremanPaulQA", 'NCSX']
 
+print(f'Output being saved to {output_dir}')
 for name, wout in zip(name_array, wout_array):
+    print(f' Running comparison with VMEC file located at: {wout}')
 
     vmec_essos = Vmec_essos(wout)
     vmec_simsopt = Vmec_simsopt(wout)
