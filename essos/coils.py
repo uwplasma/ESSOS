@@ -169,21 +169,50 @@ class Curves:
         return self._curvature
     
     def __len__(self):
-        return jnp.size(self.dofs, 0)
+        return jnp.size(self.curves, 0)
     
     def __getitem__(self, key):
         if isinstance(key, int):
-            return Curves(jnp.expand_dims(self.dofs[key], 0), self.n_segments, self.nfp, self.stellsym)
+            return Curves(jnp.expand_dims(self.curves[key], 0), self.n_segments, 1, False)
         elif isinstance(key, (slice, jnp.ndarray)):
-            return Curves(self.dofs[key], self.n_segments, self.nfp, self.stellsym)
+            return Curves(self.curves[key], self.n_segments, 1, False)
         else:
             raise TypeError(f"Invalid argument type. Got {type(key)}, expected int, slice or jnp.ndarray.")
         
     def __add__(self, other):
         if isinstance(other, Curves):
-            return Curves(jnp.concatenate((self.dofs, other.dofs), axis=0), self.n_segments, self.nfp, self.stellsym)
+            return Curves(jnp.concatenate((self.curves, other.curves), axis=0), self.n_segments, 1, False)
         else:
             raise TypeError(f"Invalid argument type. Got {type(other)}, expected Curves.")
+        
+    def __contains__(self, other):
+        if isinstance(other, Curves):
+            return jnp.all(jnp.isin(other.dofs, self.dofs))
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Curves.")
+        
+    def __eq__(self, other):
+        if isinstance(other, Curves):
+            if self.curves.shape != other.curves.shape:
+                return False
+            return jnp.all(self.curves == other.curves)
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Curves.")
+        
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __iter__(self):
+        self.iter_idx = 0
+        return self
+    
+    def __next__(self):
+        if self.iter_idx < len(self):
+            result = self[self.iter_idx]
+            self.iter_idx += 1
+            return result
+        else:
+            raise StopIteration
     
     def save_curves(self, filename: str):
         """
@@ -347,17 +376,35 @@ class Coils(Curves):
 
     def __getitem__(self, key):
         if isinstance(key, int):
-            return Coils(Curves(jnp.expand_dims(self.dofs_curves[key], 0), self.n_segments, self.nfp, self.stellsym), jnp.expand_dims(self.dofs_currents[key], 0))
+            return Coils(Curves(jnp.expand_dims(self.curves[key], 0), self.n_segments, 1, False), jnp.expand_dims(self.currents[key], 0))
         elif isinstance(key, (slice, jnp.ndarray)):
-            return Coils(Curves(self.dofs_curves[key], self.n_segments, self.nfp, self.stellsym), self.dofs_currents[key])
+            return Coils(Curves(self.curves[key], self.n_segments, 1, False), self.curves[key])
         else:
             raise TypeError(f"Invalid argument type. Got {type(key)}, expected int, slice or jnp.ndarray.")
     
     def __add__(self, other):
         if isinstance(other, Coils):
-            return Coils(Curves(jnp.concatenate((self.dofs_curves, other.dofs_curves), axis=0), self.n_segments, self.nfp, self.stellsym), jnp.concatenate((self.dofs_currents, other.dofs_currents), axis=0))
+            return Coils(Curves(jnp.concatenate((self.curves, other.curves), axis=0), self.n_segments, 1, False), jnp.concatenate((self.currents, other.currents), axis=0))
         else:
             raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils.")
+        
+    def __contains__(self, other):
+        if isinstance(other, Coils):
+            return jnp.all(jnp.isin(other.dofs, self.dofs)) and jnp.all(jnp.isin(other.dofs_currents, self.dofs_currents))
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils.")
+        
+    def __eq__(self, other):
+        if isinstance(other, Coils):
+            if self.dofs.shape != other.dofs.shape:
+                return False
+            return jnp.all(self.dofs == other.dofs) and jnp.all(self.dofs_currents == other.dofs_currents)
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils.")
+        
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
     
     def _tree_flatten(self):
         children = (Curves(self.dofs, self.n_segments, self.nfp, self.stellsym), self._dofs_currents)  # arrays / dynamic values
@@ -442,16 +489,16 @@ def CreateEquallySpacedCurves(n_curves: int, order: int, R: float, r: float, n_s
 def RotatedCurve(curve, phi, flip):
     rotmat = jnp.array(
         [[jnp.cos(phi), -jnp.sin(phi), 0],
-            [jnp.sin(phi), jnp.cos(phi), 0],
-            [0, 0, 1]]).T
+         [jnp.sin(phi),  jnp.cos(phi), 0],
+         [0,             0,            1]]).T
     if flip:
         rotmat = rotmat @ jnp.array(
-            [[1, 0, 0],
-                [0, -1, 0],
-                [0, 0, -1]])
+            [[1,  0,  0],
+             [0, -1,  0],
+             [0,  0, -1]])
     return curve @ rotmat
 
-partial(jit, static_argnames=['nfp', 'stellsym'])
+@partial(jit, static_argnames=['nfp', 'stellsym'])
 def apply_symmetries_to_curves(base_curves, nfp, stellsym):
     flip_list = [False, True] if stellsym else [False]
     curves = []
@@ -461,11 +508,11 @@ def apply_symmetries_to_curves(base_curves, nfp, stellsym):
                 if k == 0 and not flip:
                     curves.append(base_curves[i])
                 else:
-                    rotcurve = RotatedCurve(base_curves[i].transpose(), 2*jnp.pi*k/nfp, flip)
-                    curves.append(rotcurve.transpose())
+                    rotcurve = RotatedCurve(base_curves[i].T, 2*jnp.pi*k/nfp, flip)
+                    curves.append(rotcurve.T)
     return jnp.array(curves)
 
-partial(jit, static_argnames=['nfp', 'stellsym'])
+@partial(jit, static_argnames=['nfp', 'stellsym'])
 def apply_symmetries_to_currents(base_currents, nfp, stellsym): 
     flip_list = [False, True] if stellsym else [False]
     currents = []
