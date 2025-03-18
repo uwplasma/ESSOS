@@ -498,7 +498,7 @@ class near_axis():
         
     @jit
     def interpolated_array_at_point(self,array,point):
-        sp=jnp.interp(jnp.array([point]), jnp.append(self.phi,2*jnp.pi/self.nfp), jnp.append(array,array[0]), period=2*jnp.pi/self.nfp)
+        sp=jnp.interp(jnp.array([point]), jnp.append(self.phi,2*jnp.pi/self.nfp), jnp.append(array,array[0]), period=2*jnp.pi/self.nfp)[0]
         return sp
         
     @jit
@@ -520,8 +520,8 @@ class near_axis():
         total_y = R0_at_phi0 * sinphi0 + X_at_phi0 * normal_y + Y_at_phi0 * binormal_y
         Frenet_to_cylindrical_residual = jnp.arctan2(total_y, total_x) - phi_target
         Frenet_to_cylindrical_residual = jnp.where(Frenet_to_cylindrical_residual > jnp.pi, Frenet_to_cylindrical_residual - 2 * jnp.pi, Frenet_to_cylindrical_residual)
-        Frenet_to_cylindrical_residual = jnp.where(Frenet_to_cylindrical_residual < -jnp.pi, Frenet_to_cylindrical_residual + 2 * jnp.pi, Frenet_to_cylindrical_residual)
-        return Frenet_to_cylindrical_residual[0]
+        Frenet_to_cylindrical_residual = jnp.where(Frenet_to_cylindrical_residual <-jnp.pi, Frenet_to_cylindrical_residual + 2 * jnp.pi, Frenet_to_cylindrical_residual)
+        return Frenet_to_cylindrical_residual
 
     @jit
     def Frenet_to_cylindrical_1_point(self, phi0, X_at_this_theta, Y_at_this_theta):
@@ -565,7 +565,7 @@ class near_axis():
                                 X_at_this_theta=X_at_this_theta, Y_at_this_theta=Y_at_this_theta)
                 phi0_solution = lax.custom_root(residual, phi_target, newton, lambda g, y: y / g(1.0))
                 final_R, final_Z, _ = self.Frenet_to_cylindrical_1_point(phi0_solution, X_at_this_theta, Y_at_this_theta)
-                return final_R[0], final_Z[0], phi0_solution
+                return final_R, final_Z, phi0_solution
 
             return vmap(compute_for_phi)(phi_conversion)
 
@@ -584,7 +584,7 @@ class near_axis():
 
         def compute_RBC_ZBS(m, n):
             angle = m * theta2d - n * nfp * phi2d
-            sinangle, cosangle = jnp.sin(angle).T, jnp.cos(angle).T
+            sinangle, cosangle = jnp.sin(angle), jnp.cos(angle)
 
             # Conditional scaling of factor2
             factor2 = jax.lax.cond(
@@ -610,9 +610,8 @@ class near_axis():
 
 
     @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi'])
-    def get_boundary(self, r=0.1, ntheta=40, nphi=130, ntheta_fourier=20, mpol=13, ntor=25):
+    def get_boundary(self, r=0.1, ntheta=30, nphi=120, ntheta_fourier=20, mpol=5, ntor=5):
         R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
-        # return R_2D*jnp.cos(self.phi), R_2D*jnp.sin(self.phi), Z_2D, R_2D
         RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
 
         theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
@@ -639,6 +638,7 @@ class near_axis():
         return self.B0*(1 + r * self.etabar * jnp.cos(theta - (self.iota - self.iotaN) * phi))
 
     def plot(self, r=0.1, ntheta=80, nphi=150, ntheta_fourier=20, ax=None, show=True, close=False, axis_equal=True, **kwargs):
+        kwargs.setdefault('alpha', 1)
         import matplotlib.pyplot as plt 
         from matplotlib import cm
         import matplotlib.colors as clr
@@ -658,16 +658,17 @@ class near_axis():
         cmap_plot = ls.shade(Bmag, cmap, norm=norm)
         ax.plot_surface(x_2D_plot, y_2D_plot, z_2D_plot, facecolors=cmap_plot,
                         rstride=1, cstride=1, antialiased=False,
-                        linewidth=0, alpha=1, shade=False, **kwargs)
-        ax.dist = 7
-        ax.elev = 5
-        ax.azim = 45
-        cbar_ax = fig.add_axes([0.85, 0.2, 0.03, 0.6])
-        m = cm.ScalarMappable(cmap=cmap, norm=norm)
-        m.set_array([])
-        cbar = plt.colorbar(m, cax=cbar_ax)
-        cbar.ax.set_title(r'$|B| [T]$')
-        ax.grid(False)
+                        linewidth=0, shade=False, **kwargs)
+        if ax is None or ax.name != "3d":
+            ax.dist = 7
+            ax.elev = 5
+            ax.azim = 45
+            cbar_ax = fig.add_axes([0.85, 0.2, 0.03, 0.6])
+            m = cm.ScalarMappable(cmap=cmap, norm=norm)
+            m.set_array([])
+            cbar = plt.colorbar(m, cax=cbar_ax)
+            cbar.ax.set_title(r'$|B| [T]$')
+            ax.grid(False)
         if axis_equal:
             fix_matplotlib_3d(ax)
         if show:
