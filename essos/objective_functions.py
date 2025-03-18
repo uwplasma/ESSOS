@@ -56,6 +56,22 @@ def loss_coils_for_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp,
     
     return B_difference_loss+gradB_difference_loss+coil_length_loss+coil_curvature_loss
 
+@partial(jit, static_argnums=(0, 1))
+def difference_B_gradB_onaxis(nearaxis_field, coils_field):
+    Raxis = nearaxis_field.R0
+    Zaxis = nearaxis_field.Z0
+    phi = nearaxis_field.phi
+    Xaxis = Raxis*jnp.cos(phi)
+    Yaxis = Raxis*jnp.sin(phi)
+    points = jnp.array([Xaxis, Yaxis, Zaxis])
+    B_nearaxis = nearaxis_field.B_axis.T
+    B_coils = vmap(coils_field.B)(points.T)
+    
+    gradB_nearaxis = nearaxis_field.grad_B_axis.T
+    gradB_coils = vmap(coils_field.dB_by_dX)(points.T)
+    
+    return jnp.array(B_coils)-jnp.array(B_nearaxis), jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)
+    
 @partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
 def loss_coils_and_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
                n_segments=60, stellsym=True, max_coil_curvature=0.1):
@@ -69,26 +85,16 @@ def loss_coils_and_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp,
     field = BiotSavart(coils)
     new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(x[-len_dofs_nearaxis:], field_nearaxis)
     
-    Raxis = new_field_nearaxis.R0
-    Zaxis = new_field_nearaxis.Z0
-    phi = new_field_nearaxis.phi
-    Xaxis = Raxis*jnp.cos(phi)
-    Yaxis = Raxis*jnp.sin(phi)
-    points = jnp.array([Xaxis, Yaxis, Zaxis])
-    B_nearaxis = new_field_nearaxis.B_axis.T
-    B_coils = vmap(field.B)(points.T)
-    
-    gradB_nearaxis = new_field_nearaxis.grad_B_axis.T
-    gradB_coils = vmap(field.dB_by_dX)(points.T)
-    
     coil_length = loss_coil_length(field)
     coil_curvature = loss_coil_curvature(field)
     
     elongation = new_field_nearaxis.elongation
     iota = new_field_nearaxis.iota
     
-    B_difference_loss = jnp.sum(jnp.abs(jnp.array(B_coils)-jnp.array(B_nearaxis)))
-    gradB_difference_loss = jnp.sum(jnp.abs(jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)))
+    B_difference, gradB_difference = difference_B_gradB_onaxis(new_field_nearaxis, field)
+    B_difference_loss = 3*jnp.sum(jnp.abs(B_difference))
+    gradB_difference_loss = jnp.sum(jnp.abs(gradB_difference))
+    
     coil_length_loss    = 1e3*jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
     coil_curvature_loss = 1e3*jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
     elongation_loss = jnp.sum(jnp.abs(elongation))

@@ -5,13 +5,14 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import near_axis, BiotSavart
 from essos.dynamics import Tracing
 from essos.optimization import optimize_coils_and_nearaxis, optimize_coils_for_nearaxis
+from essos.objective_functions import difference_B_gradB_onaxis
 
 # Optimization parameters
 max_coil_length = 5.0
 max_coil_curvature = 4
 order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 100
+maximum_function_evaluations = 150
 number_coils_per_half_field_period = 3
 tolerance_optimization = 1e-8
 
@@ -50,11 +51,23 @@ coils_optimized, field_nearaxis_optimized = optimize_coils_and_nearaxis(field_ne
                                                     tolerance_optimization=tolerance_optimization)
 print(f"Optimization took {time()-time0:.2f} seconds")
 
+B_difference_initial, gradB_difference_initial = difference_B_gradB_onaxis(field_nearaxis_initial, BiotSavart(coils_optimized_initial_nearaxis))
+B_difference_loss_initial = jnp.sum(jnp.abs(B_difference_initial))
+gradB_difference_loss_initial = jnp.sum(jnp.abs(gradB_difference_initial))
+
+B_difference_optimized, gradB_difference_optimized = difference_B_gradB_onaxis(field_nearaxis_optimized, BiotSavart(coils_optimized))
+B_difference_loss_optimized = jnp.sum(jnp.abs(B_difference_optimized))
+gradB_difference_loss_optimized = jnp.sum(gradB_difference_optimized)
+
 print(f'############################################')
 print(f'Iota for initial near-axis: {field_nearaxis_initial.iota}')
 print(f'Iota for optimized near-axis: {field_nearaxis_optimized.iota}')
 print(f'Maximum elongation for initial near-axis: {max(field_nearaxis_initial.elongation)}')
 print(f'Maximum elongation for optimized near-axis: {max(field_nearaxis_optimized.elongation)}')
+print(f'Loss of B difference for initial near-axis: {B_difference_loss_initial}')
+print(f'Loss of B difference for optimized near-axis: {B_difference_loss_optimized}')
+print(f'Loss of gradB difference for initial near-axis: {gradB_difference_loss_initial}')
+print(f'Loss of gradB difference for optimized near-axis: {gradB_difference_loss_optimized}')
 
 # Trace fieldlines
 nfieldlines = 6
