@@ -233,7 +233,7 @@ class near_axis():
         (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
          self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
          self.normal_R, self.normal_phi, self.normal_z, self.binormal_R, self.binormal_phi, self.binormal_z,
-         self.L_grad_B, self.inv_L_grad_B, self.torsion) = parameters
+         self.L_grad_B, self.inv_L_grad_B, self.torsion, self.curvature) = parameters
         
     @property
     def dofs(self):
@@ -249,7 +249,7 @@ class near_axis():
         (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
          self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
          self.normal_R, self.normal_z, self.normal_phi, self.binormal_R, self.binormal_z, self.binormal_phi,
-         self.L_grad_B, self.inv_L_grad_B, self.torsion) = parameters
+         self.L_grad_B, self.inv_L_grad_B, self.torsion, self.curvature) = parameters
     
     @property
     def x(self):
@@ -494,7 +494,7 @@ class near_axis():
         return (R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length, iota, iotaN, G0,
                 helicity, X1c_untwisted, X1s_untwisted, Y1s_untwisted, Y1c_untwisted,
                 normal_R, normal_phi, normal_z, binormal_R, binormal_phi, binormal_z,
-                L_grad_B, inv_L_grad_B, torsion)
+                L_grad_B, inv_L_grad_B, torsion, curvature)
         
     @jit
     def interpolated_array_at_point(self,array,point):
