@@ -499,6 +499,8 @@ class near_axis():
     @jit
     def interpolated_array_at_point(self,array,point):
         sp=jnp.interp(jnp.array([point]), jnp.append(self.phi,2*jnp.pi/self.nfp), jnp.append(array,array[0]), period=2*jnp.pi/self.nfp)[0]
+        ## Using interpax would make the interpolation slightly more accurate, but it is too slow at the moment
+        # sp=interpax.interp1d(jnp.array([point]), jnp.append(self.phi,2*jnp.pi/self.nfp), jnp.append(array,array[0]), method="cubic", period=2*jnp.pi/self.nfp)[0]
         return sp
         
     @jit
