@@ -45,7 +45,7 @@ class BiotSavart():
         return points
     
 class Vmec():
-    def __init__(self, wout, ntheta=50, nphi=50, close=False, range='full torus'):
+    def __init__(self, wout, ntheta=50, nphi=50, close=True, range='full torus'):
         self.wout = wout
         from netCDF4 import Dataset
         self.nc = Dataset(self.wout)
