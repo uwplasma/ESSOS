@@ -245,7 +245,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
-                    # max_steps=1000000,
+                     max_steps=100000000,
                     event = Event(self.condition)
                 ).ys
             return trajectory
