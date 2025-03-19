@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 from essos.dynamics import Particles, Tracing
 from essos.fields import BiotSavart
 from essos.coils import Coils, CreateEquallySpacedCurves
-from essos.optimization import optimize_coils_for_particle_confinement
+from essos.optimization import optimize_loss_function
+from essos.objective_functions import loss_optimize_coils_for_particle_confinement
 
 # Optimization parameters
 target_B_on_axis = 5.7
@@ -17,7 +18,7 @@ max_coil_curvature = 0.4
 nparticles = 8
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 100
+maximum_function_evaluations = 60
 maxtime_tracing = 1e-5
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
@@ -45,8 +46,11 @@ tracing_initial = Tracing(field=coils_initial, particles=particles, maxtime=maxt
 # Optimize coils
 print(f'Optimizing coils with {maximum_function_evaluations} function evaluations and maxtime_tracing={maxtime_tracing}')
 time0 = time()
-coils_optimized = optimize_coils_for_particle_confinement(coils_initial, particles, target_B_on_axis=target_B_on_axis, maxtime=maxtime_tracing, model=model,
-                                        max_coil_length=max_coil_length, maximum_function_evaluations=maximum_function_evaluations, max_coil_curvature=max_coil_curvature)
+coils_optimized = optimize_loss_function(loss_optimize_coils_for_particle_confinement, initial_dofs=coils_initial.x,
+                           coils=coils_initial, tolerance_optimization=1e-4, particles=particles,
+                           maximum_function_evaluations=maximum_function_evaluations, max_coil_curvature=max_coil_curvature,
+                           target_B_on_axis=target_B_on_axis, max_coil_length=max_coil_length, model=model,
+                           maxtime=maxtime_tracing, num_steps=timesteps, trace_tolerance=1e-5)
 print(f"  Optimization took {time()-time0:.2f} seconds")
 particles.to_full_orbit(BiotSavart(coils_optimized))
 tracing_optimized = Tracing(field=coils_optimized, particles=particles, maxtime=maxtime_tracing, model=model, timesteps=timesteps)
