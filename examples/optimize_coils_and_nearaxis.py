@@ -4,8 +4,9 @@ import matplotlib.pyplot as plt
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import near_axis, BiotSavart
 from essos.dynamics import Tracing
-from essos.optimization import optimize_coils_and_nearaxis, optimize_coils_for_nearaxis
-from essos.objective_functions import difference_B_gradB_onaxis
+from essos.optimization import optimize_loss_function
+from essos.objective_functions import (difference_B_gradB_onaxis,
+                    loss_coils_and_nearaxis, loss_coils_for_nearaxis)
 
 # Optimization parameters
 max_coil_length = 5.0
@@ -38,17 +39,19 @@ coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coil
 # Optimize coils
 print(f'Optimizing coils for initial near=axis with {maximum_function_evaluations} function evaluations.')
 time0 = time()
-coils_optimized_initial_nearaxis = optimize_coils_for_nearaxis(field_nearaxis_initial, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
-                                                    max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,
-                                                    tolerance_optimization=tolerance_optimization)
+initial_dofs = coils_initial.x
+coils_optimized_initial_nearaxis = optimize_loss_function(loss_coils_for_nearaxis, initial_dofs=coils_initial.x, coils=coils_initial, tolerance_optimization=tolerance_optimization,
+                                  maximum_function_evaluations=maximum_function_evaluations, field_nearaxis=field_nearaxis_initial,
+                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
 print(f"Optimization took {time()-time0:.2f} seconds")
 
 # Optimize coils
 print(f'Optimizing coils and near-axis with {maximum_function_evaluations} function evaluations.')
 time0 = time()
-coils_optimized, field_nearaxis_optimized = optimize_coils_and_nearaxis(field_nearaxis_initial, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
-                                                    max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,
-                                                    tolerance_optimization=tolerance_optimization)
+initial_dofs = jnp.concatenate((coils_initial.x, field_nearaxis_initial.x))
+coils_optimized, field_nearaxis_optimized = optimize_loss_function(loss_coils_and_nearaxis, initial_dofs=initial_dofs, coils=coils_initial, tolerance_optimization=tolerance_optimization,
+                                  maximum_function_evaluations=maximum_function_evaluations, field_nearaxis=field_nearaxis_initial,
+                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
 print(f"Optimization took {time()-time0:.2f} seconds")
 
 B_difference_initial, gradB_difference_initial = difference_B_gradB_onaxis(field_nearaxis_initial, BiotSavart(coils_optimized_initial_nearaxis))

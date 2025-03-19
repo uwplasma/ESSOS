@@ -5,9 +5,22 @@ from jax import jit, grad
 from functools import partial
 from essos.coils import Curves, Coils
 from scipy.optimize import least_squares, minimize
-from essos.objective_functions import (loss_optimize_coils_for_particle_confinement,
-                                       loss_BdotN, loss_coils_for_nearaxis, loss_coils_and_nearaxis,
-                                       new_nearaxis_from_x_and_old_nearaxis)
+from essos.fields import near_axis
+
+def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
+    len_rc = len(field_nearaxis.rc)
+    len_zs = len(field_nearaxis.zs)
+    # # keeping the first rc and zs the same
+    # new_field_nearaxis_rc = jnp.concatenate((jnp.array([field_nearaxis.rc[0]]),new_field_nearaxis_x[:len_rc][1:]))
+    # new_field_nearaxis_zs = jnp.concatenate((jnp.array([field_nearaxis.zs[0]]),new_field_nearaxis_x[len_rc:len_rc+len_zs][1:]))
+    new_field_nearaxis_rc = new_field_nearaxis_x[:len_rc]
+    new_field_nearaxis_zs = new_field_nearaxis_x[len_rc:len_rc+len_zs]
+    new_field_nearaxis_etabar = new_field_nearaxis_x[-1]
+    
+    new_field_nearaxis = near_axis(rc=new_field_nearaxis_rc, zs=new_field_nearaxis_zs, etabar=new_field_nearaxis_etabar,
+                                    B0=field_nearaxis.B0, sigma0=field_nearaxis.sigma0, I2=field_nearaxis.I2,
+                                    nphi=field_nearaxis.nphi, spsi=field_nearaxis.spsi, sG=field_nearaxis.sG, nfp=field_nearaxis.nfp)
+    return new_field_nearaxis
 
 def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, **kwargs):
     len_dofs_curves = len(jnp.ravel(coils.dofs_curves))
@@ -48,34 +61,3 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     except Exception as e:
         jax.debug.print("Error: {}", e)
         return None
-
-def optimize_coils_for_particle_confinement(coils, particles, target_B_on_axis=5.7, max_coil_length=22, model='GuidingCenter',
-                                            maxtime=5e-6, num_steps=500, trace_tolerance=1e-5, tolerance_optimization=1e-4,
-                                            maximum_function_evaluations=30, max_coil_curvature=0.1):
-    return optimize_loss_function(loss_optimize_coils_for_particle_confinement, initial_dofs=coils.x, coils=coils,
-                           tolerance_optimization=tolerance_optimization, particles=particles,
-                           maximum_function_evaluations=maximum_function_evaluations, max_coil_curvature=max_coil_curvature,
-                           target_B_on_axis=target_B_on_axis, max_coil_length=max_coil_length, model=model,
-                           maxtime=maxtime, num_steps=num_steps, trace_tolerance=trace_tolerance)
-
-def optimize_coils_for_vmec_surface(vmec, coils, tolerance_optimization=1e-10,
-                                    maximum_function_evaluations=30,
-                                    max_coil_length=42, max_coil_curvature=0.1):
-    return optimize_loss_function(loss_BdotN, initial_dofs=coils.x, coils=coils, tolerance_optimization=tolerance_optimization,
-                                  maximum_function_evaluations=maximum_function_evaluations, vmec=vmec,
-                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
-    
-def optimize_coils_for_nearaxis(field_nearaxis, coils, tolerance_optimization=1e-10,
-                                    maximum_function_evaluations=30,
-                                    max_coil_length=42, max_coil_curvature=0.1):
-    return optimize_loss_function(loss_coils_for_nearaxis, initial_dofs=coils.x, coils=coils, tolerance_optimization=tolerance_optimization,
-                                  maximum_function_evaluations=maximum_function_evaluations, field_nearaxis=field_nearaxis,
-                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
-
-def optimize_coils_and_nearaxis(field_nearaxis, coils, tolerance_optimization=1e-10,
-                                    maximum_function_evaluations=30,
-                                    max_coil_length=42, max_coil_curvature=0.1):
-    initial_dofs = jnp.concatenate((coils.x, field_nearaxis.x))
-    return optimize_loss_function(loss_coils_and_nearaxis, initial_dofs=initial_dofs, coils=coils, tolerance_optimization=tolerance_optimization,
-                                  maximum_function_evaluations=maximum_function_evaluations, field_nearaxis=field_nearaxis,
-                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)

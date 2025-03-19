@@ -4,24 +4,10 @@ import jax.numpy as jnp
 from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
-from essos.fields import BiotSavart, near_axis
+from essos.fields import BiotSavart
 from essos.surfaces import BdotN_over_B, BdotN
 from essos.coils import Curves, Coils
-
-def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
-    len_rc = len(field_nearaxis.rc)
-    len_zs = len(field_nearaxis.zs)
-    # # keeping the first rc and zs the same
-    # new_field_nearaxis_rc = jnp.concatenate((jnp.array([field_nearaxis.rc[0]]),new_field_nearaxis_x[:len_rc][1:]))
-    # new_field_nearaxis_zs = jnp.concatenate((jnp.array([field_nearaxis.zs[0]]),new_field_nearaxis_x[len_rc:len_rc+len_zs][1:]))
-    new_field_nearaxis_rc = new_field_nearaxis_x[:len_rc]
-    new_field_nearaxis_zs = new_field_nearaxis_x[len_rc:len_rc+len_zs]
-    new_field_nearaxis_etabar = new_field_nearaxis_x[-1]
-    
-    new_field_nearaxis = near_axis(rc=new_field_nearaxis_rc, zs=new_field_nearaxis_zs, etabar=new_field_nearaxis_etabar,
-                                    B0=field_nearaxis.B0, sigma0=field_nearaxis.sigma0, I2=field_nearaxis.I2,
-                                    nphi=field_nearaxis.nphi, spsi=field_nearaxis.spsi, sG=field_nearaxis.sG, nfp=field_nearaxis.nfp)
-    return new_field_nearaxis
+from essos.optimization import new_nearaxis_from_x_and_old_nearaxis
 
 @partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
 def loss_coils_for_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,

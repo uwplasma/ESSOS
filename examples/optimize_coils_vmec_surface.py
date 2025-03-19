@@ -2,10 +2,13 @@ import os
 number_of_processors_to_use = 8 # Parallelization, this should divide ntheta*nphi
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from essos.surfaces import BdotN_over_B
 from essos.coils import Coils, CreateEquallySpacedCurves
-from essos.fields import Vmec
-from essos.optimization import optimize_coils_for_vmec_surface
+from essos.fields import Vmec, BiotSavart
+from essos.objective_functions import loss_BdotN
+from essos.optimization import optimize_loss_function
 
 # Optimization parameters
 max_coil_length = 40
@@ -38,10 +41,15 @@ coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coil
 # Optimize coils
 print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
 time0 = time()
-coils_optimized = optimize_coils_for_vmec_surface(vmec, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
-                                                    max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,
-                                                    tolerance_optimization=tolerance_optimization)
+coils_optimized = optimize_loss_function(loss_BdotN, initial_dofs=coils_initial.x, coils=coils_initial, tolerance_optimization=tolerance_optimization,
+                                  maximum_function_evaluations=maximum_function_evaluations, vmec=vmec,
+                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
 print(f"Optimization took {time()-time0:.2f} seconds")
+
+BdotN_over_B_initial = BdotN_over_B(vmec.surface, BiotSavart(coils_initial))
+BdotN_over_B_optimized = BdotN_over_B(vmec.surface, BiotSavart(coils_optimized))
+print(f"Maximum BdotN/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
+print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
 
 # Plot coils, before and after optimization
 fig = plt.figure(figsize=(8, 4))

@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import near_axis, BiotSavart
 from essos.dynamics import Tracing
-from essos.optimization import optimize_coils_for_nearaxis
+from essos.optimization import optimize_loss_function
+from essos.objective_functions import loss_coils_for_nearaxis
 
 # Optimization parameters
 max_coil_length = 5.0
@@ -37,9 +38,11 @@ coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coil
 # Optimize coils
 print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
 time0 = time()
-coils_optimized = optimize_coils_for_nearaxis(field, coils_initial, maximum_function_evaluations=maximum_function_evaluations,
-                                                    max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,
-                                                    tolerance_optimization=tolerance_optimization)
+initial_dofs = coils_initial.x
+coils_optimized = optimize_loss_function(loss_coils_for_nearaxis, initial_dofs=coils_initial.x,
+                                  coils=coils_initial, tolerance_optimization=tolerance_optimization,
+                                  maximum_function_evaluations=maximum_function_evaluations, field_nearaxis=field,
+                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
 print(f"Optimization took {time()-time0:.2f} seconds")
 
 # Trace fieldlines
