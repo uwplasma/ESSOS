@@ -3,7 +3,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from jax.experimental.shard_map import shard_map
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax.sharding import Mesh, PartitionSpec
 from jax import jit, vmap, tree_util, random, lax
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
@@ -11,6 +11,7 @@ from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.plot import fix_matplotlib_3d
+from essos.util import roots
 
 def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
     """
@@ -245,7 +246,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
-                     max_steps=100000000,
+                    max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys
             return trajectory
@@ -315,101 +316,74 @@ class Tracing():
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times
 
-    # def get_phi(x, y, phi_last):
-    #     """Compute the toroidal angle phi, ensuring continuity."""
-    #     phi = jnp.arctan2(y, x)
-    #     dphi = phi - phi_last
-    #     return phi - jnp.round(dphi / (2 * jnp.pi)) * (2 * jnp.pi)  # Ensure continuity
-
-    # @partial(jit, static_argnums=(0, 2))
-    # def find_poincare_hits(self, traj, phis_poincare):
-    #     """Find points where field lines cross specified phi values."""
-    #     x, y, z = traj[:, 0], traj[:, 1], traj[:, 2]
-    #     phi_values = jnp.unwrap(jnp.arctan2(y, x))  # Ensure continuity
-    #     t_steps = jnp.arange(len(x))
-
-    #     hits = []
-        
-    #     for phi_target in phis_poincare:
-    #         phi_shifted = phi_values - phi_target  # Shifted phi for comparison
-    #         sign_change = (phi_shifted[:-1] * phi_shifted[1:]) < 0  # Detect crossing
-
-    #         if jnp.any(sign_change):
-    #             crossing_indices = jnp.where(sign_change)[0]  # Get indices of crossings
-    #             for idx in crossing_indices:
-    #                 # Linear interpolation to estimate exact crossing
-    #                 w = (phi_target - phi_values[idx]) / (phi_values[idx + 1] - phi_values[idx])
-    #                 t_cross = t_steps[idx] + w * (t_steps[idx + 1] - t_steps[idx])
-    #                 x_cross = x[idx] + w * (x[idx + 1] - x[idx])
-    #                 y_cross = y[idx] + w * (y[idx + 1] - y[idx])
-    #                 z_cross = z[idx] + w * (z[idx + 1] - z[idx])
-                    
-    #                 hits.append([t_cross, x_cross, y_cross, z_cross])
-
-    #     return jnp.array(hits)
-
-    # @partial(jit, static_argnums=(0))
-    # def poincare(self):
-    #     """Compute Poincaré section hits for multiple trajectories."""
-    #     trajectories = self.trajectories  # Pass trajectories directly into the function
-    #     phis_poincare = self.phis_poincare  # Similarly, use the direct attribute
-
-    #     # Use vmap to vectorize the calls for each trajectory
-    #     return vmap(self.find_poincare_hits, in_axes=(0, None))(trajectories, tuple(phis_poincare))
-
-    # def poincare_plot(self, phis=None, filename=None, res_phi_hits=None, mark_lost=False, aspect='equal', dpi=300, xlims=None, 
-    #                 ylims=None, s=2, marker='o', show=True):
-    #     import matplotlib.pyplot as plt
-        
-    #     self.phis_poincare = phis
-    #     if res_phi_hits is None:
-    #         res_phi_hits = self.poincare()
-    #     self.res_phi_hits = res_phi_hits
-            
-    #     res_phi_hits = jnp.array(res_phi_hits)  # Ensure it's a JAX array
-        
-    #     # Determine number of rows/columns
-    #     nrowcol = int(jnp.ceil(jnp.sqrt(len(phis))))
-        
-    #     # Create subplots
-    #     fig, axs = plt.subplots(nrowcol, nrowcol, figsize=(8, 5))
-    #     axs = axs.ravel()  # Flatten for easier indexing
-        
-    #     # Loop over phi values and create plots
-    #     for i, phi in enumerate(phis):
-    #         ax = axs[i]
-    #         ax.set_aspect(aspect)
-    #         ax.set_title(f"$\\phi = {phi/jnp.pi:.2f}\\pi$", loc='left', y=0.0)
-    #         ax.set_xlabel("$r$")
-    #         ax.set_ylabel("$z$")
-            
-    #         if xlims:
-    #             ax.set_xlim(xlims)
-    #         if ylims:
-    #             ax.set_ylim(ylims)
-            
-    #         # Extract points corresponding to this phi
-    #         mask = res_phi_hits[:, 1] == i
-    #         data_this_phi = res_phi_hits[mask]
-            
-    #         if data_this_phi.shape[0] > 0:
-    #             r = jnp.sqrt(data_this_phi[:, 2]**2 + data_this_phi[:, 3]**2)
-    #             z = data_this_phi[:, 4]
-                
-    #             color = 'g'  # Default color
-    #             if mark_lost:
-    #                 lost = data_this_phi[-1, 1] < 0
-    #                 color = 'r' if lost else 'g'
-                    
-    #             ax.scatter(r, z, marker=marker, s=s, linewidths=0, c=color)
-
-    #         ax.grid(True, linewidth=0.5)
-
-    #     # Adjust layout and save
-    #     plt.tight_layout()
-    #     if filename is not None: plt.savefig(filename, dpi=dpi)
-    #     if show: plt.show()
-    #     plt.close()
+    def poincare_plot(self, shifts = [0], orientation = 'toroidal', length = 1, ax=None, show=True, **kwargs):
+        """
+        Plot Poincare plots using scipy to find the roots of an interpolation. Can take particle trace or field lines.
+        Args:
+            shifts (list, optional): Apply a linear shift to dependent data. Default is [0].
+            orientation (str, optional): 
+                'toroidal' - find time values when toroidal angle = shift [0, 2pi].
+                'z' - find time values where z coordinate = shift. Default is 'toroidal'.
+            length (float, optional): A way to shorten data. 1 - plot full length, 0.1 - plot 1/10 of data length. Default is 1.
+            ax (matplotlib.axes._subplots.AxesSubplot, optional): Matplotlib axis to plot on. Default is None.
+            show (bool, optional): Whether to display the plot. Default is True.
+            **kwargs: Additional keyword arguments for plotting.
+        Notes:
+            - If the data seem ill-behaved, there may not be enough steps in the trace for a good interpolation.
+            - This will break if there are any NaNs.
+            - Issues with toroidal interpolation: jnp.arctan2(Y, X) % (2 * jnp.pi) causes distortion in interpolation near phi = 0.
+            - Maybe determine a lower limit on resolution needed per toroidal turn for "good" results.
+        To-Do:
+            - Format colorbars.
+        """
+        if ax is None or ax.name != "3d":
+            fig = plt.figure()
+            ax = fig.add_subplot()
+        mesh = Mesh(devices=jax.devices(), axis_names=('workers',))
+        in_spec = PartitionSpec('workers', None)
+        shifts = jnp.array(shifts)
+        for shift in shifts:
+            @jit
+            def compute_trajectory_toroidal(trace):
+                X,Y,Z = trace[:,:3].T
+                R = jnp.sqrt(X**2 + Y**2)
+                phi = jnp.arctan2(Y,X) % (2 * jnp.pi)
+                T_slice = roots(self.times, phi, shift = shift, size=len(self.times))
+                # there is a bug that always counts phi = 0 as a root?  temp fix
+                T_slice = T_slice[1::2] 
+                R_slice = jnp.interp(T_slice, self.times, R)
+                Z_slice = jnp.interp(T_slice, self.times, Z)
+                return R_slice, Z_slice, T_slice
+            @jit
+            def compute_trajectory_z(trace):
+                X,Y,Z = trace[:,:3].T
+                T_slice = roots(self.times, Z, shift = shift, size=len(self.times))
+                X_slice = jnp.interp(T_slice, self.times, X)
+                Y_slice = jnp.interp(T_slice, self.times, Y)
+                return X_slice, Y_slice, T_slice
+            if orientation == 'toroidal':
+                X_slice, Y_slice, T_slice = shard_map(vmap(compute_trajectory_toroidal), mesh, 
+                            in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.trajectories)
+            elif orientation == 'z':
+                X_slice, Y_slice, T_slice = shard_map(vmap(compute_trajectory_z), mesh, 
+                            in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.trajectories)
+            length_ = int(len(X_slice)*length) 
+            cbar = 'time' if self.trajectories.shape[-1] == 4 else 'surface'
+            if cbar =='time':    hits = plt.scatter(X_slice[0:length_], Y_slice[0:length_],c = T_slice[0:length_], s = 5, **kwargs)
+            if cbar =='surface': hits = plt.scatter(X_slice[0:length_], Y_slice[0:length_],s = 5, **kwargs)
+        if orientation == 'toroidal':
+            plt.xlabel('R',fontsize = 20)
+            plt.ylabel('Z',fontsize = 20)
+            plt.title(r'$\phi$ = {:.2f} $\pi$'.format(shift/jnp.pi),fontsize = 20)
+        elif orientation == 'z':
+            plt.xlabel('X',fontsize = 20)
+            plt.xlabel('Y',fontsize = 20)
+            plt.title('Z = {:.2f}'.format(shift),fontsize = 20)
+        plt.axis('equal')
+        plt.grid()
+        plt.tight_layout()
+        if show:
+            plt.show()
         
 tree_util.register_pytree_node(Tracing,
                                Tracing._tree_flatten,

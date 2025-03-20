@@ -13,12 +13,12 @@ from essos.dynamics import Tracing, Particles
 tmax = 1e-3
 nparticles = 4
 R0 = jnp.linspace(1.23, 1.27, nparticles)
-trace_tolerance = 1e-7
-num_steps = 30000
+trace_tolerance = 1e-8
+num_steps = 5000
 mass=PROTON_MASS
 energy=4000*ONE_EV
-# pitch angle
-angle = .1
+# pitch angle = jnp.arctan(jnp.sqrt((v^2/vparallel^2) - 1)) * 180 / jnp.pi, in degrees
+angle = 45
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
@@ -32,6 +32,7 @@ initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 
 ## set the particles to all have the same velocity 
 us = jnp.sqrt(1/((jnp.tan(angle*jnp.pi/180)**2)+1))
+print(f"v_parallel/v_perp = {us}")
 particles = Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=jnp.ones(len(R0))*us,mass=mass, energy=energy,field=field)
 
 # Trace in ESSOS
@@ -39,12 +40,12 @@ time0 = time()
 tracing = Tracing(field=field, model='GuidingCenter', particles=particles,
                   maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
-trajectories = tracing.trajectories
 
-# Plot Poincare plot
-from essos.plot import poincare_plot
-poincare_plot(tracing, shift = jnp.pi)
-
+# Plot results
+time0 = time()
+tracing.poincare_plot(shifts = [jnp.pi/4, jnp.pi/2, 3*jnp.pi/4, jnp.pi], show=False)
+print(f"Poincare plot took {time()-time0:.2f} seconds")
+plt.show()
 
 ## Save results in vtk format to analyze in Paraview
 # tracing.to_vtk('trajectories')
