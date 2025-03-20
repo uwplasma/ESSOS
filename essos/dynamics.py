@@ -316,7 +316,7 @@ class Tracing():
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times
 
-    def poincare_plot(self, shifts = [0], orientation = 'toroidal', length = 1, ax=None, show=True, **kwargs):
+    def poincare_plot(self, shifts = [jnp.pi], orientation = 'toroidal', length = 1, ax=None, show=True, **kwargs):
         """
         Plot Poincare plots using scipy to find the roots of an interpolation. Can take particle trace or field lines.
         Args:
@@ -336,7 +336,7 @@ class Tracing():
         To-Do:
             - Format colorbars.
         """
-        if ax is None or ax.name != "3d":
+        if ax is None:
             fig = plt.figure()
             ax = fig.add_subplot()
         mesh = Mesh(devices=jax.devices(), axis_names=('workers',))
@@ -374,11 +374,11 @@ class Tracing():
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 20)
             plt.ylabel('Z',fontsize = 20)
-            plt.title(r'$\phi$ = {:.2f} $\pi$'.format(shift/jnp.pi),fontsize = 20)
+            # plt.title(r'$\phi$ = {:.2f} $\pi$'.format(shift/jnp.pi),fontsize = 20)
         elif orientation == 'z':
             plt.xlabel('X',fontsize = 20)
             plt.xlabel('Y',fontsize = 20)
-            plt.title('Z = {:.2f}'.format(shift),fontsize = 20)
+            # plt.title('Z = {:.2f}'.format(shift),fontsize = 20)
         plt.axis('equal')
         plt.grid()
         plt.tight_layout()
