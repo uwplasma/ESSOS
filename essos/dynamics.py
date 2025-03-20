@@ -371,15 +371,15 @@ class Tracing():
                 
             # dynamically index data which is not compatible with jit
             # filter for unique hits
+            cbar = 'time' if self.trajectories.shape[-1] == 4 else 'surface'
             for i in range(len(self.trajectories)):
-                    X_s = jnp.array(X_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
-                    Y_s = jnp.array(Y_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
-                    T_s = jnp.array(T_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
-            
-                    length_ = int(len(X_s)*1) 
-                    cbar = 'time' if self.trajectories.shape[-1] == 4 else 'surface'
-            if cbar =='time':    hits = plt.scatter(X_s[0:length_], Y_s[0:length_],c = T_s[0:length_], s = 5)
-            if cbar =='surface': hits = plt.scatter(X_s[0:length_], Y_s[0:length_],s = 5)
+                X_s = jnp.array(X_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
+                Y_s = jnp.array(Y_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
+                T_s = jnp.array(T_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
+        
+                length_ = int(len(X_s)*1) 
+                if cbar =='time':    hits = plt.scatter(X_s[0:length_], Y_s[0:length_],c = T_s[0:length_], s = 5)
+                if cbar =='surface': hits = plt.scatter(X_s[0:length_], Y_s[0:length_],s = 5)
     
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 20)
