@@ -343,6 +343,7 @@ class Tracing():
         in_spec = PartitionSpec('workers', None)
         shifts = jnp.array(shifts)
         for shift in shifts:
+
             @jit
             def compute_trajectory_toroidal(trace):
                 X,Y,Z = trace[:,:3].T
@@ -367,10 +368,19 @@ class Tracing():
             elif orientation == 'z':
                 X_slice, Y_slice, T_slice = shard_map(vmap(compute_trajectory_z), mesh, 
                             in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.trajectories)
-            length_ = int(len(X_slice)*length) 
-            cbar = 'time' if self.trajectories.shape[-1] == 4 else 'surface'
-            if cbar =='time':    hits = plt.scatter(X_slice[0:length_], Y_slice[0:length_],c = T_slice[0:length_], s = 5, **kwargs)
-            if cbar =='surface': hits = plt.scatter(X_slice[0:length_], Y_slice[0:length_],s = 5, **kwargs)
+                
+            # dynamically index data which is not compatible with jit
+            # filter for unique hits
+            for i in range(len(self.trajectories)):
+                    X_s = jnp.array(X_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
+                    Y_s = jnp.array(Y_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
+                    T_s = jnp.array(T_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
+            
+                    length_ = int(len(X_s)*1) 
+                    cbar = 'time' if self.trajectories.shape[-1] == 4 else 'surface'
+            if cbar =='time':    hits = plt.scatter(X_s[0:length_], Y_s[0:length_],c = T_s[0:length_], s = 5)
+            if cbar =='surface': hits = plt.scatter(X_s[0:length_], Y_s[0:length_],s = 5)
+    
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 20)
             plt.ylabel('Z',fontsize = 20)
