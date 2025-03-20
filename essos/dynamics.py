@@ -369,18 +369,21 @@ class Tracing():
                 X_slice, Y_slice, T_slice = shard_map(vmap(compute_trajectory_z), mesh, 
                             in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.trajectories)
                 
-            # dynamically index data which is not compatible with jit
-            # filter for unique hits
             cbar = 'time' if self.trajectories.shape[-1] == 4 else 'surface'
-            for i in range(len(self.trajectories)):
-                X_s = jnp.array(X_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
-                Y_s = jnp.array(Y_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
-                T_s = jnp.array(T_slice[i][jnp.argwhere(jnp.diff(T_slice[i])!=0)][1:]) 
-        
-                length_ = int(len(X_s)*1) 
-                if cbar =='time':    hits = plt.scatter(X_s[0:length_], Y_s[0:length_],c = T_s[0:length_], s = 5)
-                if cbar =='surface': hits = plt.scatter(X_s[0:length_], Y_s[0:length_],s = 5)
-    
+            @partial(jax.vmap, in_axes=(0, 0, 0))
+            def process_trajectory(X_i, Y_i, T_i):
+                mask = (T_i[1:] != T_i[:-1])  # Faster diff calculation
+                valid_idx = jnp.nonzero(mask, size=T_i.size - 1)[0] + 1  # Offset by 1
+                return X_i[valid_idx], Y_i[valid_idx], T_i[valid_idx]
+            X_s, Y_s, T_s = process_trajectory(X_slice, Y_slice, T_slice)
+            length_ = (vmap(len)(X_s) * length).astype(int)
+            for i in range(len(X_s)):
+                X_plot, Y_plot = X_s[i][:length_[i]], Y_s[i][:length_[i]]
+                if cbar == 'time':
+                    hits = ax.scatter(X_plot, Y_plot, c=T_s[i][:length_[i]], s=5)
+                else:
+                    hits = ax.scatter(X_plot, Y_plot, s=5)
+                    
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 20)
             plt.ylabel('Z',fontsize = 20)
