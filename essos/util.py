@@ -2,6 +2,10 @@ from jax import grad, lax, vmap, jit
 import jax.numpy as jnp
 from functools import partial
 
+# imports for scipy 
+from scipy.interpolate import  splrep, splev, PPoly
+import jax.numpy as jnp
+
 # @jit
 def newton(f, x0):
   """Newton's method for root-finding."""
@@ -40,3 +44,20 @@ def roots(x, y, shift=0, size=10):
     roots_list = vmap(find_root)(sign_changes)
     roots_array = jnp.array(roots_list)
     return roots_array
+
+def roots_scipy(x,y, shift = 0):
+              
+    '''
+    Finds roots using scipy 
+    
+    x: 1D array of independent values, must be strictly increasing -- such as Time
+    y: 1D array of dependent values -- such as X, Y, Z, B, or V 
+    shift: option to shift y to find roots at a non-zero value 
+    '''         
+    interp = splrep(x, (y - shift), k=3)
+              
+    roots = PPoly.from_spline(interp)
+              
+    x_values = roots.roots(extrapolate=False)
+             
+    return x_values
