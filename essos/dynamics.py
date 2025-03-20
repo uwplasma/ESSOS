@@ -342,8 +342,8 @@ class Tracing():
         mesh = Mesh(devices=jax.devices(), axis_names=('workers',))
         in_spec = PartitionSpec('workers', None)
         shifts = jnp.array(shifts)
+        plotting_data = []
         for shift in shifts:
-
             @jit
             def compute_trajectory_toroidal(trace):
                 X,Y,Z = trace[:,:3].T
@@ -372,13 +372,15 @@ class Tracing():
             cbar = 'time' if self.trajectories.shape[-1] == 4 else 'surface'
             @partial(jax.vmap, in_axes=(0, 0, 0))
             def process_trajectory(X_i, Y_i, T_i):
-                mask = (T_i[1:] != T_i[:-1])  # Faster diff calculation
-                valid_idx = jnp.nonzero(mask, size=T_i.size - 1)[0] + 1  # Offset by 1
+                mask = (T_i[1:] != T_i[:-1])
+                valid_idx = jnp.nonzero(mask, size=T_i.size - 1)[0] + 1
                 return X_i[valid_idx], Y_i[valid_idx], T_i[valid_idx]
             X_s, Y_s, T_s = process_trajectory(X_slice, Y_slice, T_slice)
             length_ = (vmap(len)(X_s) * length).astype(int)
             for i in range(len(X_s)):
                 X_plot, Y_plot = X_s[i][:length_[i]], Y_s[i][:length_[i]]
+                T_plot = T_s[i][:length_[i]] if cbar == 'time' else None
+                plotting_data.append((X_plot, Y_plot, T_plot))
                 if cbar == 'time':
                     hits = ax.scatter(X_plot, Y_plot, c=T_s[i][:length_[i]], s=5)
                 else:
@@ -397,6 +399,8 @@ class Tracing():
         plt.tight_layout()
         if show:
             plt.show()
+        
+        return plotting_data
         
 tree_util.register_pytree_node(Tracing,
                                Tracing._tree_flatten,

@@ -43,7 +43,7 @@ print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 
 # Plot results
 time0 = time()
-tracing.poincare_plot(shifts = [jnp.pi/4, jnp.pi/2, 3*jnp.pi/4, jnp.pi], show=False)
+plotting_data = tracing.poincare_plot(shifts = [jnp.pi/4, jnp.pi/2, 3*jnp.pi/4, jnp.pi], show=False)
 print(f"Poincare plot took {time()-time0:.2f} seconds")
 plt.show()
 
