@@ -32,7 +32,6 @@ tracing = Tracing(field=field, model='FieldLine', initial_conditions=initial_xyz
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 
-
 # Plot trajectories
 fig = plt.figure(figsize=(9, 5))
 ax1 = fig.add_subplot(121, projection='3d')
