@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 5 # Parallelization, this should divide nfieldlines
+number_of_processors_to_use = 12 # Parallelization, this should divide nfieldlines
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -9,11 +9,11 @@ from essos.coils import Coils_from_json
 from essos.dynamics import Tracing
 
 # Input parameters
-tmax = 800
-nfieldlines = 5
-R0 = jnp.linspace(1.23, 1.27, nfieldlines)
-trace_tolerance = 1e-7
-num_steps = 1500
+tmax = 6000
+nfieldlines = number_of_processors_to_use
+R0 = jnp.linspace(1.21, 1.4, nfieldlines)
+trace_tolerance = 1e-6
+num_steps = tmax
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
@@ -38,7 +38,7 @@ ax1 = fig.add_subplot(121, projection='3d')
 ax2 = fig.add_subplot(122)
 coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False)
-tracing.poincare_plot(ax=ax2, show=False, shifts=[jnp.pi/4, jnp.pi/2, 3*jnp.pi/4, jnp.pi])
+tracing.poincare_plot(ax=ax2, show=False, shifts=[jnp.pi/4, jnp.pi/2, 3*jnp.pi/4])
 plt.tight_layout()
 plt.show()
 

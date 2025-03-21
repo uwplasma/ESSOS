@@ -1,10 +1,7 @@
 from jax import grad, lax, vmap, jit
 import jax.numpy as jnp
 from functools import partial
-
-# imports for scipy 
-from scipy.interpolate import  splrep, splev, PPoly
-import jax.numpy as jnp
+from scipy.interpolate import  splrep, PPoly
 
 # @jit
 def newton(f, x0):
@@ -29,35 +26,56 @@ def newton(f, x0):
     initial_state,
   )[1]
 
-@partial(jit, static_argnums=(3))
-def roots(x, y, shift=0, size=10):
-    """Outputs all roots of an interpolated
-    function y(x) = y, where y is a scalar
-    and x is a vector. The function is interpolated
-    and the roots are found using Newton's method.
+@jit
+def roots(x, y, shift=0):
     """
-    sign_changes = jnp.nonzero(jnp.diff(jnp.sign(y - shift)), size=size)[0]
+    Outputs all unique roots of an interpolated function y(x) = y, where y is a scalar
+    and x is a vector. Removes repeated trailing values.
+
+    Args:
+      x (array-like): A vector of x values.
+      y (array-like): A vector of y values corresponding to x.
+      shift (float, optional): A value to shift the y values by. Defaults to 0.
+
+    Returns:
+      jnp.ndarray: An array of unique roots where the interpolated function crosses the shifted y value.
+    """
+    sign_changes = jnp.nonzero(jnp.diff(jnp.sign(y - shift)), size=len(y))[0]
+
     def interpolated_array_at_point(x0):
-        return jnp.interp(jnp.array([x0]), x, y)[0] - shift
+        return jnp.interp(jnp.array([x0]), x, y, left=0, right=0)[0] - shift
+
     def find_root(idx):
         return lax.custom_root(interpolated_array_at_point, x[idx], newton, lambda g, y: y / g(1.0))
+
     roots_list = vmap(find_root)(sign_changes)
     roots_array = jnp.array(roots_list)
-    return roots_array
 
-def roots_scipy(x,y, shift = 0):
-              
-    '''
-    Finds roots using scipy 
-    
-    x: 1D array of independent values, must be strictly increasing -- such as Time
-    y: 1D array of dependent values -- such as X, Y, Z, B, or V 
-    shift: option to shift y to find roots at a non-zero value 
-    '''         
+    # Find the first index where values stop increasing
+    diffs = jnp.diff(roots_array)
+    mask = diffs <= 1e-6  # Small threshold for numerical stability
+
+    # Find first occurrence of repeated values
+    first_repeat_idx = jnp.where(mask, size=1, fill_value=len(roots_array) - 1)[0][0]
+
+    # Replace repeated values with NaN
+    filtered_roots = jnp.where(jnp.arange(len(roots_array)) < first_repeat_idx, roots_array, jnp.nan)
+
+    return filtered_roots
+
+def roots_scipy(x,y, shift = 0):         
+    """
+    Finds roots using scipy.interpolate
+
+    Args:
+      x (array-like): 1D array of independent values, must be strictly increasing (e.g., Time).
+      y (array-like): 1D array of dependent values (e.g., X, Y, Z, B, or V).
+      shift (float, optional): Value to shift y to find roots at a non-zero value. Default is 0.
+
+    Returns:
+      array-like: Array of root values.
+    """
     interp = splrep(x, (y - shift), k=3)
-              
     roots = PPoly.from_spline(interp)
-              
     x_values = roots.roots(extrapolate=False)
-             
     return x_values

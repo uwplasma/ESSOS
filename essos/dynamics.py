@@ -212,6 +212,7 @@ class Tracing():
     def trace(self):
         @jit
         def compute_trajectory(initial_condition) -> jnp.ndarray:
+            initial_condition = initial_condition[0]
             if self.model == 'FullOrbit_Boris':
                 dt=self.maxtime / self.timesteps
                 def update_state(state, _):
@@ -250,11 +251,19 @@ class Tracing():
                     event = Event(self.condition)
                 ).ys
             return trajectory
-        # return jnp.array(vmap(compute_trajectory)(self.initial_conditions))
-        mesh = Mesh(devices=jax.devices(), axis_names=('workers',))
-        in_spec = PartitionSpec('workers', None)
-        return shard_map(vmap(compute_trajectory), mesh, 
-                        in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.initial_conditions)
+        
+        if len(jax.devices())!=len(self.initial_conditions):
+            return jnp.array(vmap(compute_trajectory)(self.initial_conditions[:,None,:]))
+        else:
+            # num_devices = len(jax.devices())
+            shape = self.initial_conditions.shape
+            # distributed_initial_conditions = self.initial_conditions.reshape(num_devices, -1, *shape[1:])
+            mesh = Mesh(devices=jax.devices(), axis_names=('workers'))
+            in_spec = PartitionSpec('workers')  # Distribute along the workers axis
+            out_spec = PartitionSpec('workers')  # Gather results along the same axis
+            return shard_map(compute_trajectory, mesh, in_specs=in_spec, out_specs=out_spec, check_rep=False)(
+                self.initial_conditions).reshape((shape[0], self.timesteps, shape[1]))
+        
         # trajectories = []
         # for initial_condition in self.initial_conditions:
         #     trajectory = compute_trajectory(initial_condition)
@@ -290,12 +299,12 @@ class Tracing():
         data = np.array(jnp.concatenate([i*jnp.ones((self.trajectories[i].shape[0], )) for i in range(len(self.trajectories))]))
         polyLinesToVTK(filename, x, y, z, pointsPerLine=ppl, pointData={'idx': data})
     
-    def plot(self, ax=None, show=True, axis_equal=True, **kwargs):
+    def plot(self, ax=None, show=True, axis_equal=True, n_trajectories_plot=5, **kwargs):
         if ax is None or ax.name != "3d":
             fig = plt.figure()
             ax = fig.add_subplot(projection='3d')
         trajectories_xyz = jnp.array(self.trajectories_xyz)
-        for i in range(trajectories_xyz.shape[0]):
+        for i in random.choice(random.PRNGKey(0), trajectories_xyz.shape[0], (n_trajectories_plot,), replace=False):
             ax.plot(trajectories_xyz[i, :, 0], trajectories_xyz[i, :, 1], trajectories_xyz[i, :, 2], linewidth=0.5, **kwargs)
         ax.grid(False)
         if axis_equal:
@@ -343,13 +352,15 @@ class Tracing():
         in_spec = PartitionSpec('workers', None)
         shifts = jnp.array(shifts)
         plotting_data = []
+        # from essos.util import roots_scipy
         for shift in shifts:
             @jit
             def compute_trajectory_toroidal(trace):
                 X,Y,Z = trace[:,:3].T
                 R = jnp.sqrt(X**2 + Y**2)
-                phi = jnp.arctan2(Y,X) % (2 * jnp.pi)
-                T_slice = roots(self.times, phi, shift = shift, size=len(self.times))
+                phi = jnp.arctan2(Y,X)
+                T_slice = roots(self.times, phi, shift = shift)
+                # T_slice = roots_scipy(self.times, phi, shift = shift)
                 # there is a bug that always counts phi = 0 as a root?  temp fix
                 T_slice = T_slice[1::2] 
                 R_slice = jnp.interp(T_slice, self.times, R)
@@ -358,7 +369,8 @@ class Tracing():
             @jit
             def compute_trajectory_z(trace):
                 X,Y,Z = trace[:,:3].T
-                T_slice = roots(self.times, Z, shift = shift, size=len(self.times))
+                T_slice = roots(self.times, Z, shift = shift)
+                # T_slice = roots_scipy(self.times, Z, shift = shift)
                 X_slice = jnp.interp(T_slice, self.times, X)
                 Y_slice = jnp.interp(T_slice, self.times, Y)
                 return X_slice, Y_slice, T_slice
@@ -377,14 +389,15 @@ class Tracing():
                 return X_i[valid_idx], Y_i[valid_idx], T_i[valid_idx]
             X_s, Y_s, T_s = process_trajectory(X_slice, Y_slice, T_slice)
             length_ = (vmap(len)(X_s) * length).astype(int)
+            colors = plt.cm.ocean(jnp.linspace(0, 0.7, len(X_s)))
             for i in range(len(X_s)):
                 X_plot, Y_plot = X_s[i][:length_[i]], Y_s[i][:length_[i]]
                 T_plot = T_s[i][:length_[i]] if cbar == 'time' else None
                 plotting_data.append((X_plot, Y_plot, T_plot))
                 if cbar == 'time':
-                    hits = ax.scatter(X_plot, Y_plot, c=T_s[i][:length_[i]], s=5)
+                    hits = ax.scatter(X_plot, Y_plot, c=T_s[i][:length_[i]], s=2, )
                 else:
-                    hits = ax.scatter(X_plot, Y_plot, s=5)
+                    hits = ax.scatter(X_plot, Y_plot, c=[colors[i]], s=2)
                     
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 20)

@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 4 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 5 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -10,9 +10,9 @@ from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
-tmax = 1e-3
-nparticles = 4
-R0 = jnp.linspace(1.23, 1.27, nparticles)
+tmax = 2e-3
+nparticles = number_of_processors_to_use
+R0 = jnp.linspace(1.2, 1.27, nparticles)
 trace_tolerance = 1e-8
 num_steps = 5000
 mass=PROTON_MASS
@@ -43,7 +43,7 @@ print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 
 # Plot results
 time0 = time()
-plotting_data = tracing.poincare_plot(shifts = [jnp.pi/4, jnp.pi/2, 3*jnp.pi/4, jnp.pi], show=False)
+plotting_data = tracing.poincare_plot(shifts = [jnp.pi/4, jnp.pi/2, 3*jnp.pi/4], show=False)
 print(f"Poincare plot took {time()-time0:.2f} seconds")
 plt.show()
 
