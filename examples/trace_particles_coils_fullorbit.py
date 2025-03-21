@@ -12,8 +12,9 @@ from essos.dynamics import Tracing, Particles
 
 # Input parameters
 tmax = 1e-4
-nparticles = 5
+nparticles = number_of_processors_to_use
 R0 = jnp.linspace(1.23, 1.27, nparticles)
+trace_tolerance = 1e-7
 num_steps = 3000
 mass=PROTON_MASS
 energy=4000*ONE_EV
@@ -31,7 +32,8 @@ particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=f
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='FullOrbit_Boris', particles=particles, maxtime=tmax, timesteps=num_steps)
+tracing = Tracing(field=field, model='FullOrbit_Boris', particles=particles,
+                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 

@@ -5,6 +5,7 @@ from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
 from essos.surfaces import SurfaceRZFourier
 from essos.plot import fix_matplotlib_3d
+from essos.util import newton
 
 class BiotSavart():
     def __init__(self, coils):
@@ -183,28 +184,6 @@ class Vmec():
         X = R * jnp.cos(phi)
         Y = R * jnp.sin(phi)
         return jnp.array([X, Y, Z])
-
-def newton(f, x0):
-  """Newton's method for root-finding."""
-  initial_state = (0, x0)  # (iteration, x)
-
-  def cond(state):
-    it, x = state
-    # We fix 30 iterations for simplicity, this is plenty for convergence in our tests.
-    return (it < 30)
-
-  def body(state):
-    it, x = state
-    fx, dfx = f(x), jax.grad(f)(x)
-    step = fx / dfx
-    new_state = it + 1, x - step
-    return new_state
-
-  return jax.lax.while_loop(
-    cond,
-    body,
-    initial_state,
-  )[1]
 
 class near_axis():
     def __init__(self, rc=jnp.array([1, 0.1]), zs=jnp.array([0, 0.1]), etabar=1.0,

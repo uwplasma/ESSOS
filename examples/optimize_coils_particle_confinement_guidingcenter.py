@@ -1,6 +1,6 @@
 
 import os
-number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 12 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -14,7 +14,7 @@ from essos.objective_functions import loss_optimize_coils_for_particle_confineme
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = 8
+nparticles = number_of_processors_to_use
 order_Fourier_series_coils = 4
 number_coil_points = 80
 maximum_function_evaluations = 29
