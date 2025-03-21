@@ -1,6 +1,6 @@
 
 import os
-number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 12 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -15,15 +15,20 @@ from essos.objective_functions import loss_optimize_coils_for_particle_confineme
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = 8
+nparticles = number_of_processors_to_use
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 60
+maximum_function_evaluations = 30
 maxtime_tracing = 1e-5
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
 model = 'FullOrbit_Boris'
-timesteps = int(3*maxtime_tracing/1e-8)
+timesteps = 3000#int(3*maxtime_tracing/1e-8)
+
+nparticles_plot = number_of_processors_to_use*2
+model_plot = 'GuidingCenter'
+timesteps_plot = 10000
+maxtime_tracing_plot = 3e-5
 
 # Initialize coils
 current_on_each_coil = 1.84e7
@@ -50,10 +55,15 @@ coils_optimized = optimize_loss_function(loss_optimize_coils_for_particle_confin
                            coils=coils_initial, tolerance_optimization=1e-4, particles=particles,
                            maximum_function_evaluations=maximum_function_evaluations, max_coil_curvature=max_coil_curvature,
                            target_B_on_axis=target_B_on_axis, max_coil_length=max_coil_length, model=model,
-                           maxtime=maxtime_tracing, num_steps=timesteps, trace_tolerance=1e-5)
+                           maxtime=maxtime_tracing, num_steps=timesteps)
 print(f"  Optimization took {time()-time0:.2f} seconds")
 particles.to_full_orbit(BiotSavart(coils_optimized))
-tracing_optimized = Tracing(field=coils_optimized, particles=particles, maxtime=maxtime_tracing, model=model, timesteps=timesteps)
+
+phi_array_plot = jnp.linspace(0, 2*jnp.pi, nparticles_plot)
+initial_xyz_plot=jnp.array([major_radius_coils*jnp.cos(phi_array_plot), major_radius_coils*jnp.sin(phi_array_plot), 0*phi_array_plot]).T
+particles_plot = Particles(initial_xyz=initial_xyz_plot)
+particles.to_full_orbit(BiotSavart(coils_optimized))
+tracing_optimized = Tracing(field=coils_optimized, particles=particles, maxtime=maxtime_tracing_plot, model=model_plot, timesteps=timesteps_plot)
 
 # Plot trajectories, before and after optimization
 fig = plt.figure(figsize=(9, 8))
@@ -69,9 +79,10 @@ for i, trajectory in enumerate(tracing_initial.trajectories):
 ax3.set_xlabel('R (m)');ax3.set_ylabel('Z (m)');#ax3.legend()
 coils_optimized.plot(ax=ax2, show=False)
 tracing_optimized.plot(ax=ax2, show=False)
-for i, trajectory in enumerate(tracing_optimized.trajectories):
-    ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}', linewidth=0.2)
-ax4.set_xlabel('R (m)');ax4.set_ylabel('Z (m)');#ax4.legend()
+# for i, trajectory in enumerate(tracing_optimized.trajectories):
+#     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}', linewidth=0.2)
+# ax4.set_xlabel('R (m)');ax4.set_ylabel('Z (m)');#ax4.legend()
+plotting_data = tracing_optimized.poincare_plot(ax=ax4, shifts = [jnp.pi/4, jnp.pi/2, 3*jnp.pi/4], show=False)
 plt.tight_layout()
 plt.show()
 
