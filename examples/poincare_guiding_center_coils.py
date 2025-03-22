@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 5 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 6 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -10,11 +10,11 @@ from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
-tmax = 1e-3
+tmax = 2e-3
 nparticles = number_of_processors_to_use
-R0 = jnp.linspace(1.2, 1.27, nparticles)
+R0 = jnp.linspace(1.2, 1.4, nparticles)
 trace_tolerance = 1e-7
-num_steps = 8000
+num_steps = 10000
 mass=PROTON_MASS
 energy=4000*ONE_EV
 # pitch angle = jnp.arctan(jnp.sqrt((v^2/vparallel^2) - 1)) * 180 / jnp.pi, in degrees
