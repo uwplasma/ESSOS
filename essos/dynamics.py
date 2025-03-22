@@ -351,8 +351,6 @@ class Tracing():
         if ax is None:
             fig = plt.figure()
             ax = fig.add_subplot()
-        mesh = Mesh(devices=jax.devices(), axis_names=('workers',))
-        in_spec = PartitionSpec('workers', None)
         shifts = jnp.array(shifts)
         plotting_data = []
         # from essos.util import roots_scipy
@@ -378,11 +376,9 @@ class Tracing():
                 Y_slice = jnp.interp(T_slice, self.times, Y)
                 return X_slice, Y_slice, T_slice
             if orientation == 'toroidal':
-                X_slice, Y_slice, T_slice = shard_map(vmap(compute_trajectory_toroidal), mesh, 
-                            in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.trajectories)
+                X_slice, Y_slice, T_slice = vmap(compute_trajectory_toroidal)(self.trajectories)
             elif orientation == 'z':
-                X_slice, Y_slice, T_slice = shard_map(vmap(compute_trajectory_z), mesh, 
-                            in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.trajectories)
+                X_slice, Y_slice, T_slice = vmap(compute_trajectory_toroidal)(self.trajectories)
             @partial(jax.vmap, in_axes=(0, 0, 0))
             def process_trajectory(X_i, Y_i, T_i):
                 mask = (T_i[1:] != T_i[:-1])
@@ -400,7 +396,6 @@ class Tracing():
                 else:
                     if color is None: color=[colors[i]]
                     hits = ax.scatter(X_plot, Y_plot, c=color, **kwargs)
-                    
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 18)
             plt.ylabel('Z',fontsize = 18)
