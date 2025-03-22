@@ -10,11 +10,11 @@ from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
-tmax = 2e-3
+tmax = 1e-3
 nparticles = number_of_processors_to_use
 R0 = jnp.linspace(1.2, 1.27, nparticles)
-trace_tolerance = 1e-8
-num_steps = 5000
+trace_tolerance = 1e-7
+num_steps = 2000
 mass=PROTON_MASS
 energy=4000*ONE_EV
 # pitch angle = jnp.arctan(jnp.sqrt((v^2/vparallel^2) - 1)) * 180 / jnp.pi, in degrees
@@ -43,7 +43,7 @@ print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 
 # Plot results
 time0 = time()
-plotting_data = tracing.poincare_plot(shifts = [jnp.pi/4, jnp.pi/2, 3*jnp.pi/4], show=False)
+plotting_data = tracing.poincare_plot(shifts = [0, jnp.pi/4, jnp.pi/2, 3*jnp.pi/4], show=False)
 print(f"Poincare plot took {time()-time0:.2f} seconds")
 plt.show()
 

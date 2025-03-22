@@ -9,11 +9,11 @@ from essos.coils import Coils_from_json
 from essos.dynamics import Tracing
 
 # Input parameters
-tmax = 6000
+tmax = 5000
 nfieldlines = number_of_processors_to_use
-R0 = jnp.linspace(1.21, 1.4, nfieldlines)
-trace_tolerance = 1e-6
-num_steps = tmax
+R0 = jnp.linspace(1.21, 1.45, nfieldlines)
+trace_tolerance = 1e-9
+num_steps = tmax*2
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
@@ -38,7 +38,7 @@ ax1 = fig.add_subplot(121, projection='3d')
 ax2 = fig.add_subplot(122)
 coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False)
-tracing.poincare_plot(ax=ax2, show=False, shifts=[jnp.pi/4, jnp.pi/2, 3*jnp.pi/4])
+tracing.poincare_plot(ax=ax2, show=False, shifts=[0, jnp.pi/2])#, jnp.pi/4, jnp.pi/2, 3*jnp.pi/4])
 plt.tight_layout()
 plt.show()
 

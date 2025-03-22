@@ -304,6 +304,7 @@ class Tracing():
             fig = plt.figure()
             ax = fig.add_subplot(projection='3d')
         trajectories_xyz = jnp.array(self.trajectories_xyz)
+        n_trajectories_plot = jnp.min(jnp.array([n_trajectories_plot, trajectories_xyz.shape[0]]))
         for i in random.choice(random.PRNGKey(0), trajectories_xyz.shape[0], (n_trajectories_plot,), replace=False):
             ax.plot(trajectories_xyz[i, :, 0], trajectories_xyz[i, :, 1], trajectories_xyz[i, :, 2], linewidth=0.5, **kwargs)
         ax.grid(False)
@@ -325,7 +326,7 @@ class Tracing():
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times
 
-    def poincare_plot(self, shifts = [jnp.pi], orientation = 'toroidal', length = 1, ax=None, show=True, **kwargs):
+    def poincare_plot(self, shifts = [jnp.pi/2], orientation = 'toroidal', length = 1, ax=None, show=True, color=None, **kwargs):
         """
         Plot Poincare plots using scipy to find the roots of an interpolation. Can take particle trace or field lines.
         Args:
@@ -336,6 +337,7 @@ class Tracing():
             length (float, optional): A way to shorten data. 1 - plot full length, 0.1 - plot 1/10 of data length. Default is 1.
             ax (matplotlib.axes._subplots.AxesSubplot, optional): Matplotlib axis to plot on. Default is None.
             show (bool, optional): Whether to display the plot. Default is True.
+            color: Can be time, None or a color to plot Poincaré points
             **kwargs: Additional keyword arguments for plotting.
         Notes:
             - If the data seem ill-behaved, there may not be enough steps in the trace for a good interpolation.
@@ -345,6 +347,7 @@ class Tracing():
         To-Do:
             - Format colorbars.
         """
+        kwargs.setdefault('s', 0.5)
         if ax is None:
             fig = plt.figure()
             ax = fig.add_subplot()
@@ -359,10 +362,10 @@ class Tracing():
                 X,Y,Z = trace[:,:3].T
                 R = jnp.sqrt(X**2 + Y**2)
                 phi = jnp.arctan2(Y,X)
+                phi = jnp.where(shift==0, phi, jnp.abs(phi))
                 T_slice = roots(self.times, phi, shift = shift)
+                T_slice = jnp.where(shift==0, jnp.concatenate((T_slice[1::2],T_slice[1::2])), T_slice)
                 # T_slice = roots_scipy(self.times, phi, shift = shift)
-                # there is a bug that always counts phi = 0 as a root?  temp fix
-                T_slice = T_slice[1::2] 
                 R_slice = jnp.interp(T_slice, self.times, R)
                 Z_slice = jnp.interp(T_slice, self.times, Z)
                 return R_slice, Z_slice, T_slice
@@ -380,8 +383,6 @@ class Tracing():
             elif orientation == 'z':
                 X_slice, Y_slice, T_slice = shard_map(vmap(compute_trajectory_z), mesh, 
                             in_specs=(in_spec,), out_specs=in_spec, check_rep=False)(self.trajectories)
-                
-            cbar = 'time' if self.trajectories.shape[-1] == 4 else 'surface'
             @partial(jax.vmap, in_axes=(0, 0, 0))
             def process_trajectory(X_i, Y_i, T_i):
                 mask = (T_i[1:] != T_i[:-1])
@@ -392,20 +393,21 @@ class Tracing():
             colors = plt.cm.ocean(jnp.linspace(0, 0.7, len(X_s)))
             for i in range(len(X_s)):
                 X_plot, Y_plot = X_s[i][:length_[i]], Y_s[i][:length_[i]]
-                T_plot = T_s[i][:length_[i]] if cbar == 'time' else None
+                T_plot = T_s[i][:length_[i]]
                 plotting_data.append((X_plot, Y_plot, T_plot))
-                if cbar == 'time':
-                    hits = ax.scatter(X_plot, Y_plot, c=T_s[i][:length_[i]], s=2, )
+                if color == 'time':
+                    hits = ax.scatter(X_plot, Y_plot, c=T_s[i][:length_[i]], **kwargs)
                 else:
-                    hits = ax.scatter(X_plot, Y_plot, c=[colors[i]], s=2)
+                    if color is None: color=[colors[i]]
+                    hits = ax.scatter(X_plot, Y_plot, c=color, **kwargs)
                     
         if orientation == 'toroidal':
-            plt.xlabel('R',fontsize = 20)
-            plt.ylabel('Z',fontsize = 20)
+            plt.xlabel('R',fontsize = 18)
+            plt.ylabel('Z',fontsize = 18)
             # plt.title(r'$\phi$ = {:.2f} $\pi$'.format(shift/jnp.pi),fontsize = 20)
         elif orientation == 'z':
-            plt.xlabel('X',fontsize = 20)
-            plt.xlabel('Y',fontsize = 20)
+            plt.xlabel('X',fontsize = 18)
+            plt.xlabel('Y',fontsize = 18)
             # plt.title('Z = {:.2f}'.format(shift),fontsize = 20)
         plt.axis('equal')
         plt.grid()

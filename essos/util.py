@@ -40,28 +40,13 @@ def roots(x, y, shift=0):
     Returns:
       jnp.ndarray: An array of unique roots where the interpolated function crosses the shifted y value.
     """
-    sign_changes = jnp.nonzero(jnp.diff(jnp.sign(y - shift)), size=len(y))[0]
-
+    sign_changes = jnp.nonzero(jnp.diff(jnp.sign(y - shift-1e-2)), size=len(y))[0]
     def interpolated_array_at_point(x0):
         return jnp.interp(jnp.array([x0]), x, y, left=0, right=0)[0] - shift
-
     def find_root(idx):
         return lax.custom_root(interpolated_array_at_point, x[idx], newton, lambda g, y: y / g(1.0))
-
-    roots_list = vmap(find_root)(sign_changes)
-    roots_array = jnp.array(roots_list)
-
-    # Find the first index where values stop increasing
-    diffs = jnp.diff(roots_array)
-    mask = diffs <= 1e-6  # Small threshold for numerical stability
-
-    # Find first occurrence of repeated values
-    first_repeat_idx = jnp.where(mask, size=1, fill_value=len(roots_array) - 1)[0][0]
-
-    # Replace repeated values with NaN
-    filtered_roots = jnp.where(jnp.arange(len(roots_array)) < first_repeat_idx, roots_array, jnp.nan)
-
-    return filtered_roots
+    roots_array = vmap(find_root)(sign_changes)
+    return roots_array
 
 def roots_scipy(x,y, shift = 0):         
     """
