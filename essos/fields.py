@@ -73,6 +73,7 @@ class Vmec():
         self.r_axis = self.rmnc[0, 0]
         self.mpol = int(jnp.max(self.xm)+1)
         self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
+        self.range_torus = range_torus
         self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
 
     @property

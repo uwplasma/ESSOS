@@ -314,8 +314,8 @@ class Coils(Curves):
         assert jnp.size(currents) == jnp.size(curves.dofs, 0)
         super().__init__(curves.dofs, curves.n_segments, curves.nfp, curves.stellsym)
         self._currents_scale = jnp.mean(jnp.abs(currents))
-        self._dofs_currents = currents/self.currents_scale
-        self._currents = apply_symmetries_to_currents(self._dofs_currents*self.currents_scale, self.nfp, self.stellsym)
+        self._dofs_currents = currents/self._currents_scale
+        self._currents = apply_symmetries_to_currents(self._dofs_currents*self._currents_scale, self.nfp, self.stellsym)
 
     def __str__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\

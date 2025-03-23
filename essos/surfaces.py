@@ -48,8 +48,23 @@ def nested_lists_to_array(ll):
     
 
 class SurfaceRZFourier:
-    def __init__(self, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus'):
-        if isinstance(vmec, str):
+    def __init__(self, vmec=None, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus',
+                 rc=None, zs=None, nfp=None):
+        if rc is not None:
+            self.rc = rc
+            self.zs = zs
+            self.nfp = nfp
+            self.mpol = rc.shape[0]
+            self.ntor = (rc.shape[1] - 1) // 2
+            m1d = jnp.arange(self.mpol)
+            n1d = jnp.arange(-self.ntor, self.ntor + 1)
+            n2d, m2d = jnp.meshgrid(n1d, m1d)
+            self.xm = m2d.flatten()[self.ntor:]
+            self.xn = self.nfp*n2d.flatten()[self.ntor:]
+            indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
+            self.rmnc_interp = self.rc[indices[:, 0], indices[:, 1]]
+            self.zmns_interp = self.zs[indices[:, 0], indices[:, 1]]   
+        elif isinstance(vmec, str):
             self.input_filename = vmec
             import f90nml
             all_namelists = f90nml.read(vmec)
@@ -118,6 +133,7 @@ class SurfaceRZFourier:
                 raise ValueError("vmec must be a Vmec object or a string pointing to a VMEC input file.")
         self.ntheta = ntheta
         self.nphi = nphi
+        self.range_torus = range_torus
         if range_torus == 'full torus': div = 1
         else: div = self.nfp
         if range_torus == 'half period': end_val = 0.5
@@ -209,6 +225,14 @@ class SurfaceRZFourier:
     @property
     def AbsB(self):
         return self._AbsB
+    
+    @property
+    def x(self):
+        return self.dofs
+
+    @x.setter
+    def x(self, new_dofs):
+        self.dofs = new_dofs
         
     def plot(self, ax=None, show=True, close=False, axis_equal=True, **kwargs):
         if close: raise NotImplementedError("Call close=True when instantiating the VMEC/SurfaceRZFourier object.")
@@ -260,3 +284,45 @@ class SurfaceRZFourier:
         if extra_data is not None:
             pointData = {**pointData, **extra_data}
         gridToVTK(str(filename), x, y, z, pointData=pointData)
+
+    def to_vmec(self, filename):
+        """
+        Generates a fortran namelist file containing the RBC/RBS/ZBC/ZBS
+        coefficients, in the form used in VMEC and SPEC input
+        files. The result will be returned as a string. For saving a
+        file, see the ``write_nml()`` function.
+        """
+        nml = ''
+        nml += '&INDATA\n'
+        nml += 'LASYM = .FALSE.\n'
+        nml += f'NFP = {self.nfp}\n'
+
+        for m in range(self.mpol + 1):
+            nmin = -self.ntor
+            if m == 0:
+                nmin = 0
+            for n in range(nmin, self.ntor + 1):
+                rc = self.rc[m, n + self.ntor]
+                zs = self.zs[m, n + self.ntor]
+                if jnp.abs(rc) > 0 or jnp.abs(zs) > 0:
+                    nml += f"RBC({n:4d},{m:4d}) ={rc:23.15e},    ZBS({n:4d},{m:4d}) ={zs:23.15e}\n"
+        nml += '/\n'
+        
+        with open(filename, 'w') as f:
+            f.write(nml)
+            
+    def mean_cross_sectional_area(self):
+        xyz = self.gamma
+        x2y2 = xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2
+        dgamma1 = self.gammadash_phi
+        dgamma2 = self.gammadash_theta
+        J = jnp.zeros((xyz.shape[0], xyz.shape[1], 2, 2))
+        J = J.at[:, :, 0, 0].set((xyz[:, :, 0] * dgamma1[:, :, 1] - xyz[:, :, 1] * dgamma1[:, :, 0]) / x2y2)
+        J = J.at[:, :, 0, 1].set((xyz[:, :, 0] * dgamma2[:, :, 1] - xyz[:, :, 1] * dgamma2[:, :, 0]) / x2y2)
+        J = J.at[:, :, 1, 0].set(0)
+        J = J.at[:, :, 1, 1].set(1)
+        detJ = jnp.linalg.det(J)
+        Jinv = jnp.linalg.inv(J)
+        dZ_dtheta = dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
+        mean_cross_sectional_area = jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))/(2 * jnp.pi)
+        return mean_cross_sectional_area

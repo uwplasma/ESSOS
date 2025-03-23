@@ -6,6 +6,7 @@ from functools import partial
 from essos.coils import Curves, Coils
 from scipy.optimize import least_squares, minimize
 from essos.fields import near_axis
+from essos.surfaces import SurfaceRZFourier
 
 def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
     len_rc = len(field_nearaxis.rc)
@@ -52,12 +53,20 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents*coils.currents_scale)
             return new_coils
-        elif len(initial_dofs) == len(coils.x)+len(kwargs['field_nearaxis'].x):
+        elif 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['field_nearaxis'].x):
             dofs_currents = result.x[len_dofs_curves:-len(kwargs['field_nearaxis'].x)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-            new_coils = Coils(curves=curves, currents=dofs_currents*coils.currents_scale)
+            new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
             new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(result.x[-len(kwargs['field_nearaxis'].x):], kwargs['field_nearaxis'])
             return new_coils, new_field_nearaxis
+        elif 'surface_all' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['surface_all'].x):
+            dofs_currents = result.x[len_dofs_curves:-len(kwargs['surface_all'].x)]
+            curves = Curves(dofs_curves, n_segments, nfp, stellsym)
+            new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
+            surface_all = kwargs['surface_all']
+            new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
+            new_surface.dofs = result.x[-len(surface_all.x):]
+            return new_coils, new_surface
     except Exception as e:
         jax.debug.print("Error: {}", e)
         return None
