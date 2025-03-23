@@ -10,7 +10,7 @@ output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
-wout_array = [os.path.join(os.path.dirname(__file__), '..', 'input_files', "wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc"),
+wout_array = [os.path.join(os.path.dirname(__file__), '..', 'input_files', "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"),
               os.path.join(os.path.dirname(__file__), '..', 'input_files', "wout_n3are_R7.75B5.7.nc")]
 name_array = ["LandremanPaulQA", 'NCSX']
 

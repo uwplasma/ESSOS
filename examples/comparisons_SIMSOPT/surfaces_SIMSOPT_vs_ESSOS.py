@@ -23,7 +23,7 @@ nphi   = 32
 
 # Initialize VMEC field
 vmec_file = os.path.join(os.path.dirname(__file__), '..', 'input_files',
-             'wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc')
+             'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
 vmec = Vmec(vmec_file, ntheta=ntheta, nphi=nphi, close=False)
 
 # Initialize coils

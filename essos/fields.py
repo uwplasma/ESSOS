@@ -44,12 +44,13 @@ class BiotSavart():
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         return points
-    
+
+
 class Vmec():
-    def __init__(self, wout, ntheta=50, nphi=50, close=True, range='full torus'):
-        self.wout = wout
+    def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus'):
+        self.wout_filename = wout_filename
         from netCDF4 import Dataset
-        self.nc = Dataset(self.wout)
+        self.nc = Dataset(self.wout_filename)
         self.nfp = int(self.nc.variables["nfp"][0])
         self.bmnc = jnp.array(self.nc.variables["bmnc"][:])
         self.xm = jnp.array(self.nc.variables["xm"][:])
@@ -70,9 +71,9 @@ class Vmec():
         self.ds = self.s_full_grid[1] - self.s_full_grid[0]
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
         self.r_axis = self.rmnc[0, 0]
-        self.mpol = int(jnp.max(self.xm))
+        self.mpol = int(jnp.max(self.xm)+1)
         self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
-        self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range=range)
+        self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
 
     @property
     def surface(self):
