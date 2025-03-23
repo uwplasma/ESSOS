@@ -145,7 +145,9 @@ class SurfaceRZFourier:
         return self._AbsB
         
     def plot(self, ax=None, show=True, close=False, axis_equal=True, **kwargs):
-        if close: raise NotImplementedError("close=True is not implemented, need to have closed surfaces")
+        if close: raise NotImplementedError("Call close=True when instantiating the VMEC/SurfaceRZFourier object.")
+        
+        kwargs.setdefault('alpha', 0.6)
 
         import matplotlib.pyplot as plt 
         from matplotlib import cm
@@ -157,7 +159,7 @@ class SurfaceRZFourier:
         Bmag = self.AbsB
         B_rescaled = (Bmag - Bmag.min()) / (Bmag.max() - Bmag.min())
         
-        ax.plot_surface(boundary[:, :, 0], boundary[:, :, 1], boundary[:, :, 2], alpha=0.6, facecolors=cm.jet(B_rescaled), linewidth=0, antialiased=True, **kwargs)
+        ax.plot_surface(boundary[:, :, 0], boundary[:, :, 1], boundary[:, :, 2], facecolors=cm.jet(B_rescaled), linewidth=0, antialiased=True, **kwargs)
         # ax.set_axis_off()
         ax.grid(False)
 
