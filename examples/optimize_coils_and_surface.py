@@ -116,6 +116,8 @@ def loss_coils_and_surface(x, surface_all, dofs_curves, currents_scale, nfp, max
     AbsB_on_surface = jnp.linalg.norm(B_on_surface(surface, field), axis=2)
     B_surface_loss = jnp.abs(jnp.mean(AbsB_on_surface)-target_B_on_surface)
     
+    ## Add near-axis so that the coils are optimized for the near-axis field and surface quasisymmetry?
+    
     return coil_length_loss+coil_curvature_loss+10*normal_cross_GradB_dot_grad_B_dot_GradB_surface\
           +bdotn_over_b_loss+30*mean_cross_sectional_area_loss+30*B_surface_loss
 
