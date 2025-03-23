@@ -237,6 +237,8 @@ class Tracing():
                 _, trajectory = lax.scan(update_state, initial_condition, jnp.arange(len(self.times)-1))
                 trajectory = jnp.vstack([initial_condition, trajectory])
             else:
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
                 trajectory = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
