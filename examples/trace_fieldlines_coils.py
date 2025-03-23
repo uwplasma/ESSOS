@@ -9,11 +9,11 @@ from essos.coils import Coils_from_json
 from essos.dynamics import Tracing
 
 # Input parameters
-tmax = 5000
+tmax = 4000
 nfieldlines = number_of_processors_to_use
-R0 = jnp.linspace(1.21, 1.45, nfieldlines)
-trace_tolerance = 1e-9
-num_steps = tmax*2
+R0 = jnp.linspace(1.21, 1.4, nfieldlines)
+trace_tolerance = 1e-8
+num_steps = tmax
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')

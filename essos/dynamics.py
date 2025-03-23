@@ -2,9 +2,8 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from jax.experimental.shard_map import shard_map
-from jax.sharding import Mesh, PartitionSpec
-from jax import jit, vmap, tree_util, random, lax
+from jax.sharding import Mesh, PartitionSpec, NamedSharding
+from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
 from essos.coils import Coils
@@ -12,6 +11,9 @@ from essos.fields import BiotSavart, Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.plot import fix_matplotlib_3d
 from essos.util import roots
+
+mesh = Mesh(jax.devices(), ("dev",))
+sharding = NamedSharding(mesh, PartitionSpec("dev", None))
 
 def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
     """
@@ -212,7 +214,7 @@ class Tracing():
     def trace(self):
         @jit
         def compute_trajectory(initial_condition) -> jnp.ndarray:
-            initial_condition = initial_condition[0]
+            # initial_condition = initial_condition[0]
             if self.model == 'FullOrbit_Boris':
                 dt=self.maxtime / self.timesteps
                 def update_state(state, _):
@@ -252,17 +254,20 @@ class Tracing():
                 ).ys
             return trajectory
         
-        if len(jax.devices())!=len(self.initial_conditions):
-            return vmap(compute_trajectory)(self.initial_conditions[:,None,:])
-        else:
-            # num_devices = len(jax.devices())
-            shape = self.initial_conditions.shape
-            # distributed_initial_conditions = self.initial_conditions.reshape(num_devices, -1, *shape[1:])
-            mesh = Mesh(devices=jax.devices(), axis_names=('workers'))
-            in_spec = PartitionSpec('workers')  # Distribute along the workers axis
-            out_spec = PartitionSpec('workers')  # Gather results along the same axis
-            return shard_map(compute_trajectory, mesh, in_specs=in_spec, out_specs=out_spec, check_rep=False)(
-                self.initial_conditions).reshape((shape[0], self.timesteps, shape[1]))
+        # if len(jax.devices())!=len(self.initial_conditions):
+        #     return vmap(compute_trajectory)(self.initial_conditions[:,None,:])
+        # else:
+        #     # num_devices = len(jax.devices())
+        #     shape = self.initial_conditions.shape
+        #     # distributed_initial_conditions = self.initial_conditions.reshape(num_devices, -1, *shape[1:])
+        #     mesh = Mesh(devices=jax.devices(), axis_names=('workers'))
+        #     in_spec = PartitionSpec('workers')  # Distribute along the workers axis
+        #     out_spec = PartitionSpec('workers')  # Gather results along the same axis
+        #     return shard_map(compute_trajectory, mesh, in_specs=in_spec, out_specs=out_spec, check_rep=False)(
+        #         self.initial_conditions).reshape((shape[0], self.timesteps, shape[1]))
+        
+        return jit(vmap(compute_trajectory), in_shardings=sharding, out_shardings=sharding)(
+            device_put(self.initial_conditions, sharding))
         
         # trajectories = []
         # for initial_condition in self.initial_conditions:
@@ -357,7 +362,6 @@ class Tracing():
         for shift in shifts:
             @jit
             def compute_trajectory_toroidal(trace):
-                trace=trace[0]
                 X,Y,Z = trace[:,:3].T
                 R = jnp.sqrt(X**2 + Y**2)
                 phi = jnp.arctan2(Y,X)
@@ -378,31 +382,12 @@ class Tracing():
                 return X_slice, Y_slice, T_slice
             if orientation == 'toroidal':
                 # X_slice, Y_slice, T_slice = vmap(compute_trajectory_toroidal)(self.trajectories)
-                if len(jax.devices())!=len(self.trajectories):
-                    X_slice, Y_slice, T_slice = vmap(compute_trajectory_toroidal)(self.trajectories[:,None,:,:])
-                else:
-                    shape = self.trajectories.shape
-                    mesh = Mesh(devices=jax.devices(), axis_names=('workers'))
-                    in_spec = PartitionSpec('workers')  # Distribute along the workers axis
-                    out_spec = PartitionSpec('workers')  # Gather results along the same axis
-                    X_slice, Y_slice, T_slice = shard_map(compute_trajectory_toroidal, mesh, in_specs=in_spec,
-                                                        out_specs=out_spec, check_rep=False)(self.trajectories)
-                    X_slice = X_slice.reshape(shape[0], self.timesteps)
-                    Y_slice = Y_slice.reshape(shape[0], self.timesteps)
-                    T_slice = T_slice.reshape(shape[0], self.timesteps)
+                X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_toroidal), in_shardings=sharding, out_shardings=sharding)(
+                    device_put(self.trajectories, sharding))
             elif orientation == 'z':
-                if len(jax.devices())!=len(self.trajectories):
-                    X_slice, Y_slice, T_slice = vmap(compute_trajectory_z)(self.trajectories[:,None,:,:])
-                else:
-                    shape = self.trajectories.shape
-                    mesh = Mesh(devices=jax.devices(), axis_names=('workers'))
-                    in_spec = PartitionSpec('workers')  # Distribute along the workers axis
-                    out_spec = PartitionSpec('workers')  # Gather results along the same axis
-                    X_slice, Y_slice, T_slice = shard_map(compute_trajectory_z, mesh, in_specs=in_spec,
-                                                        out_specs=out_spec, check_rep=False)(self.trajectories)
-                    X_slice = X_slice.reshape(shape[0], self.timesteps)
-                    Y_slice = Y_slice.reshape(shape[0], self.timesteps)
-                    T_slice = T_slice.reshape(shape[0], self.timesteps)
+                # X_slice, Y_slice, T_slice = vmap(compute_trajectory_z)(self.trajectories)
+                X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_z), in_shardings=sharding, out_shardings=sharding)(
+                    device_put(self.trajectories, sharding))
             @partial(jax.vmap, in_axes=(0, 0, 0))
             def process_trajectory(X_i, Y_i, T_i):
                 mask = (T_i[1:] != T_i[:-1])
@@ -410,7 +395,7 @@ class Tracing():
                 return X_i[valid_idx], Y_i[valid_idx], T_i[valid_idx]
             X_s, Y_s, T_s = process_trajectory(X_slice, Y_slice, T_slice)
             length_ = (vmap(len)(X_s) * length).astype(int)
-            colors = plt.cm.ocean(jnp.linspace(0, 0.7, len(X_s)))
+            colors = plt.cm.ocean(jnp.linspace(0, 0.8, len(X_s)))
             for i in range(len(X_s)):
                 X_plot, Y_plot = X_s[i][:length_[i]], Y_s[i][:length_[i]]
                 T_plot = T_s[i][:length_[i]]
@@ -418,8 +403,9 @@ class Tracing():
                 if color == 'time':
                     hits = ax.scatter(X_plot, Y_plot, c=T_s[i][:length_[i]], **kwargs)
                 else:
-                    if color is None: color=[colors[i]]
-                    hits = ax.scatter(X_plot, Y_plot, c=color, **kwargs)
+                    if color is None: c=[colors[i]]
+                    else: c=color
+                    hits = ax.scatter(X_plot, Y_plot, c=c, **kwargs)
                     
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 18)

@@ -10,11 +10,11 @@ from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
-tmax = 2e-3
+tmax = 1e-3
 nparticles = number_of_processors_to_use
-R0 = jnp.linspace(1.2, 1.4, nparticles)
+R0 = jnp.linspace(1.2, 1.33, nparticles)
 trace_tolerance = 1e-7
-num_steps = 10000
+num_steps = 8000
 mass=PROTON_MASS
 energy=4000*ONE_EV
 # pitch angle = jnp.arctan(jnp.sqrt((v^2/vparallel^2) - 1)) * 180 / jnp.pi, in degrees
