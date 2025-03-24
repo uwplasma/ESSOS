@@ -3,7 +3,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
-from essos.surfaces import SurfaceRZFourier
+from essos.surfaces import SurfaceRZFourier, BdotN_over_B
 from essos.plot import fix_matplotlib_3d
 from essos.util import newton
 
@@ -620,7 +620,7 @@ class near_axis():
     def B_mag(self, r, theta, phi):
         return self.B0*(1 + r * self.etabar * jnp.cos(theta - (self.iota - self.iotaN) * phi))
 
-    def plot(self, r=0.1, ntheta=80, nphi=150, ntheta_fourier=20, ax=None, show=True, close=False, axis_equal=True, **kwargs):
+    def plot(self, r=0.1, ntheta=40, nphi=120, ntheta_fourier=20, ax=None, show=True, close=False, axis_equal=True, **kwargs):
         kwargs.setdefault('alpha', 1)
         import matplotlib.pyplot as plt 
         from matplotlib import cm
@@ -656,6 +656,29 @@ class near_axis():
             fix_matplotlib_3d(ax)
         if show:
             plt.show()
+            
+    def to_vtk(self, filename, r=0.1, ntheta=40, nphi=120, ntheta_fourier=20, extra_data=None, field=None):
+        try: import numpy as np
+        except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
+        try: from pyevtk.hl import gridToVTK
+        except ImportError: raise ImportError("The 'pyevtk' library is required. Please install it using 'pip install pyevtk'.")
+        x, y, z, _ = self.get_boundary(r=r, ntheta=ntheta, nphi=nphi, ntheta_fourier=ntheta_fourier)
+        x = np.array(x.T.reshape((1, nphi, ntheta)).copy())
+        y = np.array(y.T.reshape((1, nphi, ntheta)).copy())
+        z = np.array(z.T.reshape((1, nphi, ntheta)).copy())
+        pointData = {}
+        if field is not None:
+            boundary = np.array([x, y, z]).transpose(1, 2, 3, 0)[0]
+            B_BiotSavart = np.array(vmap(lambda surf: vmap(lambda x: field.AbsB(x))(surf))(boundary)).reshape((1, nphi, ntheta)).copy()
+            pointData["B_BiotSavart"] = B_BiotSavart
+        theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
+        phi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
+        phi2D, theta2D = jnp.meshgrid(phi1D, theta1D)
+        Bmag = np.array(self.B_mag(r, theta2D, phi2D)).T.reshape((1, nphi, ntheta)).copy()
+        pointData["B_NearAxis"]=Bmag
+        if extra_data is not None:
+            pointData = {**pointData, **extra_data}
+        gridToVTK(str(filename), x, y, z, pointData=pointData)
             
 tree_util.register_pytree_node(near_axis,
                                near_axis._tree_flatten,

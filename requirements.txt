@@ -5,3 +5,4 @@ diffrax
 scipy
 netcdf4
 f90nml
+pyevtk

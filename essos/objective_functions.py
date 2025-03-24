@@ -42,7 +42,7 @@ def loss_coils_for_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp,
     
     return B_difference_loss+gradB_difference_loss+coil_length_loss+coil_curvature_loss
 
-@partial(jit, static_argnums=(0, 1))
+# @partial(jit, static_argnums=(0, 1))
 def difference_B_gradB_onaxis(nearaxis_field, coils_field):
     Raxis = nearaxis_field.R0
     Zaxis = nearaxis_field.Z0
@@ -102,15 +102,15 @@ def loss_particle_drift(field, particles, maxtime=1e-5, num_steps=300, trace_tol
     angular_drift=(jnp.sum(jnp.diff(angular_drift,axis=1),axis=1))/num_steps
     return jnp.concatenate((jnp.max(radial_drift)*jnp.ravel(2./jnp.pi*jnp.abs(jnp.arctan(radial_drift/(angular_drift+1e-10)))), jnp.ravel(jnp.abs(radial_drift)), jnp.ravel(jnp.abs(vertical_factor))))
 
-@partial(jit, static_argnums=(0))
+# @partial(jit, static_argnums=(0))
 def loss_coil_length(field):
     return jnp.ravel(field.coils.length)
 
-@partial(jit, static_argnums=(0))
+# @partial(jit, static_argnums=(0))
 def loss_coil_curvature(field):
     return jnp.mean(field.coils.curvature, axis=1)
 
-@partial(jit, static_argnums=(0, 1))
+# @partial(jit, static_argnums=(0, 1))
 def loss_normB_axis(field, npoints=15):
     R_axis = jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(field.coils.dofs_curves)))
     phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
