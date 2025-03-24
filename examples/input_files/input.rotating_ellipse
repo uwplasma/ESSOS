@@ -1,5 +1,8 @@
 !----- Runtime Parameters -----
 &INDATA
+  NS_ARRAY =                12            50
+  FTOL_ARRAY =    1.000000E-11  1.000000E-14
+  NITER_ARRAY =           1000          5000
   LASYM = F
   NFP = 0002
   MPOL = 002
@@ -10,5 +13,4 @@
   RBC(-001,001) =    0.1    ZBS(-001,001) =    0.1
   RBC( 000,001) =    2.5    ZBS( 000,001) =    2.5
   RBC( 001,001) =   -1    ZBS( 001,001) =    1
-!  RBC(-002,002) =    1E-4    ZBS(-002,002) =    1E-4
 /

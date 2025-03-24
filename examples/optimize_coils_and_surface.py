@@ -24,11 +24,11 @@ input = os.path.join('input_files','input.rotating_ellipse')
 surface_initial = SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='half period')
 
 # Optimization parameters
-max_coil_length = 38
+max_coil_length = 40
 max_coil_curvature = 0.3
 order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 600
+maximum_function_evaluations = 1000
 number_coils_per_half_field_period = 4
 tolerance_optimization = 1e-7
 target_B_on_axis = 5.7
@@ -144,7 +144,7 @@ def loss_coils_and_surface(x, surface_all, field_nearaxis, dofs_curves, currents
     bdotn_over_b = BdotN_over_B(surface, field)
     bdotn_over_b_loss = 10*jnp.sum(jnp.abs(bdotn_over_b))
     
-    mean_cross_sectional_area_loss = 100*jnp.abs(surface.mean_cross_sectional_area()-surface_all.mean_cross_sectional_area())
+    mean_cross_sectional_area_loss = 1e2*jnp.abs(surface.mean_cross_sectional_area()-surface_all.mean_cross_sectional_area())
 
     AbsB_on_surface = jnp.linalg.norm(B_on_surface(surface, field), axis=2)
     AbsB_surface_loss = jnp.abs(jnp.mean(AbsB_on_surface)-target_B_on_surface)
@@ -223,6 +223,8 @@ print(f'Initial   B on axis difference: {jnp.sum(jnp.abs(B_difference_initial))}
 print(f'Optimized B on axis difference: {jnp.sum(jnp.abs(B_difference_optimized))}')
 print(f'Initial   gradB on axis difference: {jnp.sum(jnp.abs(gradB_difference_initial))}')
 print(f'Optimized gradB on axis difference: {jnp.sum(jnp.abs(gradB_difference_optimized))}')
+print(f'Initial cross sectional area: {surface_initial.mean_cross_sectional_area()}')
+print(f'Optimized cross sectional area: {surface_optimized.mean_cross_sectional_area()}')
 
 # Plot coils, before and after optimization
 fig = plt.figure(figsize=(8, 4))

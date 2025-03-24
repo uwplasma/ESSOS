@@ -14,6 +14,7 @@ from jax import jit, vmap, devices, device_put, grad, debug
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from time import time
 import matplotlib.pyplot as plt
+from simsopt.mhd import Vmec, QuasisymmetryRatioResidual
 
 mesh = Mesh(devices(), ("dev",))
 sharding = NamedSharding(mesh, PartitionSpec("dev", None))
@@ -24,7 +25,7 @@ input = os.path.join('input_files','input.rotating_ellipse')
 surface_initial = SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='half period')
 
 # Optimization parameters
-max_coil_length = 38
+max_coil_length = 40
 max_coil_curvature = 0.3
 order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10
@@ -88,6 +89,11 @@ def loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field):
     # return loss
     return normal_cross_GradB_dot_grad_B_dot_GradB_surface
 
+def vmec_qs_from_surface(filename):
+    vmec = Vmec(filename, verbose=False)
+    qs = QuasisymmetryRatioResidual(vmec, surfaces=[1], helicity_m=1, helicity_n=0)
+    return jnp.sum(jnp.abs(qs.residuals()))
+
 @partial(jit, static_argnames=['surface_initial', 'n_segments'])
 def qs_loss(surface_dofs, dofs_curves, dofs_currents, surface_initial, currents_scale=1, n_segments=100):
     surface = SurfaceRZFourier(rc=surface_initial.rc, zs=surface_initial.zs, nfp=surface_initial.nfp, range_torus=surface_initial.range_torus, nphi=surface_initial.nphi, ntheta=surface_initial.ntheta)
@@ -95,17 +101,35 @@ def qs_loss(surface_dofs, dofs_curves, dofs_currents, surface_initial, currents_
     curves = Curves(dofs_curves, n_segments, surface_initial.nfp)
     coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
     field = BiotSavart(coils)
-    
-    loss = jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field)))
+    loss = jnp.max(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field)))
     return loss
 
 print(f'############################################')
-print(surface_initial.ntor)
-print(surface_initial.mpol)
-print(surface_initial.rmnc_interp)
-print(surface_initial.zmns_interp)
-surface_initial.to_vtk('initial_surface')
-# print(qs_loss(surface_initial.dofs, coils_initial.dofs_curves, coils_initial.dofs_currents, surface_initial, currents_scale=coils_initial.currents_scale, n_segments=number_coil_points))
+dofs_old = surface_initial.dofs
+new_dof_array = jnp.linspace(-1, 1, 10)
+qs_ESSOS_loss_array = []
+qs_VMEC_loss_array = []
+for dof in new_dof_array:
+    print(f'dof: {dof}')
+    dofs = dofs_old.at[2].set(dof)
+    loss = qs_loss(dofs, coils_initial.dofs_curves, coils_initial.dofs_currents, surface_initial, currents_scale=coils_initial.currents_scale, n_segments=number_coil_points)
+    qs_ESSOS_loss_array.append(loss)
+    
+    filename = 'input.rotating_ellipse_dof'
+    new_surface = SurfaceRZFourier(rc=surface_initial.rc, zs=surface_initial.zs, nfp=surface_initial.nfp, range_torus=surface_initial.range_torus, nphi=surface_initial.nphi, ntheta=surface_initial.ntheta)
+    new_surface.dofs = dofs
+    new_surface.to_vmec(filename)
+    new_surface.to_vtk('surface_dof')
+    qs = vmec_qs_from_surface(filename)
+    qs_VMEC_loss_array.append(qs)
+qs_ESSOS_loss_array = jnp.array(qs_ESSOS_loss_array)
+qs_VMEC_loss_array = jnp.array(qs_VMEC_loss_array)
+plt.plot(new_dof_array, qs_ESSOS_loss_array/jnp.max(qs_ESSOS_loss_array), label='ESSOS')
+plt.plot(new_dof_array, qs_VMEC_loss_array/jnp.max(qs_VMEC_loss_array), label='VMEC')
+plt.legend()
+plt.xlabel('Dof')
+plt.ylabel('Loss')
+plt.show()
 
 print(f'############################################')
 print(f"Mean Magnetic field on surface: {jnp.mean(jnp.linalg.norm(B_on_surface(surface_initial, BiotSavart(coils_initial)), axis=2))}")

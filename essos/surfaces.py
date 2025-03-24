@@ -294,10 +294,15 @@ class SurfaceRZFourier:
         """
         nml = ''
         nml += '&INDATA\n'
+        nml += 'NS_ARRAY =                12            50\n'
+        nml += 'FTOL_ARRAY =    1.000000E-11  1.000000E-14\n'
+        nml += 'NITER_ARRAY =           1000          5000\n'
         nml += 'LASYM = .FALSE.\n'
+        nml += f'MPOL = {self.mpol}\n'
+        nml += f'NTOR = {self.ntor+1}\n'
         nml += f'NFP = {self.nfp}\n'
 
-        for m in range(self.mpol + 1):
+        for m in range(self.mpol):
             nmin = -self.ntor
             if m == 0:
                 nmin = 0
