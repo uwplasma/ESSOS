@@ -6,6 +6,7 @@ from functools import partial
 from essos.coils import Curves, Coils
 from scipy.optimize import least_squares, minimize
 from essos.fields import near_axis
+from essos.surfaces import SurfaceRZFourier
 
 def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
     len_rc = len(field_nearaxis.rc)
@@ -33,7 +34,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym, **kwargs)
     
     ## Without JAX gradients, using finite differences
-    # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-2,
+    # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,
     #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
     #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
     
@@ -52,12 +53,30 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents*coils.currents_scale)
             return new_coils
-        elif len(initial_dofs) == len(coils.x)+len(kwargs['field_nearaxis'].x):
+        elif 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['field_nearaxis'].x):
             dofs_currents = result.x[len_dofs_curves:-len(kwargs['field_nearaxis'].x)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-            new_coils = Coils(curves=curves, currents=dofs_currents*coils.currents_scale)
+            new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
             new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(result.x[-len(kwargs['field_nearaxis'].x):], kwargs['field_nearaxis'])
             return new_coils, new_field_nearaxis
+        elif 'surface_all' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['surface_all'].x):
+            surface_all = kwargs['surface_all']
+            dofs_currents = result.x[len_dofs_curves:-len(surface_all.x)]
+            curves = Curves(dofs_curves, n_segments, nfp, stellsym)
+            new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
+            new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
+            new_surface.dofs = result.x[-len(surface_all.x):]
+            return new_coils, new_surface
+        elif 'surface_all' in kwargs and 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['surface_all'].x) + len(kwargs['field_nearaxis'].x):
+            surface_all = kwargs['surface_all']
+            field_nearaxis = kwargs['field_nearaxis']
+            dofs_currents = result.x[len_dofs_curves:-len(surface_all.x)-len(field_nearaxis.x)]
+            curves = Curves(dofs_curves, n_segments, nfp, stellsym)
+            new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
+            new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
+            new_surface.dofs = result.x[-len(surface_all.x)-len(field_nearaxis.x):-len(field_nearaxis.x)]
+            new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(result.x[-len(field_nearaxis.x):], field_nearaxis)
+            return new_coils, new_surface, new_field_nearaxis
     except Exception as e:
         jax.debug.print("Error: {}", e)
         return None

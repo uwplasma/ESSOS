@@ -1,0 +1,14 @@
+!----- Runtime Parameters -----
+&INDATA
+  LASYM = F
+  NFP = 0002
+  MPOL = 002
+  NTOR = 002
+!----- Boundary Parameters (n,m) -----
+  RBC( 000,000) =    10    ZBS( 000,000) =    0
+  RBC( 001,000) =    1    ZBS( 001,000) =   -1
+  RBC(-001,001) =    0.1    ZBS(-001,001) =    0.1
+  RBC( 000,001) =    2.5    ZBS( 000,001) =    2.5
+  RBC( 001,001) =   -1    ZBS( 001,001) =    1
+  RBC(-002,002) =    1E-4    ZBS(-002,002) =    1E-4
+/

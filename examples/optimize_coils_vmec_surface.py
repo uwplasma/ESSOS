@@ -23,8 +23,8 @@ nphi=32
 
 # Initialize VMEC field
 vmec = Vmec(os.path.join(os.path.dirname(__file__), 'input_files',
-             'wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc'),
-            ntheta=ntheta, nphi=nphi, range='half period')
+             'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
+            ntheta=ntheta, nphi=nphi, range_torus='half period')
 
 # Initialize coils
 current_on_each_coil = 1

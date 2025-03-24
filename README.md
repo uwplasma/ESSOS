@@ -90,7 +90,7 @@ ESSOS/
 │       ├── ESSOS_bio_savart_LandremanPaulQA.json
 │       ├── SIMSOPT_bio_savart_LandremanPaulQA.json
 │       ├── wout_n3are_R7.75B5.7.nc
-│       └── wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc
+│       └── wout_LandremanPaul2021_QA_reactorScale_lowres.nc
 ├── tests/
 │   ├── test_coils.py
 │   ├── test_constants.py
