@@ -173,3 +173,4 @@ essos/version.py
 *.vtu
 *.vts
 *.xml
+examples/input.optimized
