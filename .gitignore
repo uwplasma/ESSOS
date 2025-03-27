@@ -174,3 +174,8 @@ essos/version.py
 *.vts
 *.xml
 examples/input.optimized
+examples/parvmecinfo.txt
+threed1*
+wout_*
+input.*
+parvmec*
