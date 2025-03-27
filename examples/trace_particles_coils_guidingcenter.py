@@ -63,5 +63,5 @@ plt.tight_layout()
 plt.show()
 
 ## Save results in vtk format to analyze in Paraview
-# tracing.to_vtk('trajectories')
-# coils.to_vtk('coils')
+tracing.to_vtk('trajectories_guidingcenter')
+coils.to_vtk('coils')

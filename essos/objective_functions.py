@@ -141,7 +141,7 @@ def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, curr
     return jnp.sum(loss)
 
 @partial(jit, static_argnums=(1, 4, 5, 6, 7))
-def loss_BdotN(x, vmec, dofs_curves, currents_scale, nfp, max_coil_length=42,
+def loss_BdotN(x, surface, dofs_curves, currents_scale, nfp, max_coil_length=42,
                n_segments=60, stellsym=True, max_coil_curvature=0.1):
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
     dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], (dofs_curves.shape))
@@ -151,7 +151,7 @@ def loss_BdotN(x, vmec, dofs_curves, currents_scale, nfp, max_coil_length=42,
     coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
     field = BiotSavart(coils)
     
-    bdotn_over_b = BdotN_over_B(vmec.surface, field)
+    bdotn_over_b = BdotN_over_B(surface, field)
     coil_length = loss_coil_length(field)
     coil_curvature = loss_coil_curvature(field)
     

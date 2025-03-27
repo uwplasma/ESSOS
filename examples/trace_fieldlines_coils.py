@@ -9,7 +9,7 @@ from essos.coils import Coils_from_json
 from essos.dynamics import Tracing
 
 # Input parameters
-tmax = 4000
+tmax = 1000
 nfieldlines = number_of_processors_to_use
 R0 = jnp.linspace(1.21, 1.4, nfieldlines)
 trace_tolerance = 1e-8
@@ -42,6 +42,6 @@ tracing.poincare_plot(ax=ax2, show=False, shifts=[0, jnp.pi/2])#, jnp.pi/4, jnp.
 plt.tight_layout()
 plt.show()
 
-# # Save results in vtk format to analyze in Paraview
-# tracing.to_vtk('trajectories')
-# coils.to_vtk('coils')
+# Save results in vtk format to analyze in Paraview
+tracing.to_vtk('trajectories_fieldlines')
+coils.to_vtk('coils')

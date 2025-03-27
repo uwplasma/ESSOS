@@ -7,7 +7,7 @@ from essos.surfaces import BdotN_over_B, SurfaceRZFourier, B_on_surface
 from essos.coils import Coils, CreateEquallySpacedCurves, Curves
 from essos.optimization import optimize_loss_function, new_nearaxis_from_x_and_old_nearaxis
 from essos.objective_functions import (loss_coil_curvature, difference_B_gradB_onaxis,
-                                       loss_coil_length, loss_particle_drift)
+                                       loss_coil_length, loss_particle_drift, loss_BdotN)
 import jax.numpy as jnp
 from functools import partial
 from jax import jit, vmap, devices, device_put, grad, debug
@@ -44,6 +44,19 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    n_segments=number_coil_points,
                                    nfp=number_of_field_periods, stellsym=True)
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
+coils_initial = optimize_loss_function(loss_BdotN, initial_dofs=coils_initial.x, coils=coils_initial, tolerance_optimization=tolerance_optimization,
+                                maximum_function_evaluations=maximum_function_evaluations, surface=surface_initial,
+                                max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
+
+def B_on_surface(surface, field):
+    ntheta = surface.ntheta
+    nphi = surface.nphi
+    gamma = surface.gamma
+    gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
+    gamma_sharded = device_put(gamma_reshaped, sharding)
+    B_on_surface = jit(vmap(field.B), in_shardings=sharding, out_shardings=sharding)(gamma_sharded)
+    B_on_surface = B_on_surface.reshape(nphi, ntheta, 3)
+    return B_on_surface
 
 # @partial(jit, static_argnames=['surface','field'])
 def grad_AbsB_on_surface(surface, field):
@@ -82,37 +95,48 @@ def grad_B_dot_GradAbsB_on_surface(surface, field):
 # @partial(jit, static_argnames=['surface','field'])
 def loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field):
     gradAbsB_surface = grad_AbsB_on_surface(surface, field)
+    B_surface = B_on_surface(surface, field)
     grad_B_dot_GradB_surface = grad_B_dot_GradAbsB_on_surface(surface, field)
     normal_cross_GradB_surface = jnp.cross(surface.normal, gradAbsB_surface, axisa=-1, axisb=-1)
     normal_cross_GradB_dot_grad_B_dot_GradB_surface = jnp.sum(normal_cross_GradB_surface * grad_B_dot_GradB_surface, axis=-1)
-    # loss = jnp.abs(normal_cross_GradB_dot_grad_B_dot_GradB_surface)
-    # return loss
-    return normal_cross_GradB_dot_grad_B_dot_GradB_surface
+    B_cross_GradB = jnp.cross(B_surface, gradAbsB_surface, axisa=-1, axisb=-1)
+    # B_cross_GradB_dot_grad_B_dot_GradB_surface = jnp.sum(B_cross_GradB * grad_B_dot_GradB_surface, axis=-1)
+    # debug.print("normal_cross_GradB_dot_grad_B_dot_GradB_surface: {}", jnp.sum(jnp.abs(normal_cross_GradB_dot_grad_B_dot_GradB_surface)))
+    # debug.print("B_cross_GradB_dot_grad_B_dot_GradB_surface: {}", jnp.sum(jnp.abs(B_cross_GradB_dot_grad_B_dot_GradB_surface)))
+    return normal_cross_GradB_dot_grad_B_dot_GradB_surface#, normal_cross_GradB_dot_grad_B_dot_GradB_surface + B_cross_GradB_dot_grad_B_dot_GradB_surface
 
 def vmec_qs_from_surface(filename):
     vmec = Vmec(filename, verbose=False)
     qs = QuasisymmetryRatioResidual(vmec, surfaces=[1], helicity_m=1, helicity_n=0)
     return jnp.sum(jnp.abs(qs.residuals()))
 
-@partial(jit, static_argnames=['surface_initial', 'n_segments'])
+# @partial(jit, static_argnames=['surface_initial', 'n_segments'])
 def qs_loss(surface_dofs, dofs_curves, dofs_currents, surface_initial, currents_scale=1, n_segments=100):
     surface = SurfaceRZFourier(rc=surface_initial.rc, zs=surface_initial.zs, nfp=surface_initial.nfp, range_torus=surface_initial.range_torus, nphi=surface_initial.nphi, ntheta=surface_initial.ntheta)
     surface.dofs = surface_dofs
     curves = Curves(dofs_curves, n_segments, surface_initial.nfp)
     coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
+    print("##############################")
+    print(f"initial max(BdotN/B): {jnp.max(BdotN_over_B(surface, BiotSavart(coils))):.2e}")
+    # field = BiotSavart(coils)
+    coils = optimize_loss_function(loss_BdotN, initial_dofs=coils.x, coils=coils, tolerance_optimization=tolerance_optimization,
+                                    maximum_function_evaluations=maximum_function_evaluations, surface=surface,
+                                    max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,disp=False)
     field = BiotSavart(coils)
-    loss = jnp.max(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field)))
-    return loss
+    print(f"Final max(BdotN/B): {jnp.max(BdotN_over_B(surface, field)):.2e}")
+    loss = jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field)))
+    return loss, coils
 
 print(f'############################################')
 dofs_old = surface_initial.dofs
 new_dof_array = jnp.linspace(-1, 1, 10)
 qs_ESSOS_loss_array = []
 qs_VMEC_loss_array = []
+coils = coils_initial
 for dof in new_dof_array:
     print(f'dof: {dof}')
     dofs = dofs_old.at[2].set(dof)
-    loss = qs_loss(dofs, coils_initial.dofs_curves, coils_initial.dofs_currents, surface_initial, currents_scale=coils_initial.currents_scale, n_segments=number_coil_points)
+    loss, coils = qs_loss(dofs, coils.dofs_curves, coils.dofs_currents, surface_initial, currents_scale=coils.currents_scale, n_segments=number_coil_points)
     qs_ESSOS_loss_array.append(loss)
     
     filename = 'input.rotating_ellipse_dof'

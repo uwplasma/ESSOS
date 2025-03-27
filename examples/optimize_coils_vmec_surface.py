@@ -42,7 +42,7 @@ coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coil
 print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
 time0 = time()
 coils_optimized = optimize_loss_function(loss_BdotN, initial_dofs=coils_initial.x, coils=coils_initial, tolerance_optimization=tolerance_optimization,
-                                  maximum_function_evaluations=maximum_function_evaluations, vmec=vmec,
+                                  maximum_function_evaluations=maximum_function_evaluations, surface=vmec.surface,
                                   max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
 print(f"Optimization took {time()-time0:.2f} seconds")
 
