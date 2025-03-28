@@ -25,7 +25,7 @@ input = os.path.join('input_files','input.rotating_ellipse')
 surface_initial = SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='half period')
 
 # Optimization parameters
-max_coil_length = 40
+max_coil_length = 44
 max_coil_curvature = 0.3
 order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10

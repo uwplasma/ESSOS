@@ -1,16 +1,14 @@
 import os
-number_of_processors_to_use = 10 # Parallelization, this should divide ntheta*nphi
+number_of_processors_to_use = 12 # Parallelization, this should divide ntheta*nphi
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from essos.fields import BiotSavart, near_axis
-from essos.dynamics import Particles, Tracing
 from essos.surfaces import BdotN_over_B, SurfaceRZFourier, B_on_surface
 from essos.coils import Coils, CreateEquallySpacedCurves, Curves
 from essos.optimization import optimize_loss_function, new_nearaxis_from_x_and_old_nearaxis
-from essos.objective_functions import (loss_coil_curvature, difference_B_gradB_onaxis,
-                                       loss_coil_length, loss_particle_drift)
+from essos.objective_functions import (loss_coil_curvature, difference_B_gradB_onaxis, loss_coil_length)
 import jax.numpy as jnp
 from functools import partial
-from jax import jit, vmap, devices, device_put, grad, debug, jacfwd
+from jax import jit, vmap, devices, device_put, grad, debug
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from time import time
 import matplotlib.pyplot as plt
@@ -18,32 +16,27 @@ import matplotlib.pyplot as plt
 mesh = Mesh(devices(), ("dev",))
 sharding = NamedSharding(mesh, PartitionSpec("dev", None))
 
-ntheta=30
-nphi=30
+ntheta=24
+nphi=24
 input = os.path.join('input_files','input.rotating_ellipse')
 surface_initial = SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='half period')
 
 # Optimization parameters
-max_coil_length = 38
+max_coil_length = 40
 max_coil_curvature = 0.4
 order_Fourier_series_coils = 4
-number_coil_points = 80#order_Fourier_series_coils*10
-maximum_function_evaluations = 2000
+number_coil_points = max(70,order_Fourier_series_coils*10)
+maximum_function_evaluations = 25
 number_coils_per_half_field_period = 3
-tolerance_optimization = 1e-7
+tolerance_optimization = 1e-8
 target_B_on_axis = 5.7
-
-nparticles = number_of_processors_to_use
-maxtime_tracing = 4e-5
-num_steps=300
-trace_tolerance=1e-5
-model = 'GuidingCenter'
+target_iota = 0.41
 
 # Initialize coils
-current_on_each_coil = 1.714e7
 number_of_field_periods = surface_initial.nfp
+current_on_each_coil = 1.3e8/(number_coils_per_half_field_period*number_of_field_periods)
 major_radius_coils = surface_initial.dofs[0]
-minor_radius_coils = major_radius_coils/1.3
+minor_radius_coils = major_radius_coils/1.8
 curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
                                    R=major_radius_coils, r=minor_radius_coils,
@@ -52,69 +45,39 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 
 # Initialize near-axis
-rc=jnp.array([1, 0.045, 0.0001])*major_radius_coils
-zs=jnp.array([0,-0.045, 0.0001])*major_radius_coils
-etabar=-0.9/major_radius_coils
-# etabar_array = jnp.linspace(-0.2,0.2, 12)
-# iota_array = []
-# for etabar in etabar_array:
+rc=jnp.array([1, 0.1, 1e-3])*major_radius_coils
+zs=jnp.array([0,-0.1, 1e-3])*major_radius_coils
+etabar=-0.8/major_radius_coils
 field_nearaxis_initial = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=number_of_field_periods, B0=target_B_on_axis)
+
+# # Find etabar that leads to max iota and min elongation
+# etabar_array = jnp.linspace(0.01,0.15, 15)
+# iota_array = []
+# elongation_array = []
+# for etabar in etabar_array:
+#     field_nearaxis_initial = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=number_of_field_periods, B0=target_B_on_axis)
 #     iota_array.append(field_nearaxis_initial.iota)
-# plt.plot(etabar_array, iota_array);plt.xlabel('etabar');plt.ylabel('iota');plt.show();exit()
-print(f"Initial iota near-axis: {field_nearaxis_initial.iota}")
+#     elongation_array.append(jnp.max(field_nearaxis_initial.elongation))
+# plt.plot(etabar_array, iota_array, label='iota');plt.plot(etabar_array, jnp.array(elongation_array)/max(elongation_array), label='elongation');plt.xlabel('etabar');plt.legend();plt.show();exit()
+
+print(f"Initial iota near-axis: {field_nearaxis_initial.iota} and max elongation: {max(field_nearaxis_initial.elongation)} at etabar={etabar}")
 print(f"Mean Magnetic field on surface: {jnp.mean(jnp.linalg.norm(B_on_surface(surface_initial, BiotSavart(coils_initial)), axis=2))}")
 
-# Initialize particles
-# Xaxis = field_nearaxis_initial.R0*jnp.cos(field_nearaxis_initial.phi)
-# Yaxis = field_nearaxis_initial.R0*jnp.sin(field_nearaxis_initial.phi)
-# initial_xyz = jnp.array([Xaxis, Yaxis, field_nearaxis_initial.Z0]).T[:nparticles]
-# particles = Particles(initial_xyz=initial_xyz, field=BiotSavart(coils_initial))
-# tracing_initial = Tracing(field=coils_initial, particles=particles, maxtime=maxtime_tracing, model=model, timesteps=num_steps)
-
-# # Plot initial state
-# fig = plt.figure(figsize=(9, 8))
-# ax = fig.add_subplot(111, projection='3d')
-# tracing_initial.plot(ax=ax, show=False)
-# field_nearaxis_initial.plot(r=major_radius_coils/12, ax=ax, show=False)
-# coils_initial.plot(ax=ax, show=False)
-# surface_initial.plot(ax=ax, show=False)
-# plt.show()
-
-# @partial(jit, static_argnames=['surface','field'])
 def grad_AbsB_on_surface(surface, field):
-    ntheta = surface.ntheta
-    nphi = surface.nphi
-    gamma = surface.gamma
-    gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
-    gamma_sharded = device_put(gamma_reshaped, sharding)
+    gamma_sharded = device_put(surface.gamma.reshape(surface.nphi * surface.ntheta, 3), sharding)
     dAbsB_by_dX_on_surface = jit(vmap(field.dAbsB_by_dX), in_shardings=sharding, out_shardings=sharding)(gamma_sharded)
-    dAbsB_by_dX_on_surface = dAbsB_by_dX_on_surface.reshape(nphi, ntheta, 3)
+    dAbsB_by_dX_on_surface = dAbsB_by_dX_on_surface.reshape(surface.nphi, surface.ntheta, 3)
     return dAbsB_by_dX_on_surface
-
-# @partial(jit, static_argnames=['field'])
 def B_dot_GradAbsB(points, field):
-    B = field.B(points)
-    GradAbsB = field.dAbsB_by_dX(points)
-    B_dot_GradAbsB = jnp.sum(B * GradAbsB, axis=-1)
-    return B_dot_GradAbsB
-
-# @partial(jit, static_argnames=['field'])
+    return jnp.sum(field.B(points) * field.dAbsB_by_dX(points), axis=-1)
 def grad_B_dot_GradAbsB(points, field):
     return grad(B_dot_GradAbsB, argnums=0)(points, field)
-
-# @partial(jit, static_argnames=['surface','field'])
 def grad_B_dot_GradAbsB_on_surface(surface, field):
-    ntheta = surface.ntheta
-    nphi = surface.nphi
-    gamma = surface.gamma
-    gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
-    gamma_sharded = device_put(gamma_reshaped, sharding)
+    gamma_sharded = device_put(surface.gamma.reshape(surface.nphi * surface.ntheta, 3), sharding)
     partial_grad_B_dot_GradAbsB = partial(grad_B_dot_GradAbsB, field=field)
     grad_B_dot_GradAbsB_on_surface = jit(vmap(partial_grad_B_dot_GradAbsB), in_shardings=sharding, out_shardings=sharding)(gamma_sharded)
-    grad_B_dot_GradAbsB_on_surface = grad_B_dot_GradAbsB_on_surface.reshape(nphi, ntheta, 3)
+    grad_B_dot_GradAbsB_on_surface = grad_B_dot_GradAbsB_on_surface.reshape(surface.nphi, surface.ntheta, 3)
     return grad_B_dot_GradAbsB_on_surface
-
-# @partial(jit, static_argnames=['surface','field'])
 def loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field):
     gradAbsB_surface = grad_AbsB_on_surface(surface, field)
     grad_B_dot_GradB_surface = grad_B_dot_GradAbsB_on_surface(surface, field)
@@ -122,145 +85,103 @@ def loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field):
     normal_cross_GradB_dot_grad_B_dot_GradB_surface = jnp.sum(normal_cross_GradB_surface * grad_B_dot_GradB_surface, axis=-1)
     return normal_cross_GradB_dot_grad_B_dot_GradB_surface
 
-# # @partial(jit, static_argnames=['surface', 'field'])
-# def precompute_B_and_GradAbsB(surface, field):
-#     gamma_reshaped = surface.gamma.reshape(-1, 3)
-#     gamma_sharded = device_put(gamma_reshaped, sharding)
-#     B = jit(vmap(field.B), in_shardings=sharding, out_shardings=sharding)(gamma_sharded)
-#     GradAbsB = jit(vmap(field.dAbsB_by_dX), in_shardings=sharding, out_shardings=sharding)(gamma_sharded)
-#     return B.reshape(surface.nphi, surface.ntheta, 3), GradAbsB.reshape(surface.nphi, surface.ntheta, 3)
-# def grad_B_dot_GradAbsB(points, field):
-#     B_dot_GradAbsB_fn = lambda x: B_dot_GradAbsB(x, field)
-#     return jacfwd(B_dot_GradAbsB_fn)(points)
-# # @partial(jit, static_argnames=['surface', 'field'])
-# def loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field):
-#     B, GradAbsB = precompute_B_and_GradAbsB(surface, field)
-#     def compute_grad_B_dot_GradAbsB(x):
-#         return grad_B_dot_GradAbsB(x, field)
-#     grad_B_dot_GradAbsB_surface = jit(vmap(compute_grad_B_dot_GradAbsB), in_shardings=sharding, out_shardings=sharding)(surface.gamma.reshape(-1, 3))
-#     grad_B_dot_GradAbsB_surface = grad_B_dot_GradAbsB_surface.reshape(surface.nphi, surface.ntheta, 3)
-#     normal_cross_GradB_surface = jnp.cross(surface.normal, GradAbsB, axisa=-1, axisb=-1)
-#     result = jnp.sum(normal_cross_GradB_surface * grad_B_dot_GradAbsB_surface, axis=-1)
-#     return result
-
 @partial(jit, static_argnums=(1, 5, 6, 7, 8, 9, 10))
 def loss_coils_and_surface(x, surface_all, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
-               n_segments=60, stellsym=True, max_coil_curvature=0.5, target_B_on_surface=5.7):
+               n_segments=60, stellsym=True, max_coil_curvature=0.5, target_iota=0.41):
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
     dofs_currents = x[len_dofs_curves_ravelled:-len(surface_all.x)-len(field_nearaxis.x)]
     new_dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], (dofs_curves.shape))
-    
-    curves = Curves(new_dofs_curves, n_segments, nfp, stellsym)
-    coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
-    field = BiotSavart(coils)
-    
+    field = BiotSavart(Coils(curves=Curves(new_dofs_curves, n_segments, nfp, stellsym), currents=dofs_currents*currents_scale))
     surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
     surface.dofs = x[-len(surface_all.x)-len(field_nearaxis.x):-len(field_nearaxis.x)]
-    
     field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(x[-len(field_nearaxis.x):], field_nearaxis)
-    
-    coil_length = loss_coil_length(field)
-    coil_curvature = loss_coil_curvature(field)
-    
-    coil_length_loss    = 1e3*jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
-    coil_curvature_loss = 1e3*jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
-    
-    
-    bdotn_over_b = BdotN_over_B(surface, field)
-    bdotn_over_b_loss = 50*jnp.sum(jnp.abs(bdotn_over_b))
-    
-    # normal_cross_GradB_dot_grad_B_dot_GradB_surface = jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field))) / surface_all.ntheta / surface_all.nphi
-    # normal_cross_GradB_dot_grad_B_dot_GradB_surface = 5e+0 * normal_cross_GradB_dot_grad_B_dot_GradB_surface**0.5
-    
-    mean_cross_sectional_area_loss = 1e2*jnp.abs(surface.mean_cross_sectional_area()-surface_all.mean_cross_sectional_area())
-
-    AbsB_on_surface = jnp.linalg.norm(B_on_surface(surface, field), axis=2)
-    AbsB_surface_loss = jnp.abs(jnp.mean(AbsB_on_surface)-target_B_on_surface)
-    
     B_difference, gradB_difference = difference_B_gradB_onaxis(field_nearaxis, field)
-    B_difference_loss = 30*jnp.sum(jnp.abs(B_difference))
-    gradB_difference_loss = 1e2*jnp.sum(jnp.abs(gradB_difference))
-    
-    elongation = field_nearaxis.elongation
-    iota = field_nearaxis.iota
-    elongation_loss = jnp.sum(jnp.abs(elongation))/len(elongation)
-    # iota_loss = 1e4*jnp.abs(jnp.max(jnp.array([0.41-iota,0])))
-    iota_loss = 50/jnp.abs(iota)
-    
-    axis_surface = surface.dofs[0]
-    axis_nearaxis = field_nearaxis.rc[0]
-    axis_loss = 1e4*jnp.abs(jnp.max(jnp.array([jnp.abs(axis_nearaxis - axis_surface) - 0.1 * axis_nearaxis, 0])))
-    
+    B_difference_loss              = jnp.ravel(B_difference)
+    gradB_difference_loss          = jnp.ravel(gradB_difference)
+    bdotn_over_b_loss              = jnp.ravel(BdotN_over_B(surface, field))
+    mean_cross_sectional_area_loss = jnp.array([surface.mean_cross_sectional_area()-surface_all.mean_cross_sectional_area()])
+    # axis_loss                      = jnp.array([jnp.abs(jnp.max(jnp.array([jnp.abs(field_nearaxis.rc[0] - surface.dofs[0]) - 0.1 * field_nearaxis.rc[0], 0])))])
+    iota_loss                      = 1e1*jnp.array([field_nearaxis.iota-target_iota])
+    coil_length_loss               = 1e-1*jnp.array([jnp.max(jnp.concatenate([loss_coil_length(field)-max_coil_length,jnp.array([0])]))])
+    coil_curvature_loss            = jnp.array([jnp.max(jnp.concatenate([loss_coil_curvature(field)-max_coil_curvature,jnp.array([0])]))])
     # debug.print("######################")
-    # debug.print("normal_x_GradB_._gradB_._GradB={}", normal_cross_GradB_dot_grad_B_dot_GradB_surface)
-    # debug.print("bdotn_over_b_loss=             {}", bdotn_over_b_loss)
-    # debug.print("mean_cross_sectional_area_loss={}", mean_cross_sectional_area_loss)
-    # debug.print("B_difference_loss=             {}", B_difference_loss)
-    # debug.print("gradB_difference_loss=         {}", gradB_difference_loss)
-    # debug.print("iota_loss=                     {}", iota_loss)
-    # debug.print("axis_loss=                     {}", axis_loss)
-    # debug.print('elongation_loss=               {}', elongation_loss)
-    # debug.print('coil_length_loss=              {}', coil_length_loss)
-    # debug.print('coil_curvature_loss=           {}', coil_curvature_loss)
-    
-    # Xaxis = field_nearaxis.R0*jnp.cos(field_nearaxis.phi)
-    # Yaxis = field_nearaxis.R0*jnp.sin(field_nearaxis.phi)
-    # initial_xyz = jnp.array([Xaxis, Yaxis, field_nearaxis.Z0]).T[:nparticles]
-    # particles = Particles(initial_xyz=initial_xyz, field=field)
-    # particles_drift_loss = jnp.sum(loss_particle_drift(field, particles, maxtime_tracing, num_steps, trace_tolerance, model=model))/num_steps/nparticles
-    
-    return (
-        coil_length_loss+coil_curvature_loss
-    #    +normal_cross_GradB_dot_grad_B_dot_GradB_surface
-       +bdotn_over_b_loss
-       +mean_cross_sectional_area_loss
-    #    +AbsB_surface_loss
-       +B_difference_loss
-       +gradB_difference_loss
-       +elongation_loss
-       +iota_loss
-       +axis_loss
-    #    +particles_drift_loss
-    )
+    # debug.print("bdotn_over_b_loss=             {}", jnp.sum(bdotn_over_b_loss**2))
+    # debug.print("B_difference_loss=             {}", jnp.sum(B_difference_loss**2))
+    # debug.print("gradB_difference_loss=         {}", jnp.sum(gradB_difference_loss**2))
+    # debug.print("iota_loss=                     {}", jnp.sum(iota_loss**2))
+    # debug.print("axis_loss=                     {}", jnp.sum(axis_loss**2))
+    # debug.print("mean_cross_sectional_area_loss={}", jnp.sum(mean_cross_sectional_area_loss**2))
+    # debug.print('coil_length_loss=              {}', jnp.sum(coil_length_loss**2))
+    # debug.print('coil_curvature_loss=           {}', jnp.sum(coil_curvature_loss**2))
+    return jnp.concatenate([
+        B_difference_loss, gradB_difference_loss, iota_loss,# axis_loss,
+        coil_length_loss, coil_curvature_loss, mean_cross_sectional_area_loss, bdotn_over_b_loss
+        ])
+
+@partial(jit, static_argnums=(1, 5, 6, 7, 8, 9, 10))
+def loss_coils_and_surface_qs(x, surface_all, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
+               n_segments=60, stellsym=True, max_coil_curvature=0.5, target_iota=0.41):
+    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
+    dofs_currents = x[len_dofs_curves_ravelled:-len(surface_all.x)-len(field_nearaxis.x)]
+    new_dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], (dofs_curves.shape))
+    field = BiotSavart(Coils(curves=Curves(new_dofs_curves, n_segments, nfp, stellsym), currents=dofs_currents*currents_scale))
+    surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
+    surface.dofs = x[-len(surface_all.x)-len(field_nearaxis.x):-len(field_nearaxis.x)]
+    field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(x[-len(field_nearaxis.x):], field_nearaxis)
+    B_difference, gradB_difference = difference_B_gradB_onaxis(field_nearaxis, field)
+    normal_cross_GradB_dot_grad_B_dot_GradB_surface = 1e-4 * jnp.ravel(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field))
+    B_difference_loss              = jnp.ravel(B_difference)
+    gradB_difference_loss          = jnp.ravel(gradB_difference)
+    bdotn_over_b_loss              = jnp.ravel(BdotN_over_B(surface, field))
+    mean_cross_sectional_area_loss = jnp.array([surface.mean_cross_sectional_area()-surface_all.mean_cross_sectional_area()])
+    # axis_loss                      = jnp.array([jnp.abs(jnp.max(jnp.array([jnp.abs(field_nearaxis.rc[0] - surface.dofs[0]) - 0.1 * field_nearaxis.rc[0], 0])))])
+    iota_loss                      = 1e1*jnp.array([field_nearaxis.iota-target_iota])
+    coil_length_loss               = 1e-1*jnp.array([jnp.max(jnp.concatenate([loss_coil_length(field)-max_coil_length,jnp.array([0])]))])
+    coil_curvature_loss            = jnp.array([jnp.max(jnp.concatenate([loss_coil_curvature(field)-max_coil_curvature,jnp.array([0])]))])
+    # debug.print('normal_cross_GradB_dot_grad_B_dot_GradB_surface= {}', jnp.sum(normal_cross_GradB_dot_grad_B_dot_GradB_surface**2))
+    return jnp.concatenate([
+        B_difference_loss, gradB_difference_loss, iota_loss,# axis_loss,
+        coil_length_loss, coil_curvature_loss, mean_cross_sectional_area_loss, bdotn_over_b_loss,
+        normal_cross_GradB_dot_grad_B_dot_GradB_surface
+        ])
 
 # Optimize coils
 print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
 time0 = time()
 initial_dofs = jnp.concatenate((coils_initial.x, surface_initial.x, field_nearaxis_initial.x))
-coils_optimized, surface_optimized, field_nearaxis_optimized = optimize_loss_function(loss_coils_and_surface, initial_dofs=initial_dofs, coils=coils_initial, tolerance_optimization=tolerance_optimization,
-                                  maximum_function_evaluations=maximum_function_evaluations, surface_all=surface_initial, field_nearaxis=field_nearaxis_initial,
-                                  max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature, target_B_on_surface=target_B_on_axis)
+coils_optimized, surface_optimized, field_nearaxis_optimized = optimize_loss_function(loss_coils_and_surface, initial_dofs=initial_dofs, coils=coils_initial,
+                                tolerance_optimization=tolerance_optimization, maximum_function_evaluations=maximum_function_evaluations, target_iota=target_iota,
+                                surface_all=surface_initial, field_nearaxis=field_nearaxis_initial, max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature)
+initial_dofs = jnp.concatenate((coils_optimized.x, surface_optimized.x, field_nearaxis_optimized.x))
+coils_optimized, surface_optimized, field_nearaxis_optimized = optimize_loss_function(loss_coils_and_surface_qs, initial_dofs=initial_dofs, coils=coils_optimized,
+                                tolerance_optimization=tolerance_optimization, maximum_function_evaluations=maximum_function_evaluations, target_iota=target_iota,
+                                surface_all=surface_optimized, field_nearaxis=field_nearaxis_optimized, max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature)
 print(f"Optimization took {time()-time0:.2f} seconds")
-# Xaxis = field_nearaxis_optimized.R0*jnp.cos(field_nearaxis_optimized.phi)
-# Yaxis = field_nearaxis_optimized.R0*jnp.sin(field_nearaxis_optimized.phi)
-# initial_xyz = jnp.array([Xaxis, Yaxis, field_nearaxis_optimized.Z0]).T[:nparticles]
-# particles = Particles(initial_xyz=initial_xyz, field=BiotSavart(coils_optimized))
-# tracing_optimized = Tracing(field=coils_optimized, particles=particles, maxtime=maxtime_tracing, model=model, timesteps=num_steps)
-
 print(f'############################################')
-print(f"Mean B on surface:         {jnp.mean(jnp.linalg.norm(B_on_surface(surface_optimized, BiotSavart(coils_optimized)), axis=2))}")
-print(f"Initial   max(BdotN/B):    {jnp.max(BdotN_over_B(surface_initial, BiotSavart(coils_initial))):.2e}")
-print(f"Optimized max(BdotN/B):    {jnp.max(BdotN_over_B(surface_optimized, BiotSavart(coils_optimized))):.2e}")
-print(f'Initial   iota on-axis:    {field_nearaxis_initial.iota}')
-print(f'Optimized iota on-axis:    {field_nearaxis_optimized.iota}')
-print(f'Initial   max(elongation): {max(field_nearaxis_initial.elongation)}')
-print(f'Optimized max(elongation): {max(field_nearaxis_optimized.elongation)}')
-print(f"Initial   coils length: {coils_initial.length[:number_coils_per_half_field_period]}")
-print(f"Optimized coils length: {coils_optimized.length[:number_coils_per_half_field_period]}")
-print(f"Initial   coils curvature: {jnp.mean(coils_initial.curvature, axis=1)[:number_coils_per_half_field_period]}")
-print(f"Optimized coils curvature: {jnp.mean(coils_optimized.curvature, axis=1)[:number_coils_per_half_field_period]}")
+print(f"Mean B on surface:                  {jnp.mean(jnp.linalg.norm(B_on_surface(surface_optimized, BiotSavart(coils_optimized)), axis=2))}")
+print(f"Initial   max(BdotN/B):             {jnp.max(BdotN_over_B(surface_initial, BiotSavart(coils_initial))):.2e}")
+print(f"Optimized max(BdotN/B):             {jnp.max(BdotN_over_B(surface_optimized, BiotSavart(coils_optimized))):.2e}")
+print(f'Initial   iota on-axis:             {field_nearaxis_initial.iota}')
+print(f'Optimized iota on-axis:             {field_nearaxis_optimized.iota}')
+print(f'Initial   max(elongation):          {max(field_nearaxis_initial.elongation)}')
+print(f'Optimized max(elongation):          {max(field_nearaxis_optimized.elongation)}')
+print(f"Initial   coils length:             {coils_initial.length[:number_coils_per_half_field_period]}")
+print(f"Optimized coils length:             {coils_optimized.length[:number_coils_per_half_field_period]}")
+print(f"Initial   coils curvature:          {jnp.mean(coils_initial.curvature, axis=1)[:number_coils_per_half_field_period]}")
+print(f"Optimized coils curvature:          {jnp.mean(coils_optimized.curvature, axis=1)[:number_coils_per_half_field_period]}")
 B_difference_initial, gradB_difference_initial = difference_B_gradB_onaxis(field_nearaxis_initial, BiotSavart(coils_initial))
 B_difference_optimized, gradB_difference_optimized = difference_B_gradB_onaxis(field_nearaxis_optimized, BiotSavart(coils_optimized))
-print(f'Initial   B on axis difference: {jnp.sum(jnp.abs(B_difference_initial))}')
-print(f'Optimized B on axis difference: {jnp.sum(jnp.abs(B_difference_optimized))}')
+print(f'Initial   B on axis difference:     {jnp.sum(jnp.abs(B_difference_initial))}')
+print(f'Optimized B on axis difference:     {jnp.sum(jnp.abs(B_difference_optimized))}')
 print(f'Initial   gradB on axis difference: {jnp.sum(jnp.abs(gradB_difference_initial))}')
 print(f'Optimized gradB on axis difference: {jnp.sum(jnp.abs(gradB_difference_optimized))}')
-print(f'Initial cross sectional area: {surface_initial.mean_cross_sectional_area()}')
-print(f'Optimized cross sectional area: {surface_optimized.mean_cross_sectional_area()}')
-print(f'Initial QS metric: {jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface_initial, BiotSavart(coils_initial))))}')
-print(f'Optimized QS metric: {jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface_optimized, BiotSavart(coils_optimized))))}')
-print(f'initial axis loss: {jnp.abs(jnp.max(jnp.array([jnp.abs(field_nearaxis_initial.rc[0] - surface_initial.dofs[0]) - 0.2 * field_nearaxis_initial.rc[0], 0])))}')
-print(f'Optimized axis loss: {jnp.abs(jnp.max(jnp.array([jnp.abs(field_nearaxis_optimized.rc[0] - surface_optimized.dofs[0]) - 0.2 * field_nearaxis_optimized.rc[0], 0])))}')
+print(f'Initial cross sectional area:       {surface_initial.mean_cross_sectional_area()}')
+print(f'Optimized cross sectional area:     {surface_optimized.mean_cross_sectional_area()}')
+print(f'Initial QS metric:                  {jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface_initial, BiotSavart(coils_initial))))}')
+print(f'Optimized QS metric:                {jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface_optimized, BiotSavart(coils_optimized))))}')
+# print(f'initial axis loss: {jnp.abs(jnp.max(jnp.array([jnp.abs(field_nearaxis_initial.rc[0] - surface_initial.dofs[0]) - 0.2 * field_nearaxis_initial.rc[0], 0])))}')
+# print(f'Optimized axis loss: {jnp.abs(jnp.max(jnp.array([jnp.abs(field_nearaxis_optimized.rc[0] - surface_optimized.dofs[0]) - 0.2 * field_nearaxis_optimized.rc[0], 0])))}')
+print(f'Resulting near-axis rc={field_nearaxis_optimized.rc}, zs={field_nearaxis_optimized.zs}, etabar={field_nearaxis_optimized.etabar}')
 
 # Plot coils, before and after optimization
 fig = plt.figure(figsize=(8, 4))
@@ -269,11 +190,9 @@ ax2 = fig.add_subplot(122, projection='3d')
 coils_initial.plot(ax=ax1, show=False)
 surface_initial.plot(ax=ax1, show=False)
 field_nearaxis_initial.plot(r=major_radius_coils/12, ax=ax1, show=False)
-# tracing_initial.plot(ax=ax1, show=False)
 coils_optimized.plot(ax=ax2, show=False)
 surface_optimized.plot(ax=ax2, show=False)
 field_nearaxis_optimized.plot(r=major_radius_coils/12, ax=ax2, show=False)
-# tracing_optimized.plot(ax=ax2, show=False)
 plt.tight_layout()
 plt.show()
 
@@ -287,8 +206,6 @@ field_nearaxis_initial.to_vtk('initial_field_nearaxis', r=major_radius_coils/12,
 surface_optimized.to_vtk('optimized_surface', field=BiotSavart(coils_optimized))
 coils_optimized.to_vtk('optimized_coils')
 field_nearaxis_optimized.to_vtk('optimized_field_nearaxis', r=major_radius_coils/12, field=BiotSavart(coils_optimized))
-# tracing_initial.to_vtk('initial_tracing')
-# tracing_optimized.to_vtk('optimized_tracing')
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
