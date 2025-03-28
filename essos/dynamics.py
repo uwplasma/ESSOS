@@ -410,12 +410,12 @@ class Tracing():
                     hits = ax.scatter(X_plot, Y_plot, c=c, **kwargs)
                     
         if orientation == 'toroidal':
-            plt.xlabel('R',fontsize = 18)
-            plt.ylabel('Z',fontsize = 18)
+            plt.xlabel('R',fontsize = 15)
+            plt.ylabel('Z',fontsize = 15)
             # plt.title(r'$\phi$ = {:.2f} $\pi$'.format(shift/jnp.pi),fontsize = 20)
         elif orientation == 'z':
-            plt.xlabel('X',fontsize = 18)
-            plt.xlabel('Y',fontsize = 18)
+            plt.xlabel('X',fontsize = 15)
+            plt.xlabel('Y',fontsize = 15)
             # plt.title('Z = {:.2f}'.format(shift),fontsize = 20)
         plt.axis('equal')
         plt.grid()
