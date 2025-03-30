@@ -23,6 +23,15 @@ def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
                                     nphi=field_nearaxis.nphi, spsi=field_nearaxis.spsi, sG=field_nearaxis.sG, nfp=field_nearaxis.nfp)
     return new_field_nearaxis
 
+#### Make this a class such as make_optimizables and allow
+#### users to choose their own optimization methods and do it explicitly
+#### Perhaps make one example for optax/scipy.optimize/optimistix and
+#### show in examples how it works.
+#### Make all objective functions a class inheriting from a base class
+#### and implement the __call__ method. This way we can use
+#### the same interface for all optimizers.
+#### Add a function to get the gradients of the loss function
+#### and the hessians. This way we can use the same interface for all optimizers.
 def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, method='L-BFGS-B', **kwargs):
     len_dofs_curves = len(jnp.ravel(coils.dofs_curves))
     nfp = coils.nfp
