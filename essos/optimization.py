@@ -39,44 +39,85 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
     
     ## With JAX gradients
-    jac_loss_partial = jit(jacfwd(loss_partial))
-    result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
-                           ftol=tolerance_optimization, gtol=tolerance_optimization,
-                           xtol=1e-14, max_nfev=maximum_function_evaluations, x_scale='jac')
+    # jac_loss_partial = jit(jacfwd(loss_partial))
+    # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
+    #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
+    #                        xtol=1e-14, max_nfev=maximum_function_evaluations, x_scale='jac')
     # jac_loss_partial = jit(grad(loss_partial))
     # result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
     #                   tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': disp, 'gtol': 1e-14, 'ftol': 1e-14})
+    # final_dofs = result.x
     
-    dofs_curves = jnp.reshape(result.x[:len_dofs_curves], (dofs_curves_shape))
+    import jax
+    from jax import lax
+    import optax
+
+    fun = jit(loss_partial)
+    params = initial_dofs
+    initial_lr     = 2e-2
+    num_iterations = 3000
+
+    # # Define a learning rate scheduler
+    schedule = optax.exponential_decay(init_value=initial_lr, transition_steps=int(num_iterations/3), decay_rate=0.4)
+    optimizer = optax.chain(
+        # optax.scale_by_lbfgs(),
+        optax.scale_by_adam(),
+        optax.scale_by_schedule(schedule)
+    )
+    # optimizer = optax.scale_by_adam(initial_lr)
+
+    def update(optimizer, state, i):
+        params, opt_state = state
+        grads = jax.grad(fun)(params)
+        grads = grads.at[1].apply(jnp.negative)
+        updates, new_opt_state = optimizer.update(grads, opt_state, params)
+        new_params = optax.apply_updates(params, -updates)
+        # new_params = params - initial_lr * updates
+        jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, schedule(i), fun(new_params))
+        # jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, initial_lr, fun(new_params))
+        return (new_params, new_opt_state), params
+
+    def optimize(optimizer, params, iters):
+        opt_state = optimizer.init(params)
+        iteration_indices = jnp.arange(iters)  # Creates [0, 1, ..., iters-1]
+        _, params_hist = lax.scan(partial(update, optimizer), (params, opt_state), iteration_indices)
+        return params_hist
+
+    params_hist = optimize(optimizer, params, num_iterations)
+
+    final_dofs = params_hist[-1]
+    print(f'Final value: {fun(final_dofs):.2e}')
+    
+    dofs_curves = jnp.reshape(final_dofs[:len_dofs_curves], (dofs_curves_shape))
     try:
         if len(initial_dofs) == len(coils.x):
-            dofs_currents = result.x[len_dofs_curves:]
+            dofs_currents = final_dofs[len_dofs_curves:]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents*coils.currents_scale)
             return new_coils
         elif 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['field_nearaxis'].x):
-            dofs_currents = result.x[len_dofs_curves:-len(kwargs['field_nearaxis'].x)]
+            dofs_currents = final_dofs[len_dofs_curves:-len(kwargs['field_nearaxis'].x)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
-            new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(result.x[-len(kwargs['field_nearaxis'].x):], kwargs['field_nearaxis'])
+            new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(final_dofs[-len(kwargs['field_nearaxis'].x):], kwargs['field_nearaxis'])
             return new_coils, new_field_nearaxis
         elif 'surface_all' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['surface_all'].x):
             surface_all = kwargs['surface_all']
-            dofs_currents = result.x[len_dofs_curves:-len(surface_all.x)]
+            dofs_currents = final_dofs[len_dofs_curves:-len(surface_all.x)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
             new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
-            new_surface.dofs = result.x[-len(surface_all.x):]
+            new_surface.dofs = final_dofs[-len(surface_all.x):]
             return new_coils, new_surface
         elif 'surface_all' in kwargs and 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['surface_all'].x) + len(kwargs['field_nearaxis'].x):
             surface_all = kwargs['surface_all']
             field_nearaxis = kwargs['field_nearaxis']
-            dofs_currents = result.x[len_dofs_curves:-len(surface_all.x)-len(field_nearaxis.x)]
+            dofs_currents = final_dofs[len_dofs_curves:-len(surface_all.x)-len(field_nearaxis.x)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
             new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
-            new_surface.dofs = result.x[-len(surface_all.x)-len(field_nearaxis.x):-len(field_nearaxis.x)]
-            new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(result.x[-len(field_nearaxis.x):], field_nearaxis)
+            new_surface.dofs = final_dofs[-len(surface_all.x)-len(field_nearaxis.x):-len(field_nearaxis.x)]
+            new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(final_dofs[-len(field_nearaxis.x):], field_nearaxis)
             return new_coils, new_surface, new_field_nearaxis
     except Exception as e:
         jax.debug.print("Error: {}", e)
