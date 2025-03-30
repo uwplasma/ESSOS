@@ -4,7 +4,7 @@
   FTOL_ARRAY =    1.000000E-11  1.000000E-14
   NITER_ARRAY =           1000          5000
   LASYM = F
-  NFP = 0003
+  NFP = 0002
   MPOL = 003
   NTOR = 003
 !----- Boundary Parameters (n,m) -----

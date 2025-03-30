@@ -53,28 +53,33 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     import optax
 
     fun = jit(loss_partial)
+    jac = jit(grad(loss_partial))
     params = initial_dofs
-    initial_lr     = 2e-2
-    num_iterations = 3000
+    initial_lr = 2e-2
+    num_iterations = 2000
 
-    # # Define a learning rate scheduler
-    schedule = optax.exponential_decay(init_value=initial_lr, transition_steps=int(num_iterations/3), decay_rate=0.4)
+    # Define a learning rate scheduler
+    schedule = optax.exponential_decay(init_value=initial_lr, transition_steps=num_iterations/2, decay_rate=0.5)
+    signal = -1
     optimizer = optax.chain(
         # optax.scale_by_lbfgs(),
-        optax.scale_by_adam(),
+        # optax.scale_by_adam(),
+        optax.scale_by_amsgrad(),
         optax.scale_by_schedule(schedule)
     )
-    # optimizer = optax.scale_by_adam(initial_lr)
+    
+    optimizer = optax.amsgrad(initial_lr)
+    signal = 1
 
     def update(optimizer, state, i):
         params, opt_state = state
-        grads = jax.grad(fun)(params)
+        grads = jac(params)
         grads = grads.at[1].apply(jnp.negative)
         updates, new_opt_state = optimizer.update(grads, opt_state, params)
-        new_params = optax.apply_updates(params, -updates)
+        new_params = optax.apply_updates(params, signal*updates)
         # new_params = params - initial_lr * updates
-        jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, schedule(i), fun(new_params))
-        # jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, initial_lr, fun(new_params))
+        # jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, schedule(i), fun(new_params))
+        jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, initial_lr, fun(new_params))
         return (new_params, new_opt_state), params
 
     def optimize(optimizer, params, iters):
