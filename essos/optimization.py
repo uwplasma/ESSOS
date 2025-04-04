@@ -57,7 +57,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     jac = jit(grad(loss_partial))
     params = initial_dofs
     initial_lr = 3e-2
-    num_iterations = 500
+    num_iterations = 150
 
     # Define a learning rate scheduler
     schedule = optax.exponential_decay(init_value=initial_lr, transition_steps=num_iterations/2, decay_rate=0.5)
@@ -79,8 +79,8 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
         updates, new_opt_state = optimizer.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, sign*updates)
         # new_params = params - initial_lr * updates
-        # jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, schedule(i), fun(new_params))
-        jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, initial_lr, fun(new_params))
+        jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, schedule(i), fun(new_params))
+        # jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, initial_lr, fun(new_params))
         return (new_params, new_opt_state), params
 
     def optimize(optimizer, params, iters):
