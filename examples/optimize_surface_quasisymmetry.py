@@ -25,13 +25,13 @@ input = os.path.join('input_files','input.rotating_ellipse')
 surface_initial = SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='half period')
 
 # Optimization parameters
-max_coil_length = 44
-max_coil_curvature = 0.3
-order_Fourier_series_coils = 5
-number_coil_points = order_Fourier_series_coils*10
+max_coil_length = 50
+max_coil_curvature = 0.4
+order_Fourier_series_coils = 12
+number_coil_points = 80#order_Fourier_series_coils*10
 maximum_function_evaluations = 600
 number_coils_per_half_field_period = 4
-tolerance_optimization = 1e-7
+tolerance_optimization = 1e-8
 
 # Initialize coils
 current_on_each_coil = 1.714e7
@@ -116,28 +116,31 @@ def qs_loss(surface_dofs, dofs_curves, dofs_currents, surface_initial, currents_
     surface.dofs = surface_dofs
     curves = Curves(dofs_curves, n_segments, surface_initial.nfp)
     coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
-    print("##############################")
-    print(f"initial max(BdotN/B): {jnp.max(BdotN_over_B(surface, BiotSavart(coils))):.2e}")
-    # field = BiotSavart(coils)
+    # print("##############################")
+    print(f"  initial max(BdotN/B): {jnp.max(BdotN_over_B(surface, BiotSavart(coils))):.2e}")
+    field1 = BiotSavart(coils)
     coils = optimize_loss_function(loss_BdotN, initial_dofs=coils.x, coils=coils, tolerance_optimization=tolerance_optimization,
                                     maximum_function_evaluations=maximum_function_evaluations, surface=surface,
                                     max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,disp=False)
-    field = BiotSavart(coils)
-    print(f"Final max(BdotN/B): {jnp.max(BdotN_over_B(surface, field)):.2e}")
-    loss = jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field)))
-    return loss, coils
+    field2 = BiotSavart(coils)
+    print(f"  final max(BdotN/B): {jnp.max(BdotN_over_B(surface, field2)):.2e}")
+    loss1 = jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field1)))
+    loss2 = jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field2)))
+    return loss1, loss2, coils
 
 print(f'############################################')
 dofs_old = surface_initial.dofs
-new_dof_array = jnp.linspace(-1, 1, 10)
-qs_ESSOS_loss_array = []
+new_dof_array = jnp.linspace(-1.0, 1.0, 10)
+qs_ESSOS_loss1_array = []
+qs_ESSOS_loss2_array = []
 qs_VMEC_loss_array = []
-coils = coils_initial
 for dof in new_dof_array:
+    coils = coils_initial
     print(f'dof: {dof}')
     dofs = dofs_old.at[2].set(dof)
-    loss, coils = qs_loss(dofs, coils.dofs_curves, coils.dofs_currents, surface_initial, currents_scale=coils.currents_scale, n_segments=number_coil_points)
-    qs_ESSOS_loss_array.append(loss)
+    loss1, loss2, coils = qs_loss(dofs, coils.dofs_curves, coils.dofs_currents, surface_initial, currents_scale=coils.currents_scale, n_segments=number_coil_points)
+    qs_ESSOS_loss1_array.append(loss1)
+    qs_ESSOS_loss2_array.append(loss2)
     
     filename = 'input.rotating_ellipse_dof'
     new_surface = SurfaceRZFourier(rc=surface_initial.rc, zs=surface_initial.zs, nfp=surface_initial.nfp, range_torus=surface_initial.range_torus, nphi=surface_initial.nphi, ntheta=surface_initial.ntheta)
@@ -146,18 +149,16 @@ for dof in new_dof_array:
     new_surface.to_vtk('surface_dof')
     qs = vmec_qs_from_surface(filename)
     qs_VMEC_loss_array.append(qs)
-qs_ESSOS_loss_array = jnp.array(qs_ESSOS_loss_array)
+    print('VMEC qs:', qs)
+    print('ESSOS loss1:', loss1)
+    print('ESSOS loss2:', loss2)
+qs_ESSOS_loss1_array = jnp.array(qs_ESSOS_loss1_array)
+qs_ESSOS_loss2_array = jnp.array(qs_ESSOS_loss2_array)
 qs_VMEC_loss_array = jnp.array(qs_VMEC_loss_array)
-plt.plot(new_dof_array, qs_ESSOS_loss_array/jnp.max(qs_ESSOS_loss_array), label='ESSOS')
+plt.plot(new_dof_array, qs_ESSOS_loss1_array/jnp.max(qs_ESSOS_loss1_array), label='ESSOS without coil optimization')
+plt.plot(new_dof_array, qs_ESSOS_loss2_array/jnp.max(qs_ESSOS_loss2_array), label='ESSOS with coil optimization')
 plt.plot(new_dof_array, qs_VMEC_loss_array/jnp.max(qs_VMEC_loss_array), label='VMEC')
 plt.legend()
 plt.xlabel('Dof')
 plt.ylabel('Loss')
 plt.show()
-
-print(f'############################################')
-print(f"Mean Magnetic field on surface: {jnp.mean(jnp.linalg.norm(B_on_surface(surface_initial, BiotSavart(coils_initial)), axis=2))}")
-print(f"Initial max(BdotN/B): {jnp.max(BdotN_over_B(surface_initial, BiotSavart(coils_initial))):.2e}")
-print(f"Initial coils length: {coils_initial.length[:number_coils_per_half_field_period]}")
-print(f"Initial coils curvature: {jnp.mean(coils_initial.curvature, axis=1)[:number_coils_per_half_field_period]}")
-print(f"Initial loss qs surface: {jnp.sum(jnp.abs(loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface_initial, BiotSavart(coils_initial)))):.2e}")

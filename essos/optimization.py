@@ -46,6 +46,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     # jac_loss_partial = jit(grad(loss_partial))
     # result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
     #                   tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': disp, 'gtol': 1e-14, 'ftol': 1e-14})
+    
     # final_dofs = result.x
     
     import jax
@@ -55,12 +56,12 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     fun = jit(loss_partial)
     jac = jit(grad(loss_partial))
     params = initial_dofs
-    initial_lr = 2e-2
-    num_iterations = 2000
+    initial_lr = 3e-2
+    num_iterations = 500
 
     # Define a learning rate scheduler
     schedule = optax.exponential_decay(init_value=initial_lr, transition_steps=num_iterations/2, decay_rate=0.5)
-    signal = -1
+    sign = -1
     optimizer = optax.chain(
         # optax.scale_by_lbfgs(),
         # optax.scale_by_adam(),
@@ -68,15 +69,15 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
         optax.scale_by_schedule(schedule)
     )
     
-    optimizer = optax.amsgrad(initial_lr)
-    signal = 1
+    # optimizer = optax.amsgrad(initial_lr)
+    # sign = 1
 
     def update(optimizer, state, i):
         params, opt_state = state
         grads = jac(params)
         grads = grads.at[1].apply(jnp.negative)
         updates, new_opt_state = optimizer.update(grads, opt_state, params)
-        new_params = optax.apply_updates(params, signal*updates)
+        new_params = optax.apply_updates(params, sign*updates)
         # new_params = params - initial_lr * updates
         # jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, schedule(i), fun(new_params))
         jax.debug.print("Iteration: {}, Learning Rate: {:.6f}, Objective: {}", i, initial_lr, fun(new_params))
@@ -91,7 +92,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     params_hist = optimize(optimizer, params, num_iterations)
 
     final_dofs = params_hist[-1]
-    print(f'Final value: {fun(final_dofs):.2e}')
+    # print(f'Final value: {fun(final_dofs):.2e}')
     
     dofs_curves = jnp.reshape(final_dofs[:len_dofs_curves], (dofs_curves_shape))
     try:
