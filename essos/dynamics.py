@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
-from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
+from diffrax import diffeqsolve, ODETerm, SaveAt, Dopri8, PIDController, Event, AbstractSolver, ConstantStepSize
 from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
@@ -133,19 +133,29 @@ def FieldLine(t,
     # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 class Tracing():
-    def __init__(self, trajectories_input=None, initial_conditions=None, times=None,
-                 field=None, model=None, maxtime: float = 1e-7, timesteps: int = 500,
-                 tol_step_size = 1e-7, particles=None, condition=None):
+    def __init__(self, trajectories_input=None, initial_conditions=None, times=None, field=None,
+                 model=None, method=None, maxtime: float = 1e-7, timesteps: int = 500, stepsize: str = "adaptative",
+                 trajectories=None, tol_step_size = 1e-10, particles=None, condition=None):
+        
+        assert method == None or \
+               method == 'Boris' or \
+               issubclass(method, AbstractSolver), "Method must be None, 'Boris', or a DIFFRAX solver"
+        if method == 'Boris':
+            assert model == 'FullOrbit' or model == 'FullOrbit_Boris', "Method 'Boris' is only available for FullOrbit models"
         
         if isinstance(field, Coils):
             self.field = BiotSavart(field)
         else:
             self.field = field
+        assert stepsize in ["adaptative", "constant"], "stepsize must be 'adaptative' or 'constant'"
+
         self.model = model
+        self.method = method
         self.initial_conditions = initial_conditions
         self.times = times
         self.maxtime = maxtime
         self.timesteps = timesteps
+        self.stepsize = stepsize
         self.tol_step_size = tol_step_size
         self._trajectories = trajectories_input
         self.particles = particles
@@ -160,6 +170,8 @@ class Tracing():
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
+            if self.method is None:
+                self.method = Dopri8
         elif model == 'FullOrbit' or model == 'FullOrbit_Boris':
             self.ODE_term = ODETerm(Lorentz)
             self.args = (self.field, self.particles)
@@ -168,9 +180,15 @@ class Tracing():
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
+            if self.method is None:
+                self.method = 'Boris'
         elif model == 'FieldLine':
             self.ODE_term = ODETerm(FieldLine)
             self.args = self.field
+            if self.method is None:
+                self.method = Dopri8
+        else:
+            raise ValueError("Model must be one of: 'GuidingCenter', 'FullOrbit', 'FullOrbit_Boris', or 'FieldLine'")
             
         if self.times is None:
             self.times = jnp.linspace(0, self.maxtime, self.timesteps)
@@ -215,7 +233,7 @@ class Tracing():
         @jit
         def compute_trajectory(initial_condition) -> jnp.ndarray:
             # initial_condition = initial_condition[0]
-            if self.model == 'FullOrbit_Boris':
+            if self.model == 'FullOrbit_Boris' or self.method == 'Boris':
                 dt=self.maxtime / self.timesteps
                 def update_state(state, _):
                     # def update_fn(state):
@@ -239,18 +257,22 @@ class Tracing():
             else:
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                if self.stepsize == "adaptative":
+                    controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size)
+                elif self.stepsize == "constant":
+                    controller = ConstantStepSize()
                 trajectory = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
                     dt0=self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=Tsit5(),
+                    solver=self.method(),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
+                    stepsize_controller = controller,
                     max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys
