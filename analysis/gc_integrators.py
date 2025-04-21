@@ -85,7 +85,7 @@ ax.set_ylabel('Relative Energy Error')
 ax.set_yscale('log')
 # ax.xaxis.set_major_formatter(LogFormatterMathtext())
 ax.yaxis.set_major_formatter(LogFormatterMathtext())
-ax.tick_params(axis='x', which='both', length=0)
+ax.tick_params(axis='x', which='minor', length=0)
 yticks = [1e-6, 1e-8, 1e-10, 1e-12, 1e-14, 1e-16]
 ax.set_yticks(yticks)
 # xticks = [1e-1, 1e-0, 1e1, 1e2]

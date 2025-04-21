@@ -42,7 +42,12 @@ for method_name, method in zip(method_names, methods):
     if method_name != 'Boris':
         energies = []
         tracing_times = []
-        for trace_tolerance in [1e-8, 1e-10, 1e-12, 1e-14]:
+        for trace_tolerance in [1e-8, 1e-10, 1e-12, 1e-13, 1e-14]:
+            if method_name == 'Dopri8':
+                if trace_tolerance == 1e-13:
+                    trace_tolerance = 1e-14
+                elif trace_tolerance == 1e-14:
+                    trace_tolerance = 1e-15
             time0 = time()
             tracing = Tracing(field=field, model='FullOrbit', method=method, particles=particles,
                             maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
@@ -55,7 +60,9 @@ for method_name, method in zip(method_names, methods):
 
     energies = []
     tracing_times = []
-    for num_steps in [5000, 10000, 20000, 50000, 100000]:
+    for num_steps in [100000, 200000, 300000, 500000, 1000000]:
+        if method_name == 'Boris' or method_name == 'Dopri8':
+            num_steps //= 10
         time0 = time()
         tracing = Tracing(field=field, model='FullOrbit', method=method, particles=particles,
                         stepsize="constant", maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
@@ -75,9 +82,10 @@ ax.set_ylabel('Relative Energy Error')
 ax.set_yscale('log')
 # ax.xaxis.set_major_formatter(LogFormatterMathtext())
 ax.yaxis.set_major_formatter(LogFormatterMathtext())
-ax.tick_params(axis='x', which='both', length=0)
-yticks = [1e-1, 1e-4, 1e-7, 1e-10, 1e-13, 1e-16]
+ax.tick_params(axis='x', which='minor', length=0)
+yticks = [1e-6, 1e-8, 1e-10, 1e-12, 1e-14, 1e-16]
 ax.set_yticks(yticks)
+ax.set_ylim(top=1e-6)
 # xticks = [1e-1, 1e-0, 1e1, 1e2]
 # ax.set_xticks(xticks)
 
