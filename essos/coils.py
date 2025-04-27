@@ -492,10 +492,7 @@ def RotatedCurve(curve, phi, flip):
          [jnp.sin(phi),  jnp.cos(phi), 0],
          [0,             0,            1]]).T
     if flip:
-        rotmat = rotmat @ jnp.array(
-            [[1,  0,  0],
-             [0, -1,  0],
-             [0,  0, -1]])
+        rotmat = rotmat @ jnp.diag(jnp.array([1, -1, -1]))
     return curve @ rotmat
 
 @partial(jit, static_argnames=['nfp', 'stellsym'])
