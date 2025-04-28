@@ -31,7 +31,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     dofs_curves_shape = coils.dofs_curves.shape
     currents_scale = coils.currents_scale
     
-    loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym, **kwargs)
+    loss_partial = partial(func, dofs_curves_shape=coils.dofs_curves.shape, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym, **kwargs)
     
     ## Without JAX gradients, using finite differences
     # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,
@@ -43,6 +43,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
     #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
     #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
+    print("Starting optimization")
     result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
                       tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
     
