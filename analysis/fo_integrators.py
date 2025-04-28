@@ -4,7 +4,7 @@ os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_pr
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-plt.rcParams.update({'font.size': 16})
+plt.rcParams.update({'font.size': 18})
 from essos.fields import BiotSavart
 from essos.coils import Coils_from_json
 from essos.constants import PROTON_MASS, ONE_EV
@@ -34,7 +34,7 @@ phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=field)
 
-fig, ax = plt.subplots(figsize=(7, 5))
+fig, ax = plt.subplots(figsize=(9, 6))
 
 method_names = ['Tsit5', 'Dopri5', 'Dopri8', 'Boris']
 methods = [getattr(diffrax, method) for method in method_names[:-1]] + ['Boris']
@@ -80,17 +80,14 @@ ax.set_xlabel('Computation time (s)')
 ax.set_ylabel('Relative Energy Error')
 # ax.set_xscale('log')
 ax.set_yscale('log')
-# ax.xaxis.set_major_formatter(LogFormatterMathtext())
-ax.yaxis.set_major_formatter(LogFormatterMathtext())
 ax.tick_params(axis='x', which='minor', length=0)
 yticks = [1e-6, 1e-8, 1e-10, 1e-12, 1e-14, 1e-16]
 ax.set_yticks(yticks)
 ax.set_ylim(top=1e-6)
-# xticks = [1e-1, 1e-0, 1e1, 1e2]
-# ax.set_xticks(xticks)
-
+plt.grid()
 plt.tight_layout()
-plt.savefig(os.path.dirname(__file__) + '/fo_integration.pdf')
+plt.savefig(os.path.join(os.path.dirname(__file__), 'fo_integration.pdf'))
+plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/", 'fo_integration.pdf'))
 plt.show()
 
 ## Save results in vtk format to analyze in Paraview
