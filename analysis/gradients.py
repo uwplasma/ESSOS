@@ -59,7 +59,7 @@ print(f"Compiled gradient took {time()-time0:.4f} seconds")
 param = 42
 
 # Set the possible perturbations
-h_list = jnp.arange(-10, -1, 0.5)
+h_list = jnp.arange(-10, -1.9, 1/3)
 h_list = 10.**h_list
 
 # Number of orders for finite differences
@@ -88,10 +88,10 @@ for index, h in enumerate(h_list):
 
 # plot relative difference
 plt.figure(figsize=(9, 6))
-plt.plot(h_list, fd_diff[0], "o-", label=f'1st order', clip_on=False)
-plt.plot(h_list, fd_diff[1], "^-", label=f'2nd order', clip_on=False)
-plt.plot(h_list, fd_diff[2], "*-", label=f'4th order', clip_on=False)
-plt.plot(h_list, fd_diff[3], "s-", label=f'6th order', clip_on=False)
+plt.plot(h_list, fd_diff[0], "o-", label=f'1st order', clip_on=False, linewidth=2.5)
+plt.plot(h_list, fd_diff[1], "^-", label=f'2nd order', clip_on=False, linewidth=2.5)
+plt.plot(h_list, fd_diff[2], "*-", label=f'4th order', clip_on=False, linewidth=2.5)
+plt.plot(h_list, fd_diff[3], "s-", label=f'6th order', clip_on=False, linewidth=2.5)
 plt.legend()
 plt.xlabel('Finite differences stepsize h')
 plt.ylabel('Relative difference')
