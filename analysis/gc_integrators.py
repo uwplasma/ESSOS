@@ -2,6 +2,7 @@ import os
 number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
+from jax import block_until_ready
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
@@ -41,6 +42,7 @@ for method in ['Tsit5', 'Dopri5', 'Dopri8']:
         time0 = time()
         tracing = Tracing(field=field, model='GuidingCenter', method=getattr(diffrax, method), particles=particles,
                           maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+        block_until_ready(tracing)
         tracing_times += [time() - time0]
         
         print(f"Tracing with adaptative {method} and tolerance {trace_tolerance:.0e} took {tracing_times[-1]:.2f} seconds")
@@ -54,6 +56,7 @@ for method in ['Tsit5', 'Dopri5', 'Dopri8']:
         time0 = time()
         tracing = Tracing(field=field, model='GuidingCenter', method=getattr(diffrax, method), particles=particles,
                         stepsize="constant", maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+        block_until_ready(tracing)
         tracing_times += [time() - time0]
         
         print(f"Tracing with {method} and step {tmax/num_steps:.2e} took {tracing_times[-1]:.2f} seconds")
