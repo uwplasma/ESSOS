@@ -21,8 +21,8 @@ class Curves:
         stellsym (bool): Stellarator symmetry
         order (int): Order of the Fourier series
         curves jnp.ndarray - shape (n_indcurves*nfp*(1+stellsym), 3, 2*order+1)): Curves obtained by applying rotations and flipping corresponding to nfp fold rotational symmetry and optionally stellarator symmetry
-        gamma (jnp.array - shape (n_coils, n_segments, 3)): Discretized curves
-        gamma_dash (jnp.array - shape (n_coils, n_segments, 3)): Discretized curves derivatives
+        gamma (jnp.array - shape (n_curves, n_segments, 3)): Discretized curves
+        gamma_dash (jnp.array - shape (n_curves, n_segments, 3)): Discretized curves derivatives
 
     """
     def __init__(self, dofs: jnp.ndarray, n_segments: int = 100, nfp: int = 1, stellsym: bool = True):
@@ -63,7 +63,7 @@ class Curves:
     def _tree_unflatten(cls, aux_data, children):
         return cls(*children, **aux_data)
     
-    partial(jit, static_argnames=['self'])
+    # @partial(jit, static_argnames=['self'])
     def _set_gamma(self):
         def fori_createdata(order_index: int, data: jnp.ndarray) -> jnp.ndarray:
             return data[0] + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index - 1],                             jnp.sin(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self._curves[:, :, 2 * order_index],                             jnp.cos(2 * jnp.pi * order_index * self.quadpoints)), \
@@ -366,7 +366,7 @@ class Coils(Curves):
         old_dofs_curves = jnp.ravel(self.dofs)
         old_dofs_currents = jnp.ravel(self.dofs_currents)
         new_dofs_curves = new_dofs[:old_dofs_curves.shape[0]]
-        new_dofs_currents = new_dofs[old_dofs_curves.shape[0]:]
+        new_dofs_currents = new_dofs[old_dofs_currents.shape[0]:]
         self.dofs_curves = jnp.reshape(new_dofs_curves, (self.dofs_curves.shape))
         self.dofs_currents = new_dofs_currents
     
@@ -401,13 +401,10 @@ class Coils(Curves):
             return jnp.all(self.dofs == other.dofs) and jnp.all(self.dofs_currents == other.dofs_currents)
         else:
             raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils.")
-        
-    def __ne__(self, other):
-        return not self.__eq__(other)
 
     
     def _tree_flatten(self):
-        children = (Curves(self.dofs, self.n_segments, self.nfp, self.stellsym), self._dofs_currents)  # arrays / dynamic values
+        children = (Curves(self.dofs, self.n_segments, self.nfp, self.stellsym), self._dofs_currents*self._currents_scale)  # arrays / dynamic values
         aux_data = {}  # static values
         return (children, aux_data)
 
@@ -487,13 +484,13 @@ def CreateEquallySpacedCurves(n_curves: int, order: int, R: float, r: float, n_s
     return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
 
 def RotatedCurve(curve, phi, flip):
-    rotmat = jnp.array(
-        [[jnp.cos(phi), -jnp.sin(phi), 0],
-         [jnp.sin(phi),  jnp.cos(phi), 0],
-         [0,             0,            1]]).T
+    rotmat_T = jnp.array(
+        [[ jnp.cos(phi), jnp.sin(phi), 0],
+         [-jnp.sin(phi), jnp.cos(phi), 0],
+         [ 0,            0,            1]])
     if flip:
-        rotmat = rotmat @ jnp.diag(jnp.array([1, -1, -1]))
-    return curve @ rotmat
+        rotmat_T = rotmat_T @ jnp.diag(jnp.array([1, -1, -1]))
+    return curve @ rotmat_T
 
 @partial(jit, static_argnames=['nfp', 'stellsym'])
 def apply_symmetries_to_curves(base_curves, nfp, stellsym):
