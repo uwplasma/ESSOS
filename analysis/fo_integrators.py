@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
 from essos.fields import BiotSavart
 from essos.coils import Coils_from_json
-from essos.constants import PROTON_MASS, ONE_EV
+from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
 from essos.dynamics import Tracing, Particles
 # import integrators
 import diffrax
@@ -18,11 +18,10 @@ tmax = 1e-4
 nparticles = number_of_processors_to_use
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-12
-num_steps = 5000
 mass=PROTON_MASS
 energy=4000*ONE_EV
-
-print(f"dt = {tmax/num_steps:.2e}")
+cyclotron_frequency = ELEMENTARY_CHARGE*5/mass
+print("cyclotron period:", 1/cyclotron_frequency)
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
@@ -41,6 +40,8 @@ method_names = ['Tsit5', 'Dopri5', 'Dopri8', 'Boris']
 methods = [getattr(diffrax, method) for method in method_names[:-1]] + ['Boris']
 for method_name, method in zip(method_names, methods):
     if method_name != 'Boris':
+        starting_dt = 1e-10
+        num_steps = int(tmax/starting_dt)
         energies = []
         tracing_times = []
         for trace_tolerance in [1e-8, 1e-10, 1e-12, 1e-13, 1e-14]:
@@ -62,9 +63,9 @@ for method_name, method in zip(method_names, methods):
 
     energies = []
     tracing_times = []
-    for num_steps in [100000, 200000, 300000, 500000, 1000000]:
-        if method_name == 'Boris' or method_name == 'Dopri8':
-            num_steps //= 10
+    for n_points_in_gyration in [5, 10, 20, 50, 100]:
+        dt = 1/(n_points_in_gyration*cyclotron_frequency)
+        num_steps = int(tmax/dt)
         time0 = time()
         tracing = Tracing(field=field, model='FullOrbit', method=method, particles=particles,
                         stepsize="constant", maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
