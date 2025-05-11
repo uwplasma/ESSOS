@@ -499,11 +499,8 @@ def apply_symmetries_to_curves(base_curves, nfp, stellsym):
     for k in range(0, nfp):
         for flip in flip_list:
             for i in range(len(base_curves)):
-                if k == 0 and not flip:
-                    curves.append(base_curves[i])
-                else:
-                    rotcurve = RotatedCurve(base_curves[i].T, 2*jnp.pi*k/nfp, flip)
-                    curves.append(rotcurve.T)
+                rotcurve = RotatedCurve(base_curves[i].T, 2*jnp.pi*k/nfp, flip)
+                curves.append(rotcurve.T)
     return jnp.array(curves)
 
 @partial(jit, static_argnames=['nfp', 'stellsym'])
