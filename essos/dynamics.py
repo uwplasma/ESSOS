@@ -73,6 +73,20 @@ class Particles():
                                                                             total_speed=self.total_speed, mass=self.mass, charge=self.charge,
                                                                             phase_angle_full_orbit=self.phase_angle_full_orbit)
 
+    def join(self, other, field=None):
+        assert isinstance(other, Particles), "Cannot join with non-Particles object"
+        assert self.charge == other.charge, "Cannot join particles with different charges"
+        assert self.mass == other.mass, "Cannot join particles with different masses"
+        assert self.energy == other.energy, "Cannot join particles with different energies"
+
+        charge = self.charge
+        mass = self.mass
+        energy = self.energy
+        initial_xyz = jnp.concatenate((self.initial_xyz, other.initial_xyz), axis=0)
+        initial_vparallel_over_v = jnp.concatenate((self.initial_vparallel_over_v, other.initial_vparallel_over_v), axis=0)
+
+        return Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=initial_vparallel_over_v, charge=charge, mass=mass, energy=energy, field=field)
+    
 @partial(jit, static_argnums=(2))
 def GuidingCenter(t,
                   initial_condition,
@@ -135,7 +149,7 @@ def FieldLine(t,
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times=None, field=None,
                  model=None, method=None, maxtime: float = 1e-7, timesteps: int = 500, stepsize: str = "adaptative",
-                 trajectories=None, tol_step_size = 1e-10, particles=None, condition=None):
+                 tol_step_size = 1e-10, particles=None, condition=None):
         
         assert method == None or \
                method == 'Boris' or \
@@ -228,9 +242,7 @@ class Tracing():
             self.total_particles_lost = None
             self.loss_times = None
 
-    @partial(jit, static_argnums=(0))
     def trace(self):
-        @jit
         def compute_trajectory(initial_condition) -> jnp.ndarray:
             # initial_condition = initial_condition[0]
             if self.model == 'FullOrbit_Boris' or self.method == 'Boris':
@@ -278,26 +290,8 @@ class Tracing():
                 ).ys
             return trajectory
         
-        # if len(jax.devices())!=len(self.initial_conditions):
-        #     return vmap(compute_trajectory)(self.initial_conditions[:,None,:])
-        # else:
-        #     # num_devices = len(jax.devices())
-        #     shape = self.initial_conditions.shape
-        #     # distributed_initial_conditions = self.initial_conditions.reshape(num_devices, -1, *shape[1:])
-        #     mesh = Mesh(devices=jax.devices(), axis_names=('workers'))
-        #     in_spec = PartitionSpec('workers')  # Distribute along the workers axis
-        #     out_spec = PartitionSpec('workers')  # Gather results along the same axis
-        #     return shard_map(compute_trajectory, mesh, in_specs=in_spec, out_specs=out_spec, check_rep=False)(
-        #         self.initial_conditions).reshape((shape[0], self.timesteps, shape[1]))
-        
         return jit(vmap(compute_trajectory), in_shardings=sharding, out_shardings=sharding)(
             device_put(self.initial_conditions, sharding))
-        
-        # trajectories = []
-        # for initial_condition in self.initial_conditions:
-        #     trajectory = compute_trajectory(initial_condition)
-        #     trajectories.append(trajectory)
-        # return jnp.array(trajectories)
         
     @property
     def trajectories(self):
@@ -308,8 +302,9 @@ class Tracing():
         self._trajectories = value
     
     def _tree_flatten(self):
-        children = (self.trajectories,)  # arrays / dynamic values
-        aux_data = {'field': self.field, 'model': self.model}  # static values
+        children = (self.trajectories, self.initial_conditions, self.times, self.field)  # arrays / dynamic values
+        aux_data = {'model': self.model, 'method': self.method, 'maxtime': self.maxtime, 'timesteps': self.timesteps,'stepsize': 
+                    self.stepsize, 'tol_step_size': self.tol_step_size, 'particles': self.particles, 'condition': self.condition}  # static values
         return (children, aux_data)
 
     @classmethod
@@ -359,7 +354,7 @@ class Tracing():
         """
         Plot Poincare plots using scipy to find the roots of an interpolation. Can take particle trace or field lines.
         Args:
-            shifts (list, optional): Apply a linear shift to dependent data. Default is [0].
+            shifts (list, optional): Apply a linear shift to dependent data. Default is [pi/2].
             orientation (str, optional): 
                 'toroidal' - find time values when toroidal angle = shift [0, 2pi].
                 'z' - find time values where z coordinate = shift. Default is 'toroidal'.
