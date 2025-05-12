@@ -20,7 +20,7 @@ R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-12
 mass=PROTON_MASS
 energy=4000*ONE_EV
-cyclotron_frequency = ELEMENTARY_CHARGE*5/mass
+cyclotron_frequency = ELEMENTARY_CHARGE*0.3/mass
 print("cyclotron period:", 1/cyclotron_frequency)
 
 # Load coils and field
@@ -36,20 +36,15 @@ particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=f
 
 fig, ax = plt.subplots(figsize=(9, 6))
 
-method_names = ['Tsit5', 'Dopri5', 'Dopri8', 'Boris']
+method_names = ['Dopri8', 'Boris']
 methods = [getattr(diffrax, method) for method in method_names[:-1]] + ['Boris']
 for method_name, method in zip(method_names, methods):
     if method_name != 'Boris':
-        starting_dt = 1e-10
+        starting_dt = 1e-9
         num_steps = int(tmax/starting_dt)
         energies = []
         tracing_times = []
-        for trace_tolerance in [1e-8, 1e-10, 1e-12, 1e-13, 1e-14]:
-            if method_name == 'Dopri8':
-                if trace_tolerance == 1e-13:
-                    trace_tolerance = 1e-14
-                elif trace_tolerance == 1e-14:
-                    trace_tolerance = 1e-15
+        for trace_tolerance in [1e-8, 1e-10, 1e-12, 1e-14]:
             time0 = time()
             tracing = Tracing(field=field, model='FullOrbit', method=method, particles=particles,
                             maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
@@ -63,7 +58,7 @@ for method_name, method in zip(method_names, methods):
 
     energies = []
     tracing_times = []
-    for n_points_in_gyration in [5, 10, 20, 50, 100]:
+    for n_points_in_gyration in [5, 10, 20, 30, 40]:
         dt = 1/(n_points_in_gyration*cyclotron_frequency)
         num_steps = int(tmax/dt)
         time0 = time()
@@ -77,7 +72,6 @@ for method_name, method in zip(method_names, methods):
         energies += [jnp.mean(jnp.abs(tracing.energy-particles.energy)/particles.energy)]
     ax.plot(tracing_times, energies, label=f'{method_name}', marker='o', markersize=4, linestyle='-')
 
-from matplotlib.ticker import LogFormatterMathtext
 
 ax.legend()
 ax.set_xlabel('Computation time (s)')

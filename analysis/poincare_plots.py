@@ -28,7 +28,7 @@ timesteps_gc = int(tmax_gc/dt_gc)
 timesteps_fo = int(tmax_fo/dt_fo)
 mass = PROTON_MASS
 energy = 4000*ONE_EV
-print("cyclotron period:", 1/(ELEMENTARY_CHARGE*5/mass))
+print("cyclotron period:", 1/(ELEMENTARY_CHARGE*0.3/mass))
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
