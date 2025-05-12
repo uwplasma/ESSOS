@@ -13,9 +13,9 @@ from essos.optimization import optimize_loss_function
 # Optimization parameters
 max_coil_length = 40
 max_coil_curvature = 0.5
-order_Fourier_series_coils = 6
+order_Fourier_series_coils = 10
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 300
+maximum_function_evaluations = 500
 number_coils_per_half_field_period = 4
 tolerance_optimization = 1e-5
 ntheta=32
@@ -37,7 +37,7 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    n_segments=number_coil_points,
                                    nfp=number_of_field_periods, stellsym=True)
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
-
+print(coils_initial.dofs_curves.shape)
 # Optimize coils
 print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
 time0 = time()

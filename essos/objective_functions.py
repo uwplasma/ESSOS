@@ -117,6 +117,12 @@ def loss_coil_curvature(coils, max_coil_curvature):
 
 @partial(jit, static_argnames=['min_separation'])
 def loss_coil_separation(coils, min_separation):
+    # Sort coils by angle
+    # sorting = jnp.argsort(jnp.arctan2(coils.curves[:,1,0], coils.curves[:,0,0])%(2*jnp.pi))
+    # This can be useful to only cosider the separation between adjacent coils
+    # i_vals, j_vals = jnp.arange(len(coils)), jnp.arange(1, len(coils)+1)%len(coils)
+    # but in this case gamma_i and gamma_j have to be sorted with the sorting mask
+
     i_vals, j_vals = jnp.triu_indices(len(coils), k=1)
 
     def pair_loss(i, j):

@@ -7,31 +7,36 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
 from essos.coils import Coils_from_json
-from essos.constants import PROTON_MASS, ONE_EV
+from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
 from essos.dynamics import Tracing, Particles
 from jax import block_until_ready
-
-# Input parameters
-tmax = 1e-2
-nparticles = number_of_processors_to_use
-R0 = jnp.linspace(1.23, 1.27, nparticles)
-trace_tolerance = 1e-5
-num_steps_gc = 5000
-num_steps_fo = 100000
-mass=PROTON_MASS
-energy=5000*ONE_EV
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils_from_json(json_file)
 field = BiotSavart(coils)
 
-# Initialize particles
-Z0 = jnp.zeros(nparticles)
-phi0 = jnp.zeros(nparticles)
-initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-initial_vparallel_over_v = [0.1]
-particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=field, initial_vparallel_over_v=initial_vparallel_over_v)
+# Particle parameters
+nparticles = number_of_processors_to_use
+mass=PROTON_MASS
+energy=5000*ONE_EV
+cyclotron_frequency = ELEMENTARY_CHARGE*0.3/mass
+print("cyclotron period:", 1/cyclotron_frequency)
+
+# Particles initialization
+initial_xyz=jnp.array([[1.23, 0, 0]])
+
+particles_passing = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, initial_vparallel_over_v=[0.1], phase_angle_full_orbit=0)
+particles_traped = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, initial_vparallel_over_v=[0.9], phase_angle_full_orbit=0)
+particles = particles_passing.join(particles_traped, field=field)
+
+# Tracing parameters
+tmax = 1e-4
+trace_tolerance = 1e-15
+dt_gc = 1e-7
+dt_fo = 1e-9
+num_steps_gc = int(tmax/dt_gc)
+num_steps_fo = int(tmax/dt_fo)
 
 # Trace in ESSOS
 time0 = time()
@@ -41,9 +46,9 @@ trajectories_guidingcenter = block_until_ready(tracing_guidingcenter.trajectorie
 print(f"ESSOS guiding center tracing took {time()-time0:.2f} seconds")
 
 time0 = time()
-tracing_fullorbit = Tracing(field=field, model='FullOrbit_Boris', particles=particles,
-                  maxtime=tmax, timesteps=num_steps_fo, tol_step_size=trace_tolerance)
-trajectories_fullorbit = block_until_ready(tracing_fullorbit.trajectories)
+tracing_fullorbit = Tracing(field=field, model='FullOrbit', particles=particles, maxtime=tmax,
+                     timesteps=num_steps_fo, tol_step_size=trace_tolerance)
+block_until_ready(tracing_fullorbit.trajectories)
 print(f"ESSOS full orbit tracing took {time()-time0:.2f} seconds")
 
 # Plot trajectories, velocity parallel to the magnetic field, and energy error
@@ -57,7 +62,7 @@ coils.plot(ax=ax1, show=False)
 tracing_guidingcenter.plot(ax=ax1, show=False)
 tracing_fullorbit.plot(ax=ax1, show=False)
 
-for i, (trajectory_gc, trajectory_fo) in enumerate(zip(trajectories_guidingcenter, trajectories_fullorbit)):
+for i, (trajectory_gc, trajectory_fo) in enumerate(zip(trajectories_guidingcenter, tracing_fullorbit.trajectories)):
     ax2.plot(tracing_guidingcenter.times, jnp.abs(tracing_guidingcenter.energy[i]-particles.energy)/particles.energy, '-', label=f'Particle {i+1} GC', linewidth=1.0, alpha=0.7)
     ax2.plot(tracing_fullorbit.times, jnp.abs(tracing_fullorbit.energy[i]-particles.energy)/particles.energy, '--', label=f'Particle {i+1} FO', linewidth=1.0, markersize=0.5, alpha=0.7)
     def compute_v_parallel(trajectory_t):
@@ -84,5 +89,6 @@ plt.tight_layout()
 plt.show()
 
 ## Save results in vtk format to analyze in Paraview
-# tracing.to_vtk('trajectories')
-# coils.to_vtk('coils')
+tracing_guidingcenter.to_vtk('trajectories_gc')
+tracing_fullorbit.to_vtk('trajectories_fo')
+coils.to_vtk('coils')

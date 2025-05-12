@@ -1,6 +1,6 @@
 
 import os
-number_of_processors_to_use = 12 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 4 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -14,7 +14,7 @@ from essos.objective_functions import loss_optimize_coils_for_particle_confineme
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = number_of_processors_to_use
+nparticles = number_of_processors_to_use*3
 order_Fourier_series_coils = 4
 number_coil_points = 80
 maximum_function_evaluations = 29
@@ -38,7 +38,7 @@ coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coil
 phi_array = jnp.linspace(0, 2*jnp.pi, nparticles)
 initial_xyz=jnp.array([major_radius_coils*jnp.cos(phi_array), major_radius_coils*jnp.sin(phi_array), 0*phi_array]).T
 particles = Particles(initial_xyz=initial_xyz)
-tracing_initial = Tracing(field=coils_initial, particles=particles, maxtime=maxtime_tracing, model=model)
+tracing_initial = Tracing(field=coils_initial, particles=particles, maxtime=maxtime_tracing, model=model, tol_step_size = 1e-14)
 
 # Optimize coils
 print(f'Optimizing coils with {maximum_function_evaluations} function evaluations and maxtime_tracing={maxtime_tracing}')
