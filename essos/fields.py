@@ -44,7 +44,19 @@ class BiotSavart():
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         return points
+    
+#     def _tree_flatten(self):
+#         children = (self.coils,)
+#         aux_data = {}
+#         return (children, aux_data)
+    
+#     @classmethod
+#     def _tree_unflatten(cls, aux_data, children):
+#         return cls(*children, **aux_data)
 
+# tree_util.register_pytree_node(BiotSavart,
+#                                BiotSavart._tree_flatten,
+#                                BiotSavart._tree_unflatten)
 
 class Vmec():
     def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus'):
