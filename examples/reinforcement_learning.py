@@ -63,17 +63,15 @@ n_segments = coils.n_segments
 dofs_curves_shape = coils.dofs_curves.shape
 currents_scale = coils.currents_scale
 func = partial(loss_optimize_coils_for_particle_confinement, max_coil_curvature=max_coil_curvature, particles=particles,
-                                                 n_segments=n_segments, stellsym=stellsym, target_B_on_axis=target_B_on_axis, maxtime=maxtime_tracing,
+                                                 n_segments=n_segments, stellsym=stellsym, target_B_on_axis=target_B_on_axis,
                                                  max_coil_length=max_coil_length, num_steps=num_steps, trace_tolerance=trace_tolerance, model=model)
-# loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
+loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
 
-def f(x):
-    len_dofs_curves = len(jnp.ravel(coils.dofs_curves))
-    dofs_curves = jnp.reshape(x[:len_dofs_curves], (coils.dofs_curves.shape))
-    dofs_currents = x[len_dofs_curves:]
-    test_curves = Curves(dofs_curves, coils.n_segments, coils.nfp, coils.stellsym)
-    test_coils = Coils(test_curves, currents=dofs_currents*coils.currents_scale)
-    return func(dofs_curves=test_curves.dofs, currents_scale=test_coils.currents_scale, nfp=test_coils.nfp, n_segments=test_coils.n_segments, stellsym=test_coils.stellsym)
+# fraction = step / num_steps
+# new_maxtime = maxtime_tracing * (1 + 9 * fraction)  # From 1x to 10x
+
+f = partial(loss_partial, maxtime=maxtime_tracing)
+
 
 # --- Policy network ---
 class Policy(nn.Module):
@@ -81,17 +79,17 @@ class Policy(nn.Module):
     hidden_sizes: Sequence[int] = (64, 64)
 
     @nn.compact
-    def __call__(self, key):
+    def __call__(self, x):
         for h in self.hidden_sizes:
-            key, subkey = random.split(key)
-            x = random.normal(subkey, (h,))
+            x = nn.Dense(h)(x)
+            x = nn.relu(x)
         mean = nn.Dense(self.action_dim)(x)
         log_std = nn.Dense(self.action_dim)(x)
         return mean, log_std
 
 # --- Sample action from policy ---
 def sample_action(params, key, model):
-    mean, log_std = model.apply(params, key)
+    mean, log_std = model.apply(params, initial_dofs)
     std = jnp.exp(log_std)
     action = mean + std * random.normal(key, mean.shape)
     return action
@@ -126,7 +124,7 @@ def train_step(opt_state, params, key, model, optimizer):
 def train(seed=0, num_steps=1000, lr=1e-3, action_dim=5):
     key = random.PRNGKey(seed)
     model = Policy(action_dim)
-    params = model.init(key)
+    params = model.init(key, initial_dofs)
     optimizer = adam(lr)
     opt_state = optimizer.init(params)
 
@@ -139,26 +137,18 @@ def train(seed=0, num_steps=1000, lr=1e-3, action_dim=5):
     return params, model
 
 trained_params, policy_model = train(action_dim=5)
-
-
-
-
-
-
-
-
-
-
-
+key = random.PRNGKey(42)
+final_action = sample_action(trained_params, key, policy_model)
+final_x = final_action
 
 
 # jac_loss_partial = jit(grad(loss_partial))
 # result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
 #                     tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
+# final_x = result.x
 
-
-dofs_curves = jnp.reshape(result.x[:len_dofs_curves], (dofs_curves_shape))
-dofs_currents = result.x[len_dofs_curves:]
+dofs_curves = jnp.reshape(final_x[:len_dofs_curves], (dofs_curves_shape))
+dofs_currents = final_x[len_dofs_curves:]
 curves = Curves(dofs_curves, n_segments, nfp, stellsym)
 new_coils = Coils(curves=curves, currents=dofs_currents*coils.currents_scale)
 coils_optimized = new_coils
