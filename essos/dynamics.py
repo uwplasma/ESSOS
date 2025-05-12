@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
-from diffrax import diffeqsolve, ODETerm, SaveAt, Dopri8, PIDController, Event, AbstractSolver, ConstantStepSize
+from diffrax import diffeqsolve, ODETerm, SaveAt, Dopri8, PIDController, Event, AbstractSolver, ConstantStepSize, StepTo
 from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
@@ -45,7 +45,7 @@ def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, ch
 class Particles():
     def __init__(self, initial_xyz=None, initial_vparallel_over_v=None, charge=ALPHA_PARTICLE_CHARGE,
                  mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY, min_vparallel_over_v=-1,
-                 max_vparallel_over_v=1, field=None, initial_vxvyvz=None, initial_xyz_fullorbit=None):
+                 max_vparallel_over_v=1, field=None, initial_vxvyvz=None, initial_xyz_fullorbit=None, phase_angle_full_orbit = 0):
         self.charge = charge
         self.mass = mass
         self.energy = energy
@@ -53,7 +53,7 @@ class Particles():
         self.nparticles = len(initial_xyz)
         self.initial_xyz_fullorbit = initial_xyz_fullorbit
         self.initial_vxvyvz = initial_vxvyvz
-        self.phase_angle_full_orbit = 0
+        self.phase_angle_full_orbit = phase_angle_full_orbit
         
         if initial_vparallel_over_v is not None:
             self.initial_vparallel_over_v = jnp.array(initial_vparallel_over_v)
@@ -267,25 +267,27 @@ class Tracing():
                 _, trajectory = lax.scan(update_state, initial_condition, jnp.arange(len(self.times)-1))
                 trajectory = jnp.vstack([initial_condition, trajectory])
             else:
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                # import warnings
+                # warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
                 if self.stepsize == "adaptative":
                     controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size)
+                    dt0 = self.maxtime / self.timesteps
                 elif self.stepsize == "constant":
-                    controller = ConstantStepSize()
+                    controller = StepTo(self.times)
+                    dt0 = None
                 trajectory = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
-                    dt0=self.maxtime / self.timesteps,
+                    dt0=dt0,
                     y0=initial_condition,
                     solver=self.method(),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
-                    throw=False,
+                    throw=True,
                     # adjoint=DirectAdjoint(),
                     stepsize_controller = controller,
-                    max_steps=10000000000,
+                    max_steps = int(1e10),
                     event = Event(self.condition)
                 ).ys
             return trajectory
@@ -302,8 +304,8 @@ class Tracing():
         self._trajectories = value
     
     def _tree_flatten(self):
-        children = (self.trajectories, self.initial_conditions, self.times, self.field)  # arrays / dynamic values
-        aux_data = {'model': self.model, 'method': self.method, 'maxtime': self.maxtime, 'timesteps': self.timesteps,'stepsize': 
+        children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
+        aux_data = {'field': self.field, 'model': self.model, 'method': self.method, 'maxtime': self.maxtime, 'timesteps': self.timesteps,'stepsize': 
                     self.stepsize, 'tol_step_size': self.tol_step_size, 'particles': self.particles, 'condition': self.condition}  # static values
         return (children, aux_data)
 
