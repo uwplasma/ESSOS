@@ -3,7 +3,7 @@ from functools import partial
 number_of_processors_to_use = 8 # Parallelization, this should divide ntheta*nphi
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
-from jax import jit, grad
+from jax import jit, grad, block_until_ready
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
@@ -48,18 +48,30 @@ loss_partial = partial(loss_BdotN, dofs_curves_shape=coils.dofs_curves.shape, cu
 grad_loss_partial = jit(grad(loss_partial))
 
 time0 = time()
+loss = loss_partial(coils.x)
+block_until_ready(loss)
+print(f"Loss took {time()-time0:.4f} seconds. Gradient would take {(time()-time0)*(coils.x.size +1):.4f} seconds")
+
+time0 = time()
+loss_comp = loss_partial(coils.x)
+block_until_ready(loss_comp)
+print(f"Compiled loss took {time()-time0:.4f} seconds. Gradient would take {(time()-time0)*(coils.x.size +1):.4f} seconds")
+
+time0 = time()
 grad_loss = grad_loss_partial(coils.x)
+block_until_ready(grad_loss)
 print(f"Gradient took {time()-time0:.4f} seconds")
 
 time0 = time()
 grad_loss_comp = grad_loss_partial(coils.x)
+block_until_ready(grad_loss_comp)
 print(f"Compiled gradient took {time()-time0:.4f} seconds")
 
 # Parameter to perturb
 param = 42
 
 # Set the possible perturbations
-h_list = jnp.arange(-10, -1.9, 1/3)
+h_list = jnp.arange(-9, -0.9, 1/3)
 h_list = 10.**h_list
 
 # Number of orders for finite differences
@@ -102,8 +114,6 @@ plt.grid(which='both', axis='x')
 plt.grid(which='major', axis='y')
 for spine in plt.gca().spines.values():
     spine.set_zorder(0)
-# plt.yticks([1e-11, 1e-9, 1e-7, 1e-5, 1e-3])
-# plt.gca().yaxis.set_minor_locator(plt.NullLocator())
 plt.tight_layout()
 plt.savefig(os.path.join(os.path.dirname(__file__), 'gradients.pdf'))
 plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" ,'gradients.pdf'))
