@@ -27,11 +27,11 @@ print("cyclotron period:", 1/cyclotron_frequency)
 
 # Particles initialization
 initial_xyz=jnp.array([[1.23, 0, 0]])
-particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, initial_vparallel_over_v=[0.9], phase_angle_full_orbit=0)
+particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, initial_vparallel_over_v=[0.8])
 
 # Tracing parameters
 tmax = 1e-4
-dt = 5e-8
+dt = 1e-7
 num_steps = int(tmax/dt)
 
 fig, ax = plt.subplots(figsize=(9, 6))
@@ -39,25 +39,25 @@ fig, ax = plt.subplots(figsize=(9, 6))
 for method in ['Tsit5', 'Dopri5', 'Dopri8']:
     energies = []
     tracing_times = []
-    for trace_tolerance in [1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15]:
+    for trace_tolerance in [1e-9, 1e-10, 1e-11, 1e-12, 1e-13]:
         time0 = time()
-        tracing = Tracing(field=field, model='GuidingCenter', method=getattr(diffrax, method), particles=particles,
-                          maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+        tracing = Tracing('GuidingCenter', field, tmax, method=getattr(diffrax, method), timesteps=num_steps,
+                          stepsize='adaptive', tol_step_size=trace_tolerance, particles=particles,)
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
         
-        print(f"Tracing with adaptative {method} and tolerance {trace_tolerance:.0e} took {tracing_times[-1]:.2f} seconds")
+        print(f"Tracing with adaptive {method} and tolerance {trace_tolerance:.0e} took {tracing_times[-1]:.2f} seconds")
         
         energies += [jnp.max(jnp.abs(tracing.energy-particles.energy)/particles.energy)]
-    ax.plot(tracing_times, energies, label=f'adaptative {method}', marker='o', markersize=3, linestyle='-')
+    ax.plot(tracing_times, energies, label=f'adaptive {method}', marker='o', markersize=3, linestyle='-')
 
     energies = []
     tracing_times = []
-    for dt in [2e-7, 1e-7, 5e-8, 2.5e-8]:
+    for dt in [2e-7, 1e-7, 5e-8, 2e-8]:
         num_steps = int(tmax/dt)
         time0 = time()
-        tracing = Tracing(field=field, model='GuidingCenter', method=getattr(diffrax, method), particles=particles,
-                        stepsize="constant", maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+        tracing = Tracing('GuidingCenter', field, tmax, method=getattr(diffrax, method), 
+                          timesteps=num_steps, stepsize="constant", particles=particles)
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
         

@@ -13,42 +13,40 @@ from essos.dynamics import Tracing, Particles
 # import integrators
 import diffrax
 
-# Input parameters
-tmax = 1e-4
-nparticles = number_of_processors_to_use
-R0 = jnp.linspace(1.23, 1.27, nparticles)
-trace_tolerance = 1e-12
-mass=PROTON_MASS
-energy=4000*ONE_EV
-cyclotron_frequency = ELEMENTARY_CHARGE*0.3/mass
-print("cyclotron period:", 1/cyclotron_frequency)
-
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils_from_json(json_file)
 field = BiotSavart(coils)
 
-# Initialize particles
-Z0 = jnp.zeros(nparticles)
-phi0 = jnp.zeros(nparticles)
-initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=field)
+# Particle parameters
+nparticles = number_of_processors_to_use
+mass=PROTON_MASS
+energy=5000*ONE_EV
+cyclotron_frequency = ELEMENTARY_CHARGE*0.3/mass
+print("cyclotron period:", 1/cyclotron_frequency)
+
+# Particles initialization
+initial_xyz=jnp.array([[1.23, 0, 0]])
+particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, initial_vparallel_over_v=[0.8], field=field)
+
+# Tracing parameters
+tmax = 1e-5
+dt = 1e-9
+num_steps = int(tmax/dt)
 
 fig, ax = plt.subplots(figsize=(9, 6))
 
-method_names = ['Dopri8', 'Boris']
+method_names = ['Tsit5', 'Dopri5', 'Dopri8', 'Boris']
 methods = [getattr(diffrax, method) for method in method_names[:-1]] + ['Boris']
 for method_name, method in zip(method_names, methods):
     if method_name != 'Boris':
-        starting_dt = 1e-9
-        num_steps = int(tmax/starting_dt)
         energies = []
         tracing_times = []
         for trace_tolerance in [1e-8, 1e-10, 1e-12, 1e-14]:
             time0 = time()
-            tracing = Tracing(field=field, model='FullOrbit', method=method, particles=particles,
-                            maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
-            block_until_ready(tracing)
+            tracing = Tracing('FullOrbit', field, tmax, method=method, timesteps=num_steps,
+                              stepsize='adaptive', tol_step_size=trace_tolerance, particles=particles)
+            block_until_ready(tracing.trajectories)
             tracing_times += [time() - time0]
             
             print(f"Tracing with adaptative {method_name} and tolerance {trace_tolerance:.0e} took {tracing_times[-1]:.2f} seconds")
@@ -62,9 +60,9 @@ for method_name, method in zip(method_names, methods):
         dt = 1/(n_points_in_gyration*cyclotron_frequency)
         num_steps = int(tmax/dt)
         time0 = time()
-        tracing = Tracing(field=field, model='FullOrbit', method=method, particles=particles,
-                        stepsize="constant", maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
-        block_until_ready(tracing)
+        tracing = Tracing('FullOrbit', field, tmax, method=method, timesteps=num_steps,
+                        stepsize="constant", particles=particles)
+        block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
         
         print(f"Tracing with {method_name} and step {tmax/num_steps:.2e} took {tracing_times[-1]:.2f} seconds")

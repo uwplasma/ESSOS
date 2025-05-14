@@ -147,32 +147,65 @@ def FieldLine(t,
     # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 class Tracing():
-    def __init__(self, trajectories_input=None, initial_conditions=None, times=None, field=None,
-                 model=None, method=None, maxtime: float = 1e-7, timesteps: int = 500, stepsize: str = "adaptative",
-                 tol_step_size = 1e-10, particles=None, condition=None):
+    def __init__(self, model: str, field, maxtime: float, method=None, times=None, 
+                 timesteps: int = None, stepsize: str = "adaptive", dt0: float=1e-5, 
+                 tol_step_size = 1e-10, particles=None, initial_conditions=None, condition=None):
+        """
+        Tracing class to compute the trajectories of particles in a magnetic field.
         
-        assert method == None or \
+        Parameters
+        ----------
+        
+        """
+        
+        assert model in ["GuidingCenter", "FullOrbit", "FieldLine"], "Model must be one of: 'GuidingCenter', 'FullOrbit', or 'FieldLine'"
+        assert method is None or \
                method == 'Boris' or \
                issubclass(method, AbstractSolver), "Method must be None, 'Boris', or a DIFFRAX solver"
+        assert stepsize in ["adaptive", "constant"], "stepsize must be 'adaptive' or 'constant'"
         if method == 'Boris':
-            assert model == 'FullOrbit' or model == 'FullOrbit_Boris', "Method 'Boris' is only available for FullOrbit models"
-        
-        if isinstance(field, Coils):
-            self.field = BiotSavart(field)
-        else:
-            self.field = field
-        assert stepsize in ["adaptative", "constant"], "stepsize must be 'adaptative' or 'constant'"
-
+            assert model == 'FullOrbit', "Method 'Boris' is only available for full orbit model"
+            assert stepsize == "constant", "Method 'Boris' is only available for constant step size"
         self.model = model
         self.method = method
-        self.initial_conditions = initial_conditions
-        self.times = times
-        self.maxtime = maxtime
-        self.timesteps = timesteps
         self.stepsize = stepsize
-        self.tol_step_size = tol_step_size
-        self._trajectories = trajectories_input
-        self.particles = particles
+
+        assert isinstance(field, (BiotSavart, Coils, Vmec)), "Field must be a BiotSavart, Coils, or Vmec object"
+        self.field = BiotSavart(field) if isinstance(field, Coils) else field
+
+        assert isinstance(maxtime, (int, float)), "maxtime must be a float"
+        assert maxtime > 0, "maxtime must be greater than 0"
+        self.maxtime = maxtime
+
+        assert times is not None or timesteps is not None, "Either times or timesteps must be provided"
+
+        assert timesteps is None or \
+               isinstance(timesteps, (int, float)) and \
+               timesteps > 0, "timesteps must be None or a positive float"
+        assert times is None or \
+               isinstance(times, jnp.ndarray), "times must be None or a numpy array"
+        self.times = jnp.linspace(0, maxtime, timesteps) if times is None else times
+        self.timesteps = len(self.times)
+                    
+        if stepsize == "adaptive":
+            # assert dt0 is not None, "dt0 must be provided for adaptive step size"
+            assert tol_step_size is not None, "tol_step_size must be provided for adaptive step size"
+            assert isinstance(tol_step_size, float), "tol_step_size must be a float"
+            assert tol_step_size > 0, "tol_step_size must be greater than 0"
+            # self.dt0 = dt0
+            self.tol_step_size = tol_step_size
+        elif stepsize == "constant":
+            assert maxtime == self.times[-1], "maxtime must be equal to the last time in the times array for constant step size"
+            # self.dt0 = None
+
+        if model == 'FieldLine':
+            assert initial_conditions is not None, "initial_conditions must be provided for FieldLine model"
+            self.initial_conditions = initial_conditions
+        elif model == 'GuidingCenter' or model == 'FullOrbit':
+            assert isinstance(particles, Particles), "particles object must be provided for GuidingCenter and FullOrbit models"
+            self.particles = particles
+
+        
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
@@ -180,13 +213,14 @@ class Tracing():
                     s, _, _, _ = y
                     return s-1
                 self.condition = condition_Vmec
+
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
             if self.method is None:
                 self.method = Dopri8
-        elif model == 'FullOrbit' or model == 'FullOrbit_Boris':
+        elif model == 'FullOrbit':
             self.ODE_term = ODETerm(Lorentz)
             self.args = (self.field, self.particles)
             if self.particles.initial_xyz_fullorbit is None:
@@ -201,14 +235,8 @@ class Tracing():
             self.args = self.field
             if self.method is None:
                 self.method = Dopri8
-        else:
-            raise ValueError("Model must be one of: 'GuidingCenter', 'FullOrbit', 'FullOrbit_Boris', or 'FieldLine'")
             
-        if self.times is None:
-            self.times = jnp.linspace(0, self.maxtime, self.timesteps)
-        else:
-            self.maxtime = jnp.max(self.times)
-            self.timesteps = len(self.times)
+        
             
         self._trajectories = self.trace()
         
@@ -224,7 +252,7 @@ class Tracing():
                 mu = (self.particles.energy - self.particles.mass * vpar[0]**2 / 2) / AbsB[0]
                 return self.particles.mass * vpar**2 / 2 + mu * AbsB
             self.energy = vmap(compute_energy_gc)(self._trajectories)
-        elif model == 'FullOrbit' or model == 'FullOrbit_Boris':
+        elif model == 'FullOrbit':
             @jit
             def compute_energy_fo(trajectory):
                 vxvyvz = trajectory[:, 3:]
@@ -246,7 +274,7 @@ class Tracing():
         def compute_trajectory(initial_condition) -> jnp.ndarray:
             # initial_condition = initial_condition[0]
             if self.model == 'FullOrbit_Boris' or self.method == 'Boris':
-                dt=self.maxtime / self.timesteps
+                dt = self.times[1] - self.times[0]
                 def update_state(state, _):
                     # def update_fn(state):
                     x = state[:3]
@@ -269,17 +297,15 @@ class Tracing():
             else:
                 # import warnings
                 # warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                if self.stepsize == "adaptative":
+                if self.stepsize == "adaptive":
                     controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size)
-                    dt0 = self.maxtime / self.timesteps
                 elif self.stepsize == "constant":
                     controller = StepTo(self.times)
-                    dt0 = None
                 trajectory = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
-                    dt0=dt0,
+                    dt0=None,
                     y0=initial_condition,
                     solver=self.method(),
                     args=self.args,
@@ -332,7 +358,7 @@ class Tracing():
         trajectories_xyz = jnp.array(self.trajectories_xyz)
         n_trajectories_plot = jnp.min(jnp.array([n_trajectories_plot, trajectories_xyz.shape[0]]))
         for i in random.choice(random.PRNGKey(0), trajectories_xyz.shape[0], (n_trajectories_plot,), replace=False):
-            ax.plot(trajectories_xyz[i, :, 0], trajectories_xyz[i, :, 1], trajectories_xyz[i, :, 2], linewidth=0.5, **kwargs)
+            ax.plot(trajectories_xyz[i, :, 0], trajectories_xyz[i, :, 1], trajectories_xyz[i, :, 2], **kwargs)
         ax.grid(False)
         if axis_equal:
             fix_matplotlib_3d(ax)
