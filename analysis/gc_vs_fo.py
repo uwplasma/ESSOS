@@ -11,6 +11,10 @@ from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
 from essos.dynamics import Tracing, Particles
 from jax import block_until_ready
 
+output_dir = os.path.join(os.path.dirname(__file__), 'output')
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+    
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils_from_json(json_file)
@@ -31,8 +35,8 @@ particles_traped = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, 
 particles = particles_passing.join(particles_traped, field=field)
 
 # Tracing parameters
-tmax = 1e-4
-trace_tolerance = 1e-15
+tmax = 1e-3
+trace_tolerance = 1e-14
 dt_gc = 1e-7
 dt_fo = 1e-9
 num_steps_gc = int(tmax/dt_gc)
@@ -68,12 +72,12 @@ plt.xlim(0, tmax*1000)
 plt.ylim(bottom=0)
 plt.legend()
 plt.tight_layout()
-plt.savefig(os.path.join(os.path.dirname(__file__), 'energies.png'), dpi=300)
-
+plt.savefig(os.path.join(output_dir, 'energies.png'), dpi=300)
+plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" ,'energies.png'), dpi=300)
 
 plt.show()
 
 ## Save results in vtk format to analyze in Paraview
-tracing_gc.to_vtk(os.path.join(os.path.dirname(__file__), 'trajectories_gc'))
-tracing_fo.to_vtk(os.path.join(os.path.dirname(__file__), 'trajectories_fo'))
-coils.to_vtk(os.path.join(os.path.dirname(__file__), 'coils'))
+# tracing_gc.to_vtk(os.path.join(output_dir, 'trajectories_gc'))
+# tracing_fo.to_vtk(os.path.join(output_dir, 'trajectories_fo'))
+# coils.to_vtk(os.path.join(output_dir, 'coils'))

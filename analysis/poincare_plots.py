@@ -12,6 +12,9 @@ from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
 from essos.fields import BiotSavart
 from essos.dynamics import Tracing, Particles
 
+output_dir = os.path.join(os.path.dirname(__file__), 'output')
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
 
 # Input parameters
 tmax_fl = 50000
@@ -97,7 +100,7 @@ print(f"ESSOS tracing of {nparticles} particles with GC for {tmax_gc:.1e}s took 
 # ax.set_ylim(-0.3, 0.3)
 # plt.grid(visible=False)
 # plt.tight_layout()
-# plt.savefig(os.path.join(os.path.dirname(__file__), 'poincare_plot_fl.png'), dpi=300)
+# plt.savefig(os.path.join(output_dir, 'poincare_plot_fl.png'), dpi=300)
 # plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" , 'poincare_plot_fl.png'), dpi=300)
 
 
@@ -111,7 +114,7 @@ print(f"ESSOS tracing of {nparticles} particles with GC for {tmax_gc:.1e}s took 
 # plt.ylim(-0.3, 0.3)
 # plt.grid(visible=False)
 # plt.tight_layout()
-# plt.savefig(os.path.join(os.path.dirname(__file__), 'poincare_plot_fo.png'), dpi=300)
+# plt.savefig(os.path.join(output_dir 'poincare_plot_fo.png'), dpi=300)
 # plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" , 'poincare_plot_fo.png'), dpi=300)
 
 
@@ -125,7 +128,7 @@ print(f"ESSOS tracing of {nparticles} particles with GC for {tmax_gc:.1e}s took 
 # ax.set_ylim(-0.3, 0.3)
 # plt.grid(visible=False)
 # plt.tight_layout()
-# plt.savefig(os.path.join(os.path.dirname(__file__), 'poincare_plot_gc.png'), dpi=300)
+# plt.savefig(os.path.join(output_dir, 'poincare_plot_gc.png'), dpi=300)
 # plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" , 'poincare_plot_gc.png'), dpi=300)
 
 # plt.show()

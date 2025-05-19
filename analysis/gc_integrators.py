@@ -13,6 +13,10 @@ from essos.dynamics import Tracing, Particles
 # import integrators
 import diffrax
 
+output_dir = os.path.join(os.path.dirname(__file__), 'output')
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils_from_json(json_file)
@@ -36,24 +40,26 @@ num_steps = int(tmax/dt)
 
 fig, ax = plt.subplots(figsize=(9, 6))
 
-for method in ['Tsit5', 'Dopri5', 'Dopri8']:
+for method in ['Tsit5', 'Dopri5', 'Dopri8', 'Kvaerno5']:
     energies = []
     tracing_times = []
-    for trace_tolerance in [1e-9, 1e-10, 1e-11, 1e-12, 1e-13]:
+    for tolerance in [1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15]:
         time0 = time()
         tracing = Tracing('GuidingCenter', field, tmax, method=getattr(diffrax, method), timesteps=num_steps,
-                          stepsize='adaptive', tol_step_size=trace_tolerance, particles=particles,)
+                          stepsize='adaptive', tol_step_size=tolerance, particles=particles)
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
         
-        print(f"Tracing with adaptive {method} and tolerance {trace_tolerance:.0e} took {tracing_times[-1]:.2f} seconds")
+        print(f"Tracing with adaptive {method} and {tolerance=:.0e} took {tracing_times[-1]:.2f} seconds")
         
         energies += [jnp.max(jnp.abs(tracing.energy-particles.energy)/particles.energy)]
-    ax.plot(tracing_times, energies, label=f'adaptive {method}', marker='o', markersize=3, linestyle='-')
+    ax.plot(tracing_times, energies, label=f'{method} adapt', marker='o', markersize=3, linestyle='-')
+
+    if method == 'Kvaerno5': continue
 
     energies = []
     tracing_times = []
-    for dt in [2e-7, 1e-7, 5e-8, 2e-8]:
+    for dt in [4e-7, 2e-7, 1e-7, 8e-8, 6e-8, 4e-8, 2e-8, 1e-8]:
         num_steps = int(tmax/dt)
         time0 = time()
         tracing = Tracing('GuidingCenter', field, tmax, method=getattr(diffrax, method), 
@@ -61,23 +67,24 @@ for method in ['Tsit5', 'Dopri5', 'Dopri8']:
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
         
-        print(f"Tracing with {method} and step {tmax/num_steps:.2e} took {tracing_times[-1]:.2f} seconds")
+        print(f"Tracing with {method} and {dt=:.2e} took {tracing_times[-1]:.2f} seconds")
         
         energies += [jnp.max(jnp.abs(tracing.energy-particles.energy)/particles.energy)]
     ax.plot(tracing_times, energies, label=f'{method}', marker='o', markersize=4, linestyle='-')
 
 
-ax.legend()
+ax.legend(fontsize=15)
 ax.set_xlabel('Computation time (s)')
 ax.set_ylabel('Relative Energy Error')
-# ax.set_xscale('log')
 ax.set_yscale('log')
-ax.tick_params(axis='x', which='minor', length=0)
-yticks = [1e-6, 1e-8, 1e-10, 1e-12, 1e-14, 1e-16]
-ax.set_yticks(yticks)
-plt.grid()
+ax.set_xscale('log')
+ax.set_yscale('log')
+ax.set_xlim(1e-1, 1e2)
+ax.set_ylim(1e-16, 1e-4)
+plt.grid(axis='x', which='both', linestyle='--', linewidth=0.6)
+plt.grid(axis='y', which='major', linestyle='--', linewidth=0.6)
 plt.tight_layout()
-plt.savefig(os.path.join(os.path.dirname(__file__), 'gc_integration.pdf'))
+plt.savefig(os.path.join(output_dir, 'gc_integration.pdf'))
 plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/", 'gc_integration.pdf'))
 plt.show()
 

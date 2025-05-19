@@ -11,6 +11,10 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import Vmec
 from essos.objective_functions import loss_BdotN
 
+output_dir = os.path.join(os.path.dirname(__file__), 'output')
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+    
 # Optimization parameters
 max_coil_length = 40
 max_coil_curvature = 0.5
@@ -104,17 +108,18 @@ plt.plot(h_list, fd_diff[0], "o-", label=f'1st order', clip_on=False, linewidth=
 plt.plot(h_list, fd_diff[1], "^-", label=f'2nd order', clip_on=False, linewidth=2.5)
 plt.plot(h_list, fd_diff[2], "*-", label=f'4th order', clip_on=False, linewidth=2.5)
 plt.plot(h_list, fd_diff[3], "s-", label=f'6th order', clip_on=False, linewidth=2.5)
-plt.legend()
+plt.legend(fontsize=15)
 plt.xlabel('Finite differences stepsize h')
 plt.ylabel('Relative difference')
 plt.xscale('log')
 plt.yscale('log')
+plt.ylim(1e-13, 1e-1)
 plt.xlim(jnp.min(h_list), jnp.max(h_list))
-plt.grid(which='both', axis='x')
-plt.grid(which='major', axis='y')
+plt.grid(which='both', axis='x', linestyle='--', linewidth=0.6)
+plt.grid(which='major', axis='y', linestyle='--', linewidth=0.6)
 for spine in plt.gca().spines.values():
     spine.set_zorder(0)
 plt.tight_layout()
-plt.savefig(os.path.join(os.path.dirname(__file__), 'gradients.pdf'))
+plt.savefig(os.path.join(output_dir, 'gradients.pdf'))
 plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" ,'gradients.pdf'))
 plt.show()
