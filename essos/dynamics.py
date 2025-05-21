@@ -11,6 +11,7 @@ from essos.fields import BiotSavart, Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.plot import fix_matplotlib_3d
 from essos.util import roots
+import warnings
 
 mesh = Mesh(jax.devices(), ("dev",))
 sharding = NamedSharding(mesh, PartitionSpec("dev", None))
@@ -165,7 +166,8 @@ class Tracing():
         assert stepsize in ["adaptive", "constant"], "stepsize must be 'adaptive' or 'constant'"
         if method == 'Boris':
             assert model == 'FullOrbit', "Method 'Boris' is only available for full orbit model"
-            assert stepsize == "constant", "Method 'Boris' is only available for constant step size"
+            warnings.warn("The 'Boris' method is only supported with a constant step size. 'stepsize' has been set to constant.")
+            stepsize = "constant"
         self.model = model
         self.method = method
         self.stepsize = stepsize
@@ -192,15 +194,15 @@ class Tracing():
             assert tol_step_size is not None, "tol_step_size must be provided for adaptive step size"
             assert isinstance(tol_step_size, float), "tol_step_size must be a float"
             assert tol_step_size > 0, "tol_step_size must be greater than 0"
-            # self.dt0 = dt0
             self.tol_step_size = tol_step_size
         elif stepsize == "constant":
             assert maxtime == self.times[-1], "maxtime must be equal to the last time in the times array for constant step size"
-            # self.dt0 = None
+            self.tol_step_size = None
 
         if model == 'FieldLine':
             assert initial_conditions is not None, "initial_conditions must be provided for FieldLine model"
             self.initial_conditions = initial_conditions
+            self.particles = None
         elif model == 'GuidingCenter' or model == 'FullOrbit':
             assert isinstance(particles, Particles), "particles object must be provided for GuidingCenter and FullOrbit models"
             self.particles = particles
@@ -273,7 +275,7 @@ class Tracing():
     def trace(self):
         def compute_trajectory(initial_condition) -> jnp.ndarray:
             # initial_condition = initial_condition[0]
-            if self.model == 'FullOrbit_Boris' or self.method == 'Boris':
+            if self.method == 'Boris':
                 dt = self.times[1] - self.times[0]
                 def update_state(state, _):
                     # def update_fn(state):

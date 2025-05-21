@@ -9,6 +9,7 @@ from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 from essos.fields import BiotSavart as BiotSavart_essos
 import matplotlib.pyplot as plt
+from diffrax import Dopri8
 
 tmax_full = 1e-5
 nparticles = 3
@@ -18,7 +19,7 @@ trace_tolerance_SIMSOPT_array = [1e-3, 1e-5, 1e-7, 1e-9]#, 1e-11]
 trace_tolerance_ESSOS = 1e-5
 mass=PROTON_MASS
 energy=5000*ONE_EV
-model_ESSOS_array = ['FullOrbit', 'FullOrbit_Boris']
+method_ESSOS_array = ['Boris', Dopri8]
 
 output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
@@ -72,15 +73,15 @@ time_essos = jnp.linspace(0, tmax_full, num_steps_essos)
 tracing_array = []
 trajectories_ESSOS_array = []
 time_ESSOS_array = []
-for model_ESSOS in model_ESSOS_array:
-    print(f'Tracing ESSOS full orbit '+('Boris' if model_ESSOS=='FullOrbit_Boris' else f'with tolerance={trace_tolerance_ESSOS}')+f' and plotting the result.')
+for method_ESSOS in method_ESSOS_array:
+    print(f'Tracing ESSOS full orbit '+('Boris' if method_ESSOS=='Boris' else f'with tolerance={trace_tolerance_ESSOS}')+f' and plotting the result.')
     t1 = time.time()
-    tracing = block_until_ready(Tracing(field=field_essos, model=model_ESSOS, particles=particles,
-                                        maxtime=tmax_full, timesteps=num_steps_essos, tol_step_size=trace_tolerance_ESSOS))
+    tracing = block_until_ready(Tracing('FullOrbit', field_essos, tmax_full, method=method_ESSOS, particles=particles,
+                                        timesteps=num_steps_essos, tol_step_size=trace_tolerance_ESSOS))
     trajectories_ESSOS = tracing.trajectories
     time_ESSOS = time.time()-t1
-    print(f"  Time for ESSOS tracing={time.time()-t1:.3f}s "+('Boris' if model_ESSOS=='FullOrbit_Boris' else f'')+f". Num steps={len(trajectories_ESSOS[0])}")
-    tracing.to_vtk(os.path.join(output_dir,f'full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+'_ESSOS'))
+    print(f"  Time for ESSOS tracing={time.time()-t1:.3f}s "+('Boris' if method_ESSOS=='Boris' else f'')+f". Num steps={len(trajectories_ESSOS[0])}")
+    tracing.to_vtk(os.path.join(output_dir,f'full_orbit'+('_boris' if method_ESSOS=='Boris' else '')+'_ESSOS'))
     tracing_array.append(tracing)
     trajectories_ESSOS_array.append(trajectories_ESSOS)
     time_ESSOS_array.append(time_ESSOS)
@@ -93,9 +94,9 @@ for j in range(nparticles):
         SIMSOPT_energy_interp_this_particle = SIMSOPT_energy_interp_this_particle.at[i,j].set(jnp.interp(trajectories_SIMSOPT_array[-1][-1][:,0], trajectories_SIMSOPT_array[i][j][:,0], relative_energy_error_SIMSOPT[j][:]))
 for i, SIMSOPT_energy_interp in enumerate(SIMSOPT_energy_interp_this_particle):
     plt.plot(trajectories_SIMSOPT_array[-1][-1][4:,0], jnp.mean(SIMSOPT_energy_interp, axis=0)[4:], '--', label=f'SIMSOPT Tol={trace_tolerance_SIMSOPT_array[i]}')
-for model_ESSOS, tracing, trajectories_ESSOS in zip(model_ESSOS_array, tracing_array, trajectories_ESSOS_array):
+for method_ESSOS, tracing, trajectories_ESSOS in zip(method_ESSOS_array, tracing_array, trajectories_ESSOS_array):
     relative_energy_error_ESSOS = jnp.abs(tracing.energy-particles.energy)/particles.energy
-    plt.plot(time_essos[2:], jnp.mean(relative_energy_error_ESSOS, axis=0)[2:], '-', label=f'ESSOS'+(' Boris' if model_ESSOS=='FullOrbit_Boris' else f' Tol={trace_tolerance_ESSOS}'))
+    plt.plot(time_essos[2:], jnp.mean(relative_energy_error_ESSOS, axis=0)[2:], '-', label=f'ESSOS'+(' Boris' if method_ESSOS=='Boris' else f' Tol={trace_tolerance_ESSOS}'))
 plt.legend()
 plt.yscale('log')
 plt.xlabel('Time (s)')
@@ -107,9 +108,9 @@ plt.close()
 labels = [f'SIMSOPT Tol={tol}' for tol in trace_tolerance_SIMSOPT_array]
 times = time_SIMSOPT_array
 plt.figure()
-for model_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(model_ESSOS_array, tracing_array, trajectories_ESSOS_array, time_ESSOS_array):
+for method_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(method_ESSOS_array, tracing_array, trajectories_ESSOS_array, time_ESSOS_array):
     # Plot time comparison in a bar chart
-    labels += ([f'ESSOS Boris Algorithm'] if model_ESSOS=='FullOrbit_Boris' else [f'ESSOS Tol={trace_tolerance_ESSOS}'])
+    labels += ([f'ESSOS Boris Algorithm'] if method_ESSOS=='FullOrbit_Boris' else [f'ESSOS Tol={trace_tolerance_ESSOS}'])
     times += [time_ESSOS]
 bars = plt.bar(labels, times, color=['blue']*len(trace_tolerance_SIMSOPT_array) + ['red', 'orange'], edgecolor=['black']*len(trace_tolerance_SIMSOPT_array) + ['black']*2, hatch=['//']*len(trace_tolerance_SIMSOPT_array) + ['|']*2)
 plt.xlabel('Tracing Tolerance of SIMSOPT')
@@ -120,7 +121,7 @@ blue_patch = plt.Line2D([0], [0], color='blue', lw=4, label='SIMSOPT', linestyle
 red_patch = plt.Line2D([0], [0], color='red', lw=4, label=f'ESSOS', linestyle='-')
 orange_patch = plt.Line2D([0], [0], color='orange', lw=4, label=f'ESSOS\nBoris Algorithm')
 plt.legend(handles=[blue_patch, red_patch, orange_patch])
-plt.savefig(os.path.join(output_dir, 'times_full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+'_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'times_full_orbit'+('_boris' if method_ESSOS=='Boris' else '')+'_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
 plt.close()
 
 def interpolate_ESSOS_to_SIMSOPT(trajectory_SIMSOPT, trajectory_ESSOS):
@@ -136,13 +137,13 @@ def interpolate_ESSOS_to_SIMSOPT(trajectory_SIMSOPT, trajectory_ESSOS):
     coords_ESSOS_interp = jnp.column_stack([ interp_x, interp_y, interp_z, interp_vx, interp_vy, interp_vz])
     return coords_ESSOS_interp
 
-for model_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(model_ESSOS_array, tracing_array, trajectories_ESSOS_array, time_ESSOS_array):
+for method_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(method_ESSOS_array, tracing_array, trajectories_ESSOS_array, time_ESSOS_array):
 
     relative_error_array = []
     for i, trajectories_SIMSOPT in enumerate(trajectories_SIMSOPT_array):
         trajectories_ESSOS_interp = [interpolate_ESSOS_to_SIMSOPT(trajectories_SIMSOPT[i], trajectories_ESSOS[i]) for i in range(nparticles)]
         tracing.trajectories = trajectories_ESSOS_interp
-        if i==len(trace_tolerance_SIMSOPT_array)-1: tracing.to_vtk(os.path.join(output_dir,f'full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+'_ESSOS_interp'))
+        if i==len(trace_tolerance_SIMSOPT_array)-1: tracing.to_vtk(os.path.join(output_dir,f'full_orbit'+('_boris' if method_ESSOS=='FullOrbit_Boris' else '')+'_ESSOS_interp'))
 
         relative_error_trajectories_SIMSOPT_vs_ESSOS = []
         plt.figure()
@@ -166,7 +167,7 @@ for model_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(model_ESSOS_arra
         plt.ylabel('Relative Error')
         plt.yscale('log')
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, f'relative_error_full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+f'_SIMSOPT_vs_ESSOS_tolerance{trace_tolerance_SIMSOPT_array[i]}.pdf'), dpi=150)
+        plt.savefig(os.path.join(output_dir, f'relative_error_full_orbit'+('_boris' if method_ESSOS=='FullOrbit_Boris' else '')+f'_SIMSOPT_vs_ESSOS_tolerance{trace_tolerance_SIMSOPT_array[i]}.pdf'), dpi=150)
         plt.close()
         
         relative_error_array.append(relative_error_trajectories_SIMSOPT_vs_ESSOS)
@@ -187,7 +188,7 @@ for model_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(model_ESSOS_arra
         plt.xlabel('R')
         plt.ylabel('Z')
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir,f'full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+f'_RZ_SIMSOPT_vs_ESSOS_tolerance{trace_tolerance_SIMSOPT_array[i]}.pdf'), dpi=150)
+        plt.savefig(os.path.join(output_dir,f'full_orbit'+('_boris' if method_ESSOS=='FullOrbit_Boris' else '')+f'_RZ_SIMSOPT_vs_ESSOS_tolerance{trace_tolerance_SIMSOPT_array[i]}.pdf'), dpi=150)
         plt.close()
         
         plt.figure()
@@ -203,7 +204,7 @@ for model_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(model_ESSOS_arra
         plt.ylabel(r'$v_x/v$')
         # plt.yscale('log')
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir,f'full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+f'_vx_SIMSOPT_vs_ESSOS_tolerance{trace_tolerance_SIMSOPT_array[i]}.pdf'), dpi=150)
+        plt.savefig(os.path.join(output_dir,f'full_orbit'+('_boris' if method_ESSOS=='FullOrbit_Boris' else '')+f'_vx_SIMSOPT_vs_ESSOS_tolerance{trace_tolerance_SIMSOPT_array[i]}.pdf'), dpi=150)
         plt.close()
 
     # Calculate RMS error for each tolerance
@@ -221,7 +222,7 @@ for model_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(model_ESSOS_arra
     plt.xticks(x + bar_width * (rms_error_array.shape[1] - 1) / 2, [f'Tol={tol}' for tol in trace_tolerance_SIMSOPT_array], rotation=45)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'rms_error_full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+'_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'rms_error_full_orbit'+('_boris' if method_ESSOS=='FullOrbit_Boris' else '')+'_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
     plt.close()
 
     # Calculate maximum error for each tolerance
@@ -238,7 +239,7 @@ for model_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(model_ESSOS_arra
     plt.xticks(x + bar_width * (max_error_array.shape[1] - 1) / 2, [f'Tol={tol}' for tol in trace_tolerance_SIMSOPT_array], rotation=45)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'max_error_full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+'_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'max_error_full_orbit'+('_boris' if method_ESSOS=='FullOrbit_Boris' else '')+'_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
     plt.close()
 
     # Calculate mean error for each tolerance
@@ -255,5 +256,5 @@ for model_ESSOS, tracing, trajectories_ESSOS, time_ESSOS in zip(model_ESSOS_arra
     plt.xticks(x + bar_width * (mean_error_array.shape[1] - 1) / 2, [f'Tol={tol}' for tol in trace_tolerance_SIMSOPT_array], rotation=45)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'mean_error_full_orbit'+('_boris' if model_ESSOS=='FullOrbit_Boris' else '')+'_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'mean_error_full_orbit'+('_boris' if method_ESSOS=='FullOrbit_Boris' else '')+'_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
     plt.close()
