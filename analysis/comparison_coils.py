@@ -178,7 +178,7 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     X_axis = jnp.arange(len(labels))
     bar_width = 0.6
 
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = plt.subplots(figsize=(9, 6))
     ax.bar(X_axis, error_vals, bar_width, color="darkorange", edgecolor="black")
 
     ax.set_xticks(X_axis)
@@ -210,7 +210,7 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     X_axis = jnp.arange(len(labels))
     bar_width = 0.35
 
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = plt.subplots(figsize=(9, 6))
     ax.bar(X_axis - bar_width/2, essos_vals, bar_width, label="ESSOS", color="red", edgecolor="black")
     ax.bar(X_axis + bar_width/2, simsopt_vals, bar_width, label="SIMSOPT", color="blue", edgecolor="black")
 
