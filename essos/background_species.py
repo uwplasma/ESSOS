@@ -12,8 +12,7 @@ from essos.constants import BOLTZMANN, ELEMENTARY_CHARGE, EPSILON_0, HBAR, PROTO
 
 
 
-###This module uses some functions adapted from JAX-MONKES by R. Colin, but class structure was revamped to fit the overall package better#####
-
+###This module uses some functions adapted from NEOPAX/JAX-MONKES
 JOULE_PER_EV = 11606 * BOLTZMANN
 EV_PER_JOULE = 1 / JOULE_PER_EV
 
@@ -94,8 +93,9 @@ def nu_s_ab(ma: float, ea: float,species_b: int,v:float, points,species: Backgro
     """Slowing collision frequency"""
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
-    Tb = species.get_temperature(species_b,points)
-    mb = species.mass[species_b]    
+    mb = species.mass[species_b]   
+    #Tb = species.get_temperature(species_b,points) 
+    Tb = (mb*vtb**2) / 2.  
     return (
         gamma_ab(ma,ea, species_b, v, points,species)* nb * (ma+mb)/Tb * chandrasekhar(v / vtb) /v
     )
@@ -116,7 +116,7 @@ def coulomb_logarithm(ma:float, ea: float, species_b: int, vth_a: float, points,
     bmin, bmax =   impact_parameter(ma, ea, species_b, vth_a, points, species)
     return jnp.log(bmax / bmin)
     #lnL = 25.3 + 1.15*jnp.log10(species.temperature[0,r_index]**2/species.density[0,r_index])  
-    ###lnL = 32.2 + 1.15*jnp.log10(species.temperature[0,r_index]**2/species.density[0,r_index]) 
+    ##lnL = 32.2# + 1.15*jnp.log10(species.get_temperature(0,points)**2/species.get_density(species_b,points)) 
     #32.2+1.15*alog10(temp(1)**2/density(1))
     #return lnL
 
