@@ -11,7 +11,7 @@ from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies
 
 # Input parameters
-tmax =1e-3
+tmax = 1.e-3
 dt=1.e-7
 nparticles = number_of_processors_to_use
 R0 = jnp.linspace(1.23, 1.27, nparticles)
@@ -20,6 +20,7 @@ num_steps = int(tmax/dt)
 mass=PROTON_MASS
 mass_e=ELECTRON_MASS
 energy=4000*ONE_EV
+
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
@@ -47,19 +48,19 @@ species = BackgroundSpecies(number_species=number_species, mass_array=mass_array
 
 import jax
 import jax.numpy as jnp
-from essos.dynamics import GuidingCenterCollisionsDrift as GCCD
-from essos.dynamics import GuidingCenterCollisionsDiffusion as GCCDiff
+from essos.dynamics import GuidingCenterCollisionsDriftMu as GCCD
+from essos.dynamics import GuidingCenterCollisionsDiffusionMu as GCCDiff
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab
-total_speed_temp=particles.total_speed*jnp.ones(particles.nparticles)
-initial_conditions = jnp.concatenate([particles.initial_xyz,total_speed_temp[:, None], particles.initial_vparallel_over_v[:, None]], axis=1)
+mu=particles.initial_vperpendicular**2*particles.mass*0.5/1.0#field.AbsB(points)
+initial_conditions = jnp.concatenate([particles.initial_xyz,particles.initial_vparallel[:, None],mu[:, None]],axis=1)    
 args = (field, particles,species)
 GCCD(0,initial_conditions[0],args)
 GCCDiff(0,initial_conditions[0],args)
-#initial_condition = jnp.concatenate([particles.initial_xyz,total_speed_temp[:, None], particles.initial_vparallel_over_v[:, None]], axis=1)[0]
+#initial_condition = jnp.concatenate([particles.initial_xyz,particles.initial_vparallel[:, None],mu[:, None]],axis=1)[0]
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterCollisions', particles=particles,
+tracing = Tracing(field=field, model='GuidingCenterCollisionsMu', particles=particles,
                   maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance,species=species)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
@@ -76,7 +77,7 @@ tracing.plot(ax=ax1, show=False)
 
 for i, trajectory in enumerate(trajectories):
     ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i][0])/tracing.energy[i][0], label=f'Particle {i+1}')
-    ax3.plot(tracing.times, trajectory[:, 4], label=f'Particle {i+1}')
+    ax3.plot(tracing.times, trajectory[:, 3]/jnp.sqrt(tracing.energy[i]/mass*2.), label=f'Particle {i+1}')
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 ax2.set_xlabel('Time (s)')
 ax2.set_ylabel('Normalized energy variation')
