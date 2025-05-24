@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
+import diffrax
 from diffrax import diffeqsolve, ODETerm, SaveAt, Dopri8, PIDController, Event, AbstractSolver, ConstantStepSize, StepTo
 from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
@@ -160,6 +161,11 @@ class Tracing():
         """
         
         assert model in ["GuidingCenter", "FullOrbit", "FieldLine"], "Model must be one of: 'GuidingCenter', 'FullOrbit', or 'FieldLine'"
+        if isinstance(method, str) and method != 'Boris':
+            try:
+                method = getattr(diffrax, method)
+            except AttributeError:
+                raise ValueError(f"String method '{method}' is not a valid diffrax solver")
         assert method is None or \
                method == 'Boris' or \
                issubclass(method, AbstractSolver), "Method must be None, 'Boris', or a DIFFRAX solver"
@@ -168,6 +174,7 @@ class Tracing():
             assert model == 'FullOrbit', "Method 'Boris' is only available for full orbit model"
             warnings.warn("The 'Boris' method is only supported with a constant step size. 'stepsize' has been set to constant.")
             stepsize = "constant"
+        
         self.model = model
         self.method = method
         self.stepsize = stepsize
@@ -238,43 +245,15 @@ class Tracing():
             if self.method is None:
                 self.method = Dopri8
             
-        
             
         self._trajectories = self.trace()
-        
-        if self.particles is not None:
-            self.energy = jnp.zeros((self.particles.nparticles, self.timesteps))
-            
-        if model == 'GuidingCenter':
-            @jit
-            def compute_energy_gc(trajectory):
-                xyz = trajectory[:, :3]
-                vpar = trajectory[:, 3]
-                AbsB = vmap(self.field.AbsB)(xyz)
-                mu = (self.particles.energy - self.particles.mass * vpar[0]**2 / 2) / AbsB[0]
-                return self.particles.mass * vpar**2 / 2 + mu * AbsB
-            self.energy = vmap(compute_energy_gc)(self._trajectories)
-        elif model == 'FullOrbit':
-            @jit
-            def compute_energy_fo(trajectory):
-                vxvyvz = trajectory[:, 3:]
-                return self.particles.mass / 2 * (vxvyvz[:, 0]**2 + vxvyvz[:, 1]**2 + vxvyvz[:, 2]**2)
-            self.energy = vmap(compute_energy_fo)(self._trajectories)
-        elif model == 'FieldLine':
-            self.energy = jnp.ones((len(initial_conditions), self.timesteps))
-        
-        self.trajectories_xyz = vmap(lambda xyz: vmap(lambda point: self.field.to_xyz(point[:3]))(xyz))(self.trajectories)
-        
         if isinstance(field, Vmec):
-            self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction()
+            self.trajectories_xyz = vmap(lambda xyz: vmap(lambda point: self.field.to_xyz(point[:3]))(xyz))(self.trajectories)
         else:
-            self.loss_fractions = None
-            self.total_particles_lost = None
-            self.loss_times = None
+            self.trajectories_xyz = self.trajectories
 
     def trace(self):
         def compute_trajectory(initial_condition) -> jnp.ndarray:
-            # initial_condition = initial_condition[0]
             if self.method == 'Boris':
                 dt = self.times[1] - self.times[0]
                 def update_state(state, _):
@@ -297,17 +276,20 @@ class Tracing():
                 _, trajectory = lax.scan(update_state, initial_condition, jnp.arange(len(self.times)-1))
                 trajectory = jnp.vstack([initial_condition, trajectory])
             else:
-                # import warnings
-                # warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
                 if self.stepsize == "adaptive":
-                    controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size)
+                    r0 = jnp.linalg.norm(initial_condition[:2])
+                    dtmax = r0*0.5*jnp.pi/self.particles.total_speed # can at most do quarter of a revolution per step
+                    controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, dtmax=dtmax, rtol=self.tol_step_size, atol=self.tol_step_size)
+                    dt0 = 1e-3 * dtmax # initial guess for first timestep, will be adjusted by adaptive timestepper
                 elif self.stepsize == "constant":
                     controller = StepTo(self.times)
+                    dt0 = None
+
                 trajectory = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
-                    dt0=None,
+                    dt0=dt0,
                     y0=initial_condition,
                     solver=self.method(),
                     args=self.args,
@@ -322,7 +304,7 @@ class Tracing():
         
         return jit(vmap(compute_trajectory), in_shardings=sharding, out_shardings=sharding)(
             device_put(self.initial_conditions, sharding))
-        
+    
     @property
     def trajectories(self):
         return self._trajectories
@@ -331,15 +313,36 @@ class Tracing():
     def trajectories(self, value):
         self._trajectories = value
     
-    def _tree_flatten(self):
-        children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
-        aux_data = {'field': self.field, 'model': self.model, 'method': self.method, 'maxtime': self.maxtime, 'timesteps': self.timesteps,'stepsize': 
-                    self.stepsize, 'tol_step_size': self.tol_step_size, 'particles': self.particles, 'condition': self.condition}  # static values
-        return (children, aux_data)
+    def _energy(self):
+        assert self.model in ['GuidingCenter', 'FullOrbit'], "Energy calculation is only available for GuidingCenter and FullOrbit models"
+        mass = self.particles.mass
 
-    @classmethod
-    def _tree_unflatten(cls, aux_data, children):
-        return cls(*children, **aux_data)
+        if self.model == 'GuidingCenter':
+            initial_xyz = self.initial_conditions[:, :3]
+            initial_vparallel = self.initial_conditions[:, 3]
+            initial_B = vmap(self.field.AbsB)(initial_xyz)
+            mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
+            def compute_energy(trajectory, mu):
+                xyz = trajectory[:, :3]
+                vpar = trajectory[:, 3]
+                AbsB = vmap(self.field.AbsB)(xyz)                
+                return 0.5 * mass * jnp.square(vpar) + mu * AbsB
+            
+            energy = vmap(compute_energy)(self.trajectories, mu_array)
+            
+        elif self.model == 'FullOrbit':
+            def compute_energy(trajectory):
+                vxvyvz = trajectory[:, 3:]
+                v_squared = jnp.dot(vxvyvz, vxvyvz, axis=1)
+                return 0.5 * mass * v_squared
+            
+            energy = vmap(compute_energy)(self.trajectories)
+
+        return energy
+    
+    @property
+    def energy(self):
+        return self._energy()
     
     def to_vtk(self, filename):
         try: import numpy as np
@@ -471,7 +474,18 @@ class Tracing():
             plt.show()
         
         return plotting_data
-        
+    
+    def _tree_flatten(self):
+        children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
+        aux_data = {'field': self.field, 'model': self.model, 'method': self.method, 'maxtime': self.maxtime, 'timesteps': self.timesteps,'stepsize': 
+                    self.stepsize, 'tol_step_size': self.tol_step_size, 'particles': self.particles, 'condition': self.condition}  # static values
+        return (children, aux_data)
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(*children, **aux_data)
+
+
 tree_util.register_pytree_node(Tracing,
                                Tracing._tree_flatten,
                                Tracing._tree_unflatten)

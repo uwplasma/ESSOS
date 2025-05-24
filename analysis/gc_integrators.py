@@ -11,8 +11,6 @@ from essos.fields import BiotSavart
 from essos.coils import Coils_from_json
 from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
 from essos.dynamics import Tracing, Particles
-# import integrators
-import diffrax
 
 output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
@@ -45,10 +43,10 @@ for method, marker in zip(['Tsit5', 'Dopri5', 'Dopri8', 'Kvaerno5'], markers):
     num_steps = int(tmax/dt)
     energies = []
     tracing_times = []
-    tolerances = [1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16]
+    tolerances = [1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16]
     for tolerance in tolerances:
         time0 = time()
-        tracing = Tracing('GuidingCenter', field, tmax, method=getattr(diffrax, method), timesteps=num_steps,
+        tracing = Tracing('GuidingCenter', field, tmax, method=method, timesteps=num_steps,
                           stepsize='adaptive', tol_step_size=tolerance, particles=particles)
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
@@ -66,7 +64,7 @@ for method, marker in zip(['Tsit5', 'Dopri5', 'Dopri8', 'Kvaerno5'], markers):
     for dt in [4e-7, 2e-7, 1e-7, 8e-8, 6e-8, 4e-8, 2e-8, 1e-8]:
         num_steps = int(tmax/dt)
         time0 = time()
-        tracing = Tracing('GuidingCenter', field, tmax, method=getattr(diffrax, method), 
+        tracing = Tracing('GuidingCenter', field, tmax, method=method, 
                           timesteps=num_steps, stepsize="constant", particles=particles)
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
