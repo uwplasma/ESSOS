@@ -95,7 +95,7 @@ for j in range(nparticles):
 for i, SIMSOPT_energy_interp in enumerate(SIMSOPT_energy_interp_this_particle):
     plt.plot(trajectories_SIMSOPT_array[-1][-1][4:,0], jnp.mean(SIMSOPT_energy_interp, axis=0)[4:], '--', label=f'SIMSOPT Tol={trace_tolerance_SIMSOPT_array[i]}')
 for method_ESSOS, tracing, trajectories_ESSOS in zip(method_ESSOS_array, tracing_array, trajectories_ESSOS_array):
-    relative_energy_error_ESSOS = jnp.abs(tracing.energy-particles.energy)/particles.energy
+    relative_energy_error_ESSOS = jnp.abs(tracing.energy()-particles.energy)/particles.energy
     plt.plot(time_essos[2:], jnp.mean(relative_energy_error_ESSOS, axis=0)[2:], '-', label=f'ESSOS'+(' Boris' if method_ESSOS=='Boris' else f' Tol={trace_tolerance_ESSOS}'))
 plt.legend()
 plt.yscale('log')

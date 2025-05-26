@@ -190,7 +190,7 @@ class Tracing():
 
         assert timesteps is None or \
                isinstance(timesteps, (int, float)) and \
-               timesteps > 0, "timesteps must be None or a positive float"
+               timesteps > 0, f"timesteps must be None or a positive float. Got: {type(timesteps)}"
         assert times is None or \
                isinstance(times, jnp.ndarray), "times must be None or a numpy array"
         self.times = jnp.linspace(0, maxtime, timesteps) if times is None else times
@@ -313,7 +313,7 @@ class Tracing():
     def trajectories(self, value):
         self._trajectories = value
     
-    def _energy(self):
+    def energy(self):
         assert self.model in ['GuidingCenter', 'FullOrbit'], "Energy calculation is only available for GuidingCenter and FullOrbit models"
         mass = self.particles.mass
 
@@ -333,16 +333,12 @@ class Tracing():
         elif self.model == 'FullOrbit':
             def compute_energy(trajectory):
                 vxvyvz = trajectory[:, 3:]
-                v_squared = jnp.dot(vxvyvz, vxvyvz, axis=1)
+                v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)
                 return 0.5 * mass * v_squared
             
             energy = vmap(compute_energy)(self.trajectories)
 
         return energy
-    
-    @property
-    def energy(self):
-        return self._energy()
     
     def to_vtk(self, filename):
         try: import numpy as np
