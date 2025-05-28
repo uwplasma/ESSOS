@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
-from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
+from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter
 from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
@@ -151,7 +151,7 @@ class Tracing():
         self.particles = particles
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
-            if isinstance(field, Vmec):
+            if isinstance(field, Vmec) and model == 'GuidingCenter':
                 def condition_Vmec(t, y, args, **kwargs):
                     s, _, _, _ = y
                     return s-1
@@ -250,6 +250,7 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
+                    progress_meter=TqdmProgressMeter(),
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
                     max_steps=10000000000,
                     event = Event(self.condition)
