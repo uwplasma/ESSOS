@@ -11,8 +11,8 @@ from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies
 
 # Input parameters
-tmax =1e-3
-dt=1.e-7
+tmax =1e-5
+dt=1.e-9
 nparticles = number_of_processors_to_use
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
@@ -22,7 +22,7 @@ mass_e=ELECTRON_MASS
 energy=4000*ONE_EV
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils_from_json(json_file)
 field = BiotSavart(coils)
 
