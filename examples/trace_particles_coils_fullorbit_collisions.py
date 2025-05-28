@@ -1,6 +1,7 @@
 import os
 number_of_processors_to_use = 5 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
+from jax import vmap
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -11,8 +12,8 @@ from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies
 
 # Input parameters
-tmax = 1.e-3
-dt=1.e-7
+tmax = 6.e-5
+dt=1.e-9
 nparticles = number_of_processors_to_use
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
@@ -31,7 +32,7 @@ field = BiotSavart(coils)
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy)
+particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=field)
 
 
 #Initialize background species
@@ -48,11 +49,10 @@ species = BackgroundSpecies(number_species=number_species, mass_array=mass_array
 
 import jax
 import jax.numpy as jnp
-from essos.dynamics import GuidingCenterCollisionsDriftMu as GCCD
-from essos.dynamics import GuidingCenterCollisionsDiffusionMu as GCCDiff
+from essos.dynamics import LorentzCollisionsDrift as GCCD
+from essos.dynamics import LorentzCollisionsDiffusion as GCCDiff
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab
-mu=particles.initial_vperpendicular**2*particles.mass*0.5/1.0#field.AbsB(points)
-initial_conditions = jnp.concatenate([particles.initial_xyz,particles.initial_vparallel[:, None],mu[:, None]],axis=1)    
+initial_conditions = jnp.concatenate([particles.initial_xyz_fullorbit, particles.initial_vxvyvz], axis=1)
 args = (field, particles,species)
 GCCD(0,initial_conditions[0],args)
 GCCDiff(0,initial_conditions[0],args)
@@ -60,7 +60,7 @@ GCCDiff(0,initial_conditions[0],args)
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterCollisionsMu', particles=particles,
+tracing = Tracing(field=field, model='FullOrbitCollisions', particles=particles,
                   maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance,species=species)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
@@ -75,10 +75,15 @@ ax4 = fig.add_subplot(224)
 coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False)
 
+
 for i, trajectory in enumerate(trajectories):
-    ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i][0])/tracing.energy[i][0], label=f'Particle {i+1}')
-    ax3.plot(tracing.times, trajectory[:, 3]/jnp.sqrt(tracing.energy[i]/mass*2.), label=f'Particle {i+1}')
-    ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
+    ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[0])/tracing.energy[0], label=f'Particle {i+1}', linewidth=0.2)
+    def compute_v_parallel(trajectory_t):
+        magnetic_field_unit_vector = field.B(trajectory_t[:3]) / field.AbsB(trajectory_t[:3])
+        return jnp.dot(trajectory_t[3:], magnetic_field_unit_vector)/jnp.sqrt(trajectory_t[3]**2+trajectory_t[4]**2+trajectory_t[5]**2)
+    v_parallel = vmap(compute_v_parallel)(trajectory)
+    ax3.plot(tracing.times, v_parallel , label=f'Particle {i+1}')
+    ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}', linewidth=0.2)
 ax2.set_xlabel('Time (s)')
 ax2.set_ylabel('Normalized energy variation')
 ax3.set_ylabel(r'$v_{\parallel}/v$')
