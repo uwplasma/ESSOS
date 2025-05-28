@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 plt.rcParams.update({'font.size': 18})
 
-tmax_gc = 5e-4
+tmax = 5e-5
 nparticles = 5
 axis_shft=0.02
 R0 = jnp.linspace(1.2125346+axis_shft, 1.295-axis_shft, nparticles)
@@ -37,9 +37,7 @@ phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 initial_vparallel_over_v = random.uniform(random.PRNGKey(42), (nparticles,), minval=-1, maxval=1)
 
-phis_poincare = [(i/4)*(2*jnp.pi/nfp) for i in range(4)]
-
-particles = Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=initial_vparallel_over_v, mass=mass, energy=energy)
+particles = Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=initial_vparallel_over_v, mass=mass, energy=energy, field=field_essos)
 
 # Trace in SIMSOPT
 runtime_SIMSOPT_array = []
@@ -49,28 +47,23 @@ relative_energy_error_SIMSOPT_array = []
 print(f'Output being saved to {output_dir}')
 print(f'SIMSOPT LandremanPaulQA json file location: {LandremanPaulQA_json_file}\n')
 for trace_tolerance_SIMSOPT in trace_tolerance_array:
-    print(f'Tracing SIMSOPT guiding center with tolerance={trace_tolerance_SIMSOPT}')
+    print(f'Tracing SIMSOPT full orbit with tolerance={trace_tolerance_SIMSOPT}')
     t1 = time()
     trajectories_SIMSOPT, trajectories_SIMSOPT_phi_hits = block_until_ready(trace_particles(
                     field=field_simsopt, xyz_inits=particles.initial_xyz, mass=particles.mass,
-                    parallel_speeds=particles.initial_vparallel, tmax=tmax_gc, mode='gc_vac',
+                    parallel_speeds=particles.initial_vparallel, tmax=tmax, mode='full',
                     charge=particles.charge, Ekin=particles.energy, tol=trace_tolerance_SIMSOPT))
     runtime_SIMSOPT = time() - t1
     runtime_SIMSOPT_array.append(runtime_SIMSOPT)
     avg_steps_SIMSOPT = sum([len(l) for l in trajectories_SIMSOPT]) // nparticles
     avg_steps_SIMSOPT_array.append(avg_steps_SIMSOPT)
-    # print(trajectories_SIMSOPT_this_tolerance[0].shape)
+    
     print(f"Time for SIMSOPT tracing={runtime_SIMSOPT:.3f}s. Avg num steps={avg_steps_SIMSOPT}\n")
     trajectories_SIMSOPT_array.append(trajectories_SIMSOPT)
     
-    relative_energy_SIMSOPT = []
-    for i, trajectory in enumerate(trajectories_SIMSOPT):
-        xyz = jnp.asarray(trajectory[:, 1:4])
-        vpar = trajectory[:, 4]
-        field_simsopt.set_points(xyz)
-        AbsB = field_simsopt.AbsB()[:,0]
-        mu = (particles.energy - particles.mass*vpar[0]**2/2)/AbsB[0]
-        relative_energy_SIMSOPT.append(jnp.abs(particles.mass*vpar**2/2+mu*AbsB-particles.energy)/particles.energy)
+    relative_energy_SIMSOPT = [jnp.abs(0.5  * mass * jnp.sum(jnp.square(trajectory[:, 4:]), axis=1) - particles.energy) / particles.energy
+                               for trajectory in trajectories_SIMSOPT]
+
     relative_energy_error_SIMSOPT_array.append(relative_energy_SIMSOPT)
 
     # particles_to_vtk(trajectories_SIMSOPT_this_tolerance, os.path.join(output_dir,f'guiding_center_SIMSOPT'))
@@ -82,16 +75,21 @@ trajectories_ESSOS_array = []
 relative_energy_error_ESSOS_array = []
 
 # Creating a tracing object for compilation
-compile_tracing = Tracing('GuidingCenter', field_essos, tmax_gc, timesteps=100, method='Dopri5',
+compile_tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=100, method='Dopri5',
                   stepsize='adaptive', tol_step_size=trace_tolerance_array[0], particles=particles)
+# compile_tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=100, method='Boris',
+#                           stepsize='constant', particles=particles)
+
 block_until_ready(compile_tracing.trajectories)
 
-for index, trace_tolerance_ESSOS in enumerate(trace_tolerance_array):
-    num_steps_essos = avg_steps_SIMSOPT_array[index]
-    print(f'Tracing ESSOS guiding center with tolerance={trace_tolerance_ESSOS}')
+for tolerance_idx, trace_tolerance_ESSOS in enumerate(trace_tolerance_array):
+    num_steps_essos = 10000 # avg_steps_SIMSOPT_array[tolerance_idx]
+    print(f'Tracing ESSOS full orbit with tolerance={trace_tolerance_ESSOS}')
     start_time = time()
-    tracing = Tracing('GuidingCenter', field_essos, tmax_gc, timesteps=num_steps_essos, method='Dopri5',
-                    stepsize='adaptive', tol_step_size=trace_tolerance_ESSOS, particles=particles)
+    tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=num_steps_essos, method='Dopri5',
+                      stepsize='adaptive', tol_step_size=trace_tolerance_ESSOS, particles=particles)
+    # tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=num_steps_essos, method='Boris',
+    #                    stepsize='constant', particles=particles)
     block_until_ready(tracing.trajectories)
     runtime_ESSOS = time() - start_time
     runtime_ESSOS_array.append(runtime_ESSOS)
@@ -130,7 +128,7 @@ plt.yscale('log')
 plt.xlabel('Time (ms)')
 plt.ylabel('Average Relative Energy Error')
 plt.tight_layout()
-plt.savefig(os.path.join(output_dir, f'relative_energy_error_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, f'relative_energy_error_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
 
 # Plot time comparison in a bar chart
 
@@ -152,10 +150,10 @@ ax.set_xticks(X_axis)
 ax.set_xticklabels(labels)
 ax.set_ylabel("Computation time (s)")
 ax.set_yscale('log')
-ax.set_ylim(1e0, 1e2)
+ax.set_ylim(1e0, 1e3)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 ax.legend(fontsize=14)
-plt.savefig(os.path.join(output_dir, 'times_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'times_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
 
 ##################################
 
@@ -165,14 +163,16 @@ def interpolate_SIMSOPT_to_ESSOS(trajectory_SIMSOPT, time_ESSOS):
     interp_x = jnp.interp(time_ESSOS, time_simsopt, trajectory_SIMSOPT[:, 1])
     interp_y = jnp.interp(time_ESSOS, time_simsopt, trajectory_SIMSOPT[:, 2])
     interp_z = jnp.interp(time_ESSOS, time_simsopt, trajectory_SIMSOPT[:, 3])
-    interp_v = jnp.interp(time_ESSOS, time_simsopt, trajectory_SIMSOPT[:, 4])
+    interp_vx = jnp.interp(time_ESSOS, time_simsopt, trajectory_SIMSOPT[:, 4])
+    interp_vy = jnp.interp(time_ESSOS, time_simsopt, trajectory_SIMSOPT[:, 5])
+    interp_vz = jnp.interp(time_ESSOS, time_simsopt, trajectory_SIMSOPT[:, 6])
 
-    coords_SIMSOPT_interp = jnp.column_stack([interp_x, interp_y, interp_z, interp_v])
+    coords_SIMSOPT_interp = jnp.column_stack([interp_x, interp_y, interp_z, interp_vx, interp_vy, interp_vz])
     
     return coords_SIMSOPT_interp
 
 xyz_error_fig, xyz_error_ax = plt.subplots(figsize=(9, 6))
-vpar_error_fig, vpar_error_ax = plt.subplots(figsize=(9, 6))
+v_error_fig, v_error_ax = plt.subplots(figsize=(9, 6))
 
 avg_relative_xyz_error_array = []
 avg_relative_v_error_array = []
@@ -184,47 +184,47 @@ for tolerance_idx in range(len(trace_tolerance_array)):
     this_trajectory_ESSOS = trajectories_ESSOS_array[tolerance_idx]
 
     relative_xyz_errors = jnp.linalg.norm(this_trajectory_ESSOS[:, :, :3] - this_trajectory_SIMSOPT[:, :, :3], axis=2) / (jnp.linalg.norm(this_trajectory_SIMSOPT[:, :, :3], axis=2) + 1e-12)
-    relative_v_errros = jnp.abs(this_trajectory_SIMSOPT[:, :, 3] - this_trajectory_ESSOS[:, :, 3]) / (jnp.abs(this_trajectory_SIMSOPT[:, :, 3]) + 1e-12)
+    relative_v_errors = jnp.linalg.norm(this_trajectory_ESSOS[:, :, 3:] - this_trajectory_SIMSOPT[:, :, 3:], axis=2) / (jnp.linalg.norm(this_trajectory_SIMSOPT[:, :, 3:], axis=2) + 1e-12)
         
     avg_relative_xyz_errors = jnp.mean(relative_xyz_errors, axis=0)
-    avg_relative_v_errors = jnp.mean(relative_v_errros, axis=0)
+    avg_relative_v_errors = jnp.mean(relative_v_errors, axis=0)
     avg_relative_xyz_error_array.append(jnp.mean(avg_relative_xyz_errors))
     avg_relative_v_error_array.append(jnp.mean(avg_relative_v_errors))
 
     xyz_error_ax.plot(times_essos_array[tolerance_idx]*1000, avg_relative_xyz_errors, label=rf'tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$')
-    vpar_error_ax.plot(times_essos_array[tolerance_idx]*1000, avg_relative_v_errors, label=rf'tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$')
+    v_error_ax.plot(times_essos_array[tolerance_idx]*1000, avg_relative_v_errors, label=rf'tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$')
 
-for ax, fig in zip([xyz_error_ax, vpar_error_ax], [xyz_error_fig, vpar_error_fig]):
+for ax, fig in zip([xyz_error_ax, v_error_ax], [xyz_error_fig, v_error_fig]):
     ax.legend()
     ax.set_xlabel('Time (ms)')
     ax.set_yscale('log')
 
 xyz_error_ax.set_ylabel(r'Relative $x,y,z$ Error')
-vpar_error_ax.set_ylabel(r'Relative $v_\parallel$ Error')
-xyz_error_fig.savefig(os.path.join(output_dir, f'relative_xyz_error_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
-vpar_error_fig.savefig(os.path.join(output_dir, f'relative_vpar_error_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+v_error_ax.set_ylabel(r'Relative $v_x,v_y,v_z$ Error')
+xyz_error_fig.savefig(os.path.join(output_dir, f'relative_xyz_error_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+v_error_fig.savefig(os.path.join(output_dir, f'relative_v_error_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
 
 quantities = [(fr"tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx], avg_relative_v_error_array[tolerance_idx]) 
               for tolerance_idx in range(len(trace_tolerance_array))]
 
 labels = [q[0] for q in quantities]
 xyz_vals = [q[1] for q in quantities]
-vpar_vals = [q[2] for q in quantities]
+v_vals = [q[2] for q in quantities]
 
 X_axis = jnp.arange(len(labels))
 bar_width = 0.35
 
 fig, ax = plt.subplots(figsize=(9, 6))
 ax.bar(X_axis - bar_width/2, xyz_vals, bar_width, label=r"x,y,z", color="red", edgecolor="black")
-ax.bar(X_axis + bar_width/2, vpar_vals, bar_width, label=r"$v_\parallel$", color="blue", edgecolor="black")
+ax.bar(X_axis + bar_width/2, v_vals, bar_width, label=r"$v_x,v_y,v_z$", color="blue", edgecolor="black")
 
 ax.set_xticks(X_axis)
 ax.set_xticklabels(labels)
 ax.set_ylabel("Time Averaged Relative Error")
 ax.set_yscale('log')
-ax.set_ylim(1e-6, 1e-1)
+ax.set_ylim(1e-8, 1e-1)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 ax.legend(fontsize=14)
-plt.savefig(os.path.join(output_dir, 'relative_errors_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'relative_errors_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
 
 plt.show()
