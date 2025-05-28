@@ -278,9 +278,13 @@ class Tracing():
             else:
                 if self.stepsize == "adaptive":
                     r0 = jnp.linalg.norm(initial_condition[:2])
-                    dtmax = r0*0.5*jnp.pi/self.particles.total_speed # can at most do quarter of a revolution per step
+                    if self.model != 'FieldLine':
+                        dtmax = r0*0.5*jnp.pi/self.particles.total_speed # can at most do quarter of a revolution per step
+                        dt0 = 1e-3 * dtmax # initial guess for first timestep, will be adjusted by adaptive timestepper
+                    else:
+                        dtmax = None
+                        dt0 = None
                     controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, dtmax=dtmax, rtol=self.tol_step_size, atol=self.tol_step_size)
-                    dt0 = 1e-3 * dtmax # initial guess for first timestep, will be adjusted by adaptive timestepper
                 elif self.stepsize == "constant":
                     controller = StepTo(self.times)
                     dt0 = None
