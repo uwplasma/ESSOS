@@ -53,7 +53,7 @@ for method, marker in zip(['Tsit5', 'Dopri5', 'Dopri8', 'Kvaerno5'], markers):
         
         print(f"Tracing with adaptive {method} and {tolerance=:.0e} took {tracing_times[-1]:.2f} seconds")
         
-        energies += [jnp.max(jnp.abs(tracing.energy-particles.energy)/particles.energy)]
+        energies += [jnp.max(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
     ax.plot(tracing_times, energies, label=f'{method} adapt', marker='o', markersize=3)
     ax_tol.plot(tolerances, energies, marker, label=f'{method} adapt', clip_on=False, linewidth=2.5)
 
@@ -71,7 +71,7 @@ for method, marker in zip(['Tsit5', 'Dopri5', 'Dopri8', 'Kvaerno5'], markers):
         
         print(f"Tracing with {method} and {dt=:.2e} took {tracing_times[-1]:.2f} seconds")
         
-        energies += [jnp.max(jnp.abs(tracing.energy-particles.energy)/particles.energy)]
+        energies += [jnp.max(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
     ax.plot(tracing_times, energies, label=f'{method}', marker='o', markersize=4, linestyle='-')
     gc.collect()
 

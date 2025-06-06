@@ -54,7 +54,7 @@ for method_name, method in zip(method_names, methods):
             
             print(f"Tracing with adaptive {method_name} and tolerance {trace_tolerance:.0e} took {tracing_times[-1]:.2f} seconds")
             
-            energies += [jnp.mean(jnp.abs(tracing.energy-particles.energy)/particles.energy)]
+            energies += [jnp.mean(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
         ax.plot(tracing_times, energies, label=f'{method_name} adapt', marker='o', markersize=3, linestyle='-')
 
     energies = []
@@ -70,7 +70,7 @@ for method_name, method in zip(method_names, methods):
         
         print(f"Tracing with {method_name} and step {dt:.2e} took {tracing_times[-1]:.2f} seconds")
         
-        energies += [jnp.mean(jnp.abs(tracing.energy-particles.energy)/particles.energy)]
+        energies += [jnp.mean(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
     ax.plot(tracing_times, energies, label=f'{method_name}', marker='o', markersize=4, linestyle='-')
 
 
