@@ -6,7 +6,7 @@ from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
 import diffrax
-from diffrax import diffeqsolve, ODETerm, SaveAt, Dopri8, PIDController, Event, AbstractSolver, ConstantStepSize, StepTo
+from diffrax import diffeqsolve, ODETerm, SaveAt, Dopri8, PIDController, Event, AbstractSolver, ConstantStepSize, StepTo, NoProgressMeter, TqdmProgressMeter
 from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
@@ -151,7 +151,8 @@ def FieldLine(t,
 class Tracing():
     def __init__(self, model: str, field, maxtime: float, method=None, times=None, 
                  timesteps: int = None, stepsize: str = "adaptive", dt0: float=1e-5, 
-                 tol_step_size = 1e-10, particles=None, initial_conditions=None, condition=None):
+                 tol_step_size = 1e-10, particles=None, initial_conditions=None, condition=None,
+                 progress_meter=False):
         """
         Tracing class to compute the trajectories of particles in a magnetic field.
         
@@ -178,6 +179,7 @@ class Tracing():
         self.model = model
         self.method = method
         self.stepsize = stepsize
+        self.progress_meter = progress_meter
 
         assert isinstance(field, (BiotSavart, Coils, Vmec)), "Field must be a BiotSavart, Coils, or Vmec object"
         self.field = BiotSavart(field) if isinstance(field, Coils) else field
@@ -288,6 +290,11 @@ class Tracing():
                 elif self.stepsize == "constant":
                     controller = StepTo(self.times)
                     dt0 = None
+                    
+                if self.progress_meter:
+                    progress_meter = TqdmProgressMeter()
+                else:
+                    progress_meter = NoProgressMeter()
 
                 trajectory = diffeqsolve(
                     self.ODE_term,
@@ -300,6 +307,7 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=True,
                     # adjoint=DirectAdjoint(),
+                    progress_meter = progress_meter,
                     stepsize_controller = controller,
                     max_steps = int(1e10),
                     event = Event(self.condition)
