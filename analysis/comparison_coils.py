@@ -77,6 +77,8 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     
     # Running the first time for compilation
     [curve.gamma() for curve in curves_simsopt]
+    [curve.gammadash() for curve in curves_simsopt]
+    [curve.gammadashdash() for curve in curves_simsopt]
     coils_essos.gamma
     
     # Running the second time for coils characteristics comparison
