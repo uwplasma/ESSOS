@@ -14,6 +14,11 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 plt.rcParams.update({'font.size': 18})
 
+########################################################################################
+method = 'Boris'  # 'Boris' or 'Dopri5'
+########################################################################################
+
+
 tmax = 5e-5
 nparticles = 5
 axis_shft=0.02
@@ -75,21 +80,27 @@ trajectories_ESSOS_array = []
 relative_energy_error_ESSOS_array = []
 
 # Creating a tracing object for compilation
-compile_tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=100, method='Dopri5',
-                  stepsize='adaptive', tol_step_size=trace_tolerance_array[0], particles=particles)
-# compile_tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=100, method='Boris',
-#                           stepsize='constant', particles=particles)
+if method == 'Dopri5':
+    compile_tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=100, method='Dopri5',
+                      stepsize='adaptive', tol_step_size=trace_tolerance_array[0], particles=particles)
+else:
+    compile_tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=100, method='Boris',
+                      stepsize='constant', particles=particles)
 
 block_until_ready(compile_tracing.trajectories)
 
 for tolerance_idx, trace_tolerance_ESSOS in enumerate(trace_tolerance_array):
-    num_steps_essos = 10000 # avg_steps_SIMSOPT_array[tolerance_idx]
     print(f'Tracing ESSOS full orbit with tolerance={trace_tolerance_ESSOS}')
     start_time = time()
-    tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=num_steps_essos, method='Dopri5',
-                      stepsize='adaptive', tol_step_size=trace_tolerance_ESSOS, particles=particles)
-    # tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=num_steps_essos, method='Boris',
-    #                    stepsize='constant', particles=particles)
+    if method == 'Dopri5':
+        num_steps_essos = 10000
+        tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=num_steps_essos, method='Dopri5',
+                          stepsize='adaptive', tol_step_size=trace_tolerance_ESSOS, particles=particles)
+    else:
+        num_steps_essos = avg_steps_SIMSOPT_array[tolerance_idx]*10
+        tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=num_steps_essos, method='Boris',
+                           stepsize='constant', particles=particles)
+        
     block_until_ready(tracing.trajectories)
     runtime_ESSOS = time() - start_time
     runtime_ESSOS_array.append(runtime_ESSOS)
@@ -128,7 +139,10 @@ plt.yscale('log')
 plt.xlabel('Time (ms)')
 plt.ylabel('Average Relative Energy Error')
 plt.tight_layout()
-plt.savefig(os.path.join(output_dir, f'relative_energy_error_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+if method == 'Dopri5':
+    plt.savefig(os.path.join(output_dir, f'relative_energy_error_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+else:
+    plt.savefig(os.path.join(output_dir, f'relative_energy_error_fo_SIMSOPT_vs_ESSOS_Boris.pdf'), dpi=150)
 
 # Plot time comparison in a bar chart
 
@@ -150,10 +164,13 @@ ax.set_xticks(X_axis)
 ax.set_xticklabels(labels)
 ax.set_ylabel("Computation time (s)")
 ax.set_yscale('log')
-ax.set_ylim(1e0, 1e3)
+ax.set_ylim(1e-1, 1e3)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 ax.legend(fontsize=14)
-plt.savefig(os.path.join(output_dir, 'times_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+if method == 'Dopri5':
+    plt.savefig(os.path.join(output_dir, 'times_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+else:
+    plt.savefig(os.path.join(output_dir, 'times_fo_SIMSOPT_vs_ESSOS_Boris.pdf'), dpi=150)
 
 ##################################
 
@@ -201,8 +218,12 @@ for ax, fig in zip([xyz_error_ax, v_error_ax], [xyz_error_fig, v_error_fig]):
 
 xyz_error_ax.set_ylabel(r'Relative $x,y,z$ Error')
 v_error_ax.set_ylabel(r'Relative $v_x,v_y,v_z$ Error')
-xyz_error_fig.savefig(os.path.join(output_dir, f'relative_xyz_error_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
-v_error_fig.savefig(os.path.join(output_dir, f'relative_v_error_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+if method == 'Dopri5':
+    xyz_error_fig.savefig(os.path.join(output_dir, f'relative_xyz_error_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+    v_error_fig.savefig(os.path.join(output_dir, f'relative_v_error_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+else:
+    xyz_error_fig.savefig(os.path.join(output_dir, f'relative_xyz_error_fo_SIMSOPT_vs_ESSOS_Boris.pdf'), dpi=150)
+    v_error_fig.savefig(os.path.join(output_dir, f'relative_v_error_fo_SIMSOPT_vs_ESSOS_Boris.pdf'), dpi=150)
 
 quantities = [(fr"tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx], avg_relative_v_error_array[tolerance_idx]) 
               for tolerance_idx in range(len(trace_tolerance_array))]
@@ -222,9 +243,12 @@ ax.set_xticks(X_axis)
 ax.set_xticklabels(labels)
 ax.set_ylabel("Time Averaged Relative Error")
 ax.set_yscale('log')
-ax.set_ylim(1e-8, 1e-1)
+ax.set_ylim(1e-6, 1e1)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 ax.legend(fontsize=14)
-plt.savefig(os.path.join(output_dir, 'relative_errors_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+if method == 'Dopri5':
+    plt.savefig(os.path.join(output_dir, 'relative_errors_fo_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+else:
+    plt.savefig(os.path.join(output_dir, 'relative_errors_fo_SIMSOPT_vs_ESSOS_Boris.pdf'), dpi=150)
 
 plt.show()
