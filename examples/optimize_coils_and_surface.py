@@ -117,12 +117,12 @@ def loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field):
     normal_cross_GradB_dot_grad_B_dot_GradB_surface = jnp.sum(normal_cross_GradB_surface * grad_B_dot_GradB_surface, axis=-1)
     return normal_cross_GradB_dot_grad_B_dot_GradB_surface
 
-@partial(jit, static_argnums=(1, 5, 6, 7, 8, 9, 10))
-def loss_coils_and_surface(x, surface_all, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
+@partial(jit, static_argnums=(1, 3, 5, 6, 7, 8, 9, 10))
+def loss_coils_and_surface(x, surface_all, field_nearaxis, dofs_curves_shape, currents_scale, nfp, max_coil_length=42,
                n_segments=60, stellsym=True, max_coil_curvature=0.5, target_B_on_surface=5.7):
-    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
+    len_dofs_curves_ravelled = dofs_curves_shape[0]*dofs_curves_shape[1]*dofs_curves_shape[2]
     dofs_currents = x[len_dofs_curves_ravelled:-len(surface_all.x)-len(field_nearaxis.x)]
-    new_dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], (dofs_curves.shape))
+    new_dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves_shape)
     
     curves = Curves(new_dofs_curves, n_segments, nfp, stellsym)
     coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
@@ -133,8 +133,8 @@ def loss_coils_and_surface(x, surface_all, field_nearaxis, dofs_curves, currents
     
     field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(x[-len(field_nearaxis.x):], field_nearaxis)
     
-    coil_length = loss_coil_length(field)
-    coil_curvature = loss_coil_curvature(field)
+    coil_length = loss_coil_length(coils)
+    coil_curvature = loss_coil_curvature(coils)
     
     coil_length_loss    = 1e3*jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
     coil_curvature_loss = 1e3*jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
