@@ -35,8 +35,8 @@ def loss_coils_for_nearaxis(x, field_nearaxis, dofs_curves_shape, currents_scale
     
     B_difference_loss = jnp.sum(jnp.abs(jnp.array(B_coils)-jnp.array(B_nearaxis)))
     gradB_difference_loss = jnp.sum(jnp.abs(jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)))
-    coil_length_loss = 1e3*jnp.max(loss_coil_length(field, max_coil_length))
-    coil_curvature_loss = 1e3*jnp.max(loss_coil_curvature(field, max_coil_curvature))
+    coil_length_loss = 1e3*jnp.max(loss_coil_length(coils, max_coil_length))
+    coil_curvature_loss = 1e3*jnp.max(loss_coil_curvature(coils, max_coil_curvature))
     
     
     return B_difference_loss+gradB_difference_loss+coil_length_loss+coil_curvature_loss
@@ -77,8 +77,8 @@ def loss_coils_and_nearaxis(x, field_nearaxis, dofs_curves_shape, currents_scale
     B_difference_loss = 3*jnp.sum(jnp.abs(B_difference))
     gradB_difference_loss = jnp.sum(jnp.abs(gradB_difference))
     
-    coil_length_loss = 1e3*jnp.max(loss_coil_length(field, max_coil_length))
-    coil_curvature_loss = 1e3*jnp.max(loss_coil_curvature(field, max_coil_curvature))
+    coil_length_loss = 1e3*jnp.max(loss_coil_length(coils, max_coil_length))
+    coil_curvature_loss = 1e3*jnp.max(loss_coil_curvature(coils, max_coil_curvature))
     elongation_loss = jnp.sum(jnp.abs(elongation))
     iota_loss = 30/jnp.abs(iota)
     
@@ -107,32 +107,41 @@ def loss_particle_drift(field, particles, maxtime=1e-5, num_steps=300, trace_tol
     # return jnp.concatenate((jnp.ravel(jnp.abs(vertical_factor)),))
 
 @partial(jit, static_argnames=['max_coil_length'])
-def loss_coil_length(coils, max_coil_length):
-    return jnp.square((coils.length-max_coil_length)/max_coil_length)
+def loss_coil_length(coils, max_coil_length=0):
+    return jnp.square(coils.length/max_coil_length - 1)
 
 @partial(jit, static_argnames=['max_coil_curvature'])
-def loss_coil_curvature(coils, max_coil_curvature):
+def loss_coil_curvature(coils, max_coil_curvature=0):
     pointwise_curvature_loss = jnp.square(jnp.maximum(coils.curvature-max_coil_curvature, 0))
-    return jnp.mean(pointwise_curvature_loss, axis=1)
+    return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
 
-@partial(jit, static_argnames=['min_separation'])
-def loss_coil_separation(coils, min_separation):
-    # Sort coils by angle
-    # sorting = jnp.argsort(jnp.arctan2(coils.curves[:,1,0], coils.curves[:,0,0])%(2*jnp.pi))
-    # This can be useful to only cosider the separation between adjacent coils
-    # i_vals, j_vals = jnp.arange(len(coils)), jnp.arange(1, len(coils)+1)%len(coils)
-    # but in this case gamma_i and gamma_j have to be sorted with the sorting mask
+def compute_candidates(coils, min_separation):
+    centers = coils.curves[:, :, 0]
+    a_n = coils.curves[:, :, 2 : 2*coils.order+1 : 2]
+    b_n = coils.curves[:, :, 1 : 2*coils.order : 2]
+    radii = jnp.sum(jnp.linalg.norm(a_n, axis=1)+jnp.linalg.norm(b_n, axis=1), axis=1)
 
     i_vals, j_vals = jnp.triu_indices(len(coils), k=1)
+    centers_dists = jnp.linalg.norm(centers[i_vals] - centers[j_vals], axis=1)
+    mask = centers_dists <= min_separation + radii[i_vals] + radii[j_vals]
+
+    return i_vals[mask], j_vals[mask]
+
+@partial(jit, static_argnames=['min_separation'])
+def loss_coil_separation(coils, min_separation, candidates=None):
+    if candidates is None:
+        candidates = jnp.triu_indices(len(coils), k=1)
 
     def pair_loss(i, j):
         gamma_i = coils.gamma[i]
+        gamma_dash_i = jnp.linalg.norm(coils.gamma_dash[i], axis=-1)
         gamma_j = coils.gamma[j]
+        gamma_dash_j = jnp.linalg.norm(coils.gamma_dash[j], axis=-1)
         dists = jnp.linalg.norm(gamma_i[:, None, :] - gamma_j[None, :, :], axis=2)
         penalty = jnp.maximum(0, min_separation - dists)
-        return jnp.mean(jnp.square(penalty))
+        return jnp.mean(jnp.square(penalty)*gamma_dash_i*gamma_dash_j)
 
-    losses = jax.vmap(pair_loss)(i_vals, j_vals)
+    losses = jax.vmap(pair_loss)(*candidates)
     return jnp.sum(losses)
 
 # @partial(jit, static_argnames=['target_B_on_axis', 'npoints'])
