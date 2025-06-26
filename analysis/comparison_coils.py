@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
 from jax import block_until_ready
 from essos.fields import BiotSavart as BiotSavart_essos
-from essos.coils import Coils_from_simsopt, Curves_from_simsopt
+from essos.coils import Coils, Curves
 from simsopt import load
 from simsopt.geo import CurveXYZFourier, curves_to_vtk
 from simsopt.field import BiotSavart as BiotSavart_simsopt, coils_via_symmetries
@@ -33,17 +33,17 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
         coils_simsopt = field_simsopt.coils
         curves_simsopt = [coil.curve for coil in coils_simsopt]
         currents_simsopt = [coil.current for coil in coils_simsopt]
-        coils_essos = Coils_from_simsopt(json_file_stel, nfp)
-        curves_essos = Curves_from_simsopt(json_file_stel, nfp)
+        coils_essos = Coils.from_simsopt(json_file_stel, nfp)
+        curves_essos = Curves.from_simsopt(json_file_stel, nfp)
     else:
         coils_simsopt  = coils_via_symmetries(curves_stel, currents_stel, nfp, True)
         curves_simsopt = [c.curve for c in coils_simsopt]
         currents_simsopt = [c.current for c in coils_simsopt]
         field_simsopt = BiotSavart_simsopt(coils_simsopt)
-        
-        coils_essos = Coils_from_simsopt(coils_simsopt, nfp)
-        curves_essos = Curves_from_simsopt(curves_simsopt, nfp)
-        
+
+        coils_essos = Coils.from_simsopt(coils_simsopt, nfp)
+        curves_essos = Curves.from_simsopt(curves_simsopt, nfp)
+
     field_essos = BiotSavart_essos(coils_essos)
     
     coils_essos_to_simsopt = coils_essos.to_simsopt()
