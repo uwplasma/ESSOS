@@ -44,7 +44,11 @@ class Curves:
         self._order = dofs.shape[2]//2
         self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
         self.quadpoints = jnp.linspace(0, 1, self.n_segments, endpoint=False)
-        self._set_gamma()
+        self._gamma = None
+        self._gamma_dash = None
+        self._gamma_dashdash = None
+        self._curvature = None
+        self._length = None
 
     def __str__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
@@ -73,7 +77,7 @@ class Curves:
         gamma_dash     = jnp.zeros((jnp.size(self._curves, 0), self.n_segments, 3))
         gamma_dashdash = jnp.zeros((jnp.size(self._curves, 0), self.n_segments, 3))
         gamma, gamma_dash, gamma_dashdash = fori_loop(1, self._order+1, fori_createdata, (gamma, gamma_dash, gamma_dashdash)) 
-        length = jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in gamma_dash])
+        length = jnp.mean(jnp.linalg.norm(gamma_dash, axis=2), axis=1)
         curvature = vmap(compute_curvature)(gamma_dash, gamma_dashdash)
         self._gamma = gamma
         self._gamma_dash = gamma_dash
@@ -150,22 +154,32 @@ class Curves:
     
     @property
     def gamma(self):
+        if self._gamma is None:
+            self._set_gamma()
         return self._gamma
     
     @property
     def gamma_dash(self):
+        if self._gamma_dash is None:
+            self._set_gamma()
         return self._gamma_dash
     
     @property
     def gamma_dashdash(self):
+        if self._gamma_dashdash is None:
+            self._set_gamma()
         return self._gamma_dashdash
     
     @property
     def length(self):
+        if self._length is None:
+            self._set_gamma()
         return self._length
     
     @property
     def curvature(self):
+        if self._curvature is None:
+            self._set_gamma()
         return self._curvature
     
     def __len__(self):
@@ -288,9 +302,12 @@ class Curves:
             pointData = {**pointData, **extra_data}
         polyLinesToVTK(str(filename), np.array(x), np.array(y), np.array(z), pointsPerLine=np.array(ppl), pointData=pointData)
 
-class Curves_from_simsopt(Curves):
-    # This assumes curves have all nfp and stellsym symmetries
-    def __init__(self, simsopt_curves, nfp=1, stellsym=True):
+    @classmethod
+    def from_simsopt(cls, simsopt_curves, nfp=1, stellsym=True):
+        """
+        Create a Curves object from a list of simsopt curves.
+        This assumes curves have all nfp and stellsym symmetries.
+        """
         if isinstance(simsopt_curves, str):
             from simsopt import load
             bs = load(simsopt_curves)
@@ -301,7 +318,7 @@ class Curves_from_simsopt(Curves):
             [curve.x for curve in simsopt_curves]
         ), (len(simsopt_curves), 3, 2*simsopt_curves[0].order+1))
         n_segments = len(simsopt_curves[0].quadpoints)
-        super().__init__(dofs, n_segments, nfp, stellsym)
+        return cls(dofs, n_segments, nfp, stellsym)
 
 tree_util.register_pytree_node(Curves,
                                Curves._tree_flatten,
@@ -447,24 +464,29 @@ class Coils(Curves):
         import json
         with open(filename, "w") as file:
             json.dump(data, file)
-
-class Coils_from_json(Coils):
-    def __init__(self, filename: str):
-        import json
-        with open(filename , "r") as file:
-            data = json.load(file)
-        super().__init__(Curves(jnp.array(data["dofs_curves"]), data["n_segments"], data["nfp"], data["stellsym"]), data["dofs_currents"])
-
-class Coils_from_simsopt(Coils):
-    # This assumes coils have all nfp and stellsym symmetries
-    def __init__(self, simsopt_coils, nfp=1, stellsym=True):
+        
+    @classmethod
+    def from_simsopt(cls, simsopt_coils, nfp=1, stellsym=True):
+        """ This assumes coils have all nfp and stellsym symmetries"""
         if isinstance(simsopt_coils, str):
             from simsopt import load
             bs = load(simsopt_coils)
             simsopt_coils = bs.coils
         curves = [c.curve for c in simsopt_coils]
         currents = jnp.array([c.current.get_value() for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]])
-        super().__init__(Curves_from_simsopt(curves, nfp, stellsym), currents)
+        return cls(Curves.from_simsopt(curves, nfp, stellsym), currents)
+    
+    @classmethod
+    def from_json(cls, filename: str):
+        """
+        Create a Coils object from a json file
+        """
+        import json
+        with open(filename, "r") as file:
+            data = json.load(file)
+        curves = Curves(jnp.array(data["dofs_curves"]), data["n_segments"], data["nfp"], data["stellsym"])
+        currents = jnp.array(data["dofs_currents"])
+        return cls(curves, currents)
 
 tree_util.register_pytree_node(Coils,
                                Coils._tree_flatten,
