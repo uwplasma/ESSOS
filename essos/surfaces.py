@@ -26,9 +26,31 @@ def BdotN(surface, field):
 
 @partial(jit, static_argnames=['surface','field'])
 def BdotN_over_B(surface, field):
-    B_surface = B_on_surface(surface, field)
-    B_dot_n = jnp.sum(B_surface * surface.unitnormal, axis=2)
-    return B_dot_n / jnp.linalg.norm(B_surface, axis=2)
+    return BdotN(surface, field) / jnp.linalg.norm(B_on_surface(surface, field), axis=2)
+
+@partial(jit, static_argnames=['surface','field'])
+def _squared_flux_local(surface, field):
+    return 0.5 * jnp.mean(BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
+                          * surface.area_element)
+
+@partial(jit, static_argnames=['surface','field'])
+def _squared_flux_global(surface, field):
+    return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element)
+
+@partial(jit, static_argnames=['surface','field'])
+def _squared_flux_normalized(surface, field):
+    return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element) / \
+                 jnp.mean(jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
+
+def SquaredFlux(surface, field, definition='local'):
+    if definition == 'local':
+        return _squared_flux_local(surface, field)
+    elif definition == 'quadratic flux':
+        return _squared_flux_global(surface, field)
+    elif definition == 'normalized':
+        return _squared_flux_normalized(surface, field)
+    else:
+        raise ValueError(f"Unknown definition: {definition}")
 
 def nested_lists_to_array(ll):
     """
@@ -147,11 +169,13 @@ class SurfaceRZFourier:
         
         self.angles =  jnp.einsum('i,jk->ijk', self.xm, self.theta_2d) - jnp.einsum('i,jk->ijk', self.xn, self.phi_2d)
     
-        (self._gamma, self._gammadash_theta, self._gammadash_phi,
-            self._normal, self._unitnormal) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
-        
-        if hasattr(self, 'bmnc'):
-            self._AbsB = self._set_AbsB()
+        self._gamma = None
+        self._gammadash_theta = None
+        self._gammadash_phi = None
+        self._normal = None
+        self._unitnormal = None
+        self._area_element = None
+        self._AbsB = None
 
     @property
     def dofs(self):
@@ -165,12 +189,14 @@ class SurfaceRZFourier:
         indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
         self.rmnc_interp = self.rc[indices[:, 0], indices[:, 1]]
         self.zmns_interp = self.zs[indices[:, 0], indices[:, 1]]
-        (self._gamma, self._gammadash_theta, self._gammadash_phi,
-            self._normal, self._unitnormal) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
-        # if hasattr(self, 'bmnc'):
-        #     self._AbsB = self._set_AbsB()
+        self._gamma = None
+        self._gammadash_theta = None
+        self._gammadash_phi = None
+        self._normal = None
+        self._unitnormal = None
+        self._area_element = None
+        self._AbsB = None
         
-    @partial(jit, static_argnames=['self'])
     def _set_gamma(self, rmnc_interp, zmns_interp):
         phi_2d = self.phi_2d
         angles = self.angles
@@ -193,37 +219,62 @@ class SurfaceRZFourier:
 
         normal = jnp.cross(gammadash_phi, gammadash_theta, axis=2)
         unitnormal = normal / jnp.linalg.norm(normal, axis=2, keepdims=True)
-        
-        return (gamma, gammadash_theta, gammadash_phi, normal, unitnormal)
-    
-    @partial(jit, static_argnames=['self'])
+        area_element = jnp.linalg.norm(jnp.cross(gammadash_theta, gammadash_phi, axis=2), axis=2)
+
+        self._gamma = gamma
+        self._gammadash_theta = gammadash_theta
+        self._gammadash_phi = gammadash_phi
+        self._normal = normal
+        self._unitnormal = unitnormal
+        self._area_element = area_element
+
     def _set_AbsB(self):
         angles_nyq = jnp.einsum('i,jk->ijk', self.xm_nyq, self.theta_2d) - jnp.einsum('i,jk->ijk', self.xn_nyq, self.phi_2d)
         AbsB = jnp.einsum('i,ijk->jk', self.bmnc_interp, jnp.cos(angles_nyq))
-        return AbsB
+        self._AbsB = AbsB
     
     @property
     def gamma(self):
+        if self._gamma is None:
+            self._set_gamma(self.rmnc_interp, self.zmns_interp)
         return self._gamma
     
     @property
     def gammadash_theta(self):
+        if self._gammadash_theta is None:
+            self._set_gamma(self.rmnc_interp, self.zmns_interp)
         return self._gammadash_theta
     
     @property
     def gammadash_phi(self):
+        if self._gammadash_phi is None:
+            self._set_gamma(self.rmnc_interp, self.zmns_interp)
         return self._gammadash_phi
     
     @property
     def normal(self):
+        if self._normal is None:
+            self._set_gamma(self.rmnc_interp, self.zmns_interp)
         return self._normal
     
     @property
     def unitnormal(self):
+        if self._unitnormal is None:
+            self._set_gamma(self.rmnc_interp, self.zmns_interp)
         return self._unitnormal
-    
+
+    @property
+    def area_element(self):
+        if self._area_element is None:
+            self._set_gamma(self.rmnc_interp, self.zmns_interp)
+        return self._area_element
+
     @property
     def AbsB(self):
+        if self._AbsB is None:
+            if not hasattr(self, 'bmnc'):
+                raise AttributeError("AbsB is not available. Ensure that the bmnc attribute is set.")
+            self._set_AbsB()
         return self._AbsB
     
     @property
