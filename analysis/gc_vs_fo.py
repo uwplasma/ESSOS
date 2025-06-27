@@ -6,7 +6,7 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_json
+from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
 from essos.dynamics import Tracing, Particles
 from jax import block_until_ready
@@ -17,7 +17,7 @@ if not os.path.exists(output_dir):
     
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_json(json_file)
+coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
 # Particle parameters
@@ -64,8 +64,8 @@ tracing_fo.plot(ax=ax, show=False)
 plt.tight_layout()
 
 plt.figure(figsize=(9, 6))
-plt.plot(tracing_gc.times*1000, jnp.abs(tracing_gc.energy[0]/particles.energy-1), label='Guiding Center', color='red')
-plt.plot(tracing_fo.times*1000, jnp.abs(tracing_fo.energy[0]/particles.energy-1), label='Full Orbit', color='blue')
+plt.plot(tracing_gc.times*1000, jnp.abs(tracing_gc.energy()[0]/particles.energy-1), label='Guiding Center', color='red')
+plt.plot(tracing_fo.times*1000, jnp.abs(tracing_fo.energy()[0]/particles.energy-1), label='Full Orbit', color='blue')
 plt.xlabel('Time (ms)')
 plt.ylabel('Relative Energy Error')
 plt.xlim(0, tmax*1000)

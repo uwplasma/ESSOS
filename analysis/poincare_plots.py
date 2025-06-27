@@ -7,7 +7,7 @@ from jax import jit, grad, block_until_ready
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
-from essos.coils import Coils_from_json
+from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
 from essos.fields import BiotSavart
 from essos.dynamics import Tracing, Particles
@@ -35,7 +35,7 @@ print("cyclotron period:", 1/(ELEMENTARY_CHARGE*0.3/mass))
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_json(json_file)
+coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
 R0_fieldlines = jnp.linspace(1.21, 1.41, nfieldlines)

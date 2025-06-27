@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_json
+from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
 from essos.dynamics import Tracing, Particles
 
@@ -18,7 +18,7 @@ if not os.path.exists(output_dir):
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_json(json_file)
+coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
 # Particle parameters

@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from jax import block_until_ready, random
 from simsopt import load
 from simsopt.field import (particles_to_vtk, compute_fieldlines, plot_poincare_data)
-from essos.coils import Coils_from_simsopt
+from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 from essos.fields import BiotSavart as BiotSavart_essos
@@ -30,7 +30,7 @@ if not os.path.exists(output_dir):
 nfp=2
 LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '../examples', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
 field_simsopt = load(LandremanPaulQA_json_file)
-field_essos = BiotSavart_essos(Coils_from_simsopt(LandremanPaulQA_json_file, nfp))
+field_essos = BiotSavart_essos(Coils.from_simsopt(LandremanPaulQA_json_file, nfp))
 
 Z0 = jnp.zeros(nfieldlines)
 phi0 = jnp.zeros(nfieldlines)
