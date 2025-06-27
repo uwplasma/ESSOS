@@ -1,8 +1,9 @@
 import os
-from time import time
+from time import perf_counter as time
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
 import jax.numpy as jnp
+from jax import block_until_ready
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import Vmec, BiotSavart
 from essos.surfaces import B_on_surface, BdotN_over_B, SurfaceRZFourier as SurfaceRZFourier_ESSOS, SquaredFlux as SquaredFlux_ESSOS
@@ -52,38 +53,94 @@ surface_simsopt = SurfaceRZFourier_SIMSOPT.from_wout(vmec_file, range="full toru
 field_simsopt.set_points(surface_simsopt.gamma().reshape((-1, 3)))
 # surface_simsopt.to_vtk("simsopt_surface")
 
+# Running the first time for compilation
+surface_simsopt.gamma()
+surface_simsopt.gammadash1()
+surface_simsopt.gammadash2()
+surface_simsopt.unitnormal()
+field_simsopt.B()
+SquaredFlux_SIMSOPT(surface_simsopt, field_simsopt).J()
+surface_essos.gamma
+
+# Running the second time for surface characteristics comparison
+
 print("Gamma")
-gamma_error = jnp.sum(jnp.abs(surface_simsopt.gamma() - surface_essos.gamma))
+start_time = time()
+gamma_essos = block_until_ready(surface_essos.gamma)
+t_gamma_essos = time() - start_time
+
+gamma_simsopt = block_until_ready(surface_simsopt.gamma())
+start_time = time()
+t_gamma_simsopt = time() - start_time
+
+gamma_error = jnp.sum(jnp.abs(gamma_simsopt - gamma_essos))
 print(gamma_error)
 
+
 print('Gamma dash theta')
-gamma_dash_theta_error = jnp.sum(jnp.abs(surface_simsopt.gammadash2()-surface_essos.gammadash_theta))
+start_time = time()
+gamma_dash_theta_essos = block_until_ready(surface_essos.gammadash_theta)
+t_gamma_dash_theta_essos = time() - start_time
+
+start_time = time()
+gamma_dash_theta_simsopt = block_until_ready(surface_simsopt.gammadash2())
+t_gamma_dash_theta_simsopt = time() - start_time
+
+gamma_dash_theta_error = jnp.sum(jnp.abs(gamma_dash_theta_simsopt - gamma_dash_theta_essos))
 print(gamma_dash_theta_error)
 
+
 print('Gamma dash phi')
-gamma_dash_phi_error = jnp.sum(jnp.abs(surface_simsopt.gammadash1()-surface_essos.gammadash_phi))
+start_time = time()
+gamma_dash_phi_essos = block_until_ready(surface_essos.gammadash_phi)
+t_gamma_dash_phi_essos = time() - start_time
+
+start_time = time()
+gamma_dash_phi_simsopt = block_until_ready(surface_simsopt.gammadash1())
+t_gamma_dash_phi_simsopt = time() - start_time
+
+gamma_dash_phi_error = jnp.sum(jnp.abs(gamma_dash_phi_simsopt - gamma_dash_phi_essos))
 print(gamma_dash_phi_error)
 
-print('Normal')
-normal_error = jnp.sum(jnp.abs(surface_simsopt.normal()-surface_essos.normal))
-print(normal_error)
 
 print('Unit normal')
-unit_normal_error = jnp.sum(jnp.abs(surface_simsopt.unitnormal()-surface_essos.unitnormal))
+start_time = time()
+unit_normal_essos = block_until_ready(surface_essos.unitnormal)
+t_unit_normal_essos = time() - start_time
+
+start_time = time()
+unit_normal_simsopt = block_until_ready(surface_simsopt.unitnormal())
+t_unit_normal_simsopt = time() - start_time
+
+unit_normal_error = jnp.sum(jnp.abs(unit_normal_simsopt - unit_normal_essos))
 print(unit_normal_error)
 
+
 print('B on surface')
-B_on_surface_error = jnp.sum(jnp.abs(field_simsopt.B().reshape((nphi, ntheta, 3)) - B_on_surface(surface_essos, field_essos)))
+start_time = time()
+B_on_surface_essos = block_until_ready(B_on_surface(surface_essos, field_essos))
+t_B_on_surface_essos = time() - start_time
+
+start_time = time()
+B_on_surface_simsopt = block_until_ready(field_simsopt.B())
+t_B_on_surface_simsopt = time() - start_time
+
+B_on_surface_error = jnp.sum(jnp.abs(B_on_surface_simsopt.reshape((nphi, ntheta, 3)) - B_on_surface_essos))
 print(B_on_surface_error)
+
 
 definition = "local"
 print("Squared flux", definition)
-sf_SIMSOPT = SquaredFlux_SIMSOPT(surface_simsopt, field_simsopt, definition=definition).J()
-sf_ESSOS = SquaredFlux_ESSOS(surface_essos, field_essos, definition=definition)
-squared_flux_error = jnp.abs(sf_SIMSOPT - sf_ESSOS)
+start_time = time()
+sf_essos = block_until_ready(SquaredFlux_ESSOS(surface_essos, field_essos, definition=definition))
+t_squared_flux_essos = time() - start_time
 
-print("ESSOS: ", sf_ESSOS)
-print("SIMSOPT: ", sf_SIMSOPT)
+start_time = time()
+sf_simsopt = block_until_ready(SquaredFlux_SIMSOPT(surface_simsopt, field_simsopt, definition=definition).J())
+t_squared_flux_simsopt = time() - start_time
+
+squared_flux_error = jnp.abs(sf_simsopt - sf_essos)
+print(squared_flux_error)
 
 # Labels and corresponding absolute errors (ESSOS - SIMSOPT)
 quantities_errors = [
@@ -112,5 +169,37 @@ ax.set_ylim(1e-14, 1e-10)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 
 plt.tight_layout()
-# plt.savefig(os.path.join(output_dir, f"comparison_error_surfaces.pdf"), transparent=True)
+plt.savefig(os.path.join(output_dir, f"comparison_error_surfaces.pdf"), transparent=True)
+
+# Labels and corresponding timings
+quantities = [
+    (r"$\Gamma$",         t_gamma_essos,         t_gamma_simsopt),
+    (r"$\Gamma'_\theta$", t_gamma_dash_theta_essos, t_gamma_dash_theta_simsopt),
+    (r"$\Gamma'_\phi$",   t_gamma_dash_phi_essos,   t_gamma_dash_phi_simsopt),
+    (r"$\mathbf{n}$",     t_unit_normal_essos,     t_unit_normal_simsopt),
+    # (r"$\mathbf{B}$",     t_B_on_surface_essos,     t_B_on_surface_simsopt),
+    (r"$L_\text{flux}$",  t_squared_flux_essos,     t_squared_flux_simsopt),
+]
+
+labels = [q[0] for q in quantities]
+essos_vals = [q[1] for q in quantities]
+simsopt_vals = [q[2] for q in quantities]
+
+X_axis = jnp.arange(len(labels))
+bar_width = 0.35
+
+fig, ax = plt.subplots(figsize=(9, 6))
+ax.bar(X_axis - bar_width/2, essos_vals, bar_width, label="ESSOS", color="red", edgecolor="black")
+ax.bar(X_axis + bar_width/2, simsopt_vals, bar_width, label="SIMSOPT", color="blue", edgecolor="black")
+
+ax.set_xticks(X_axis)
+ax.set_xticklabels(labels)
+ax.set_ylabel("Computation time (s)")
+ax.set_yscale("log")
+ax.set_ylim(1e-7, 1e-1)
+ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
+ax.legend(fontsize=12)
+plt.tight_layout()
+plt.savefig(os.path.join(output_dir, f"comparison_time_surfaces.pdf"), transparent=True)
+
 plt.show()
