@@ -12,22 +12,36 @@ from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies,gamma_ab
 import numpy as np
 import jax 
+
 # Input parameters
-tmax = 1.e-3
-dt=1.e-9
+light_speed=299792458
+tmax = 1.e-5
+dt=1.e-8
 nparticles = number_of_processors_to_use*32
 R0 = 1.25#jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
 num_steps = int(tmax/dt)
 mass=PROTON_MASS
+mass_a=4.*mass
 mass_e=ELECTRON_MASS
-T_test=3000.
-energy=T_test*ONE_EV
-light_speed=299792458
+vth_c_b2=1.0657889247888946e-06   #T=1000 eV 
+vth_c_a2=1.e-2#4.263155699155578e-06
+#vth_c_a2=4.263155699155578e-06
+vth_c_e2=0.1
+
+
+T_a=vth_c_a2*light_speed**2*mass_a/ONE_EV
+
+T_e=20.e+3*ONE_EV
+vth_c_e2=T_e/mass_e*2./light_speed**2
+
+energy=3.5e+6*ONE_EV#0.5*mass_a*vth_c_a2*light_speed**2
+vth_c_a2=energy*2./mass_a/light_speed**2
+
 
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils_from_json(json_file)
 field = BiotSavart(coils)
 
@@ -35,25 +49,29 @@ field = BiotSavart(coils)
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-particles = Particles(initial_xyz=initial_xyz,initial_vparallel_over_v=0.2*jnp.ones(nparticles), mass=mass, energy=energy)
+particles = Particles(initial_xyz=initial_xyz,initial_vparallel_over_v=-1.*jnp.ones(nparticles), mass=mass, energy=energy)
 
 
 #Initialize background species
 #number_species=2  #(electrons,deuterium)
-#mass_array=jnp.array([ELECTRON_MASS/PROTON_MASS,2])    #mass_over_mproton
+mass_array=jnp.array([ELECTRON_MASS/PROTON_MASS])    #mass_over_mproton
 number_species=1  #(electrons,deuterium)
-mass_array=jnp.array([1.])    #mass_over_mproton
-charge_array=jnp.array([1.])    #mass_over_mproton
-T0=1.e+3  #eV
-n0=1e+20  #m^-3
+#mass_array=jnp.array([1.])    #mass_over_mproton
+charge_array=jnp.array([-1.])    #mass_over_mproton
+T_b=vth_c_e2*light_speed**2*mass_e/ONE_EV/2.  #eV
+n_0=100000e+20  #m^-3
 #n_array=[lambda x,y,z: n0,lambda x,y,z: n0 ]
 #T_array=[lambda x,y,z: T0,lambda x,y,z: T0 ]
-n_array=jnp.array([n0])
-T_array=jnp.array([T0])
+n_array=jnp.array([n_0])
+T_array=jnp.array([T_b])
 #n_array=jnp.array([n0, n0])
 #T_array=jnp.array([T0, T0])
+
+
 species = BackgroundSpecies(number_species=number_species, mass_array=mass_array, charge_array=charge_array, n_array=n_array, T_array=T_array)
-vth_c=jnp.sqrt(T0*ONE_EV/PROTON_MASS)/light_speed
+#t_s=1./gamma_ab(particles.mass, particles.charge, 0,vth_c_a2, points, species: BackgroundSpecies) 
+
+vth_c=jnp.sqrt(T_b*ONE_EV/mass_e)/light_speed
 vpar_mean=0.
 vpar_sigma=vth_c
 v_mean=vth_c*jnp.sqrt(8./jnp.pi)
@@ -81,7 +99,7 @@ pitch_sigma=jnp.sqrt(2.**2/12)
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=field, model='GuidingCenterCollisionsMu', particles=particles,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance,species=species,tag_gc=1.)
+                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance,species=species,tag_gc=0)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 
@@ -190,6 +208,7 @@ ax52 = fig2.add_subplot(255)
 ax62 = fig2.add_subplot(256)
 ax72 = fig2.add_subplot(257)
 ax82 = fig2.add_subplot(258)
+ax92 = fig2.add_subplot(259)
 nbins=64
 
 v0=jnp.sqrt(tracing.energy[:,0]*2./particles.mass)
@@ -202,7 +221,32 @@ pitch0=vpar0/v0
 pitch_final=vparfinal/vfinal
 
 
+#def find_first_less_than_numpy(arr, value):
+#    indices = jnp.where(arr < value)[0]
+#    if indices.size > 0:
+#        result=indices[0]
+#    else:
+#    	result=jnp.nan
+#    return result
 
+#t_final=jax.vmap(find_first_less_than_numpy,in_axes=(0,None),out_axes=0)(v/light_speed,0.7*jnp.sqrt(vth_c_a2))
+
+
+def find_first_less_than_numpy(arr, value):
+    result=np.zeros(arr.shape[0])
+    for i in range(arr.shape[0]):
+        indices = np.where(arr[i] < value)[0]
+        if indices.size > 0:
+            result[i]=tracing.times[indices[0]]
+        else:
+    	    result[i]=np.nan
+    return result
+
+t_final=find_first_less_than_numpy(np.log(v/v[0,0]),np.log(0.6))
+
+
+print('Mean slowing down time is :', jnp.nanmean(t_final,axis=0))
+print('Standard deviation of slowing down time is :', jnp.nanstd(t_final,axis=0))
 
 
 bad_indices_v0 = jnp.isnan(v0) 
@@ -213,6 +257,7 @@ bad_indices_vperp0 = jnp.isnan(vperp0)
 bad_indices_vperp_final = jnp.isnan(vperpfinal)
 bad_indices_vpar0 = jnp.isnan(vpar0) 
 bad_indices_vpar_final = jnp.isnan(vparfinal) 
+bad_indices_t_final = jnp.isnan(t_final) 
 good_indices_v0 = ~bad_indices_v0
 good_indices_vfinal = ~bad_indices_vfinal
 good_indices_pitch0 = ~bad_indices_pitch0
@@ -221,11 +266,12 @@ good_indices_vpar0 = ~bad_indices_vpar0
 good_indices_vpar_final = ~bad_indices_vpar_final
 good_indices_vperp0 = ~bad_indices_vperp0
 good_indices_vperp_final = ~bad_indices_vperp_final
+good_indices_t_final = ~bad_indices_t_final
 good_v0 = v0[good_indices_v0]
 good_vfinal = vfinal[good_indices_vfinal]
 good_pitch0 = pitch0[good_indices_pitch0]
 good_pitch_final = pitch_final[good_indices_pitch_final]
-
+good_t_final = t_final[good_indices_t_final]
 
 good_vpar0 = vpar0[good_indices_vpar0]
 good_vpar_final = vparfinal[good_indices_vpar_final]
@@ -246,6 +292,7 @@ vpar_tfinal_counts,vpar_tfinal_bins=jnp.histogram(good_vpar_final,bins=nbins)
 vperp_t0_counts,vperp_t0_bins=jnp.histogram(good_vperp0,bins=nbins)
 vperp_tfinal_counts,vperp_tfinal_bins=jnp.histogram(good_vperp_final,bins=nbins)
 
+tfinal_counts,tfinal_bins=jnp.histogram(good_t_final,bins=nbins)
 
 ax12.stairs(v0_counts,v0_bins)
 ax22.stairs(vfinal_counts,vfinal_bins)
@@ -259,6 +306,7 @@ ax62.stairs(pitch_tfinal_counts,pitch_tfinal_bins)
 #ax82.hist2d(vfinal,pitch_final,bins=nbins)
 ax72.stairs(vperp_t0_counts,vperp_t0_bins)
 ax82.stairs(vperp_tfinal_counts,vperp_tfinal_bins)
+ax92.stairs(tfinal_counts,tfinal_bins)
 
 ax12.set_title('t=0')
 ax12.set_xlabel('v')
@@ -285,6 +333,9 @@ ax82.set_title('t=t_final')
 ax82.set_ylabel('Counts')
 ax82.set_xlabel(r'$v_{\perp}$')
 
+ax92.set_title('t=t_final')
+ax92.set_ylabel('Counts')
+ax92.set_xlabel(r'$t_{final}$')
 
 plt.tight_layout()
 plt.savefig('dist.pdf')

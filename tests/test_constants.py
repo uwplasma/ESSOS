@@ -4,6 +4,9 @@ from essos.constants import PROTON_MASS, NEUTRON_MASS, ELEMENTARY_CHARGE, ONE_EV
 def test_proton_mass():
     assert PROTON_MASS == 1.67262192369e-27
 
+def test_proton_mass():
+    assert ELECTRON_MASS == 9.1093837139e-31
+
 def test_neutron_mass():
     assert NEUTRON_MASS == 1.67492749804e-27
 
