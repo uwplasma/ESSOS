@@ -60,6 +60,10 @@ class Particles():
         self.phase_angle_full_orbit = 0
         self.particle_index=jnp.arange(self.nparticles)
         
+        key=jax.random.key(42)
+        self.random_keys=jax.random.split(key,self.nparticles)
+        
+        
         if initial_vparallel_over_v is not None:
             self.initial_vparallel_over_v = jnp.array(initial_vparallel_over_v)
         else:
@@ -88,7 +92,7 @@ def GuidingCenterCollisionsDiffusionMu(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, vpar,mu = initial_condition
-    field, particles,species = args
+    field, particles,species,tag_gc = args
     q = particles.charge
     m = particles.mass
     #E = m/2*v**2   
@@ -107,16 +111,16 @@ def GuidingCenterCollisionsDiffusionMu(t,
     indeces_species=species.species_indeces
     nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
     nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    Diffusion_par=p**2/2.*nu_par
-    Diffusion_perp=p**2/2.*nu_D 
+    Diffusion_par=p**2*nu_par/2.
+    Diffusion_perp=p**2*nu_D/2. 
     Diffusion_x=0.0#((Diffusion_par-Diffusion_perp)*(1.-xi**2)/2.+Diffusion_perp)/(m*omega_mod)**2
     Yvv=(Diffusion_par*xi**2+Diffusion_perp*(1.-xi**2))/p**2
     Yvmu=2.*xi*(1.-xi**2)*(Diffusion_par-Diffusion_perp)/p**2
-    Ymumu=4.*(1.-xi**2)*(Diffusion_par*(1.-xi**2)+Diffusion_perp*xi**2)/p**2
-    lambda_p=0.5*(Yvv+Ymumu+jnp.sqrt((Yvv-Ymumu)**2+4.*(Yvv*Ymumu-Yvmu**2)))
-    lambda_m=0.5*(Yvv+Ymumu-jnp.sqrt((Yvv-Ymumu)**2+4.*(Yvv*Ymumu-Yvmu**2)))
+    Ymumu=4.*(1.-xi**2)*(Diffusion_par*(1.-xi**2)+Diffusion_perp*xi**2)/p**2 
+    lambda_p=0.5*(Yvv+Ymumu+jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
+    lambda_m=0.5*(Yvv+Ymumu-jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
     Q1=jnp.reshape(jnp.array([1, Yvmu/(lambda_p-Ymumu)])/jnp.sqrt(1.+(Yvmu/(lambda_p-Ymumu))**2),(2,1))
-    Q2=jnp.reshape(jnp.array([1, Yvmu/(lambda_m-Yvv)])/jnp.sqrt(1.+(Yvmu/(lambda_m-Yvv))**2),(2,1))
+    Q2=jnp.reshape(jnp.array([ Yvmu/(lambda_m-Yvv),1])/jnp.sqrt(1.+(Yvmu/(lambda_m-Yvv))**2),(2,1)) 
     mat1=jnp.diag(jnp.array([v,0.5*m*v**2/AbsB]))
     mat2=jnp.append(Q1,Q2,axis=1)
     mat3=jnp.diag(jnp.array([jnp.sqrt(2.*lambda_p),jnp.sqrt(2.*lambda_m)]))
@@ -133,14 +137,14 @@ def GuidingCenterCollisionsDriftMu(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z,vpar,mu = initial_condition
-    field, particles,species = args
+    field, particles,species,tag_gc = args
     q = particles.charge
     m = particles.mass
     #E = m/2*v**2
     points = jnp.array([x, y, z])
     B_covariant = field.B_covariant(points)
     B_contravariant = field.B_contravariant(points)
-    AbsB = field.AbsB(points)
+    AbsB =field.AbsB(points)
     gradB = field.dAbsB_by_dX(points)
     AbsB_par=AbsB #should take into account B_par modification, but it does not matter for vacuum fields, so let's keep this for now
     omega_mod = q*AbsB_par/m    
@@ -151,19 +155,16 @@ def GuidingCenterCollisionsDriftMu(t,
     nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
     nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
     nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_par=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    Diffusion_par=p**2/2.*nu_par
-    Diffusion_perp=p**2/2.*nu_D 
-    d_Diffusion_par_dp=p*nu_par+p**2/2.*dnu_par/m
-    Avpar=-nu_s*vpar+2.*vpar/(p**2)*(Diffusion_par-Diffusion_perp+p/2.*d_Diffusion_par_dp)
-    Amu=-2.*nu_s*mu+2.*mu/(p**2)*(3.*(Diffusion_par-Diffusion_perp)+p*d_Diffusion_par_dp)+2.*Diffusion_perp/(m*AbsB)
-    dxdt = vpar*B_contravariant/AbsB + (vpar**2/omega_mod+mu/q)*jnp.cross(B_covariant, gradB)/AbsB/AbsB
-    dvpardt=  Avpar-mu/m*jnp.dot(B_contravariant,gradB)/AbsB
+    dnu_par_dv=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    Diffusion_par=p**2*nu_par/2.
+    Diffusion_perp=p**2*nu_D/2.
+    d_Diffusion_par_dp=p*nu_par+p**2*dnu_par_dv/(2.*m)
+    Avpar=-nu_s*vpar+vpar/p**2*(2.*(Diffusion_par-Diffusion_perp)+p*d_Diffusion_par_dp)
+    Amu=-nu_s*2.*mu+2.*mu/p**2*(3.*(Diffusion_par-Diffusion_perp)+p*d_Diffusion_par_dp)+2.*Diffusion_perp/(m*AbsB)
+    dxdt = tag_gc*(vpar*B_contravariant/AbsB + (vpar**2/omega_mod+mu/q)*jnp.cross(B_covariant, gradB)/AbsB/AbsB)
+    dvpardt=  Avpar-mu/m*jnp.dot(B_contravariant,gradB)/AbsB*tag_gc
     dmudt = Amu
     return jnp.append(dxdt,jnp.append(dvpardt,dmudt))
-
-
-
 
 
 @partial(jit, static_argnums=(2))
@@ -171,7 +172,7 @@ def GuidingCenterCollisionsDiffusion(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, v,xi = initial_condition
-    field, particles,species = args
+    field, particles,species,tag_gc = args
     q = particles.charge
     m = particles.mass
     #E = m/2*v**2
@@ -194,19 +195,19 @@ def GuidingCenterCollisionsDiffusion(t,
     Diffusion_x=0.0#((Diffusion_par-Diffusion_perp)*(1.-xi**2)/2.+Diffusion_perp)/(m*omega_mod)**2
     dxdt = jnp.sqrt(2.*Diffusion_x)*I_bb_tensor
     dvdt=jnp.sqrt(2.*Diffusion_par)/m   #equation format was in p=m*v so we divide by m)
-    dxidt=jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[jnp.sqrt((1.-xi**2)*2.*Diffusion_perp/p**2),0.])
+    dxidt=jnp.sqrt((1.-xi**2)*2.*Diffusion_perp/p**2)
+    #jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[jnp.sqrt((1.-xi**2)*2.*Diffusion_perp/p**2),0.])
     #Off diagonals between position an dvelocity are zero at zeroth order
     Dxv=jnp.zeros((2,3))
     Dvx=jnp.zeros((3,2))
     return jnp.append(jnp.append(dxdt,Dxv,axis=0),jnp.append(Dvx,jnp.diag(jnp.append(dvdt,dxidt)),axis=0),axis=1)
-
 
 @partial(jit, static_argnums=(2))
 def GuidingCenterCollisionsDrift(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, v,xi = initial_condition
-    field, particles,species = args
+    field, particles,species,tag_gc = args
     q = particles.charge
     m = particles.mass
     #E = m/2*v**2
@@ -229,10 +230,12 @@ def GuidingCenterCollisionsDrift(t,
     Diffusion_par=p**2/2.*nu_par
     Diffusion_perp=p**2/2.*nu_D 
     d_Diffusion_par_dp=p*nu_par+p**2/2.*dnu_par/m
-    dxdt = vpar*B_contravariant/AbsB + (vpar**2/omega+mu/q)*jnp.cross(B_covariant, gradB)/AbsB/AbsB
-    dvdt=(-nu_s*p+2.*Diffusion_par/p+d_Diffusion_par_dp)/m  #equation format was in p=m*v so we divide by m)
-    dxidt =-xi*2.*Diffusion_perp/p**2-mu/m*jnp.dot(B_contravariant,gradB)/AbsB/v#-jnp.abs(-mu/m*jnp.dot(B_contravariant,gradB)/AbsB)/v*xi
+    dxdt = tag_gc*(vpar*B_contravariant/AbsB + (vpar**2/omega+mu/q)*jnp.cross(B_covariant, gradB)/AbsB/AbsB)
+    dvdt=(-nu_s*p+2.*Diffusion_par/p+d_Diffusion_par_dp*0.5)/m  #equation format was in p=m*v so we divide by m)
+    dxidt =-xi*2.*Diffusion_perp/p**2*0.5-mu/m*jnp.dot(B_contravariant,gradB)/AbsB/v*tag_gc
     return jnp.append(dxdt,jnp.append(dvdt,dxidt))
+
+
 
 
 @partial(jit, static_argnums=(2))
@@ -351,10 +354,17 @@ def FieldLine(t,
     #     return jnp.zeros(3, dtype=float)
     # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
+
+
+## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
+## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
+## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
+## !!!!  Here particle_key was added to compute_trajectories (E. Neto collisions modifications)
+## This is important for correct sampling of Brownian motion
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times=None,
                  field=None, model=None, maxtime: float = 1e-7, timesteps: int = 500,
-                 tol_step_size = 1e-7, particles=None, condition=None,species=None):
+                 tol_step_size = 1e-7, particles=None, condition=None,species=None,tag_gc=1.):
         
         if isinstance(field, Coils):
             self.field = BiotSavart(field)
@@ -369,12 +379,18 @@ class Tracing():
         self._trajectories = trajectories_input
         self.particles = particles
         self.species=species
+        self.tag_gc=tag_gc
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
-                def condition_Vmec(t, y, args, **kwargs):
-                    s, _, _, _ = y
-                    return s-1
+                if model == 'GuidingCenterCollisionsMu':
+                    def condition_Vmec(t, y, args, **kwargs):
+                        s, _, _, _ ,_= y
+                        return s-1
+                else:
+                    def condition_Vmec(t, y, args, **kwargs):
+                        s, _, _, _ = y
+                        return s-1	        
                 self.condition = condition_Vmec                
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
@@ -388,7 +404,7 @@ class Tracing():
             #print('tol: ', tol)
             #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)            
             #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
-            self.args = (self.field, self.particles,self.species)
+            self.args = (self.field, self.particles,self.species,self.tag_gc)
             total_speed_temp=self.particles.total_speed*jnp.ones(self.particles.nparticles)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,total_speed_temp[:, None], self.particles.initial_vparallel_over_v[:, None]], axis=1)
         elif model == 'GuidingCenterCollisionsMu':
@@ -399,7 +415,7 @@ class Tracing():
             #print('tol: ', tol)
             #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)
             #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))
-            self.args = (self.field, self.particles,self.species)
+            self.args = (self.field, self.particles,self.species,self.tag_gc)
             #x,y,z=self.particles.initial_xyz[]
             B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
             mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle
@@ -413,7 +429,7 @@ class Tracing():
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
         elif model == 'FullOrbitCollisions':
-            self.args = (self.field, self.particles,self.species)
+            self.args = (self.field, self.particles,self.species,self.tag_gc)
             print(self.args)
             if self.particles.initial_xyz_fullorbit is None:
                 raise ValueError("Initial full orbit positions require field input to Particles")
@@ -425,7 +441,7 @@ class Tracing():
             self.args = self.field
             
         if self.times is None:
-            self.times = jnp.linspace(0, self.maxtime, self.timesteps)
+            self.times = jnp.linspace(0, self.maxtime, 10000)
         else:
             self.maxtime = jnp.max(self.times)
             self.timesteps = len(self.times)
@@ -462,7 +478,7 @@ class Tracing():
             def compute_vperp_gc(trajectory):
                 xyz = trajectory[:, :3]                
                 mu = trajectory[:, 4]
-                AbsB = vmap(self.field.AbsB)(xyz)
+                AbsB =vmap(self.field.AbsB)(xyz)
                 return jnp.sqrt(2.*mu*AbsB/self.particles.mass)
             self.vperp_final = vmap(compute_vperp_gc)(self._trajectories)     
         elif model == 'FullOrbit' or model == 'FullOrbit_Boris' or 'FullOrbitCollisions':
@@ -488,7 +504,7 @@ class Tracing():
     @partial(jit, static_argnums=(0))
     def trace(self):
         @jit
-        def compute_trajectory(initial_condition,particle_index) -> jnp.ndarray:
+        def compute_trajectory(initial_condition,particle_key) -> jnp.ndarray:
             # initial_condition = initial_condition[0]
             if self.model == 'FullOrbit_Boris':
                 dt=self.maxtime / self.timesteps
@@ -518,19 +534,19 @@ class Tracing():
                 t1=self.maxtime
                 dt0=self.maxtime / self.timesteps
                 tol=dt0*0.5
-                print('tol: ', tol)
-                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(particle_index), levy_area=diffrax.SpaceTimeTimeLevyArea)            
+                #print('tol: ', tol)
+                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)            
                 self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
-                print(self.model, 'I am here')
-                print(self.ODE_term)
+                #print(self.model)
+                #print(self.ODE_term)
                 trajectory = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
                     dt0=self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.SPaRK(),
-                    #solver=diffrax.ItoMilstein(),
+                    #solver=diffrax.SlowRK(),
+                    solver=diffrax.StratonovichMilstein(),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
@@ -546,24 +562,24 @@ class Tracing():
                 t1=self.maxtime
                 dt0=self.maxtime / self.timesteps
                 tol=dt0*0.5
-                print('tol: ', tol)
-                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(particle_index), levy_area=diffrax.SpaceTimeTimeLevyArea)            
+                #print('tol: ', tol)
+                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
                 self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
-                print(self.model, 'I am here')
-                print(self.ODE_term)
+                #print(self.model)
+                #print(self.ODE_term)
                 trajectory = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
                     dt0=self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.SPaRK(),
-                    #solver=diffrax.ItoMilstein(),
+                    #solver=diffrax.SPaRK(),
+                    solver=diffrax.ItoMilstein(),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
+                    #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
                     max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys        
@@ -574,11 +590,11 @@ class Tracing():
                 t1=self.maxtime
                 dt0=self.maxtime / self.timesteps
                 tol=dt0*0.5
-                print('tol: ', tol)
-                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(6,), key=jax.random.key(particle_index), levy_area=diffrax.SpaceTimeTimeLevyArea)            
+                #print('tol: ', tol)
+                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(6,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)            
                 self.ODE_term = MultiTerm(ODETerm(LorentzCollisionsDrift),ControlTerm(LorentzCollisionsDiffusion,bm))
-                print(self.model, 'I am here')
-                print(self.ODE_term)
+                #print(self.model)
+                #print(self.ODE_term)
                 trajectory = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
@@ -609,7 +625,7 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
+                    #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
                     max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys
@@ -628,7 +644,7 @@ class Tracing():
         #         self.initial_conditions).reshape((shape[0], self.timesteps, shape[1]))
         
         return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
-            device_put(self.initial_conditions, sharding),device_put(self.particles.particle_index, sharding_index))
+            device_put(self.initial_conditions, sharding),device_put(self.particles.random_keys, sharding_index))
         #return jit(vmap(compute_trajectory,in_axes=(0,0)))(
         #    self.initial_conditions,self.particles.particle_index)          
         # trajectories = []

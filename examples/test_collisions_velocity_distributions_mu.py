@@ -9,18 +9,19 @@ from essos.fields import BiotSavart
 from essos.coils import Coils_from_json
 from essos.constants import PROTON_MASS, ONE_EV,ELECTRON_MASS
 from essos.dynamics import Tracing, Particles
-from essos.background_species import BackgroundSpecies
-
+from essos.background_species import BackgroundSpecies,gamma_ab
+import numpy as np
+import jax 
 # Input parameters
-tmax = 1.e-4
-dt=1.e-8
+tmax = 1.e-3
+dt=1.e-9
 nparticles = number_of_processors_to_use*32
 R0 = 1.25#jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
 num_steps = int(tmax/dt)
 mass=PROTON_MASS
 mass_e=ELECTRON_MASS
-T_test=1000.
+T_test=3000.
 energy=T_test*ONE_EV
 light_speed=299792458
 
@@ -62,25 +63,25 @@ vperp_sigma=vth_c*jnp.sqrt(2.-jnp.pi/2.)
 pitch_mean=0.
 pitch_sigma=jnp.sqrt(2.**2/12)
 
-##import jax
-##import jax.numpy as jnp
-##from essos.dynamics import GuidingCenterCollisionsDriftMu as GCCD
-##from essos.dynamics import GuidingCenterCollisionsDiffusionMu as GCCDiff
-##from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab
-##B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
-##mu=particles.initial_vperpendicular**2*particles.mass*0.5/B_particle/particles.mass
-##initial_conditions = jnp.concatenate([particles.initial_xyz,particles.initial_vparallel[:, None],mu[:, None]],axis=1)  
-##args = (field, particles,species)
-##GCCD(0,initial_conditions[0],args)
-##GCCDiff(0,initial_conditions[0],args)
-##initial_condition=initial_conditions[0]
+#import jax
+#import jax.numpy as jnp
+#from essos.dynamics import GuidingCenterCollisionsDriftMu as GCCD
+#from essos.dynamics import GuidingCenterCollisionsDiffusionMu as GCCDiff
+#from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab
+#B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
+#mu=particles.initial_vperpendicular**2*particles.mass*0.5/B_particle/particles.mass
+#initial_conditions = jnp.concatenate([particles.initial_xyz,particles.initial_vparallel[:, None],mu[:, None]],axis=1)  
+#args = (field, particles,species)
+#GCCD(0,initial_conditions[0],args)
+#GCCDiff(0,initial_conditions[0],args)
+#initial_condition=initial_conditions[0]
 #initial_condition = jnp.concatenate([particles.initial_xyz,total_speed_temp[:, None], particles.initial_vparallel_over_v[:, None]], axis=1)[0]
 #initial_condition = jnp.concatenate([particles.initial_xyz,total_speed_temp[:, None], particles.initial_vparallel_over_v[:, None]], axis=1)[0]
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterCollisions', particles=particles,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance,species=species)
+tracing = Tracing(field=field, model='GuidingCenterCollisionsMu', particles=particles,
+                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance,species=species,tag_gc=1.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 
@@ -94,8 +95,11 @@ ax4 = fig.add_subplot(224)
 coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False)
 
+v=jnp.sqrt(tracing.energy*2./particles.mass)
+
 for i, trajectory in enumerate(trajectories):
-    ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i,0])/tracing.energy[i,0], label=f'Particle {i+1}')
+    #ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i,0])/tracing.energy[i,0], label=f'Particle {i+1}')
+    ax2.plot(tracing.times, (v[i]-v[i,0])/v[i,0], label=f'Particle {i+1}')    
     ax3.plot(tracing.times, trajectory[:, 3]/jnp.sqrt(tracing.energy[i]/mass*2.), label=f'Particle {i+1}')
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 
@@ -115,11 +119,12 @@ plt.tight_layout()
 plt.savefig('traj.pdf')
 
 
-v=trajectories[:,:,3]
-pitch=trajectories[:,:,4]
-vpar=pitch*v
-vperp=jnp.sqrt(v**2-vpar**2)
 
+v=jnp.sqrt(tracing.energy*2./particles.mass)
+#pitch=trajectories[:,:,3]/v
+vpar=trajectories[:,:,3]
+vperp=tracing.vperp_final
+pitch=vpar/v
 # Plot distribution in velocities initial t and final 
 fig3 = plt.figure(figsize=(9, 8))
 ax13 = fig3.add_subplot(241)
@@ -146,7 +151,6 @@ ax73.plot(tracing.times,jnp.nanmean(vperp/light_speed,axis=0))
 ax73.axhline(y=vperp_mean, color='r', linestyle='--')
 ax83.plot(tracing.times,jnp.nanstd(vperp/light_speed,axis=0))
 ax83.axhline(y=vperp_sigma, color='r', linestyle='--')
-
 ax13.set_title('Mean energy')
 ax13.set_xlabel('time')
 ax13.set_ylabel('Energy')
@@ -176,34 +180,28 @@ plt.savefig('statistics.pdf')
 
 
 
-
 # Plot distribution in velocities initial t and final 
 fig2 = plt.figure(figsize=(9, 8))
-ax12 = fig2.add_subplot(241)
-ax22 = fig2.add_subplot(242)
-ax32 = fig2.add_subplot(243)
-ax42 = fig2.add_subplot(244)
-ax52 = fig2.add_subplot(245)
-ax62 = fig2.add_subplot(246)
-ax72 = fig2.add_subplot(247)
-ax82 = fig2.add_subplot(248)
-
+ax12 = fig2.add_subplot(251)
+ax22 = fig2.add_subplot(252)
+ax32 = fig2.add_subplot(253)
+ax42 = fig2.add_subplot(254)
+ax52 = fig2.add_subplot(255)
+ax62 = fig2.add_subplot(256)
+ax72 = fig2.add_subplot(257)
+ax82 = fig2.add_subplot(258)
 nbins=64
 
+v0=jnp.sqrt(tracing.energy[:,0]*2./particles.mass)
+vfinal=jnp.sqrt(tracing.energy[:,-1]*2./particles.mass)
+vperp0=tracing.vperp_final[:,0]
+vperpfinal=tracing.vperp_final[:,-1]
+vpar0=trajectories[:,0,3]
+vparfinal=trajectories[:,-1,3]
+pitch0=vpar0/v0
+pitch_final=vparfinal/vfinal
 
-v=trajectories[:,:,3]
-pitch=trajectories[:,:,4]
-vpar=pitch*v
-vperp=jnp.sqrt(v**2-vpar**2)
 
-v0=v[:,0]
-vfinal=v[:,-1]
-vperp0=vperp[:,0]
-vperpfinal=vperp[:,-1]
-vpar0=vpar[:,0]
-vparfinal=vpar[:,-1]
-pitch0=pitch[:,0]
-pitch_final=pitch[:,-1]
 
 
 
@@ -228,6 +226,7 @@ good_vfinal = vfinal[good_indices_vfinal]
 good_pitch0 = pitch0[good_indices_pitch0]
 good_pitch_final = pitch_final[good_indices_pitch_final]
 
+
 good_vpar0 = vpar0[good_indices_vpar0]
 good_vpar_final = vparfinal[good_indices_vpar_final]
 good_vperp0 = vperp0[good_indices_vperp0]
@@ -246,6 +245,7 @@ vpar_tfinal_counts,vpar_tfinal_bins=jnp.histogram(good_vpar_final,bins=nbins)
 
 vperp_t0_counts,vperp_t0_bins=jnp.histogram(good_vperp0,bins=nbins)
 vperp_tfinal_counts,vperp_tfinal_bins=jnp.histogram(good_vperp_final,bins=nbins)
+
 
 ax12.stairs(v0_counts,v0_bins)
 ax22.stairs(vfinal_counts,vfinal_bins)
@@ -284,6 +284,8 @@ ax72.set_xlabel(r'$v_{\perp}$')
 ax82.set_title('t=t_final')
 ax82.set_ylabel('Counts')
 ax82.set_xlabel(r'$v_{\perp}$')
+
+
 plt.tight_layout()
 plt.savefig('dist.pdf')
 
