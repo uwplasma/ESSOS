@@ -67,8 +67,19 @@ def nu_D_ab(ma: float, ea: float,species_b: int,v:float, points,species: Backgro
     vtb = species.get_v_thermal(species_b,points)
     prefactor = gamma_ab(ma,ea, species_b, v,points,species) * nb 
     erf_part = (jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb))/ v**3
-    return prefactor * erf_part
+    return prefactor * erf_part*2.
 
+
+@partial(jit, static_argnames=['species'])
+def d_nu_D_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
+    """Deflection collision frequency"""
+    nb = species.get_density(species_b,points)
+    vtb = species.get_v_thermal(species_b,points)
+    prefactor = gamma_ab(ma,ea, species_b, v,points,species) * nb 
+    erf_part = (d_erf(x)-d_chandrasekar(x))/vtb/v**3-3.*(jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb))/ v**4
+    return (
+        2 *  gamma_ab(ma,ea, species_b,v, points,species) * nb  * (d_chandrasekhar(v / vtb)*v/vtb-3.*chandrasekhar(v / vtb))/ v**4
+    )
 
 @partial(jit, static_argnames=['species'])
 def nu_par_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
@@ -85,7 +96,7 @@ def d_nu_par_ab(ma: float, ea: float,species_b: int,v:float, points,species: Bac
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     return (
-        2 *  gamma_ab(ma,ea, species_b,v, points,species) * nb  * (d_chandrasekhar(v / vtb)*v/vtb-3.*chandrasekhar(v / vtb))/ v**4 
+        2 *  gamma_ab(ma,ea, species_b,v, points,species) * nb  * (d_chandrasekhar(v / vtb)*v/vtb-3.*chandrasekhar(v / vtb))/ v**4
     )
 
 @partial(jit, static_argnames=['species'])
@@ -97,8 +108,8 @@ def nu_s_ab(ma: float, ea: float,species_b: int,v:float, points,species: Backgro
     #Tb = species.get_temperature(species_b,points) 
     Tb = (mb*vtb**2) / 2.  
     return (
-        gamma_ab(ma,ea, species_b, v, points,species)* nb * (ma+mb)/Tb * chandrasekhar(v / vtb) /v
-    )
+        gamma_ab(ma,ea, species_b, v, points,species)* nb * (ma+mb)/Tb * chandrasekhar(v / vtb) /v 
+    )*(ma/(ma+mb))
 
 @partial(jit, static_argnames=['species'])
 def coulomb_logarithm(ma:float, ea: float, species_b: int, vth_a: float, points, species: BackgroundSpecies) -> float:
@@ -113,12 +124,12 @@ def coulomb_logarithm(ma:float, ea: float, species_b: int, vth_a: float, points,
     -------
     log(lambda) : float
     """
-    bmin, bmax =   impact_parameter(ma, ea, species_b, vth_a, points, species)
-    return jnp.log(bmax / bmin)
+    ##bmin, bmax =   impact_parameter(ma, ea, species_b, vth_a, points, species)
+    ##return jnp.log(bmax / bmin)
     #lnL = 25.3 + 1.15*jnp.log10(species.temperature[0,r_index]**2/species.density[0,r_index])  
-    ##lnL = 32.2# + 1.15*jnp.log10(species.get_temperature(0,points)**2/species.get_density(species_b,points)) 
+    lnL = 32.2 + 1.15*jnp.log10(species.get_temperature(0,points)**2/species.get_density(0,points)) 
     #32.2+1.15*alog10(temp(1)**2/density(1))
-    #return lnL
+    return lnL
 
 @partial(jit, static_argnames=['species'])
 def impact_parameter(ma:float, ea: float, species_b: int, vth_a: float, points, species: BackgroundSpecies)-> float:
@@ -164,3 +175,7 @@ def chandrasekhar(x: jax.Array) -> jax.Array:
 
 def d_chandrasekhar(x: jax.Array) -> jax.Array:
     return 2 / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2)) - 2 / x * chandrasekhar(x)
+    
+    
+def d_erf(x: jax.Array) -> jax.Array:
+    return 2 / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))    
