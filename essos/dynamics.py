@@ -441,7 +441,7 @@ class Tracing():
             self.args = self.field
             
         if self.times is None:
-            self.times = jnp.linspace(0, self.maxtime, 10000)
+            self.times = jnp.linspace(0, self.maxtime, self.timesteps)
         else:
             self.maxtime = jnp.max(self.times)
             self.timesteps = len(self.times)
