@@ -11,13 +11,13 @@ from simsopt.geo import CurveXYZFourier, curves_to_vtk
 from simsopt.field import BiotSavart as BiotSavart_simsopt, coils_via_symmetries
 from simsopt.configs import get_ncsx_data, get_w7x_data, get_hsx_data, get_giuliani_data
 
-output_dir = os.path.join(os.path.dirname(__file__), 'output')
+output_dir = os.path.join(os.path.dirname(__file__), '../output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 n_segments = 100
 
-LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '../examples/', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
+LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '../../examples/', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
 nfp_array      = [3, 2, 5, 4, 2]
 curves_array   = [get_ncsx_data()[0], LandremanPaulQA_json_file, get_w7x_data()[0], get_hsx_data()[0], get_giuliani_data()[0]]
 currents_array = [get_ncsx_data()[1], None, get_w7x_data()[1], get_hsx_data()[1], get_giuliani_data()[1]]
@@ -191,7 +191,7 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f"comparison_error_BiotSavart_{name}.pdf"), transparent=True)
+    plt.savefig(os.path.join(output_dir, f"comparisons_coils_error_{name}.pdf"), transparent=True)
     plt.close()
 
 
@@ -224,5 +224,5 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
     ax.legend(fontsize=12)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f"comparison_time_BiotSavart_{name}.pdf"), transparent=True)
+    plt.savefig(os.path.join(output_dir, f"comparisons_coils_time_{name}.pdf"), transparent=True)
     plt.close()

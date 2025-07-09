@@ -110,7 +110,7 @@ plt.plot(h_list, fd_diff[2], "*-", label=f'4th order', clip_on=False, linewidth=
 plt.plot(h_list, fd_diff[3], "s-", label=f'6th order', clip_on=False, linewidth=2.5)
 plt.legend(fontsize=15)
 plt.xlabel('Finite differences stepsize h')
-plt.ylabel('Relative difference')
+plt.ylabel('Relative error')
 plt.xscale('log')
 plt.yscale('log')
 plt.ylim(1e-13, 1e-1)

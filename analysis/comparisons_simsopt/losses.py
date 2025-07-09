@@ -12,13 +12,13 @@ from simsopt.geo import CurveXYZFourier, curves_to_vtk, CurveCurveDistance, LpCu
 from simsopt.field import BiotSavart as BiotSavart_simsopt, coils_via_symmetries
 from simsopt.configs import get_ncsx_data, get_w7x_data, get_hsx_data, get_giuliani_data
 
-output_dir = os.path.join(os.path.dirname(__file__), 'output')
+output_dir = os.path.join(os.path.dirname(__file__), '../output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 n_segments = 100
 
-LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '../examples/', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
+LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '../../examples/', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
 nfp_array      = [3, 2, 5, 4, 2]
 curves_array   = [get_ncsx_data()[0], LandremanPaulQA_json_file, get_w7x_data()[0], get_hsx_data()[0], get_giuliani_data()[0]]
 currents_array = [get_ncsx_data()[1], None, get_w7x_data()[1], get_hsx_data()[1], get_giuliani_data()[1]]
@@ -84,7 +84,7 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     CurveCurveDistance(curves_simsopt, 0.5).J()
     loss_coil_separation(coils_essos, 0.5)
     
-    # Running the second time for coils characteristics comparison
+    # Running the second time for losses comparison
 
     start_time = time()
     curvature_loss_simsopt = block_until_ready(2*sum([LpCurveCurvature(curve, p=2, threshold=0).J() for curve in curves_simsopt]))
@@ -124,10 +124,14 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     t_ind_separation_avg_essos = time() - start_time
     print(f"Independence separation loss ESSOS: {ind_separation_loss_essos}")
 
-    length_error_avg         = jnp.linalg.norm(length_loss_essos         - length_loss_simsopt)
-    curvature_error_avg      = jnp.linalg.norm(curvature_loss_essos      - curvature_loss_simsopt)
-    separation_error_avg     = jnp.linalg.norm(separation_loss_essos     - separation_loss_simsopt)
-    ind_separation_error_avg = jnp.linalg.norm(ind_separation_loss_essos - ind_separation_loss_simsopt)
+    length_error_avg         = jnp.linalg.norm(length_loss_essos - length_loss_simsopt)  / jnp.linalg.norm(length_loss_simsopt)
+    if length_error_avg == 0:
+        length_error_avg = jnp.finfo(jnp.float64).eps
+    curvature_error_avg      = jnp.linalg.norm(curvature_loss_essos - curvature_loss_simsopt) / jnp.linalg.norm(curvature_loss_simsopt)
+    if curvature_error_avg == 0:
+        curvature_error_avg = jnp.finfo(jnp.float64).eps
+    separation_error_avg     = jnp.linalg.norm(separation_loss_essos - separation_loss_simsopt) / jnp.linalg.norm(separation_loss_simsopt)
+    ind_separation_error_avg = jnp.linalg.norm(ind_separation_loss_essos - ind_separation_loss_simsopt) / jnp.linalg.norm(ind_separation_loss_simsopt)
     print(f"length_error_avg: {length_error_avg:.2e}")
     print(f"curvature_error_avg: {curvature_error_avg:.2e}")
     print(f"separation_error_avg: {separation_error_avg:.2e}")
@@ -152,13 +156,13 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
 
     ax.set_xticks(X_axis)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("Absolute error")
+    ax.set_ylabel("Relative error")
     ax.set_yscale("log")
-    ax.set_ylim(1e-17, 1e-2)
+    ax.set_ylim(1e-16, 1e-1)
     ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f"comparison_error_losses_{name}.pdf"), transparent=True)
+    plt.savefig(os.path.join(output_dir, f"comparisons_losses_error_{name}.pdf"), transparent=True)
     plt.close()
 
 
@@ -189,5 +193,5 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
     ax.legend(fontsize=12)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f"comparison_time_losses_{name}.pdf"), transparent=True)
+    plt.savefig(os.path.join(output_dir, f"comparisons_losses_time_{name}.pdf"), transparent=True)
     plt.close()

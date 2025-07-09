@@ -5,6 +5,7 @@ from jax import vmap
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+plt.rcParams.update({'font.size': 18})
 from essos.fields import BiotSavart
 from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
@@ -67,7 +68,7 @@ plt.figure(figsize=(9, 6))
 plt.plot(tracing_gc.times*1000, jnp.abs(tracing_gc.energy()[0]/particles.energy-1), label='Guiding Center', color='red')
 plt.plot(tracing_fo.times*1000, jnp.abs(tracing_fo.energy()[0]/particles.energy-1), label='Full Orbit', color='blue')
 plt.xlabel('Time (ms)')
-plt.ylabel('Relative Energy Error')
+plt.ylabel('Relative energy error')
 plt.xlim(0, tmax*1000)
 plt.ylim(bottom=0)
 plt.legend()

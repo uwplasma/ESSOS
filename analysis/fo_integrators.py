@@ -76,7 +76,7 @@ for method_name, method in zip(method_names, methods):
 
 ax.legend(fontsize=15, loc='upper left')
 ax.set_xlabel('Computation time (s)')
-ax.set_ylabel('Relative Energy Error')
+ax.set_ylabel('Relative energy error')
 ax.set_xscale('log')
 ax.set_yscale('log')
 ax.set_xlim(1e-1, 1e2)

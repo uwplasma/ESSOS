@@ -11,7 +11,7 @@ from simsopt.field import BiotSavart as BiotSavart_simsopt
 from simsopt.geo import SurfaceRZFourier as SurfaceRZFourier_SIMSOPT
 from simsopt.objectives import SquaredFlux as SquaredFlux_SIMSOPT
 
-output_dir = os.path.join(os.path.dirname(__file__), 'output')
+output_dir = os.path.join(os.path.dirname(__file__), '../output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
@@ -27,7 +27,7 @@ ntheta = 36
 nphi   = 32
 
 # Initialize VMEC field
-vmec_file = os.path.join(os.path.dirname(__file__), '../examples', 'input_files',
+vmec_file = os.path.join(os.path.dirname(__file__), '../../examples', 'input_files',
              'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
 vmec = Vmec(vmec_file, ntheta=ntheta, nphi=nphi, close=False)
 
@@ -60,7 +60,7 @@ surface_simsopt.gammadash2()
 surface_simsopt.unitnormal()
 field_simsopt.B()
 SquaredFlux_SIMSOPT(surface_simsopt, field_simsopt).J()
-surface_essos.gamma
+block_until_ready(surface_essos.gamma)
 
 # Running the second time for surface characteristics comparison
 
@@ -169,7 +169,7 @@ ax.set_ylim(1e-14, 1e-10)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 
 plt.tight_layout()
-plt.savefig(os.path.join(output_dir, f"comparison_error_surfaces.pdf"), transparent=True)
+plt.savefig(os.path.join(output_dir, f"comparisons_surfaces_error.pdf"), transparent=True)
 
 # Labels and corresponding timings
 quantities = [
@@ -200,6 +200,6 @@ ax.set_ylim(1e-7, 1e-1)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 ax.legend(fontsize=12)
 plt.tight_layout()
-plt.savefig(os.path.join(output_dir, f"comparison_time_surfaces.pdf"), transparent=True)
+plt.savefig(os.path.join(output_dir, f"comparisons_surfaces_time.pdf"), transparent=True)
 
 plt.show()

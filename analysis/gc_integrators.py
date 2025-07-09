@@ -82,7 +82,7 @@ ax_tol.set_xlim(tolerances[-1], tolerances[0])
 
 for axis in [ax, ax_tol]:
     axis.legend(fontsize=15)
-    axis.set_ylabel('Relative Energy Error')
+    axis.set_ylabel('Relative energy error')
     axis.set_xscale('log')
     axis.set_yscale('log')
     axis.set_ylim(1e-16, 1e-4)

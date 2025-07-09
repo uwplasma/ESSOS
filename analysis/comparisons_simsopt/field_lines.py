@@ -23,12 +23,12 @@ trace_tolerance_ESSOS = 1e-9
 mass=PROTON_MASS
 energy=5000*ONE_EV
 
-output_dir = os.path.join(os.path.dirname(__file__), 'output')
+output_dir = os.path.join(os.path.dirname(__file__), '../output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 nfp=2
-LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '../examples', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
+LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '../../examples', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
 field_simsopt = load(LandremanPaulQA_json_file)
 field_essos = BiotSavart_essos(Coils.from_simsopt(LandremanPaulQA_json_file, nfp))
 
@@ -116,7 +116,7 @@ ax.set_yscale('log')
 ax.set_ylim(1e0, 1e2)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 ax.legend(fontsize=14)
-plt.savefig(os.path.join(output_dir, 'times_fl_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'comparisons_fl_times.pdf'), dpi=150)
 
 ##################################
 
@@ -153,7 +153,7 @@ plt.xlabel('Time (a.u.)')
 plt.yscale('log')
 
 plt.ylabel(r'Relative $x,y,z$ Error')
-plt.savefig(os.path.join(output_dir, f'relative_xyz_error_fl_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, f'comparisons_fl_error_xyz.pdf'), dpi=150)
 
 quantities = [(fr"tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx]) 
               for tolerance_idx in range(len(trace_tolerance_array))]
@@ -169,11 +169,11 @@ ax.bar(X_axis, xyz_vals, bar_width, label=r"x,y,z", color="darkorange", edgecolo
 
 ax.set_xticks(X_axis)
 ax.set_xticklabels(labels)
-ax.set_ylabel("Time Averaged Relative Error")
+ax.set_ylabel("Time-averaged relative error")
 ax.set_yscale('log')
 ax.set_ylim(1e-6, 1e-1)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 ax.legend(fontsize=14)
-plt.savefig(os.path.join(output_dir, 'relative_errors_fl_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'comparisons_fl_error.pdf'), dpi=150)
 
 plt.show()

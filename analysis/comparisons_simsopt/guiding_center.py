@@ -23,12 +23,12 @@ trace_tolerance_ESSOS = 1e-9
 mass=PROTON_MASS
 energy=5000*ONE_EV
 
-output_dir = os.path.join(os.path.dirname(__file__), 'output')
+output_dir = os.path.join(os.path.dirname(__file__), '../output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 nfp=2
-LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '../examples', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
+LandremanPaulQA_json_file = os.path.join(os.path.dirname(__file__), '../../examples', 'input_files', 'SIMSOPT_biot_savart_LandremanPaulQA.json')
 field_simsopt = load(LandremanPaulQA_json_file)
 field_essos = BiotSavart_essos(Coils.from_simsopt(LandremanPaulQA_json_file, nfp))
 
@@ -128,9 +128,9 @@ legend_elements = [Line2D([0], [0], color=colors[tolerance_idx], linestyle='-', 
 plt.legend(handles=legend_elements, loc='lower right', title='ESSOS (─), SIMSOPT (--)', fontsize=14, title_fontsize=14)
 plt.yscale('log')
 plt.xlabel('Time (ms)')
-plt.ylabel('Average Relative Energy Error')
+plt.ylabel('Average relative energy error')
 plt.tight_layout()
-plt.savefig(os.path.join(output_dir, f'relative_energy_error_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, f'comparisons_gc_error_energy.pdf'), dpi=150)
 
 # Plot time comparison in a bar chart
 
@@ -155,7 +155,7 @@ ax.set_yscale('log')
 ax.set_ylim(1e0, 1e2)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 ax.legend(fontsize=14)
-plt.savefig(os.path.join(output_dir, 'times_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'comparisons_gc_times.pdf'), dpi=150)
 
 ##################################
 
@@ -201,8 +201,8 @@ for ax, fig in zip([xyz_error_ax, vpar_error_ax], [xyz_error_fig, vpar_error_fig
 
 xyz_error_ax.set_ylabel(r'Relative $x,y,z$ Error')
 vpar_error_ax.set_ylabel(r'Relative $v_\parallel$ Error')
-xyz_error_fig.savefig(os.path.join(output_dir, f'relative_xyz_error_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
-vpar_error_fig.savefig(os.path.join(output_dir, f'relative_vpar_error_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+xyz_error_fig.savefig(os.path.join(output_dir, f'comparisons_gc_error_xyz.pdf'), dpi=150)
+vpar_error_fig.savefig(os.path.join(output_dir, f'comparisons_gc_error_vpar.pdf'), dpi=150)
 
 quantities = [(fr"tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx], avg_relative_v_error_array[tolerance_idx]) 
               for tolerance_idx in range(len(trace_tolerance_array))]
@@ -220,11 +220,11 @@ ax.bar(X_axis + bar_width/2, vpar_vals, bar_width, label=r"$v_\parallel$", color
 
 ax.set_xticks(X_axis)
 ax.set_xticklabels(labels)
-ax.set_ylabel("Time Averaged Relative Error")
+ax.set_ylabel("Time-averaged relative error")
 ax.set_yscale('log')
 ax.set_ylim(1e-6, 1e-1)
 ax.grid(axis='y', which='both', linestyle='--', linewidth=0.6)
 ax.legend(fontsize=14)
-plt.savefig(os.path.join(output_dir, 'relative_errors_gc_SIMSOPT_vs_ESSOS.pdf'), dpi=150)
+plt.savefig(os.path.join(output_dir, 'comparisons_gc_error.pdf'), dpi=150)
 
 plt.show()
