@@ -478,10 +478,10 @@ class Tracing():
             def compute_vperp_gc(trajectory):
                 xyz = trajectory[:, :3]                
                 mu = trajectory[:, 4]
-                AbsB =vmap(self.field.AbsB)(xyz)
+                AbsB = vmap(self.field.AbsB)(xyz)
                 return jnp.sqrt(2.*mu*AbsB/self.particles.mass)
             self.vperp_final = vmap(compute_vperp_gc)(self._trajectories)     
-        elif model == 'FullOrbit' or model == 'FullOrbit_Boris' or 'FullOrbitCollisions':
+        elif model == 'FullOrbit' or model == 'FullOrbit_Boris' or model == 'FullOrbitCollisions':
             @jit
             def compute_energy_fo(trajectory):
                 vxvyvz = trajectory[:, 3:]
@@ -504,7 +504,7 @@ class Tracing():
     @partial(jit, static_argnums=(0))
     def trace(self):
         @jit
-        def compute_trajectory(initial_condition,particle_key) -> jnp.ndarray:
+        def compute_trajectory(initial_condition, particle_key) -> jnp.ndarray:
             # initial_condition = initial_condition[0]
             if self.model == 'FullOrbit_Boris':
                 dt=self.maxtime / self.timesteps
@@ -631,28 +631,9 @@ class Tracing():
                 ).ys
             return trajectory
         
-        # if len(jax.devices())!=len(self.initial_conditions):
-        #     return vmap(compute_trajectory)(self.initial_conditions[:,None,:])
-        # else:
-        #     # num_devices = len(jax.devices())
-        #     shape = self.initial_conditions.shape
-        #     # distributed_initial_conditions = self.initial_conditions.reshape(num_devices, -1, *shape[1:])
-        #     mesh = Mesh(devices=jax.devices(), axis_names=('workers'))
-        #     in_spec = PartitionSpec('workers')  # Distribute along the workers axis
-        #     out_spec = PartitionSpec('workers')  # Gather results along the same axis
-        #     return shard_map(compute_trajectory, mesh, in_specs=in_spec, out_specs=out_spec, check_rep=False)(
-        #         self.initial_conditions).reshape((shape[0], self.timesteps, shape[1]))
-        
         return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
-            device_put(self.initial_conditions, sharding),device_put(self.particles.random_keys, sharding_index))
-        #return jit(vmap(compute_trajectory,in_axes=(0,0)))(
-        #    self.initial_conditions,self.particles.particle_index)          
-        # trajectories = []
-        # for initial_condition in self.initial_conditions:
-        #     trajectory = compute_trajectory(initial_condition)
-        #     trajectories.append(trajectory)
-        # return jnp.array(trajectories)
-        
+            device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
+    
     @property
     def trajectories(self):
         return self._trajectories
