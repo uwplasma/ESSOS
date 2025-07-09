@@ -76,7 +76,7 @@ def d_nu_D_ab(ma: float, ea: float,species_b: int,v:float, points,species: Backg
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     prefactor = gamma_ab(ma,ea, species_b, v,points,species) * nb 
-    erf_part = (d_erf(v/vtb)-d_chandrasekar(v/vtb))/vtb/v**3-3.*(jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb))/ v**4
+    erf_part = (d_erf(v/vtb)-d_chandrasekhar(v/vtb))/vtb/v**3-3.*(jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb))/ v**4
     return (
         2 *  gamma_ab(ma,ea, species_b,v, points,species) * nb  * (d_chandrasekhar(v / vtb)*v/vtb-3.*chandrasekhar(v / vtb))/ v**4
     )
