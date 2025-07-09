@@ -16,8 +16,10 @@ from essos.util import roots
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab
 
 mesh = Mesh(jax.devices(), ("dev",))
-sharding = NamedSharding(mesh, PartitionSpec("dev", None))
-sharding_index = NamedSharding(mesh, PartitionSpec("dev"))
+spec=PartitionSpec("dev", None)
+spec_index=PartitionSpec("dev")
+sharding = NamedSharding(mesh, spec)
+sharding_index = NamedSharding(mesh, spec_index)
 
 def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
     """
@@ -625,7 +627,7 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
+                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
                     max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys
@@ -633,7 +635,11 @@ class Tracing():
         
         return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
             device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
-    
+        #x=jax.device_put(self.initial_conditions, sharding)
+        #y=jax.device_put(self.particles.random_keys, sharding_index)        
+        #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
+        #return sharded_fun(x, y).block_until_ready()    
+
     @property
     def trajectories(self):
         return self._trajectories
