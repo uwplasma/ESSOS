@@ -5,18 +5,21 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import Vmec
-from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
+from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,PROTON_MASS,ELECTRON_MASS
 from essos.dynamics import Tracing, Particles
+from essos.background_species import BackgroundSpecies
 import numpy as np
 
+
 # Input parameters
-tmax = 1e-2
-nparticles = number_of_processors_to_use*10
+tmax = 1e-3
+dt=1.e-8
+nparticles = number_of_processors_to_use*1
 s = 0.25 # s-coordinate: flux surface label
 theta = jnp.linspace(0, 2*jnp.pi, nparticles)
 phi = jnp.linspace(0, 2*jnp.pi/2/2, nparticles)
-trace_tolerance = 1e-8
-num_steps_to_plot = 5000
+trace_tolerance = 1e-7
+num_steps_to_plot =  int(tmax/dt)
 energy=FUSION_ALPHA_PARTICLE_ENERGY#/10
 
 # Load coils and field
@@ -30,10 +33,27 @@ initial_xyz=jnp.array([[s]*nparticles, theta, phi]).T
 particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,
                       charge=ALPHA_PARTICLE_CHARGE, energy=energy, field=vmec)
 
+#Initialize background species
+#number_species=2  #(electrons,deuterium)
+#mass_array=jnp.array([ELECTRON_MASS/PROTON_MASS,2])    #mass_over_mproton
+number_species=2  #(electrons,deuterium)
+mass_array=jnp.array([ELECTRON_MASS/PROTON_MASS,2])    #mass_over_mproton
+charge_array=jnp.array([-1.,1.])    #mass_over_mproton
+T0=1.e+3  #eV
+n0=1e+20  #m^-3
+#n_array=[lambda x,y,z: n0,lambda x,y,z: n0 ]
+#T_array=[lambda x,y,z: T0,lambda x,y,z: T0 ]
+n_array=jnp.array([n0,n0])
+T_array=jnp.array([T0,T0])
+#n_array=jnp.array([n0, n0])
+#T_array=jnp.array([T0, T0])
+species = BackgroundSpecies(number_species=number_species, mass_array=mass_array, charge_array=charge_array, n_array=n_array, T_array=T_array)
+
+
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=vmec, model='GuidingCenter', particles=particles, maxtime=tmax,
-                  timesteps=num_steps_to_plot, tol_step_size=trace_tolerance)
+tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMu', particles=particles, maxtime=tmax,
+                  timesteps=num_steps_to_plot, tol_step_size=trace_tolerance,species=species,tag_gc=1.)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
 trajectories = tracing.trajectories
@@ -75,3 +95,37 @@ plt.savefig('vmec.png')
 # # Save results in vtk format to analyze in Paraview
 # vmec.surface.to_vtk('surface')
 # tracing.to_vtk('trajectories')
+
+
+# Plot trajectories, velocity parallel to the magnetic field, and energy error
+fig = plt.figure(figsize=(9, 8))
+ax1 = fig.add_subplot(221, projection='3d')
+ax2 = fig.add_subplot(222)
+ax3 = fig.add_subplot(223)
+ax4 = fig.add_subplot(224)
+
+vmec.surface.plot(ax=ax1, show=False, alpha=0.4)
+tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
+
+v=jnp.sqrt(tracing.energy*2./particles.mass)
+
+for i, trajectory in enumerate(trajectories):
+    #ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i,0])/tracing.energy[i,0], label=f'Particle {i+1}')
+    ax2.plot(tracing.times, (v[i]-v[i,0])/v[i,0], label=f'Particle {i+1}')    
+    ax3.plot(tracing.times, trajectory[:, 3]/jnp.sqrt(tracing.energy[i]/particles.mass*2.), label=f'Particle {i+1}')
+    ax4.plot(trajectory[:,0], label=f'Particle {i+1}')
+
+
+
+
+ax2.set_xlabel('Time (s)')
+ax2.set_ylabel('Normalized energy variation')
+ax3.set_ylabel(r'$v_{\parallel}/v$')
+#ax2.legend()
+ax3.set_xlabel('Time (s)')
+#ax3.legend()
+ax4.set_xlabel('R (m)')
+ax4.set_ylabel('Z (m)')
+#ax4.legend()
+plt.tight_layout()
+plt.savefig('traj_vmec.png')

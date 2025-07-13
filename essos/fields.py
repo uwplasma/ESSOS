@@ -14,6 +14,11 @@ class BiotSavart():
         self.gamma = coils.gamma
         self.gamma_dash = coils.gamma_dash
     
+
+    @partial(jit, static_argnames=['self'])
+    def sqrtg(self, points):
+        return 1.
+    
     @partial(jit, static_argnames=['self'])
     def B(self, points):
         dif_R = (jnp.array(points)-self.gamma).T
@@ -37,9 +42,29 @@ class BiotSavart():
     def dB_by_dX(self, points):
         return jacfwd(self.B)(points)
     
+    
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def grad_B_covariant(self, points):
+        return jacfwd(self.B_covariant)(points)    
+ 
+    @partial(jit, static_argnames=['self'])
+    def curl_B(self, points):
+        grad_B_cov=self.grad_B_covariant(points)
+        return jnp.array([grad_B_cov[2][1] -grad_B_cov[1][2],
+                          grad_B_cov[0][2] -grad_B_cov[2][0],
+                          grad_B_cov[1][0] -grad_B_cov[0][1]])/self.sqrtg(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def curl_b(self, points):
+        return self.curl_B(points)/self.AbsB(points)+jnp.cross(self.B_covariant(points),jnp.array(self.dAbsB_by_dX(points)))/self.AbsB(points)**2/self.sqrtg(points)
+
+    @partial(jit, static_argnames=['self'])
+    def kappa(self, points):
+        return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
     
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
@@ -102,7 +127,17 @@ class Vmec():
         B_sup_theta = jnp.dot(bsupumnc_interp, cosangle_nyq)
         B_sup_phi = jnp.dot(bsupvmnc_interp, cosangle_nyq)
         return jnp.array([0*B_sup_theta, B_sup_theta, B_sup_phi])
-    
+ 
+    @partial(jit, static_argnames=['self'])
+    def sqrtg(self, points):
+        s, theta, phi = points
+        gmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.gmnc[1:])
+        cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
+        sqrt_g_vmec = jnp.dot(gmnc_interp, cosangle_nyq)
+        return sqrt_g_vmec
+
+
+
     @partial(jit, static_argnames=['self'])
     def B(self, points):
         s, theta, phi = points
@@ -169,11 +204,33 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def dB_by_dX(self, points):
         return jacfwd(self.B)(points)
+
+
     
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
     
+    @partial(jit, static_argnames=['self'])
+    def grad_B_covariant(self, points):
+        return jacfwd(self.B_covariant)(points)    
+ 
+    @partial(jit, static_argnames=['self'])
+    def curl_B(self, points):
+        grad_B_cov=self.grad_B_covariant(points)
+        return jnp.array([grad_B_cov[2][1] -grad_B_cov[1][2],
+                          grad_B_cov[0][2] -grad_B_cov[2][0],
+                          grad_B_cov[1][0] -grad_B_cov[0][1]])/self.sqrtg(points)
+    
+    
+    @partial(jit, static_argnames=['self'])
+    def curl_b(self, points):
+        return self.curl_B(points)/self.AbsB(points)+jnp.cross(self.B_covariant(points),jnp.array(self.dAbsB_by_dX(points)))/self.AbsB(points)**2/self.sqrtg(points)
+
+    @partial(jit, static_argnames=['self'])
+    def kappa(self, points):
+        return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
+
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         s, theta, phi = points

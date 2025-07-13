@@ -1,33 +1,36 @@
 import os
-number_of_processors_to_use = 32 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_json
-from essos.constants import PROTON_MASS, ONE_EV
+from essos.coils import Coils_from_json,Coils_from_simsopt
+from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
-tmax = 1e-4
-nparticles = number_of_processors_to_use*32
-R0 = jnp.linspace(1.23, 1.27, nparticles)
+tmax = 1e-7
+nparticles = number_of_processors_to_use*1
+R0 = 17.#jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
-num_steps = 150000
-mass=PROTON_MASS
-energy=4000*ONE_EV
+num_steps = 5000
+energy=FUSION_ALPHA_PARTICLE_ENERGY#/10
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_json(json_file)
+#json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+#coils = Coils_from_json(json_file)
+#field = BiotSavart(coils)
+
+json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'QI_nfp2.json')#'ESSOS_biot_savart_LandremanPaulQA.json')
+coils = Coils_from_simsopt(json_file,nfp=2)
 field = BiotSavart(coils)
 
 # Initialize particles
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy)
+particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,charge=ALPHA_PARTICLE_CHARGE, energy=energy)
 
 # Trace in ESSOS
 time0 = time()
