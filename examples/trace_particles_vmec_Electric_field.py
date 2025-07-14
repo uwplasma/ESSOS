@@ -7,10 +7,11 @@ import matplotlib.pyplot as plt
 from essos.fields import Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.dynamics import Tracing, Particles
+from essos.electric_field import Electric_field_flux
 import numpy as np
 
 # Input parameters
-tmax = 1e-4
+tmax = 1.e-4
 nparticles = number_of_processors_to_use*10
 s = 0.25 # s-coordinate: flux surface label
 theta = jnp.linspace(0, 2*jnp.pi, nparticles)
@@ -20,8 +21,12 @@ num_steps_to_plot = 5000
 energy=FUSION_ALPHA_PARTICLE_ENERGY/10
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__file__), "wout_n3are_R7.75B5.7.nc")
+wout_file = os.path.join(os.path.dirname(__file__),"wout_n3are_R7.75B5.7.nc")
 vmec = Vmec(wout_file)
+
+#Load electric field
+Er_file=os.path.join(os.path.dirname(__file__), 'input_files','Er.h5')
+Electric_field=Electric_field_flux(Er_filename=Er_file,vmec=vmec)
 
 # Initialize particles
 Z0 = jnp.zeros(nparticles)
@@ -32,11 +37,12 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=vmec, model='GuidingCenter', particles=particles, maxtime=tmax,
+tracing = Tracing(field=vmec, electric_field=Electric_field,model='GuidingCenter', particles=particles, maxtime=tmax,
                   timesteps=num_steps_to_plot, tol_step_size=trace_tolerance)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
 trajectories = tracing.trajectories
+
 
 # Plot trajectories, velocity parallel to the magnetic field, loss fractions and/or energy error
 fig = plt.figure(figsize=(9, 8))

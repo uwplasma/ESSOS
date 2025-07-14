@@ -100,7 +100,8 @@ class Vmec():
         self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
-
+        self.Aminor_p = jnp.array(self.nc.variables["Aminor_p"][:])
+        
     @property
     def surface(self):
         return self._surface

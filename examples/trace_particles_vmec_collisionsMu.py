@@ -12,18 +12,18 @@ import numpy as np
 
 
 # Input parameters
-tmax = 1e-3
+tmax = 1e-4
 dt=1.e-8
 nparticles = number_of_processors_to_use*1
 s = 0.25 # s-coordinate: flux surface label
 theta = jnp.linspace(0, 2*jnp.pi, nparticles)
-phi = jnp.linspace(0, 2*jnp.pi/2/2, nparticles)
+phi = jnp.linspace(0, 2*jnp.pi/2/3, nparticles)
 trace_tolerance = 1e-7
 num_steps_to_plot =  int(tmax/dt)
-energy=FUSION_ALPHA_PARTICLE_ENERGY#/10
+energy=FUSION_ALPHA_PARTICLE_ENERGY/10
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__name__), 'input_files','wout_QI_nfp2_low_turb_QI_stable_3_Er3_beta_scaled.nc')#"wout_n3are_R7.75B5.7.nc")
+wout_file = os.path.join(os.path.dirname(__file__), 'input_files',"wout_n3are_R7.75B5.7.nc")
 vmec = Vmec(wout_file)
 
 # Initialize particles

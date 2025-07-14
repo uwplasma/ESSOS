@@ -10,6 +10,7 @@ from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein #For co
 import diffrax
 from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
+from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.plot import fix_matplotlib_3d
 from essos.util import roots
@@ -94,7 +95,7 @@ def GuidingCenterCollisionsDiffusionMu(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, vpar,mu = initial_condition
-    field, particles,species,tag_gc = args
+    field, particles,electric_field,species,tag_gc = args
     q = particles.charge
     m = particles.mass
     #E = m/2*v**2   
@@ -139,7 +140,7 @@ def GuidingCenterCollisionsDriftMu(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z,vpar,mu = initial_condition
-    field, particles,species,tag_gc = args
+    field, particles,electric_field,species,tag_gc = args
     q = particles.charge
     m = particles.mass
     #E = m/2*v**2
@@ -156,7 +157,7 @@ def GuidingCenterCollisionsDriftMu(t,
     p=m*v
     Bstar=B_contravariant+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*B_contravariant/AbsB#+flow.U0(points) 
-    F_gc=mu*gradB+m*vpar**2*field.kappa(points)#-electric.electric(points)+vpar*flow.coriolis(points)+flow.centrifugal(points)        
+    F_gc=mu*gradB+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
     indeces_species=species.species_indeces
     nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
     nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
@@ -180,7 +181,7 @@ def GuidingCenterCollisionsDiffusion(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, v,xi = initial_condition
-    field, particles,species,tag_gc = args
+    field, particles,electric_field,species,tag_gc = args
     q = particles.charge
     m = particles.mass
     #E = m/2*v**2
@@ -215,7 +216,7 @@ def GuidingCenterCollisionsDrift(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, v,xi = initial_condition
-    field, particles,species,tag_gc = args
+    field, particles,electric_field,species,tag_gc = args
     q = particles.charge
     m = particles.mass
     #E = m/2*v**2
@@ -233,7 +234,7 @@ def GuidingCenterCollisionsDrift(t,
     p=m*v
     Bstar=B_contravariant+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*B_contravariant/AbsB#+flow.U0(points) 
-    F_gc=mu*gradB+m*vpar**2*field.kappa(points)#-electric.electric(points)+vpar*flow.coriolis(points)+flow.centrifugal(points)    
+    F_gc=mu*gradB+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)    
     indeces_species=species.species_indeces
     nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
     nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
@@ -257,7 +258,7 @@ def GuidingCenter(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, vpar = initial_condition
-    field, particles = args
+    field, particles,electric_field = args
     q = particles.charge
     m = particles.mass
     E = particles.energy
@@ -271,13 +272,13 @@ def GuidingCenter(t,
     mu = (E - m*vpar**2/2)/AbsB
     sqrtg=field.sqrtg(points)
     omega = q*AbsB/m
-    #Bstar=B_contravariant+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
-    #Ustar=vpar*B_contravariant/AbsB#+flow.U0(points) 
-    #F_gc=mu*gradB+m*vpar**2*field.kappa(points)#-electric.electric(points)+vpar*flow.coriolis(points)+flow.centrifugal(points)
-    #dxdt =  Ustar + jnp.cross(B_covariant, F_gc)/jnp.dot(B_covariant,Bstar)/q/sqrtg
-    #dvdt = -jnp.dot(Bstar,F_gc)/jnp.dot(B_covariant,Bstar)*AbsB/m    
-    dxdt = vpar*B_contravariant/AbsB + (vpar**2/omega+mu/q)*jnp.cross(B_covariant, gradB)/AbsB/AbsB/sqrtg
-    dvdt = -mu/m*jnp.dot(B_contravariant,gradB)/AbsB
+    Bstar=B_contravariant+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
+    Ustar=vpar*B_contravariant/AbsB#+flow.U0(points) 
+    F_gc=mu*gradB+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)
+    dxdt =  Ustar + jnp.cross(B_covariant, F_gc)/jnp.dot(B_covariant,Bstar)/q/sqrtg
+    dvdt = -jnp.dot(Bstar,F_gc)/jnp.dot(B_covariant,Bstar)*AbsB/m    
+    #dxdt = vpar*B_contravariant/AbsB + (vpar**2/omega+mu/q)*jnp.cross(B_covariant, gradB)/AbsB/AbsB/sqrtg
+    #dvdt = -mu/m*jnp.dot(B_contravariant,gradB)/AbsB
     return jnp.append(dxdt,dvdt)
     # def zero_derivatives(_):
     #     return jnp.zeros(4, dtype=float)
@@ -383,13 +384,19 @@ def FieldLine(t,
 ## This is important for correct sampling of Brownian motion
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times=None,
-                 field=None, model=None, maxtime: float = 1e-7, timesteps: int = 500,
+                 field=None, electric_field=None,model=None, maxtime: float = 1e-7, timesteps: int = 500,
                  tol_step_size = 1e-7, particles=None, condition=None,species=None,tag_gc=1.):
         
+        if electric_field==None:
+            self.electric_field = Electric_field_zero()
+        else:
+            self.electric_field=electric_field
+
         if isinstance(field, Coils):
             self.field = BiotSavart(field)
         else:
             self.field = field
+    
         self.model = model
         self.initial_conditions = initial_conditions
         self.times = times
@@ -414,7 +421,7 @@ class Tracing():
                 self.condition = condition_Vmec                
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
-            self.args = (self.field, self.particles)
+            self.args = (self.field, self.particles,self.electric_field)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
         elif model == 'GuidingCenterCollisions':
             # Brownian motion
@@ -424,7 +431,7 @@ class Tracing():
             #print('tol: ', tol)
             #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)            
             #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
-            self.args = (self.field, self.particles,self.species,self.tag_gc)
+            self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
             total_speed_temp=self.particles.total_speed*jnp.ones(self.particles.nparticles)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,total_speed_temp[:, None], self.particles.initial_vparallel_over_v[:, None]], axis=1)
         elif model == 'GuidingCenterCollisionsMu':
@@ -435,7 +442,7 @@ class Tracing():
             #print('tol: ', tol)
             #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)
             #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))
-            self.args = (self.field, self.particles,self.species,self.tag_gc)
+            self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
             #x,y,z=self.particles.initial_xyz[]
             B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
             mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle
