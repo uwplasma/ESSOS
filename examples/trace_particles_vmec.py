@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use =8 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -20,7 +20,7 @@ num_steps_to_plot = 5000
 energy=FUSION_ALPHA_PARTICLE_ENERGY/10
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__file__), "wout_n3are_R7.75B5.7.nc")
+wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_n3are_R7.75B5.7.nc")
 vmec = Vmec(wout_file)
 
 # Initialize particles
