@@ -65,6 +65,23 @@ class MockField:
     
     def dAbsB_by_dX(self, points):
         return jnp.array([0.0, 0.0, 1.0])
+    
+    
+    @partial(jit, static_argnames=['self'])
+    def grad_B_covariant(self, points):
+        return jnp.array([1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0])   
+ 
+
+    def curl_B(self, points):
+        return jnp.array([1.0,0.0,1.0])
+    
+    
+    def curl_b(self, points):
+        return jnp.array([1.0,0.0,1.0])
+
+    def kappa(self, points):
+        return jnp.array([1.0,0.0,1.0])
+
 
     def to_xyz(self, points):
         return points
