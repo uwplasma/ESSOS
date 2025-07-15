@@ -21,6 +21,7 @@ class Electric_field_flux():
     @partial(jit, static_argnames=['self'])
     def E_covariant(self, points):
         s, theta, phi = points
+        #rho**2 here comes from going from E_r to E_s used by VMEC, variable drds is not stored to save memory
         Er_interp=jnp.interp(s, self.rho**2, self.Es, left='extrapolate')
 
         return jnp.array([Er_interp,0.0,0.0])

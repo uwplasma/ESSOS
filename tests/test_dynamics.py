@@ -65,6 +65,11 @@ class MockField:
 
     def to_xyz(self, points):
         return points
+    
+class MockElectricField:
+    def E_covariant(self, points):
+        return jnp.array([1.0, 0.0, 0.0])
+    
 
 @pytest.fixture
 def particles():
@@ -72,6 +77,10 @@ def particles():
 
 @pytest.fixture
 def field():
+    return MockField()
+
+@pytest.fixture
+def electric_field():
     return MockField()
 
 def test_particles_initialization(particles):
@@ -83,10 +92,10 @@ def test_particles_initialization(particles):
     assert particles.initial_vparallel.shape == (10,)
     assert particles.initial_vperpendicular.shape == (10,)
 
-def test_guiding_center(field, particles):
+def test_guiding_center(field, particles,electric_field):
     initial_conditions = jnp.array([1.0, 0.0, 0.0, 1])
     t = 0.0
-    result = GuidingCenter(t, initial_conditions, (field, particles))
+    result = GuidingCenter(t, initial_conditions, (field, particles,electric_field))
     assert result.shape == (4,)
 
 def test_lorentz(field, particles):
@@ -101,12 +110,12 @@ def test_field_line(field):
     result = FieldLine(t, initial_condition, field)
     assert result.shape == (3,)
 
-def test_tracing_initialization(field, particles):
+def test_tracing_initialization(field, particles,electric_field):
     x = jnp.linspace(1, 2, particles.nparticles)
     y = jnp.zeros(particles.nparticles)
     z = jnp.zeros(particles.nparticles)
     initial_conditions =jnp.array([x, y, z]).T
-    tracing = Tracing(initial_conditions=initial_conditions, field=field, model='GuidingCenter', particles=particles, timesteps=200)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, timesteps=200)
     assert tracing.field == field
     assert tracing.model == 'GuidingCenter'
     assert tracing.initial_conditions.shape == (particles.nparticles, 4)
