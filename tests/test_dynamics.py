@@ -100,7 +100,7 @@ def field():
 
 @pytest.fixture
 def electric_field():
-    return MockField()
+    return MockElectricField()
 
 def test_particles_initialization(particles):
     assert particles.nparticles == 10
