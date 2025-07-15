@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
-from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event
+from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein #For collisions we need this to solve stochastic differential equation
 import diffrax
 from essos.coils import Coils
@@ -664,6 +664,7 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
+                    progress_meter=TqdmProgressMeter(),
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
                     max_steps=10000000000,
                     event = Event(self.condition)
