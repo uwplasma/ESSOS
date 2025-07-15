@@ -58,7 +58,7 @@ class MockField:
         return jnp.array([0.0, 1.0, 0.0])
     
     def sqrtg(self,points):
-        return 1.
+        return 1.0
     
     def AbsB(self, points):
         return 1.0
@@ -68,18 +68,18 @@ class MockField:
     
     
     def grad_B_covariant(self, points):
-        return jnp.array([1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0])   
+        return jnp.array([0.0,0.0,0.0],[0.0,0.0,0.0],[0.0,0.0,0.0])   
  
 
     def curl_B(self, points):
-        return jnp.array([1.0,0.0,1.0])
+        return jnp.array([0.0,0.0,0.0])
     
     
     def curl_b(self, points):
-        return jnp.array([1.0,0.0,1.0])
+        return jnp.array([0.0,0.0,0.0])
 
     def kappa(self, points):
-        return jnp.array([1.0,0.0,1.0])
+        return jnp.array([0.0,0.0,1.0])
 
 
     def to_xyz(self, points):
@@ -87,7 +87,7 @@ class MockField:
     
 class MockElectricField:
     def E_covariant(self, points):
-        return jnp.array([1.0, 0.0, 0.0])
+        return jnp.array([0.0, 0.0, 0.0])
     
 
 @pytest.fixture
