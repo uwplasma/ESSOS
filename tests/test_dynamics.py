@@ -67,7 +67,6 @@ class MockField:
         return jnp.array([0.0, 0.0, 1.0])
     
     
-    @partial(jit, static_argnames=['self'])
     def grad_B_covariant(self, points):
         return jnp.array([1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0])   
  
