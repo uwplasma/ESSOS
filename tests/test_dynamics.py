@@ -57,6 +57,9 @@ class MockField:
     def B_contravariant(self, points):
         return jnp.array([0.0, 1.0, 0.0])
     
+    def sqrtg(self,points):
+        return 1.
+    
     def AbsB(self, points):
         return 1.0
     
