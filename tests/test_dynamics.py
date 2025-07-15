@@ -79,7 +79,7 @@ class MockField:
         return jnp.array([0.0,0.0,0.0])
 
     def kappa(self, points):
-        return jnp.array([0.0,0.0,1.0])
+        return jnp.array([0.0,0.0,0.0])
 
 
     def to_xyz(self, points):

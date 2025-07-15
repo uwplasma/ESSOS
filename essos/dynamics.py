@@ -418,7 +418,19 @@ class Tracing():
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _, _ = y
                         return s-1	        
-                self.condition = condition_Vmec                
+                self.condition = condition_Vmec
+            #elif isinstance(field,BiotSavart):
+                #if model == 'GuidingCenterCollisionsMu':
+                #    def condition_BioSavart(t, s, args, **kwargs):
+                #        x0,y0,z0=args
+                #        x, y, z, _,_ = s
+                #        return (x-0)**2+(y-y0)**2+(z-z0)**2-4.	  
+                #else:
+                #    def condition_Vmec(t, s, args, **kwargs):
+                #        x0,y0,z0=args
+                #        x, y, z, _ = s
+                #        return (x-0)**2+(y-y0)**2+(z-z0)**2-4.	        
+                #self.condition = condition_Vmec                
         if model == 'GuidingCenter':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles,self.electric_field)
