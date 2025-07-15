@@ -121,12 +121,12 @@ def test_tracing_initialization(field, particles,electric_field):
     assert tracing.initial_conditions.shape == (particles.nparticles, 4)
     assert tracing.times.shape == (200,)
 
-def test_tracing_trace(field, particles):
+def test_tracing_trace(field, particles,electric_field):
     x = jnp.linspace(1, 2, particles.nparticles)
     y = jnp.zeros(particles.nparticles)
     z = jnp.zeros(particles.nparticles)
     initial_conditions =jnp.array([x, y, z]).T
-    tracing = Tracing(initial_conditions=initial_conditions, field=field, model='GuidingCenter', particles=particles, timesteps=200)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, timesteps=200)
     trajectories = tracing.trace()
     assert trajectories.shape == (particles.nparticles, 200, 4)
 
