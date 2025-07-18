@@ -683,3 +683,48 @@ class near_axis():
 tree_util.register_pytree_node(near_axis,
                                near_axis._tree_flatten,
                                near_axis._tree_unflatten)
+
+
+class MagneticFieldSum():
+    """
+    Class used to sum two or more magnetic fields together. Takes a list of ESSOS fields as input 
+    example:
+    field = BiotSavart(coils)
+    field_sum = MagneticFieldSum([field,field])
+    """
+
+    def __init__(self, Bfields):
+        self.Bfields = tuple(Bfields)  # Make it hashable
+
+    @partial(jit, static_argnames=['self'])
+    def B(self,points):
+        Bs = jnp.stack([bf.B(points) for bf in self.Bfields], axis=0)
+        return jnp.sum(Bs, axis=0)
+
+
+    @partial(jit, static_argnames=['self'])
+    def B_covariant(self, points):
+        B_covariants = jnp.stack([bf.B_covariant(points) for bf in self.Bfields], axis=0)
+        return jnp.sum(B_covariants, axis=0)
+        
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, points):
+        B_contravariants = jnp.stack([bf.B_contravariant(points) for bf in self.Bfields], axis=0)
+        return jnp.sum(B_contravariants, axis=0)
+        
+    @partial(jit, static_argnames=['self'])
+    def AbsB(self, points):
+        return jnp.linalg.norm(self.B(points))
+    
+    @partial(jit, static_argnames=['self'])
+    def dB_by_dX(self, points):
+        return jacfwd(self.B)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def dAbsB_by_dX(self, points):
+        return grad(self.AbsB)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def to_xyz(self, points):
+        return points
+        
