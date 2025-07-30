@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 32 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -11,22 +11,22 @@ from essos.constants import PROTON_MASS, ONE_EV,ELECTRON_MASS
 from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies
 
-# Input parameters
-tmax = 1.e-4
+tmax = 1.e-3
 dt=1.e-8
-nparticles = number_of_processors_to_use*32
+times_to_trace=100
+nparticles = number_of_processors_to_use*32*4
 R0 = 1.25#jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
 num_steps = int(tmax/dt)
 mass=PROTON_MASS
 mass_e=ELECTRON_MASS
-T_test=1000.
+T_test=3000.
 energy=T_test*ONE_EV
 light_speed=299792458
 
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils_from_json(json_file)
 field = BiotSavart(coils)
 
@@ -34,23 +34,17 @@ field = BiotSavart(coils)
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-particles = Particles(initial_xyz=initial_xyz,initial_vparallel_over_v=0.2*jnp.ones(nparticles), mass=mass, energy=energy)
+particles = Particles(initial_xyz=initial_xyz,initial_vparallel_over_v=0.8*jnp.ones(nparticles), mass=mass, energy=energy)
 
 
 #Initialize background species
-#number_species=2  #(electrons,deuterium)
-#mass_array=jnp.array([ELECTRON_MASS/PROTON_MASS,2])    #mass_over_mproton
 number_species=1  #(electrons,deuterium)
 mass_array=jnp.array([1.])    #mass_over_mproton
 charge_array=jnp.array([1.])    #mass_over_mproton
 T0=1.e+3  #eV
 n0=1e+20  #m^-3
-#n_array=[lambda x,y,z: n0,lambda x,y,z: n0 ]
-#T_array=[lambda x,y,z: T0,lambda x,y,z: T0 ]
 n_array=jnp.array([n0])
 T_array=jnp.array([T0])
-#n_array=jnp.array([n0, n0])
-#T_array=jnp.array([T0, T0])
 species = BackgroundSpecies(number_species=number_species, mass_array=mass_array, charge_array=charge_array, n_array=n_array, T_array=T_array)
 vth_c=jnp.sqrt(T0*ONE_EV/PROTON_MASS)/light_speed
 vpar_mean=0.
@@ -62,25 +56,11 @@ vperp_sigma=vth_c*jnp.sqrt(2.-jnp.pi/2.)
 pitch_mean=0.
 pitch_sigma=jnp.sqrt(2.**2/12)
 
-##import jax
-##import jax.numpy as jnp
-##from essos.dynamics import GuidingCenterCollisionsDriftMu as GCCD
-##from essos.dynamics import GuidingCenterCollisionsDiffusionMu as GCCDiff
-##from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab
-##B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
-##mu=particles.initial_vperpendicular**2*particles.mass*0.5/B_particle/particles.mass
-##initial_conditions = jnp.concatenate([particles.initial_xyz,particles.initial_vparallel[:, None],mu[:, None]],axis=1)  
-##args = (field, particles,species)
-##GCCD(0,initial_conditions[0],args)
-##GCCDiff(0,initial_conditions[0],args)
-##initial_condition=initial_conditions[0]
-#initial_condition = jnp.concatenate([particles.initial_xyz,total_speed_temp[:, None], particles.initial_vparallel_over_v[:, None]], axis=1)[0]
-#initial_condition = jnp.concatenate([particles.initial_xyz,total_speed_temp[:, None], particles.initial_vparallel_over_v[:, None]], axis=1)[0]
 
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=field, model='GuidingCenterCollisions', particles=particles,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance,species=species)
+                  maxtime=tmax, timesteps=num_steps,times_to_trace=times_to_trace, tol_step_size=trace_tolerance,species=species,tag_gc=0.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 
@@ -96,7 +76,7 @@ tracing.plot(ax=ax1, show=False)
 
 for i, trajectory in enumerate(trajectories):
     ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i,0])/tracing.energy[i,0], label=f'Particle {i+1}')
-    ax3.plot(tracing.times, trajectory[:, 3]/jnp.sqrt(tracing.energy[i]/mass*2.), label=f'Particle {i+1}')
+    ax3.plot(tracing.times, trajectory[:, 4], label=f'Particle {i+1}')
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 
 

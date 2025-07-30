@@ -11,16 +11,18 @@ import numpy as np
 
 # Input parameters
 tmax = 1e-4
+timestep = 1.e-8
+times_to_trace=10000
 nparticles = number_of_processors_to_use*10
 s = 0.25 # s-coordinate: flux surface label
 theta = jnp.linspace(0, 2*jnp.pi, nparticles)
-phi = jnp.linspace(0, 2*jnp.pi/2/3, nparticles)
-trace_tolerance = 1e-8
-num_steps_to_plot = 5000
-energy=FUSION_ALPHA_PARTICLE_ENERGY/10
+phi = jnp.linspace(0, 2*jnp.pi/2/4, nparticles)
+atol = 1e-8
+rtol = 1e-8
+energy=FUSION_ALPHA_PARTICLE_ENERGY
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_n3are_R7.75B5.7.nc")
+wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_QH_simple_scaled.nc")
 vmec = Vmec(wout_file)
 
 # Initialize particles
@@ -33,7 +35,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=vmec, model='GuidingCenter', particles=particles, maxtime=tmax,
-                  timesteps=num_steps_to_plot, tol_step_size=trace_tolerance)
+                  timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
 trajectories = tracing.trajectories
@@ -70,7 +72,7 @@ ax3.set_ylabel(r'$v_{\parallel}/v$')
 ax3.set_xlabel('Time (s)')
 ax4.set_xlabel('Time (s)')
 plt.tight_layout()
-plt.show()
+plt.savefig('vmec.pdf')
 
 # # Save results in vtk format to analyze in Paraview
 # vmec.surface.to_vtk('surface')

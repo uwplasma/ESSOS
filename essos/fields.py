@@ -3,7 +3,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B
+from essos.surfaces import SurfaceRZFourier, BdotN_over_B,SurfaceClassifier
 from essos.plot import fix_matplotlib_3d
 from essos.util import newton
 
@@ -101,6 +101,7 @@ class Vmec():
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
         self.Aminor_p = jnp.array(self.nc.variables["Aminor_p"][:])
+        #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
         
     @property
     def surface(self):
