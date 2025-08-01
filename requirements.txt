@@ -4,6 +4,7 @@ tqdm
 matplotlib
 diffrax
 scipy
+jaxkd
 netcdf4
 f90nml
 pyevtk

@@ -17,14 +17,17 @@ from jax import config
 # to use higher precision
 config.update("jax_enable_x64", True)
 
+
+
+
 # Input parameters
-tmax = 1.e-3
-dt=1.e-8
-times_to_trace=10000
-nparticles = number_of_processors_to_use*32#32
+tmax = 1e-4
+dt=1.e-14
+times_to_trace=100
+nparticles = number_of_processors_to_use*2
 R0 = 1.25#jnp.linspace(1.23, 1.27, nparticles)
-atol = 1.e-4
-rtol=1.e-4
+atol = 1.e-6
+rtol=0.
 rejected_steps=100
 mass=PROTON_MASS
 mass_e=ELECTRON_MASS
@@ -42,6 +45,8 @@ Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 particles = Particles(initial_xyz=initial_xyz,initial_vparallel_over_v=1.0*jnp.ones(nparticles), mass=mass, energy=energy)
+
+
 
 
 #Initialize background species
