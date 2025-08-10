@@ -133,7 +133,7 @@ def ineq(fun, multiplier=0.,penalty=1., sq_grad=0.,weight=1., reduction=jnp.sum)
     def init_fn(*args, **kwargs):
         out = fun(*args, **kwargs)
         return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),sq_grad+jnp.zeros_like(fun(*args, **kwargs))),
-                'slack': jax.nn.relu(out) ** 0.5,'mu': PenaltyCoefficient(penalty+jnp.zeros_like(fun(*args, **kwargs)))}
+                'slack': jax.nn.relu(out) ** 0.5}
 
     def loss_fn(params, *args, **kwargs):
         inf = fun(*args, **kwargs) - params['slack'] ** 2
