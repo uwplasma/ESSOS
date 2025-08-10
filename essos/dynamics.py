@@ -818,7 +818,7 @@ class Tracing():
                     max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys          
-            elif model == 'GuidingCenterAdaptative' :  
+            elif self.model == 'GuidingCenterAdaptative' :  
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
                 trajectory = diffeqsolve(
