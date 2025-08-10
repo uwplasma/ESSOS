@@ -18,10 +18,11 @@ from jax import config
 config.update("jax_enable_x64", True)
 
 # Input parameters
-tmax = 4.e-5
+tmax = 1.e-5
 dt=1.e-8
 times_to_trace=100
-nparticles = number_of_processors_to_use*32
+nparticles_per_core=2
+nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 1.25
 num_steps = jnp.round(tmax/dt)
 mass=PROTON_MASS
@@ -64,7 +65,7 @@ pitch_sigma=jnp.sqrt(2.**2/12)
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterCollisionsMuAdaptative', particles=particles,
+tracing = Tracing(field=field, model='GuidingCenterCollisionsMuFixed', particles=particles,
                   maxtime=tmax, timestep=dt,times_to_trace=times_to_trace,species=species,tag_gc=0.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories

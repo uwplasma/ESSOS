@@ -17,8 +17,9 @@ from essos.background_species import BackgroundSpecies
 tmax = 1e-5
 timestep=1.e-8
 times_to_trace=10000
-nparticles = number_of_processors_to_use*10
-R0 = 17.0#14.6#jnp.linspace(1.23, 1.27, nparticles)
+nparticles_per_core=2
+nparticles = number_of_processors_to_use*nparticles_per_core
+R0 = 17.0
 atol= 1e-5
 rtol=1.e-5
 energy=FUSION_ALPHA_PARTICLE_ENERGY
@@ -102,7 +103,8 @@ ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')
 ax4.legend()
 plt.tight_layout()
-plt.savefig('coils_classifier_collisions.pdf')
+plt.show()
+
 
 ## Save results in vtk format to analyze in Paraview
 # tracing.to_vtk('trajectories')

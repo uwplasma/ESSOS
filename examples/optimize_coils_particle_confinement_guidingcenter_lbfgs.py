@@ -11,7 +11,7 @@ from essos.dynamics import Particles, Tracing
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
 from essos.optimization import optimize_loss_function
 from essos.objective_functions import loss_particle_r_cross_final_new,loss_particle_r_cross_max,loss_particle_radial_drift,loss_particle_gamma_c
-from essos.objective_functions import loss_coil_curvature_new,loss_coil_length_new,loss_normB_axis_new,loss_normB_axis_average
+from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis,loss_normB_axis_average
 from functools import partial
 import optax
 
@@ -20,15 +20,15 @@ import optax
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = number_of_processors_to_use*10
+nparticles = number_of_processors_to_use*1
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 6
+maximum_function_evaluations = 2
 maxtimes = [2.e-5]
 num_steps=100
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
-model = 'GuidingCenter'
+model = 'GuidingCenterAdaptative'
 
 # Initialize coils
 current_on_each_coil = 1.84e7
@@ -55,10 +55,10 @@ particles = Particles(initial_xyz=initial_xyz)
 
 t=maxtimes[0]
 
-curvature_partial=partial(loss_coil_curvature_new, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
-length_partial=partial(loss_coil_length_new, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
+curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
+length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
 Baxis_average_partial=partial(loss_normB_axis_average,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
-r_max_partial = partial(loss_particle_r_cross_max, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,num_steps=num_steps)
+r_max_partial = partial(loss_particle_r_cross_max, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model = model,num_steps=num_steps)
 def total_loss(params):
     return jnp.sum(jnp.square(r_max_partial(params)+curvature_partial(params)+length_partial(params)+Baxis_average_partial(params)))
 

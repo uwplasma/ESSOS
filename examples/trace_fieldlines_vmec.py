@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 8 # Parallelization, this should divide nfieldlines
+number_of_processors_to_use = 1 # Parallelization, this should divide nfieldlines
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -9,14 +9,15 @@ from essos.coils import Coils_from_json
 from essos.dynamics import Tracing
 
 # Input parameters
-tmax = 4000
-nfieldlines = number_of_processors_to_use*1
-R0 = jnp.linspace(16, 16.5, nfieldlines)
+tmax = 1.e-6
+nfieldlines_per_core=8
+nfieldlines = number_of_processors_to_use*nfieldlines_per_core
+R0 = jnp.linspace(1.21, 1.4, nfieldlines)
 trace_tolerance = 1e-8
-num_steps = tmax
+num_steps = 400
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__file__), 'input_files','wout_QI_nfp2_stable_Er_006_000043_hires_scaled.nc')
+wout_file = os.path.join(os.path.dirname(__file__), 'input_files',"wout_QH_simple_scaled.nc")
 vmec = Vmec(wout_file)
 
 # Initialize particles
@@ -27,7 +28,7 @@ initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=vmec, model='FieldLine', initial_conditions=initial_xyz,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 

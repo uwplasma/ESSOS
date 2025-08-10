@@ -23,7 +23,7 @@ def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
                                     nphi=field_nearaxis.nphi, spsi=field_nearaxis.spsi, sG=field_nearaxis.sG, nfp=field_nearaxis.nfp)
     return new_field_nearaxis
 
-def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, method='L-BFGS-B',maxtime=1.e-5, **kwargs):
+def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, method='L-BFGS-B', **kwargs):
     len_dofs_curves = len(jnp.ravel(coils.dofs_curves))
     nfp = coils.nfp
     stellsym = coils.stellsym
@@ -31,7 +31,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     dofs_curves_shape = coils.dofs_curves.shape
     currents_scale = coils.currents_scale
     
-    loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=1.e-5, **kwargs)
+    loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym, **kwargs)
     
     ## Without JAX gradients, using finite differences
     result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,

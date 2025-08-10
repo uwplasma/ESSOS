@@ -531,7 +531,7 @@ class Tracing():
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _, _ ,_= y
                         return s-1
-                elif model == 'FieldLine':
+                elif model == 'FieldLine' or model== 'FieldLineAdaptative':
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _ = y
                         return s-1	 
@@ -594,7 +594,7 @@ class Tracing():
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
-        elif model == 'FieldLine':
+        elif model == 'FieldLine' or model== 'FieldLineAdaptative':
             self.ODE_term = ODETerm(FieldLine)
             self.args = self.field
         
@@ -645,7 +645,7 @@ class Tracing():
                 vxvyvz = trajectory[:, 3:]
                 return self.particles.mass / 2 * (vxvyvz[:, 0]**2 + vxvyvz[:, 1]**2 + vxvyvz[:, 2]**2)
             self.energy = vmap(compute_energy_fo)(self._trajectories)
-        elif model == 'FieldLine':
+        elif model == 'FieldLine' or model== 'FieldLineAdaptative':
             self.energy = jnp.ones((len(initial_conditions), self.times_to_trace))
         
 
@@ -813,10 +813,11 @@ class Tracing():
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
-                    # adjoint=DirectAdjoint(),
+                    # adjoint=DirectAdjoint(),                   
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
                     max_steps=10000000000,
-                    event = Event(self.condition)
+                    event = Event(self.condition),
+                    progress_meter=TqdmProgressMeter()                   
                 ).ys          
             elif self.model == 'GuidingCenterAdaptative' :  
                 import warnings
@@ -837,6 +838,25 @@ class Tracing():
                     max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys
+            elif self.model == 'FieldLineAdaptative' :  
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=self.timestep,#self.maxtime / self.timesteps,
+                    y0=initial_condition,
+                    solver=diffrax.Tsit5(),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=DirectAdjoint(),
+                    progress_meter=TqdmProgressMeter(),
+                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
+                    max_steps=10000000000,
+                    event = Event(self.condition)
+                ).ys                
             #Fixed guiding center
             else:
                 import warnings

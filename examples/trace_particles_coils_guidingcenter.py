@@ -10,10 +10,11 @@ from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_A
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
-tmax = 1.e-5
-dt=1.e-8
-times_to_trace=10000
-nparticles = number_of_processors_to_use*24
+tmax = 1.e-6
+timestep=1.e-8
+times_to_trace=1000
+nparticles_per_core=2
+nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 atol = 1e-7
 rtol = 1e-7
@@ -33,7 +34,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,charge=A
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=field, model='GuidingCenter', particles=particles,
-                  maxtime=tmax, timestep=dt,times_to_trace=times_to_trace, atol=atol,rtol=rtol,)
+                  maxtime=tmax, timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 
@@ -61,7 +62,7 @@ ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')
 ax4.legend()
 plt.tight_layout()
-plt.savefig('coils_no_classifier.pdf')
+plt.show()
 
 ## Save results in vtk format to analyze in Paraview
 # tracing.to_vtk('trajectories')

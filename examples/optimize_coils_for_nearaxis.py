@@ -12,7 +12,7 @@ max_coil_length = 5.0
 max_coil_curvature = 4
 order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 100
+maximum_function_evaluations = 20#100
 number_coils_per_half_field_period = 3
 tolerance_optimization = 1e-8
 
@@ -48,7 +48,7 @@ print(f"Optimization took {time()-time0:.2f} seconds")
 # Trace fieldlines
 nfieldlines = 6
 num_steps = 1000
-tmax = 150
+tmax = 1.e-6
 trace_tolerance = 1e-7
 
 R0 = jnp.linspace(field.R0[0], 1.05*field.R0[0], nfieldlines)
@@ -58,9 +58,9 @@ initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 
 time0 = time()
 tracing_initial = Tracing(field=BiotSavart(coils_initial), model='FieldLine', initial_conditions=initial_xyz,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance)
 tracing_optimized = Tracing(field=BiotSavart(coils_optimized), model='FieldLine', initial_conditions=initial_xyz,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance)
 print(f"Tracing took {time()-time0:.2f} seconds")
 
 # Plot coils, before and after optimization

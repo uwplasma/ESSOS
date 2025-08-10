@@ -7,7 +7,7 @@ from essos.surfaces import BdotN_over_B, SurfaceRZFourier, B_on_surface
 from essos.coils import Coils, CreateEquallySpacedCurves, Curves
 from essos.optimization import optimize_loss_function, new_nearaxis_from_x_and_old_nearaxis
 from essos.objective_functions import (loss_coil_curvature, difference_B_gradB_onaxis,
-                                       loss_coil_length, loss_particle_drift)
+                                       loss_coil_length,field_from_dofs)
 import jax.numpy as jnp
 from functools import partial
 from jax import jit, vmap, devices, device_put, grad, debug
@@ -28,7 +28,7 @@ max_coil_length = 38
 max_coil_curvature = 0.3
 order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 600
+maximum_function_evaluations = 20#600
 number_coils_per_half_field_period = 4
 tolerance_optimization = 1e-7
 target_B_on_axis = 5.7
@@ -120,21 +120,16 @@ def loss_normal_cross_GradB_dot_grad_B_dot_GradB_surface(surface, field):
 @partial(jit, static_argnums=(1, 5, 6, 7, 8, 9, 10))
 def loss_coils_and_surface(x, surface_all, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
                n_segments=60, stellsym=True, max_coil_curvature=0.5, target_B_on_surface=5.7):
-    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
-    dofs_currents = x[len_dofs_curves_ravelled:-len(surface_all.x)-len(field_nearaxis.x)]
-    new_dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], (dofs_curves.shape))
     
-    curves = Curves(new_dofs_curves, n_segments, nfp, stellsym)
-    coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
-    field = BiotSavart(coils)
-    
+    field=field_from_dofs(x[:-len(surface_all.x)-len(field_nearaxis.x)] ,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym)     
     surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
     surface.dofs = x[-len(surface_all.x)-len(field_nearaxis.x):-len(field_nearaxis.x)]
     
     field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(x[-len(field_nearaxis.x):], field_nearaxis)
     
-    coil_length = loss_coil_length(field)
-    coil_curvature = loss_coil_curvature(field)
+    coil_length = loss_coil_length(x[:-len(surface_all.x)-len(field_nearaxis.x)],dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_length=max_coil_length)
+    coil_curvature = loss_coil_curvature(x[:-len(surface_all.x)-len(field_nearaxis.x)],dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_curvature=max_coil_curvature)
+    
     
     coil_length_loss    = 1e3*jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
     coil_curvature_loss = 1e3*jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))

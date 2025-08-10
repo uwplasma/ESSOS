@@ -17,10 +17,11 @@ import jax
 light_speed=299792458
 tmax = 1.e-5
 dt=1.e-8
-nparticles = number_of_processors_to_use*32
+nparticles_per_core=2
+nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 1.25#jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
-num_steps = int(tmax/dt)
+times_to_trace=100
 mass=PROTON_MASS
 mass_a=4.*mass
 mass_e=ELECTRON_MASS
@@ -98,8 +99,8 @@ pitch_sigma=jnp.sqrt(2.**2/12)
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterCollisionsMu', particles=particles,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance,species=species,tag_gc=0)
+tracing = Tracing(field=field, model='GuidingCenterCollisionsMuFixed', particles=particles,
+                  maxtime=tmax, timestep=dt,times_to_trace=times_to_trace,species=species,tag_gc=0.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 

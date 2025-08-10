@@ -20,15 +20,17 @@ import optax
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = number_of_processors_to_use*10
+n_particles_per_core=1
+nparticles = number_of_processors_to_use*n_particles_per_core
 order_Fourier_series_coils = 4
 number_coil_points = 80
 maximum_function_evaluations = 301
-maxtimes = [2.e-5]
+maxtimes = [1.e-6]
+t=maxtimes[0]
 num_steps=100
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
-model = 'GuidingCenter'
+model = 'GuidingCenterAdaptative'
 
 # Initialize coils
 current_on_each_coil = 1.84e7
@@ -53,7 +55,6 @@ phi_array = jnp.linspace(0, 2*jnp.pi, nparticles)
 initial_xyz=jnp.array([major_radius_coils*jnp.cos(phi_array), major_radius_coils*jnp.sin(phi_array), 0*phi_array]).T
 particles = Particles(initial_xyz=initial_xyz)
 
-t=maxtimes[0]
 
 curvature_partial=partial(loss_coil_curvature_new, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
 length_partial=partial(loss_coil_length_new, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
