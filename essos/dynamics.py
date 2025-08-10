@@ -617,7 +617,7 @@ class Tracing():
                 AbsB = vmap(self.field.AbsB)(xyz)
                 mu = (self.particles.energy - self.particles.mass * vpar[0]**2 / 2) / AbsB[0]
                 return self.particles.mass * vpar**2 / 2 + mu * AbsB
-            self.energy = vmap(compute_energy_gc)(self._trajectories)
+            self.energy = vmap(compute_energy_gc)(self._trajectories)         
         elif model == 'GuidingCenterCollisions':
             @jit
             def compute_energy_gc(trajectory):
@@ -657,7 +657,7 @@ class Tracing():
                 self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_collisions()                    
             else:                
                 self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction()
-        elif isinstance(field, BiotSavart) and isinstance(boundary,SurfaceClassifier):
+        elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
             if self.model == 'GuidingCenterCollisions' or model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsAdaptative':
                 self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_BioSavart_collisions(boundary)                    
             else:                

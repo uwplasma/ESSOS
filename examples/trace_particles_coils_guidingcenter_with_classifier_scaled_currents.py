@@ -12,12 +12,13 @@ from essos.surfaces import SurfaceClassifier
 from essos.coils import Coils_from_json,Coils_from_simsopt
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ONE_EV
 from essos.dynamics import Tracing, Particles
+from essos.objective_functions import loss_normB_axis
 
 # Input parameters
-tmax = 1.e-6
+tmax = 1.e-5
 timestep=1.e-8
 tiems_to_trace=100
-nparticles = number_of_processors_to_use*10
+nparticles = number_of_processors_to_use*1
 R0 = 17.0#14.6#jnp.linspace(1.23, 1.27, nparticles)
 atol=1.e-7
 rtol=1.e-7
@@ -30,7 +31,14 @@ json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'QH_simple_sc
 coils = Coils_from_simsopt(json_file,nfp=4)
 field = BiotSavart(coils)
 
-
+#renormalize coisl to have B_target=5.7 on axis
+B_axis_old=loss_normB_axis(field,npoints=200)
+#print(jnp.average(B_axis_old))
+B_target=5.7
+coils.dofs_currents=coils.dofs_currents*B_target/jnp.average(B_axis_old)
+field=BiotSavart(coils)
+#B_axis_new=loss_normB_axis(field,npoints=200)
+#print(jnp.average(B_axis_new))
 # Load coils and field
 wout_file = os.path.join(os.path.dirname(__name__), 'input_files','wout_QH_simple_scaled.nc')
 vmec = Vmec(wout_file)
@@ -68,7 +76,7 @@ trajectories = tracing.trajectories
 #    ax2.plot(tracing.times, jnp.abs(tracing.energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
 #    ax3.plot(tracing.times, trajectory[:, 3]/particles.total_speed, label=f'Particle {i+1}')
     #ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
-#    ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), #trajectory[:, 2], label=f'Particle {i+1}')
+#    ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 #ax2.set_xlabel('Time (s)')
 #ax2.set_ylabel('Relative Energy Error')
 #ax3.set_ylabel(r'$v_{\parallel}/v$')

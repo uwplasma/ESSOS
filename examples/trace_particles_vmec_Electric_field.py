@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use =8 # Parallelization, this should divide nparticles
+number_of_processors_to_use =1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -11,7 +11,7 @@ from essos.electric_field import Electric_field_flux
 import numpy as np
 
 # Input parameters
-tmax = 1.e-4
+tmax = 1.e-5
 timestep = 1.e-8
 times_to_trace=10000
 nparticles = number_of_processors_to_use*10

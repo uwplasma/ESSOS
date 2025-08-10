@@ -13,7 +13,9 @@ class BiotSavart():
         self.currents = coils.currents
         self.gamma = coils.gamma
         self.gamma_dash = coils.gamma_dash
-    
+        self.r_axis=jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(self.coils.dofs_curves)))
+        self.z_axis=jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
+
 
     @partial(jit, static_argnames=['self'])
     def sqrtg(self, points):
@@ -71,6 +73,7 @@ class BiotSavart():
         return points
 
 
+
 class Vmec():
     def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus'):
         self.wout_filename = wout_filename
@@ -96,6 +99,7 @@ class Vmec():
         self.ds = self.s_full_grid[1] - self.s_full_grid[0]
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
         self.r_axis = self.rmnc[0, 0]
+        self.z_axis=self.zmns[0,0]
         self.mpol = int(jnp.max(self.xm)+1)
         self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
         self.range_torus = range_torus
