@@ -17,7 +17,7 @@ from essos.objective_functions import normB_axis
 # Input parameters
 tmax = 1.e-5
 timestep=1.e-8
-tiems_to_trace=100
+times_to_trace=100
 nparticles_per_core=2
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 17.0
