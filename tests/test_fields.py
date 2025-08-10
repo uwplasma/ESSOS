@@ -11,7 +11,11 @@ class MockCoils:
 
     @property
     def dofs_curves(self):
-        return self._dofs        
+        return self._dofs
+    
+    @dofs_curves.setter
+    def dofs_curves(self, new_dofs_curves):
+        self.dofs = new_dofs_curves  
 
 def test_biot_savart_initialization():
     coils = MockCoils()
