@@ -550,7 +550,7 @@ class Tracing():
                         xx, yy, zz, _ = y
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
                 self.condition = condition_BioSavart                
-        if model == 'GuidingCenter':
+        if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles,self.electric_field)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
@@ -609,7 +609,7 @@ class Tracing():
         if self.particles is not None:
             self.energy = jnp.zeros((self.particles.nparticles, self.times_to_trace))
             
-        if model == 'GuidingCenter':
+        if model == 'GuidingCenter' or  model == 'GuidingCenterAdaptative' :
             @jit
             def compute_energy_gc(trajectory):
                 xyz = trajectory[:, :3]
@@ -817,8 +817,8 @@ class Tracing():
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
                     max_steps=10000000000,
                     event = Event(self.condition)
-                ).ys                            
-            else:
+                ).ys          
+            elif model == 'GuidingCenterAdaptative' :  
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
                 trajectory = diffeqsolve(
@@ -834,6 +834,25 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     progress_meter=TqdmProgressMeter(),
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
+                    max_steps=10000000000,
+                    event = Event(self.condition)
+                ).ys
+            #Fixed guiding center
+            else:
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=self.timestep,#self.maxtime / self.timesteps,
+                    y0=initial_condition,
+                    solver=diffrax.Tsit5(),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=DirectAdjoint(),
+                    progress_meter=TqdmProgressMeter(),
                     max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys
