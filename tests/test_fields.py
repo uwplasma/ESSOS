@@ -9,6 +9,10 @@ class MockCoils:
         self.gamma = random.uniform(random.PRNGKey(0), (3, 3, 3))
         self.gamma_dash = random.uniform(random.PRNGKey(0), (3, 3, 3))
 
+    @property
+    def dofs_curves(self):
+        return self._dofs        
+
 def test_biot_savart_initialization():
     coils = MockCoils()
     biot_savart = BiotSavart(coils)
