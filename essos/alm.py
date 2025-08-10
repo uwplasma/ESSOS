@@ -111,7 +111,7 @@ def eq(fun, multiplier=0.0,penalty=1.,sq_grad=0., weight=1., reduction=jnp.sum):
     return Constraint(init_fn, loss_fn)
 
 
-def ineq(fun, multiplier=0.,penalty=1., weight=1., reduction=jnp.sum):
+def ineq(fun, multiplier=0.,penalty=1., sq_grad=0.,weight=1., reduction=jnp.sum):
     """Represents an inequality constraint, h(x) >= 0, which uses a slack
     variable internally to convert it to an equality constraint.
 
