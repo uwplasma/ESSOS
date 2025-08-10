@@ -134,7 +134,7 @@ def test_tracing_initialization(field, particles,electric_field):
     y = jnp.zeros(particles.nparticles)
     z = jnp.zeros(particles.nparticles)
     initial_conditions =jnp.array([x, y, z]).T
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, timesteps=200)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, times_to_trace=200)
     assert tracing.field == field
     assert tracing.model == 'GuidingCenter'
     assert tracing.initial_conditions.shape == (particles.nparticles, 4)
@@ -145,7 +145,7 @@ def test_tracing_trace(field, particles,electric_field):
     y = jnp.zeros(particles.nparticles)
     z = jnp.zeros(particles.nparticles)
     initial_conditions =jnp.array([x, y, z]).T
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, timesteps=200)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, times_to_trace=200)
     trajectories = tracing.trace()
     assert trajectories.shape == (particles.nparticles, 200, 4)
 
