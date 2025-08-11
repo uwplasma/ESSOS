@@ -134,8 +134,10 @@ class MultiObjectiveOptimizer:
         curves = Curves(dofs_curves, self.num_points, self.initial_coils.nfp, self.initial_coils.stellsym)
         return Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale)
 
-    def run(self):
-        self.study = optuna.create_study(directions=["minimize"] * len(self.loss_functions))
+    def run(self, seed: int = 42):
+        sampler = optuna.samplers.NSGAIISampler(seed=seed)
+        self.study = optuna.create_study(directions=["minimize"] * len(self.loss_functions),sampler=sampler)
+        self.study.set_user_attr("seed", seed)
         self.study.optimize(self._objective, n_trials=self.n_trials)
 
     def optimize_with_optax(self, weights, method="adam", lr=1e-2):
