@@ -8,6 +8,9 @@ from jax import jit
 from functools import partial
 from essos.coils import Coils, Curves, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
+import numpy as np
+from pandas.plotting import parallel_coordinates
+import pandas as pd
 
 
 class MultiObjectiveOptimizer:
@@ -24,8 +27,8 @@ class MultiObjectiveOptimizer:
         self.order_Fourier = self.opt_config.get("order_Fourier", 6)
         self.num_points = self.order_Fourier * 10
         self.num_coils = self.opt_config.get("num_coils", 4)
-        self.max_eval = self.opt_config.get("maximum_function_evaluations", 200)
-
+        self.max_eval = self.opt_config.get("maximum_function_evaluations", 300)
+        self.n_trials = self.opt_config.get("n_trials", 100)
         self.tol = self.opt_config.get("tolerance_optimization", 1e-5)
         self.optimizer_choices = self.opt_config.get("optimizer_choices", ["adam", "amsgrad", "sgd"])
 
@@ -79,12 +82,6 @@ class MultiObjectiveOptimizer:
 
     @partial(jit, static_argnums=(0,))
     def weighted_loss(self, x, weights):
-        # dofs_len = len(jnp.ravel(self.initial_coils.dofs_curves))
-        # dofs_curves = jnp.reshape(x[:dofs_len], self.initial_coils.dofs_curves.shape)
-        # dofs_currents = x[dofs_len:]
-        # curves = Curves(dofs_curves, self.num_points, self.initial_coils.nfp, self.initial_coils.stellsym)
-        # coils = Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale)
-        # field = BiotSavart(coils)
 
         available_inputs = self._build_available_inputs(x)
 
@@ -139,7 +136,7 @@ class MultiObjectiveOptimizer:
 
     def run(self):
         self.study = optuna.create_study(directions=["minimize"] * len(self.loss_functions))
-        self.study.optimize(self._objective, n_trials=self.opt_config.get("n_trials", 100))
+        self.study.optimize(self._objective, n_trials=self.n_trials)
 
     def optimize_with_optax(self, weights, method="adam", lr=1e-2):
         loss_fn = lambda x: self.weighted_loss(x, weights)
@@ -158,59 +155,286 @@ class MultiObjectiveOptimizer:
 
         return self._build_coils_from_x(x)
 
-    def plot_pareto_fronts(self):
-        import itertools
-        from mpl_toolkits.mplot3d import Axes3D
-        trials = self.study.best_trials
-        losses = list(zip(*[t.values for t in trials]))
-        num_losses = len(losses)
 
-        for i, j in itertools.combinations(range(num_losses), 2):
-            x = losses[i]
-            y = losses[j]
-            plt.figure(figsize=(6, 4))
-            plt.scatter(x, y, color='red', label='Pareto Front')
-            plt.xlabel(self.loss_names[i])
-            plt.ylabel(self.loss_names[j])
-            plt.title(f'Pareto Front: {self.loss_names[i]} vs {self.loss_names[j]}')
-            plt.grid(True)
-            plt.legend()
+
+    def plot_pareto_fronts(self, logx=False, logy=False, logz=False, z_thresh=None, ncols=None):
+        """
+        Plot Pareto front.
+
+        logx, logy, logz: Apply log10 transform to x, y, z axes respectively.
+        z_thresh: If provided, filter out points where y > mean + z_thresh * std
+        ncols: Number of columns in the grid layout for 2D projections.
+        """
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import optuna
+
+        if not hasattr(self, "loss_names"):
+            raise ValueError("loss_names must be set before plotting.")
+        names = self.loss_names
+
+        eps = 1e-12
+        completed = [t for t in self.study.trials
+                    if t.state == optuna.trial.TrialState.COMPLETE and t.values is not None]
+        if not completed:
+            print("No completed trials to plot.")
+            return
+
+        values = np.array([t.values for t in completed], dtype=float)
+        m = values.shape[1]
+        if m < 2:
+            print("Need at least 2 objectives to plot 2D projections.")
+            return
+
+        # Pareto mask 
+        n = values.shape[0]
+        mask_pf = np.ones(n, dtype=bool)
+        for i in range(n):
+            if not mask_pf[i]:
+                continue
+            dominated = np.any((values <= values[i]).all(axis=1) & (values < values[i]).any(axis=1))
+            if dominated:
+                mask_pf[i] = False
+        if not np.any(mask_pf):
+            print("No Pareto-optimal points found.")
+            return
+        pf = values[mask_pf]
+
+        if ncols is None:
+            ncols = max(1, m - 1)
+        nrows = m
+        fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4.5 * nrows), squeeze=False)
+
+        for i in range(m):
+            x_raw = pf[:, i].astype(float)
+            x = np.log10(np.clip(x_raw, eps, None)) if logx else x_raw
+            x_lim = x.mean() + float(z_thresh) * x.std() if (z_thresh is not None and x.std() > 0) else None
+
+            js = [j for j in range(m) if j != i]
+            for c, j in enumerate(js):
+                y_raw = pf[:, j].astype(float)
+                y = np.log10(np.clip(y_raw, eps, None)) if logy else y_raw
+                y_lim = y.mean() + float(z_thresh) * y.std() if (z_thresh is not None and y.std() > 0) else None
+
+                keep = np.ones_like(x, dtype=bool)
+                if x_lim is not None:
+                    keep &= (x <= x_lim)
+                if y_lim is not None:
+                    keep &= (y <= y_lim)
+                filtered = int((~keep).sum())
+
+                ax = axes[i, c]
+                ax.scatter(x[keep], y[keep], s=24, c='red', label='Pareto front')
+                ax.set_xlabel(names[i] + (" (log10)" if logx else ""))
+                ax.set_ylabel(names[j] + (" (log10)" if logy else ""))
+                title = f'{names[i]} → {names[j]}'
+                if filtered > 0:
+                    title += f'  (filtered {filtered})'
+                ax.set_title(title)
+                ax.grid(True)
+                ax.legend(loc='best')
+
+            for c in range(len(js), ncols):
+                axes[i, c].axis('off')
+
+        fig.suptitle("2D Pareto Projections (row i: x = loss_i; columns: y = other losses)", y=1.02, fontsize=12)
+        plt.tight_layout()
+        plt.show()
+
+        # 3D 
+        if m == 3:
+            from mpl_toolkits.mplot3d import Axes3D
+            x = np.log10(np.clip(pf[:, 0], eps, None)) if logx else pf[:, 0]
+            y = np.log10(np.clip(pf[:, 1], eps, None)) if logy else pf[:, 1]
+            z = np.log10(np.clip(pf[:, 2], eps, None)) if logz else pf[:, 2]
+
+            x_lim = x.mean() + float(z_thresh) * x.std() if (z_thresh is not None and x.std() > 0) else None
+            y_lim = y.mean() + float(z_thresh) * y.std() if (z_thresh is not None and y.std() > 0) else None
+            z_lim = z.mean() + float(z_thresh) * z.std() if (z_thresh is not None and z.std() > 0) else None
+
+            keep = np.ones_like(x, dtype=bool)
+            if x_lim is not None: keep &= (x <= x_lim)
+            if y_lim is not None: keep &= (y <= y_lim)
+            if z_lim is not None: keep &= (z <= z_lim)
+            filtered = int((~keep).sum())
+
+            fig3d = plt.figure(figsize=(8, 6))
+            ax3 = fig3d.add_subplot(111, projection='3d')
+            ax3.scatter(x[keep], y[keep], z[keep], c='red', s=20, label='Pareto front')
+            ax3.set_xlabel(names[0] + (" (log10)" if logx else ""))
+            ax3.set_ylabel(names[1] + (" (log10)" if logy else ""))
+            ax3.set_zlabel(names[2] + (" (log10)" if logz else ""))
+            title = "3D Pareto Front (non-dominated)"
+            if filtered > 0:
+                title += f'  (filtered {filtered})'
+            ax3.set_title(title)
+            ax3.legend(loc='best')
             plt.tight_layout()
             plt.show()
 
-        if num_losses == 3:
-            x, y, z = losses[0], losses[1], losses[2]
-            fig = plt.figure(figsize=(8, 6))
-            ax = fig.add_subplot(111, projection='3d')
-            ax.scatter(x, y, z, c='red')
-            ax.set_xlabel(self.loss_names[0])
-            ax.set_ylabel(self.loss_names[1])
-            ax.set_zlabel(self.loss_names[2])
-            ax.set_title("3D Pareto Front")
-            plt.tight_layout()
-            plt.show()
+    def plot_parallel_coordinates(self, logy=False, z_thresh=None, include_params=None):
+        """
+        Draw one parallel-coordinates figure per objective.
 
-    
-
-    def plot_optimization_history(self):
+        logy: Apply log10 transform to y-axis values.
+        z_thresh: If provided, filter out points where y > mean + z_thresh * std
+        include_params: If provided, filter the parameters to include only those specified.
+        """
+        import numpy as np
+        import plotly.graph_objects as go
         import optuna.visualization as vis
-        for i, name in enumerate(self.loss_names):
-            fig = vis.plot_optimization_history(
+
+        if not hasattr(self, "loss_names"):
+            raise ValueError("loss_names must be set before plotting.")
+        names = self.loss_names
+
+        trials = [t for t in self.study.trials if t.values is not None]
+        if not trials:
+            print("No completed trials to plot.")
+            return
+
+        eps = 1e-12
+        params = include_params if include_params is not None else None
+
+        for i, name in enumerate(names):
+            subfig = vis.plot_parallel_coordinate(
                 self.study,
-                target=lambda t, i=i: t.values[i],
-                target_name=name
+                target=lambda t, idx=i: t.values[idx],
+                target_name=name,
+                params=params
+            )
+
+            fig = go.Figure()
+
+            for tr in subfig.data:
+                if tr.type != "parcoords":
+                    continue
+
+                trj = tr.to_plotly_json()
+                dims = trj.get("dimensions", [])
+
+                # Locate the objective dimension by its label
+                obj_idx = None
+                for k, d in enumerate(dims):
+                    if str(d.get("label", "")) == name:
+                        obj_idx = k
+                        break
+
+                keep = None
+                if obj_idx is not None:
+                    vals = np.array(dims[obj_idx]["values"], dtype=float)
+                    if logy:
+                        vals = np.log10(np.clip(vals, eps, None))
+                    # Update transformed values for plotting
+                    dims[obj_idx]["values"] = vals.tolist()
+
+                    if z_thresh is not None and vals.size > 1 and np.isfinite(vals.std()) and vals.std() > 0:
+                        y_lim = vals.mean() + float(z_thresh) * vals.std()
+                        keep = (vals <= y_lim)
+
+                # Apply filtering mask to all dimensions
+                if keep is not None:
+                    for d in dims:
+                        d_vals = np.array(d["values"], dtype=float)
+                        d["values"] = d_vals[keep].tolist()
+
+                trj["dimensions"] = dims
+                fig.add_trace(go.Parcoords(**{k: v for k, v in trj.items() if k != "type"}))
+
+            fig.update_layout(
+                title_text=f"Parallel Coordinates — {name}" + (" (objective log10)" if logy else ""),
+                showlegend=False
             )
             fig.show()
 
-    def plot_param_importances(self):
+
+    def plot_optimization_history(self, logy=False, z_thresh=None, ncols=2):
+        """
+        Plot optimization history for all objectives in a grid layout.
+
+        logy: Apply log10 transform to y-axis values.
+        z_thresh: If provided, filter out points where y > mean + z_thresh * std
+        ncols: Number of columns in the grid layout.
+        """
+        import numpy as np
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
         import optuna.visualization as vis
-        fig = vis.plot_param_importances(self.study)
+        eps = 1e-12
+        if not hasattr(self, "loss_names"):
+            raise ValueError("loss_names must be set before plotting.")
+        names = self.loss_names
+
+        trials = [t for t in self.study.trials if t.values is not None]
+        if not trials:
+            print("No completed trials to plot.")
+            return
+
+        n_obj = len(names)
+        ncols = max(1, ncols)
+        nrows = int(np.ceil(n_obj / ncols))
+
+        fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[n for n in names])
+
+        for i, name in enumerate(names):
+            subfig = vis.plot_optimization_history(
+                self.study,
+                target=lambda t, idx=i: t.values[idx],
+                target_name=name
+            )
+            row, col = (i // ncols) + 1, (i % ncols) + 1
+
+            for tr in subfig.data:
+                tr = tr.to_plotly_json()
+                if "x" in tr and "y" in tr and tr.get("type") in ("scatter", "scattergl"):
+                    x = np.array(tr["x"], dtype=float)
+                    y = np.array(tr["y"], dtype=float)
+                    if logy:
+                        y = np.log10(np.clip(y, eps, None))
+                    
+                    if z_thresh is not None and y.size > 1 and np.isfinite(y.std()) and y.std() > 0:
+                        y_lim = y.mean() + float(z_thresh) * y.std()
+                        keep = (y <= y_lim)
+                        tr["x"] = x[keep].tolist()
+                        tr["y"] = y[keep].tolist()
+                    else:
+                        tr["y"] = y.tolist()
+
+                    tr["showlegend"] = False  
+                    fig.add_trace(go.Scatter(**{k: v for k, v in tr.items() if k not in ("type",)}), row=row, col=col)
+                else:
+                    
+                    tr["showlegend"] = False
+                    fig.add_trace(go.Scatter(**{k: v for k, v in tr.items() if k not in ("type",)}), row=row, col=col)
+
+            fig.update_xaxes(title_text="Trial", row=row, col=col)
+            fig.update_yaxes(title_text=name + (" (log10)" if logy else ""), row=row, col=col)
+
+        fig.update_layout(
+            height=320 * nrows,
+            width=520 * ncols,
+            title_text="Optimization History (all objectives)",
+            showlegend=False 
+        )
         fig.show()
 
-    def plot_parallel_coordinates(self):
+    def plot_param_importances(self):
         import optuna.visualization as vis
-        fig = vis.plot_parallel_coordinate(self.study)
-        fig.show()
+        if self.study is None:
+            print("Study is None.")
+            return
+        target_names = getattr(self, "loss_names", [f"loss_{i}" for i in range(len(self.loss_functions))])
+
+        for i, name in enumerate(target_names):
+            fig = vis.plot_param_importances(
+                self.study,
+                target=lambda t, i=i: t.values[i],
+                target_name=name,
+            )
+            fig.update_layout(title=f"Parameter Importance — {name}")
+            fig.update_xaxes(title_text="Hyperparameter")
+            fig.update_yaxes(title_text="Importance")
+            fig.show()
 
 
     def select_best_from_pareto(self, weights=None, limits=None):
@@ -232,73 +456,25 @@ class MultiObjectiveOptimizer:
                 best_trial = trial
         return best_trial
 
-    def rebuild_best_coils(self, weights=None, constraints=None):
-        trial = self.select_best_from_pareto(weights=weights, limits=constraints)
+    def rebuild_best_coils(self, weights=None, limits=None, plot=False):
+        trial = self.select_best_from_pareto(weights=weights, limits=limits)
         if trial is None:
             raise ValueError("No valid trial found from Pareto front.")
 
         method = trial.params["method"]
         lr = trial.params["lr"]
         weights = [trial.params[f"weight_{name}"] for name in self.loss_names]
+        self.best_coils=self.optimize_with_optax(weights, method=method, lr=lr)
+        if plot:
+            fig = plt.figure(figsize=(8, 4))
+            ax1 = fig.add_subplot(121, projection='3d')
+            ax2 = fig.add_subplot(122, projection='3d')
+            self.initial_coils.plot(ax=ax1, show=False)
+            self.vmec.surface.plot(ax=ax1, show=False)
+            self.best_coils.plot(ax=ax2, show=False)
+            self.vmec.surface.plot(ax=ax2, show=False)
+            plt.tight_layout()
+            plt.show()
 
-        return self.optimize_with_optax(weights, method=method, lr=lr)
-
-
-if __name__ == "__main__":
-    import os
-    from essos.fields import Vmec
-    from essos.objective_functions import loss_normB_axis,loss_bdotn_over_b,loss_coil_length, loss_coil_curvature
-
-    # @partial(jit, static_argnums=(1, 4, 5, 6))
-    # def loss_bdotn_over_b(x, vmec, dofs_curves, currents_scale, nfp, n_segments=60, stellsym=True):
-    #     dofs_len = len(jnp.ravel(dofs_curves))
-    #     dofs_curves = jnp.reshape(x[:dofs_len], dofs_curves.shape)
-    #     dofs_currents = x[dofs_len:]
-    #     curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-    #     coils = Coils(curves=curves, currents=dofs_currents * currents_scale)
-    #     field = BiotSavart(coils)
-    #     return jnp.sum(jnp.abs(BdotN_over_B(vmec.surface, field)))
-
-    vmec = Vmec("../examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc", ntheta=32, nphi=32, range_torus='half period')
-
-
-    # inputs
-    manager = MultiObjectiveOptimizer(
-        loss_functions=(loss_bdotn_over_b, loss_coil_length, loss_coil_curvature,loss_normB_axis),
-        vmec=vmec,
-        opt_config={
-            "n_trials": 100,
-            "maximum_function_evaluations": 300,
-            "tolerance_optimization": 1e-5,
-            "optimizer_choices": ["adam", "amsgrad", "sgd"],
-            "num_coils": 4,
-            "order_Fourier": 6,
-        }
-    )
-
-    print("\n--------Starting multi-objective optimization...")
-    manager.run()
-    print("--------Optimization completed!")
-
-    best = manager.study.best_trials[0]
-    print("\n[Best Trial (Raw)]")
-    print(f"Losses: {best.values}\nParams: {best.params}")
-
-    print("\n--------Starting Optax refinement...")
-    weights = [1.0, 1, 1, 0.1]  # Example weights
-    best_coils = manager.optimize_with_optax(weights)
-    print("--------Optax refinement completed!")
-
-    manager.plot_pareto_fronts()
-
-    # Plot coils, before and after optimization
-    fig = plt.figure(figsize=(8, 4))
-    ax1 = fig.add_subplot(121, projection='3d')
-    ax2 = fig.add_subplot(122, projection='3d')
-    manager.initial_coils.plot(ax=ax1, show=False)
-    vmec.surface.plot(ax=ax1, show=False)
-    best_coils.plot(ax=ax2, show=False)
-    vmec.surface.plot(ax=ax2, show=False)
-    plt.tight_layout()
-    plt.show()
+        return self.best_coils
 
