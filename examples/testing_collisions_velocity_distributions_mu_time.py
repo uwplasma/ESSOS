@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 32 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -14,10 +14,10 @@ import numpy as np
 import jax 
 
 # Input parameters
-light_speed=299792458
+light_speed=SPEED_OF_LIGHT
 tmax = 1.e-5
 dt=1.e-8
-nparticles_per_core=2
+nparticles_per_core=10
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 1.25#jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7

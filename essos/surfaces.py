@@ -408,7 +408,7 @@ class SurfaceClassifier():
         return d
     
 
-#partial(jit, static_argnames=['surface'])
+partial(jit, static_argnames=['surface'])
 def signed_distance_from_surface_jax(xyz, surface):
     """
     Compute the signed distances from points ``xyz`` to a surface.  The sign is

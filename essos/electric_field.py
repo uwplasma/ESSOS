@@ -16,6 +16,7 @@ class Electric_field_flux():
         self.E_phi=0.0*self.Er
         self.Aminor_p=vmec.Aminor_p
         self.Es=self.Er*0.5/self.rho*self.Aminor_p
+        #Setting E_s(0) = 0, because the transformation is singular
         self.Es=self.Es.at[0].set(0.0)
         
     @partial(jit, static_argnames=['self'])

@@ -14,9 +14,9 @@ from essos.background_species import BackgroundSpecies
 
 
 # Input parameters
-tmax = 1e-5
+tmax = 1e-4
 timestep=1.e-8
-times_to_trace=10000
+times_to_trace=1000
 nparticles_per_core=2
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 17.0
@@ -73,7 +73,7 @@ tracing = Tracing(field=field, model='GuidingCenterCollisionsMuFixed', particles
                   maxtime=tmax, timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol,tag_gc=1.,species=species,boundary=boundary)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
-print(f"Particle 1 lost {tracing.lost_energies[0]:.2f} Joules while hitting (s,$\\theta$,$\\phi$)=({tracing.lost_positions[0,0]:.2f},{tracing.lost_positions[0,1]:.2f},{tracing.lost_positions[0,2]:.2f})")
+print(f"Particle 1 lost {tracing.lost_energies[1]} Joules while hitting (s,$\\theta$,$\\phi$)=({tracing.lost_positions[1,0]:.2f},{tracing.lost_positions[1,1]:.2f},{tracing.lost_positions[1,2]:.2f})")
 trajectories = tracing.trajectories
 
 # Plot trajectories, velocity parallel to the magnetic field, and energy error

@@ -12,7 +12,7 @@ import numpy as np
 
 
 # Input parameters
-tmax = 1.e-6
+tmax = 1.e-4
 timestep=1.e-8
 times_to_trace=1000
 nparticles_per_core=2
@@ -67,7 +67,7 @@ ax4 = fig.add_subplot(224)
 ## Plot trajectories in 3D
 vmec.surface.plot(ax=ax1, show=False, alpha=0.4)
 tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
-for i in range(np.random.choice(nparticles)):
+for i in np.random.choice(nparticles, size=min(2, nparticles), replace=False):
     trajectory = trajectories[i]
     ## Plot energy error
     ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i][0])/tracing.energy[i][0], label=f'Particle {i+1}')

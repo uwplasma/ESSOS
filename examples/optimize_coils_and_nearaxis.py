@@ -13,7 +13,7 @@ max_coil_length = 5.0
 max_coil_curvature = 4
 order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 20#150
+maximum_function_evaluations = 20
 number_coils_per_half_field_period = 3
 tolerance_optimization = 1e-8
 

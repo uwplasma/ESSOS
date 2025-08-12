@@ -14,9 +14,9 @@ from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_A
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
-tmax = 1.e-6
+tmax = 1.e-4
 timestep=1.e-8
-times_to_trace=100
+times_to_trace=1000
 nparticles_per_core=2
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 17.0

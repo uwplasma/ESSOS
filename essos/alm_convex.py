@@ -49,7 +49,7 @@ def prepare_update(params,updates,eta,omega,model='Constant',beta=2.0,mu_max=1.e
         #omega=omega/mu_average    
         eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
         omega=jnp.maximum(omega/mu_average,omega_tol)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
     elif model=='Mu_Tolerance_False':
         jax.debug.print('False {m}', m=model)    
         mu_average=penalty_average(params)        
@@ -128,7 +128,7 @@ def eq(fun, multiplier=0.0,penalty=1.,sq_grad=0., weight=1., reduction=jnp.sum):
 
     def loss_fn(params, *args, **kwargs):
         inf = fun(*args, **kwargs)
-        return weight * reduction(-params['lambda'].value * inf + params['lambda'].penalty* inf ** 2 / 2), inf
+        return weight * reduction(-params['lambda'].value * inf + params['lambda'].penalty* inf ** 2 / 2+ params['lambda'].value**2 /(2.*params['lambda'].penalty)), inf
 
     return Constraint(init_fn, loss_fn)
 
@@ -159,7 +159,7 @@ def ineq(fun, multiplier=0.,penalty=1., sq_grad=0.,weight=1., reduction=jnp.sum)
 
     def loss_fn(params, *args, **kwargs):
         inf = fun(*args, **kwargs) - params['slack'] ** 2
-        return weight * reduction(-params['lambda'].value * inf + params['lambda'].penalty * inf ** 2 / 2), inf
+        return weight * reduction(-params['lambda'].value * inf + params['lambda'].penalty * inf ** 2 / 2+ params['lambda'].value**2 /(2.*params['lambda'].penalty)), inf
 
     return Constraint(init_fn, loss_fn)
 
@@ -227,9 +227,6 @@ def ALM_model(optimizer: optax.GradientTransformation,  #an optimizer from OPTAX
 ):
 
 
-    
-
-
     if model_lagrange=='Mu_Tolerance_LBFGS':
         @jax.jit
         def init_fn(params,**kargs):
@@ -251,13 +248,13 @@ def ALM_model(optimizer: optax.GradientTransformation,  #an optimizer from OPTAX
 
     # Augmented Lagrangian
     def lagrangian(main_params,lagrange_params,**kargs):
-        main_loss = loss(main_params,**kargs)
+        main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
         mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
         return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
 
     # Augmented Lagrangian
     def lagrangian_lbfgs(main_params,lagrange_params,**kargs):
-        main_loss = loss(main_params,**kargs)
+        main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
         mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
         return  main_loss+mdmm_loss
 
@@ -368,7 +365,7 @@ def ALM_model(optimizer: optax.GradientTransformation,  #an optimizer from OPTAX
             lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
             params=main_params,lagrange_params
             opt_state=main_state,lag_state
-            return params,opt_state, grad,info,eta,omega        
+            return params,opt_state, grad,info,eta,omega      
 
 
     return ALM(init_fn,partial(update_fn,model=model_lagrange,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))

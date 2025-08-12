@@ -21,10 +21,10 @@ config.update("jax_enable_x64", True)
 
 
 # Input parameters
-tmax = 1e-6
+tmax = 1e-5
 dt=1.e-14
 times_to_trace=100
-nparticles_per_core=2
+nparticles_per_core=10
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 1.25#jnp.linspace(1.23, 1.27, nparticles)
 atol = 1.e-6

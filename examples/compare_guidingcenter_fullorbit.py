@@ -12,7 +12,8 @@ from essos.dynamics import Tracing, Particles
 from jax import block_until_ready
 
 # Input parameters
-tmax = 1e-5
+tmax = 1e-4
+dt_fo=1.e-9
 nparticles = number_of_processors_to_use
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-5
@@ -36,13 +37,13 @@ particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=f
 # Trace in ESSOS
 time0 = time()
 tracing_guidingcenter = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
-                  maxtime=tmax, times_to_trace=num_steps_gc, atol=trace_tolerance,rtol=trace_tolerance)
+                  maxtime=tmax,times_to_trace=num_steps_gc, atol=trace_tolerance,rtol=trace_tolerance)
 trajectories_guidingcenter = block_until_ready(tracing_guidingcenter.trajectories)
 print(f"ESSOS guiding center tracing took {time()-time0:.2f} seconds")
 
 time0 = time()
 tracing_fullorbit = Tracing(field=field, model='FullOrbit_Boris', particles=particles,
-                  maxtime=tmax, times_to_trace=num_steps_fo, atol=trace_tolerance,rtol=trace_tolerance)
+                  maxtime=tmax, times_to_trace=num_steps_fo,timestep=dt_fo)
 trajectories_fullorbit = block_until_ready(tracing_fullorbit.trajectories)
 print(f"ESSOS full orbit tracing took {time()-time0:.2f} seconds")
 

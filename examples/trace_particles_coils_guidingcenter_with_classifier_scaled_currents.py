@@ -15,9 +15,9 @@ from essos.dynamics import Tracing, Particles
 from essos.objective_functions import normB_axis
 
 # Input parameters
-tmax = 1.e-5
+tmax = 1.e-4
 timestep=1.e-8
-times_to_trace=100
+times_to_trace=1000
 nparticles_per_core=2
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 17.0
@@ -38,7 +38,7 @@ B_axis_old=normB_axis(field,npoints=200)
 B_target=5.7
 coils.dofs_currents=coils.dofs_currents*B_target/jnp.average(B_axis_old)
 field=BiotSavart(coils)
-#B_axis_new=loss_normB_axis(field,npoints=200)
+#B_axis_new=normB_axis(field,npoints=200)
 #print(jnp.average(B_axis_new))
 # Load coils and field
 wout_file = os.path.join(os.path.dirname(__name__), 'input_files','wout_QH_simple_scaled.nc')

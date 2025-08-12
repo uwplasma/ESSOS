@@ -21,7 +21,7 @@ config.update("jax_enable_x64", True)
 tmax = 1.e-5
 dt=1.e-8
 times_to_trace=100
-nparticles_per_core=2
+nparticles_per_core=10
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 1.25
 num_steps = jnp.round(tmax/dt)

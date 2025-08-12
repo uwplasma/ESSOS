@@ -37,7 +37,7 @@ nparticles = number_of_processors_to_use
 maxtime_tracing = 4e-5
 num_steps=300
 trace_tolerance=1e-5
-model = 'GuidingCenter'
+model = 'GuidingCenterAdaptative'
 
 # Initialize coils
 current_on_each_coil = 1.714e7
