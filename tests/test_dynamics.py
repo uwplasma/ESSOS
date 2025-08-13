@@ -148,7 +148,7 @@ def test_tracing_trace(field, particles,electric_field):
     initial_conditions =jnp.array([x, y, z]).T
     tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, times_to_trace=200)
     trajectories = tracing.trace()
-    assert trajectories.shape == (particles.nparticles, 200, 5)
+    assert trajectories.shape == (particles.nparticles, 200, 4)
 
 
 def test_tracing_trace_collisions(field, particles,electric_field):
@@ -169,7 +169,7 @@ def test_tracing_trace_collisions(field, particles,electric_field):
     trajectories = tracing.trace()
     assert species.mass.shape == (2,)
     assert species.charge.shape == (2,)
-    assert trajectories.shape == (particles.nparticles, 200, 4)
+    assert trajectories.shape == (particles.nparticles, 200, 5)
 
 
 if __name__ == "__main__":
