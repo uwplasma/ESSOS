@@ -2,19 +2,12 @@
 import os
 number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
-from time import time
-import jax
-print(jax.devices())
+from jax import grad
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
-from essos.dynamics import Particles, Tracing
-from essos.coils import Coils, CreateEquallySpacedCurves,Curves
-from essos.optimization import optimize_loss_function
-from essos.objective_functions import loss_particle_r_cross_max
+from essos.dynamics import Particles
+from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis_average
 from functools import partial
-import optax
-
 
 # Optimization parameters
 target_B_on_axis = 5.7
@@ -22,7 +15,7 @@ max_coil_length = 31
 max_coil_curvature = 0.4
 n_particles_per_core=1
 nparticles = number_of_processors_to_use*n_particles_per_core
-order_Fourier_series_coils = 4
+order_Fourier_series_coils = 2
 number_coil_points = 80
 maximum_function_evaluations = 301
 maxtimes = [1.e-6]
@@ -55,21 +48,21 @@ phi_array = jnp.linspace(0, 2*jnp.pi, nparticles)
 initial_xyz=jnp.array([major_radius_coils*jnp.cos(phi_array), major_radius_coils*jnp.sin(phi_array), 0*phi_array]).T
 particles = Particles(initial_xyz=initial_xyz)
 
-
+# Objective functions
+## Curvature
 curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
+## Length
 length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
+## B on axis
 Baxis_average_partial=partial(loss_normB_axis_average,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
-r_max_partial = partial(loss_particle_r_cross_max, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,num_steps=num_steps)
-
-
-
+## All terms put together
 def total_loss(params):
-    return jnp.sum(jnp.square(r_max_partial(params)+curvature_partial(params)+length_partial(params)+Baxis_average_partial(params)))
+    return jnp.sum(jnp.square(curvature_partial(params)+length_partial(params)+Baxis_average_partial(params)))
 
-
+## Take the gradients
 params=coils_initial.x
 loss=total_loss(params)
-gradients=jax.grad(total_loss)(params)
+gradients=grad(total_loss)(params)
 
 print('Objective function: {:.2E}'.format(loss))
-print('Gradients: ',gradients)
+print('Gradients (derivative of objective function with respect to coils): ',gradients)
