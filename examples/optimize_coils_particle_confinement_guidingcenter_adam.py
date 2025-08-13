@@ -1,17 +1,14 @@
 
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 3 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
-from time import time
-import jax
-print(jax.devices())
 import jax.numpy as jnp
+from jax import jit, grad
 import matplotlib.pyplot as plt
 from essos.dynamics import Particles, Tracing
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
-from essos.optimization import optimize_loss_function
-from essos.objective_functions import loss_particle_r_cross_final_new,loss_particle_r_cross_max,loss_particle_radial_drift,loss_particle_gamma_c
-from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis,loss_normB_axis_average
+from essos.objective_functions import loss_particle_r_cross_max
+from essos.objective_functions import loss_coil_curvature,loss_coil_length, loss_normB_axis_average
 from functools import partial
 import optax
 
@@ -23,7 +20,7 @@ max_coil_curvature = 0.4
 nparticles = number_of_processors_to_use*1
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 2
+maximum_function_evaluations = 15
 maxtimes = [2.e-5]
 num_steps=100
 number_coils_per_half_field_period = 3
@@ -68,18 +65,17 @@ def total_loss(params):
     return jnp.linalg.norm(curvature_partial(params)+length_partial(params)+Baxis_average_partial(params))**2
 
 
-@jax.jit
+jit
 def update(params,opt_state):
-    grad = jax.grad(total_loss)(params)        
-    updates, opt_state =optimizer.update(grad, opt_state)
+    this_grad = grad(total_loss)(params)        
+    updates, opt_state =optimizer.update(this_grad, opt_state)
     params = optax.apply_updates(params, updates)    
     return params,opt_state
 
 for i in range(maximum_function_evaluations):
     params,opt_state=update(params,opt_state)
-    if i % 5 == 0:
-        print('Objective function: {:.2E}'.format(total_loss(params)))
-
+    if i % 3 == 0:
+        print('Objective function at iteration {:d}: {:.2E}'.format(i, total_loss(params)))
 
 
 dofs_curves = jnp.reshape(params[:len_dofs_curves], (dofs_curves_shape))
@@ -114,7 +110,8 @@ for i, trajectory in enumerate(tracing_optimized.trajectories):
 ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')#ax4.legend()
 plt.tight_layout()
-plt.savefig(f'opt_adam.pdf')
+# plt.savefig(f'opt_adam.pdf')
+plt.show()
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
