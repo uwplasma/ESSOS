@@ -472,7 +472,7 @@ def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
     def update_fn(params, lag_state,grad,info,eta,omega,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
         main_params,lagrange_params=params
         minimization_loop=jaxopt.LBFGSB(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega)
-        state=minimization_loop.run(main_params,bounds=(jnp.zeros_like(main_params),jnp.ones_like(main_params)*100.),lagrange_params=lagrange_params,**kargs)
+        state=minimization_loop.run(main_params,bounds=(-100.*jnp.ones_like(main_params),jnp.ones_like(main_params)*100.),lagrange_params=lagrange_params,**kargs)
         main_params=state.params
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
         true_func=partial(optax_prepare_update().update,model='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)

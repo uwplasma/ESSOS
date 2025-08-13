@@ -14,7 +14,7 @@ from essos.optimization import optimize_loss_function
 from essos.objective_functions import loss_particle_r_cross_final_new,loss_particle_r_cross_max,loss_particle_radial_drift,loss_particle_gamma_c
 from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis,loss_normB_axis_average
 from functools import partial
-import essos.alm as alm
+import essos.alm_convex as alm
 import optax
 
 
@@ -22,7 +22,7 @@ import optax
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = number_of_processors_to_use*10
+nparticles = number_of_processors_to_use*4
 order_Fourier_series_coils = 4
 number_coil_points = 80
 maximum_function_evaluations = 10
@@ -71,7 +71,7 @@ constraints = alm.combine(
 alm.eq(curvature_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(length_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(Baxis_average_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-#alm.eq(r_max_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(r_max_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 )
 
 
@@ -82,12 +82,12 @@ mu_max=1.e4                                 #Maximum penalty parameter allowed
 alpha=0.99           #
 gamma=1.e-2
 epsilon=1.e-8
-omega_tol=1.e-5    #grad_tolerance, associated with grad of lagrangian to main parameters
-eta_tol=1.e-6  #contrained tolerances, associated with variation of contraints
+omega_tol=0.5    #grad_tolerance, associated with grad of lagrangian to main parameters
+eta_tol=0.001  #contrained tolerances, associated with variation of contraints
 
 
 
-ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+ALM=alm.ALM_model_optimistix_LevenbergMarquardt(constraints,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
 lagrange_params=constraints.init(coils_initial.x)
 params = coils_initial.x, lagrange_params
