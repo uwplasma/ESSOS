@@ -175,7 +175,7 @@ def loss_particle_r_cross_max(x,particles,dofs_curves, currents_scale, nfp,n_seg
     R_axis=tracing.field.r_axis
     Z_axis=tracing.field.z_axis
     r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
-    return jnp.ravel(jnp.max(r_cross,axis=1))
+    return jnp.max(r_cross,axis=1)
 
 def loss_lost_fraction(field, particles, maxtime=1e-5, num_steps=100, trace_tolerance=1e-5, model='GuidingCenterAdaptative',timestep=1.e-8,boundary=None):
     particles.to_full_orbit(field)
@@ -228,7 +228,27 @@ def loss_normB_axis_average(x,dofs_curves,currents_scale,nfp,n_segments=60,stell
     R_axis=field.r_axis
     phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
-    return jnp.absolute(jnp.average(B_axis)-target_B_on_axis)
+    return jnp.array([jnp.absolute(jnp.average(B_axis)-target_B_on_axis)])
+
+
+
+# @partial(jit, static_argnums=(0))
+def loss_coil_curvature_new(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,max_coil_curvature=0.4):
+    field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)
+    coil_curvature=jnp.mean(field.coils.curvature, axis=1)
+    return jnp.maximum(coil_curvature-max_coil_curvature,0.0)
+
+# @partial(jit, static_argnums=(0))
+def loss_coil_length_new(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,max_coil_length=31):
+    field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)    
+    coil_length=jnp.ravel(field.coils.length)
+    return jnp.maximum(coil_length-max_coil_length,0.0)
+
+
+
+
+
+
 
 @partial(jit, static_argnums=(1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,14))
 def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, currents_scale, nfp, max_coil_curvature=0.5,

@@ -8,7 +8,7 @@ from jax import jit
 import jax.numpy as jnp
 import optax
 from functools import partial
-
+import jaxopt
 
 class LagrangeMultiplier(NamedTuple):
     """Marks the Lagrange multipliers as such in the gradient and update so
@@ -372,4 +372,123 @@ def ALM_model(optimizer: optax.GradientTransformation,  #an optimizer from OPTAX
 
 
     return ALM(init_fn,partial(update_fn,model=model_lagrange,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
+    #return optax.GradientTransformationExtraArgs(init_fn, update_fn)
+
+
+
+#Augmented 
+def ALM_model_jaxopt_scipy(constraints: Constraint,#List of constraints
+    optimizer='L-BFGS-B' ,  #the name of jax.scipy optimize  
+    loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
+    beta=2.0,
+    mu_max=1.e4,
+    alpha=0.99,
+    gamma=1.e-2,
+    epsilon=1.e-8,
+    eta_tol=1.e-4,
+    omega_tol=1.e-6,
+    **kargs,                   #Extra key arguments for loss
+):
+
+
+
+    @jax.jit
+    def init_fn(params,**kargs):
+        main_params,lagrange_params=params
+        grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+        lag_state=optax_prepare_update().init(lagrange_params)                
+        return lag_state,grad,info        
+
+    @jax.jit
+    # Augmented Lagrangian
+    def lagrangian(main_params,lagrange_params,**kargs):
+        main_loss = loss(main_params,**kargs)
+        mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+        return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
+
+
+
+  
+    #@partial(jit, static_argnums=(6,7,8,9,10,11,12,13))
+    def update_fn(params, lag_state,grad,info,eta,omega,optimizer=optimizer,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+        main_params,lagrange_params=params
+        minimization_loop=jaxopt.ScipyMinimize(fun=lagrangian,method=optimizer,has_aux=True,value_and_grad=False,tol=omega)
+        state=minimization_loop.run(main_params,lagrange_params,**kargs)  
+        main_params=state.params
+        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+        true_func=partial(optax_prepare_update().update,model='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+        false_func=partial(optax_prepare_update().update,model='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
+        lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
+        lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
+        params=main_params,lagrange_params
+        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
+        eta=lag_updates[1]
+        omega=lag_updates[2]
+        jax.debug.print('omega {omega}:', omega=omega)   
+        jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
+        jax.debug.print('eta {omega}:', omega=eta)
+        jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
+        return params,lag_state,grad,info,eta,omega                                  
+
+
+    return ALM(init_fn,partial(update_fn,optimizer=optimizer,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
+    #return optax.GradientTransformationExtraArgs(init_fn, update_fn)
+
+
+
+
+
+#Using explicit jaxopt optimizer and not scipy wrapper, Note: JAXOPT is the only jax library with bounded lbfgs at the moment
+def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
+    loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
+    beta=2.0,
+    mu_max=1.e4,
+    alpha=0.99,
+    gamma=1.e-2,
+    epsilon=1.e-8,
+    eta_tol=1.e-4,
+    omega_tol=1.e-6,
+    **kargs,                   #Extra key arguments for loss
+):
+
+
+
+    @jax.jit
+    def init_fn(params,**kargs):
+        main_params,lagrange_params=params
+        grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+        lag_state=optax_prepare_update().init(lagrange_params)                
+        return lag_state,grad,info        
+
+    @jax.jit
+    # Augmented Lagrangian
+    def lagrangian(main_params,lagrange_params,**kargs):
+        main_loss = loss(main_params,**kargs)
+        mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+        return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
+
+
+    @partial(jit, static_argnums=(6,7,8,9,10,11,12))
+    def update_fn(params, lag_state,grad,info,eta,omega,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+        main_params,lagrange_params=params
+        minimization_loop=jaxopt.LBFGSB(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega)
+        state=minimization_loop.run(main_params,bounds=(jnp.zeros_like(main_params),jnp.ones_like(main_params)*100.),lagrange_params=lagrange_params,**kargs)
+        main_params=state.params
+        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+        true_func=partial(optax_prepare_update().update,model='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+        false_func=partial(optax_prepare_update().update,model='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
+        lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
+        lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
+        params=main_params,lagrange_params
+        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
+        eta=lag_updates[1]
+        omega=lag_updates[2]
+        jax.debug.print('omega {omega}:', omega=omega)   
+        jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
+        jax.debug.print('eta {omega}:', omega=eta)
+        jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
+        return params,lag_state,grad,info,eta,omega                                  
+
+
+    return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
     #return optax.GradientTransformationExtraArgs(init_fn, update_fn)

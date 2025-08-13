@@ -14,7 +14,7 @@ from essos.optimization import optimize_loss_function
 from essos.objective_functions import loss_particle_r_cross_final_new,loss_particle_r_cross_max,loss_particle_radial_drift,loss_particle_gamma_c
 from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis,loss_normB_axis_average
 from functools import partial
-import essos.alm_convex as alm
+import essos.alm as alm
 import optax
 
 
@@ -25,8 +25,8 @@ max_coil_curvature = 0.4
 nparticles = number_of_processors_to_use*10
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 30
-maxtimes = [1.e-5]
+maximum_function_evaluations = 10
+maxtimes = [2.e-5]
 num_steps=100
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
@@ -65,7 +65,7 @@ r_max_partial = partial(loss_particle_r_cross_max, particles=particles,dofs_curv
 
 # Create the constraints
 penalty = 1.05 #Intial penalty values
-multiplier=1.0 #Initial lagrange multiplier values
+multiplier=0.0 #Initial lagrange multiplier values
 sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
 constraints = alm.combine(
 alm.eq(curvature_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
@@ -76,21 +76,22 @@ alm.eq(Baxis_average_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_g
 
 
 
-model_lagrange='Mu_Tolerance_LBFGS'              #Options: Mu_Constant, Mu_Monotonic, Mu_Conditional,Mu_Adaptative
+model_lagrange='Mu_Tolerance'              #Options: Mu_Constant, Mu_Monotonic, Mu_Conditional,Mu_Adaptative
 beta=2.                                     #penalty update parameter
 mu_max=1.e4                                 #Maximum penalty parameter allowed
 alpha=0.99           #
 gamma=1.e-2
 epsilon=1.e-8
-omega_tol=0.01   #grad_tolerance, associated with grad of lagrangian to main parameters
+omega_tol=1.e-5    #grad_tolerance, associated with grad of lagrangian to main parameters
 eta_tol=1.e-6  #contrained tolerances, associated with variation of contraints
-optimizer=optax.lbfgs(linesearch=optax.scale_by_zoom_linesearch(max_linesearch_steps=15))
 
-ALM=alm.ALM_model(optimizer,constraints,model_lagrange=model_lagrange,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+
+
+ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
 lagrange_params=constraints.init(coils_initial.x)
 params = coils_initial.x, lagrange_params
-opt_state,grad,value,info=ALM.init(params)
+lag_state,grad,info=ALM.init(params)
 mu_average=alm.penalty_average(lagrange_params)
 #omega=1.#1./mu_average
 #eta=1000.#1./mu_average**0.1
@@ -99,7 +100,7 @@ eta=1./mu_average**0.1
 
 i=0
 while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
-    params, opt_state, grad,value,info,eta,omega = ALM.update(params,opt_state,grad,value,info,eta,omega)        #One step of ALM optimization
+    params, lag_state,grad,info,eta,omega = ALM.update(params,lag_state,grad,info,eta,omega)        #One step of ALM optimization
     #if i % 5 == 0:
     #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
     print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')

@@ -25,8 +25,8 @@ max_coil_curvature = 0.4
 nparticles = number_of_processors_to_use*10
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 2
-maxtimes = [4.e-5]
+maximum_function_evaluations = 30
+maxtimes = [1.e-5]
 num_steps=100
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
@@ -84,7 +84,7 @@ gamma=1.e-2
 epsilon=1.e-8
 omega_tol=1.    #grad_tolerance, associated with grad of lagrangian to main parameters
 eta_tol=1.e-6  #contrained tolerances, associated with variation of contraints
-optimizer=optax.adabelief(learning_rate=0.01,nesterov=True)
+optimizer=optax.adabelief(learning_rate=0.003,nesterov=True)
 
 
 ALM=alm.ALM_model(optimizer,constraints,model_lagrange=model_lagrange,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
