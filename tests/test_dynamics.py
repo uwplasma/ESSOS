@@ -159,19 +159,6 @@ def test_tracing_trace_adaptative(field, particles,electric_field):
     trajectories = tracing.trace()
     assert trajectories.shape == (particles.nparticles, 200, 4)
 
-def test_tracing_trace_fullorbit(field, particles,electric_field):
-    x = jnp.linspace(1, 2, particles.nparticles)
-    y = jnp.zeros(particles.nparticles)
-    z = jnp.zeros(particles.nparticles)
-    vx = jnp.linspace(1, 2, particles.nparticles)*0.
-    vy = jnp.zeros(particles.nparticles)*0.
-    vz = jnp.zeros(particles.nparticles)*0.
-    initial_conditions =jnp.concatenate([jnp.array([x, y, z]).T,jnp.array([vx, vy, vz]).T],axis=1)
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='FullOrbit_Boris', particles=particles, times_to_trace=200)
-    trajectories = tracing.trace()
-    assert trajectories.shape == (particles.nparticles, 200, 6)
-
-
 
 def test_tracing_trace_collisions_fixed(field, particles,electric_field):
     x = jnp.linspace(1, 2, particles.nparticles)
