@@ -13,9 +13,10 @@ import numpy as np
 tmax = 1e-4
 timestep = 1.e-8
 times_to_trace=5000
-nparticles_per_core=2
+nparticles_per_core=6
 nparticles = number_of_processors_to_use*nparticles_per_core
-s = 0.25 # s-coordinate: flux surface label
+n_particles_to_plot = 4
+s = 0.6 # s-coordinate: flux surface label
 theta = jnp.linspace(0, 2*jnp.pi, nparticles)
 phi = jnp.linspace(0, 2*jnp.pi/2/4, nparticles)
 atol = 1e-8
@@ -23,7 +24,7 @@ rtol = 1e-8
 energy=FUSION_ALPHA_PARTICLE_ENERGY
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_QH_simple_scaled.nc")
+wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 vmec = Vmec(wout_file)
 
 # Initialize particles
@@ -52,7 +53,7 @@ ax4 = fig.add_subplot(224)
 ## Plot trajectories in 3D
 vmec.surface.plot(ax=ax1, show=False, alpha=0.4)
 tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
-for i in np.random.choice(nparticles, size=min(2, nparticles), replace=False):
+for i in np.random.choice(nparticles, size=n_particles_to_plot, replace=False):
     trajectory = trajectories[i]
     ## Plot energy error
     ax2.plot(tracing.times[2:], jnp.abs(tracing.energy[i][2:]-particles.energy)/particles.energy, label=f'Particle {i+1}')

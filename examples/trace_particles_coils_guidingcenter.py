@@ -5,8 +5,8 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_json,Coils_from_simsopt
-from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ONE_EV
+from essos.coils import Coils_from_json
+from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, ONE_EV
 from essos.dynamics import Tracing, Particles
 
 # Input parameters

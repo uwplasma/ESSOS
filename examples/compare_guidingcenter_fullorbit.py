@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 3 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from jax import vmap
 from time import time
@@ -12,9 +12,10 @@ from essos.dynamics import Tracing, Particles
 from jax import block_until_ready
 
 # Input parameters
-tmax = 4.e-4
+tmax = 1.e-4
 dt_fo=1.e-9
-nparticles = number_of_processors_to_use
+nparticles_per_core=2
+nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-5
 num_steps_gc = 5000

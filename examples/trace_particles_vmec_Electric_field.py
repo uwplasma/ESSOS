@@ -14,9 +14,9 @@ import numpy as np
 tmax = 1.e-4
 timestep = 1.e-8
 times_to_trace=1000
-nparticles_per_core=2
+nparticles_per_core=6
 nparticles = number_of_processors_to_use*nparticles_per_core
-s = 0.25 # s-coordinate: flux surface label
+s = 0.6 # s-coordinate: flux surface label
 theta = jnp.linspace(0, 2*jnp.pi, nparticles)
 phi = jnp.linspace(0, 2*jnp.pi/2/4, nparticles)
 atol = 1e-8
@@ -24,7 +24,7 @@ rtol = 1e-8
 energy=FUSION_ALPHA_PARTICLE_ENERGY
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_QH_simple_scaled.nc")
+wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 vmec = Vmec(wout_file)
 
 #Load electric field

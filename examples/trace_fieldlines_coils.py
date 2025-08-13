@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 6 # Parallelization, this should divide nfieldlines
+number_of_processors_to_use = 1 # Parallelization, this should divide nfieldlines
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp

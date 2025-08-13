@@ -1,6 +1,6 @@
 
 import os
-number_of_processors_to_use = 3 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from jax import jit, value_and_grad
 import jax.numpy as jnp

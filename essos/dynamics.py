@@ -85,12 +85,6 @@ class Particles():
         self.initial_xyz_fullorbit, self.initial_vxvyvz = gc_to_fullorbit(field=field, initial_xyz=self.initial_xyz, initial_vparallel=self.initial_vparallel,
                                                                             total_speed=self.total_speed, mass=self.mass, charge=self.charge,
                                                                             phase_angle_full_orbit=self.phase_angle_full_orbit)
-
-
-
-
-
-
 @partial(jit, static_argnums=(2))
 def GuidingCenterCollisionsDiffusionMu(t,
                   initial_condition,
@@ -236,21 +230,15 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
     d_sigma22_dvpar=m*v/field.AbsB(points)*xi*Q2.at[1].get()*jnp.sqrt(2.*lambda_m)+0.5*m*v**2/field.AbsB(points)*d_Q22_dvpar*jnp.sqrt(2.*lambda_m)+0.5*m*v**2/field.AbsB(points)*Q2.at[1].get()*jnp.sqrt(2.)*d_lambda_m_dvpar/(2.*jnp.sqrt(lambda_m))    
     d_sigma22_dmu=Q2.at[1].get()*jnp.sqrt(2.*lambda_m)+0.5*m*v**2/field.AbsB(points)*d_Q22_dmu*jnp.sqrt(2.*lambda_m)+0.5*m*v**2/field.AbsB(points)*Q2.at[1].get()*jnp.sqrt(2.)*d_lambda_m_dmu/(2.*jnp.sqrt(lambda_m))        
 
-
     Avpar_corr=jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[-0.5*(sigma11*d_sigma11_dvpar+sigma12*d_sigma12_dvpar+sigma21*d_sigma11_dmu+sigma22*d_sigma12_dmu),-0.5*vpar/p**2*(p*d_Diffusion_par_dp)])
     Amu_corr=jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[-0.5*(sigma11*d_sigma21_dvpar+sigma12*d_sigma22_dvpar+sigma21*d_sigma21_dmu+sigma22*d_sigma22_dmu),-0.5*(d_Dmumu_dmu+d_Dmuv_dvpar)])  
-    #Avpar=-nu_s*vpar+vpar/p**2*(2.*(Diffusion_par-Diffusion_perp)+p*d_Diffusion_par_dp)
-    #Amu=-nu_s*2.*mu+2.*mu/p**2*(3.*(Diffusion_par-Diffusion_perp)+p*d_Diffusion_par_dp)+2.*Diffusion_perp/(m*field.AbsB(points))
+
     Avpar=-nu_s*vpar+d_Dvv_dvpar+d_Dmuv_dmu+Avpar_corr
     Amu=-nu_s*2.*mu+d_Dmumu_dmu+d_Dmuv_dvpar+Amu_corr
     dxdt =  tag_gc*(Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points))
     dvpardt = (-jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m*tag_gc+Avpar)/SPEED_OF_LIGHT
-    #dxdt = tag_gc*(vpar*B_contravariant/AbsB + (vpar**2/omega_mod+mu/q)*jnp.cross(B_covariant, gradB)/AbsB/AbsB/sqrtg)
-    #dvpardt=  Avpar-mu/m*jnp.dot(B_contravariant,gradB)/AbsB*tag_gc
-    dmudt = Amu/(SPEED_OF_LIGHT**2*particles.mass)
-    jax.debug.print("time {x}", x=t)
-    #jax.debug.print("vpar  {x}", x=vpar)
-    #jax.debug.print("mu {x}", x=mu)        
+
+    dmudt = Amu/(SPEED_OF_LIGHT**2*particles.mass)  
     return jnp.append(dxdt,jnp.append(dvpardt,dmudt))
 
 
@@ -260,9 +248,7 @@ def GuidingCenterCollisionsDriftMuIto(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z,vpar,mu = initial_condition
-    field, particles,electric_field,species,tag_gc = args
-    #jax.debug.print("vpar  {x}", x=vpar)
-    #jax.debug.print("mu {x}", x=mu)  
+    field, particles,electric_field,species,tag_gc = args 
     vpar=SPEED_OF_LIGHT*vpar
     mu=SPEED_OF_LIGHT**2*particles.mass*mu
     m = particles.mass
@@ -271,8 +257,7 @@ def GuidingCenterCollisionsDriftMuIto(t,
     v=jnp.sqrt(2./m*(0.5*m*vpar**2+mu*field.AbsB(points)))
     p=m*v
     xi=vpar/v
-    #xi=jnp.select(condlist=[jnp.abs(xi)<=1,jnp.abs(xi)>1],choicelist=[jnp.sign(xi)*(2.-jnp.abs(xi)),xi])
-    #vpar=xi*v
+
     Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
@@ -299,12 +284,8 @@ def GuidingCenterCollisionsDriftMuIto(t,
     Amu=-nu_s*2.*mu+d_Dmumu_dmu+d_Dmuv_dvpar
     dxdt =  tag_gc*(Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points))
     dvpardt = (-jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m*tag_gc+Avpar)/SPEED_OF_LIGHT
-    #dxdt = tag_gc*(vpar*B_contravariant/AbsB + (vpar**2/omega_mod+mu/q)*jnp.cross(B_covariant, gradB)/AbsB/AbsB/sqrtg)
-    #dvpardt=  Avpar-mu/m*jnp.dot(B_contravariant,gradB)/AbsB*tag_gc
-    dmudt = Amu/(SPEED_OF_LIGHT**2*particles.mass)
-    #jax.debug.print("time {x}", x=t)
-    #jax.debug.print("vpar  {x}", x=vpar)
-    #jax.debug.print("mu {x}", x=mu)        
+
+    dmudt = Amu/(SPEED_OF_LIGHT**2*particles.mass) 
     return jnp.append(dxdt,jnp.append(dvpardt,dmudt))
 
 @partial(jit, static_argnums=(2))
@@ -315,10 +296,8 @@ def GuidingCenterCollisionsDiffusion(t,
     field, particles,electric_field,species,tag_gc = args
     q = particles.charge
     m = particles.mass
-    #xi=jnp.select(condlist=[jnp.abs(xi)<=1,jnp.abs(xi)>1],choicelist=[xi,jnp.sign(xi)*(2.-jnp.abs(xi))])
-    #v=jnp.select(condlist=[v>0.,v<=0.],choicelist=[v,0.05*jnp.sqrt(2.*species.T0[0]*ELEMENTARY_CHARGE/species.mass[0])])    
+
     points = jnp.array([x, y, z])
-    #I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(B_contravariant,B_contravariant))/AbsB**2
     I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(field.B_contravariant(points),jnp.reshape(field.B_contravariant(points),(3,1))))/field.AbsB(points)**2
     p=m*v
     indeces_species=species.species_indeces
@@ -344,10 +323,9 @@ def GuidingCenterCollisionsDrift(t,
     field, particles,electric_field,species,tag_gc = args
     q = particles.charge
     m = particles.mass
-    #E = m/2*v**2
+
     vpar=xi*v
-    #xi=jnp.select(condlist=[jnp.abs(xi)<=1,jnp.abs(xi)>1],choicelist=[xi,jnp.sign(xi)*(2.-jnp.abs(xi))])
-    #v=jnp.select(condlist=[v>0.,v<=0.],choicelist=[v,0.05*jnp.sqrt(2.*species.T0[0]*ELEMENTARY_CHARGE/species.mass[0])])    
+
     points = jnp.array([x, y, z])
     mu = (m*v**2/2 - m*vpar**2/2)/field.AbsB(points)
     p=m*v
@@ -363,10 +341,10 @@ def GuidingCenterCollisionsDrift(t,
     Diffusion_perp=p**2/2.*nu_D 
     d_Diffusion_par_dp=p*nu_par+p**2/2.*dnu_par/m
     dxdt =  tag_gc*(Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points))
-    #dxdt = tag_gc*(vpar*B_contravariant/AbsB + (vpar**2/omega+mu/q)*jnp.cross(field.B_covariant(points), gradB)/field.AbsB(points)/field.AbsB(points)/field.sqrtg(points))
+
     dvdt=(-nu_s*p+2.*Diffusion_par/p+d_Diffusion_par_dp*0.5)/m  #equation format was in p=m*v so we divide by m)
     dxidt = -jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m/v*tag_gc-xi*2.*Diffusion_perp/p**2*0.5
-    #dxidt =-xi*2.*Diffusion_perp/p**2*0.5-mu/m*jnp.dot(B_contravariant,gradB)/AbsB/v*tag_gc
+
     return jnp.append(dxdt,jnp.append(dvdt,dxidt))
 
 
@@ -388,8 +366,7 @@ def GuidingCenter(t,
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)
     dxdt =  Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points)
     dvdt = -jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m    
-    #dxdt = vpar*field.B_contravariant(points)/AbsB + (vpar**2/omega+mu/q)*jnp.cross(B_covariant, gradB)/field.AbsB(points)**2/field.sqrtg(points)
-    #dvdt = -mu/m*jnp.dot(field.B_contravariant(points),gradB)/field.AbsB(points)
+
     return jnp.append(dxdt,dvdt)
     # def zero_derivatives(_):
     #     return jnp.zeros(4, dtype=float)

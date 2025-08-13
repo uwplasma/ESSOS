@@ -1,15 +1,13 @@
 import os
 number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
-import jax
-print(jax.devices())
 from time import time
 from jax import block_until_ready
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart,Vmec
 from essos.surfaces import SurfaceClassifier
-from essos.coils import Coils_from_json,Coils_from_simsopt
+from essos.coils import Coils_from_simsopt
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ONE_EV
 from essos.dynamics import Tracing, Particles
 
@@ -48,8 +46,8 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,charge=A
 print(f"Initialization performed")
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
-                  maxtime=tmax, timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol,boundary=boundary)
+tracing = block_until_ready(Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
+                  maxtime=tmax, timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol,boundary=boundary))
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
 trajectories = tracing.trajectories

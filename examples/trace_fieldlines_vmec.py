@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 3 # Parallelization, this should divide nfieldlines
+number_of_processors_to_use = 1 # Parallelization, this should divide nfieldlines
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -10,7 +10,7 @@ from essos.dynamics import Tracing
 
 # Input parameters
 tmax = 1500
-nfieldlines_per_core=2
+nfieldlines_per_core=6
 nfieldlines = number_of_processors_to_use*nfieldlines_per_core
 R0 = jnp.linspace(0.05, 0.6, nfieldlines)
 trace_tolerance = 1e-10
