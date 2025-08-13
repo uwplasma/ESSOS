@@ -150,8 +150,27 @@ def test_tracing_trace(field, particles,electric_field):
     trajectories = tracing.trace()
     assert trajectories.shape == (particles.nparticles, 200, 4)
 
+def test_tracing_trace_adaptative(field, particles,electric_field):
+    x = jnp.linspace(1, 2, particles.nparticles)
+    y = jnp.zeros(particles.nparticles)
+    z = jnp.zeros(particles.nparticles)
+    initial_conditions =jnp.array([x, y, z]).T
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterAdaptative', particles=particles, times_to_trace=200)
+    trajectories = tracing.trace()
+    assert trajectories.shape == (particles.nparticles, 200, 4)
 
-def test_tracing_trace_collisions(field, particles,electric_field):
+def test_tracing_trace_adaptative(field, particles,electric_field):
+    x = jnp.linspace(1, 2, particles.nparticles)
+    y = jnp.zeros(particles.nparticles)
+    z = jnp.zeros(particles.nparticles)
+    initial_conditions =jnp.array([x, y, z]).T
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='FullOrbit_Boris', particles=particles, times_to_trace=200)
+    trajectories = tracing.trace()
+    assert trajectories.shape == (particles.nparticles, 200, 6)
+
+
+
+def test_tracing_trace_collisions_fixed(field, particles,electric_field):
     x = jnp.linspace(1, 2, particles.nparticles)
     y = jnp.zeros(particles.nparticles)
     z = jnp.zeros(particles.nparticles)
@@ -171,6 +190,45 @@ def test_tracing_trace_collisions(field, particles,electric_field):
     assert species.charge.shape == (2,)
     assert trajectories.shape == (particles.nparticles, 200, 5)
 
+def test_tracing_trace_collisions_ito(field, particles,electric_field):
+    x = jnp.linspace(1, 2, particles.nparticles)
+    y = jnp.zeros(particles.nparticles)
+    z = jnp.zeros(particles.nparticles)
+    initial_conditions =jnp.array([x, y, z]).T
+    #Initialize background species
+    number_species=1  #(electrons,deuterium)
+    mass_array=jnp.array([1.,ELECTRON_MASS/PROTON_MASS])    #mass_over_mproton
+    charge_array=jnp.array([1.,-1])    #mass_over_mproton
+    T0=1.e+3  #eV
+    n0=1e+20  #m^-3
+    n_array=jnp.array([n0,n0])
+    T_array=jnp.array([T0,T0])
+    species = BackgroundSpecies(number_species=number_species, mass_array=mass_array, charge_array=charge_array, n_array=n_array, T_array=T_array)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterCollisionsMuIto', particles=particles, times_to_trace=200,maxtime=1.e-6,species=species)
+    trajectories = tracing.trace()
+    assert species.mass.shape == (2,)
+    assert species.charge.shape == (2,)
+    assert trajectories.shape == (particles.nparticles, 200, 5)
+
+def test_tracing_trace_collisions_adaptative(field, particles,electric_field):
+    x = jnp.linspace(1, 2, particles.nparticles)
+    y = jnp.zeros(particles.nparticles)
+    z = jnp.zeros(particles.nparticles)
+    initial_conditions =jnp.array([x, y, z]).T
+    #Initialize background species
+    number_species=1  #(electrons,deuterium)
+    mass_array=jnp.array([1.,ELECTRON_MASS/PROTON_MASS])    #mass_over_mproton
+    charge_array=jnp.array([1.,-1])    #mass_over_mproton
+    T0=1.e+3  #eV
+    n0=1e+20  #m^-3
+    n_array=jnp.array([n0,n0])
+    T_array=jnp.array([T0,T0])
+    species = BackgroundSpecies(number_species=number_species, mass_array=mass_array, charge_array=charge_array, n_array=n_array, T_array=T_array)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterCollisionsMuAdaptative', particles=particles, times_to_trace=200,maxtime=1.e-6,species=species)
+    trajectories = tracing.trace()
+    assert species.mass.shape == (2,)
+    assert species.charge.shape == (2,)
+    assert trajectories.shape == (particles.nparticles, 200, 5)
 
 if __name__ == "__main__":
     pytest.main()
