@@ -6,7 +6,7 @@ number_of_field_periods = 2
 number_coils_per_half_field_period = 4
 major_radius_coils = 1.0
 minor_radius_coils = 0.3
-order_Fourier_series_coils = 5
+order_Fourier_series_coils = 1
 number_coil_points = 50
 curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
@@ -16,9 +16,15 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
 coils = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 
 # Change the parameters of a given coil
-coils.x = coils.x.at[0].set(0.5)
-coils.x = coils.x.at[1].set(0.2)
-coils.x = coils.x.at[2].set(0.1)
+print("Coils before changing parameters:")
+print(coils.x)
+
+coils.x = coils.x.at[0].set(1.0)
+coils.x = coils.x.at[1].set(0.4)
+coils.x = coils.x.at[2].set(0.3)
+
+print("Coils after changing parameters:")
+print(coils.x)
 
 # Plot the result
 coils.plot()

@@ -27,9 +27,9 @@ keywords = ["Plasma",
      "Simulation",
      "JAX"]
  
-dependencies = [ "jax", "jaxlib", "matplotlib", "diffrax", "scipy", "netcdf4"]
+dependencies = [ "jax", "jaxlib", "tqdm", "matplotlib", "diffrax", "optax", "scipy", "jaxkd", "netcdf4"]
  
-requires-python = ">=3.5"
+requires-python = ">=3.10"
 
 [project.urls]
 Homepage = "https://github.com/uwplasma/ESSOS"

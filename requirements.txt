@@ -1,8 +1,11 @@
 jax
 jaxlib
+tqdm
 matplotlib
 diffrax
+optax
 scipy
+jaxkd
 netcdf4
 f90nml
 pyevtk
