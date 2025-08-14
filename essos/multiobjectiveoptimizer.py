@@ -158,49 +158,42 @@ class MultiObjectiveOptimizer:
         return self._build_coils_from_x(x)
 
 
-
-    def plot_pareto_fronts(self, logx=False, logy=False, logz=False, z_thresh=None, ncols=None):
+    def plot_pareto_fronts(self, logx=False, logy=False, logz=False, z_thresh=None, ncols=None, save=None):
         """
         Plot Pareto front.
 
         logx, logy, logz: Apply log10 transform to x, y, z axes respectively.
         z_thresh: If provided, filter out points where y > mean + z_thresh * std
         ncols: Number of columns in the grid layout for 2D projections.
+        save: str (exact path) or True (auto-save in ./output/) or None (no save)
         """
         import numpy as np
         import matplotlib.pyplot as plt
         import optuna
+        import os, datetime
 
         if not hasattr(self, "loss_names"):
             raise ValueError("loss_names must be set before plotting.")
         names = self.loss_names
 
         eps = 1e-12
+        tol = 1e-4
         completed = [t for t in self.study.trials
                     if t.state == optuna.trial.TrialState.COMPLETE and t.values is not None]
         if not completed:
             print("No completed trials to plot.")
             return
 
-        values = np.array([t.values for t in completed], dtype=float)
-        m = values.shape[1]
+        pf_trials = [t for t in getattr(self.study, "best_trials", []) 
+                    if t.state == optuna.trial.TrialState.COMPLETE and t.values is not None]
+
+        pf = np.array([t.values for t in pf_trials], dtype=float)
+
+
+        m = pf.shape[1]
         if m < 2:
             print("Need at least 2 objectives to plot 2D projections.")
             return
-
-        # Pareto mask 
-        n = values.shape[0]
-        mask_pf = np.ones(n, dtype=bool)
-        for i in range(n):
-            if not mask_pf[i]:
-                continue
-            dominated = np.any((values <= values[i]).all(axis=1) & (values < values[i]).any(axis=1))
-            if dominated:
-                mask_pf[i] = False
-        if not np.any(mask_pf):
-            print("No Pareto-optimal points found.")
-            return
-        pf = values[mask_pf]
 
         if ncols is None:
             ncols = max(1, m - 1)
@@ -241,6 +234,17 @@ class MultiObjectiveOptimizer:
 
         fig.suptitle("2D Pareto Projections (row i: x = loss_i; columns: y = other losses)", y=1.02, fontsize=12)
         plt.tight_layout()
+
+        if isinstance(save, str) or save is True:
+            if save is True:
+                os.makedirs("output", exist_ok=True)
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_path = os.path.join("output", f"plot_pareto_fronts_{ts}.png")
+            else:
+                out_path = save
+            fig.savefig(out_path, dpi=300)
+            print(f"Saved figure to {out_path}")
+
         plt.show()
 
         # 3D 
@@ -272,19 +276,38 @@ class MultiObjectiveOptimizer:
             ax3.set_title(title)
             ax3.legend(loc='best')
             plt.tight_layout()
+
+            if isinstance(save, str) or save is True:
+                if save is True:
+                    os.makedirs("output", exist_ok=True)
+                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    out_path3d = os.path.join("output", f"plot_pareto_fronts_3d_{ts}.png")
+                else:
+                    base = save
+                    if base.lower().endswith((".png", ".jpg", ".jpeg")):
+                        root, ext = os.path.splitext(base)
+                        out_path3d = f"{root}_3d{ext}"
+                    else:
+                        out_path3d = base + "_3d.png"
+                fig3d.savefig(out_path3d, dpi=300)
+                print(f"Saved figure to {out_path3d}")
+
             plt.show()
 
-    def plot_parallel_coordinates(self, logy=False, z_thresh=None, include_params=None):
+    def plot_parallel_coordinates(self, logy=False, z_thresh=None, include_params=None, save=None):
         """
         Draw one parallel-coordinates figure per objective.
 
         logy: Apply log10 transform to y-axis values.
         z_thresh: If provided, filter out points where y > mean + z_thresh * std
         include_params: If provided, filter the parameters to include only those specified.
+        save: str (exact path) or True (auto-save in ./output/) or None (no save).
+                For True/str, a separate file per objective is saved.
         """
         import numpy as np
         import plotly.graph_objects as go
         import optuna.visualization as vis
+        import os, datetime
 
         if not hasattr(self, "loss_names"):
             raise ValueError("loss_names must be set before plotting.")
@@ -327,14 +350,12 @@ class MultiObjectiveOptimizer:
                     vals = np.array(dims[obj_idx]["values"], dtype=float)
                     if logy:
                         vals = np.log10(np.clip(vals, eps, None))
-                    # Update transformed values for plotting
                     dims[obj_idx]["values"] = vals.tolist()
 
                     if z_thresh is not None and vals.size > 1 and np.isfinite(vals.std()) and vals.std() > 0:
                         y_lim = vals.mean() + float(z_thresh) * vals.std()
                         keep = (vals <= y_lim)
 
-                # Apply filtering mask to all dimensions
                 if keep is not None:
                     for d in dims:
                         d_vals = np.array(d["values"], dtype=float)
@@ -347,21 +368,40 @@ class MultiObjectiveOptimizer:
                 title_text=f"Parallel Coordinates — {name}" + (" (objective log10)" if logy else ""),
                 showlegend=False
             )
+
+            if isinstance(save, str) or save is True:
+                if save is True:
+                    os.makedirs("output", exist_ok=True)
+                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    out_html = os.path.join("output", f"plot_parallel_coordinates_{name}_{ts}.html")
+                else:
+                    # if a single path string is given, create per-objective filenames by inserting name
+                    base = save
+                    if base.lower().endswith(".html"):
+                        root, ext = os.path.splitext(base)
+                        out_html = f"{root}_{name}{ext}"
+                    else:
+                        out_html = base + f"_{name}.html"
+                fig.write_html(out_html)
+                print(f"Saved figure to {out_html}")
+
             fig.show()
 
-
-    def plot_optimization_history(self, logy=False, z_thresh=None, ncols=2):
+    def plot_optimization_history(self, logy=False, z_thresh=None, ncols=2, save=None):
         """
         Plot optimization history for all objectives in a grid layout.
 
         logy: Apply log10 transform to y-axis values.
         z_thresh: If provided, filter out points where y > mean + z_thresh * std
         ncols: Number of columns in the grid layout.
+        save: str (exact path) or True (auto-save in ./output/) or None (no save).
         """
         import numpy as np
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
         import optuna.visualization as vis
+        import os, datetime
+
         eps = 1e-12
         if not hasattr(self, "loss_names"):
             raise ValueError("loss_names must be set before plotting.")
@@ -402,10 +442,9 @@ class MultiObjectiveOptimizer:
                     else:
                         tr["y"] = y.tolist()
 
-                    tr["showlegend"] = False  
+                    tr["showlegend"] = False
                     fig.add_trace(go.Scatter(**{k: v for k, v in tr.items() if k not in ("type",)}), row=row, col=col)
                 else:
-                    
                     tr["showlegend"] = False
                     fig.add_trace(go.Scatter(**{k: v for k, v in tr.items() if k not in ("type",)}), row=row, col=col)
 
@@ -416,27 +455,84 @@ class MultiObjectiveOptimizer:
             height=320 * nrows,
             width=520 * ncols,
             title_text="Optimization History (all objectives)",
-            showlegend=False 
+            showlegend=False
         )
+
+        if isinstance(save, str) or save is True:
+            if save is True:
+                os.makedirs("output", exist_ok=True)
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_html = os.path.join("output", f"plot_optimization_history_{ts}.html")
+            else:
+                out_html = save
+            fig.write_html(out_html)
+            print(f"Saved figure to {out_html}")
+
         fig.show()
 
-    def plot_param_importances(self):
+    def plot_param_importances(self, save=None):
         import optuna.visualization as vis
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go
+        import math, os, datetime
+
         if self.study is None:
             print("Study is None.")
             return
         target_names = getattr(self, "loss_names", [f"loss_{i}" for i in range(len(self.loss_functions))])
 
+        n = len(target_names)
+        if n == 0:
+            print("No targets to plot.")
+            return
+
+        # build one big figure with subplots
+        ncols = 2 if n >= 2 else 1
+        nrows = math.ceil(n / ncols)
+        fig = make_subplots(
+            rows=nrows,
+            cols=ncols,
+            subplot_titles=[f"{name}" for name in target_names]
+        )
+
         for i, name in enumerate(target_names):
-            fig = vis.plot_param_importances(
+            sub = vis.plot_param_importances(
                 self.study,
                 target=lambda t, i=i: t.values[i],
                 target_name=name,
             )
-            fig.update_layout(title=f"Parameter Importance — {name}")
-            fig.update_xaxes(title_text="Hyperparameter")
-            fig.update_yaxes(title_text="Importance")
-            fig.show()
+            r, c = divmod(i, ncols)
+            row, col = r + 1, c + 1
+
+            # move traces to the big figure
+            for tr in sub.data:
+                tr.showlegend = False
+                fig.add_trace(tr, row=row, col=col)
+
+            # axis labels for each subplot
+            fig.update_xaxes(title_text="Hyperparameter", row=row, col=col)
+            fig.update_yaxes(title_text="Importance", row=row, col=col)
+
+        fig.update_layout(
+            height=max(320 * nrows, 320),
+            width=max(520 * ncols, 520),
+            title_text="Parameter Importances (all objectives)",
+            showlegend=False,
+        )
+
+        # save logic: True -> ./output/plot_param_importances_<ts>.html
+        # str  -> if endswith .html, use as-is; else append .html
+        if isinstance(save, str) or save is True:
+            if save is True:
+                os.makedirs("output", exist_ok=True)
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_html = os.path.join("output", f"plot_param_importances_{ts}.html")
+            else:
+                out_html = save if save.lower().endswith(".html") else (save + ".html")
+            fig.write_html(out_html)
+            print(f"Saved figure to {out_html}")
+
+        fig.show()
 
 
     def select_best_from_pareto(self, weights=None, limits=None):

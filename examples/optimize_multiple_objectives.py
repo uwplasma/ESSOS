@@ -37,7 +37,7 @@ print(f"Losses: {best.values}\nParams: {best.params}")
 
 
 print("\n--------Starting Optax refinement...")
-weights = [1, 1, 1, 100]  # Example weights
+weights = [1, 1, 1, 1]  # Example weights
 best_coils = manager.rebuild_best_coils(weights=weights, plot=True)
 print("--------Optax refinement completed!")
 
@@ -46,7 +46,10 @@ BdotN_over_B_optimized = BdotN_over_B(vmec.surface, BiotSavart(manager.best_coil
 print(f"Maximum BdotN/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
 print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
 
-manager.plot_pareto_fronts(z_thresh=3)
-manager.plot_optimization_history()
-manager.plot_param_importances()
-manager.plot_parallel_coordinates()
+
+
+
+manager.plot_pareto_fronts(z_thresh=3, save= True)
+manager.plot_optimization_history(z_thresh=3, save= True)
+manager.plot_param_importances(save= True)
+manager.plot_parallel_coordinates(z_thresh=3, save= True)
