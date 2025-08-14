@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 32 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -7,20 +7,21 @@ import matplotlib.pyplot as plt
 import matplotlib.colors
 from essos.fields import BiotSavart
 from essos.coils import Coils_from_json
-from essos.constants import PROTON_MASS, ONE_EV,ELECTRON_MASS
+from essos.constants import PROTON_MASS, ONE_EV,ELECTRON_MASS,SPEED_OF_LIGHT
 from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies,gamma_ab
 import numpy as np
 import jax 
 
 # Input parameters
-light_speed=299792458
+light_speed=SPEED_OF_LIGHT
 tmax = 1.e-5
 dt=1.e-8
-nparticles = number_of_processors_to_use*32
+nparticles_per_core=10
+nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 1.25#jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
-num_steps = int(tmax/dt)
+times_to_trace=100
 mass=PROTON_MASS
 mass_a=4.*mass
 mass_e=ELECTRON_MASS
@@ -98,8 +99,8 @@ pitch_sigma=jnp.sqrt(2.**2/12)
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterCollisionsMu', particles=particles,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance,species=species,tag_gc=0)
+tracing = Tracing(field=field, model='GuidingCenterCollisionsMuFixed', particles=particles,
+                  maxtime=tmax, timestep=dt,times_to_trace=times_to_trace,species=species,tag_gc=0.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 

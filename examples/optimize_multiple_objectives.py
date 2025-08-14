@@ -3,14 +3,14 @@ import jax.numpy as jnp
 from essos.fields import BiotSavart
 from essos.fields import Vmec
 from essos.surfaces import BdotN_over_B
-from essos.objective_functions import loss_normB_axis,loss_bdotn_over_b,loss_coil_length_with_limits, loss_coil_curvature_with_limits, loss_BdotN
+from essos.objective_functions import loss_normB_axis,loss_bdotn_over_b,loss_coil_length, loss_coil_curvature, loss_BdotN
 from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 
 vmec = Vmec("./input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc", ntheta=32, nphi=32, range_torus='half period')
 
 # inputs
 manager = MultiObjectiveOptimizer(
-    loss_functions=(loss_bdotn_over_b, loss_coil_length_with_limits, loss_coil_curvature_with_limits, loss_normB_axis),
+    loss_functions=(loss_bdotn_over_b, loss_coil_length, loss_coil_curvature, loss_normB_axis),
     vmec=vmec,
     function_inputs={
         "max_coil_length": 0,

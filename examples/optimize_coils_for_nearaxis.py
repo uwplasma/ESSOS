@@ -8,11 +8,11 @@ from essos.optimization import optimize_loss_function
 from essos.objective_functions import loss_coils_for_nearaxis
 
 # Optimization parameters
-max_coil_length = 5.0
-max_coil_curvature = 4
+max_coil_length = 4
+max_coil_curvature = 6
 order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 100
+maximum_function_evaluations = 200
 number_coils_per_half_field_period = 3
 tolerance_optimization = 1e-8
 
@@ -27,7 +27,7 @@ field = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
 current_on_each_coil = 17e5*field.B0/nfp/2
 number_of_field_periods = nfp
 major_radius_coils = field.R0[0]
-minor_radius_coils = major_radius_coils/1.5
+minor_radius_coils = major_radius_coils/2.0
 curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
                                    R=major_radius_coils, r=minor_radius_coils,
@@ -48,7 +48,7 @@ print(f"Optimization took {time()-time0:.2f} seconds")
 # Trace fieldlines
 nfieldlines = 6
 num_steps = 1000
-tmax = 150
+tmax = 1.e-6
 trace_tolerance = 1e-7
 
 R0 = jnp.linspace(field.R0[0], 1.05*field.R0[0], nfieldlines)
@@ -57,10 +57,10 @@ phi0 = jnp.zeros(nfieldlines)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 
 time0 = time()
-tracing_initial = Tracing(field=BiotSavart(coils_initial), model='FieldLine', initial_conditions=initial_xyz,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
-tracing_optimized = Tracing(field=BiotSavart(coils_optimized), model='FieldLine', initial_conditions=initial_xyz,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+tracing_initial = Tracing(field=BiotSavart(coils_initial), model='FieldLineAdaptative', initial_conditions=initial_xyz,
+                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance)
+tracing_optimized = Tracing(field=BiotSavart(coils_optimized), model='FieldLineAdaptative', initial_conditions=initial_xyz,
+                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance)
 print(f"Tracing took {time()-time0:.2f} seconds")
 
 # Plot coils, before and after optimization

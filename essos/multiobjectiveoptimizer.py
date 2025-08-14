@@ -469,13 +469,16 @@ class MultiObjectiveOptimizer:
             print(f"Saved figure to {out_html}")
 
         fig.show()
-
-    def plot_param_importances(self, save=None):
+    
+    def plot_param_importances(self, save=None, ncols=2):
         import optuna.visualization as vis
         from plotly.subplots import make_subplots
         import plotly.graph_objects as go
         import math, os, datetime
 
+        horizontal_spacing=0.3
+        vertical_spacing=0.2
+    
         if self.study is None:
             print("Study is None.")
             return
@@ -486,13 +489,14 @@ class MultiObjectiveOptimizer:
             print("No targets to plot.")
             return
 
-        # build one big figure with subplots
-        ncols = 2 if n >= 2 else 1
+        ncols = max(1, min(ncols, n))
         nrows = math.ceil(n / ncols)
         fig = make_subplots(
             rows=nrows,
             cols=ncols,
-            subplot_titles=[f"{name}" for name in target_names]
+            subplot_titles=[f"{name}" for name in target_names],
+            horizontal_spacing=horizontal_spacing,
+            vertical_spacing=vertical_spacing,
         )
 
         for i, name in enumerate(target_names):
@@ -504,12 +508,10 @@ class MultiObjectiveOptimizer:
             r, c = divmod(i, ncols)
             row, col = r + 1, c + 1
 
-            # move traces to the big figure
             for tr in sub.data:
                 tr.showlegend = False
                 fig.add_trace(tr, row=row, col=col)
 
-            # axis labels for each subplot
             fig.update_xaxes(title_text="Hyperparameter", row=row, col=col)
             fig.update_yaxes(title_text="Importance", row=row, col=col)
 
@@ -520,8 +522,6 @@ class MultiObjectiveOptimizer:
             showlegend=False,
         )
 
-        # save logic: True -> ./output/plot_param_importances_<ts>.html
-        # str  -> if endswith .html, use as-is; else append .html
         if isinstance(save, str) or save is True:
             if save is True:
                 os.makedirs("output", exist_ok=True)
@@ -533,6 +533,7 @@ class MultiObjectiveOptimizer:
             print(f"Saved figure to {out_html}")
 
         fig.show()
+
 
 
     def select_best_from_pareto(self, weights=None, limits=None):

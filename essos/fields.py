@@ -3,7 +3,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B
+from essos.surfaces import SurfaceRZFourier, BdotN_over_B,SurfaceClassifier
 from essos.plot import fix_matplotlib_3d
 from essos.util import newton
 
@@ -13,6 +13,13 @@ class BiotSavart():
         self.currents = coils.currents
         self.gamma = coils.gamma
         self.gamma_dash = coils.gamma_dash
+        self.r_axis=jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(self.coils.dofs_curves)))
+        self.z_axis=jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
+
+
+    @partial(jit, static_argnames=['self'])
+    def sqrtg(self, points):
+        return 1.
     
     @partial(jit, static_argnames=['self'])
     def B(self, points):
@@ -37,13 +44,34 @@ class BiotSavart():
     def dB_by_dX(self, points):
         return jacfwd(self.B)(points)
     
+    
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
     
     @partial(jit, static_argnames=['self'])
+    def grad_B_covariant(self, points):
+        return jacfwd(self.B_covariant)(points)    
+ 
+    @partial(jit, static_argnames=['self'])
+    def curl_B(self, points):
+        grad_B_cov=self.grad_B_covariant(points)
+        return jnp.array([grad_B_cov[2][1] -grad_B_cov[1][2],
+                          grad_B_cov[0][2] -grad_B_cov[2][0],
+                          grad_B_cov[1][0] -grad_B_cov[0][1]])/self.sqrtg(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def curl_b(self, points):
+        return self.curl_B(points)/self.AbsB(points)+jnp.cross(self.B_covariant(points),jnp.array(self.dAbsB_by_dX(points)))/self.AbsB(points)**2/self.sqrtg(points)
+
+    @partial(jit, static_argnames=['self'])
+    def kappa(self, points):
+        return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
+    
+    @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         return points
+
 
 
 class Vmec():
@@ -71,11 +99,14 @@ class Vmec():
         self.ds = self.s_full_grid[1] - self.s_full_grid[0]
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
         self.r_axis = self.rmnc[0, 0]
+        self.z_axis=self.zmns[0,0]
         self.mpol = int(jnp.max(self.xm)+1)
         self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
-
+        self.Aminor_p = jnp.array(self.nc.variables["Aminor_p"][:])
+        #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
+        
     @property
     def surface(self):
         return self._surface
@@ -102,7 +133,17 @@ class Vmec():
         B_sup_theta = jnp.dot(bsupumnc_interp, cosangle_nyq)
         B_sup_phi = jnp.dot(bsupvmnc_interp, cosangle_nyq)
         return jnp.array([0*B_sup_theta, B_sup_theta, B_sup_phi])
-    
+ 
+    @partial(jit, static_argnames=['self'])
+    def sqrtg(self, points):
+        s, theta, phi = points
+        gmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.gmnc[1:])
+        cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
+        sqrt_g_vmec = jnp.dot(gmnc_interp, cosangle_nyq)
+        return sqrt_g_vmec
+
+
+
     @partial(jit, static_argnames=['self'])
     def B(self, points):
         s, theta, phi = points
@@ -169,11 +210,33 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def dB_by_dX(self, points):
         return jacfwd(self.B)(points)
+
+
     
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
     
+    @partial(jit, static_argnames=['self'])
+    def grad_B_covariant(self, points):
+        return jacfwd(self.B_covariant)(points)    
+ 
+    @partial(jit, static_argnames=['self'])
+    def curl_B(self, points):
+        grad_B_cov=self.grad_B_covariant(points)
+        return jnp.array([grad_B_cov[2][1] -grad_B_cov[1][2],
+                          grad_B_cov[0][2] -grad_B_cov[2][0],
+                          grad_B_cov[1][0] -grad_B_cov[0][1]])/self.sqrtg(points)
+    
+    
+    @partial(jit, static_argnames=['self'])
+    def curl_b(self, points):
+        return self.curl_B(points)/self.AbsB(points)+jnp.cross(self.B_covariant(points),jnp.array(self.dAbsB_by_dX(points)))/self.AbsB(points)**2/self.sqrtg(points)
+
+    @partial(jit, static_argnames=['self'])
+    def kappa(self, points):
+        return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
+
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         s, theta, phi = points

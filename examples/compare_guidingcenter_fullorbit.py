@@ -12,12 +12,14 @@ from essos.dynamics import Tracing, Particles
 from jax import block_until_ready
 
 # Input parameters
-tmax = 1e-2
-nparticles = number_of_processors_to_use
+tmax = 1.e-4
+dt_fo=1.e-9
+nparticles_per_core=2
+nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-5
 num_steps_gc = 5000
-num_steps_fo = 100000
+num_steps_fo = int(tmax/dt_fo)
 mass=PROTON_MASS
 energy=5000*ONE_EV
 
@@ -30,19 +32,19 @@ field = BiotSavart(coils)
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-initial_vparallel_over_v = [0.1]
+initial_vparallel_over_v = jnp.linspace(-0.1, 0.1, nparticles)
 particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=field, initial_vparallel_over_v=initial_vparallel_over_v)
 
 # Trace in ESSOS
 time0 = time()
-tracing_guidingcenter = Tracing(field=field, model='GuidingCenter', particles=particles,
-                  maxtime=tmax, timesteps=num_steps_gc, tol_step_size=trace_tolerance)
+tracing_guidingcenter = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
+                  maxtime=tmax,times_to_trace=num_steps_gc, atol=trace_tolerance,rtol=trace_tolerance)
 trajectories_guidingcenter = block_until_ready(tracing_guidingcenter.trajectories)
 print(f"ESSOS guiding center tracing took {time()-time0:.2f} seconds")
 
 time0 = time()
 tracing_fullorbit = Tracing(field=field, model='FullOrbit_Boris', particles=particles,
-                  maxtime=tmax, timesteps=num_steps_fo, tol_step_size=trace_tolerance)
+                  maxtime=tmax, times_to_trace=num_steps_fo,timestep=dt_fo)
 trajectories_fullorbit = block_until_ready(tracing_fullorbit.trajectories)
 print(f"ESSOS full orbit tracing took {time()-time0:.2f} seconds")
 
@@ -64,24 +66,25 @@ for i, (trajectory_gc, trajectory_fo) in enumerate(zip(trajectories_guidingcente
         magnetic_field_unit_vector = field.B(trajectory_t[:3]) / field.AbsB(trajectory_t[:3])
         return jnp.dot(trajectory_t[3:], magnetic_field_unit_vector)
     v_parallel_fo = vmap(compute_v_parallel)(trajectory_fo)
-    ax3.plot(tracing_guidingcenter.times, trajectory_gc[:, 3] / particles.total_speed, '-', label=f'Particle {i+1} GC', linewidth=1.0, alpha=0.3)
+    ax3.plot(tracing_guidingcenter.times, trajectory_gc[:, 3] / particles.total_speed, '-', label=f'Particle {i+1} GC', linewidth=1.1, alpha=0.95)
     ax3.plot(tracing_fullorbit.times, v_parallel_fo / particles.total_speed, '--', label=f'Particle {i+1} FO', linewidth=0.5, markersize=0.5, alpha=0.2)
     # ax4.plot(jnp.sqrt(trajectory_gc[:,0]**2+trajectory_gc[:,1]**2), trajectory_gc[:, 2], '-', label=f'Particle {i+1} GC', linewidth=1.5, alpha=0.3)
     # ax4.plot(jnp.sqrt(trajectory_fo[:,0]**2+trajectory_fo[:,1]**2), trajectory_fo[:, 2], '--', label=f'Particle {i+1} FO', linewidth=1.5, markersize=0.5, alpha=0.2)
-tracing_guidingcenter.poincare_plot(ax=ax4, show=False, color='k', label=f'Particle {i+1} GC', shifts=[0, jnp.pi/2])
-tracing_fullorbit.poincare_plot(    ax=ax4, show=False, color='r', label=f'Particle {i+1} FO', shifts=[0, jnp.pi/2])
+tracing_guidingcenter.poincare_plot(ax=ax4, show=False, color='k', label=f'GC', shifts=[jnp.pi/2])#, 0])
+tracing_fullorbit.poincare_plot(    ax=ax4, show=False, color='r', label=f'FO', shifts=[jnp.pi/2])#, 0])
 
 ax2.set_xlabel('Time (s)')
 ax2.set_ylabel('Relative Energy Error')
 ax3.set_ylabel(r'$v_{\parallel}/v$')
-ax2.legend()
+ax2.legend(loc='upper right')
 ax3.set_xlabel('Time (s)')
-ax3.legend()
+ax3.legend(loc='upper right')
 ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')
-ax4.legend()
+ax4.legend(loc='upper right')
 plt.tight_layout()
 plt.show()
+
 
 ## Save results in vtk format to analyze in Paraview
 # tracing.to_vtk('trajectories')

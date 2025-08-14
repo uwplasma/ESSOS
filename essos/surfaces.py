@@ -1,8 +1,10 @@
 from functools import partial
 import jax.numpy as jnp
+from jax.scipy.interpolate import RegularGridInterpolator
 from jax import jit, vmap, devices, device_put
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from essos.plot import fix_matplotlib_3d
+import jaxkd
 
 mesh = Mesh(devices(), ("dev",))
 sharding = NamedSharding(mesh, PartitionSpec("dev", None))
@@ -326,3 +328,129 @@ class SurfaceRZFourier:
         dZ_dtheta = dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
         mean_cross_sectional_area = jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))/(2 * jnp.pi)
         return mean_cross_sectional_area
+    
+#This class is based on simsopt classifier but translated to fit jax    
+class SurfaceClassifier():
+    """
+    Takes in a toroidal surface and constructs an interpolant of the signed distance function
+    :math:`f:R^3\to R` that is positive inside the volume contained by the surface,
+    (approximately) zero on the surface, and negative outisde the volume contained by the surface.
+    """
+
+    def __init__(self, surface,h=0.05):
+        """
+        Args:
+            surface: the surface to contruct the distance from.
+            h: grid resolution of the interpolant
+        """
+        gammas = surface.gamma
+        r = jnp.linalg.norm(gammas[:, :, :2], axis=2)
+        z = gammas[:, :, 2]
+        rmin = max(jnp.min(r) - 0.1, 0.)
+        rmax = jnp.max(r) + 0.1
+        zmin = jnp.min(z) - 0.1
+        zmax = jnp.max(z) + 0.1
+
+        self.zrange = (zmin, zmax)
+        self.rrange = (rmin, rmax)
+
+        nr = int((self.rrange[1]-self.rrange[0])/h)
+        nphi = int(2*jnp.pi/h)
+        nz = int((self.zrange[1]-self.zrange[0])/h)
+
+        def fbatch(rs, phis, zs):
+            xyz = jnp.zeros(( 3))
+            xyz=xyz.at[0].set( rs * jnp.cos(phis))
+            xyz=xyz.at[1].set(rs * jnp.sin(phis))
+            xyz=xyz.at[2].set(zs)
+            return signed_distance_from_surface_jax(xyz, surface)   
+            #return signed_distance_from_surface_extras(xyz, surface) ####memory bounded
+
+        #rule = sopp.UniformInterpolationRule(p) 
+        #self.dist = RegularGridInterpolator((jnp.linspace(rmin,rmax,nr),
+        #            jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),
+        #            vmap(vmap(vmap(fbatch,in_axes=(0,None,None)),in_axes=(None,0,None)),in_axes=(None,None,0))(jnp.linspace(rmin,rmax,nr),
+        #            jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)))
+        #self.r_list=jnp.linspace(16.9,17.1,nr)
+        #self.phi_list=jnp.linspace(0., 0.01, nphi)
+        #self.z_list=jnp.linspace(-0.1, 0.1, nz)
+        #self.test= vmap(vmap(vmap(fbatch,in_axes=(0,None,None)),in_axes=(None,0,None)),in_axes=(None,None,0))(self.r_list,
+        #            self.phi_list, self.z_list)
+        #self.r_list=jnp.linspace(rmin,rmax,nr)
+        #self.phi_list=jnp.linspace(0., 2*jnp.pi, nphi)
+        #self.z_list=jnp.linspace(zmin, zmax, nz)
+        #self.test= vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(jnp.linspace(rmin,rmax,nr),
+        #            jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz))
+        #self.dist = RegularGridInterpolator((self.r_list,self.phi_list, self.z_list),
+        #            vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(self.r_list,self.phi_list, self.z_list),fill_value=-1.)        
+        self.dist = RegularGridInterpolator((jnp.linspace(rmin,rmax,nr),
+                    jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),
+                    vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(jnp.linspace(rmin,rmax,nr),
+                    jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),fill_value=-1.)
+        #self.dist.interpolate_batch(fbatch)    
+
+    @partial(jit, static_argnames=['self'])
+    def evaluate_xyz(self, xyz):
+        rphiz = jnp.zeros_like(xyz)
+        rphiz=rphiz.at[0].set(jnp.linalg.norm(xyz[:2]))
+        rphiz=rphiz.at[1].set(jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2*jnp.pi))
+        rphiz=rphiz.at[2].set(xyz.at[2].get())
+        # initialize to -1 since the regular grid interpolant will just keep
+        # that value when evaluated outside of bounds
+        d=self.dist(rphiz)[0][0]
+        return d
+
+    @partial(jit, static_argnames=['self'])
+    def evaluate_rphiz(self, rphiz):
+        # initialize to -1 since the regular grid interpolant will just keep
+        # that value when evaluated outside of bounds
+        d=self.dist(rphiz)[0][0]
+        return d
+    
+
+partial(jit, static_argnames=['surface'])
+def signed_distance_from_surface_jax(xyz, surface):
+    """
+    Compute the signed distances from points ``xyz`` to a surface.  The sign is
+    positive for points inside the volume surrounded by the surface.
+    """
+    gammas = surface.gamma.reshape((-1, 3))
+    #from scipy.spatial import KDTree ##better for cpu?
+    tree = jaxkd.build_tree(gammas)
+    mins, _ = jaxkd.query_neighbors(tree, xyz, k=1)    
+    n = surface.unitnormal.reshape((-1, 3))
+    nmins = n[mins]
+    gammamins = gammas[mins]
+    # Now that we have found the closest node, we approximate the surface with
+    # a plane through that node with the appropriate normal and then compute
+    # the distance from the point to that plane
+    # https://stackoverflow.com/questions/55189333/how-to-get-distance-from-point-to-plane-in-3d
+    mindist = jnp.sum((xyz-gammamins) * nmins, axis=1)
+    a_point_in_the_surface = jnp.mean(surface.gamma[0, :, :], axis=0)
+    sign_of_interiorpoint = jnp.sign(jnp.sum((a_point_in_the_surface-gammas[0, :])*n[0, :]))
+    signed_dists = mindist * sign_of_interiorpoint
+    return signed_dists
+
+#@partial(jit, static_argnames=['surface'])
+def signed_distance_from_surface_extras(xyz, surface):
+    """
+    Compute the signed distances from points ``xyz`` to a surface.  The sign is
+    positive for points inside the volume surrounded by the surface.
+    """
+    gammas = surface.gamma.reshape((-1, 3))
+    mins, _ = jaxkd.extras.query_neighbors_pairwise(gammas, xyz, k=1)    
+    n = surface.unitnormal.reshape((-1, 3))
+    nmins = n[mins]
+    gammamins = gammas[mins]
+    # Now that we have found the closest node, we approximate the surface with
+    # a plane through that node with the appropriate normal and then compute
+    # the distance from the point to that plane
+    # https://stackoverflow.com/questions/55189333/how-to-get-distance-from-point-to-plane-in-3d
+    mindist = jnp.sum((xyz-gammamins) * nmins, axis=1)
+    a_point_in_the_surface = jnp.mean(surface.gamma[0, :, :], axis=0)
+    sign_of_interiorpoint = jnp.sign(jnp.sum((a_point_in_the_surface-gammas[0, :])*n[0, :]))
+    signed_dists = mindist * sign_of_interiorpoint
+    return signed_dists
+
+
+
