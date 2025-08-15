@@ -28,7 +28,7 @@ class MultiObjectiveOptimizer:
         self.num_points = self.order_Fourier * 10
         self.num_coils = self.opt_config.get("num_coils", 4)
         self.max_eval = self.opt_config.get("maximum_function_evaluations", 300)
-        self.n_trials = self.opt_config.get("n_trials", 100)
+        self.n_trials = self.opt_config.get("n_trials", 1)
         self.tol = self.opt_config.get("tolerance_optimization", 1e-5)
         self.optimizer_choices = self.opt_config.get("optimizer_choices", ["adam", "amsgrad", "sgd"])
 

@@ -59,3 +59,5 @@ def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn(
 
     optimization_result=optimizer.optimize_with_optax(weights, method="adam", lr=1e-2)
     assert optimization_result.currents_scale==0.01999998979999997872
+    
+    optimizer.run()
