@@ -40,7 +40,7 @@ def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1
         jax.debug.print('False {m}', m=model_mu)            
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
     elif model_mu=='Mu_Tolerance_True':
-        jax.debug.print('True {m}', m=model_mu)    
+        jax.debug.print('Standard True {m}', m=model_mu)    
         mu_average=penalty_average(params)
         #eta=eta/mu_average**(0.1)
         #omega=omega/mu_average    
@@ -48,13 +48,15 @@ def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1
         omega=jnp.maximum(omega/mu_average,omega_tol)
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
     elif model_mu=='Mu_Tolerance_False':
-        jax.debug.print('False {m}', m=model_mu)    
+        jax.debug.print('Standard False {m}', m=model_mu)    
         mu_average=penalty_average(params)        
         #eta=1./mu_average**(0.1)
         #omega=1./mu_average    
         eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
+        #jax.debug.print('HMMMMMM mu_av {m}', m=mu_average)          
+        #jax.debug.print('HMMMMMM eta {m}', m=eta)    
         omega=jnp.maximum(1./mu_average,omega_tol)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+beta*x.penalty,0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
     elif model_mu=='Mu_Adaptative':
         jax.debug.print('True {m}', m=model_mu)            
@@ -72,18 +74,18 @@ def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,
     pred = lambda x: isinstance(x, LagrangeMultiplier)
     if model_mu=='Constant':
         jax.debug.print('{m}', m=model_mu)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier((y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
     elif model_mu=='Mu_Monotonic':     
         jax.debug.print('{m}', m=model_mu)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
     elif model_mu=='Mu_Conditional_True':
         jax.debug.print('True {m}', m=model_mu)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
     elif model_mu=='Mu_Conditional_False':
         jax.debug.print('False {m}', m=model_mu)            
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
     elif model_mu=='Mu_Tolerance_True':
-        jax.debug.print('True {m}', m=model_mu)    
+        jax.debug.print('Squared True {m}', m=model_mu)   
         mu_average=penalty_average(params)
         #eta=eta/mu_average**(0.1)
         #omega=omega/mu_average    
@@ -91,61 +93,21 @@ def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,
         omega=jnp.maximum(omega/mu_average,omega_tol)
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
     elif model_mu=='Mu_Tolerance_False':
-        jax.debug.print('False {m}', m=model_mu)    
+        jax.debug.print('Squared False {m}', m=model_mu)    
         mu_average=penalty_average(params)        
         #eta=1./mu_average**(0.1)
         #omega=1./mu_average    
         eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
         omega=jnp.maximum(1./mu_average,omega_tol)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+beta*x.penalty,0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
     elif model_mu=='Mu_Adaptative':
         jax.debug.print('True {m}', m=model_mu)            
         #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*y.value,-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred)
+        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*(y.value-x.value/x.penalty),-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*(y.penalty*2.+(x.value/x.penalty)**2)),params,updates,is_leaf=pred)
 
 
 
-def prepare_update_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
-    """Different methods for updating multipliers and penalties)
-    """
-
-
-    pred = lambda x: isinstance(x, LagrangeMultiplier)
-    if model_mu=='Constant':
-        jax.debug.print('{m}', m=model_mu)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
-    elif model_mu=='Mu_Monotonic':     
-        jax.debug.print('{m}', m=model_mu)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
-    elif model_mu=='Mu_Conditional_True':
-        jax.debug.print('True {m}', m=model_mu)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
-    elif model_mu=='Mu_Conditional_False':
-        jax.debug.print('False {m}', m=model_mu)            
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
-    elif model_mu=='Mu_Tolerance_True':
-        jax.debug.print('True {m}', m=model_mu)    
-        mu_average=penalty_average(params)
-        #eta=eta/mu_average**(0.1)
-        #omega=omega/mu_average    
-        eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
-        omega=jnp.maximum(omega/mu_average,omega_tol)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
-    elif model_mu=='Mu_Tolerance_False':
-        jax.debug.print('False {m}', m=model_mu)    
-        mu_average=penalty_average(params)        
-        #eta=1./mu_average**(0.1)
-        #omega=1./mu_average    
-        eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
-        omega=jnp.maximum(1./mu_average,omega_tol)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+beta*x.penalty,0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
-        #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
-    elif model_mu=='Mu_Adaptative':
-        jax.debug.print('True {m}', m=model_mu)            
-        #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*y.value,-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred)
-     
 
 def lagrange_update(model_lagrangian='Standard'):
     """A gradient transformation for Optax that prepares an MDMM gradient
@@ -169,7 +131,7 @@ def lagrange_update(model_lagrangian='Standard'):
         del params
         if model_lagrangian=='Standard' :
             return update_method(lagrange_params,updates,eta,omega,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol), state
-        elif model_lagrangian=='Standard' :
+        elif model_lagrangian=='Squared' :
             return update_method_squared(lagrange_params,updates,eta,omega,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol), state
         else:
             print('Lagrangian model not available please select Standard or Squared ')
@@ -518,7 +480,7 @@ def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
 ):
 
 
-
+    jax.debug.print('dentro LFBGSB {m}',m={model_lagrangian})
     @jax.jit
     def init_fn(params,**kargs):
         main_params,lagrange_params=params
@@ -532,6 +494,7 @@ def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
             mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
             return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
     elif model_lagrangian=='Squared':
+        jax.debug.print('dentro LFBGSB {m}',m={model_lagrangian})
         def lagrangian(main_params,lagrange_params,**kargs):
             main_loss = jnp.square(jnp.linalg.norm((loss(main_params,**kargs))))
             #This uses ||f(x)||^2 in the lagrangian
@@ -608,7 +571,7 @@ def ALM_model_jaxopt_LevenbergMarquardt(constraints: Constraint,#List of constra
     @partial(jit, static_argnums=(6,7,8,9,10,11,12))
     def update_fn(params, lag_state,grad,info,eta,omega,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
         main_params,lagrange_params=params
-        minimization_loop=jaxopt.LevenbergMarquardt(residual_fun=lagrangian_least_residual,has_aux=True,implicit_diff=False,xtol=omega,gtol=omega)
+        minimization_loop=jaxopt.LevenbergMarquardt(residual_fun=lagrangian_least_residual,has_aux=True,implicit_diff=False,xtol=1.e-14,gtol=omega)
         state=minimization_loop.run(main_params,lagrange_params=lagrange_params,**kargs)
         main_params=state.params
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
@@ -736,11 +699,11 @@ def ALM_model_optimistix_LevenbergMarquardt(constraints: Constraint,#List of con
     def update_fn(params, lag_state,grad,info,eta,omega,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
         main_params,lagrange_params=params
         optimizer=optimistix.LevenbergMarquardt(rtol=omega,atol=omega)
-        state=optimistix.least_squares(fn=lagrangian_least_residual,solver=optimizer,y0=main_params,args=lagrange_params,has_aux=True,options={'jac':'bwd'})
+        state=optimistix.least_squares(fn=lagrangian_least_residual,solver=optimizer,y0=main_params,args=lagrange_params,has_aux=True,options={'jac':'bwd'},max_steps=100000)
         main_params=state.value
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        true_func=partial(lagrange_update(model_lagrangian=model_lagrangian),model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-        false_func=partial(lagrange_update(model_lagrangian=model_lagrangian),model_mu='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
+        true_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+        false_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
         lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
         lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
         params=main_params,lagrange_params

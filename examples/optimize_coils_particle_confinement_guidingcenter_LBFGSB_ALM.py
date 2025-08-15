@@ -1,6 +1,6 @@
 
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax
@@ -8,29 +8,32 @@ print(jax.devices())
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from essos.surfaces import SurfaceRZFourier
 from essos.dynamics import Particles, Tracing
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
 from essos.optimization import optimize_loss_function
-from essos.objective_functions import loss_particle_r_cross_final_new,loss_particle_r_cross_max,loss_particle_radial_drift,loss_particle_gamma_c
-from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis,loss_normB_axis_average
+from essos.objective_functions import loss_particle_r_cross_max_constraint,loss_particle_gamma_c
+from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis_average,loss_Br,loss_iota
 from functools import partial
-import essos.alm_convex as alm
-import optax
+import essos.augmented_lagrangian as alm
+
+
+
 
 
 # Optimization parameters
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = number_of_processors_to_use*4
+nparticles = number_of_processors_to_use*1
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 10
-maxtimes = [2.e-5]
+maximum_function_evaluations = 2
+maxtimes = [1.e-5]
 num_steps=100
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
-model = 'GuidingCenterAdaptative'
+model = 'GuidingCenter'
 
 # Initialize coils
 current_on_each_coil = 1.84e7
@@ -50,48 +53,74 @@ n_segments = coils_initial.n_segments
 dofs_curves_shape = coils_initial.dofs_curves.shape
 currents_scale = coils_initial.currents_scale
 
+ntheta=30
+nphi=30
+input = os.path.join(os.path.dirname(__name__),'input_files','input.rotating_ellipse_2')
+boundary= SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='full torus')
+#print('Final params',params)
+#print(info[1])
+# Plot trajectories, before and after optimization
+fig = plt.figure(figsize=(9, 8))
+ax1 = fig.add_subplot(221, projection='3d')
+boundary.plot(ax=ax1, show=False)
+coils_initial.plot(ax=ax1, show=False)
+plt.savefig('surface.pdf')
+
 # Initialize particles
 phi_array = jnp.linspace(0, 2*jnp.pi, nparticles)
 initial_xyz=jnp.array([major_radius_coils*jnp.cos(phi_array), major_radius_coils*jnp.sin(phi_array), 0*phi_array]).T
 particles = Particles(initial_xyz=initial_xyz)
 
 t=maxtimes[0]
-loss_partial = partial(loss_particle_gamma_c,particles=particles, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps)
+loss_partial = partial(loss_particle_gamma_c,particles=particles, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps,boundary=boundary)
 curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
 length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
 Baxis_average_partial=partial(loss_normB_axis_average,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
-r_max_partial = partial(loss_particle_r_cross_max, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps)
+r_max_partial = partial(loss_particle_r_cross_max_constraint,target_r=0.4, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps,boundary=boundary)
+iota_partial = partial(loss_iota,target_iota=0.5, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps,boundary=boundary)
+Br_partial = partial(loss_Br, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps,boundary=boundary,)
 
 
 # Create the constraints
-penalty = 1.05 #Intial penalty values
-multiplier=0.0 #Initial lagrange multiplier values
+penalty = 1. #Intial penalty values
+multiplier=0.5 #Initial lagrange multiplier values
 sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
+model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers 
+#Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
+
+#Construct constraints
 constraints = alm.combine(
 alm.eq(curvature_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(length_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(Baxis_average_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(r_max_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+#alm.eq(Br_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+#alm.eq(iota_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 )
 
 
 
-model_lagrange='Mu_Tolerance'              #Options: Mu_Constant, Mu_Monotonic, Mu_Conditional,Mu_Adaptative
 beta=2.                                     #penalty update parameter
 mu_max=1.e4                                 #Maximum penalty parameter allowed
-alpha=0.99           #
+alpha=0.99                                  #These are parameters only used if gradient descent and adaaptative mu
 gamma=1.e-2
 epsilon=1.e-8
-omega_tol=0.5    #grad_tolerance, associated with grad of lagrangian to main parameters
-eta_tol=0.001  #contrained tolerances, associated with variation of contraints
+omega_tol=0.1    #desired grad_tolerance, associated with grad of lagrangian to main parameters
+eta_tol=0.1    #desired contraint tolerance, associated with variation of contraints
 
 
 
-ALM=alm.ALM_model_optimistix_LevenbergMarquardt(constraints,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+#If loss=cost_function(x) is not prescribed, f(x)=0 is considered
+ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
+#Initializing lagrange multipliers
 lagrange_params=constraints.init(coils_initial.x)
+#parameters are a tuple of the primal/main optimisation parameters and the lagrange multipliers
 params = coils_initial.x, lagrange_params
+#This is just to initialize an empty state for the lagrange multiplier update and get some information
 lag_state,grad,info=ALM.init(params)
+
+#Initializing first tolerances for the inner minimisation loop iteration
 mu_average=alm.penalty_average(lagrange_params)
 #omega=1.#1./mu_average
 #eta=1000.#1./mu_average**0.1
@@ -100,7 +129,8 @@ eta=1./mu_average**0.1
 
 i=0
 while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
-    params, lag_state,grad,info,eta,omega = ALM.update(params,lag_state,grad,info,eta,omega)        #One step of ALM optimization
+    #One step of ALM optimization
+    params, lag_state,grad,info,eta,omega = ALM.update(params,lag_state,grad,info,eta,omega)    
     #if i % 5 == 0:
     #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
     print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')

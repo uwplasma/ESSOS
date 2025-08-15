@@ -60,7 +60,7 @@ length_partial=partial(loss_coil_length_new, dofs_curves=coils_initial.dofs_curv
 Baxis_average_partial=partial(loss_normB_axis_average,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
 r_max_partial = partial(loss_particle_r_cross_max, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model = model,num_steps=num_steps)
 def total_loss(params):
-    return jnp.linalg.norm(jnp.concatenate((r_max_partial(params),length_partial(params),curvature_partial(params),Baxis_average_partial(params))))**2,Baxis_average_partial(params)
+    return jnp.linalg.norm(jnp.concatenate((r_max_partial(params),length_partial(params),curvature_partial(params),Baxis_average_partial(params))))**2
 
 params=coils_initial.x
 optimizer=optax.lbfgs()

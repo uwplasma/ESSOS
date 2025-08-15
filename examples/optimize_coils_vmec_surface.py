@@ -15,7 +15,7 @@ max_coil_length = 40
 max_coil_curvature = 0.5
 order_Fourier_series_coils = 6
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 10
+maximum_function_evaluations = 100
 number_coils_per_half_field_period = 4
 tolerance_optimization = 1e-5
 ntheta=32
@@ -46,8 +46,13 @@ coils_optimized = optimize_loss_function(loss_BdotN, initial_dofs=coils_initial.
                                   max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
 print(f"Optimization took {time()-time0:.2f} seconds")
 
+
 BdotN_over_B_initial = BdotN_over_B(vmec.surface, BiotSavart(coils_initial))
 BdotN_over_B_optimized = BdotN_over_B(vmec.surface, BiotSavart(coils_optimized))
+curvature=jnp.mean(BiotSavart(coils_optimized).coils.curvature, axis=1)
+length=jnp.max(jnp.ravel(BiotSavart(coils_optimized).coils.length))
+print(f"Mean curvature: ",curvature)
+print(f"Length:", length)
 print(f"Maximum BdotN/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
 print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
 
@@ -60,7 +65,7 @@ vmec.surface.plot(ax=ax1, show=False)
 coils_optimized.plot(ax=ax2, show=False)
 vmec.surface.plot(ax=ax2, show=False)
 plt.tight_layout()
-plt.show()
+plt.savefig('coils_normal.png')
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
