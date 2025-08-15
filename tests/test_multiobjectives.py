@@ -9,7 +9,6 @@ from essos.fields import BiotSavart
 import jax.numpy as jnp
 
 
-@pytest.fixture
 def mock_vmec():
     vmec = MagicMock()
     vmec.nfp = 2
@@ -19,25 +18,21 @@ def mock_vmec():
 
 
 
-@pytest.fixture
 def dummy_loss_fn():
     def loss_fn(field=None, coils=None, vmec=None, surface=None, x=None, **kwargs):
         return jnp.sum(x)
     return loss_fn
 
 
-def test_build_available_inputs( mock_vmec,  dummy_loss_fn):
+def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn()):
     optimizer = MultiObjectiveOptimizer(
         loss_functions=[dummy_loss_fn],
-        vmec=mock_vmec,
+        vmec=vmec,
         coils_init=None,
         function_inputs={"extra": 42},
         opt_config={"order_Fourier": 2, "num_coils": 2}
     )
-    x = jnp.arange(30, dtype=float)
-    #mock_Curves.return_value = MagicMock()
-    #mock_Coils.return_value = MagicMock()
-    #mock_BiotSavart.return_value = MagicMock()
+    x = jnp.arange(32, dtype=float)
 
     result = optimizer._build_available_inputs(x)
 
@@ -46,9 +41,9 @@ def test_build_available_inputs( mock_vmec,  dummy_loss_fn):
     }
     assert expected_keys.issubset(result.keys())
     assert isinstance(result["x"], jnp.ndarray)
-    assert result["vmec"] is mock_vmec
-    assert result["surface"] is mock_vmec.surface
+    assert result["vmec"] is vmec
+    assert result["surface"] is vmec.surface
     assert result["currents_scale"] == 1.0
     assert result["nfp"] == 2
     assert result["extra"] == 42
-    assert result["dofs_curves"].shape == (2, 3)
+    assert result["dofs_curves"].shape == (2, 3,5)
