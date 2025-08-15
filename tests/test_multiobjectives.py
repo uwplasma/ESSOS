@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 from essos.coils import Coils,Curves
+from essos.fields import BiotSavart
 
 # test_multiobjectiveoptimizer.py
 
@@ -24,9 +25,7 @@ def dummy_loss_fn():
         return jnp.sum(x)
     return loss_fn
 
-@patch("essos.coils.Curves")
-@patch("essos.coils.Coils")
-@patch("essos.fields.BiotSavart")
+
 def test_build_available_inputs(mock_BiotSavart, mock_Coils, mock_Curves, mock_vmec,  dummy_loss_fn):
     optimizer = MultiObjectiveOptimizer(
         loss_functions=[dummy_loss_fn],
@@ -36,9 +35,9 @@ def test_build_available_inputs(mock_BiotSavart, mock_Coils, mock_Curves, mock_v
         opt_config={"order_Fourier": 2, "num_coils": 2}
     )
     x = jnp.arange(20, dtype=float)
-    mock_Curves.return_value = MagicMock()
-    mock_Coils.return_value = MagicMock()
-    mock_BiotSavart.return_value = MagicMock()
+    #mock_Curves.return_value = MagicMock()
+    #mock_Coils.return_value = MagicMock()
+    #mock_BiotSavart.return_value = MagicMock()
 
     result = optimizer._build_available_inputs(x)
 
