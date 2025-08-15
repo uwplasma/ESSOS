@@ -16,7 +16,7 @@ def mock_vmec():
     return vmec
 
 @pytest.fixture
-def mock_initial_curves():
+def mock_initial_coils():
     coils = MagicMock()
     coils.dofs_curves = jnp.ones((2, 3,3))
     coils.currents_scale = 1.0
