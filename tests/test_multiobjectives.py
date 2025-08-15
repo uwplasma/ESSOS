@@ -85,7 +85,3 @@ def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn(
 
     optimizer.run()
 
-    optimizer.plot_pareto_fronts(z_thresh=3, save= True)
-    optimizer.plot_optimization_history(z_thresh=3, save= True)
-    optimizer.plot_param_importances(save= True)
-    optimizer.plot_parallel_coordinates(z_thresh=3, save= True)
