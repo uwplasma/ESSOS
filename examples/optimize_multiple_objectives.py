@@ -17,12 +17,12 @@ manager = MultiObjectiveOptimizer(
         "max_coil_curvature": 0.0,
     },
     opt_config={
-        "n_trials": 2,
-        "maximum_function_evaluations": 300,
+        "n_trials": 20,
+        "maximum_function_evaluations": 50,
         "tolerance_optimization": 1e-5,
         "optimizer_choices": ["adam", "amsgrad", "sgd"],
         "num_coils": 4,
-        "order_Fourier": 6,
+        "order_Fourier": 3,
     }
 )
 
@@ -46,10 +46,7 @@ BdotN_over_B_optimized = BdotN_over_B(vmec.surface, BiotSavart(manager.best_coil
 print(f"Maximum BdotN/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
 print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
 
-
-
-
 manager.plot_pareto_fronts(z_thresh=3, save= True)
 manager.plot_optimization_history(z_thresh=3, save= True)
 manager.plot_param_importances(save= True)
-manager.plot_parallel_coordinates(z_thresh=3, save= True)
+# manager.plot_parallel_coordinates(z_thresh=3, save= True)
