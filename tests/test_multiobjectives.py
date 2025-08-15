@@ -26,7 +26,7 @@ def dummy_loss_fn():
     return loss_fn
 
 
-def test_build_available_inputs(mock_BiotSavart, mock_Coils, mock_Curves, mock_vmec,  dummy_loss_fn):
+def test_build_available_inputs( mock_vmec,  dummy_loss_fn):
     optimizer = MultiObjectiveOptimizer(
         loss_functions=[dummy_loss_fn],
         vmec=mock_vmec,
