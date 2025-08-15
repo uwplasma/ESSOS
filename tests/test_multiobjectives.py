@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from .multiobjectiveoptimizer import MultiObjectiveOptimizer
+from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 
 # test_multiobjectiveoptimizer.py
 
