@@ -34,7 +34,7 @@ def test_build_available_inputs( mock_vmec,  dummy_loss_fn):
         function_inputs={"extra": 42},
         opt_config={"order_Fourier": 2, "num_coils": 2}
     )
-    x = jnp.arange(20, dtype=float)
+    x = jnp.arange(30, dtype=float)
     #mock_Curves.return_value = MagicMock()
     #mock_Coils.return_value = MagicMock()
     #mock_BiotSavart.return_value = MagicMock()
