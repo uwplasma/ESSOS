@@ -22,6 +22,7 @@ def field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=Tru
     return field
 
 
+
 @partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
 def loss_coils_for_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
                n_segments=60, stellsym=True, max_coil_curvature=0.1):
