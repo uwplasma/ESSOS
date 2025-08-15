@@ -16,15 +16,7 @@ def mock_vmec():
     vmec.surface = MagicMock()
     return vmec
 
-@pytest.fixture
-def mock_initial_coils():
-    coils = MagicMock()
-    coils.dofs_curves = jnp.ones((2, 3,3))
-    coils.currents_scale = 1.0
-    coils.nfp = 2
-    coils.stellsym = True
-    coils.x = jnp.concatenate([jnp.ones(18), jnp.ones(2)])  # 6 for dofs, 2 for currents
-    return coils
+
 
 @pytest.fixture
 def dummy_loss_fn():
@@ -35,11 +27,11 @@ def dummy_loss_fn():
 @patch("essos.coils.Curves")
 @patch("essos.coils.Coils")
 @patch("essos.fields.BiotSavart")
-def test_build_available_inputs(mock_BiotSavart, mock_Coils, mock_Curves, mock_vmec, mock_initial_coils, dummy_loss_fn):
+def test_build_available_inputs(mock_BiotSavart, mock_Coils, mock_Curves, mock_vmec,  dummy_loss_fn):
     optimizer = MultiObjectiveOptimizer(
         loss_functions=[dummy_loss_fn],
         vmec=mock_vmec,
-        coils_init=mock_initial_coils,
+        coils_init=None,
         function_inputs={"extra": 42},
         opt_config={"order_Fourier": 2, "num_coils": 2}
     )
