@@ -17,7 +17,7 @@ manager = MultiObjectiveOptimizer(
         "max_coil_curvature": 0.0,
     },
     opt_config={
-        "n_trials": 100,
+        "n_trials": 2,
         "maximum_function_evaluations": 300,
         "tolerance_optimization": 1e-5,
         "optimizer_choices": ["adam", "amsgrad", "sgd"],
