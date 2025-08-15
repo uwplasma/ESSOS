@@ -19,7 +19,7 @@ def mock_vmec():
 
 
 def dummy_loss_fn():
-    def loss_fn(field=None, coils=None, vmec=None, surface=None, x=None, **kwargs):
+    def loss_fn(field=None, coils=None, vmec=None, surface=None, x=None):
         return jnp.sum(x)
     return loss_fn
 
@@ -36,6 +36,7 @@ def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn(
 
     result = optimizer._build_available_inputs(x)
 
+
     expected_keys = {
         "field", "coils", "vmec", "surface", "x", "dofs_curves", "currents_scale", "nfp", "extra"
     }
@@ -47,3 +48,14 @@ def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn(
     assert result["nfp"] == 2
     assert result["extra"] == 42
     assert result["dofs_curves"].shape == (2, 3,5)
+
+    weights=jnp.array([1.0])
+    loss_result=optimizer._call_loss_fn(dummy_loss_fn,result)
+    assert loss_result.shape == ()
+    assert loss_result == 496
+    loss_weight_result=optimizer.weighted_loss( x, weights)
+    assert loss_weight_result.shape == ()
+    assert loss_weight_result == 496
+
+    optimization_result=optimizer.optimize_with_optax(weights, method="adam", lr=1e-2)
+    assert optimization_result.currents_scale==0.01999998979999997872
