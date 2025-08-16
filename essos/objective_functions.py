@@ -4,10 +4,12 @@ import jax.numpy as jnp
 from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
-from essos.fields import BiotSavart
+from essos.fields import BiotSavart,BiotSavart_from_gamma
 from essos.surfaces import BdotN_over_B, BdotN
-from essos.coils import Curves, Coils
+from essos.coils import Curves, Coils,compute_curvature
 from essos.optimization import new_nearaxis_from_x_and_old_nearaxis
+from essos.constants import mu_0
+
 import optax
 
 
@@ -20,6 +22,15 @@ def field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=Tru
     coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
     field = BiotSavart(coils)
     return field
+
+def coils_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
+    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
+    dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves.shape)
+    dofs_currents = x[len_dofs_curves_ravelled:]
+    
+    curves = Curves(dofs_curves, n_segments, nfp, stellsym)
+    coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
+    return coils
 
 def curves_from_dofs(x,dofs_curves,nfp,n_segments=60, stellsym=True):
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
@@ -241,24 +252,24 @@ def normB_axis(field, npoints=15,target_B_on_axis=5.7):
 
 # @partial(jit, static_argnums=(0))
 #def loss_coil_length(field,max_coil_length=31):
-#    coil_length=jnp.ravel(field.coils.length)
+#    coil_length=jnp.ravel(field.coils_length)
 #    return jnp.array([jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))])
 
 # @partial(jit, static_argnums=(0))
 #def loss_coil_curvature(field,max_coil_curvature=0.4):
-#    coil_curvature=jnp.mean(field.coils.curvature, axis=1)
+#    coil_curvature=jnp.mean(field.coils_curvature, axis=1)
 #    return jnp.array([jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))])
 
 # @partial(jit, static_argnums=(0))
 def loss_coil_length(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,max_coil_length=31):
     field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)    
-    coil_length=jnp.ravel(field.coils.length)
+    coil_length=jnp.ravel(field.coils_length)
     return jnp.ravel(jnp.array([jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))]))
 
 # @partial(jit, static_argnums=(0))
 def loss_coil_curvature(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,max_coil_curvature=0.4):
     field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)
-    coil_curvature=jnp.mean(field.coils.curvature, axis=1)
+    coil_curvature=jnp.mean(field.coils_curvature, axis=1)
     return jnp.ravel(jnp.array([jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))]))
 
 # @partial(jit, static_argnums=(0, 1))
@@ -282,13 +293,13 @@ def loss_normB_axis_average(x,dofs_curves,currents_scale,nfp,n_segments=60,stell
 # @partial(jit, static_argnums=(0))
 def loss_coil_curvature_new(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,max_coil_curvature=0.4):
     field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)
-    coil_curvature=jnp.mean(field.coils.curvature, axis=1)
+    coil_curvature=jnp.mean(field.coils_curvature, axis=1)
     return jnp.maximum(coil_curvature-max_coil_curvature,0.0)
 
 # @partial(jit, static_argnums=(0))
 def loss_coil_length_new(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,max_coil_length=31):
     field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)    
-    coil_length=jnp.ravel(field.coils.length)
+    coil_length=jnp.ravel(field.coils_length)
     return jnp.maximum(coil_length-max_coil_length,0.0)
 
 
@@ -438,3 +449,153 @@ def cs_distance_pure(gammac, lc, gammas, ns, minimum_distance):
         * jnp.linalg.norm(ns, axis=1)[None, :]
     return jnp.mean(integralweight * jnp.maximum(minimum_distance-dists, 0)**2)
 
+
+
+#This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
+# In that case we would do the candidates method from simsopt entirely
+def loss_linking_mnumber(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,downsample=1):
+    curves=curves_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
+    #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
+    # (needs change if quadpoints are allowed to be different)
+    dphi=curves.quadpoints[1]-curves.quadpoints[0]
+    result=jnp.sum(jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
+                                        in_axes=(None,None,0,0,None))(curves.gamma[:,0:-1:downsample,:],
+                                                                    curves.gamma_dash[:,0:-1:downsample,:],
+                                                                    curves.gamma[:,0:-1:downsample,:],
+                                                                    curves.gamma_dash[:,0:-1:downsample,:],
+                                                                    dphi),k=1))
+    return result
+
+
+#This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
+# In that case we would do the candidates method from simsopt entirely
+def loss_linking_mnumber_constarint(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,downsample=1):
+    curves=curves_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
+    #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
+    # (needs change if quadpoints are allowed to be different)
+    dphi=curves.quadpoints[1]-curves.quadpoints[0]
+    result=jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
+                                        in_axes=(None,None,0,0,None))(curves.gamma[:,0:-1:downsample,:],
+                                                                    curves.gamma_dash[:,0:-1:downsample,:],
+                                                                    curves.gamma[:,0:-1:downsample,:],
+                                                                    curves.gamma_dash[:,0:-1:downsample,:],
+                                                                    dphi)+1.e-18,k=1)  
+    #The 1.e-18 above is just to get all the correct values in the following mask
+    return result[result != 0.0].flatten()
+
+def linking_number_pure(gamma1, lc1, gamma2, lc2,dphi):
+    linking_number_ij=jnp.sum(jnp.abs(jax.vmap(integrand_linking_number, in_axes=(0, 0, 0, 0,None,None))(gamma1, lc1, gamma2, lc2,dphi,dphi)/ (4*jnp.pi)))
+    return linking_number_ij
+
+def integrand_linking_number(r1,dr1,r2,dr2,dphi1,dphi2):
+    """
+    Compute the integrand for the linking number between two curves.
+
+    Args:
+        r1 (array-like): Points along the first curve.
+        dr1 (array-like): Tangent vectors along the first curve.
+        r2 (array-like): Points along the second curve.
+        dr2 (array-like): Tangent vectors along the second curve.
+        dphi1 (array-like): increments of quadpoints 1  
+        dphi2 (array-like): increments of quadpoints 2               
+
+    Returns:
+        float: The integrand value for the linking number.
+    """
+    return jnp.dot((r1-r2), jnp.cross(dr1, dr2)) / jnp.linalg.norm(r1-r2)**3*dphi1*dphi2
+
+
+
+#Loss function penalizing force on coils using Landremann-Hurwitz method
+def loss_lorentz_force_coils(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,p=1,threshold=0.5e+6):
+    coils=coils_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments, stellsym) 
+    curves_indeces=jnp.arange(coils.gamma.shape[0])
+    #We want to calculate tangeng cross [B_self + B_mutual] for each coil
+    #B_self is the self-field of the coil, B_mutual is the field from the other coils
+    force_penalty=jax.vmap(lp_force_pure,in_axes=(0,None,None,None,None,None,None,None))(curves_indeces,coils.gamma,
+                                                                                 coils.gamma_dash,coils.gamma_dashdash,coils.currents,coils.quadpoints,p, threshold)
+    return force_penalty
+
+
+
+
+
+
+def lp_force_pure(index,gamma, gamma_dash,gamma_dashdash,currents,quadpoints,p, threshold):
+    """Pure function for minimizing the Lorentz force on a coil.
+    The function is
+
+     .. math::
+        J = \frac{1}{p}\left(\int \text{max}(|\vec{F}| - F_0, 0)^p d\ell\right)
+
+    where :math:`\vec{F}` is the Lorentz force, :math:`F_0` is a threshold force,  
+    and :math:`\ell` is arclength along the coil.
+    """
+    regularization = regularization_circ(1./jnp.average(compute_curvature( gamma_dash.at[index].get(), gamma_dashdash.at[index].get())))
+    B_mutual=jax.vmap(BiotSavart_from_gamma(jnp.roll(gamma, -index, axis=0)[1:],
+                                 jnp.roll(gamma_dash, -index, axis=0)[1:],
+                                 jnp.roll(gamma_dashdash, -index, axis=0)[1:],
+                                 jnp.roll(currents, -index, axis=0)[1:]).B,in_axes=0)(gamma[index])
+    B_self = B_regularized_pure(gamma.at[index].get(),gamma_dash.at[index].get(), gamma_dashdash.at[index].get(), quadpoints, currents[index], regularization)
+    gammadash_norm = jnp.linalg.norm(gamma_dash.at[index].get(), axis=1)[:, None]
+    tangent = gamma_dash.at[index].get() / gammadash_norm
+    force = jnp.cross(currents.at[index].get() * tangent, B_self + B_mutual)
+    force_norm = jnp.linalg.norm(force, axis=1)[:, None]
+    return (jnp.sum(jnp.maximum(force_norm - threshold, 0)**p * gammadash_norm))*(1./p)
+
+
+
+def B_regularized_singularity_term(rc_prime, rc_prime_prime, regularization):
+    """The term in the regularized Biot-Savart law in which the near-singularity
+    has been integrated analytically.
+
+    regularization corresponds to delta * a * b for rectangular x-section, or to
+    a²/√e for circular x-section.
+
+    A prefactor of μ₀ I / (4π) is not included.
+
+    The derivatives rc_prime, rc_prime_prime refer to an angle that goes up to
+    2π, not up to 1.
+    """
+    norm_rc_prime = jnp.linalg.norm(rc_prime, axis=1)
+    return jnp.cross(rc_prime, rc_prime_prime) * (0.5 * (-2 + jnp.log(64 * norm_rc_prime * norm_rc_prime / regularization)) / (norm_rc_prime**3))[:, None]
+
+
+def B_regularized_pure(gamma, gammadash, gammadashdash, quadpoints, current, regularization):
+    # The factors of 2π in the next few lines come from the fact that simsopt
+    # uses a curve parameter that goes up to 1 rather than 2π.
+    phi = quadpoints * 2 * jnp.pi
+    rc = gamma
+    rc_prime = gammadash / 2 / jnp.pi
+    rc_prime_prime = gammadashdash / 4 / jnp.pi**2
+    n_quad = phi.shape[0]
+    dphi = 2 * jnp.pi / n_quad
+    analytic_term = B_regularized_singularity_term(rc_prime, rc_prime_prime, regularization)
+    dr = rc[:, None] - rc[None, :]
+    first_term = jnp.cross(rc_prime[None, :], dr) / ((jnp.sum(dr * dr, axis=2) + regularization) ** 1.5)[:, :, None]
+    cos_fac = 2 - 2 * jnp.cos(phi[None, :] - phi[:, None])
+    denominator2 = cos_fac * jnp.sum(rc_prime * rc_prime, axis=1)[:, None] + regularization
+    factor2 = 0.5 * cos_fac / denominator2**1.5
+    second_term = jnp.cross(rc_prime_prime, rc_prime)[:, None, :] * factor2[:, :, None]
+    integral_term = dphi * jnp.sum(first_term + second_term, 1)
+    return current * mu_0 / (4 * jnp.pi) * (analytic_term + integral_term)
+
+
+
+def regularization_circ(a):
+    """Regularization for a circular conductor"""
+    return a**2 / jnp.sqrt(jnp.e)
+
+
+def regularization_rect(a, b):
+    """Regularization for a rectangular conductor"""
+    return a * b * rectangular_xsection_delta(a, b)
+
+def rectangular_xsection_k(a, b):
+    """Auxiliary function for field in rectangular conductor"""
+    return (4 * b) / (3 * a) * jnp.arctan(a/b) + (4*a)/(3*b)*jnp.arctan(b/a)+ (b**2)/(6*a**2)*jnp.log(b/a) + (a**2)/(6*b**2)*jnp.log(a/b) -  (a**4 - 6*a**2*b**2 + b**4)/(6*a**2*b**2)*jnp.log(a/b+b/a)
+
+
+def rectangular_xsection_delta(a, b):
+    """Auxiliary function for field in rectangular conductor"""
+    return jnp.exp(-25/6 + rectangular_xsection_k(a, b))

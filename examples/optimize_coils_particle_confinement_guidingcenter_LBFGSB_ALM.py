@@ -28,8 +28,8 @@ max_coil_curvature = 0.4
 nparticles = number_of_processors_to_use*1
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 2
-maxtimes = [1.e-5]
+maximum_function_evaluations = 9
+maxtimes = [2.e-5]
 num_steps=100
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
@@ -105,13 +105,13 @@ mu_max=1.e4                                 #Maximum penalty parameter allowed
 alpha=0.99                                  #These are parameters only used if gradient descent and adaaptative mu
 gamma=1.e-2
 epsilon=1.e-8
-omega_tol=0.1    #desired grad_tolerance, associated with grad of lagrangian to main parameters
-eta_tol=0.1    #desired contraint tolerance, associated with variation of contraints
+omega_tol=0.0001    #desired grad_tolerance, associated with grad of lagrangian to main parameters
+eta_tol=0.001    #desired contraint tolerance, associated with variation of contraints
 
 
 
 #If loss=cost_function(x) is not prescribed, f(x)=0 is considered
-ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,loss=loss_partial,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
 #Initializing lagrange multipliers
 lagrange_params=constraints.init(coils_initial.x)

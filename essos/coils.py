@@ -388,6 +388,10 @@ class Coils(Curves):
         else:
             raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils.")
         
+    def __exclude_coil__(self, index):
+        return Coils(Curves(jnp.concatenate((self.curves[:index], self.curves[index+1:])), self.n_segments, 1, False), jnp.concatenate((self.currents[:index], self.currents[index+1:])))
+
+        
     def __contains__(self, other):
         if isinstance(other, Coils):
             return jnp.all(jnp.isin(other.dofs, self.dofs)) and jnp.all(jnp.isin(other.dofs_currents, self.dofs_currents))
