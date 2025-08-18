@@ -235,7 +235,25 @@ class SurfaceRZFourier:
     @x.setter
     def x(self, new_dofs):
         self.dofs = new_dofs
-        
+
+    @property
+    def volume(self):
+
+        xyz = self.gamma  # shape: (nphi, ntheta, 3)
+        n = self.normal    # shape: (nphi, ntheta, 3)
+
+        integrand = jnp.sum(xyz * n, axis=2)  # dot(x, n), shape: (nphi, ntheta)
+        volume = jnp.mean(integrand) / 3.0
+        return volume
+
+    @property
+    def area(self):
+        n = self.normal()  # (nphi, ntheta, 3)
+        norm_n = jnp.linalg.norm(n, axis=2)  # shape: (nphi, ntheta)
+        avg_area = jnp.mean(norm_n)
+        return avg_area
+
+
     def plot(self, ax=None, show=True, close=False, axis_equal=True, **kwargs):
         if close: raise NotImplementedError("Call close=True when instantiating the VMEC/SurfaceRZFourier object.")
         
