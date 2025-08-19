@@ -29,23 +29,13 @@ class BiotSavart():
         return jnp.mean(dB_sum, axis=0)
 
     @partial(jit, static_argnames=['self'])
-    def B_field(self, points):
-        points = jnp.array(points)  # (Nphi, Ntheta, 3)
-        points_flat = points.reshape(-1, 3)  # (Npoints, 3)
-
-        gamma_flat = self.gamma.reshape(-1, 3)          # (Ngamma, 3)
-        gamma_dash_flat = self.gamma_dash.reshape(-1, 3)  # (Ngamma, 3)
-        currents_flat = jnp.repeat(self.currents, self.gamma.shape[1])  # shape = (Ngamma,)
-
-        def B_at_point(p):
-            dif_R = p - gamma_flat  # (Ngamma, 3)
-            norm = jnp.linalg.norm(dif_R, axis=1)
-            dB = jnp.cross(gamma_dash_flat, dif_R) / norm[:, None]**3  # (Ngamma, 3)
-            return jnp.einsum("i,ij->j", 1e-7 * currents_flat, dB)  # (3,)
-
-        B_flat = vmap(B_at_point)(points_flat)  # (Npoints, 3)
-        return B_flat    # (Nphi, Ntheta, 3) B_flat.reshape(points.shape)
-
+    def A(self, points):
+        dif_R = (jnp.array(points)-self.gamma)
+        R_norm = jnp.linalg.norm(dif_R, axis=-1)
+        dA = self.gamma_dash / R_norm[..., None]
+        weighted = self.currents[:, None, None] * dA * 1e-7
+        A_vec = jnp.mean(weighted, axis=(0, 1))
+        return A_vec
 
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
