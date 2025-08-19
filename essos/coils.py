@@ -253,7 +253,7 @@ class Curves:
         coils = coils_via_symmetries(cuves_simsopt, currents_simsopt, self.nfp, self.stellsym)
         return [c.curve for c in coils]
     
-    def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True, **kwargs):
+    def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True,color="r", linewidth=3,label=None,**kwargs):
         def rep(data):
             if close:
                 return jnp.concatenate((data, [data[0]]))
@@ -263,6 +263,7 @@ class Curves:
         if ax is None or ax.name != "3d":
             fig = plt.figure()
             ax = fig.add_subplot(projection='3d')
+        label_count=0
         for gamma, gammadash in zip(self.gamma, self.gamma_dash):
             x = rep(gamma[:, 0])
             y = rep(gamma[:, 1])
@@ -271,9 +272,13 @@ class Curves:
                 xt = rep(gammadash[:, 0])
                 yt = rep(gammadash[:, 1])
                 zt = rep(gammadash[:, 2])
-            ax.plot(x, y, z, **kwargs, color='brown', linewidth=3)
+            if label_count == 0:
+                ax.plot(x, y, z, **kwargs, color=color, linewidth=linewidth,label=label)
+                label_count += 1
+            else:
+                ax.plot(x, y, z, **kwargs, color=color, linewidth=linewidth)
             if plot_derivative:
-                ax.quiver(x, y, z, 0.1 * xt, 0.1 * yt, 0.1 * zt, arrow_length_ratio=0.1, color="r")
+                ax.quiver(x, y, z, 0.1 * xt, 0.1 * yt, 0.1 * zt, arrow_length_ratio=0.1, color='r')
         if axis_equal:
             fix_matplotlib_3d(ax)
         if show:

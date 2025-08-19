@@ -13,13 +13,27 @@ from essos.constants import mu_0
 import optax
 
 
-def field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
+
+def pertubred_field_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
+    coils = coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp=nfp,n_segments=n_segments, stellsym=stellsym)
+    field = BiotSavart(coils)
+    return field
+
+def perturbed_coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
     dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves.shape)
     dofs_currents = x[len_dofs_curves_ravelled:]
-    
     curves = Curves(dofs_curves, n_segments, nfp, stellsym)
     coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
+    #Split once the key/seed given for one pertubred stellarator
+    split_keys = jax.random.split(jax.random.key(key), 2)
+    #Internally the following functions will then further split the two keys avoiding repeating keys
+    perturb_curves_systematic(coils, sampler, key=split_keys[0])
+    perturb_curves_statistic(coils, sampler, key=split_keys[1])
+    return coils
+
+def field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
+    coils = coils_from_dofs(x,dofs_curves,currents_scale,nfp=nfp,n_segments=n_segments, stellsym=stellsym)
     field = BiotSavart(coils)
     return field
 
@@ -27,7 +41,6 @@ def coils_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=Tru
     len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
     dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves.shape)
     dofs_currents = x[len_dofs_curves_ravelled:]
-    
     curves = Curves(dofs_curves, n_segments, nfp, stellsym)
     coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
     return coils
@@ -367,27 +380,27 @@ def loss_BdotN_only_constraint(x, vmec, dofs_curves, currents_scale, nfp,n_segme
 #This is thr quickest way to get coil-surface distance (but I guess not the most efficient way for large sizes). 
 # In that case we would do the candidates method from simsopt entirely
 def loss_cs_distance(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
-    curves=curves_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.sum(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(curves.gamma,curves.gamma_dash,surface.gamma,surface.unitnormal,minimum_distance=min_distance_cs))
+    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
+    result=jnp.sum(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,minimum_distance=min_distance_cs))
     return result
 
 #Same as above but for individual constraints (useful in case one wants to target the several pairs individually)
 def loss_cs_distance_array(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
-    curves=curves_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(curves.gamma,curves.gamma_dash,surface.gamma,surface.unitnormal,minimum_distance=min_distance_cs)
+    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
+    result=jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,minimum_distance=min_distance_cs)
     return result.flatten()
 
 #This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
 # In that case we would do the candidates method from simsopt entirely
 def loss_cc_distance(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cc=0.7,downsample=1):
-    curves=curves_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.sum(jnp.triu(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(curves.gamma,curves.gamma_dash,curves.gamma,curves.gamma_dash,minimum_distance=min_distance_cc,downsample=downsample),k=1))
+    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
+    result=jnp.sum(jnp.triu(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,coils.gamma,coils.gamma_dash,minimum_distance=min_distance_cc,downsample=downsample),k=1))
     return result
 
 #Same as above but for individual constraints (useful in case one wants to target the several pairs individually)
 def loss_cc_distance_array(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cc=0.7,downsample=1):
-    curves=curves_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.triu(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(curves.gamma,curves.gamma_dash,curves.gamma,curves.gamma_dash,minimum_distance=min_distance_cc,downsample=downsample),k=1)
+    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
+    result=jnp.triu(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,coils.gamma,coils.gamma_dash,minimum_distance=min_distance_cc,downsample=downsample),k=1)
     return result[result != 0.0].flatten()
 
 
@@ -454,15 +467,15 @@ def cs_distance_pure(gammac, lc, gammas, ns, minimum_distance):
 #This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
 # In that case we would do the candidates method from simsopt entirely
 def loss_linking_mnumber(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,downsample=1):
-    curves=curves_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
+    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
     #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
     # (needs change if quadpoints are allowed to be different)
-    dphi=curves.quadpoints[1]-curves.quadpoints[0]
+    dphi=coils.quadpoints[1]-coils.quadpoints[0]
     result=jnp.sum(jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
-                                        in_axes=(None,None,0,0,None))(curves.gamma[:,0:-1:downsample,:],
-                                                                    curves.gamma_dash[:,0:-1:downsample,:],
-                                                                    curves.gamma[:,0:-1:downsample,:],
-                                                                    curves.gamma_dash[:,0:-1:downsample,:],
+                                        in_axes=(None,None,0,0,None))(coils.gamma[:,0:-1:downsample,:],
+                                                                    coils.gamma_dash[:,0:-1:downsample,:],
+                                                                    coils.gamma[:,0:-1:downsample,:],
+                                                                    coils.gamma_dash[:,0:-1:downsample,:],
                                                                     dphi),k=1))
     return result
 
@@ -470,15 +483,15 @@ def loss_linking_mnumber(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym
 #This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
 # In that case we would do the candidates method from simsopt entirely
 def loss_linking_mnumber_constarint(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,downsample=1):
-    curves=curves_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
+    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
     #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
     # (needs change if quadpoints are allowed to be different)
-    dphi=curves.quadpoints[1]-curves.quadpoints[0]
+    dphi=coils.quadpoints[1]-coils.quadpoints[0]
     result=jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
-                                        in_axes=(None,None,0,0,None))(curves.gamma[:,0:-1:downsample,:],
-                                                                    curves.gamma_dash[:,0:-1:downsample,:],
-                                                                    curves.gamma[:,0:-1:downsample,:],
-                                                                    curves.gamma_dash[:,0:-1:downsample,:],
+                                        in_axes=(None,None,0,0,None))(coils.gamma[:,0:-1:downsample,:],
+                                                                    coils.gamma_dash[:,0:-1:downsample,:],
+                                                                    coils.gamma[:,0:-1:downsample,:],
+                                                                    coils.gamma_dash[:,0:-1:downsample,:],
                                                                     dphi)+1.e-18,k=1)  
     #The 1.e-18 above is just to get all the correct values in the following mask
     return result[result != 0.0].flatten()

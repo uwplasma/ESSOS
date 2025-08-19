@@ -204,7 +204,7 @@ class PerturbationSample():
 
 
 
-def perturb_curves_systematically(curves: Curves,sampler:GaussianSampler, key=0):
+def perturb_curves_systematic(curves: Curves,sampler:GaussianSampler, key=None):
     """
     Apply a systematic perturbation to all the coils
     
@@ -216,7 +216,7 @@ def perturb_curves_systematically(curves: Curves,sampler:GaussianSampler, key=0)
         A new Coils object with the perturbed curves.
     """
     new_seeds=jax.random.split(key, num=curves.n_base_curves)
-    if sammpler.n_derivs == 0:
+    if sampler.n_derivs == 0:
         perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
         gamma_perturbations = apply_symmetries_to_gammas(perturbation[:,0,:,:], curves.nfp, curves.stellsym)
         curves.gamma=curves.gamma + gamma_perturbations    
@@ -234,10 +234,10 @@ def perturb_curves_systematically(curves: Curves,sampler:GaussianSampler, key=0)
         curves.gamma=curves.gamma + gamma_perturbations    
         curves.gamma_dash=curves.gamma_dash + gamma_perturbations_dash        
         curves.gamma_dashdash=curves.gamma_dashdash + gamma_perturbations_dashdash
-    return curves  
+    #return curves  
 
 
-def perturb_curves_statistic(curves: Curves,sampler:GaussianSampler, key=0):
+def perturb_curves_statistic(curves: Curves,sampler:GaussianSampler, key=None):
     """
     Apply a systematic perturbation to all the coils
     
@@ -248,8 +248,8 @@ def perturb_curves_statistic(curves: Curves,sampler:GaussianSampler, key=0):
     Returns:
         A new Coils object with the perturbed curves.
     """
-    new_seeds=jax.random.split(jax.random.key(key), num=curves.gamma.shape[0])
-    if sammpler.n_derivs == 0:
+    new_seeds=jax.random.split(key, num=curves.gamma.shape[0])
+    if sampler.n_derivs == 0:
         perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
         curves.gamma=curves.gamma + perturbation[:,0,:,:]
     elif sampler.n_derivs == 1:
@@ -261,5 +261,5 @@ def perturb_curves_statistic(curves: Curves,sampler:GaussianSampler, key=0):
         curves.gamma=curves.gamma + perturbation[:,0,:,:]               
         curves.gamma_dash=curves.gamma_dash + perturbation[:,1,:,:]  
         curves.gamma_dashdash=curves.gamma_dashdash + perturbation[:,2,:,:]
-    return curves  
+    #return curves  
 
