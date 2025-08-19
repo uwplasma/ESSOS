@@ -599,3 +599,18 @@ def rectangular_xsection_k(a, b):
 def rectangular_xsection_delta(a, b):
     """Auxiliary function for field in rectangular conductor"""
     return jnp.exp(-25/6 + rectangular_xsection_k(a, b))
+
+
+#def loss_BdotN_only_with_perturbation(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, N_stells=10):
+#    """
+#    Compute the loss function for BdotN with a perturbation applied to the BdotN value.):
+#    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
+#    
+#    bdotn_over_b = BdotN_over_B(vmec.surface, field)
+#    
+#    # Apply perturbation to the BdotN value
+#    bdotn_over_b += perturbation
+#    
+#    bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
+
+#    return bdotn_over_b_loss

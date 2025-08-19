@@ -46,6 +46,15 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    nfp=number_of_field_periods, stellsym=True)
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 
+from essos.coil_perturbation import GaussianSampler
+coils=coils_initial
+
+g=GaussianSampler(coils.quadpoints,sigma=0.05,length_scale=0.1,n_derivs=0)
+
+g.compute_covariance_matrix()
+g.compute_covariance_matrix_and_second_derivatives()
+g.get_covariance_matrix()
+
 len_dofs_curves = len(jnp.ravel(coils_initial.dofs_curves))
 nfp = coils_initial.nfp
 stellsym = coils_initial.stellsym
