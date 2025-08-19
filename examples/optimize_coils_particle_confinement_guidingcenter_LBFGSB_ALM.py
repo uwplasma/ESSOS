@@ -54,6 +54,10 @@ g=GaussianSampler(coils.quadpoints,sigma=0.05,length_scale=0.1,n_derivs=0)
 g.compute_covariance_matrix()
 g.compute_covariance_matrix_and_second_derivatives()
 g.get_covariance_matrix()
+new_curves=curves.gamma[0:3,:,:]
+
+from essos.coils import apply_symmetries_to_gammas
+apply_symmetries_to_gammas(new_curves,2,True)
 
 len_dofs_curves = len(jnp.ravel(coils_initial.dofs_curves))
 nfp = coils_initial.nfp

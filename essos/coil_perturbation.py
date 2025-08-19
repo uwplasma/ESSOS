@@ -3,15 +3,9 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import jit, vmap
 from jaxtyping import Array, Float  # https://github.com/google/jaxtyping
+from essos.coils import Curves,apply_symmetries_to_gammas
 from functools import partial
-from essos.fields import BiotSavart,BiotSavart_from_gamma
-from essos.surfaces import BdotN_over_B, BdotN
-from essos.coils import Curves, Coils,compute_curvature
-import lineax 
-from jax.scipy.linalg import cholesky
 
-import jax
-import jax.numpy as jnp
 
 def ldl_decomposition(A):
     """
@@ -160,7 +154,7 @@ class GaussianSampler():
             jnp.concatenate((dcov_mat_dxdx,-dcov_mat_dxdxdx,dcov_mat_dxdxdxdx),axis=0 )), axis=1)  
         return matrix_sqrt_via_spectral(final_mat)
 
-    #@partial(jit, static_argnames=['self'])
+    @partial(jit, static_argnames=['self'])
     def get_covariance_matrix(self):
         if self.n_derivs ==0:
             return self.compute_covariance_matrix()
@@ -172,13 +166,100 @@ class GaussianSampler():
 
     @partial(jit, static_argnames=['self'])
     def draw_sample(self, key=0):
-        """
-        Returns a list of ``n_derivs+1`` arrays of size ``(len(points), 3)``, containing the
-        perturbation and the derivatives.
-        """
+
         n = len(self.points)
-        z = jax.random.normal(key=jax.random.key(key),shape=(len(self.points)*(self.n_derivs+1), 3))
+        z = jax.random.normal(key=key,shape=(len(self.points)*(self.n_derivs+1), 3))
         L=self.get_covariance_matrix()
         curve_and_derivs = jnp.matmul(L,z)
-        return jnp.matmul(L,z)
+        if self.n_derivs ==0:            
+            return jnp.reshape(jnp.matmul(L,z),(1,len(self.points),3))
+        elif self.n_derivs ==1:            
+            return jnp.reshape(jnp.matmul(L,z),(2,len(self.points),3))
+        elif self.n_derivs ==2:            
+            return jnp.reshape(jnp.matmul(L,z),(3,len(self.points),3))
+
+
+
+class PerturbationSample():
+    def __init__(self, sampler, key=0, sample=None):
+        self.sampler = sampler
+        self.key = key   # If not None, most likely fail with serialization
+        if sample:
+            self._sample = sample
+        else:
+            self.resample()
+
+    def resample(self):
+        self._sample = self.sampler.draw_sample(self.key)
+
+    def get_sample(self, deriv):
+        """
+        Get the perturbation (if ``deriv=0``) or its ``deriv``-th derivative.
+        """
+        assert isinstance(deriv, int)
+        if deriv >= len(self._sample):
+            raise ValueError("""The sample on has {len(self._sample)-1} derivatives.
+        Adjust the `n_derivs` parameter of the sampler to access higher derivatives.""")
+        return self._sample[deriv]
+
+
+
+def perturb_curves_systematically(curves: Curves,sampler:GaussianSampler, key=0):
+    """
+    Apply a systematic perturbation to all the coils
+    
+    Args:
+        coils: The coils to be perturbed.
+        perturbation_sample: A PerturbationSample containing the perturbation data.
+        
+    Returns:
+        A new Coils object with the perturbed curves.
+    """
+    new_seeds=jax.random.split(key, num=curves.n_base_curves)
+    if sammpler.n_derivs == 0:
+        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
+        gamma_perturbations = apply_symmetries_to_gammas(perturbation[:,0,:,:], curves.nfp, curves.stellsym)
+        curves.gamma=curves.gamma + gamma_perturbations    
+    elif sampler.n_derivs == 1:
+        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
+        gamma_perturbations = apply_symmetries_to_gammas(perturbation[:,0,:,:], curves.nfp, curves.stellsym)
+        gamma_perturbations_dash = apply_symmetries_to_gammas(perturbation[:,1,:,:], curves.nfp, curves.stellsym)
+        curves.gamma=curves.gamma + gamma_perturbations    
+        curves.gamma_dash=curves.gamma_dash + gamma_perturbations_dash                   
+    elif sampler.n_derivs == 2:
+        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
+        gamma_perturbations = apply_symmetries_to_gammas(perturbation[:,0,:,:], curves.nfp, curves.stellsym)
+        gamma_perturbations_dash = apply_symmetries_to_gammas(perturbation[:,1,:,:], curves.nfp, curves.stellsym)
+        gamma_perturbations_dashdash = apply_symmetries_to_gammas(perturbation[:,2,:,:], curves.nfp, curves.stellsym)        
+        curves.gamma=curves.gamma + gamma_perturbations    
+        curves.gamma_dash=curves.gamma_dash + gamma_perturbations_dash        
+        curves.gamma_dashdash=curves.gamma_dashdash + gamma_perturbations_dashdash
+    return curves  
+
+
+def perturb_curves_statistic(curves: Curves,sampler:GaussianSampler, key=0):
+    """
+    Apply a systematic perturbation to all the coils
+    
+    Args:
+        coils: The coils to be perturbed.
+        perturbation_sample: A PerturbationSample containing the perturbation data.
+        
+    Returns:
+        A new Coils object with the perturbed curves.
+    """
+    new_seeds=jax.random.split(jax.random.key(key), num=curves.gamma.shape[0])
+    if sammpler.n_derivs == 0:
+        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
+        curves.gamma=curves.gamma + perturbation[:,0,:,:]
+    elif sampler.n_derivs == 1:
+        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
+        curves.gamma=curves.gamma + perturbation[:,0,:,:]               
+        curves.gamma_dash=curves.gamma_dash + perturbation[:,1,:,:]  
+    elif sampler.n_derivs == 2:
+        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
+        curves.gamma=curves.gamma + perturbation[:,0,:,:]               
+        curves.gamma_dash=curves.gamma_dash + perturbation[:,1,:,:]  
+        curves.gamma_dashdash=curves.gamma_dashdash + perturbation[:,2,:,:]
+    return curves  
 

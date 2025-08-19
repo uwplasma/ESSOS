@@ -45,6 +45,7 @@ class Curves:
         self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
         self.quadpoints = jnp.linspace(0, 1, self.n_segments, endpoint=False)
         self._set_gamma()
+        self.n_base_curves=dofs.shape[0]
 
     def __str__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
@@ -152,13 +153,27 @@ class Curves:
     def gamma(self):
         return self._gamma
     
+    @gamma.setter
+    def gamma(self, new_gamma):
+        self._gamma = new_gamma
+
     @property
     def gamma_dash(self):
         return self._gamma_dash
+
+    @gamma_dash.setter
+    def gamma_dash(self, new_gamma_dash):
+        self._gamma_dash = new_gamma_dash
+
+
     
     @property
     def gamma_dashdash(self):
         return self._gamma_dashdash
+
+    @gamma_dashdash.setter
+    def gamma_dashdash(self, new_gamma_dashdash):
+        self._gamma_dashdash = new_gamma_dashdash        
     
     @property
     def length(self):
@@ -498,8 +513,8 @@ def RotatedCurve(curve, phi, flip):
     if flip:
         rotmat = rotmat @ jnp.array(
             [[1,  0,  0],
-             [0, -1,  0],
-             [0,  0, -1]])
+                [0, -1,  0],
+                [0,  0, -1]])
     return curve @ rotmat
 
 @partial(jit, static_argnames=['nfp', 'stellsym'])
@@ -515,6 +530,20 @@ def apply_symmetries_to_curves(base_curves, nfp, stellsym):
                     rotcurve = RotatedCurve(base_curves[i].T, 2*jnp.pi*k/nfp, flip)
                     curves.append(rotcurve.T)
     return jnp.array(curves)
+
+@partial(jit, static_argnames=['nfp', 'stellsym'])
+def apply_symmetries_to_gammas(base_gammas, nfp, stellsym):
+    flip_list = [False, True] if stellsym else [False]
+    gammas = []
+    for k in range(0, nfp):
+        for flip in flip_list:
+            for i in range(len(base_gammas)):
+                if k == 0 and not flip:
+                    gammas.append(base_gammas[i])
+                else:
+                    rotcurve = RotatedCurve(base_gammas[i], 2*jnp.pi*k/nfp, flip)
+                    gammas.append(rotcurve)
+    return jnp.array(gammas)    
 
 @partial(jit, static_argnames=['nfp', 'stellsym'])
 def apply_symmetries_to_currents(base_currents, nfp, stellsym): 
