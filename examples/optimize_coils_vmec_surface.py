@@ -46,8 +46,13 @@ coils_optimized = optimize_loss_function(loss_BdotN, initial_dofs=coils_initial.
                                   max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
 print(f"Optimization took {time()-time0:.2f} seconds")
 
+
 BdotN_over_B_initial = BdotN_over_B(vmec.surface, BiotSavart(coils_initial))
 BdotN_over_B_optimized = BdotN_over_B(vmec.surface, BiotSavart(coils_optimized))
+curvature=jnp.mean(BiotSavart(coils_optimized).coils.curvature, axis=1)
+length=jnp.max(jnp.ravel(BiotSavart(coils_optimized).coils.length))
+print(f"Mean curvature: ",curvature)
+print(f"Length:", length)
 print(f"Maximum BdotN/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
 print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
 
