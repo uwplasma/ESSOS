@@ -32,7 +32,7 @@ nphi=32
 # Initialize VMEC field
 vmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files',
              'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
-            ntheta=ntheta, nphi=nphi, range_torus='half period')
+            ntheta=ntheta, nphi=nphi, range_torus='full torus')
 
 # Initialize coils
 current_on_each_coil = 1
@@ -60,7 +60,7 @@ dofs_curves_shape = coils_initial.dofs_curves.shape
 sigma=0.01
 length_scale=0.4*jnp.pi
 n_derivs=2
-N_samples=10  #Number of samples for the stochastic perturbation
+N_samples=100  #Number of samples for the stochastic perturbation
 #Create a Gaussian sampler for perturbation
 #This sampler will be used to perturb the coils
 sampler=GaussianSampler(coils_initial.quadpoints,sigma=sigma,length_scale=length_scale,n_derivs=n_derivs)
