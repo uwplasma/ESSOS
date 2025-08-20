@@ -37,11 +37,11 @@ def ldl_decomposition(A):
             return L.at[i, k].set(L_ik)
 
         # Update column k of L below diagonal
-        L = lax.fori_loop(k + 1, n, inner_body, L)
+        L = jax.lax.fori_loop(k + 1, n, inner_body, L)
 
         return (L, D)
 
-    L, D = lax.fori_loop(0, n, body_fun, (L, D))
+    L, D = jax.lax.fori_loop(0, n, body_fun, (L, D))
 
     return L, D
 
