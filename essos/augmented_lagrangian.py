@@ -349,7 +349,7 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
     if model_mu=='Mu_Conditional':
         # Do the optimization step     
         @partial(jit, static_argnums=(6,7,8,9,10,11,12,13))
-        def update_fn(params, opt_state,grad,info,eta,omega,model_lagrange=model_lagrange,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+        def update_fn(params, opt_state,grad,info,eta,omega,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
             main_state,lag_state=opt_state
             main_params,lagrange_params=params
             main_updates, main_state = optimizer.update(grad[0], main_state) 
