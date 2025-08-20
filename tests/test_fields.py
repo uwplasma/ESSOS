@@ -8,6 +8,7 @@ class MockCoils:
         self.currents = jnp.array([1.0, 2.0, 3.0])
         self.gamma = random.uniform(random.PRNGKey(0), (3, 3, 3))
         self.gamma_dash = random.uniform(random.PRNGKey(0), (3, 3, 3))
+        self.gamma_dash = random.uniform(random.PRNGKey(0), (3, 3, 3))
         self.dofs_curves = random.uniform(random.PRNGKey(0), (3, 3, 3))
 
 def test_biot_savart_initialization():
