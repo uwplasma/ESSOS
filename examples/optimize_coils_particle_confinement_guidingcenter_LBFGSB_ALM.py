@@ -46,28 +46,6 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    nfp=number_of_field_periods, stellsym=True)
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 
-from essos.coil_perturbation import GaussianSampler
-coils=coils_initial
-
-g=GaussianSampler(coils.quadpoints,sigma=0.2,length_scale=0.1,n_derivs=2)
-
-from essos.coils import apply_symmetries_to_gammas
-from essos.coil_perturbation import perturb_curves_statistic,perturb_curves_systematic
-
-coils_sys = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
-perturb_curves_systematic(coils_sys, g, key=0)
-coils_stat = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
-perturb_curves_statistic(coils_stat, g, key=1)
-
-coils_sys.plot(ax=ax1, show=False,color='b')
-fig = plt.figure(figsize=(9, 8))
-ax1 = fig.add_subplot(221, projection='3d')
-coils_initial.plot(ax=ax1, show=False,color='brown',linewidth=1)
-coils_sys.plot(ax=ax1, show=False,color='blue',linewidth=1)
-coils_stat.plot(ax=ax1, show=False,color='green',linewidth=1)
-plt.savefig('coil_perturb.pdf')
-
-
 
 len_dofs_curves = len(jnp.ravel(coils_initial.dofs_curves))
 nfp = coils_initial.nfp
