@@ -253,7 +253,7 @@ class Curves:
         coils = coils_via_symmetries(cuves_simsopt, currents_simsopt, self.nfp, self.stellsym)
         return [c.curve for c in coils]
     
-    def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True,color="r", linewidth=3,label=None,**kwargs):
+    def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True,color="brown", linewidth=3,label=None,**kwargs):
         def rep(data):
             if close:
                 return jnp.concatenate((data, [data[0]]))

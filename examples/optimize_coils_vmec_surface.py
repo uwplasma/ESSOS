@@ -65,7 +65,7 @@ vmec.surface.plot(ax=ax1, show=False)
 coils_optimized.plot(ax=ax2, show=False)
 vmec.surface.plot(ax=ax2, show=False)
 plt.tight_layout()
-plt.savefig('coils_normal.png')
+plt.show()
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")

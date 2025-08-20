@@ -28,19 +28,19 @@ def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1
 
     pred = lambda x: isinstance(x, LagrangeMultiplier)
     if model_mu=='Constant':
-        jax.debug.print('{m}', m=model_mu)
+        #jax.debug.print('{m}', m=model_mu)
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
     elif model_mu=='Mu_Monotonic':     
-        jax.debug.print('{m}', m=model_mu)        
+        #jax.debug.print('{m}', m=model_mu)        
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
     elif model_mu=='Mu_Conditional_True':
-        jax.debug.print('True {m}', m=model_mu)        
+        #jax.debug.print('True {m}', m=model_mu)        
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
     elif model_mu=='Mu_Conditional_False':
-        jax.debug.print('False {m}', m=model_mu)            
+        #jax.debug.print('False {m}', m=model_mu)            
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
     elif model_mu=='Mu_Tolerance_True':
-        jax.debug.print('Standard True {m}', m=model_mu)    
+        #jax.debug.print('Standard True {m}', m=model_mu)    
         mu_average=penalty_average(params)
         #eta=eta/mu_average**(0.1)
         #omega=omega/mu_average    
@@ -48,7 +48,7 @@ def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1
         omega=jnp.maximum(omega/mu_average,omega_tol)
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
     elif model_mu=='Mu_Tolerance_False':
-        jax.debug.print('Standard False {m}', m=model_mu)    
+        #jax.debug.print('Standard False {m}', m=model_mu)    
         mu_average=penalty_average(params)        
         #eta=1./mu_average**(0.1)
         #omega=1./mu_average    
@@ -59,7 +59,7 @@ def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
     elif model_mu=='Mu_Adaptative':
-        jax.debug.print('True {m}', m=model_mu)            
+        #jax.debug.print('True {m}', m=model_mu)            
         #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*y.value,-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred)
 
@@ -73,19 +73,19 @@ def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,
 
     pred = lambda x: isinstance(x, LagrangeMultiplier)
     if model_mu=='Constant':
-        jax.debug.print('{m}', m=model_mu)
+        #jax.debug.print('{m}', m=model_mu)
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier((y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
     elif model_mu=='Mu_Monotonic':     
-        jax.debug.print('{m}', m=model_mu)        
+        #jax.debug.print('{m}', m=model_mu)        
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
     elif model_mu=='Mu_Conditional_True':
-        jax.debug.print('True {m}', m=model_mu)        
+        #jax.debug.print('True {m}', m=model_mu)        
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
     elif model_mu=='Mu_Conditional_False':
-        jax.debug.print('False {m}', m=model_mu)            
+        #jax.debug.print('False {m}', m=model_mu)            
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
     elif model_mu=='Mu_Tolerance_True':
-        jax.debug.print('Squared True {m}', m=model_mu)   
+        #jax.debug.print('Squared True {m}', m=model_mu)   
         mu_average=penalty_average(params)
         #eta=eta/mu_average**(0.1)
         #omega=omega/mu_average    
@@ -93,7 +93,7 @@ def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,
         omega=jnp.maximum(omega/mu_average,omega_tol)
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
     elif model_mu=='Mu_Tolerance_False':
-        jax.debug.print('Squared False {m}', m=model_mu)    
+        #jax.debug.print('Squared False {m}', m=model_mu)    
         mu_average=penalty_average(params)        
         #eta=1./mu_average**(0.1)
         #omega=1./mu_average    
@@ -102,7 +102,7 @@ def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
     elif model_mu=='Mu_Adaptative':
-        jax.debug.print('True {m}', m=model_mu)            
+        #jax.debug.print('True {m}', m=model_mu)            
         #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*(y.value-x.value/x.penalty),-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*(y.penalty*2.+(x.value/x.penalty)**2)),params,updates,is_leaf=pred)
 
@@ -378,8 +378,8 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
             def minimization_loop(state):
                 params,main_state,grad,info=state
                 main_params,lagrange_params=params
-                jax.debug.print('Loop omega: {omega}', omega=omega)   
-                jax.debug.print('Loop grad: {grad}', grad=jnp.linalg.norm(grad[0]))                                              
+                #jax.debug.print('Loop omega: {omega}', omega=omega)   
+                #jax.debug.print('Loop grad: {grad}', grad=jnp.linalg.norm(grad[0]))                                              
                 main_updates, main_state = optimizer.update(grad[0], main_state) 
                 main_params = optax.apply_updates(main_params, main_updates)
                 params=main_params,lagrange_params                        
@@ -398,8 +398,8 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
             opt_state=main_state,lag_state
             eta=lag_updates[1]
             omega=lag_updates[2]
-            jax.debug.print('eta {omega}:', omega=eta)   
-            jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))   
+            #jax.debug.print('eta {omega}:', omega=eta)   
+            #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))   
             return params,opt_state,grad,info,eta,omega   
     elif model_mu=='Mu_Tolerance_LBFGS':
         # Do the optimization step     
@@ -415,8 +415,8 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
             def minimization_loop(state):
                 params,main_state,grad,value,info=state
                 main_params,lagrange_params=params
-                jax.debug.print('Loop omega: {omega}', omega=omega)   
-                jax.debug.print('Loop grad: {grad}', grad=jnp.linalg.norm(grad[0]))                                                             
+                #jax.debug.print('Loop omega: {omega}', omega=omega)   
+                #jax.debug.print('Loop grad: {grad}', grad=jnp.linalg.norm(grad[0]))                                                             
                 main_updates, main_state = optimizer.update(grad[0], main_state,params=main_params,value=value,grad=grad[0],value_fn=lagrangian_lbfgs,lagrange_params=lagrange_params) 
                 main_params = optax.apply_updates(main_params, main_updates)
                 params=main_params,lagrange_params                        
@@ -436,8 +436,8 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
             opt_state=main_state,lag_state
             eta=lag_updates[1]
             omega=lag_updates[2]
-            jax.debug.print('eta {omega}:', omega=eta)   
-            jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))   
+            #jax.debug.print('eta {omega}:', omega=eta)   
+            #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))   
             return params,opt_state,grad,value[0],value[1],eta,omega                                           
     else:       
         # Do the optimization step
@@ -480,7 +480,7 @@ def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
 ):
 
 
-    jax.debug.print('dentro LFBGSB {m}',m={model_lagrangian})
+    #jax.debug.print('LFBGSB {m}',m={model_lagrangian})
     @jax.jit
     def init_fn(params,**kargs):
         main_params,lagrange_params=params
@@ -494,7 +494,7 @@ def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
             mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
             return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
     elif model_lagrangian=='Squared':
-        jax.debug.print('dentro LFBGSB {m}',m={model_lagrangian})
+        #jax.debug.print(' LFBGSB {m}',m={model_lagrangian})
         def lagrangian(main_params,lagrange_params,**kargs):
             main_loss = jnp.square(jnp.linalg.norm((loss(main_params,**kargs))))
             #This uses ||f(x)||^2 in the lagrangian
@@ -516,10 +516,10 @@ def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
         eta=lag_updates[1]
         omega=lag_updates[2]
-        jax.debug.print('omega {omega}:', omega=omega)   
-        jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
-        jax.debug.print('eta {omega}:', omega=eta)
-        jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
+        #jax.debug.print('omega {omega}:', omega=omega)   
+        #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
+        #jax.debug.print('eta {omega}:', omega=eta)
+        #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
         return params,lag_state,grad,info,eta,omega                                  
 
 
@@ -583,10 +583,10 @@ def ALM_model_jaxopt_LevenbergMarquardt(constraints: Constraint,#List of constra
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
         eta=lag_updates[1]
         omega=lag_updates[2]
-        jax.debug.print('omega {omega}:', omega=omega)   
-        jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
-        jax.debug.print('eta {omega}:', omega=eta)
-        jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
+        #jax.debug.print('omega {omega}:', omega=omega)   
+        #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
+        #jax.debug.print('eta {omega}:', omega=eta)
+        #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
         return params,lag_state,grad,info,eta,omega                                  
 
 
@@ -648,10 +648,10 @@ def ALM_model_jaxopt_lbfgs(constraints: Constraint,#List of constraints
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
         eta=lag_updates[1]
         omega=lag_updates[2]
-        jax.debug.print('omega {omega}:', omega=omega)   
-        jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
-        jax.debug.print('eta {omega}:', omega=eta)
-        jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
+        #jax.debug.print('omega {omega}:', omega=omega)   
+        #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
+        #jax.debug.print('eta {omega}:', omega=eta)
+        #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
         return params,lag_state,grad,info,eta,omega                                  
 
 
@@ -710,10 +710,10 @@ def ALM_model_optimistix_LevenbergMarquardt(constraints: Constraint,#List of con
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
         eta=lag_updates[1]
         omega=lag_updates[2]
-        jax.debug.print('omega {omega}:', omega=omega)   
-        jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
-        jax.debug.print('eta {omega}:', omega=eta)
-        jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
+        #jax.debug.print('omega {omega}:', omega=omega)   
+        #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
+        #jax.debug.print('eta {omega}:', omega=eta)
+        #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
         return params,lag_state,grad,info,eta,omega                                  
 
 

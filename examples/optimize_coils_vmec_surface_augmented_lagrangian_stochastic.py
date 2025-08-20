@@ -15,7 +15,7 @@ import essos.augmented_lagrangian as alm
 from functools import partial
 
 # Optimization parameters
-maximum_function_evaluations=100
+maximum_function_evaluations=10
 max_coil_length = 40
 max_coil_curvature = 0.5
 bdotn_tol=1.e-6
@@ -60,7 +60,7 @@ dofs_curves_shape = coils_initial.dofs_curves.shape
 sigma=0.01
 length_scale=0.4*jnp.pi
 n_derivs=2
-N_samples=200  #Number of samples for the stochastic perturbation
+N_samples=10  #Number of samples for the stochastic perturbation
 #Create a Gaussian sampler for perturbation
 #This sampler will be used to perturb the coils
 sampler=GaussianSampler(coils_initial.quadpoints,sigma=sigma,length_scale=length_scale,n_derivs=n_derivs)
@@ -119,7 +119,7 @@ eta=1./mu_average**0.1
 
 
 # Optimize coils
-print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
+print(f'Optimizing coils with {maximum_function_evaluations} function evaluations using stochastic and ALM.')
 time0 = time()
 
 
@@ -140,7 +140,7 @@ dofs_currents = params[0][len_dofs_curves:]
 curves = Curves(dofs_curves, n_segments, nfp, stellsym)
 coils_optimized = Coils(curves=curves, currents=dofs_currents*coils_initial.currents_scale)
 
-print(f"Optimization took {time()-time0:.2f} seconds")
+print(f"Stochastic optimization with ALM took {time()-time0:.2f} seconds")
 
 
 BdotN_over_B_initial = BdotN_over_B(vmec.surface, BiotSavart(coils_initial))
