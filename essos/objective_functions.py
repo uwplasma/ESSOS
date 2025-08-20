@@ -9,13 +9,14 @@ from essos.surfaces import BdotN_over_B, BdotN
 from essos.coils import Curves, Coils,compute_curvature
 from essos.optimization import new_nearaxis_from_x_and_old_nearaxis
 from essos.constants import mu_0
+from essos.coil_perturbation import perturb_curves_systematic, perturb_curves_statistic
 
 import optax
 
 
 
 def pertubred_field_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
-    coils = coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp=nfp,n_segments=n_segments, stellsym=stellsym)
+    coils = perturbed_coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp=nfp,n_segments=n_segments, stellsym=stellsym)
     field = BiotSavart(coils)
     return field
 
@@ -374,6 +375,31 @@ def loss_BdotN_only_constraint(x, vmec, dofs_curves, currents_scale, nfp,n_segme
     return bdotn_over_b_loss
 
 
+@partial(jit, static_argnums=(1,2,3, 6, 7, 8))
+def loss_BdotN_only_stochastic(x,sampler,N_samples, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True):
+    keys= jnp.arange(N_samples)  
+    def perturbed_bdotn_over_b(x,key,sampler,dofs_curves, currents_scale, nfp, n_segments, stellsym):
+        perturbed_field = pertubred_field_from_dofs(x,key,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym)
+        bdotn_over_b = BdotN_over_B(vmec.surface, perturbed_field)
+        return jnp.sum(jnp.abs(bdotn_over_b))
+    #Average over the N_samples
+    expected_loss=jnp.average(jax.vmap(perturbed_bdotn_over_b, in_axes=(None,0,None,None,None,None,None,None))(x, keys,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym),axis=0)
+    return expected_loss
+
+
+@partial(jit, static_argnums=(1,2,3, 6, 7, 8,9))
+def loss_BdotN_only_constraint_stochastic(x,sampler,N_samples, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True,target_tol=1.e-6):
+    keys= jnp.arange(N_samples)  
+    def perturbed_bdotn_over_b(x,key,sampler,dofs_curves, currents_scale, nfp, n_segments, stellsym):
+        perturbed_field = pertubred_field_from_dofs(x,key,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym)
+        bdotn_over_b = BdotN_over_B(vmec.surface, perturbed_field)
+        return jnp.square(bdotn_over_b)
+    #Average over the N_samples
+    expected_loss=jnp.average(jax.vmap(perturbed_bdotn_over_b, in_axes=(None,0,None,None,None,None,None,None))(x, keys,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym),axis=0)
+
+    constrained_expected_loss = jnp.sqrt(jnp.sum(jnp.maximum(expected_loss-target_tol,0.0)))
+    #bdotn_over_b_loss = jnp.sqrt(0.5*jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0))
+    return constrained_expected_loss
 
 
 

@@ -7,8 +7,9 @@ import matplotlib.pyplot as plt
 from essos.surfaces import BdotN_over_B
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
 from essos.fields import Vmec, BiotSavart
-from essos.objective_functions import loss_BdotN_only_constraint,loss_coil_curvature_new,loss_coil_length_new,loss_BdotN_only
+from essos.objective_functions import loss_BdotN_only_constraint_stochastic,loss_coil_curvature_new,loss_coil_length_new,loss_BdotN_only_stochastic
 from essos.objective_functions import loss_coil_curvature,loss_coil_length
+from essos.coil_perturbation import GaussianSampler
 
 import essos.augmented_lagrangian as alm
 from functools import partial
@@ -23,6 +24,10 @@ number_coil_points = order_Fourier_series_coils*10
 number_coils_per_half_field_period = 4
 ntheta=32
 nphi=32
+
+
+
+
 
 # Initialize VMEC field
 vmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files',
@@ -51,6 +56,17 @@ dofs_curves_shape = coils_initial.dofs_curves.shape
 
 
 
+#Sampling parameters
+sigma=0.01
+length_scale=0.4*jnp.pi
+n_derivs=2
+N_samples=200  #Number of samples for the stochastic perturbation
+#Create a Gaussian sampler for perturbation
+#This sampler will be used to perturb the coils
+sampler=GaussianSampler(coils_initial.quadpoints,sigma=sigma,length_scale=length_scale,n_derivs=n_derivs)
+
+
+
 
 # Create the constraints
 penalty = 0.1 #Intial penalty values
@@ -62,8 +78,8 @@ model_lagrangian='Standard'  #Use standard augmented lagragian suitable for boun
 
 curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
 length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
-bdotn_partial=partial(loss_BdotN_only_constraint, vmec=vmec, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym,target_tol=bdotn_tol)
-bdotn_only_partial=partial(loss_BdotN_only, vmec=vmec, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym)
+bdotn_partial=partial(loss_BdotN_only_constraint_stochastic,sampler=sampler,N_samples=N_samples, vmec=vmec, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym,target_tol=bdotn_tol)
+bdotn_only_partial=partial(loss_BdotN_only_stochastic,sampler=sampler,N_samples=N_samples, vmec=vmec, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym)
 
 #Construct constraints
 constraints = alm.combine(
