@@ -2,9 +2,7 @@
 import os
 number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
-from time import time
-import jax
-print(jax.devices())
+from jax import jit, value_and_grad
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.dynamics import Particles, Tracing
@@ -23,7 +21,7 @@ max_coil_curvature = 0.4
 nparticles = number_of_processors_to_use*10
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 2
+maximum_function_evaluations = 3
 maxtimes = [2.e-5]
 num_steps=100
 number_coils_per_half_field_period = 3
@@ -66,21 +64,17 @@ params=coils_initial.x
 optimizer=optax.lbfgs()
 opt_state=optimizer.init(params)
 
-@jax.jit
+@jit
 def update(params,opt_state):
-    value, grad = jax.value_and_grad(total_loss)(params)        
+    value, grad = value_and_grad(total_loss)(params)        
     updates, opt_state =optimizer.update(grad, opt_state, params, value=value, grad=grad, value_fn=total_loss)
     params = optax.apply_updates(params, updates)
     return params,opt_state
 
 for i in range(maximum_function_evaluations):
     params,opt_state=update(params,opt_state)
-    if i % 5 == 0:
-        print('Objective function: {:.2E}'.format(total_loss(params)))
-
-
-
-
+    if i % 3 == 0:
+        print('Objective function at iteration {:d}: {:.2E}'.format(i, total_loss(params)))
 
 dofs_curves = jnp.reshape(params[:len_dofs_curves], (dofs_curves_shape))
 dofs_currents = params[len_dofs_curves:]
@@ -114,7 +108,8 @@ for i, trajectory in enumerate(tracing_optimized.trajectories):
 ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')#ax4.legend()
 plt.tight_layout()
-plt.savefig(f'opt_lbfgs.pdf')
+# plt.savefig(f'opt_lbfgs.pdf')
+plt.show()
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")

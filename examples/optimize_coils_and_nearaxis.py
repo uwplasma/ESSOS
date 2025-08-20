@@ -9,11 +9,11 @@ from essos.objective_functions import (difference_B_gradB_onaxis,
                     loss_coils_and_nearaxis, loss_coils_for_nearaxis)
 
 # Optimization parameters
-max_coil_length = 5.0
-max_coil_curvature = 4
+max_coil_length = 4.
+max_coil_curvature = 6.
 order_Fourier_series_coils = 5
 number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 20
+maximum_function_evaluations = 200
 number_coils_per_half_field_period = 3
 tolerance_optimization = 1e-8
 
@@ -28,7 +28,7 @@ field_nearaxis_initial = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
 current_on_each_coil = 17e5*field_nearaxis_initial.B0/nfp/2
 number_of_field_periods = nfp
 major_radius_coils = field_nearaxis_initial.R0[0]
-minor_radius_coils = major_radius_coils/1.5
+minor_radius_coils = major_radius_coils/2.0
 curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
                                    R=major_radius_coils, r=minor_radius_coils,
@@ -48,7 +48,7 @@ print(f"Optimization took {time()-time0:.2f} seconds")
 # Optimize coils
 print(f'Optimizing coils and near-axis with {maximum_function_evaluations} function evaluations.')
 time0 = time()
-initial_dofs = jnp.concatenate((coils_initial.x, field_nearaxis_initial.x))
+initial_dofs = jnp.concatenate((coils_optimized_initial_nearaxis.x, field_nearaxis_initial.x))
 coils_optimized, field_nearaxis_optimized = optimize_loss_function(loss_coils_and_nearaxis, initial_dofs=initial_dofs, coils=coils_initial, tolerance_optimization=tolerance_optimization,
                                   maximum_function_evaluations=maximum_function_evaluations, field_nearaxis=field_nearaxis_initial,
                                   max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
@@ -97,10 +97,10 @@ fig = plt.figure(figsize=(8, 4))
 ax1 = fig.add_subplot(121, projection='3d')
 ax2 = fig.add_subplot(122, projection='3d')
 coils_optimized_initial_nearaxis.plot(ax=ax1, show=False)
-field_nearaxis_initial.plot(ax=ax1, show=False, alpha=0.2)
+field_nearaxis_initial.plot(ax=ax1, show=False, alpha=0.35)
 tracing_initial.plot(ax=ax1, show=False)
 coils_optimized.plot(ax=ax2, show=False)
-field_nearaxis_optimized.plot(ax=ax2, show=False, alpha=0.2)
+field_nearaxis_optimized.plot(ax=ax2, show=False, alpha=0.35)
 tracing_optimized.plot(ax=ax2, show=False)
 plt.show()
 

@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 8 # Parallelization, this should divide ntheta*nphi
+number_of_processors_to_use = 5 # Parallelization, this should divide ntheta*nphi
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -11,15 +11,15 @@ from essos.objective_functions import loss_BdotN
 from essos.optimization import optimize_loss_function
 
 # Optimization parameters
-max_coil_length = 40
-max_coil_curvature = 0.5
-order_Fourier_series_coils = 6
-number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 100
-number_coils_per_half_field_period = 4
+max_coil_length = 10
+max_coil_curvature = 1.0
+order_Fourier_series_coils = 3
+number_coil_points = order_Fourier_series_coils*15
+maximum_function_evaluations = 50
+number_coils_per_half_field_period = 3
 tolerance_optimization = 1e-5
-ntheta=32
-nphi=32
+ntheta=35
+nphi=35
 
 # Initialize VMEC field
 vmec = Vmec(os.path.join(os.path.dirname(__file__), 'input_files',
@@ -30,7 +30,7 @@ vmec = Vmec(os.path.join(os.path.dirname(__file__), 'input_files',
 current_on_each_coil = 1
 number_of_field_periods = vmec.nfp
 major_radius_coils = vmec.r_axis
-minor_radius_coils = vmec.r_axis/1.5
+minor_radius_coils = vmec.r_axis/1.8
 curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
                                    R=major_radius_coils, r=minor_radius_coils,

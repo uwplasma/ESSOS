@@ -55,6 +55,7 @@ def curves_from_dofs(x,dofs_curves,nfp,n_segments=60, stellsym=True):
     return curves
 
 
+
 @partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
 def loss_coils_for_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
                n_segments=60, stellsym=True, max_coil_curvature=0.1):
@@ -336,6 +337,16 @@ def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, curr
     loss = jnp.concatenate((normB_axis_loss, coil_length_loss, coil_curvature_loss,particles_drift_loss))
     return jnp.sum(loss)
 
+
+@partial(jit, static_argnums=(1, 4, 5, 6))
+def loss_bdotn_over_b(x, vmec, dofs_curves, currents_scale, nfp, n_segments=60, stellsym=True):
+    dofs_len = len(jnp.ravel(dofs_curves))
+    dofs_curves = jnp.reshape(x[:dofs_len], dofs_curves.shape)
+    dofs_currents = x[dofs_len:]
+    curves = Curves(dofs_curves, n_segments, nfp, stellsym)
+    coils = Coils(curves=curves, currents=dofs_currents * currents_scale)
+    field = BiotSavart(coils)
+    return jnp.sum(jnp.abs(BdotN_over_B(vmec.surface, field)))
 
 
 @partial(jit, static_argnums=(1, 4, 5, 6, 7))
