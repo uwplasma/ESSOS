@@ -11,3 +11,4 @@ f90nml
 pyevtk
 optuna
 pandas
+jaxopt
