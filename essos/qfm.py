@@ -6,35 +6,40 @@ from scipy.optimize import minimize
 from essos.surfaces import SurfaceRZFourier 
 
 class QfmSurface:
-    def __init__(self, field, surface: SurfaceRZFourier, label: str, targetlabel: float,
-                 toroidal_flux_idx: int = 0):
+    def __init__(self, field, surface: SurfaceRZFourier, label: str, targetlabel: float = None,
+                toroidal_flux_idx: int = 0):
         assert label in ["area", "volume", "toroidal_flux"], f"Unsupported label: {label}"
+        
         self.field = field
         self.surface = surface  
-        self.surface_optimize = self._with_x(surface, surface.x)  
+        self.surface_optimize = self._build_surface_with_x(surface, surface.x)  
         self.label = label
-        self.targetlabel = targetlabel
         self.toroidal_flux_idx = int(toroidal_flux_idx)  
         self.name = str(id(self))
 
+        if targetlabel is None:
+            if label == "volume":
+                self.targetlabel = surface.volume
+            elif label == "area":
+                self.targetlabel = surface.area
+            elif label == "toroidal_flux":
+                self.targetlabel = self._toroidal_flux(surface)
+            else:
+                raise ValueError(f"Unsupported label: {label}")
+        else:
+            self.targetlabel = targetlabel
+
     def _toroidal_flux(self, surf: SurfaceRZFourier) -> jnp.ndarray:
-        
         idx = self.toroidal_flux_idx
-
         gamma = surf.gamma
-
         curve = gamma[idx, :, :]          
         dl = jnp.roll(curve, -1, axis=0) - curve 
-    
         A_vals = vmap(self.field.A)(curve)
-
         Adl = jnp.sum(A_vals * dl, axis=1) 
-
         tf = jnp.sum(Adl)
         return tf
 
-
-    def _with_x(self, surface: SurfaceRZFourier, x):
+    def _build_surface_with_x(self, surface: SurfaceRZFourier, x):
         s = SurfaceRZFourier(
             rc=surface.rc,
             zs=surface.zs,
@@ -42,13 +47,13 @@ class QfmSurface:
             ntheta=surface.ntheta,
             nphi=surface.nphi,
             range_torus=surface.range_torus,
-            close=True
+            close=False
         )
         s.x = x
         return s
 
     def objective(self, x):
-        surf = self._with_x(self.surface_optimize, x)
+        surf = self._build_surface_with_x(self.surface_optimize, x)
         N = surf.unitnormal
         norm_N = jnp.linalg.norm(surf.normal, axis=2)
         points_flat = surf.gamma.reshape(-1, 3)
@@ -60,7 +65,13 @@ class QfmSurface:
         return result
 
     def constraint(self, x):
-        surf = self._with_x(self.surface_optimize, x)
+        """
+        result estimate
+        volume: 1e-6
+        area: 1e-6
+        toroidal flux: 1e-12
+        """
+        surf = self._build_surface_with_x(self.surface_optimize, x)
         if self.label == "volume":
             val = surf.volume - self.targetlabel
         elif self.label == "area":
@@ -71,13 +82,19 @@ class QfmSurface:
             raise ValueError(f"Unsupported label: {self.label}")
         return val
 
-    def penalty_objective(self, x, constraint_weight=10):
+    def penalty_objective(self, x, constraint_weight=1.0):
+        """
+        weight estimate
+        volume: 1e1
+        area: 1e1
+        toroidal flux: 1e10
+        """
         r = self.objective(x)
         c = self.constraint(x)
         result = r + 0.5 * constraint_weight * c**2
         return jnp.asarray(result), None
 
-    def minimize_penalty_lbfgs(self, tol=1e-3, maxiter=1000, constraint_weight=10):
+    def minimize_penalty_lbfgs(self, tol=1e-6, maxiter=1000, constraint_weight=1.0):
         value_and_grad_fn = jax.value_and_grad(
             lambda x: self.penalty_objective(x, constraint_weight),
             has_aux=True
@@ -92,7 +109,7 @@ class QfmSurface:
         )
         x0 = self.surface_optimize.x
         res = solver.run(x0)
-        self.surface_optimize = self._with_x(self.surface_optimize, res.params)
+        self.surface_optimize = self._build_surface_with_x(self.surface_optimize, res.params)
         return {
             "fun": res.state.value,
             "gradient": jax.grad(lambda x: self.penalty_objective(x, constraint_weight)[0])(res.params),
@@ -103,7 +120,7 @@ class QfmSurface:
         }
 
 
-    def minimize_exact_scipy_slsqp(self, tol=1e-3, maxiter=1000):
+    def minimize_exact_scipy_slsqp(self, tol=1e-6, maxiter=1000):
         fun = lambda x: jnp.asarray(self.objective(x)).item()
         jac = lambda x: jnp.asarray(jax.grad(self.objective)(x))
         con_fun = lambda x: jnp.asarray(self.constraint(x)).item()
@@ -115,7 +132,7 @@ class QfmSurface:
             constraints=constraints, method='SLSQP',
             tol=tol, options={"maxiter": maxiter}
         )
-        self.surface_optimize = self._with_x(self.surface_optimize, res.x)
+        self.surface_optimize = self._build_surface_with_x(self.surface_optimize, res.x)
         return {
             "fun": res.fun,
             "gradient": jac(res.x),
@@ -126,7 +143,7 @@ class QfmSurface:
         }
 
 
-    def run(self, tol=1e-4, maxiter=1000, method='SLSQP', constraint_weight=10.0):
+    def run(self, tol=1e-6, maxiter=1000, method='SLSQP', constraint_weight=1.0):
         method_up = method.upper()
         if method_up == 'SLSQP':
             return self.minimize_exact_scipy_slsqp(tol=tol, maxiter=maxiter)

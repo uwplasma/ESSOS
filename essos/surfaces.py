@@ -10,6 +10,16 @@ mesh = Mesh(devices(), ("dev",))
 sharding = NamedSharding(mesh, PartitionSpec("dev", None))
 
 @partial(jit, static_argnames=['surface','field'])
+def toroidal_flux(surface, field, idx=0) -> jnp.ndarray:
+    gamma = surface.gamma
+    curve = gamma[idx, :, :]
+    dl = jnp.roll(curve, -1, axis=0) - curve
+    A_vals = vmap(field.A)(curve)
+    Adl = jnp.sum(A_vals * dl, axis=1) 
+    tf = jnp.sum(Adl)
+    return tf
+
+@partial(jit, static_argnames=['surface','field'])
 def B_on_surface(surface, field):
     ntheta = surface.ntheta
     nphi = surface.nphi
@@ -252,6 +262,64 @@ class SurfaceRZFourier:
         norm_n = jnp.linalg.norm(n, axis=2)  # shape: (nphi, ntheta)
         avg_area = jnp.mean(norm_n)
         return avg_area
+
+    def change_resolution(self, mpol: int, ntor: int):
+        """
+        Change the values of `mpol` and `ntor`.
+        New Fourier coefficients are zero by default.
+        Old coefficients outside the new range are discarded.
+        """
+        rc_old, zs_old = self.rc, self.zs
+        mpol_old, ntor_old = self.mpol, self.ntor
+
+        rc_new = jnp.zeros((mpol, 2 * ntor + 1))
+        zs_new = jnp.zeros((mpol, 2 * ntor + 1))
+
+        m_keep = min(mpol_old, mpol)
+        n_keep = min(ntor_old, ntor)
+
+        old_slice = slice(ntor_old - n_keep, ntor_old + n_keep + 1)
+        new_slice = slice(ntor     - n_keep, ntor     + n_keep + 1)
+
+        # Copy overlapping region
+        rc_new = rc_new.at[:m_keep, new_slice].set(rc_old[:m_keep, old_slice])
+        zs_new = zs_new.at[:m_keep, new_slice].set(zs_old[:m_keep, old_slice])
+
+        # Update attributes
+        self.mpol, self.ntor = mpol, ntor
+        self.rc, self.zs = rc_new, zs_new
+
+        # Recompute xm/xn and interpolation arrays
+        m1d = jnp.arange(self.mpol)
+        n1d = jnp.arange(-self.ntor, self.ntor + 1)
+        n2d, m2d = jnp.meshgrid(n1d, m1d)
+        self.xm = m2d.flatten()[self.ntor:]
+        self.xn = self.nfp * n2d.flatten()[self.ntor:]
+
+        indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
+        self.rmnc_interp = self.rc[indices[:, 0], indices[:, 1]]
+        self.zmns_interp = self.zs[indices[:, 0], indices[:, 1]]
+
+        # Update degrees of freedom
+        self.num_dofs_rc = len(jnp.ravel(self.rc)[self.ntor:])
+        self.num_dofs_zs = len(jnp.ravel(self.zs)[self.ntor:])
+        self._dofs = jnp.concatenate(
+            (jnp.ravel(self.rc)[self.ntor:], jnp.ravel(self.zs)[self.ntor:])
+        )
+
+        # Recompute angles and geometry
+        self.angles = (
+            jnp.einsum('i,jk->ijk', self.xm, self.theta_2d)
+            - jnp.einsum('i,jk->ijk', self.xn, self.phi_2d)
+        )
+        (self._gamma, self._gammadash_theta, self._gammadash_phi,
+        self._normal, self._unitnormal) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
+
+        # Recompute AbsB if available
+        if hasattr(self, 'bmnc'):
+            self._AbsB = self._set_AbsB()
+
+        return self
 
 
     def plot(self, ax=None, show=True, close=False, axis_equal=True, **kwargs):

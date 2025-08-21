@@ -27,14 +27,16 @@ class BiotSavart():
         dB = jnp.cross(self.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0)/jnp.linalg.norm(dif_R, axis=0)**3
         dB_sum = jnp.einsum("i,bai", self.currents*1e-7, dB, optimize="greedy")
         return jnp.mean(dB_sum, axis=0)
-
+    
     @partial(jit, static_argnames=['self'])
     def A(self, points):
         dif_R = (jnp.array(points)-self.gamma)
-        R_norm = jnp.linalg.norm(dif_R, axis=-1)
-        dA = self.gamma_dash / R_norm[..., None]
-        weighted = self.currents[:, None, None] * dA * 1e-7
-        A_vec = jnp.mean(weighted, axis=(0, 1))
+        dA = self.gamma_dash / jnp.linalg.norm(dif_R, axis=-1, keepdims=True)
+        A_vec = jnp.sum(
+            jnp.mean(self.currents[:, None, None] * dA * 1e-7, axis=1),
+            axis=0
+        )
+
         return A_vec
 
     @partial(jit, static_argnames=['self'])
