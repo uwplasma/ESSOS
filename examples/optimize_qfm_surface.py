@@ -16,7 +16,7 @@ from essos.fields import Vmec, BiotSavart
 # Load initial guess surface
 ntheta=35
 nphi=36
-vmec = os.path.join('input_files','input.initial_guess')
+vmec = os.path.join('input_files','input.rotating_ellipse')
 surf = SurfaceRZFourier(vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True)
 surf.change_resolution(6,6)
 
