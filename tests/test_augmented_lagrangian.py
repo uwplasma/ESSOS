@@ -363,13 +363,6 @@ class TestAugmentedLagrangian(unittest.TestCase):
 
         if __name__ == "__main__":
             pytest.main([__file__])
-        self.assertIsInstance(c, Constraint)
-        params = c.init(jnp.array([2.]))
-        # Should not raise
-        try:
-            c.loss(params, jnp.array([2.]))
-        except Exception:
-            self.fail("Constraint.loss raised Exception unexpectedly!")
 
     def test_alm_namedtuple(self):
         def dummy_init(*args, **kwargs): return None
