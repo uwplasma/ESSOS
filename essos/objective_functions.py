@@ -11,8 +11,6 @@ from essos.optimization import new_nearaxis_from_x_and_old_nearaxis
 from essos.constants import mu_0
 from essos.coil_perturbation import perturb_curves_systematic, perturb_curves_statistic
 
-import optax
-
 
 
 def pertubred_field_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):

@@ -199,15 +199,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertIsInstance(alm, ALM)
         state,grad,info = alm.init(params)
         eta = {'lambda': jnp.array([0.0])}
-        omega = {'lambda': jnp.array([0.0])}
-        mu_max=  jnp.array([10.0])
-        alpha=  jnp.array([1.0])
-        beta=  jnp.array([2.0])        
-        gamma=jnp.array([1.e-3])
-        epsilon=jnp.array([1.e-12])
-        eta_tol=jnp.array([1.e-1])
-        omega_tol=jnp.array([1.e-1])    
-        alm.update(params, state,grad,info,eta,omega,beta,mu_max,alpha,gamma,epsilon,eta_tol,omega_tol)
+        omega = {'lambda': jnp.array([0.0])}  
+        alm.update(params, state,grad,info,eta,omega)
 
     def test_ALM_model_jaxopt_LevenbergMarquardt_init_and_update(self):
         def fun(x): return x - 1
@@ -219,15 +212,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertIsInstance(alm, ALM)
         state,grad,info = alm.init(params)
         eta = {'lambda': jnp.array([0.0])}
-        omega = {'lambda': jnp.array([0.0])}
-        mu_max=  jnp.array([10.0])
-        alpha=  jnp.array([1.0])
-        beta=  jnp.array([2.0])        
-        gamma=jnp.array([1.e-3])
-        epsilon=jnp.array([1.e-12])
-        eta_tol=jnp.array([1.e-1])
-        omega_tol=jnp.array([1.e-1])     
-        alm.update(params, state,grad,info,eta,omega,beta,mu_max,alpha,gamma,epsilon,eta_tol,omega_tol)
+        omega = {'lambda': jnp.array([0.0])}   
+        alm.update(params, state,grad,info,eta,omega)
 
 
 
@@ -241,15 +227,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertIsInstance(alm, ALM)
         state,grad,info = alm.init(params)
         eta = {'lambda': jnp.array([0.0])}
-        omega = {'lambda': jnp.array([0.0])}
-        mu_max=  jnp.array([10.0])
-        alpha=  jnp.array([1.0])
-        beta=  jnp.array([2.0])        
-        gamma=jnp.array([1.e-3])
-        epsilon=jnp.array([1.e-12])
-        eta_tol=jnp.array([1.e-1])
-        omega_tol=jnp.array([1.e-1])     
-        alm.update(params, state,grad,info,eta,omega,beta,mu_max,alpha,gamma,epsilon,eta_tol,omega_tol)
+        omega = {'lambda': jnp.array([0.0])} 
+        alm.update(params, state,grad,info,eta,omega)
 
 
     def test_ALM_model_optimistix_LevenbergMarquardt_init_and_update(self):
@@ -263,14 +242,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         state,grad,info = alm.init(params)
         eta = {'lambda': jnp.array([0.0])}
         omega = {'lambda': jnp.array([0.0])}
-        mu_max=  jnp.array([10.0])
-        alpha=  jnp.array([1.0])
-        beta=  jnp.array([2.0])        
-        gamma=jnp.array([1.e-3])
-        epsilon=jnp.array([1.e-12])
-        eta_tol=jnp.array([1.e-1])
-        omega_tol=jnp.array([1.e-1])  
-        alm.update(params, state,grad,info,eta,omega,beta,mu_max,alpha,gamma,epsilon,eta_tol,omega_tol)
+        alm.update(params, state,grad,info,eta,omega)
 
 
 if __name__ == "__main__":
