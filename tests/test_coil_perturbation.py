@@ -1,6 +1,7 @@
 import unittest
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from essos.coil_perturbation import (
     #ldl_decomposition,
@@ -45,7 +46,7 @@ class TestCoilPerturbation(unittest.TestCase):
         sqrt_A = matrix_sqrt_via_spectral(A)
         # sqrt_A @ sqrt_A ≈ A
         A_recon = sqrt_A @ sqrt_A
-        jnp.testing.assert_allclose(A, A_recon, atol=1e-6)
+        np.testing.assert_allclose(A, A_recon, atol=1e-6)
 
     def test_gaussian_sampler_covariances_and_draw(self):
         points = jnp.linspace(0, 1, 5)
