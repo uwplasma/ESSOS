@@ -416,13 +416,13 @@ def loss_BdotN_only_constraint_stochastic(x,sampler,N_samples, vmec, dofs_curves
 # In that case we would do the candidates method from simsopt entirely
 def loss_cs_distance(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
     coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.sum(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,minimum_distance=min_distance_cs))
+    result=jnp.sum(jax.vmap(jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None)),in_axes=(None,None,0,0,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,minimum_distance=min_distance_cs))
     return result
 
 #Same as above but for individual constraints (useful in case one wants to target the several pairs individually)
 def loss_cs_distance_array(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
     coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,minimum_distance=min_distance_cs)
+    result=jax.vmap(jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None)),in_axes=(None,None,0,0,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,minimum_distance=min_distance_cs)
     return result.flatten()
 
 #This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
