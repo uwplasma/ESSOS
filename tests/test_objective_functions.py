@@ -12,6 +12,7 @@ class DummyField:
         self.B_axis = jnp.array([[1., 0., 0.]])
         self.grad_B_axis = jnp.array([[0., 0., 0.]])
         self.r_axis = 1.0
+        self.z_axis = 0.0
         self.AbsB = MagicMock(return_value=5.7)
         self.B = MagicMock(return_value=jnp.array([1., 0., 0.]))
         self.dB_by_dX = MagicMock(return_value=jnp.array([0., 0., 0.]))
@@ -23,6 +24,7 @@ class DummyField:
         self.gamma_dashdash = jnp.ones((2, 10, 3))
         self.currents = jnp.ones(2)
         self.quadpoints = jnp.linspace(0, 1, 10)
+        self.x = jnp.zeros((10))
 
 class DummyCoils(DummyField):
     def __init__(self):
