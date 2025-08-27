@@ -145,7 +145,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         # Call init and update with dummy data
         params = {'x': jnp.array([1.0])}
         lagrange_params = LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))
-        updates = {'x': jnp.array([0.1])}
+        updates = LagrangeMultiplier(jnp.array([-0.5]), jnp.array([1.0]), jnp.array([1.0]))
         state = gt.init(params)
         # eta, omega, etc. are required by update_fn signature
         eta = {'x': jnp.array([0.0])}
