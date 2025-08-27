@@ -196,7 +196,9 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = eq(fun)
         alm = ALM_model_jaxopt_lbfgsb(constraint)
         self.assertIsInstance(alm, ALM)
-        params = jnp.array([2.0])
+        main_params = {'x': jnp.array([1.0])}
+        lagrange_params = {'x': LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))}        
+        params = main_params,lagrange_params
         state = alm.init(params)
         try:
             alm.update(params, state)
@@ -208,7 +210,9 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = eq(fun)
         alm = ALM_model_jaxopt_LevenbergMarquardt(constraint)
         self.assertIsInstance(alm, ALM)
-        params = jnp.array([2.0])
+        main_params = {'x': jnp.array([1.0])}
+        lagrange_params = {'x': LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))}        
+        params = main_params,lagrange_params
         state = alm.init(params)
         try:
             alm.update(params, state)
@@ -220,7 +224,9 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = eq(fun)
         alm = ALM_model_jaxopt_lbfgs(constraint)
         self.assertIsInstance(alm, ALM)
-        params = jnp.array([2.0])
+        main_params = {'x': jnp.array([1.0])}
+        lagrange_params = {'x': LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))}        
+        params = main_params,lagrange_params
         state = alm.init(params)
         try:
             alm.update(params, state)
@@ -232,7 +238,9 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = eq(fun)
         alm = ALM_model_optimistix_LevenbergMarquardt(constraint)
         self.assertIsInstance(alm, ALM)
-        params = jnp.array([2.0])
+        main_params = {'x': jnp.array([1.0])}
+        lagrange_params = {'x': LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))}        
+        params = main_params,lagrange_params
         state = alm.init(params)
         try:
             alm.update(params, state)
