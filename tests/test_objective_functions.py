@@ -192,17 +192,17 @@ class TestObjectiveFunctions(unittest.TestCase):
         objf.loss_linking_mnumber_constarint(self.x, self.dofs_curves, self.currents_scale, self.nfp)
 
     def test_cc_distance_pure(self):
-        gamma1 = jnp.zeros((10, 3))
+        gamma1 = jnp.ones((10, 3))*3.
         l1 = jnp.ones((10, 3))
-        gamma2 = jnp.zeros((10, 3))
-        l2 = jnp.ones((10, 3))
+        gamma2 = jnp.ones((10, 3))*4.
+        l2 = jnp.ones((10, 3))*6.
         objf.cc_distance_pure(gamma1, l1, gamma2, l2, 1.0)
 
     def test_cs_distance_pure(self):
-        gammac = jnp.zeros((10, 3))
+        gammac = jnp.ones((10, 3))*7.
         lc = jnp.ones((10, 3))
-        gammas = jnp.zeros((10, 3))
-        ns = jnp.ones((10, 3))
+        gammas = jnp.ones((10, 3))*9.
+        ns = jnp.ones((10, 3))*10.
         objf.cs_distance_pure(gammac, lc, gammas, ns, 1.0)
 
     @patch('essos.objective_functions.coils_from_dofs', return_value=DummyCoils())
@@ -212,8 +212,8 @@ class TestObjectiveFunctions(unittest.TestCase):
     @patch('essos.objective_functions.compute_curvature', return_value=1.0)
     @patch('essos.objective_functions.BiotSavart_from_gamma', return_value=MagicMock(B=MagicMock(return_value=jnp.array([1., 0., 0.]))))
     def test_lp_force_pure(self, bsg, cc):
-        gamma = jnp.zeros((2, 10, 3))
-        gamma_dash = jnp.ones((2, 10, 3))
+        gamma = jnp.ones((2, 10, 3))*2.
+        gamma_dash = jnp.ones((2, 10, 3))*3.
         gamma_dashdash = jnp.ones((2, 10, 3))
         currents = jnp.ones(2)
         quadpoints = jnp.linspace(0, 1, 10)
@@ -225,7 +225,7 @@ class TestObjectiveFunctions(unittest.TestCase):
         objf.B_regularized_singularity_term(rc_prime, rc_prime_prime, 1.0)
 
     def test_B_regularized_pure(self):
-        gamma = jnp.zeros((10, 3))
+        gamma = jnp.ones((10, 3))*4.
         gammadash = jnp.ones((10, 3))
         gammadashdash = jnp.ones((10, 3))
         quadpoints = jnp.linspace(0, 1, 10)
@@ -243,10 +243,10 @@ class TestObjectiveFunctions(unittest.TestCase):
         objf.rectangular_xsection_delta(a, b)
 
     def test_linking_number_pure_and_integrand(self):
-        gamma1 = jnp.zeros((10, 3))
-        lc1 = jnp.ones((10, 3))
-        gamma2 = jnp.zeros((10, 3))
-        lc2 = jnp.ones((10, 3))
+        gamma1 = jnp.ones((10, 3))*4.
+        lc1 = jnp.ones((10, 3))*2.
+        gamma2 = jnp.ones((10, 3))*6.
+        lc2 = jnp.ones((10, 3))*5.
         dphi = 0.1
         objf.linking_number_pure(gamma1, lc1, gamma2, lc2, dphi)
         r1 = jnp.zeros(3)
