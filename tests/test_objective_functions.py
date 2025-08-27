@@ -51,8 +51,8 @@ class DummyVmec:
 
 class DummySurface:
     def __init__(self):
-        self.gamma = np.zeros((10, 3))
-        self.unitnormal = np.ones((10, 3))
+        self.gamma = jnp.zeros((10, 3))
+        self.unitnormal = jnp.ones((10, 3))
 
 def dummy_sampler(*args, **kwargs):
     return 0
