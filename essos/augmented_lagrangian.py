@@ -640,8 +640,8 @@ def ALM_model_jaxopt_lbfgs(constraints: Constraint,#List of constraints
         state=minimization_loop.run(main_params,lagrange_params=lagrange_params,**kargs)
         main_params=state.params
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        true_func=partial(lagrange_update(model_lagrangian=model_lagrangian),model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-        false_func=partial(lagrange_update(model_lagrangian=model_lagrangian),model_mu='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
+        true_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+        false_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
         lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
         lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
         params=main_params,lagrange_params
