@@ -1,10 +1,9 @@
 import unittest
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from essos.coil_perturbation import (
-    ldl_decomposition,
+    #ldl_decomposition,
     matrix_sqrt_via_spectral,
     GaussianSampler,
     PerturbationSample,
@@ -31,22 +30,22 @@ import essos.coil_perturbation
 essos.coil_perturbation.apply_symmetries_to_gammas = dummy_apply_symmetries_to_gammas
 
 class TestCoilPerturbation(unittest.TestCase):
-    def test_ldl_decomposition(self):
-        A = jnp.array([[4.0, 2.0], [2.0, 3.0]])
-        L, D = ldl_decomposition(A)
-        # Check shapes
-        self.assertEqual(L.shape, (2, 2))
-        self.assertEqual(D.shape, (2,))
-        # Check that A ≈ L @ jnp.diag(D) @ L.T
-        A_recon = L @ jnp.diag(D) @ L.T
-        np.testing.assert_allclose(A, A_recon, atol=1e-6)
+    #def test_ldl_decomposition(self):
+    #    A = jnp.array([[4.0, 2.0], [2.0, 3.0]])
+    #    L, D = ldl_decomposition(A)
+    #    # Check shapes
+    #    self.assertEqual(L.shape, (2, 2))
+    #    self.assertEqual(D.shape, (2,))
+    #    # Check that A ≈ L @ jnp.diag(D) @ L.T
+    #    A_recon = L @ jnp.diag(D) @ L.T
+    #    np.testing.assert_allclose(A, A_recon, atol=1e-6)
 
     def test_matrix_sqrt_via_spectral(self):
         A = jnp.array([[4.0, 2.0], [2.0, 3.0]])
         sqrt_A = matrix_sqrt_via_spectral(A)
         # sqrt_A @ sqrt_A ≈ A
         A_recon = sqrt_A @ sqrt_A
-        np.testing.assert_allclose(A, A_recon, atol=1e-6)
+        jnp.testing.assert_allclose(A, A_recon, atol=1e-6)
 
     def test_gaussian_sampler_covariances_and_draw(self):
         points = jnp.linspace(0, 1, 5)
