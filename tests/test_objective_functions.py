@@ -24,7 +24,7 @@ class DummyField:
         self.gamma_dashdash = jnp.ones((2, 10, 3))
         self.currents = jnp.ones(2)
         self.quadpoints = jnp.linspace(0, 1, 10)
-        self.x = jnp.zeros((10))
+        self.x = jnp.zeros((10,1))
 
 class DummyCoils(DummyField):
     def __init__(self):
