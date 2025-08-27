@@ -144,7 +144,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertTrue(hasattr(gt, 'update'))
         # Call init and update with dummy data
         params = {'x': jnp.array([1.0])}
-        lagrange_params = {'x': LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))}
+        lagrange_params = LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))
         updates = {'x': jnp.array([0.1])}
         state = gt.init(params)
         # eta, omega, etc. are required by update_fn signature
@@ -183,7 +183,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         # Call init and update
         state = alm.init(params)
         # Simulate a gradient step
-        grads = jax.tree_map(jnp.ones_like, params)
+        grads = jax.tree_util.tree_map(jnp.ones_like, params)
         # eta, omega, etc. are required by update_fn signature
         eta = {'lambda': jnp.array([0.0])}
         omega = {'lambda': jnp.array([0.0])}
