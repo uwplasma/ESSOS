@@ -175,10 +175,12 @@ class TestAugmentedLagrangian(unittest.TestCase):
         optimizer = optax.sgd(1e-3)
         def fun(x): return x - 1
         constraint = eq(fun)
+        main_params = jnp.array([6.0,2.0])        
+        lagrange_params = constraint.init(main_params)
+        params = main_params,lagrange_params            
         alm = ALM_model_optax(optimizer, constraint)
         self.assertIsInstance(alm, ALM)
         # Call init and update
-        params = jnp.array([2.0])
         state = alm.init(params)
         # Simulate a gradient step
         grads = jax.tree_map(jnp.ones_like, params)
@@ -194,11 +196,11 @@ class TestAugmentedLagrangian(unittest.TestCase):
     def test_ALM_model_jaxopt_lbfgsb_init_and_update(self):
         def fun(x): return x - 1
         constraint = eq(fun)
+        main_params = jnp.array([6.0,2.0])        
+        lagrange_params = constraint.init(main_params)
+        params = main_params,lagrange_params            
         alm = ALM_model_jaxopt_lbfgsb(constraint)
         self.assertIsInstance(alm, ALM)
-        main_params = {'x': jnp.array([1.0])}
-        lagrange_params = {'x': LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))}        
-        params = main_params,lagrange_params
         state = alm.init(params)
         try:
             alm.update(params, state)
@@ -208,11 +210,11 @@ class TestAugmentedLagrangian(unittest.TestCase):
     def test_ALM_model_jaxopt_LevenbergMarquardt_init_and_update(self):
         def fun(x): return x - 1
         constraint = eq(fun)
+        main_params = jnp.array([6.0,2.0])        
+        lagrange_params = constraint.init(main_params)
+        params = main_params,lagrange_params        
         alm = ALM_model_jaxopt_LevenbergMarquardt(constraint)
         self.assertIsInstance(alm, ALM)
-        main_params = {'x': jnp.array([1.0])}
-        lagrange_params = {'x': LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))}        
-        params = main_params,lagrange_params
         state = alm.init(params)
         try:
             alm.update(params, state)
@@ -222,11 +224,11 @@ class TestAugmentedLagrangian(unittest.TestCase):
     def test_ALM_model_jaxopt_lbfgs_init_and_update(self):
         def fun(x): return x - 1
         constraint = eq(fun)
+        main_params = jnp.array([6.0,2.0])        
+        lagrange_params = constraint.init(main_params)
+        params = main_params,lagrange_params            
         alm = ALM_model_jaxopt_lbfgs(constraint)
         self.assertIsInstance(alm, ALM)
-        main_params = {'x': jnp.array([1.0])}
-        lagrange_params = {'x': LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))}        
-        params = main_params,lagrange_params
         state = alm.init(params)
         try:
             alm.update(params, state)
@@ -236,11 +238,11 @@ class TestAugmentedLagrangian(unittest.TestCase):
     def test_ALM_model_optimistix_LevenbergMarquardt_init_and_update(self):
         def fun(x): return x - 1
         constraint = eq(fun)
+        main_params = jnp.array([6.0,2.0])        
+        lagrange_params = constraint.init(main_params)
+        params = main_params,lagrange_params            
         alm = ALM_model_optimistix_LevenbergMarquardt(constraint)
         self.assertIsInstance(alm, ALM)
-        main_params = {'x': jnp.array([1.0])}
-        lagrange_params = {'x': LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))}        
-        params = main_params,lagrange_params
         state = alm.init(params)
         try:
             alm.update(params, state)
