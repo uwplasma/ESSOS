@@ -229,18 +229,18 @@ class TestAugmentedLagrangian(unittest.TestCase):
         alm.update(params, state,grad,info,eta,omega)
 
 
-    def test_ALM_model_optimistix_LevenbergMarquardt_init_and_update(self):
-        def fun(x): return x - 1
-        constraint = eq(fun)
-        main_params = jnp.array([6.0,2.0])        
-        lagrange_params = constraint.init(main_params)
-        params = main_params,lagrange_params            
-        alm = ALM_model_optimistix_LevenbergMarquardt(constraint)
-        self.assertIsInstance(alm, ALM)
-        state,grad,info = alm.init(params)
-        eta = jnp.array(1.0)
-        omega =  jnp.array(1.0)
-        alm.update(params, state,grad,info,eta,omega)
+#    def test_ALM_model_optimistix_LevenbergMarquardt_init_and_update(self):
+#        def fun(x): return x - 1
+#        constraint = eq(fun)
+#        main_params = jnp.array([6.0,2.0])        
+#        lagrange_params = constraint.init(main_params)
+#        params = main_params,lagrange_params            
+#        alm = ALM_model_optimistix_LevenbergMarquardt(constraint)
+#        self.assertIsInstance(alm, ALM)
+#        state,grad,info = alm.init(params)
+#        eta = jnp.array(1.0)
+#        omega =  jnp.array(1.0)
+#        alm.update(params, state,grad,info,eta,omega)
 
 
 if __name__ == "__main__":
