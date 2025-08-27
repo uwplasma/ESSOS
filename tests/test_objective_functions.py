@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 import jax.numpy as jnp
-import numpy as np
 
 import essos.objective_functions as objf
 
@@ -36,11 +35,11 @@ class DummyCurves:
 class DummyParticles:
     def __init__(self):
         self.to_full_orbit = MagicMock()
-        self.trajectories = np.zeros((2, 10, 3))
+        self.trajectories = jnp.zeros((2, 10, 3))
 
 class DummyTracing:
     def __init__(self, *args, **kwargs):
-        self.trajectories = np.zeros((2, 10, 3))
+        self.trajectories = jnp.zeros((2, 10, 3))
         self.field = DummyField()
         self.loss_fraction = 0.1
         self.times_to_trace = 10
@@ -193,17 +192,17 @@ class TestObjectiveFunctions(unittest.TestCase):
         objf.loss_linking_mnumber_constarint(self.x, self.dofs_curves, self.currents_scale, self.nfp)
 
     def test_cc_distance_pure(self):
-        gamma1 = np.zeros((10, 3))
-        l1 = np.ones((10, 3))
-        gamma2 = np.zeros((10, 3))
-        l2 = np.ones((10, 3))
+        gamma1 = jnp.zeros((10, 3))
+        l1 = jnp.ones((10, 3))
+        gamma2 = jnp.zeros((10, 3))
+        l2 = jnp.ones((10, 3))
         objf.cc_distance_pure(gamma1, l1, gamma2, l2, 1.0)
 
     def test_cs_distance_pure(self):
-        gammac = np.zeros((10, 3))
-        lc = np.ones((10, 3))
-        gammas = np.zeros((10, 3))
-        ns = np.ones((10, 3))
+        gammac = jnp.zeros((10, 3))
+        lc = jnp.ones((10, 3))
+        gammas = jnp.zeros((10, 3))
+        ns = jnp.ones((10, 3))
         objf.cs_distance_pure(gammac, lc, gammas, ns, 1.0)
 
     @patch('essos.objective_functions.coils_from_dofs', return_value=DummyCoils())
@@ -213,23 +212,23 @@ class TestObjectiveFunctions(unittest.TestCase):
     @patch('essos.objective_functions.compute_curvature', return_value=1.0)
     @patch('essos.objective_functions.BiotSavart_from_gamma', return_value=MagicMock(B=MagicMock(return_value=jnp.array([1., 0., 0.]))))
     def test_lp_force_pure(self, bsg, cc):
-        gamma = np.zeros((2, 10, 3))
-        gamma_dash = np.ones((2, 10, 3))
-        gamma_dashdash = np.ones((2, 10, 3))
-        currents = np.ones(2)
-        quadpoints = np.linspace(0, 1, 10)
+        gamma = jnp.zeros((2, 10, 3))
+        gamma_dash = jnp.ones((2, 10, 3))
+        gamma_dashdash = jnp.ones((2, 10, 3))
+        currents = jnp.ones(2)
+        quadpoints = jnp.linspace(0, 1, 10)
         objf.lp_force_pure(0, gamma, gamma_dash, gamma_dashdash, currents, quadpoints, 1, 1e6)
 
     def test_B_regularized_singularity_term(self):
-        rc_prime = np.ones((10, 3))
-        rc_prime_prime = np.ones((10, 3))
+        rc_prime = jnp.ones((10, 3))
+        rc_prime_prime = jnp.ones((10, 3))
         objf.B_regularized_singularity_term(rc_prime, rc_prime_prime, 1.0)
 
     def test_B_regularized_pure(self):
-        gamma = np.zeros((10, 3))
-        gammadash = np.ones((10, 3))
-        gammadashdash = np.ones((10, 3))
-        quadpoints = np.linspace(0, 1, 10)
+        gamma = jnp.zeros((10, 3))
+        gammadash = jnp.ones((10, 3))
+        gammadashdash = jnp.ones((10, 3))
+        quadpoints = jnp.linspace(0, 1, 10)
         current = 1.0
         regularization = 1.0
         objf.B_regularized_pure(gamma, gammadash, gammadashdash, quadpoints, current, regularization)
@@ -244,16 +243,16 @@ class TestObjectiveFunctions(unittest.TestCase):
         objf.rectangular_xsection_delta(a, b)
 
     def test_linking_number_pure_and_integrand(self):
-        gamma1 = np.zeros((10, 3))
-        lc1 = np.ones((10, 3))
-        gamma2 = np.zeros((10, 3))
-        lc2 = np.ones((10, 3))
+        gamma1 = jnp.zeros((10, 3))
+        lc1 = jnp.ones((10, 3))
+        gamma2 = jnp.zeros((10, 3))
+        lc2 = jnp.ones((10, 3))
         dphi = 0.1
         objf.linking_number_pure(gamma1, lc1, gamma2, lc2, dphi)
-        r1 = np.zeros(3)
-        dr1 = np.ones(3)
-        r2 = np.zeros(3)
-        dr2 = np.ones(3)
+        r1 = jnp.zeros(3)
+        dr1 = jnp.ones(3)
+        r2 = jnp.zeros(3)
+        dr2 = jnp.ones(3)
         objf.integrand_linking_number(r1, dr1, r2, dr2, dphi, dphi)
 
 if __name__ == "__main__":
