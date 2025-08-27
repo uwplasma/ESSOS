@@ -416,13 +416,13 @@ def loss_BdotN_only_constraint_stochastic(x,sampler,N_samples, vmec, dofs_curves
 # In that case we would do the candidates method from simsopt entirely
 def loss_cs_distance(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
     coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.sum(jax.vmap(jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None)),in_axes=(None,None,None,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,min_distance_cs))
+    result=jnp.sum(jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,min_distance_cs))
     return result
 
 #Same as above but for individual constraints (useful in case one wants to target the several pairs individually)
 def loss_cs_distance_array(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
     coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jax.vmap(jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None)),in_axes=(None,None,None,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,min_distance_cs)
+    result=jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,min_distance_cs)
     return result.flatten()
 
 #This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
@@ -571,13 +571,6 @@ def loss_lorentz_force_coils(x,dofs_curves,currents_scale,nfp,n_segments=60,stel
 
 def lp_force_pure(index,gamma, gamma_dash,gamma_dashdash,currents,quadpoints,p, threshold):
     """Pure function for minimizing the Lorentz force on a coil.
-    The function is
-
-     .. math::
-        J = \frac{1}{p}\left(\int \text{max}(|\vec{F}| - F_0, 0)^p d\ell\right)
-
-    where :math:`\vec{F}` is the Lorentz force, :math:`F_0` is a threshold force,  
-    and :math:`\ell` is arclength along the coil.
     """
     regularization = regularization_circ(1./jnp.average(compute_curvature( gamma_dash.at[index].get(), gamma_dashdash.at[index].get())))
     B_mutual=jax.vmap(BiotSavart_from_gamma(jnp.roll(gamma, -index, axis=0)[1:],
