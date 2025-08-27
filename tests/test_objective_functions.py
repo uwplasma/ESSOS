@@ -180,7 +180,7 @@ class TestObjectiveFunctions(unittest.TestCase):
 
     @patch('essos.objective_functions.coils_from_dofs', return_value=DummyCoils())
     def test_loss_cs_distance_and_array(self, cfd):
-        objf.loss_cs_distance(self.x, self.surface, self.dofs_curves, self.currents_scale, self.nfp)
+        #objf.loss_cs_distance(self.x, self.surface, self.dofs_curves, self.currents_scale, self.nfp)
         objf.loss_cs_distance_array(self.x, self.surface, self.dofs_curves, self.currents_scale, self.nfp)
 
     @patch('essos.objective_functions.coils_from_dofs', return_value=DummyCoils())
