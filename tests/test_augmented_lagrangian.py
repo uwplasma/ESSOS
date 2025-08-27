@@ -188,10 +188,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         eta = {'lambda': jnp.array([0.0])}
         omega = {'lambda': jnp.array([0.0])}
         # The update function signature may vary, so use try/except to catch errors
-        try:
-            alm.update(grads, state, eta, omega, params)
-        except Exception:
-            pass  # Accept errors due to incomplete dummy data
+        alm.update(grads, state, eta, omega, params)
 
     def test_ALM_model_jaxopt_lbfgsb_init_and_update(self):
         def fun(x): return x - 1
@@ -202,10 +199,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         alm = ALM_model_jaxopt_lbfgsb(constraint)
         self.assertIsInstance(alm, ALM)
         state = alm.init(params)
-        try:
-            alm.update(params, state)
-        except Exception:
-            pass
+        alm.update(params, state)
 
     def test_ALM_model_jaxopt_LevenbergMarquardt_init_and_update(self):
         def fun(x): return x - 1
@@ -216,10 +210,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
         alm = ALM_model_jaxopt_LevenbergMarquardt(constraint)
         self.assertIsInstance(alm, ALM)
         state = alm.init(params)
-        try:
-            alm.update(params, state)
-        except Exception:
-            pass
+        alm.update(params, state)
+
 
     def test_ALM_model_jaxopt_lbfgs_init_and_update(self):
         def fun(x): return x - 1
@@ -230,10 +222,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         alm = ALM_model_jaxopt_lbfgs(constraint)
         self.assertIsInstance(alm, ALM)
         state = alm.init(params)
-        try:
-            alm.update(params, state)
-        except Exception:
-            pass
+        alm.update(params, state)
 
     def test_ALM_model_optimistix_LevenbergMarquardt_init_and_update(self):
         def fun(x): return x - 1
@@ -244,10 +233,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         alm = ALM_model_optimistix_LevenbergMarquardt(constraint)
         self.assertIsInstance(alm, ALM)
         state = alm.init(params)
-        try:
-            alm.update(params, state)
-        except Exception:
-            pass
+        alm.update(params, state)
 
 if __name__ == "__main__":
     pytest.main([__file__])
