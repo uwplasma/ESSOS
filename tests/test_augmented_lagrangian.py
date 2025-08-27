@@ -205,8 +205,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
         beta=  jnp.array([2.0])        
         gamma=jnp.array([1.e-3])
         epsilon=jnp.array([1.e-12])
-        eta_tol=1.e-1
-        omega_tol=1.e-1      
+        eta_tol=jnp.array([1.e-1])
+        omega_tol=jnp.array([1.e-1])    
         alm.update(params, state,grad,info,eta,omega,beta,mu_max,alpha,gamma,epsilon,eta_tol,omega_tol)
 
     def test_ALM_model_jaxopt_LevenbergMarquardt_init_and_update(self):
@@ -225,8 +225,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
         beta=  jnp.array([2.0])        
         gamma=jnp.array([1.e-3])
         epsilon=jnp.array([1.e-12])
-        eta_tol=1.e-1
-        omega_tol=1.e-1      
+        eta_tol=jnp.array([1.e-1])
+        omega_tol=jnp.array([1.e-1])     
         alm.update(params, state,grad,info,eta,omega,beta,mu_max,alpha,gamma,epsilon,eta_tol,omega_tol)
 
 
@@ -247,8 +247,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
         beta=  jnp.array([2.0])        
         gamma=jnp.array([1.e-3])
         epsilon=jnp.array([1.e-12])
-        eta_tol=1.e-1
-        omega_tol=1.e-1      
+        eta_tol=jnp.array([1.e-1])
+        omega_tol=jnp.array([1.e-1])     
         alm.update(params, state,grad,info,eta,omega,beta,mu_max,alpha,gamma,epsilon,eta_tol,omega_tol)
 
 
@@ -268,8 +268,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
         beta=  jnp.array([2.0])        
         gamma=jnp.array([1.e-3])
         epsilon=jnp.array([1.e-12])
-        eta_tol=1.e-1
-        omega_tol=1.e-1      
+        eta_tol=jnp.array([1.e-1])
+        omega_tol=jnp.array([1.e-1])  
         alm.update(params, state,grad,info,eta,omega,beta,mu_max,alpha,gamma,epsilon,eta_tol,omega_tol)
 
 
