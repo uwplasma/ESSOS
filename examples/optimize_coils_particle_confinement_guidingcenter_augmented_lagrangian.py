@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 from essos.surfaces import SurfaceRZFourier
 from essos.dynamics import Particles, Tracing
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
-from essos.optimization import optimize_loss_function
 from essos.objective_functions import loss_particle_r_cross_max_constraint,loss_particle_gamma_c
 from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis_average,loss_Br,loss_iota
 from functools import partial
@@ -56,7 +55,7 @@ currents_scale = coils_initial.currents_scale
 
 ntheta=30
 nphi=30
-input = os.path.join(os.path.dirname(__name__),'input_files','input.rotating_ellipse_2')
+input = os.path.join(os.path.dirname(__name__),'input_files','input.toroidal_surface')
 boundary= SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='full torus')
 #print('Final params',params)
 #print(info[1])

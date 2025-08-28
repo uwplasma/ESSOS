@@ -248,11 +248,20 @@ def loss_iota(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stells
     B_phi=jnp.multiply(B_particle[:,:,0],dphi_dx)+jnp.multiply(B_particle[:,:,1],dphi_dy)
     return jnp.sum(jnp.maximum(target_iota-B_theta/B_phi,0.0))
 
-def loss_lost_fraction(field, particles, maxtime=1e-5, num_steps=100, trace_tolerance=1e-5, model='GuidingCenterAdaptative',timestep=1.e-8,boundary=None):
+#final lost fraction
+def loss_lost_fraction(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5,timestep=1.e-7, model='GuidingCenterAdaptative',boundary=None):
+    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym) 
     particles.to_full_orbit(field)
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    lost_fraction = tracing.loss_fraction
+    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+    lost_fraction = tracing.loss_fractions[-1]
+    return lost_fraction
+
+#lost fraction at every saved time snapshot (which is given by num_steps)
+def loss_lost_fraction_times(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5,timestep=1.e-7, model='GuidingCenterAdaptative',boundary=None):
+    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym) 
+    particles.to_full_orbit(field)
+    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+    lost_fraction = tracing.loss_fractions
     return lost_fraction
 
 # @partial(jit, static_argnums=(0, 1))

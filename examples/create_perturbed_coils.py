@@ -59,7 +59,7 @@ coils_sys.plot(ax=ax1, show=False,color='blue',linewidth=1,label='Systematic per
 coils_stat.plot(ax=ax1, show=False,color='green',linewidth=1,label='Statistical perturbation')
 coils_perturbed.plot(ax=ax1, show=False,color='magenta',linewidth=1,label='Perturbed coils')
 plt.legend()
-plt.savefig('coil_perturb.pdf')
+plt.show()
 
 
 

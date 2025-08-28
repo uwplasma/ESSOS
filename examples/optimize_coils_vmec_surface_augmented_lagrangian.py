@@ -153,14 +153,14 @@ curvature_alm=jnp.mean(BiotSavart(coils_optimized_alm).coils.curvature, axis=1)
 length_alm=jnp.max(jnp.ravel(BiotSavart(coils_optimized_alm).coils.length))
 
 
-print(f"Maximum allowed curvature was: ",max_coil_curvature)
-print(f"Mean curvature no ALM: ",curvature)
-print(f"Length no ALM:", length)
-print(f"Maximum allowed length was: ",max_coil_length)
+print(f"Maximum allowed curvature target: ",max_coil_curvature)
+print(f"Maximum allowed length target: ",max_coil_length)
+print(f"Mean curvature without ALM: ",curvature)
+print(f"Length withou ALM:", length)
 print(f"Mean curvature with ALM: ",curvature_alm)
 print(f"Length with ALM:", length_alm)
 print(f"Maximum BdotN/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
-print(f"Maximum BdotN/B after optimization no ALM: {jnp.max(BdotN_over_B_optimized):.2e}")
+print(f"Maximum BdotN/B after optimization without ALM: {jnp.max(BdotN_over_B_optimized):.2e}")
 print(f"Maximum BdotN/B after optimization with ALM: {jnp.max(BdotN_over_B_optimized_alm):.2e}")
 # Plot coils, before and after optimization
 fig = plt.figure(figsize=(8, 4))
@@ -173,7 +173,7 @@ coils_optimized_alm.plot(ax=ax2, show=False,color='orange', label='Optimized wit
 vmec.surface.plot(ax=ax2, show=False)
 plt.legend()
 plt.tight_layout()
-plt.savefig('coils_opt_alm.pdf')
+plt.show()
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
