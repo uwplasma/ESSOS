@@ -132,7 +132,7 @@ class TestObjectiveFunctions(unittest.TestCase):
     @patch('essos.objective_functions.field_from_dofs', return_value=DummyField())
     def test_loss_lost_fraction(self, ffd):
         with patch('essos.objective_functions.Tracing', return_value=self.tracing):
-            objf.loss_lost_fraction(self.field, self.particles)
+            objf.loss_lost_fraction(self.field, self.particles, self.dofs_curves, self.currents_scale, self.nfp)
 
     def test_normB_axis(self):
         objf.normB_axis(self.field)
