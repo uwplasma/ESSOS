@@ -43,7 +43,7 @@ class DummyTracing:
     def __init__(self, *args, **kwargs):
         self.trajectories = jnp.zeros((2, 10, 3))
         self.field = DummyField()
-        self.loss_fraction = 0.1
+        self.loss_fractions = jnp.array([0.1,0.2,1.])
         self.times_to_trace = 10
         self.maxtime = 1e-5
 
