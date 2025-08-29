@@ -89,6 +89,7 @@ class GaussianSampler():
             (measure for the magnitude of the perturbation).
         length_scale: length scale of the underlying gaussian process
                       (measure for the smoothness of the perturbation).
+        n_derivs: number of derivatives to calculate, right now maximum is up to 2
     """
 
     points: Array
@@ -206,14 +207,18 @@ class PerturbationSample():
 
 def perturb_curves_systematic(curves: Curves,sampler:GaussianSampler, key=None):
     """
-    Apply a systematic perturbation to all the coils
+    Apply a systematic perturbation to all the coils. 
+    This means taht an independent perturbation is applied to the each unique coil
+    Then, the required symmetries are applied to the perturbed unique set of coils
     
     Args:
-        coils: The coils to be perturbed.
-        perturbation_sample: A PerturbationSample containing the perturbation data.
+        curves: curves to be perturbed.
+        sampler: the gaussian sampler used to get the perturbations
+        key: the seed which will be splited to geenerate random 
+        but reproducible pertubations
         
     Returns:
-        A new Coils object with the perturbed curves.
+        The curves given as an input are modified and thus no return is done
     """
     new_seeds=jax.random.split(key, num=curves.n_base_curves)
     if sampler.n_derivs == 0:
@@ -239,14 +244,18 @@ def perturb_curves_systematic(curves: Curves,sampler:GaussianSampler, key=None):
 
 def perturb_curves_statistic(curves: Curves,sampler:GaussianSampler, key=None):
     """
-    Apply a systematic perturbation to all the coils
+    Apply a statistic perturbation to all the coils. 
+    This means taht an independent perturbation is applied every coil
+    including repeated coils 
     
     Args:
-        coils: The coils to be perturbed.
-        perturbation_sample: A PerturbationSample containing the perturbation data.
-        
+        curves: curves to be perturbed.
+        sampler: the gaussian sampler used to get the perturbations
+        key: the seed which will be splited to geenerate random 
+        but reproducible pertubations
+                
     Returns:
-        A new Coils object with the perturbed curves.
+        The curves given as an input are modified and thus no return is done
     """
     new_seeds=jax.random.split(key, num=curves.gamma.shape[0])
     if sampler.n_derivs == 0:
