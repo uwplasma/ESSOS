@@ -1,6 +1,6 @@
 
 import os
-number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax
@@ -24,11 +24,11 @@ import essos.augmented_lagrangian as alm
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = number_of_processors_to_use*1
+nparticles = number_of_processors_to_use*10
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 9
-maxtimes = [2.e-5]
+maximum_function_evaluations = 1
+maxtimes = [1.e-5]
 num_steps=100
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
@@ -53,18 +53,6 @@ n_segments = coils_initial.n_segments
 dofs_curves_shape = coils_initial.dofs_curves.shape
 currents_scale = coils_initial.currents_scale
 
-ntheta=30
-nphi=30
-input = os.path.join(os.path.dirname(__name__),'input_files','input.toroidal_surface')
-boundary= SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='full torus')
-#print('Final params',params)
-#print(info[1])
-# Plot trajectories, before and after optimization
-fig = plt.figure(figsize=(9, 8))
-ax1 = fig.add_subplot(221, projection='3d')
-boundary.plot(ax=ax1, show=False)
-coils_initial.plot(ax=ax1, show=False)
-plt.savefig('surface.pdf')
 
 # Initialize particles
 phi_array = jnp.linspace(0, 2*jnp.pi, nparticles)
@@ -72,13 +60,13 @@ initial_xyz=jnp.array([major_radius_coils*jnp.cos(phi_array), major_radius_coils
 particles = Particles(initial_xyz=initial_xyz)
 
 t=maxtimes[0]
-loss_partial = partial(loss_particle_gamma_c,particles=particles, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps,boundary=boundary)
+loss_partial = partial(loss_particle_gamma_c,particles=particles, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps)
 curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
 length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
 Baxis_average_partial=partial(loss_normB_axis_average,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
-r_max_partial = partial(loss_particle_r_cross_max_constraint,target_r=0.4, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps,boundary=boundary)
-iota_partial = partial(loss_iota,target_iota=0.5, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps,boundary=boundary)
-Br_partial = partial(loss_Br, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps,boundary=boundary,)
+r_max_partial = partial(loss_particle_r_cross_max_constraint,target_r=0.4, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps)
+iota_partial = partial(loss_iota,target_iota=0.5, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps)
+Br_partial = partial(loss_Br, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps)
 
 
 # Create the constraints
@@ -134,7 +122,7 @@ while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or
     #if i % 5 == 0:
     #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
     print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')
-    print('lagrange',params[1])
+    #print('lagrange',params[1])
     i=i+1
 
 

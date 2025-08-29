@@ -131,7 +131,7 @@ while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or
     #if i % 5 == 0:
     #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
     print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')
-    print('lagrange',params[1])
+    #print('lagrange',params[1])
     i=i+1
 
 

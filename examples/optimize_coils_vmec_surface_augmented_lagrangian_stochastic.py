@@ -60,7 +60,7 @@ dofs_curves_shape = coils_initial.dofs_curves.shape
 sigma=0.01
 length_scale=0.4*jnp.pi
 n_derivs=2
-N_samples=100  #Number of samples for the stochastic perturbation
+N_samples=10  #Number of samples for the stochastic perturbation
 #Create a Gaussian sampler for perturbation
 #This sampler will be used to perturb the coils
 sampler=GaussianSampler(coils_initial.quadpoints,sigma=sigma,length_scale=length_scale,n_derivs=n_derivs)
@@ -130,7 +130,7 @@ while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or
     #if i % 5 == 0:
     #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
     print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')
-    print('lagrange',params[1])
+    #print('lagrange',params[1])
     i=i+1
 
 

@@ -1,6 +1,6 @@
 
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax
@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from essos.surfaces import SurfaceRZFourier, SurfaceClassifier
 from essos.dynamics import Particles, Tracing
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
-from essos.objective_functions import loss_lost_fraction
+from essos.objective_functions import loss_lost_fraction,loss_lost_fraction_times
 from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis_average,loss_Br,loss_iota
 from functools import partial
 import essos.augmented_lagrangian as alm
@@ -24,13 +24,13 @@ import essos.augmented_lagrangian as alm
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = number_of_processors_to_use*10
+nparticles = number_of_processors_to_use*1
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 9
-maxtimes = [1.e-4]
+maximum_function_evaluations = 10
+maxtimes = [1.e-2]
 timestep=1.e-8
-num_steps=300
+num_steps=100
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
 model = 'GuidingCenterAdaptative'
@@ -64,11 +64,7 @@ print(f"ESSOS boundary took {time()-timeI:.2f} seconds")
 #print('Final params',params)
 #print(info[1])
 # Plot trajectories, before and after optimization
-fig = plt.figure(figsize=(9, 8))
-ax1 = fig.add_subplot(221, projection='3d')
-surface.plot(ax=ax1, show=False)
-coils_initial.plot(ax=ax1, show=False)
-plt.savefig('surface.pdf')
+
 
 # Initialize particles
 phi_array = jnp.linspace(0, 2*jnp.pi, nparticles)
@@ -77,6 +73,9 @@ particles = Particles(initial_xyz=initial_xyz)
 
 t=maxtimes[0]
 loss_partial = partial(loss_lost_fraction,particles=particles, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,timestep=timestep,model=model,num_steps=num_steps,boundary=boundary)
+jax.grad(loss_partial)(coils_initial.x)
+
+
 curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
 length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
 Baxis_average_partial=partial(loss_normB_axis_average,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
@@ -130,7 +129,7 @@ while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or
     #One step of ALM optimization
     params, lag_state,grad,info,eta,omega = ALM.update(params,lag_state,grad,info,eta,omega)    
     print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')
-    print('lagrange',params[1])
+    #print('lagrange',params[1])
     i=i+1
 
 
@@ -139,9 +138,8 @@ dofs_currents = params[0][len_dofs_curves:]
 curves = Curves(dofs_curves, n_segments, nfp, stellsym)
 new_coils = Coils(curves=curves, currents=dofs_currents*coils_initial.currents_scale)
 params=new_coils.x
-tracing_initial = Tracing(field=coils_initial, particles=particles, maxtime=t, model=model
-                ,times_to_trace=200,timestep=1.e-8,atol=1.e-5,rtol=1.e-5,boundary=boundary)
-tracing_optimized = Tracing(field=new_coils, particles=particles, maxtime=t, model=model,times_to_trace=200,timestep=1.e-8,atol=1.e-5,rtol=1.e-5,boundary=boundary)
+tracing_initial = Tracing(field=coils_initial, particles=particles, maxtime=t, model=model,times_to_trace=num_steps,timestep=timestep,boundary=boundary)
+tracing_optimized = Tracing(field=new_coils, particles=particles, maxtime=t, model=model,times_to_trace=num_steps,timestep=timestep,boundary=boundary)
 
 #print('Final params',params)
 #print(info[1])
@@ -167,7 +165,7 @@ for i, trajectory in enumerate(tracing_optimized.trajectories):
 ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')#ax4.legend()
 plt.tight_layout()
-plt.savefig(f'opt_constrained.pdf')
+plt.show()
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
