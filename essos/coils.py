@@ -45,6 +45,7 @@ class Curves:
         self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
         self.quadpoints = jnp.linspace(0, 1, self.n_segments, endpoint=False)
         self._set_gamma()
+        self.n_base_curves=dofs.shape[0]
 
     def __str__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
@@ -152,13 +153,27 @@ class Curves:
     def gamma(self):
         return self._gamma
     
+    @gamma.setter
+    def gamma(self, new_gamma):
+        self._gamma = new_gamma
+
     @property
     def gamma_dash(self):
         return self._gamma_dash
+
+    @gamma_dash.setter
+    def gamma_dash(self, new_gamma_dash):
+        self._gamma_dash = new_gamma_dash
+
+
     
     @property
     def gamma_dashdash(self):
         return self._gamma_dashdash
+
+    @gamma_dashdash.setter
+    def gamma_dashdash(self, new_gamma_dashdash):
+        self._gamma_dashdash = new_gamma_dashdash        
     
     @property
     def length(self):
@@ -238,7 +253,7 @@ class Curves:
         coils = coils_via_symmetries(cuves_simsopt, currents_simsopt, self.nfp, self.stellsym)
         return [c.curve for c in coils]
     
-    def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True, **kwargs):
+    def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True,color="brown", linewidth=3,label=None,**kwargs):
         def rep(data):
             if close:
                 return jnp.concatenate((data, [data[0]]))
@@ -248,6 +263,7 @@ class Curves:
         if ax is None or ax.name != "3d":
             fig = plt.figure()
             ax = fig.add_subplot(projection='3d')
+        label_count=0
         for gamma, gammadash in zip(self.gamma, self.gamma_dash):
             x = rep(gamma[:, 0])
             y = rep(gamma[:, 1])
@@ -256,9 +272,13 @@ class Curves:
                 xt = rep(gammadash[:, 0])
                 yt = rep(gammadash[:, 1])
                 zt = rep(gammadash[:, 2])
-            ax.plot(x, y, z, **kwargs, color='brown', linewidth=3)
+            if label_count == 0:
+                ax.plot(x, y, z, **kwargs, color=color, linewidth=linewidth,label=label)
+                label_count += 1
+            else:
+                ax.plot(x, y, z, **kwargs, color=color, linewidth=linewidth)
             if plot_derivative:
-                ax.quiver(x, y, z, 0.1 * xt, 0.1 * yt, 0.1 * zt, arrow_length_ratio=0.1, color="r")
+                ax.quiver(x, y, z, 0.1 * xt, 0.1 * yt, 0.1 * zt, arrow_length_ratio=0.1, color='r')
         if axis_equal:
             fix_matplotlib_3d(ax)
         if show:
@@ -388,6 +408,10 @@ class Coils(Curves):
         else:
             raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils.")
         
+    def __exclude_coil__(self, index):
+        return Coils(Curves(jnp.concatenate((self.curves[:index], self.curves[index+1:])), self.n_segments, 1, False), jnp.concatenate((self.currents[:index], self.currents[index+1:])))
+
+        
     def __contains__(self, other):
         if isinstance(other, Coils):
             return jnp.all(jnp.isin(other.dofs, self.dofs)) and jnp.all(jnp.isin(other.dofs_currents, self.dofs_currents))
@@ -494,8 +518,8 @@ def RotatedCurve(curve, phi, flip):
     if flip:
         rotmat = rotmat @ jnp.array(
             [[1,  0,  0],
-             [0, -1,  0],
-             [0,  0, -1]])
+                [0, -1,  0],
+                [0,  0, -1]])
     return curve @ rotmat
 
 @partial(jit, static_argnames=['nfp', 'stellsym'])
@@ -511,6 +535,20 @@ def apply_symmetries_to_curves(base_curves, nfp, stellsym):
                     rotcurve = RotatedCurve(base_curves[i].T, 2*jnp.pi*k/nfp, flip)
                     curves.append(rotcurve.T)
     return jnp.array(curves)
+
+@partial(jit, static_argnames=['nfp', 'stellsym'])
+def apply_symmetries_to_gammas(base_gammas, nfp, stellsym):
+    flip_list = [False, True] if stellsym else [False]
+    gammas = []
+    for k in range(0, nfp):
+        for flip in flip_list:
+            for i in range(len(base_gammas)):
+                if k == 0 and not flip:
+                    gammas.append(base_gammas[i])
+                else:
+                    rotcurve = RotatedCurve(base_gammas[i], 2*jnp.pi*k/nfp, flip)
+                    gammas.append(rotcurve)
+    return jnp.array(gammas)    
 
 @partial(jit, static_argnames=['nfp', 'stellsym'])
 def apply_symmetries_to_currents(base_currents, nfp, stellsym): 
