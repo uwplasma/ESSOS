@@ -522,3 +522,93 @@ def apply_symmetries_to_currents(base_currents, nfp, stellsym):
                 current = -base_currents[i] if flip else base_currents[i]
                 currents.append(current)
     return jnp.array(currents)
+
+## Linear tools for Mirrors -- should be updated, and folded into existing tools when possible 
+
+def Coils_from_simsopt_temp(simsopt_coils):
+    # This tool was required to load RotatedCurves from somsopt;
+    # the main tool should be updated accordingly, this should be deleted
+    from simsopt import load
+    bs = load(simsopt_coils)
+    simsopt_coils = bs.coils
+    curves = [c.curve for c in simsopt_coils]
+    currents = jnp.array([c.current.get_value() for c in simsopt_coils])
+
+    dofs = []
+    for c in curves:
+        try: # for CurveXYZ
+            dofs +=[jnp.array(c.rotmat @ c.curve.dofs_matrix)]
+    
+        except:# for RotatedCurve
+            dofs += [jnp.array(c.dofs_matrix)]
+                
+    n_segments = len(curves[0].quadpoints)
+    dofs = jnp.array(dofs) 
+
+    curves = Curves(dofs,n_segments,nfp =1, stellsym=False)
+    
+    return Coils(curves,currents)
+    #super().__init__(Coils(curves,currents))
+
+
+def CreateEquallySpacedCurvesinZ(n_curves: int, order: int, Z, r: float, n_segments: int = 100,
+                              nfp: int = 1, stellsym: bool = False) -> jnp.ndarray:
+        '''
+        Z: jnp.linspace(Zmin,Zmax,n_curves
+        r: sets minor radius in x and y 
+        stellsym always False
+        nfp: always 1 
+        '''
+    
+        curves = jnp.zeros((n_curves, 3, 1 + 2 * order))
+
+        curves = curves.at[:, 2, 0].set(Z)   # z[0]
+        curves = curves.at[:, 0, 1].set(r)  # x[1]
+        curves = curves.at[:, 1, 2].set(r)  # y[2]
+
+
+        return Curves(curves, n_segments=n_segments, nfp=1, stellsym=False)
+    
+#@partial(jit)
+def apply_symmetries_to_mirror_curves(base_curves, rotation):
+    """
+    Take an essos curve dofs, flip the z coordinates, and rotate 
+
+    For mirror optimization, if we assume all coils are in +z, this copies coils to -z 
+    and then can rotate the coils to account for any symmetry  
+
+    returns: dofs of curves [rotated,...,base_curves]
+    """
+    curves = []
+    # assumes coils are in + quadrant
+    # first apply symmetry
+    for i in base_curves:
+        rotcurve = RotatedCurve(i.transpose(), rotation, True)
+        curves.append(rotcurve.T)       
+            
+    # add in base curves       
+    for i in base_curves:
+        curves.append(i)
+                     
+    return curves
+
+#@partial(jit) # for some reason jitting sets the current to 1 
+def coils_via_symmetries_mirror(coils, rotation,n_segments = 100):
+    """
+    Take an essos coil object, extracts the curves and currents, and applies mirror symmetry
+
+    returns: new coil object
+    """
+    
+    currents = coils.currents 
+    curves = coils.curves 
+    
+    curves = apply_symmetries_to_mirror_curves(curves, rotation)
+    curves_symm = Curves(curves, n_segments=n_segments, nfp=1, stellsym=False)
+
+    # assuming we have applied symmetry to our curves, we must switch the sign of the current for flipped curves
+    flipped_currents  = [c * -1 for c in currents]
+    currents_symm = jnp.ravel(jnp.array([flipped_currents,currents]))    
+    
+    coils = Coils(curves=curves_symm, currents=currents_symm)
+    return coils

@@ -746,3 +746,187 @@ class near_axis():
 tree_util.register_pytree_node(near_axis,
                                near_axis._tree_flatten,
                                near_axis._tree_unflatten)
+
+
+class SFLM_paraxial():
+    def __init__(self,B0,c):
+        
+        self.B0 = B0
+        self.c = c
+                
+    @partial(jit, static_argnames=['self'])
+    def s_(self,points):
+        c = self.c
+        x,y,z = points.T
+
+        x_bar, y_bar, z_bar = x / c, y / c, z / c
+        a = (1+z_bar)
+        b = (1-z_bar)
+        
+        s_bar = z_bar + 0.5 * ((x_bar ** 2) / a - (y_bar ** 2) /b)
+        
+        return s_bar
+         
+    @partial(jit, static_argnames=['self'])
+    def grad_s_bar(self, points):
+        return jacfwd(self.s_)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def B(self,points):
+        s_bar = self.s_(points)
+        grad_s_val = self.grad_s_bar(points)
+        
+        factor = self.B0 / (1 - s_bar**2)
+
+        B_x = factor * grad_s_val[0]* self.c
+        B_y = factor * grad_s_val[1]* self.c
+        B_z = factor * grad_s_val[2]* self.c
+
+        return jnp.array([B_x, B_y, B_z])
+
+    @partial(jit, static_argnames=['self'])
+    def B_covariant(self, points):
+        return self.B(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, points):
+        return self.B(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def AbsB(self, points):
+        return jnp.linalg.norm(self.B(points))
+    
+    @partial(jit, static_argnames=['self'])
+    def dB_by_dX(self, points):
+        return jacfwd(self.B)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def dAbsB_by_dX(self, points):
+        return grad(self.AbsB)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def to_xyz(self, points):
+        return points
+
+    ## For getting straight field line surfaces
+    # Define the parametric functions for the ellipse
+    def get_x(self,theta, z, rho):
+        c = self.c
+        return rho*(1+z/c) * jnp.cos(theta)
+    
+    def get_y(self,theta, z, rho):
+        c = self.c
+        return rho*(1-z/c) * jnp.sin(theta)
+    
+    def get_z(self,theta, z):
+        c = self.c
+        return z
+
+    @partial(jit, static_argnames=['self'])
+    def get_alpha(self,points):
+        c = self.c
+        x,y,z = points.T
+        zb = z/c
+        return jnp.arctan2((1+zb)*y,(1-zb)*x)
+        
+    @partial(jit, static_argnames=['self'])    
+    def get_rho(self,points):
+        c = self.c
+        x,y,z = points.T
+        a = (1+z/c) 
+        b = (1-z/c) 
+        return jnp.sqrt((x/a)**2 + (y/b)**2)
+        
+    @partial(jit, static_argnames=['self'])
+    def grad_alpha(self, points):
+        return jacfwd(self.get_alpha)(points)
+
+    @partial(jit, static_argnames=['self'])
+    def grad_rho(self, points):
+        return jacfwd(self.get_rho)(points)    
+
+
+class SFLM_Clebsch():
+
+    def __init__(self,B0,c):
+        
+        self.B0 = B0
+        self.c = c    
+
+    @partial(jit, static_argnames=['self'])
+    def get_alpha(self,points):
+        c = self.c
+        x,y,z = points.T
+        zb = z/c
+        return jnp.arctan2((1+zb)*y,(1-zb)*x)
+                
+    @partial(jit, static_argnames=['self'])    
+    def get_rho(self,points):
+        c = self.c
+        x,y,z = points.T
+        a = (1+z/c) 
+        b = (1-z/c) 
+        return jnp.sqrt((x/a)**2 + (y/b)**2)
+
+    @partial(jit, static_argnames=['self'])
+    def grad_alpha(self, points):
+        return jacfwd(self.get_alpha)(points)
+
+    @partial(jit, static_argnames=['self'])
+    def grad_rho(self, points):
+        return jacfwd(self.get_rho)(points)    
+
+        
+    @partial(jit, static_argnames=['self'])
+    def B(self,points):
+        c = self.c
+        B0 = self.B0
+        x,y,z = points.T
+
+        grad_r = self.grad_rho(points)
+        grad_a = self.grad_alpha(points)
+        cross = jnp.cross(grad_r,grad_a)
+
+        scaled = B0 * self.get_rho(points)*jnp.cross(grad_r,grad_a)
+
+        #scaled = jnp.cross(grad_r,grad_a)
+
+        return scaled
+
+    @partial(jit, static_argnames=['self'])
+    def B_covariant(self, points):
+        return self.B(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, points):
+        return self.B(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def AbsB(self, points):
+        return jnp.linalg.norm(self.B(points))
+    
+    @partial(jit, static_argnames=['self'])
+    def dB_by_dX(self, points):
+        return jacfwd(self.B)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def dAbsB_by_dX(self, points):
+        return grad(self.AbsB)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def to_xyz(self, points):
+        return points
+
+    ## For getting straight field line surfaces
+    # Define the parametric functions for the ellipse
+    def get_x(self,theta, z, rho):
+        c = self.c
+        return rho*(1+z/c) * jnp.cos(theta)
+    
+    def get_y(self,theta, z, rho):
+        c = self.c
+        return rho*(1-z/c) * jnp.sin(theta)
+    
+    def get_z(self,theta, z):
+        c = self.c
+        return z
