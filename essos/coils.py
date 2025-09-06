@@ -560,3 +560,104 @@ def apply_symmetries_to_currents(base_currents, nfp, stellsym):
                 current = -base_currents[i] if flip else base_currents[i]
                 currents.append(current)
     return jnp.array(currents)
+
+# ---------- helpers ----------
+def _resample_closed_curve_uniform(gamma: jnp.ndarray, n_segments: int) -> jnp.ndarray:
+    """
+    Piecewise-linear arclength reparameterization to n_segments uniform samples in t∈[0,1).
+    gamma: (M,3) closed curve, M>=3. Returns (n_segments,3).
+    """
+    M = gamma.shape[0]
+    # close the loop for cumulative length
+    g_ext = jnp.vstack([gamma, gamma[0:1, :]])  # (M+1, 3)
+    seg = g_ext[1:] - g_ext[:-1]                # (M, 3)
+    seg_len = jnp.linalg.norm(seg, axis=1)      # (M,)
+    cum = jnp.concatenate([jnp.array([0.0]), jnp.cumsum(seg_len)])  # (M+1,)
+    total = cum[-1]
+    # target arclengths
+    s_targets = jnp.linspace(0.0, total, n_segments+1, endpoint=False)  # include 0, exclude total
+    # for each target, find segment index i with cum[i] <= s < cum[i+1]
+    # jnp.searchsorted is in JAX; side='right' then subtract 1
+    idx = jnp.searchsorted(cum, s_targets, side='right') - 1   # (n_segments+1,)
+    idx = jnp.clip(idx, 0, M-1)                                # safe
+    s0 = cum[idx]
+    s1 = cum[idx+1]
+    w = (s_targets - s0) / jnp.maximum(s1 - s0, 1e-12)         # fractional position in segment
+    p0 = g_ext[idx]
+    p1 = g_ext[idx+1]
+    g_uni = p0 + w[:, None]*(p1 - p0)                          # (n_segments+1, 3)
+    return g_uni[:n_segments]                                   # drop the last duplicate
+
+def _fit_real_fourier_1d(f: jnp.ndarray, order: int):
+    """
+    f: (N,) samples at t_j = j/N, j=0..N-1
+    Returns (a0, sin_cos) where:
+      a0: scalar
+      sin_cos: (2*order,) packed [sin1, cos1, sin2, cos2, ...]
+    Conventions match Curves._set_gamma (sin in odd slots, cos in even).
+    """
+    N = f.shape[0]
+    F = jnp.fft.fft(f) / N       # normalized DFT so that f ≈ sum_k F_k exp(i2πkj/N)
+    a0 = F[0].real               # constant term
+    # For real f: a_k = 2 Re(F_k), b_k = -2 Im(F_k)
+    k = jnp.arange(1, order+1)
+    Fk = F[k]                    # (order,)
+    cos_k =  2.0 * jnp.real(Fk)  # a_k
+    sin_k = -2.0 * jnp.imag(Fk)  # b_k
+    # interleave as [sin1, cos1, sin2, cos2, ...]
+    inter = jnp.empty((2*order,), dtype=f.dtype)
+    inter = inter.at[0::2].set(sin_k)
+    inter = inter.at[1::2].set(cos_k)
+    return a0, inter
+
+def fit_dofs_from_coils(coils_gamma, order: int, n_segments: int, assume_uniform: bool = False):
+    """
+    coils_gamma: list or array of shape (Ncoils, Mi, 3) with Mi >= 3 (can vary per coil if list)
+                 Each curve must be closed (first≈last).
+    order: Fourier order K
+    n_segments: resampling size used by Curves
+    assume_uniform: if True, skip arclength resampling and only wrap; otherwise resample uniformly.
+
+    Returns:
+      dofs: jnp.ndarray shape (Ncoils, 3, 2*order+1)
+      gamma_resampled: jnp.ndarray shape (Ncoils, n_segments, 3)
+    """
+    # make list of arrays
+    if isinstance(coils_gamma, jnp.ndarray):
+        # assume all same Mi; wrap to list
+        coils_list = [coils_gamma[i] for i in range(coils_gamma.shape[0])]
+    else:
+        coils_list = list(coils_gamma)
+
+    gammas_uni = []
+    for g in coils_list:
+        g = jnp.asarray(g)
+        if not assume_uniform:
+            g_uni = _resample_closed_curve_uniform(g, n_segments)
+        else:
+            # ensure periodic and resample by simple wrap if sizes differ
+            if g.shape[0] != n_segments:
+                # take uniform subsamples (nearest index)
+                idx = jnp.floor(jnp.linspace(0, g.shape[0], n_segments, endpoint=False)).astype(int) % g.shape[0]
+                g_uni = g[idx]
+            else:
+                g_uni = g
+        gammas_uni.append(g_uni)
+
+    gamma_resampled = jnp.stack(gammas_uni, axis=0)  # (Ncoils, n_segments, 3)
+
+    # Build dofs
+    def fit_one(g_uni):
+        # fit each component
+        a0x, interx = _fit_real_fourier_1d(g_uni[:,0], order)
+        a0y, intery = _fit_real_fourier_1d(g_uni[:,1], order)
+        a0z, interz = _fit_real_fourier_1d(g_uni[:,2], order)
+        # pack [a0, sin1, cos1, ..., sinK, cosK] per component
+        coeffs_x = jnp.concatenate([a0x[None], interx], axis=0)
+        coeffs_y = jnp.concatenate([a0y[None], intery], axis=0)
+        coeffs_z = jnp.concatenate([a0z[None], interz], axis=0)
+        # stack to shape (3, 2*order+1) with component axis second in Curves
+        return jnp.stack([coeffs_x, coeffs_y, coeffs_z], axis=0)
+
+    dofs = jax.vmap(fit_one)(gamma_resampled)  # (Ncoils, 3, 2*order+1)
+    return dofs, gamma_resampled

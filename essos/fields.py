@@ -80,15 +80,21 @@ class BiotSavart():
 
 
 class BiotSavart_from_gamma():
-    def __init__(self, gamma,gamma_dash,gamma_dashdash, currents):
+    def __init__(self, gamma,gamma_dash=None,gamma_dashdash=None, currents=None):
+        if currents is None:
+            currents = jnp.ones(len(gamma))
+        else:
+            currents = currents
         self.currents = currents
         self.gamma = gamma
-        self.gamma_dash = gamma_dash
-        #self.gamma_dashdash = gamma_dashdash
-        self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in gamma_dash])
-        self.coils_curvature= vmap(compute_curvature)(gamma_dash, gamma_dashdash)
         self.r_axis=jnp.average(jnp.linalg.norm(jnp.average(gamma,axis=1)[:,0:2],axis=1))
         self.z_axis=jnp.average(jnp.average(gamma,axis=1)[:,2])
+        if gamma_dash is not None:
+            self.gamma_dash = gamma_dash
+            self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in gamma_dash])
+        if gamma_dashdash is not None:
+            self.gamma_dashdash = gamma_dashdash
+            self.coils_curvature= vmap(compute_curvature)(gamma_dash, gamma_dashdash)
 
     @partial(jit, static_argnames=['self'])
     def sqrtg(self, points):
