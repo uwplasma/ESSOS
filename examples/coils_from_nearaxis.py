@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 6 # Parallelization, this should divide nfieldlines
+number_of_processors_to_use = 4 # Parallelization, this should divide nfieldlines
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 import jax.numpy as jnp
 from essos.fields import near_axis, BiotSavart_from_gamma, BiotSavart
@@ -15,18 +15,19 @@ rc = jnp.array([1,  0.045])
 zs = jnp.array([0, -0.045])
 etabar = -0.9
 nfp = 3
-r_surface = 0.1
-r_max_poincare = 0.25
-r_coils = 0.4
-ntheta = 51
-ncoils = 10
-tmax = 2000
+r_surface = 0.15
+r_max_poincare = 0.2
+r_coils = 0.45
+ntheta = 41
+ncoils = 6
+tmax = 1000
 nfieldlines_per_core=1
 nfieldlines = number_of_processors_to_use*nfieldlines_per_core
-trace_tolerance = 1e-9
+trace_tolerance = 1e-10
 num_steps = 3000
-order = 2
+order = 3
 current_on_each_coil = 1e5
+n_segments = 60
 
 field_nearaxis = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
 
@@ -69,10 +70,9 @@ print(f"Creating coils_gamma took {time()-time0:.2f} seconds")
 # field_coils_gamma = BiotSavart_from_gamma(coils_gamma, coils_gamma_dash, currents=current_on_each_coil*jnp.ones(len(coils_gamma)))
 
 time0 = time()
-n_segments = ntheta
-dofs, gamma_uni = fit_dofs_from_coils(coils_gamma[:ncoils], order=order, n_segments=n_segments, assume_uniform=True)
+dofs, gamma_uni = fit_dofs_from_coils(coils_gamma[:ncoils+1], order=order, n_segments=n_segments, assume_uniform=True)
 curves = Curves(dofs=dofs, n_segments=n_segments, nfp=nfp, stellsym=True)
-coils = Coils(curves=curves, currents=[current_on_each_coil]*ncoils)
+coils = Coils(curves=curves, currents=[current_on_each_coil]*(ncoils+1))
 field_coils_DOFS = BiotSavart(coils)
 print(f"Fitting coils took {time()-time0:.2f} seconds")
 
@@ -111,15 +111,15 @@ tracing_coils_DOFS.plot(ax=ax1, show=False)
 tracing_coils_DOFS.poincare_plot(ax=ax2, show=False, shifts=shifts/nfp/2, color='r')#, jnp.pi/2, jnp.pi/4, jnp.pi/2, 3*jnp.pi/4])
 for i, shift1 in enumerate(shifts):
     phi_idx = int(shift1/ (2*jnp.pi) * nphi) % nphi
-    ax2.plot(R_2D_surface[:,phi_idx], z_2D_surface[:,phi_idx], color='grey',      alpha=1.0, linewidth=2, label='Surface' if i==0 else '_nolegend_')
+    ax2.plot(R_2D_surface[:,phi_idx], z_2D_surface[:,phi_idx], color='grey',      alpha=1.0, linewidth=2, label='Surfaces' if i==0 else '_nolegend_')
     # ax2.plot(R_2D_coils[:,phi_idx],   z_2D_coils[:,phi_idx],   color='#b87333', alpha=1.0, linewidth=2, label='Coils' if i==0 else '_nolegend_')
-for coil_number in range(ncoils):
+for coil_number in range(ncoils+1):
     R_coils_gamma = jnp.sqrt(coils_gamma[coil_number,:,0]**2 + coils_gamma[coil_number,:,1]**2)
-    ax2.plot(R_coils_gamma, coils_gamma[coil_number,:,2], color='#b87333', linewidth=2, label='Coils' if coil_number==0 else '_nolegend_')
+    ax2.plot(R_coils_gamma, coils_gamma[coil_number,:,2], color='#b87333', linewidth=2, label='Coils from Near-Axis' if coil_number==0 else '_nolegend_')
     R_curve = jnp.sqrt(curves.gamma[coil_number,:,0]**2 + curves.gamma[coil_number,:,1]**2)
-    ax2.plot(R_curve, curves.gamma[coil_number,:,2], '--', color='blue', linewidth=1, label='Coil from DOFs' if coil_number==0 else '_nolegend_')
-ax2.plot([], [], color='k', label='Fieldlines from coils_gamma')
-ax2.plot([], [], color='r', label='Fieldlines from coils_DOFS')
+    ax2.plot(R_curve, curves.gamma[coil_number,:,2], '--', color='blue', linewidth=1, label='Coil fitted to Fourier' if coil_number==0 else '_nolegend_')
+# ax2.plot([], [], color='k', label='Fieldlines from Coils from Near-Axis')
+ax2.plot([], [], color='r', label='Fieldlines from Coils from Fourier')
 ax2.legend()
 plt.tight_layout()
 plt.show()
