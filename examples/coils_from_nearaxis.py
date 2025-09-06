@@ -1,3 +1,6 @@
+import os
+number_of_processors_to_use = 6 # Parallelization, this should divide nfieldlines
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 import jax.numpy as jnp
 from essos.fields import near_axis, BiotSavart_from_gamma, BiotSavart
 import plotly.graph_objects as go
@@ -13,11 +16,13 @@ zs = jnp.array([0, -0.045])
 etabar = -0.9
 nfp = 3
 r_surface = 0.1
-r_coils = 0.45
-ntheta = 41
-ncoils = 4
+r_max_poincare = 0.25
+r_coils = 0.4
+ntheta = 51
+ncoils = 10
 tmax = 2000
-nfieldlines = 3
+nfieldlines_per_core=1
+nfieldlines = number_of_processors_to_use*nfieldlines_per_core
 trace_tolerance = 1e-9
 num_steps = 3000
 order = 2
@@ -25,9 +30,11 @@ current_on_each_coil = 1e5
 
 field_nearaxis = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
 
-nphi   = ntheta * nfp
+nphi   = 151
+time0 = time()
 x_2D_surface, y_2D_surface, z_2D_surface, R_2D_surface = field_nearaxis.get_boundary(r=r_surface, ntheta=ntheta, nphi=nphi)
 x_2D_coils, y_2D_coils, z_2D_coils, R_2D_coils = field_nearaxis.get_boundary(r=r_coils, ntheta=ntheta, nphi=nphi)
+print(f"Creating surfaces took {time()-time0:.2f} seconds")
 
 time0 = time()
 coils_gamma = jnp.zeros((ncoils * 2 * nfp, ntheta, 3))
@@ -70,7 +77,7 @@ field_coils_DOFS = BiotSavart(coils)
 print(f"Fitting coils took {time()-time0:.2f} seconds")
 
 
-R0 = jnp.linspace(rc[0]+rc[1], rc[0]+rc[1]+r_surface, nfieldlines)
+R0 = jnp.linspace(rc[0]+rc[1], rc[0]+rc[1]+r_max_poincare, nfieldlines)
 Z0 = jnp.zeros(nfieldlines)
 phi0 = jnp.zeros(nfieldlines)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
