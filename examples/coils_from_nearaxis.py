@@ -13,13 +13,13 @@ zs = jnp.array([0, -0.045])
 etabar = -0.9
 nfp = 3
 r_surface = 0.1
-r_coils = 0.4
-ntheta = 51
-ncoils = 6
-tmax = 4000
-nfieldlines = 4
+r_coils = 0.45
+ntheta = 41
+ncoils = 4
+tmax = 2000
+nfieldlines = 3
 trace_tolerance = 1e-9
-num_steps = 6000
+num_steps = 3000
 order = 2
 current_on_each_coil = 1e5
 
@@ -29,6 +29,7 @@ nphi   = ntheta * nfp
 x_2D_surface, y_2D_surface, z_2D_surface, R_2D_surface = field_nearaxis.get_boundary(r=r_surface, ntheta=ntheta, nphi=nphi)
 x_2D_coils, y_2D_coils, z_2D_coils, R_2D_coils = field_nearaxis.get_boundary(r=r_coils, ntheta=ntheta, nphi=nphi)
 
+time0 = time()
 coils_gamma = jnp.zeros((ncoils * 2 * nfp, ntheta, 3))
 coil_i = 0
 for n in range(2*nfp):
@@ -38,33 +39,35 @@ for n in range(2*nfp):
         loop = jnp.stack([x_2D_coils[:, i], y_2D_coils[:, i], z_2D_coils[:, i]], axis=-1)  # (ntheta,3)
         coils_gamma = coils_gamma.at[coil_i].set(loop)
         coil_i += 1
+print(f"Creating coils_gamma took {time()-time0:.2f} seconds")
         
-def d_dtheta_fft(f_theta):
-    """
-    f_theta: (..., ntheta) periodic samples over θ in [0, 2π)
-    Returns ∂f/∂θ with same shape.
-    """
-    ntheta = f_theta.shape[-1]
-    # k = 0, 1, ..., ntheta-1 mapped to integer Fourier modes with period 2π
-    k = jnp.fft.fftfreq(ntheta, d=1.0/ntheta)  # integers (…, -2, -1, 0, 1, 2, …)
-    Fk = jnp.fft.fft(f_theta, axis=-1)
-    dF = (1j * k) * Fk  # for period 2π, ∂/∂θ multiplies by i*k
-    return jnp.fft.ifft(dF, axis=-1).real
+# def d_dtheta_fft(f_theta):
+#     """
+#     f_theta: (..., ntheta) periodic samples over θ in [0, 2π)
+#     Returns ∂f/∂θ with same shape.
+#     """
+#     ntheta = f_theta.shape[-1]
+#     # k = 0, 1, ..., ntheta-1 mapped to integer Fourier modes with period 2π
+#     k = jnp.fft.fftfreq(ntheta, d=1.0/ntheta)  # integers (…, -2, -1, 0, 1, 2, …)
+#     Fk = jnp.fft.fft(f_theta, axis=-1)
+#     dF = (1j * k) * Fk  # for period 2π, ∂/∂θ multiplies by i*k
+#     return jnp.fft.ifft(dF, axis=-1).real
 
-# Apply along the θ axis to each Cartesian component
-coils_gamma_dash = jnp.stack([
-    d_dtheta_fft(coils_gamma[..., 0]),
-    d_dtheta_fft(coils_gamma[..., 1]),
-    d_dtheta_fft(coils_gamma[..., 2]),
-], axis=-1)  # (Ncoils, ntheta, 3)
-field_coils_gamma = BiotSavart_from_gamma(coils_gamma, coils_gamma_dash, currents=current_on_each_coil*jnp.ones(len(coils_gamma)))
+# # Apply along the θ axis to each Cartesian component
+# coils_gamma_dash = jnp.stack([
+#     d_dtheta_fft(coils_gamma[..., 0]),
+#     d_dtheta_fft(coils_gamma[..., 1]),
+#     d_dtheta_fft(coils_gamma[..., 2]),
+# ], axis=-1)  # (Ncoils, ntheta, 3)
+# field_coils_gamma = BiotSavart_from_gamma(coils_gamma, coils_gamma_dash, currents=current_on_each_coil*jnp.ones(len(coils_gamma)))
 
-
+time0 = time()
 n_segments = ntheta
 dofs, gamma_uni = fit_dofs_from_coils(coils_gamma[:ncoils], order=order, n_segments=n_segments, assume_uniform=True)
 curves = Curves(dofs=dofs, n_segments=n_segments, nfp=nfp, stellsym=True)
 coils = Coils(curves=curves, currents=[current_on_each_coil]*ncoils)
 field_coils_DOFS = BiotSavart(coils)
+print(f"Fitting coils took {time()-time0:.2f} seconds")
 
 
 R0 = jnp.linspace(rc[0]+rc[1], rc[0]+rc[1]+r_surface, nfieldlines)
@@ -94,7 +97,7 @@ for coil in coils_gamma:
 for curve_gamma in curves.gamma:
     ax1.plot(curve_gamma[:, 0], curve_gamma[:, 1], curve_gamma[:, 2], '--', color='blue', linewidth=1)
 
-shifts = jnp.array([0])
+shifts = jnp.array([0, jnp.pi/2, jnp.pi, 3*jnp.pi/2])
 # tracing_coils_gamma.plot(ax=ax1, show=False)
 # tracing_coils_gamma.poincare_plot(ax=ax2, show=False, shifts=shifts/nfp/2, color='k')#, jnp.pi/2, jnp.pi/4, jnp.pi/2, 3*jnp.pi/4])
 tracing_coils_DOFS.plot(ax=ax1, show=False)
