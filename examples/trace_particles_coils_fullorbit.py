@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 5 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from jax import vmap
 from time import time
@@ -12,7 +12,9 @@ from essos.dynamics import Tracing, Particles
 
 # Input parameters
 tmax = 1e-4
-nparticles = number_of_processors_to_use
+dt=1.e-8
+nparticles_per_core=2
+nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
 num_steps = 3000
@@ -33,7 +35,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=f
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=field, model='FullOrbit_Boris', particles=particles,
-                  maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+                  maxtime=tmax, times_to_trace=num_steps,timestep=dt, atol=trace_tolerance,rtol=trace_tolerance)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 

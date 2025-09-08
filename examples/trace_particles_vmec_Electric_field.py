@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
+number_of_processors_to_use =1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -7,15 +7,15 @@ import matplotlib.pyplot as plt
 from essos.fields import Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.dynamics import Tracing, Particles
+from essos.electric_field import Electric_field_flux
 import numpy as np
 
 # Input parameters
-tmax = 1e-4
+tmax = 1.e-4
 timestep = 1.e-8
-times_to_trace=5000
+times_to_trace=1000
 nparticles_per_core=6
 nparticles = number_of_processors_to_use*nparticles_per_core
-n_particles_to_plot = 4
 s = 0.6 # s-coordinate: flux surface label
 theta = jnp.linspace(0, 2*jnp.pi, nparticles)
 phi = jnp.linspace(0, 2*jnp.pi/2/4, nparticles)
@@ -27,6 +27,10 @@ energy=FUSION_ALPHA_PARTICLE_ENERGY
 wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 vmec = Vmec(wout_file)
 
+#Load electric field
+Er_file=os.path.join(os.path.dirname(__file__), 'input_files','Er.h5')
+Electric_field=Electric_field_flux(Er_filename=Er_file,vmec=vmec)
+
 # Initialize particles
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
@@ -36,11 +40,12 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=vmec, model='GuidingCenterAdaptative', particles=particles, maxtime=tmax,
+tracing = Tracing(field=vmec, electric_field=Electric_field,model='GuidingCenterAdaptative', particles=particles, maxtime=tmax,
                   timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
 trajectories = tracing.trajectories
+
 
 # Plot trajectories, velocity parallel to the magnetic field, loss fractions and/or energy error
 fig = plt.figure(figsize=(9, 8))
@@ -53,7 +58,7 @@ ax4 = fig.add_subplot(224)
 ## Plot trajectories in 3D
 vmec.surface.plot(ax=ax1, show=False, alpha=0.4)
 tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
-for i in np.random.choice(nparticles, size=n_particles_to_plot, replace=False):
+for i in np.random.choice(nparticles, size=min(2, nparticles), replace=False):
     trajectory = trajectories[i]
     ## Plot energy error
     ax2.plot(tracing.times[2:], jnp.abs(tracing.energy[i][2:]-particles.energy)/particles.energy, label=f'Particle {i+1}')

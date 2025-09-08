@@ -40,8 +40,8 @@ num_steps_fo = int(tmax/dt_fo)
 
 # Trace in ESSOS
 time0 = time()
-tracing_guidingcenter = Tracing(field=field, model='GuidingCenter', particles=particles,
-                  maxtime=tmax, timesteps=num_steps_gc, tol_step_size=trace_tolerance)
+tracing_guidingcenter = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
+                  maxtime=tmax,times_to_trace=num_steps_gc, atol=trace_tolerance,rtol=trace_tolerance)
 trajectories_guidingcenter = block_until_ready(tracing_guidingcenter.trajectories)
 print(f"ESSOS guiding center tracing took {time()-time0:.2f} seconds")
 
@@ -69,24 +69,25 @@ for i, (trajectory_gc, trajectory_fo) in enumerate(zip(trajectories_guidingcente
         magnetic_field_unit_vector = field.B(trajectory_t[:3]) / field.AbsB(trajectory_t[:3])
         return jnp.dot(trajectory_t[3:], magnetic_field_unit_vector)
     v_parallel_fo = vmap(compute_v_parallel)(trajectory_fo)
-    ax3.plot(tracing_guidingcenter.times, trajectory_gc[:, 3] / particles.total_speed, '-', label=f'Particle {i+1} GC', linewidth=1.0, alpha=0.3)
+    ax3.plot(tracing_guidingcenter.times, trajectory_gc[:, 3] / particles.total_speed, '-', label=f'Particle {i+1} GC', linewidth=1.1, alpha=0.95)
     ax3.plot(tracing_fullorbit.times, v_parallel_fo / particles.total_speed, '--', label=f'Particle {i+1} FO', linewidth=0.5, markersize=0.5, alpha=0.2)
     # ax4.plot(jnp.sqrt(trajectory_gc[:,0]**2+trajectory_gc[:,1]**2), trajectory_gc[:, 2], '-', label=f'Particle {i+1} GC', linewidth=1.5, alpha=0.3)
     # ax4.plot(jnp.sqrt(trajectory_fo[:,0]**2+trajectory_fo[:,1]**2), trajectory_fo[:, 2], '--', label=f'Particle {i+1} FO', linewidth=1.5, markersize=0.5, alpha=0.2)
-tracing_guidingcenter.poincare_plot(ax=ax4, show=False, color='k', label=f'Particle {i+1} GC', shifts=[0, jnp.pi/2])
-tracing_fullorbit.poincare_plot(    ax=ax4, show=False, color='r', label=f'Particle {i+1} FO', shifts=[0, jnp.pi/2])
+tracing_guidingcenter.poincare_plot(ax=ax4, show=False, color='k', label=f'GC', shifts=[jnp.pi/2])#, 0])
+tracing_fullorbit.poincare_plot(    ax=ax4, show=False, color='r', label=f'FO', shifts=[jnp.pi/2])#, 0])
 
 ax2.set_xlabel('Time (s)')
 ax2.set_ylabel('Relative Energy Error')
 ax3.set_ylabel(r'$v_{\parallel}/v$')
-ax2.legend()
+ax2.legend(loc='upper right')
 ax3.set_xlabel('Time (s)')
-ax3.legend()
+ax3.legend(loc='upper right')
 ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')
-ax4.legend()
+ax4.legend(loc='upper right')
 plt.tight_layout()
 plt.show()
+
 
 ## Save results in vtk format to analyze in Paraview
 tracing_guidingcenter.to_vtk('trajectories_gc')
