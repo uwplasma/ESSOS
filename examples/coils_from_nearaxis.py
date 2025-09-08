@@ -48,7 +48,7 @@ x_2D_boozer = jnp.zeros((ntheta_Fourier, field_nearaxis.nphi))
 y_2D_boozer = jnp.zeros((ntheta_Fourier, field_nearaxis.nphi))
 z_2D_boozer = jnp.zeros((ntheta_Fourier, field_nearaxis.nphi))
 for i in range(ntheta_Fourier):
-    (self,array,point)
+    sp=jnp.interp(jnp.array([point]), jnp.append(self.phi,2*jnp.pi/self.nfp), jnp.append(array,array[0]), period=2*jnp.pi/self.nfp)[0]
     x_spline_this_theta = field_nearaxis.interpolated_array_at_point(
                                  jnp.append(field_nearaxis.varphi, 2 * np.pi / field_nearaxis.nfp),
                                  jnp.append(x_2D[i,:], x_2D[i,0]), bc_type='periodic')
