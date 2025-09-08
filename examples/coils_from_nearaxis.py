@@ -40,7 +40,28 @@ print(f"Creating surfaces took {time()-time0:.2f} seconds")
 time0 = time()
 coils_gamma = jnp.zeros((ncoils * 2 * nfp, ntheta, 3))
 coil_i = 0
-for n in range(2*nfp):
+ntheta_Fourier = 20
+R_2D, Z_2D, phi0_2D = field_nearaxis.Frenet_to_cylindrical(r=r_coils, ntheta=ntheta_Fourier)
+x_2D = R_2D * jnp.cos(phi0_2D)
+y_2D = R_2D * jnp.sin(phi0_2D)
+x_2D_boozer = jnp.zeros((ntheta_Fourier, field_nearaxis.nphi))
+y_2D_boozer = jnp.zeros((ntheta_Fourier, field_nearaxis.nphi))
+z_2D_boozer = jnp.zeros((ntheta_Fourier, field_nearaxis.nphi))
+for i in range(ntheta_Fourier):
+    (self,array,point)
+    x_spline_this_theta = field_nearaxis.interpolated_array_at_point(
+                                 jnp.append(field_nearaxis.varphi, 2 * np.pi / field_nearaxis.nfp),
+                                 jnp.append(x_2D[i,:], x_2D[i,0]), bc_type='periodic')
+    y_spline_this_theta = field_nearaxis.interpolated_array_at_point(
+                                 jnp.append(field_nearaxis.varphi, 2 * np.pi / field_nearaxis.nfp),
+                                 jnp.append(y_2D[i,:], y_2D[i,0]), bc_type='periodic')
+    z_spline_this_theta = field_nearaxis.interpolated_array_at_point(
+                                 jnp.append(field_nearaxis.varphi, 2 * np.pi / field_nearaxis.nfp),
+                                 jnp.append(z_2D[i,:], z_2D[i,0]), bc_type='periodic')
+    x_2D_boozer.at[i].set(x_spline_this_theta)
+    y_2D_boozer.at[i].set(y_spline_this_theta)
+    z_2D_boozer.at[i].set(z_spline_this_theta)
+for n in range(1):#2*nfp):
     phi_vals = jnp.linspace(2*jnp.pi/(2*nfp)*n, 2*jnp.pi/(2*nfp)*(n+1), ncoils, endpoint=False)
     phi_idx = (phi_vals / (2*jnp.pi) * nphi).astype(int) % nphi
     for i in phi_idx:
