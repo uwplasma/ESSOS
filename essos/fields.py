@@ -356,8 +356,8 @@ class near_axis():
         (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
          self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
          self.normal_R, self.normal_phi, self.normal_z, self.binormal_R, self.binormal_phi, self.binormal_z,
-         self.L_grad_B, self.inv_L_grad_B, self.torsion, self.curvature) = parameters
-        
+         self.L_grad_B, self.inv_L_grad_B, self.torsion, self.curvature, self.varphi, self.R0p, self.Z0p) = parameters
+
     @property
     def dofs(self):
         return self._dofs
@@ -372,8 +372,8 @@ class near_axis():
         (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
          self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
          self.normal_R, self.normal_z, self.normal_phi, self.binormal_R, self.binormal_z, self.binormal_phi,
-         self.L_grad_B, self.inv_L_grad_B, self.torsion, self.curvature) = parameters
-    
+         self.L_grad_B, self.inv_L_grad_B, self.torsion, self.curvature, self.varphi, self.R0p, self.Z0p) = parameters
+
     @property
     def x(self):
         return self._dofs
@@ -617,7 +617,30 @@ class near_axis():
         return (R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length, iota, iotaN, G0,
                 helicity, X1c_untwisted, X1s_untwisted, Y1s_untwisted, Y1c_untwisted,
                 normal_R, normal_phi, normal_z, binormal_R, binormal_phi, binormal_z,
-                L_grad_B, inv_L_grad_B, torsion, curvature)
+                L_grad_B, inv_L_grad_B, torsion, curvature, varphi, R0p, Z0p)
+    
+    @jit
+    def phi_of_theta_varphi_func(self, phi_0, r, theta, varphi):
+        nu0 = self.interpolated_array_at_point(self.varphi-self.phi, phi_0)
+        X1c = self.interpolated_array_at_point(self.X1c_untwisted, phi_0)
+        X1s = self.interpolated_array_at_point(self.X1s_untwisted, phi_0)
+        Y1c = self.interpolated_array_at_point(self.Y1c_untwisted, phi_0)
+        Y1s = self.interpolated_array_at_point(self.Y1s_untwisted, phi_0)
+        bR = self.interpolated_array_at_point(self.binormal_R, phi_0)
+        bZ = self.interpolated_array_at_point(self.binormal_z, phi_0)
+        nR = self.interpolated_array_at_point(self.normal_R, phi_0)
+        nZ = self.interpolated_array_at_point(self.normal_z, phi_0)
+        R0 = self.interpolated_array_at_point(self.R0, phi_0)
+        R0p = self.interpolated_array_at_point(self.R0p, phi_0)
+        Z0p = self.interpolated_array_at_point(self.Z0p, phi_0)
+        nu1c = X1c * (bR * Z0p - bZ * R0p)/R0 + Y1c * (nZ * R0p - nR * Z0p)/R0
+        nu1s = X1s * (bR * Z0p - bZ * R0p)/R0 + Y1s * (nZ * R0p - nR * Z0p)/R0
+        return phi_0 + nu0 + r * (nu1c * jnp.cos(theta) + nu1s * jnp.sin(theta)) - varphi
+    
+    @jit
+    def phi_of_theta_varphi(self, r, theta, varphi):
+        residual = partial(self.phi_of_theta_varphi_func, theta=theta, r=r, varphi=varphi)
+        return lax.custom_root(residual, varphi, newton, lambda g, y: y / g(1.0))
         
     @jit
     def interpolated_array_at_point(self,array,point):
@@ -753,8 +776,35 @@ class near_axis():
         R_2Dnew, Z_2Dnew = vmap(lambda m: vmap(lambda n: compute_RZ(m, n))(n_vals))(m_vals)
         R_2Dnew, Z_2Dnew = R_2Dnew.sum(axis=(0, 1)), Z_2Dnew.sum(axis=(0, 1))
 
-        x_2D_plot = R_2Dnew.T * jnp.cos(phi1D)
-        y_2D_plot = R_2Dnew.T * jnp.sin(phi1D)
+        x_2D_plot = R_2Dnew.T * jnp.cos(phi2D.T)
+        y_2D_plot = R_2Dnew.T * jnp.sin(phi2D.T)
+        z_2D_plot = Z_2Dnew.T
+        return x_2D_plot, y_2D_plot, z_2D_plot, R_2Dnew.T
+    
+    @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi'])
+    def get_boundary_varphi_theta(self, r=0.1, ntheta=30, nphi=120, ntheta_fourier=20, mpol=5, ntor=5):
+        R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
+        RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
+
+        theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
+        varphi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
+        varphi2D, theta2D = jnp.meshgrid(varphi1D, theta1D, indexing='ij')
+        
+        # Convert varphi to phi using phi_of_theta_varphi for each (theta, varphi)
+        phi2D = vmap(lambda theta_row, varphi_row: vmap(lambda theta, varphi: self.phi_of_theta_varphi(r, theta, varphi))(theta_row, varphi_row))(theta2D, varphi2D)
+
+        def compute_RZ(m, n):
+            angle = m * theta2D - n * self.nfp * phi2D
+            return RBC[n + ntor, m] * jnp.cos(angle), ZBS[n + ntor, m] * jnp.sin(angle)
+
+        m_vals = jnp.arange(mpol + 1)
+        n_vals = jnp.arange(-ntor, ntor + 1)
+
+        R_2Dnew, Z_2Dnew = vmap(lambda m: vmap(lambda n: compute_RZ(m, n))(n_vals))(m_vals)
+        R_2Dnew, Z_2Dnew = R_2Dnew.sum(axis=(0, 1)), Z_2Dnew.sum(axis=(0, 1))
+
+        x_2D_plot = R_2Dnew.T * jnp.cos(phi2D.T)
+        y_2D_plot = R_2Dnew.T * jnp.sin(phi2D.T)
         z_2D_plot = Z_2Dnew.T
         return x_2D_plot, y_2D_plot, z_2D_plot, R_2Dnew.T
     
