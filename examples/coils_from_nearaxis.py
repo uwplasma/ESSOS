@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nfieldlines
+number_of_processors_to_use = 4 # Parallelization, this should divide nfieldlines
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 import jax.numpy as jnp
 from essos.fields import near_axis, BiotSavart_from_gamma, BiotSavart
@@ -17,26 +17,20 @@ etabar = -0.9
 nfp = 3
 nphi = 51
 r_surface = 0.1
-r_max_poincare = 0.05
+r_max_poincare = -0.2
 r_coils = 0.5
 ntheta = 41
 ncoils = 6
-tmax = 5000
+tmax = 1500
 nfieldlines_per_core=1
 nfieldlines = number_of_processors_to_use*nfieldlines_per_core
 trace_tolerance = 1e-10
-num_steps = 7*tmax
-order = 8
+num_steps = 5*tmax
+order = 4
 current_on_each_coil = 1e5
 n_segments = 61
 
 field_nearaxis = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp, nphi=nphi)
-
-nphi   = 151
-time0 = time()
-x_2D_surface, y_2D_surface, z_2D_surface, R_2D_surface = field_nearaxis.get_boundary(r=r_surface, ntheta=ntheta, nphi=nphi)
-x_2D_coils, y_2D_coils, z_2D_coils, R_2D_coils = field_nearaxis.get_boundary_varphi_theta(r=r_coils, ntheta=ntheta, nphi=nphi)
-print(f"Creating surfaces took {time()-time0:.2f} seconds")
 
 # import matplotlib.pyplot as plt
 # from jax import vmap
@@ -52,43 +46,51 @@ print(f"Creating surfaces took {time()-time0:.2f} seconds")
 # plt.show()
 # exit()
 
+nphi   = ncoils * 2 * nfp
+time0 = time()
+x_2D_surface, y_2D_surface, z_2D_surface, R_2D_surface = field_nearaxis.get_boundary(r=r_surface, ntheta=ntheta, nphi=nphi)
+x_2D_coils, y_2D_coils, z_2D_coils, R_2D_coils = field_nearaxis.get_boundary(r=r_coils, ntheta=ntheta, nphi=nphi, phi_is_varphi=True)
+print(f"Creating surfaces took {time()-time0:.2f} seconds")
+
 time0 = time()
 coils_gamma = jnp.zeros((ncoils * 2 * nfp, ntheta, 3))
 coil_i = 0
 for n in range(2*nfp):
     phi_vals = (jnp.arange(ncoils) + 0.5) * (2 * jnp.pi) / ((2) * nfp * ncoils) + 2*jnp.pi/(2*nfp)*n
-    # phi_vals = jnp.linspace(2*jnp.pi/(2*nfp)*n, 2*jnp.pi/(2*nfp)*(n+1), ncoils, endpoint=False)
+    # phi_vals = jnp.linspace(2*jnp.pi/(2*nfp)*n + 2*jnp.pi/(2*nfp)/ncoils/2, 2*jnp.pi/(2*nfp)*(n+1) + 2*jnp.pi/(2*nfp)/ncoils/2, ncoils, endpoint=False)
     phi_idx = (phi_vals / (2*jnp.pi) * nphi).astype(int) % nphi
+    # print(f"n={n}, phi_vals={phi_vals}, phi_idx={phi_idx}")
     for i in phi_idx:
         loop = jnp.stack([x_2D_coils[:, i], y_2D_coils[:, i], z_2D_coils[:, i]], axis=-1)  # (ntheta,3)
         coils_gamma = coils_gamma.at[coil_i].set(loop)
         coil_i += 1
 print(f"Creating coils_gamma took {time()-time0:.2f} seconds for {ncoils*2*nfp} coils")
+# exit()
         
-def d_dtheta_fft(f_theta):
-    """
-    f_theta: (..., ntheta) periodic samples over θ in [0, 2π)
-    Returns ∂f/∂θ with same shape.
-    """
-    ntheta = f_theta.shape[-1]
-    # k = 0, 1, ..., ntheta-1 mapped to integer Fourier modes with period 2π
-    k = jnp.fft.fftfreq(ntheta, d=1.0/ntheta)  # integers (…, -2, -1, 0, 1, 2, …)
-    Fk = jnp.fft.fft(f_theta, axis=-1)
-    dF = (1j * k) * Fk  # for period 2π, ∂/∂θ multiplies by i*k
-    return jnp.fft.ifft(dF, axis=-1).real * (2*jnp.pi)
+# def d_dtheta_fft(f_theta):
+#     """
+#     f_theta: (..., ntheta) periodic samples over θ in [0, 2π)
+#     Returns ∂f/∂θ with same shape.
+#     """
+#     ntheta = f_theta.shape[-1]
+#     # k = 0, 1, ..., ntheta-1 mapped to integer Fourier modes with period 2π
+#     k = jnp.fft.fftfreq(ntheta, d=1.0/ntheta)  # integers (…, -2, -1, 0, 1, 2, …)
+#     Fk = jnp.fft.fft(f_theta, axis=-1)
+#     dF = (1j * k) * Fk  # for period 2π, ∂/∂θ multiplies by i*k
+#     return jnp.fft.ifft(dF, axis=-1).real * (2*jnp.pi)
 
-# Apply along the θ axis to each Cartesian component
-coils_gamma_dash = jnp.stack([
-    d_dtheta_fft(coils_gamma[..., 0]),
-    d_dtheta_fft(coils_gamma[..., 1]),
-    d_dtheta_fft(coils_gamma[..., 2]),
-], axis=-1)  # (Ncoils, ntheta, 3)
-field_coils_gamma = BiotSavart_from_gamma(coils_gamma, coils_gamma_dash, currents=current_on_each_coil*jnp.ones(len(coils_gamma)))
+# # Apply along the θ axis to each Cartesian component
+# coils_gamma_dash = jnp.stack([
+#     d_dtheta_fft(coils_gamma[..., 0]),
+#     d_dtheta_fft(coils_gamma[..., 1]),
+#     d_dtheta_fft(coils_gamma[..., 2]),
+# ], axis=-1)  # (Ncoils, ntheta, 3)
+# field_coils_gamma = BiotSavart_from_gamma(coils_gamma, coils_gamma_dash, currents=current_on_each_coil*jnp.ones(len(coils_gamma)))
 
 time0 = time()
 dofs, gamma_uni = fit_dofs_from_coils(coils_gamma[:ncoils], order=order, n_segments=n_segments, assume_uniform=True)
 curves = Curves(dofs=dofs, n_segments=n_segments, nfp=nfp, stellsym=True)
-coils = Coils(curves=curves, currents=[current_on_each_coil]*(ncoils))
+coils = Coils(curves=curves, currents=[-current_on_each_coil]*(ncoils))
 field_coils_DOFS = BiotSavart(coils)
 print(f"Fitting coils took {time()-time0:.2f} seconds")
 
@@ -97,11 +99,11 @@ R0 = jnp.linspace(rc[0]+rc[1], rc[0]+rc[1]+r_max_poincare, nfieldlines)
 Z0 = jnp.zeros(nfieldlines)
 phi0 = jnp.zeros(nfieldlines)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-time0 = time()
-tracing_coils_gamma = block_until_ready(Tracing(field=field_coils_gamma, model='FieldLineAdaptative', initial_conditions=initial_xyz,
-                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
-print(f"ESSOS tracing coils_gamma took {time()-time0:.2f} seconds")
-trajectories_coils_gamma = tracing_coils_gamma.trajectories
+# time0 = time()
+# tracing_coils_gamma = block_until_ready(Tracing(field=field_coils_gamma, model='FieldLineAdaptative', initial_conditions=initial_xyz,
+#                   maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
+# print(f"ESSOS tracing coils_gamma took {time()-time0:.2f} seconds")
+# trajectories_coils_gamma = tracing_coils_gamma.trajectories
 time0 = time()
 tracing_coils_DOFS = block_until_ready(Tracing(field=field_coils_DOFS, model='FieldLineAdaptative', initial_conditions=initial_xyz,
                     maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
@@ -116,10 +118,11 @@ fig_plotly.add_surface(
     x=x_2D_surface,
     y=y_2D_surface,
     z=z_2D_surface,
-    opacity=0.5,
+    opacity=0.8,
     colorscale='Greys',
     showscale=False,
-    name='Surface'
+    name='Surface',
+    showlegend=True
 )
 
 # Add coils from near-axis
@@ -129,31 +132,36 @@ for coil in coils_gamma:
         y=coil[:, 1],
         z=coil[:, 2],
         mode='lines',
-        line=dict(color='#b87333', width=5),
-        name='Coil (Near-Axis)'
+        line=dict(width=10, color='#b87333'),
+        name='Coil (Near-Axis)',
+        showlegend=False if coil is not coils_gamma[0] else True
     ))
 
 # Add fitted curves
-for curve_gamma in curves.gamma:
+colors = ['blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'brown', 'olive', 'pink', 'teal']
+for i, curve_gamma in enumerate(curves.gamma):
+    color = colors[(i // ncoils) % len(colors)]
     fig_plotly.add_trace(go.Scatter3d(
         x=curve_gamma[:, 0],
         y=curve_gamma[:, 1],
         z=curve_gamma[:, 2],
         mode='lines',
-        line=dict(color='blue', width=2, dash='dash'),
-        name='Fitted Curve'
+        line=dict(width=10, color=color),
+        name=f'Fitted Curve Group {i // ncoils + 1}',
+        showlegend=(i % ncoils == 0)
     ))
 
-# Add fieldline traces
-for traj in trajectories_coils_gamma:
-    fig_plotly.add_trace(go.Scatter3d(
-        x=traj[:, 0],
-        y=traj[:, 1],
-        z=traj[:, 2],
-        mode='lines',
-        line=dict(color='black', width=2),
-        name='Fieldline'
-    ))
+# # Add fieldline traces
+# for traj in trajectories_coils_gamma:
+#     fig_plotly.add_trace(go.Scatter3d(
+#         x=traj[:, 0],
+#         y=traj[:, 1],
+#         z=traj[:, 2],
+#         mode='lines',
+#         line=dict(color='black', width=2),
+#         name='Fieldline',
+#         showlegend=False if traj is not trajectories_coils_gamma[0] else True
+#     ))
 
 # Add fieldline traces from fitted coils
 for traj in trajectories_coils_DOFS:
@@ -163,7 +171,8 @@ for traj in trajectories_coils_DOFS:
         z=traj[:, 2],
         mode='lines',
         line=dict(color='red', width=1),
-        name='Fieldline (Fitted Coils)'
+        name='Fieldline (Fitted Coils)',
+        showlegend=False if traj is not trajectories_coils_DOFS[0] else True
     ))
 
 fig_plotly.update_layout(
@@ -181,7 +190,7 @@ fig_plotly.show()
 fig2 = plt.figure(figsize=(6, 5))
 ax2 = fig2.add_subplot(111)
 shifts = jnp.array([0, jnp.pi])
-tracing_coils_gamma.poincare_plot(ax=ax2, show=False, shifts=shifts/nfp/2, color='k', s=0.05)
+# tracing_coils_gamma.poincare_plot(ax=ax2, show=False, shifts=shifts/nfp/2, color='k', s=0.05)
 tracing_coils_DOFS.poincare_plot(ax=ax2, show=False, shifts=shifts/nfp/2, color='r', s=0.05)
 for i, shift1 in enumerate(shifts):
     phi_idx = int(shift1/ (2*jnp.pi) * nphi) % nphi
@@ -191,7 +200,7 @@ for coil_number in range(ncoils):
     ax2.plot(R_coils_gamma, coils_gamma[coil_number,:,2], color='#b87333', linewidth=2, label='Coils from Near-Axis' if coil_number==0 else '_nolegend_')
     R_curve = jnp.sqrt(curves.gamma[coil_number,:,0]**2 + curves.gamma[coil_number,:,1]**2)
     ax2.plot(R_curve, curves.gamma[coil_number,:,2], '--', color='blue', linewidth=1, label='Coil fitted to Fourier' if coil_number==0 else '_nolegend_')
-ax2.plot([], [], color='k', label='Fieldlines from Coils from Near-Axis')
+# ax2.plot([], [], color='k', label='Fieldlines from Coils from Near-Axis')
 ax2.plot([], [], color='r', label='Fieldlines from Coils from Fourier')
 ax2.legend()
 plt.tight_layout()

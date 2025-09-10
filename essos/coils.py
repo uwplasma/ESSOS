@@ -518,8 +518,8 @@ def RotatedCurve(curve, phi, flip):
     if flip:
         rotmat = rotmat @ jnp.array(
             [[1,  0,  0],
-                [0, -1,  0],
-                [0,  0, -1]])
+             [0, -1,  0],
+             [0,  0, -1]])
     return curve @ rotmat
 
 @partial(jit, static_argnames=['nfp', 'stellsym'])

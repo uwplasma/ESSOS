@@ -640,7 +640,11 @@ class near_axis():
     @jit
     def phi_of_theta_varphi(self, r, theta, varphi):
         residual = partial(self.phi_of_theta_varphi_func, theta=theta, r=r, varphi=varphi)
-        return lax.custom_root(residual, varphi, newton, lambda g, y: y / g(1.0))
+        phi_on_axis = lax.custom_root(residual, varphi, newton, lambda g, y: y / g(1.0))
+        X_at_this_theta = r * (self.X1c_untwisted * jnp.cos(theta) + self.X1s_untwisted * jnp.sin(theta))
+        Y_at_this_theta = r * (self.Y1c_untwisted * jnp.cos(theta) + self.Y1s_untwisted * jnp.sin(theta))
+        _, _, phi_off_axis = self.Frenet_to_cylindrical_1_point(phi_on_axis, X_at_this_theta, Y_at_this_theta)
+        return phi_off_axis + 2 * jnp.pi * (phi_off_axis < 0) - 2 * jnp.pi * (phi_off_axis > 2 * jnp.pi)
         
     @jit
     def interpolated_array_at_point(self,array,point):
@@ -756,43 +760,27 @@ class near_axis():
         RBC = RBC.at[:ntor, 0].set(0)
         return RBC, ZBS
 
-
-    @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi'])
-    def get_boundary(self, r=0.1, ntheta=30, nphi=120, ntheta_fourier=20, mpol=5, ntor=5):
+    @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi', 'phi_is_varphi'])
+    def get_boundary(self, r=0.1, ntheta=30, nphi=120, ntheta_fourier=20, mpol=5, ntor=5, phi_is_varphi=False):
         R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
         RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
 
         theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
-        phi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
+        phi1D = jax.lax.cond(
+            phi_is_varphi,
+            lambda _: jnp.linspace(2*jnp.pi/nphi/2, 2*jnp.pi + 2*jnp.pi/nphi/2, nphi, endpoint=False),
+            lambda _: jnp.linspace(0, 2 * jnp.pi, nphi),
+            operand=None
+        )
         phi2D, theta2D = jnp.meshgrid(phi1D, theta1D, indexing='ij')
-
-        def compute_RZ(m, n):
-            angle = m * theta2D - n * self.nfp * phi2D
-            return RBC[n + ntor, m] * jnp.cos(angle), ZBS[n + ntor, m] * jnp.sin(angle)
-
-        m_vals = jnp.arange(mpol + 1)
-        n_vals = jnp.arange(-ntor, ntor + 1)
-
-        R_2Dnew, Z_2Dnew = vmap(lambda m: vmap(lambda n: compute_RZ(m, n))(n_vals))(m_vals)
-        R_2Dnew, Z_2Dnew = R_2Dnew.sum(axis=(0, 1)), Z_2Dnew.sum(axis=(0, 1))
-
-        x_2D_plot = R_2Dnew.T * jnp.cos(phi2D.T)
-        y_2D_plot = R_2Dnew.T * jnp.sin(phi2D.T)
-        z_2D_plot = Z_2Dnew.T
-        return x_2D_plot, y_2D_plot, z_2D_plot, R_2Dnew.T
-    
-    @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi'])
-    def get_boundary_varphi_theta(self, r=0.1, ntheta=30, nphi=120, ntheta_fourier=20, mpol=5, ntor=5):
-        R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
-        RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
-
-        theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
-        varphi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
-        varphi2D, theta2D = jnp.meshgrid(varphi1D, theta1D, indexing='ij')
         
-        # Convert varphi to phi using phi_of_theta_varphi for each (theta, varphi)
-        phi2D = vmap(lambda theta_row, varphi_row: vmap(lambda theta, varphi: self.phi_of_theta_varphi(r, theta, varphi))(theta_row, varphi_row))(theta2D, varphi2D)
-
+        phi2D = jax.lax.cond(
+            phi_is_varphi,
+            lambda _: vmap(lambda theta_row, varphi_row: vmap(lambda theta, varphi: self.phi_of_theta_varphi(r, theta, varphi))(theta_row, varphi_row))(theta2D, phi2D),
+            lambda _: phi2D,
+            operand=None
+        )
+        
         def compute_RZ(m, n):
             angle = m * theta2D - n * self.nfp * phi2D
             return RBC[n + ntor, m] * jnp.cos(angle), ZBS[n + ntor, m] * jnp.sin(angle)
