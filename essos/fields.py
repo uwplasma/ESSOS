@@ -1,6 +1,6 @@
 import jax
 jax.config.update("jax_enable_x64", True)
-from jax import vmap
+from jax import jit, vmap
 from essos.coils import compute_curvature
 import jax.numpy as jnp
 from functools import partial
@@ -819,3 +819,114 @@ class near_axis():
 tree_util.register_pytree_node(near_axis,
                                near_axis._tree_flatten,
                                near_axis._tree_unflatten)
+
+
+
+
+class DipoleField:
+    def __init__(self, dipole_positions, dipole_moments, pho_values, stellsym=False, nfp=1, coordinate_flag='cartesian', R0=1.0, scale_factor=1.0):
+        self.mu0_over_4pi = 1e-7
+        self.R0 = R0
+        self.pho_values = pho_values
+        scaled_moments = dipole_moments * scale_factor
+        self.dipole_positions, self.dipole_moments = self._apply_symmetries(dipole_positions, scaled_moments, stellsym, nfp, coordinate_flag)
+        self.n_dipoles = self.dipole_positions.shape[0]
+        self._last_field = None
+        self._last_eval_points = None
+        self._compute_field = jit(vmap(lambda x: jnp.sum(
+            vmap(lambda pos, mom: self._compute_single_dipole_field(x, pos, mom), in_axes=(0, 0))(
+                self.dipole_positions, self.dipole_moments
+            ), axis=0
+        ), in_axes=0))
+
+    @staticmethod
+    @jit
+    def _compute_single_dipole_field(x_eval, pos, mom):
+        mu0_over_4pi = 1e-7  
+        r_vec = x_eval - pos
+        r_mag = jnp.linalg.norm(r_vec) + 1e-12
+        r_hat = r_vec / r_mag
+        B = (3 * jnp.dot(mom, r_hat) / r_mag**3 * r_hat - mom / r_mag**3) * mu0_over_4pi
+        return B
+
+    @partial(jit, static_argnames=['self'])
+    def B(self, eval_points, chunk_size=512):
+        if not hasattr(self, '_last_field') or self._last_field is None or eval_points.shape[0] != self._last_eval_points.shape[0]:
+            with jax.ensure_compile_time_eval():
+                self._last_field = self._compute_field(eval_points)
+                self._last_eval_points = eval_points
+        return self._last_field
+
+    @partial(jit, static_argnames=['self'])
+    def B_covariant(self, eval_points):
+        return self.B(eval_points)
+
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, eval_points):
+        return self.B(eval_points)
+
+    @partial(jit, static_argnames=['self'])
+    def AbsB(self, eval_points):
+        B = self.B(eval_points)
+        return jnp.linalg.norm(B, axis=-1)
+
+    def dAbsB_by_dX(self, eval_points, eps=1e-6):
+        is_single_point = len(eval_points.shape) == 1 and eval_points.shape[0] == 3
+        if is_single_point:
+            eval_points = eval_points.reshape(1, 3)
+        elif len(eval_points.shape) != 2 or eval_points.shape[1] != 3:
+            raise ValueError(f"eval_points must be 2D with shape (n, 3) or 1D with length 3, got {eval_points.shape}")
+        n_points = len(eval_points)
+        grad_B = jnp.zeros((n_points, 3))
+        for i in range(3):
+            delta = jnp.zeros((n_points, 3))
+            delta = delta.at[:, i].set(eps)
+            B_plus = self.AbsB(eval_points + delta)
+            B_minus = self.AbsB(eval_points - delta)
+            grad_B = grad_B.at[:, i].set((B_plus - B_minus) / (2 * eps))
+        if is_single_point:
+            grad_B = grad_B.squeeze(0)
+        return grad_B
+
+    def update_dipole_pho(self, dipole_idx, new_pho, eval_points):
+        if self._last_field is None or len(eval_points) != self._last_eval_points.shape[0]:
+            raise ValueError("Call B with the same eval_points before updating a dipole.")
+        old_moment = self.dipole_moments[dipole_idx]
+        old_magnitude = jnp.linalg.norm(old_moment)
+        if new_pho == 0:
+            new_moment = jnp.array([0.0, 0.0, 0.0])
+        else:
+            old_pho = self.pho_values[dipole_idx]
+            scale_factor = new_pho / old_pho if old_pho != 0 else new_pho
+            new_magnitude = old_magnitude * scale_factor
+            new_moment = old_moment * (new_magnitude / old_magnitude) if new_magnitude != 0 else jnp.array([0.0, 0.0, 0.0])
+        new_contribs = vmap(lambda x: self._compute_single_dipole_field(x, self.dipole_positions[dipole_idx], new_moment))(eval_points)
+        old_contribs = vmap(lambda x: self._compute_single_dipole_field(x, self.dipole_positions[dipole_idx], old_moment))(eval_points)
+        updated_field = self._last_field - old_contribs + new_contribs
+        self._last_field = updated_field
+        self.pho_values = self.pho_values.at[dipole_idx].set(new_pho)
+        self.dipole_moments = self.dipole_moments.at[dipole_idx].set(new_moment)
+        return updated_field
+
+    def _apply_symmetries(self, positions, moments, stellsym=False, nfp=1, coordinate_flag='cartesian'):
+        step = 1
+        pos = positions[::step]
+        mom = moments[::step]
+        if coordinate_flag == 'cylindrical':
+            phi_dipole = jnp.arctan2(pos[:, 1], pos[:, 0])
+            mom = jnp.stack([mom[:, 0] * jnp.cos(phi_dipole) - mom[:, 1] * jnp.sin(phi_dipole),
+                             mom[:, 0] * jnp.sin(phi_dipole) + mom[:, 1] * jnp.cos(phi_dipole),
+                             mom[:, 2]], axis=1)
+        all_pos, all_mom = [], []
+        stell_list = [1.0] if not stellsym else [1.0, -1.0]
+        for stell in stell_list:
+            pos_stell = pos * jnp.array([1.0, stell, stell])
+            mom_stell = mom * jnp.array([stell, 1.0, 1.0]) if stellsym else mom
+            for i in range(nfp):
+                angle = 2 * jnp.pi * i / nfp
+                R = jnp.array([[jnp.cos(angle), -jnp.sin(angle), 0.0],
+                               [jnp.sin(angle), jnp.cos(angle), 0.0],
+                               [0.0, 0.0, 1.0]])
+                all_pos.append(pos_stell @ R.T)
+                all_mom.append(mom_stell @ R.T)
+        return jnp.concatenate(all_pos, axis=0), jnp.concatenate(all_mom, axis=0)

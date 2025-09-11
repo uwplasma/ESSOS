@@ -64,3 +64,45 @@ def roots_scipy(x,y, shift = 0):
     roots = PPoly.from_spline(interp)
     x_values = roots.roots(extrapolate=False)
     return x_values
+
+def read_famus_dipoles(path, debug=False):
+    positions, moments, IC_list, pho_list = [], [], [], []
+    first_ic_one = -1
+
+    with open(path, "r") as f:
+        for line_num, line in enumerate(f):
+            if line.strip().startswith("#") or len(line.strip()) == 0:
+                continue
+
+            parts = line.split(",")
+            if debug and line_num < 10:
+                print(f"Line {line_num}: {parts}")
+
+            if len(parts) >= 12:
+                try:
+                    x, y, z = float(parts[3]), float(parts[4]), float(parts[5])
+                    Ic = float(parts[6])
+                    M = float(parts[7])
+                    pho = float(parts[8])
+                    phi = float(parts[10])
+                    theta = float(parts[11])
+
+                    if Ic == 1 and first_ic_one == -1:
+                        first_ic_one = line_num
+
+                    positions.append([x, y, z])
+                    mx = M * jnp.sin(phi) * jnp.sin(theta)
+                    my = -M * jnp.cos(phi) * jnp.sin(theta)
+                    mz = M * jnp.cos(theta)
+                    moments.append([mx, my, mz])
+                    IC_list.append(Ic)
+                    pho_list.append(pho)
+
+                except Exception as e:
+                    if debug:
+                        print(f"Error parsing line {line_num}: {e}")
+                    continue
+
+    positions = jnp.array(positions)
+    moments = jnp.array(moments)
+    return positions, moments, jnp.array(IC_list), jnp.array(pho_list)
