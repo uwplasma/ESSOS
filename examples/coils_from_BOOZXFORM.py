@@ -14,17 +14,16 @@ import jax.numpy as jnp
 from essos.coils import fit_dofs_from_coils, Curves, Coils
 import matplotlib.pyplot as plt
 
-# file_to_use = 'LandremanPaul2021_QA_reactorScale_lowres'
+file_to_use = 'LandremanPaul2021_QA_reactorScale_lowres'
 # file_to_use = 'HSX_QHS_vacuum_ns201'
-file_to_use = 'W7-X_standard_configuration'
+# file_to_use = 'W7-X_standard_configuration'
 
-js = None
-ntheta = 41
-ncoils = 6
-tmax = 1200
+ntheta = 51
+ncoils = 10
+tmax = 1300
 nfieldlines_per_core=1
-trace_tolerance = 1e-5
-num_steps = 20000
+trace_tolerance = 1e-12
+num_steps = 22000
 order_Fourier_coils = 4
 current_on_each_coil = 2e8
 refine_nphi_for_surface_plot = 4
@@ -78,6 +77,7 @@ phi1D_Boozerplot = np.linspace(0, 2 * np.pi / b.nfp / 2, nphi*refine_nphi_for_su
 phi_Boozerplot, theta_Boozerplot = np.meshgrid(phi1D_Boozerplot, theta1D)
 modB_Boozerplot = np.zeros_like(theta_Boozerplot)
 
+js = None
 for jmn in range(b.mnboz):
     m = b.xm_b[jmn]
     n = b.xn_b[jmn]
@@ -284,7 +284,7 @@ Zsurf_phi0  = np.array([0.0]*ntheta)
 for jmn in range(b.mnboz):
     Rsurf_phi0 += (b.rmnc_b[jmn, js] * np.cos(b.xm_b[jmn] * theta1D - b.xn_b[jmn] * shift_surface_plot_for_phi))[0]
     Zsurf_phi0 += (b.zmns_b[jmn, js] * np.sin(b.xm_b[jmn] * theta1D - b.xn_b[jmn] * shift_surface_plot_for_phi))[0]
-ax2.plot(Rsurf_phi0,  Zsurf_phi0,  color='black', alpha=1.0, linewidth=2, label='CWS and Plasma Boundary')
+ax2.plot(Rsurf_phi0,  Zsurf_phi0,  color='black', alpha=1.0, linewidth=2, label='Surface of Constant Boozer Angle')
 ax2.set_xlabel('R (m)')
 ax2.set_ylabel('Z (m)')
 
@@ -303,26 +303,22 @@ ax2.plot([], [], color='blue', label='Fieldlines')
 if plot_fieldlines_constant_phi:
     ax2.plot([], [], color='red',  label='Fieldlines (constant phi)')
 
-# # Plot VMEC flux surfaces for reference
-# iradii = np.linspace(0,vmec.wout.ns-1,num=nradius).round()
-# iradii = [int(i) for i in iradii]
-# R = np.zeros((nzeta,nradius,ntheta))
-# Z = np.zeros((nzeta,nradius,ntheta))
-# Raxis = np.zeros(nzeta)
-# Zaxis = np.zeros(nzeta)
-# phis = zeta
-
-# ## Obtain VMEC QFM surfaces
-# for itheta in range(ntheta):
-#     for izeta in range(nzeta):
-#         for iradius in range(nradius):
-#             for imode, xnn in enumerate(vmec.wout.xn):
-#                 angle = vmec.wout.xm[imode]*theta[itheta] - xnn*zeta[izeta]
-#                 R[izeta,iradius,itheta] += vmec.wout.rmnc[imode, iradii[iradius]]*np.cos(angle)
-#                 Z[izeta,iradius,itheta] += vmec.wout.zmns[imode, iradii[iradius]]*np.sin(angle)
-
-# ax2.legend()
-# plt.tight_layout()
+# Plot VMEC flux surfaces for reference
+# Match the surfaces of VMEC closest to the radii of the fieldlines traced
+s_fieldlines = (jnp.linspace(sum(vmec.wout.rmnc)[0], sum(vmec.wout.rmnc)[-1], nfieldlines) - sum(vmec.wout.rmnc)[0])/ \
+               (sum(vmec.wout.rmnc)[-1] - sum(vmec.wout.rmnc)[0])
+s_vmec = jnp.sqrt(jnp.linspace(0, 1, vmec.wout.ns))
+iradii = np.array([np.abs(s_vmec - s).argmin() for s in s_fieldlines])
+for iradius in range(nfieldlines):
+    R = [0]*ntheta
+    Z = [0]*ntheta
+    for imode, xnn in enumerate(vmec.wout.xn):
+        angle = vmec.wout.xm[imode]*theta1D - xnn*shift_surface_plot_for_phi
+        R += vmec.wout.rmnc[imode, iradii[iradius]]*np.cos(angle)
+        Z += vmec.wout.zmns[imode, iradii[iradius]]*np.sin(angle)
+    ax2.plot(R, Z, 'r--', linewidth=1.5, label='Surfaces of Constant Cylindrical Angle' if iradius ==0 else '_nolegend_')
+ax2.legend()
+plt.tight_layout()
 
 fig = plt.figure()
 plt.contourf(phi_Boozerplot, theta_Boozerplot, modB_Boozerplot, levels=6)
