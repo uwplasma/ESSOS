@@ -2,15 +2,19 @@
 import os
 number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
-from jax import jit, value_and_grad
+from time import time
+import jax
+print(jax.devices())
+jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.dynamics import Particles, Tracing
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
 from essos.optimization import optimize_loss_function
 from essos.objective_functions import loss_particle_r_cross_final_new,loss_particle_r_cross_max,loss_particle_radial_drift,loss_particle_gamma_c
-from essos.objective_functions import loss_coil_curvature_new,loss_coil_length_new,loss_normB_axis,loss_normB_axis_average
+from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis,loss_normB_axis_average
 from functools import partial
+import essos.alm_convex as alm
 import optax
 
 
@@ -21,7 +25,7 @@ max_coil_curvature = 0.4
 nparticles = number_of_processors_to_use*10
 order_Fourier_series_coils = 4
 number_coil_points = 80
-maximum_function_evaluations = 3
+maximum_function_evaluations = 10
 maxtimes = [2.e-5]
 num_steps=100
 number_coils_per_half_field_period = 3
@@ -52,32 +56,60 @@ initial_xyz=jnp.array([major_radius_coils*jnp.cos(phi_array), major_radius_coils
 particles = Particles(initial_xyz=initial_xyz)
 
 t=maxtimes[0]
-
-curvature_partial=partial(loss_coil_curvature_new, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
-length_partial=partial(loss_coil_length_new, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
+loss_partial = partial(loss_particle_gamma_c,particles=particles, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps)
+curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
+length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
 Baxis_average_partial=partial(loss_normB_axis_average,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
-r_max_partial = partial(loss_particle_r_cross_max, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model = model,num_steps=num_steps)
-def total_loss(params):
-    return jnp.linalg.norm(jnp.concatenate((r_max_partial(params),length_partial(params),curvature_partial(params),Baxis_average_partial(params))))**2
+r_max_partial = partial(loss_particle_r_cross_max, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model=model,num_steps=num_steps)
 
-params=coils_initial.x
-optimizer=optax.lbfgs()
-opt_state=optimizer.init(params)
 
-@jit
-def update(params,opt_state):
-    value, grad = value_and_grad(total_loss)(params)        
-    updates, opt_state =optimizer.update(grad, opt_state, params, value=value, grad=grad, value_fn=total_loss)
-    params = optax.apply_updates(params, updates)
-    return params,opt_state
+# Create the constraints
+penalty = 1.05 #Intial penalty values
+multiplier=0.0 #Initial lagrange multiplier values
+sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
+constraints = alm.combine(
+alm.eq(curvature_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(length_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(Baxis_average_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(r_max_partial, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+)
 
-for i in range(maximum_function_evaluations):
-    params,opt_state=update(params,opt_state)
-    if i % 3 == 0:
-        print('Objective function at iteration {:d}: {:.2E}'.format(i, total_loss(params)))
 
-dofs_curves = jnp.reshape(params[:len_dofs_curves], (dofs_curves_shape))
-dofs_currents = params[len_dofs_curves:]
+
+model_lagrange='Mu_Tolerance'              #Options: Mu_Constant, Mu_Monotonic, Mu_Conditional,Mu_Adaptative
+beta=2.                                     #penalty update parameter
+mu_max=1.e4                                 #Maximum penalty parameter allowed
+alpha=0.99           #
+gamma=1.e-2
+epsilon=1.e-8
+omega_tol=1.e-5    #grad_tolerance, associated with grad of lagrangian to main parameters
+eta_tol=1.e-6  #contrained tolerances, associated with variation of contraints
+optimizer='SLSQP'
+
+
+ALM=alm.ALM_model_jaxopt(constraints,optimizer=optimizer,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+
+lagrange_params=constraints.init(coils_initial.x)
+params = coils_initial.x, lagrange_params
+lag_state,grad,info=ALM.init(params)
+mu_average=alm.penalty_average(lagrange_params)
+#omega=1.#1./mu_average
+#eta=1000.#1./mu_average**0.1
+omega=1./mu_average
+eta=1./mu_average**0.1
+
+i=0
+while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
+    params, lag_state,grad,info,eta,omega = ALM.update(params,lag_state,grad,info,eta,omega)        #One step of ALM optimization
+    #if i % 5 == 0:
+    #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
+    print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')
+    print('lagrange',params[1])
+    i=i+1
+
+
+dofs_curves = jnp.reshape(params[0][:len_dofs_curves], (dofs_curves_shape))
+dofs_currents = params[0][len_dofs_curves:]
 curves = Curves(dofs_curves, n_segments, nfp, stellsym)
 new_coils = Coils(curves=curves, currents=dofs_currents*coils_initial.currents_scale)
 params=new_coils.x
@@ -85,7 +117,8 @@ tracing_initial = Tracing(field=coils_initial, particles=particles, maxtime=t, m
                 ,times_to_trace=200,timestep=1.e-8,atol=1.e-5,rtol=1.e-5)
 tracing_optimized = Tracing(field=new_coils, particles=particles, maxtime=t, model=model,times_to_trace=200,timestep=1.e-8,atol=1.e-5,rtol=1.e-5)
 
-
+#print('Final params',params)
+#print(info[1])
 # Plot trajectories, before and after optimization
 fig = plt.figure(figsize=(9, 8))
 ax1 = fig.add_subplot(221, projection='3d')
@@ -108,8 +141,7 @@ for i, trajectory in enumerate(tracing_optimized.trajectories):
 ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')#ax4.legend()
 plt.tight_layout()
-# plt.savefig(f'opt_lbfgs.pdf')
-plt.show()
+plt.savefig(f'opt_constrained.pdf')
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
@@ -122,5 +154,3 @@ plt.show()
 #tracing_optimized.to_vtk('trajectories_final')
 #coils_initial.to_vtk('coils_initial')
 #new_coils.to_vtk('coils_optimized')
-
-

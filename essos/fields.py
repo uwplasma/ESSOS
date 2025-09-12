@@ -1,5 +1,7 @@
 import jax
 jax.config.update("jax_enable_x64", True)
+from jax import vmap
+from essos.coils import compute_curvature
 import jax.numpy as jnp
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
@@ -13,6 +15,9 @@ class BiotSavart():
         self.currents = coils.currents
         self.gamma = coils.gamma
         self.gamma_dash = coils.gamma_dash
+        #self.gamma_dashdash = coils.gamma_dashdash
+        self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in self.gamma_dash])
+        self.coils_curvature= vmap(compute_curvature)(self.gamma_dash, coils.gamma_dashdash)        
         self.r_axis=jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(self.coils.dofs_curves)))
         self.z_axis=jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
 
@@ -39,6 +44,74 @@ class BiotSavart():
 
         return A_vec
 
+    @partial(jit, static_argnames=['self'])
+    def B_covariant(self, points):
+        return self.B(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, points):
+        return self.B(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def AbsB(self, points):
+        return jnp.linalg.norm(self.B(points))
+    
+    @partial(jit, static_argnames=['self'])
+    def dB_by_dX(self, points):
+        return jacfwd(self.B)(points)
+    
+    
+    @partial(jit, static_argnames=['self'])
+    def dAbsB_by_dX(self, points):
+        return grad(self.AbsB)(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def grad_B_covariant(self, points):
+        return jacfwd(self.B_covariant)(points)    
+ 
+    @partial(jit, static_argnames=['self'])
+    def curl_B(self, points):
+        grad_B_cov=self.grad_B_covariant(points)
+        return jnp.array([grad_B_cov[2][1] -grad_B_cov[1][2],
+                          grad_B_cov[0][2] -grad_B_cov[2][0],
+                          grad_B_cov[1][0] -grad_B_cov[0][1]])/self.sqrtg(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def curl_b(self, points):
+        return self.curl_B(points)/self.AbsB(points)+jnp.cross(self.B_covariant(points),jnp.array(self.dAbsB_by_dX(points)))/self.AbsB(points)**2/self.sqrtg(points)
+
+    @partial(jit, static_argnames=['self'])
+    def kappa(self, points):
+        return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
+    
+    @partial(jit, static_argnames=['self'])
+    def to_xyz(self, points):
+        return points
+
+
+
+class BiotSavart_from_gamma():
+    def __init__(self, gamma,gamma_dash,gamma_dashdash, currents):
+        self.currents = currents
+        self.gamma = gamma
+        self.gamma_dash = gamma_dash
+        #self.gamma_dashdash = gamma_dashdash
+        self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in gamma_dash])
+        self.coils_curvature= vmap(compute_curvature)(gamma_dash, gamma_dashdash)
+        self.r_axis=jnp.average(jnp.linalg.norm(jnp.average(gamma,axis=1)[:,0:2],axis=1))
+        self.z_axis=jnp.average(jnp.average(gamma,axis=1)[:,2])
+
+    @partial(jit, static_argnames=['self'])
+    def sqrtg(self, points):
+        return 1.
+    
+    @partial(jit, static_argnames=['self'])
+    def B(self, points):
+        dif_R = (jnp.array(points)-self.gamma).T
+        dB = jnp.cross(self.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0)/jnp.linalg.norm(dif_R, axis=0)**3
+        dB_sum = jnp.einsum("i,bai", self.currents*1e-7, dB, optimize="greedy")
+        return jnp.mean(dB_sum, axis=0)
+    
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
         return self.B(points)

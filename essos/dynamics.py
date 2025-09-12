@@ -517,7 +517,7 @@ class Tracing():
                         s, _, _, _ = y
                         return s-1	        
                 self.condition = condition_Vmec
-            elif isinstance(field,BiotSavart) and isinstance(boundary,SurfaceClassifier):
+            elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
                 if model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative' or model=='GuidingCenterCollisions':
                     def condition_BioSavart(t, y, args, **kwargs):
                         xx, yy, zz, _,_ = y
