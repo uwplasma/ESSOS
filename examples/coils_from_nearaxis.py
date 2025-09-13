@@ -195,6 +195,8 @@ if plot_coils_on_2D:
 if plot_coils_without_Fourier_fit:
     ax.plot([], [], color='k', label='Fieldlines from Coils from Near-Axis')
 ax.plot([], [], color='b', label='Fieldlines')
+ax.set_xlabel('R (m)')
+ax.set_ylabel('Z (m)')
 ax.legend()
 plt.tight_layout()
 
