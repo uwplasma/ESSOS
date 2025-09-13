@@ -18,11 +18,11 @@ file_to_use = 'LandremanPaul2021_QA_reactorScale_lowres'
 # file_to_use = 'HSX_QHS_vacuum_ns201'
 # file_to_use = 'W7-X_standard_configuration'
 
-ntheta = 51
-ncoils = 10
-tmax = 1300
+ntheta = 41
+ncoils = 4
+tmax = 800
 nfieldlines_per_core=1
-trace_tolerance = 1e-12
+trace_tolerance = 1e-8
 num_steps = 22000
 order_Fourier_coils = 4
 current_on_each_coil = 2e8
@@ -40,18 +40,15 @@ os.makedirs(output_dir, exist_ok=True)
 wout_filename = os.path.join(input_dir, 'wout_'+file_to_use+'.nc')
 boozmn_filename = os.path.join(output_dir, 'boozmn_'+file_to_use+'.nc')
 
-# if boozmn_filename.split('/')[-1] in os.listdir(output_dir):
-#     print(f"File {boozmn_filename} already exists, skipping computation")
-#     b = bx.Booz_xform()
-#     b.read_boozmn(boozmn_filename)
-# else:
 print(f"Computing {boozmn_filename}")
 vmec = Vmec(wout_filename, verbose=False)
 b = Boozer(vmec, mpol=64, ntor=64, verbose=True)
+time0 = time()
 b.register([1])
 b.run()
 # b.bx.write_boozmn(boozmn_filename)
 b = b.bx
+print(f"Computing Boozer harmonics took {time()-time0:.2f} seconds")
 
 current_on_each_coil = current_on_each_coil / ncoils*vmec.wout.Aminor_p**2/1.7**2
 nfieldlines = number_of_processors_to_use*nfieldlines_per_core
@@ -145,9 +142,6 @@ index = 0
 index = 0
 for i, j, k in zip(X.T, Y.T, Z.T):
     index += 1
-    # showlegend = True
-    # if index > 1:
-    #     showlegend = False
     showlegend = False
     data.append(go.Scatter3d(x=i, y=j, z=k, mode='lines', line=line_marker, showlegend=showlegend))#, name=r'Constant $\varphi$ contours'))
 
@@ -158,9 +152,6 @@ if show_coils_fitted_to_Fourier:
     index = 0
     for i, j, k in zip(gamma_coils[:, :, 0].T, gamma_coils[:, :, 1].T, gamma_coils[:, :, 2].T):
         index += 1
-        # showlegend = True
-        # if index > 1:
-        #     showlegend = False
         showlegend = False
         data.append(go.Scatter3d(x=i, y=j, z=k, mode='lines', line=line_marker, showlegend=showlegend, name='Coils fitted to Fourier'))
 
@@ -185,9 +176,6 @@ if plot_fieldlines_constant_phi:
     index = 0
     for i, j, k in zip(X_phi.T, Y_phi.T, Z_phi.T):
         index += 1
-        # showlegend = True
-        # if index > 1:
-        #     showlegend = False
         showlegend = False
         data.append(go.Scatter3d(x=i, y=j, z=k, mode='lines', line=line_marker, showlegend=showlegend, name=r"Constant $\phi$ contours"))
 
@@ -231,7 +219,7 @@ for traj in trajectories_coils_DOFS:
         line=dict(color='black', width=0.2),
         opacity=1.0,
         name='Fieldline constant Boozer coils',
-        showlegend=False if traj is not trajectories_coils_DOFS[0] else True
+        showlegend=False# if traj is not trajectories_coils_DOFS[0] else True
     ))
 
 # Add fieldlines from phi coils
@@ -245,7 +233,7 @@ if plot_fieldlines_constant_phi:
             line=dict(color='blue', width=0.2),
             opacity=1.0,
             name='Fieldline constant phi coils',
-            showlegend=False if traj is not trajectories_coils_phi[0] else True
+            showlegend=False# if traj is not trajectories_coils_phi[0] else True
         ))
             
 fig = go.Figure(data=data)
@@ -327,7 +315,5 @@ plt.ylabel(r'Boozer poloidal angle $\theta$')
 for i in range(ncoils):
     plt.axvline(x=phi1D[i], color='black', linewidth=2.5)
 plt.colorbar(label='|B| (T)')
-
-# bx.surfplot(b, js=0,  fill=False, ncontours=ncoils)
 
 plt.show()

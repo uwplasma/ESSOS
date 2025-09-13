@@ -15,7 +15,7 @@ class BiotSavart():
         self.currents = coils.currents
         self.gamma = coils.gamma
         self.gamma_dash = coils.gamma_dash
-        #self.gamma_dashdash = coils.gamma_dashdash
+        self.gamma_dashdash = coils.gamma_dashdash
         self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in self.gamma_dash])
         self.coils_curvature= vmap(compute_curvature)(self.gamma_dash, coils.gamma_dashdash)        
         self.r_axis=jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(self.coils.dofs_curves)))
@@ -77,7 +77,37 @@ class BiotSavart():
     def to_xyz(self, points):
         return points
 
+@jit
+def d_dtheta_fft(f_theta):
+    ntheta = f_theta.shape[-1]
+    k = jnp.fft.fftfreq(ntheta, d=1.0/ntheta)     # integer modes
+    Fk = jnp.fft.fft(f_theta, axis=-1)
+    dF = (1j * k) * Fk
+    return jnp.fft.ifft(dF, axis=-1).real * (2*jnp.pi)
 
+@jit
+def d2_dtheta2_fft(f_theta):
+    ntheta = f_theta.shape[-1]
+    k = jnp.fft.fftfreq(ntheta, d=1.0/ntheta)     # integer modes
+    Fk = jnp.fft.fft(f_theta, axis=-1)
+    d2F = -(k**2) * Fk
+    return jnp.fft.ifft(d2F, axis=-1).real * (2*jnp.pi)**2
+
+@jit
+def gamma_dash_from_gamma(gamma):
+    return jnp.stack([
+        d_dtheta_fft(gamma[..., 0]),
+        d_dtheta_fft(gamma[..., 1]),
+        d_dtheta_fft(gamma[..., 2]),
+    ], axis=-1)
+
+@jit
+def gamma_dashdash_from_gamma(gamma):
+    return jnp.stack([
+        d2_dtheta2_fft(gamma[..., 0]),
+        d2_dtheta2_fft(gamma[..., 1]),
+        d2_dtheta2_fft(gamma[..., 2]),
+    ], axis=-1)
 
 class BiotSavart_from_gamma():
     def __init__(self, gamma,gamma_dash=None,gamma_dashdash=None, currents=None):
@@ -91,10 +121,14 @@ class BiotSavart_from_gamma():
         self.z_axis=jnp.average(jnp.average(gamma,axis=1)[:,2])
         if gamma_dash is not None:
             self.gamma_dash = gamma_dash
-            self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in gamma_dash])
+        else:
+            self.gamma_dash = gamma_dash_from_gamma(gamma)
+        self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in self.gamma_dash])
         if gamma_dashdash is not None:
             self.gamma_dashdash = gamma_dashdash
-            self.coils_curvature= vmap(compute_curvature)(gamma_dash, gamma_dashdash)
+        else:
+            self.gamma_dashdash = gamma_dashdash_from_gamma(gamma)
+        self.coils_curvature= vmap(compute_curvature)(gamma_dash, gamma_dashdash)
 
     @partial(jit, static_argnames=['self'])
     def sqrtg(self, points):
@@ -620,7 +654,14 @@ class near_axis():
                 L_grad_B, inv_L_grad_B, torsion, curvature, varphi, R0p, Z0p)
     
     @jit
-    def phi_of_theta_varphi_func(self, phi_0, r, theta, varphi):
+    def residual_phi0_of_theta_varphi_func(self, phi_0, r, theta, varphi):
+        # Residual = phi + nu - varphi = 0
+        # Compute phi off axis
+        X_at_this_theta = r * (self.X1c_untwisted * jnp.cos(theta) + self.X1s_untwisted * jnp.sin(theta))
+        Y_at_this_theta = r * (self.Y1c_untwisted * jnp.cos(theta) + self.Y1s_untwisted * jnp.sin(theta))
+        _, _, phi = self.Frenet_to_cylindrical_1_point(phi_0, X_at_this_theta, Y_at_this_theta)
+        # phi = phi + 2 * jnp.pi * (phi < 0) - 2 * jnp.pi * (phi > 2 * jnp.pi)
+        # Compute nu = nu0 + r (nu1c cos theta + nu1s sin theta)
         nu0 = self.interpolated_array_at_point(self.varphi-self.phi, phi_0)
         X1c = self.interpolated_array_at_point(self.X1c_untwisted, phi_0)
         X1s = self.interpolated_array_at_point(self.X1s_untwisted, phi_0)
@@ -635,16 +676,18 @@ class near_axis():
         Z0p = self.interpolated_array_at_point(self.Z0p, phi_0)
         nu1c = X1c * (bR * Z0p - bZ * R0p)/R0 + Y1c * (nZ * R0p - nR * Z0p)/R0
         nu1s = X1s * (bR * Z0p - bZ * R0p)/R0 + Y1s * (nZ * R0p - nR * Z0p)/R0
-        return phi_0 + nu0 + r * (nu1c * jnp.cos(theta) + nu1s * jnp.sin(theta)) - varphi
+        nu = nu0 + r * (nu1c * jnp.cos(theta) + nu1s * jnp.sin(theta))
+        # Return residual
+        return phi + nu - varphi
     
     @jit
     def phi_of_theta_varphi(self, r, theta, varphi):
-        residual = partial(self.phi_of_theta_varphi_func, theta=theta, r=r, varphi=varphi)
+        residual = partial(self.residual_phi0_of_theta_varphi_func, theta=theta, r=r, varphi=varphi)
         phi_on_axis = lax.custom_root(residual, varphi, newton, lambda g, y: y / g(1.0))
         X_at_this_theta = r * (self.X1c_untwisted * jnp.cos(theta) + self.X1s_untwisted * jnp.sin(theta))
         Y_at_this_theta = r * (self.Y1c_untwisted * jnp.cos(theta) + self.Y1s_untwisted * jnp.sin(theta))
         _, _, phi_off_axis = self.Frenet_to_cylindrical_1_point(phi_on_axis, X_at_this_theta, Y_at_this_theta)
-        return phi_off_axis + 2 * jnp.pi * (phi_off_axis < 0) - 2 * jnp.pi * (phi_off_axis > 2 * jnp.pi)
+        return phi_off_axis# + 2 * jnp.pi * (phi_off_axis < 0) - 2 * jnp.pi * (phi_off_axis > 2 * jnp.pi)
         
     @jit
     def interpolated_array_at_point(self,array,point):
@@ -701,7 +744,7 @@ class near_axis():
         return total_R, total_z, total_phi
     
     @partial(jit, static_argnames=['ntheta'])
-    def Frenet_to_cylindrical(self, r, ntheta=20):
+    def Frenet_to_cylindrical(self, r, ntheta=20, phi_is_varphi=False):
         nphi_conversion = self.nphi
         theta = jnp.linspace(0, 2 * jnp.pi, ntheta, endpoint=False)
         phi_conversion = jnp.linspace(0, 2 * jnp.pi / self.nfp, nphi_conversion, endpoint=False)
@@ -713,9 +756,28 @@ class near_axis():
             Y_at_this_theta = r * (self.Y1c_untwisted * costheta + self.Y1s_untwisted * sintheta)
 
             def compute_for_phi(phi_target):
-                residual = partial(self.Frenet_to_cylindrical_residual_func, phi_target=phi_target,
-                                X_at_this_theta=X_at_this_theta, Y_at_this_theta=Y_at_this_theta)
+                
+                def residual(z):
+                    return jax.lax.cond(
+                        phi_is_varphi,
+                        # Branch A: solve for phi0 so that phi+nu-varphi = 0
+                        lambda _: self.residual_phi0_of_theta_varphi_func(
+                            z, r=r, theta=theta_j, varphi=phi_target
+                        ),
+                        # Branch B: solve for phi so Frenet_to_cylindrical_residual_func = 0
+                        lambda _: self.Frenet_to_cylindrical_residual_func(
+                            z, phi_target=phi_target,
+                            X_at_this_theta=X_at_this_theta,
+                            Y_at_this_theta=Y_at_this_theta
+                        ),
+                        operand=None
+                    )
+                # residual = partial(self.Frenet_to_cylindrical_residual_func, phi_target=phi_target,
+                #                 X_at_this_theta=X_at_this_theta, Y_at_this_theta=Y_at_this_theta)
+                # residual = partial(self.residual_phi0_of_theta_varphi_func, theta=theta_j, r=r, varphi=phi_target)
+                
                 phi0_solution = lax.custom_root(residual, phi_target, newton, lambda g, y: y / g(1.0))
+                
                 final_R, final_Z, _ = self.Frenet_to_cylindrical_1_point(phi0_solution, X_at_this_theta, Y_at_this_theta)
                 return final_R, final_Z, phi0_solution
 
@@ -761,28 +823,32 @@ class near_axis():
         return RBC, ZBS
 
     @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi', 'phi_is_varphi'])
-    def get_boundary(self, r=0.1, ntheta=30, nphi=120, ntheta_fourier=20, mpol=5, ntor=5, phi_is_varphi=False):
-        R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
+    def get_boundary(self, r=0.1, ntheta=30, nphi=120, ntheta_fourier=20, mpol=5, ntor=5, phi_is_varphi=False, phi_offset=0.0):
+        R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier, phi_is_varphi=phi_is_varphi)
         RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
 
         theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
-        phi1D = jax.lax.cond(
-            phi_is_varphi,
-            lambda _: jnp.linspace(2*jnp.pi/nphi/2, 2*jnp.pi + 2*jnp.pi/nphi/2, nphi, endpoint=False),
-            lambda _: jnp.linspace(0, 2 * jnp.pi, nphi),
-            operand=None
-        )
-        phi2D, theta2D = jnp.meshgrid(phi1D, theta1D, indexing='ij')
+        
+        # phi1D = jax.lax.cond(
+        #     phi_is_varphi,
+        #     lambda _: jnp.linspace(2*jnp.pi/nphi/2, 2*jnp.pi + 2*jnp.pi/nphi/2, nphi, endpoint=False),
+        #     lambda _: jnp.linspace(0, 2 * jnp.pi, nphi),
+        #     operand=None
+        # )
+        # phi1D += phi_offset
+        phi1D = jnp.linspace(0, 2 * jnp.pi, nphi) + phi_offset
+        
+        phi2D_original, theta2D = jnp.meshgrid(phi1D, theta1D, indexing='ij')
         
         phi2D = jax.lax.cond(
             phi_is_varphi,
-            lambda _: vmap(lambda theta_row, varphi_row: vmap(lambda theta, varphi: self.phi_of_theta_varphi(r, theta, varphi))(theta_row, varphi_row))(theta2D, phi2D),
-            lambda _: phi2D,
+            lambda _: vmap(lambda theta_row, varphi_row: vmap(lambda theta, varphi: self.phi_of_theta_varphi(r, theta, varphi))(theta_row, varphi_row))(theta2D, phi2D_original),
+            lambda _: phi2D_original,
             operand=None
         )
         
         def compute_RZ(m, n):
-            angle = m * theta2D - n * self.nfp * phi2D
+            angle = m * theta2D - n * self.nfp * phi2D_original
             return RBC[n + ntor, m] * jnp.cos(angle), ZBS[n + ntor, m] * jnp.sin(angle)
 
         m_vals = jnp.arange(mpol + 1)

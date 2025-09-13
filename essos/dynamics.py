@@ -501,7 +501,7 @@ class Tracing():
         self.particles = particles
         self.species=species
         self.tag_gc=tag_gc
-        self.progress_meter = NoProgressMeter() # TqdmProgressMeter()
+        self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
