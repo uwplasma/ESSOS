@@ -94,7 +94,7 @@ class QfmSurface:
         result = r + 0.5 * constraint_weight * c**2
         return jnp.asarray(result), None
 
-    def minimize_penalty_lbfgs(self, tol=1e-6, maxiter=1000, constraint_weight=1.0):
+    def minimize_penalty_lbfgs(self, tol=1e-6, maxiter=1000, constraint_weight=1e4):
         value_and_grad_fn = jax.value_and_grad(
             lambda x: self.penalty_objective(x, constraint_weight),
             has_aux=True
@@ -143,7 +143,7 @@ class QfmSurface:
         }
 
 
-    def run(self, tol=1e-6, maxiter=1000, method='SLSQP', constraint_weight=1.0):
+    def run(self, tol=1e-6, maxiter=1000, method='SLSQP', constraint_weight=1e4):
         method_up = method.upper()
         if method_up == 'SLSQP':
             return self.minimize_exact_scipy_slsqp(tol=tol, maxiter=maxiter)
