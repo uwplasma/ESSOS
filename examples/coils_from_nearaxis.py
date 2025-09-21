@@ -26,6 +26,7 @@ trace_tolerance = 1e-8
 num_steps = 22000
 order = 4
 current_on_each_coil = 2e8
+Poincare_plot_phi = jnp.array([0])
 plot_coils_without_Fourier_fit = False
 plot_coils_on_2D = False
 plot_difference_varphi_phi = False
@@ -37,6 +38,7 @@ current_on_each_coil = current_on_each_coil / ncoils*r_surface**2/1.7**2
 r_array = jnp.linspace(1e-5, r_surface, nfieldlines)
 n_segments = ntheta
 
+print(f"Starting to create surfaces and coils for {nfieldlines} fieldlines and {ncoils} coils...")
 time0 = time()
 r_array = jnp.linspace(1e-5, r_surface, nfieldlines)
 results = [field_nearaxis.get_boundary(r=r, ntheta=ntheta, nphi=nphi_internal_pyQSC) for r in r_array]
@@ -173,10 +175,9 @@ fig_plotly.show()
 # Now plot the 2D Poincare plot with Matplotlib
 fig2 = plt.figure(figsize=(6, 5))
 ax = fig2.add_subplot(111)
-shifts = jnp.array([0])
 if plot_coils_without_Fourier_fit:
-    tracing_coils_gamma.poincare_plot(ax=ax, show=False, shifts=shifts/nfp/2, color='k', s=0.05)
-tracing_coils_DOFS.poincare_plot(ax=ax, show=False, shifts=shifts/nfp/2, color='b', s=0.05)
+    tracing_coils_gamma.poincare_plot(ax=ax, show=False, shifts=Poincare_plot_phi/nfp/2, color='k', s=0.05)
+tracing_coils_DOFS.poincare_plot(ax=ax, show=False, shifts=Poincare_plot_phi/nfp/2, color='b', s=0.05)
 
 for i in range(nfieldlines):
     ax.plot(R_2D_surface_array[i,:,0], z_2D_surface_array[i,:,0], 'r--', linewidth=1.5, label='Surfaces of Constant Cylindrical Angle' if i==0 else '_nolegend_')

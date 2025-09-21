@@ -15,14 +15,12 @@ from essos.coils import fit_dofs_from_coils, Curves, Coils
 import matplotlib.pyplot as plt
 
 file_to_use = 'LandremanPaul2021_QA_reactorScale_lowres'
-# file_to_use = 'HSX_QHS_vacuum_ns201'
-# file_to_use = 'W7-X_standard_configuration'
 
 ntheta = 41
-ncoils = 4
-tmax = 800
+ncoils = 6
+tmax = 1100
 nfieldlines_per_core=1
-trace_tolerance = 1e-8
+trace_tolerance = 1e-9
 num_steps = 22000
 order_Fourier_coils = 4
 current_on_each_coil = 2e8
@@ -275,18 +273,6 @@ for jmn in range(b.mnboz):
 ax2.plot(Rsurf_phi0,  Zsurf_phi0,  color='black', alpha=1.0, linewidth=2, label='Surface of Constant Boozer Angle')
 ax2.set_xlabel('R (m)')
 ax2.set_ylabel('Z (m)')
-
-# for coil_number in range(ncoils):
-#     R_coils_gamma = jnp.sqrt(coils_gamma[coil_number,:,0]**2 + coils_gamma[coil_number,:,1]**2)
-#     R_curve = jnp.sqrt(curves.gamma[coil_number,:,0]**2 + curves.gamma[coil_number,:,1]**2)
-
-#     ax2.plot(R_coils_gamma, coils_gamma[coil_number,:,2],
-#             color='black', linewidth=3.5, alpha=0.9,
-#             label='Coils from Boozer Surface' if coil_number==0 else '_nolegend_')
-
-#     ax2.plot(R_curve, curves.gamma[coil_number,:,2],
-#             linestyle='--', color='tab:orange', linewidth=3.5, alpha=0.8,
-#             label='Coil fitted to Fourier' if coil_number==0 else '_nolegend_')
 ax2.plot([], [], color='blue', label='Fieldlines')
 if plot_fieldlines_constant_phi:
     ax2.plot([], [], color='red',  label='Fieldlines (constant phi)')
