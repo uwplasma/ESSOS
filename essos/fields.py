@@ -128,7 +128,7 @@ class BiotSavart_from_gamma():
             self.gamma_dashdash = gamma_dashdash
         else:
             self.gamma_dashdash = gamma_dashdash_from_gamma(gamma)
-        self.coils_curvature= vmap(compute_curvature)(gamma_dash, gamma_dashdash)
+        self.coils_curvature= vmap(compute_curvature)(self.gamma_dash, self.gamma_dashdash)
 
     @partial(jit, static_argnames=['self'])
     def sqrtg(self, points):

@@ -856,8 +856,8 @@ class Tracing():
                 ).ys
             return trajectory
         
-        return jit(vmap(compute_trajectory,in_axes=(0,None)), in_shardings=(sharding,None), out_shardings=sharding)(
-            device_put(self.initial_conditions, sharding), None)
+        return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
+                    device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
         #x=jax.device_put(self.initial_conditions, sharding)
         #y=jax.device_put(self.particles.random_keys, sharding_index)        
         #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
