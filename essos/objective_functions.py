@@ -1,4 +1,5 @@
 import jax
+# from build.lib.essos import coils
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import jit, vmap
@@ -72,16 +73,15 @@ def loss_coils_for_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp,
     gradB_nearaxis = field_nearaxis.grad_B_axis.T
     gradB_coils = vmap(field.dB_by_dX)(points.T)
     
-    coil_length = loss_coil_length(x,dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_length=max_coil_length)
-    coil_curvature = loss_coil_curvature(x,dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_curvature=max_coil_curvature)
-    
+    coil_length = field.coils.length
+    coil_curvature = field.coils.curvature
     
     B_difference_loss = jnp.sum(jnp.abs(jnp.array(B_coils)-jnp.array(B_nearaxis)))
     gradB_difference_loss = jnp.sum(jnp.abs(jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)))
-    coil_length_loss = 1e3*jnp.max(loss_coil_length(coils, max_coil_length))
-    coil_curvature_loss = 1e3*jnp.max(loss_coil_curvature(coils, max_coil_curvature))
-    
-    
+    coil_length_loss = 1e3*jnp.max(jnp.maximum(0, coil_length - max_coil_length))
+    coil_curvature_loss = 1e3*jnp.max(jnp.maximum(0, coil_curvature - max_coil_curvature))
+
+
     return B_difference_loss+gradB_difference_loss+coil_length_loss+coil_curvature_loss
 
 # @partial(jit, static_argnums=(0, 1))
@@ -100,17 +100,17 @@ def difference_B_gradB_onaxis(nearaxis_field, coils_field):
     
     return jnp.array(B_coils)-jnp.array(B_nearaxis), jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)
     
-@partial(jit, static_argnums=(1, 2, 4, 5, 6, 7, 8))
-def loss_coils_and_nearaxis(x, field_nearaxis, dofs_curves_shape, currents_scale, nfp, max_coil_length=42,
+@partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
+def loss_coils_and_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
                n_segments=60, stellsym=True, max_coil_curvature=0.1):
     #len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
     len_dofs_nearaxis = len(field_nearaxis.x)          
     field=field_from_dofs(x[:-len_dofs_nearaxis],dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym)               
     new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(x[-len_dofs_nearaxis:], field_nearaxis)
     
-    coil_length = loss_coil_length(x[:-len_dofs_nearaxis],dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_length=max_coil_length)
-    coil_curvature = loss_coil_curvature(x[:-len_dofs_nearaxis],dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_curvature=max_coil_curvature)
-    
+    coil_length = field.coils.length
+    coil_curvature = field.coils.curvature
+
     elongation = new_field_nearaxis.elongation
     iota = new_field_nearaxis.iota
     
@@ -118,13 +118,12 @@ def loss_coils_and_nearaxis(x, field_nearaxis, dofs_curves_shape, currents_scale
     B_difference_loss = 3*jnp.sum(jnp.abs(B_difference))
     gradB_difference_loss = jnp.sum(jnp.abs(gradB_difference))
     
-    coil_length_loss = 1e3*jnp.max(loss_coil_length(coils, max_coil_length))
-    coil_curvature_loss = 1e3*jnp.max(loss_coil_curvature(coils, max_coil_curvature))
+    coil_length_loss = 1e3*jnp.max(jnp.maximum(0, coil_length - max_coil_length))
+    coil_curvature_loss = 1e3*jnp.max(jnp.maximum(0, coil_curvature - max_coil_curvature))
     elongation_loss = jnp.sum(jnp.abs(elongation))
     iota_loss = 30/jnp.abs(iota)
     
     return B_difference_loss+gradB_difference_loss+coil_length_loss+coil_curvature_loss+elongation_loss+iota_loss
-
 
 def loss_particle_radial_drift(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
     field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
@@ -362,14 +361,11 @@ def loss_BdotN(x, vmec, dofs_curves, currents_scale, nfp, max_coil_length=42,
     field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
     
     bdotn_over_b = BdotN_over_B(vmec.surface, field)
-    coil_length = loss_coil_length(x,dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_length=max_coil_length)
-    coil_curvature = loss_coil_curvature(x,dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_curvature=max_coil_curvature)
-    
-    
     bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
-    coil_length_loss    = jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
-    coil_curvature_loss = jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
-    
+
+    coil_length_loss    = jnp.maximum(0, jnp.max(field.coils.length-max_coil_length))
+    coil_curvature_loss = jnp.maximum(0, jnp.mean(field.coils.curvature, axis=1)-max_coil_curvature)
+
     return bdotn_over_b_loss+coil_length_loss+coil_curvature_loss
 
 @partial(jit, static_argnums=(1, 4, 5, 6))
@@ -377,7 +373,6 @@ def loss_BdotN_only(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, ste
     field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
     
     bdotn_over_b = BdotN_over_B(vmec.surface, field)
-
     bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
 
     return bdotn_over_b_loss
