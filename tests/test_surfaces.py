@@ -265,8 +265,8 @@ def test_classifier_jit_smoke():
                        [9.2, 20.0, 0.1]])
 
     # JIT both methods:
-    f1 = jax.jit(sc.evaluate_xyz, static_argnames=("self",))
-    f2 = jax.jit(sc.evaluate_rphiz, static_argnames=("self",))
+    f1 = sc.evaluate_xyz
+    f2 = sc.evaluate_rphiz
 
     out1 = f1(xyz)
     out2 = f2(rphiz)

@@ -49,7 +49,7 @@ def quadratic_cartesian_field(xyz: jnp.ndarray) -> jnp.ndarray:
 
 
 def make_grid(rr=(0.4, 1.2, 4), ph=(0.0, math.pi/2, 3), zz=(-0.5, 0.5, 4)):
-    return GridSpec(rrange=rr, phi_range=ph, z_range=zz, value_size=3)
+    return GridSpec(r_range=rr, phi_range=ph, z_range=zz, value_size=3)
 
 
 # Skip-function that masks a thin inner cylinder (r < rmin+0.05)
