@@ -28,6 +28,11 @@ import jax.numpy as jnp
 import equinox as eqx
 from jax import lax
 
+from functools import partial
+from jax import block_until_ready
+from jax.scipy.interpolate import RegularGridInterpolator as JaxRGI
+import time
+
 # --------------------------------------------------------------------------------------
 # Utility: Lagrange basis with precomputed nodes and scalings (barycentric‑like product)
 # --------------------------------------------------------------------------------------
@@ -521,3 +526,163 @@ class InterpolatedField(eqx.Module):
         rms = jnp.sqrt(jnp.mean(diff**2))
         mx = jnp.max(diff)
         return float(rms), float(mx)
+
+def _ensure_batch(x: jnp.ndarray):
+    """Accept (3,) or (N,3). Return (N,3) and a flag indicating 'was_single'."""
+    x = jnp.asarray(x)
+    if x.ndim == 1:
+        return x[None, :], True
+    return x, False
+
+
+def _unbatch(out: jnp.ndarray, was_single: bool):
+    """If 'out' is (N,…) and was_single, return out[0]; else return out."""
+    return out[0] if was_single else out
+
+
+class InterpolatedVmecNative(eqx.Module):
+    """
+    Per-component regular-grid interpolators in native VMEC coordinates (s,θ,φ).
+    Exposes jittable evaluators for B_covariant, B_contravariant, and sqrtg,
+    and convenience passthroughs for AbsB and to_xyz.
+    """
+    vmec: any
+    srange: Tuple[float, float, int]
+    thetarange: Tuple[float, float, int]
+    phirange: Tuple[float, float, int]
+    _rgis: dict = eqx.static_field()
+
+    def __init__(
+        self,
+        vmec,
+        srange: Tuple[float, float, int] = (0.0, 1.0, 24),
+        thetarange: Tuple[float, float, int] = (0.0, 2 * jnp.pi, 48),
+        phirange: Tuple[float, float, int] = (0.0, None, 64),
+    ):
+        self.vmec = vmec
+        nfp = int(vmec.nfp)
+        if phirange[1] is None:
+            phirange = (0.0, 2 * jnp.pi / nfp, phirange[2])
+        self.srange, self.thetarange, self.phirange = srange, thetarange, phirange
+        object.__setattr__(self, "_rgis", {})
+
+    def build_all(self) -> "InterpolatedVmecNative":
+        print("[build] Precomputing grids & field values for RGI ...")
+        t0 = time.perf_counter()
+        s0, s1, ns = self.srange
+        th0, th1, nth = self.thetarange
+        ph0, ph1, nph = self.phirange
+
+        s_list = jnp.linspace(s0, s1, ns)
+        th_list = jnp.linspace(th0, th1, nth)
+        ph_list = jnp.linspace(ph0, ph1, nph)
+
+        # Tensor grid (ij indexing so reshape matches (ns,nth,nph))
+        SS, TT, PP = jnp.meshgrid(s_list, th_list, ph_list, indexing="ij")
+        pts_flat = jnp.stack([SS.ravel(), TT.ravel(), PP.ravel()], axis=1)  # (N,3)
+        N = pts_flat.shape[0]
+        print(f"[build] grid sizes: ns={ns}, nth={nth}, nph={nph} -> N={N}")
+
+        # Batch evaluate VMEC quantities
+        t_eval = time.perf_counter()
+        Bcov = jax.vmap(self.vmec.B_covariant)(pts_flat)      # (N,3)
+        Bcon = jax.vmap(self.vmec.B_contravariant)(pts_flat)  # (N,3)
+        sqrtg = jax.vmap(self.vmec.sqrtg)(pts_flat)           # (N,)
+        Bcov, Bcon, sqrtg = (block_until_ready(Bcov),
+                             block_until_ready(Bcon),
+                             block_until_ready(sqrtg))
+        print(f"[build] VMEC eval on grid: {time.perf_counter() - t_eval:.2f}s")
+
+        # Reshape to tensor grid
+        Bcov = Bcov.reshape((ns, nth, nph, 3))
+        Bcon = Bcon.reshape((ns, nth, nph, 3))
+        sqrtg = sqrtg.reshape((ns, nth, nph))
+
+        # Build RGIs (3+3+1)
+        t_rgi = time.perf_counter()
+
+        def rgi3(A3):
+            # A3 shape = (ns,nth,nph)
+            return JaxRGI((s_list, th_list, ph_list), A3, fill_value=None)
+
+        rgis = {
+            "Bcov0": rgi3(Bcov[..., 0]),
+            "Bcov1": rgi3(Bcov[..., 1]),
+            "Bcov2": rgi3(Bcov[..., 2]),
+            "Bcon0": rgi3(Bcon[..., 0]),
+            "Bcon1": rgi3(Bcon[..., 1]),
+            "Bcon2": rgi3(Bcon[..., 2]),
+            "sqrtg": rgi3(sqrtg),
+        }
+        object.__setattr__(self, "_rgis", rgis)
+
+        print(f"[build] RGI build: {time.perf_counter() - t_rgi:.2f}s")
+        print(f"[build] total: {time.perf_counter() - t0:.2f}s")
+        return self
+
+    # ---------- public, jittable evaluators with shape handling ----------
+    @eqx.filter_jit
+    def B_covariant(self, s_th_phi: jnp.ndarray) -> jnp.ndarray:
+        pts, single = _ensure_batch(s_th_phi)
+        v0 = self._rgis["Bcov0"](pts)
+        v1 = self._rgis["Bcov1"](pts)
+        v2 = self._rgis["Bcov2"](pts)
+        val = jnp.stack([v0, v1, v2], axis=-1)  # (N,3)
+        return _unbatch(val, single)            # (3,) or (N,3)
+
+    @eqx.filter_jit
+    def B_contravariant(self, s_th_phi: jnp.ndarray) -> jnp.ndarray:
+        pts, single = _ensure_batch(s_th_phi)
+        v0 = self._rgis["Bcon0"](pts)
+        v1 = self._rgis["Bcon1"](pts)
+        v2 = self._rgis["Bcon2"](pts)
+        val = jnp.stack([v0, v1, v2], axis=-1)  # (N,3)
+        return _unbatch(val, single)            # (3,) or (N,3)
+
+    @eqx.filter_jit
+    def sqrtg(self, s_th_phi: jnp.ndarray) -> jnp.ndarray:
+        pts, single = _ensure_batch(s_th_phi)
+        g = self._rgis["sqrtg"](pts)            # (N,)
+        return _unbatch(g, single)              # () or (N,)
+
+    # ---------- convenience passthroughs ----------
+    @partial(jax.jit, static_argnames=("self",))
+    def AbsB(self, pts_stp):
+        """Accept (..., 3) or (3,) and return (...,). Works for any batch rank."""
+        pts = jnp.asarray(pts_stp)
+        if pts.ndim == 1:                 # (3,)
+            return self.vmec.AbsB(pts)
+        if pts.shape[-1] != 3:
+            raise ValueError(f"AbsB expects last dim = 3; got {pts.shape}")
+        leading = pts.shape[:-1]
+        flat = pts.reshape((-1, 3))
+        out = jax.vmap(self.vmec.AbsB)(flat)            # (N,)
+        return out.reshape(leading)
+
+    @partial(jax.jit, static_argnames=("self",))
+    def to_xyz(self, pts_stp):
+        """Accept (..., 3) or (3,) and return (..., 3). Works for any batch rank."""
+        pts = jnp.asarray(pts_stp)
+        if pts.ndim == 1:                 # (3,)
+            return self.vmec.to_xyz(pts)
+        if pts.shape[-1] != 3:
+            raise ValueError(f"to_xyz expects last dim = 3; got {pts.shape}")
+        # Flatten leading dims, vmap, then reshape back
+        leading = pts.shape[:-1]
+        flat = pts.reshape((-1, 3))
+        out = jax.vmap(self.vmec.to_xyz)(flat)          # (N, 3)
+        return out.reshape(leading + (3,))
+
+
+def build_vmec_native_interpolant(
+    vmec,
+    srange=(0.0, 1.0, 33),
+    thetarange=(0.0, 2 * jnp.pi, 48),
+    phirange=(0.0, None, 64),
+) -> InterpolatedVmecNative:
+    """Helper factory with one-liner build, plus prints for timing."""
+    print("[stage] Building native (s,θ,φ) interpolants: B_cov, B_con, sqrtg ...")
+    t = time.perf_counter()
+    interp = InterpolatedVmecNative(vmec, srange, thetarange, phirange).build_all()
+    print(f"[time] Interpolant build total: {time.perf_counter() - t:.2f}s")
+    return interp
