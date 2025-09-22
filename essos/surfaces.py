@@ -1,10 +1,16 @@
 from functools import partial
 import jax.numpy as jnp
 from jax.scipy.interpolate import RegularGridInterpolator
-from jax import jit, vmap, devices, device_put
+from jax import jit, vmap, devices, device_put, block_until_ready
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from essos.plot import fix_matplotlib_3d
 import jaxkd
+import time
+import numpy as np
+try:
+    from scipy.spatial import cKDTree
+except ImportError:
+    raise ImportError("pip install scipy to speed up SurfaceClassifier building.")
 
 mesh = Mesh(devices(), ("dev",))
 sharding = NamedSharding(mesh, PartitionSpec("dev", None))
@@ -328,129 +334,144 @@ class SurfaceRZFourier:
         dZ_dtheta = dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
         mean_cross_sectional_area = jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))/(2 * jnp.pi)
         return mean_cross_sectional_area
-    
-#This class is based on simsopt classifier but translated to fit jax    
-class SurfaceClassifier():
+
+class SurfaceClassifier:
     """
-    Takes in a toroidal surface and constructs an interpolant of the signed distance function
-    :math:`f:R^3\to R` that is positive inside the volume contained by the surface,
-    (approximately) zero on the surface, and negative outisde the volume contained by the surface.
+    Signed-distance interpolant f: R^3 -> R
+      + inside the surface
+      ~ 0 on the surface
+      - outside
     """
 
-    def __init__(self, surface,h=0.05):
+    def __init__(self, surface, h=0.05, use_fundamental_phi=True):
         """
         Args:
-            surface: the surface to contruct the distance from.
-            h: grid resolution of the interpolant
+          surface: SurfaceRZFourier
+          h: target step for r,phi,z
+          use_fundamental_phi: if True, restrict phi to [0, 2π/nfp] instead of [0, 2π]
         """
-        gammas = surface.gamma
+        t0 = time.perf_counter()
+        print("[SC] init: start")
+
+        self.surface = surface
+        gammas = surface.gamma                     # (nphi, ntheta, 3)
+        nfp = getattr(surface, "nfp", 1)
+
+        # -------------------------
+        # Bounds & grid resolution
+        # -------------------------
         r = jnp.linalg.norm(gammas[:, :, :2], axis=2)
         z = gammas[:, :, 2]
-        rmin = max(jnp.min(r) - 0.1, 0.)
-        rmax = jnp.max(r) + 0.1
-        zmin = jnp.min(z) - 0.1
-        zmax = jnp.max(z) + 0.1
+        rmin = float(max(jnp.min(r) - 0.1, 0.0))
+        rmax = float(jnp.max(r) + 0.1)
+        zmin = float(jnp.min(z) - 0.1)
+        zmax = float(jnp.max(z) + 0.1)
 
-        self.zrange = (zmin, zmax)
-        self.rrange = (rmin, rmax)
+        if use_fundamental_phi and nfp > 0:
+            phimin = 0.0
+            phimax = float(2 * jnp.pi / nfp)
+        else:
+            phimin = 0.0
+            phimax = float(2 * jnp.pi)
 
-        nr = int((self.rrange[1]-self.rrange[0])/h)
-        nphi = int(2*jnp.pi/h)
-        nz = int((self.zrange[1]-self.zrange[0])/h)
+        self.rrange  = (rmin, rmax)
+        self.zrange  = (zmin, zmax)
+        self.phirange = (phimin, phimax)
 
-        def fbatch(rs, phis, zs):
-            xyz = jnp.zeros(( 3))
-            xyz=xyz.at[0].set( rs * jnp.cos(phis))
-            xyz=xyz.at[1].set(rs * jnp.sin(phis))
-            xyz=xyz.at[2].set(zs)
-            return signed_distance_from_surface_jax(xyz, surface)   
-            #return signed_distance_from_surface_extras(xyz, surface) ####memory bounded
+        # Make sure we have at least 2 points per axis:
+        nr   = max(int((rmax - rmin) / h), 2)
+        nphi = max(int((phimax - phimin) / h), 3)   # keep ≥3 to resolve periodicity a bit
+        nz   = max(int((zmax - zmin) / h), 2)
 
-        #rule = sopp.UniformInterpolationRule(p) 
-        #self.dist = RegularGridInterpolator((jnp.linspace(rmin,rmax,nr),
-        #            jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),
-        #            vmap(vmap(vmap(fbatch,in_axes=(0,None,None)),in_axes=(None,0,None)),in_axes=(None,None,0))(jnp.linspace(rmin,rmax,nr),
-        #            jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)))
-        #self.r_list=jnp.linspace(16.9,17.1,nr)
-        #self.phi_list=jnp.linspace(0., 0.01, nphi)
-        #self.z_list=jnp.linspace(-0.1, 0.1, nz)
-        #self.test= vmap(vmap(vmap(fbatch,in_axes=(0,None,None)),in_axes=(None,0,None)),in_axes=(None,None,0))(self.r_list,
-        #            self.phi_list, self.z_list)
-        #self.r_list=jnp.linspace(rmin,rmax,nr)
-        #self.phi_list=jnp.linspace(0., 2*jnp.pi, nphi)
-        #self.z_list=jnp.linspace(zmin, zmax, nz)
-        #self.test= vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(jnp.linspace(rmin,rmax,nr),
-        #            jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz))
-        #self.dist = RegularGridInterpolator((self.r_list,self.phi_list, self.z_list),
-        #            vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(self.r_list,self.phi_list, self.z_list),fill_value=-1.)        
-        self.dist = RegularGridInterpolator((jnp.linspace(rmin,rmax,nr),
-                    jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),
-                    vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(jnp.linspace(rmin,rmax,nr),
-                    jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),fill_value=-1.)
-        #self.dist.interpolate_batch(fbatch)    
+        print(f"[SC] ranges: r=({rmin:.3f},{rmax:.3f})  phi=({phimin:.3f},{phimax:.3f})  z=({zmin:.3f},{zmax:.3f})")
+        print(f"[SC] grid sizes: nr={nr}, nphi={nphi}, nz={nz}  -> total={nr*nphi*nz:,d} nodes")
+
+        # -------------------------
+        # Precompute KD-tree once
+        # -------------------------
+        t_tree = time.perf_counter()
+        gammas_flat = gammas.reshape((-1, 3))
+        normals_flat = surface.unitnormal.reshape((-1, 3))
+
+        self._tree = jaxkd.build_tree(gammas_flat)
+        # Sign convention (interior point):
+        a_point = jnp.mean(surface.gamma[0, :, :], axis=0)
+        sign_of_interiorpoint = jnp.sign(jnp.sum((a_point - gammas_flat[0, :]) * normals_flat[0, :]))
+        self._sign = float(sign_of_interiorpoint)
+
+        print(f"[SC] KD-tree build: {time.perf_counter() - t_tree:.2f}s "
+              f"(nodes={gammas_flat.shape[0]:,d})")
+
+        # -------------------------
+        # Build (r,phi,z) grid
+        # -------------------------
+        t_grid = time.perf_counter()
+        r_list   = jnp.linspace(rmin, rmax, nr)
+        phi_list = jnp.linspace(phimin, phimax, nphi)
+        z_list   = jnp.linspace(zmin, zmax, nz)
+
+        # Mesh in 'ij' so r varies slowest, z fastest when flattened
+        RR, PP, ZZ = jnp.meshgrid(r_list, phi_list, z_list, indexing="ij")  # each (nr, nphi, nz)
+        Ntot = nr * nphi * nz
+
+        # Convert to Cartesian for nearest-neighbor query:
+        XX = RR * jnp.cos(PP)
+        YY = RR * jnp.sin(PP)
+        xyz_grid = jnp.stack([XX, YY, ZZ], axis=-1).reshape((Ntot, 3))
+
+        print(f"[SC] grid gen: {time.perf_counter() - t_grid:.2f}s; xyz_grid shape={tuple(xyz_grid.shape)}")
+
+        # Build SciPy KD-tree on CPU (fast)
+        t_query = time.perf_counter()
+        tree = cKDTree(np.asarray(gammas_flat))                      # (Ng, 3)
+        dist, idxs = tree.query(np.asarray(xyz_grid), k=1, workers=-1)  # (Ntot,), (Ntot,)
+        nearest_pts     = gammas_flat[np.asarray(idxs)]              # jnp will accept np indexing
+        nearest_normals = normals_flat[np.asarray(idxs)]
+        # signed distance to tangent plane
+        d_plane = jnp.sum((xyz_grid - nearest_pts) * nearest_normals, axis=-1)  # (Ntot,)
+        signed  = self._sign * d_plane
+        field_vals = signed.reshape((nr, nphi, nz))
+        _ = block_until_ready(field_vals)
+        print(f"[SC] KD query+dist: {time.perf_counter() - t_query:.2f}s (SciPy cKDTree)")
+
+        # -------------------------
+        # Build RGI
+        # -------------------------
+        t_rgi = time.perf_counter()
+        self._r_list   = r_list
+        self._phi_list = phi_list
+        self._z_list   = z_list
+
+        # fill_value < 0.0 => "outside" by default beyond bounds
+        self.dist = RegularGridInterpolator(
+            (r_list, phi_list, z_list), field_vals, fill_value=-1.0
+        )
+
+        print(f"[SC] RGI build: {time.perf_counter() - t_rgi:.2f}s")
+        print(f"[SC] init done in {time.perf_counter() - t0:.2f}s total")
+
+    # -------------------------
+    # Vectorized signed-distance API (XYZ)
+    # -------------------------
+    @staticmethod
+    def _xyz_to_rphiz(xyz):
+        """xyz: (...,3) -> rphiz: (...,3)"""
+        x, y, z = xyz[..., 0], xyz[..., 1], xyz[..., 2]
+        r   = jnp.sqrt(x * x + y * y)
+        phi = jnp.mod(jnp.arctan2(y, x), 2 * jnp.pi)
+        return jnp.stack([r, phi, z], axis=-1)
+
+    def _wrap_phi(self, phi):
+        period = 2 * jnp.pi / max(1, int(getattr(self.surface, "nfp", 1)))
+        return jnp.mod(phi, period)
 
     @partial(jit, static_argnames=['self'])
     def evaluate_xyz(self, xyz):
-        rphiz = jnp.zeros_like(xyz)
-        rphiz=rphiz.at[0].set(jnp.linalg.norm(xyz[:2]))
-        rphiz=rphiz.at[1].set(jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2*jnp.pi))
-        rphiz=rphiz.at[2].set(xyz.at[2].get())
-        # initialize to -1 since the regular grid interpolant will just keep
-        # that value when evaluated outside of bounds
-        d=self.dist(rphiz)[0][0]
-        return d
+        rphiz = self._xyz_to_rphiz(xyz)
+        rphiz = rphiz.at[..., 1].set(self._wrap_phi(rphiz[..., 1]))
+        return self.dist(rphiz)
 
     @partial(jit, static_argnames=['self'])
     def evaluate_rphiz(self, rphiz):
-        # initialize to -1 since the regular grid interpolant will just keep
-        # that value when evaluated outside of bounds
-        d=self.dist(rphiz)[0][0]
-        return d
-    
-
-partial(jit, static_argnames=['surface'])
-def signed_distance_from_surface_jax(xyz, surface):
-    """
-    Compute the signed distances from points ``xyz`` to a surface.  The sign is
-    positive for points inside the volume surrounded by the surface.
-    """
-    gammas = surface.gamma.reshape((-1, 3))
-    #from scipy.spatial import KDTree ##better for cpu?
-    tree = jaxkd.build_tree(gammas)
-    mins, _ = jaxkd.query_neighbors(tree, xyz, k=1)    
-    n = surface.unitnormal.reshape((-1, 3))
-    nmins = n[mins]
-    gammamins = gammas[mins]
-    # Now that we have found the closest node, we approximate the surface with
-    # a plane through that node with the appropriate normal and then compute
-    # the distance from the point to that plane
-    # https://stackoverflow.com/questions/55189333/how-to-get-distance-from-point-to-plane-in-3d
-    mindist = jnp.sum((xyz-gammamins) * nmins, axis=1)
-    a_point_in_the_surface = jnp.mean(surface.gamma[0, :, :], axis=0)
-    sign_of_interiorpoint = jnp.sign(jnp.sum((a_point_in_the_surface-gammas[0, :])*n[0, :]))
-    signed_dists = mindist * sign_of_interiorpoint
-    return signed_dists
-
-#@partial(jit, static_argnames=['surface'])
-def signed_distance_from_surface_extras(xyz, surface):
-    """
-    Compute the signed distances from points ``xyz`` to a surface.  The sign is
-    positive for points inside the volume surrounded by the surface.
-    """
-    gammas = surface.gamma.reshape((-1, 3))
-    mins, _ = jaxkd.extras.query_neighbors_pairwise(gammas, xyz, k=1)    
-    n = surface.unitnormal.reshape((-1, 3))
-    nmins = n[mins]
-    gammamins = gammas[mins]
-    # Now that we have found the closest node, we approximate the surface with
-    # a plane through that node with the appropriate normal and then compute
-    # the distance from the point to that plane
-    # https://stackoverflow.com/questions/55189333/how-to-get-distance-from-point-to-plane-in-3d
-    mindist = jnp.sum((xyz-gammamins) * nmins, axis=1)
-    a_point_in_the_surface = jnp.mean(surface.gamma[0, :, :], axis=0)
-    sign_of_interiorpoint = jnp.sign(jnp.sum((a_point_in_the_surface-gammas[0, :])*n[0, :]))
-    signed_dists = mindist * sign_of_interiorpoint
-    return signed_dists
-
-
-
+        rphiz = rphiz.at[..., 1].set(self._wrap_phi(rphiz[..., 1]))
+        return self.dist(rphiz)

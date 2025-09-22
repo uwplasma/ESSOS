@@ -178,16 +178,19 @@ class RegularGridInterpolant3D(eqx.Module):
         object.__setattr__(self, "hz", hz)
 
         d = rule.degree
-        # 1D DOF locations for each axis: (n_cells*d + 1)
-        r_dof_1d = jnp.concatenate(
-            [rmin + (i * hr + rule.nodes * hr) for i in range(nr)] + [jnp.array([rmax])]
-        )
-        phi_dof_1d = jnp.concatenate(
-            [phimin + (j * hphi + rule.nodes * hphi) for j in range(nphi)] + [jnp.array([phimax])]
-        )
-        z_dof_1d = jnp.concatenate(
-            [zmin + (k * hz + rule.nodes * hz) for k in range(nz)] + [jnp.array([zmax])]
-        )
+
+        def axis_dofs(xmin, h, n_cells):
+            # include nodes [0..d-1] for each cell, then add a single final endpoint
+            base = []
+            for i in range(n_cells):
+                # take all nodes except the last one
+                base.append(xmin + (i * h + rule.nodes[:d] * h))
+            base = jnp.concatenate(base) if base else jnp.array([])
+            return jnp.concatenate([base, jnp.array([xmin + n_cells * h])])
+
+        r_dof_1d  = axis_dofs(rmin,  hr,   nr)
+        phi_dof_1d = axis_dofs(phimin, hphi, nphi)
+        z_dof_1d  = axis_dofs(zmin,  hz,   nz)
         # Full tensor grid of DOFs
         R, P, Z = jnp.meshgrid(r_dof_1d, phi_dof_1d, z_dof_1d, indexing="ij")
         Rf = R.reshape(-1)
