@@ -46,13 +46,16 @@ num_steps_fo = int(tmax/dt_fo)
 # Trace in ESSOS
 time0 = time()
 tracing_gc = Tracing(field=field, model='GuidingCenter', particles=particles,
-                  maxtime=tmax, timesteps=num_steps_gc, tol_step_size=trace_tolerance)
+                  maxtime=tmax, timestep=num_steps_gc, atol=trace_tolerance, rtol=trace_tolerance,
+                  times_to_trace=200)
 trajectories_guidingcenter = block_until_ready(tracing_gc.trajectories)
 print(f"ESSOS guiding center tracing took {time()-time0:.2f} seconds")
 
 time0 = time()
 tracing_fo = Tracing(field=field, model='FullOrbit', particles=particles, maxtime=tmax,
-                     timesteps=num_steps_fo, tol_step_size=trace_tolerance)
+                     timestep=num_steps_fo, atol=trace_tolerance, rtol=trace_tolerance,
+                     times_to_trace=200)
+
 block_until_ready(tracing_fo.trajectories)
 print(f"ESSOS full orbit tracing took {time()-time0:.2f} seconds")
 

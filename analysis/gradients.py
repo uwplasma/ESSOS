@@ -45,10 +45,10 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
 coils = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 
 
-loss_partial = partial(loss_BdotN, dofs_curves_shape=coils.dofs_curves.shape, currents_scale=coils.currents_scale, 
+loss_partial = partial(loss_BdotN, dofs_curves=coils.dofs_curves, currents_scale=coils.currents_scale, 
                        nfp=coils.nfp, n_segments=coils.n_segments, stellsym=coils.stellsym,
                        vmec=vmec, max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature)
-
+print(loss_partial(coils.x))
 grad_loss_partial = jit(grad(loss_partial))
 
 time0 = time()

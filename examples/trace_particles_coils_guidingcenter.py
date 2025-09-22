@@ -5,7 +5,7 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_json
+from essos.coils import Coils
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, ONE_EV
 from essos.dynamics import Tracing, Particles
 
@@ -21,8 +21,8 @@ rtol = 1e-7
 energy=4000*ONE_EV
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_json(json_file)
+json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
 # Initialize particles
@@ -49,7 +49,7 @@ coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False)
 
 for i, trajectory in enumerate(trajectories):
-    ax2.plot(tracing.times, jnp.abs(tracing.energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
+    ax2.plot(tracing.times, jnp.abs(tracing.energy()[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
     ax3.plot(tracing.times, trajectory[:, 3]/particles.total_speed, label=f'Particle {i+1}')
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 ax2.set_xlabel('Time (s)')

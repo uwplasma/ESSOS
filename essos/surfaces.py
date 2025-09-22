@@ -172,7 +172,7 @@ class SurfaceRZFourier:
         self.angles =  jnp.einsum('i,jk->ijk', self.xm, self.theta_2d) - jnp.einsum('i,jk->ijk', self.xn, self.phi_2d)
     
         (self._gamma, self._gammadash_theta, self._gammadash_phi,
-            self._normal, self._unitnormal) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
+            self._normal, self._unitnormal, self._area_element) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
         
         if hasattr(self, 'bmnc'):
             self._AbsB = self._set_AbsB()
@@ -190,7 +190,7 @@ class SurfaceRZFourier:
         self.rmnc_interp = self.rc[indices[:, 0], indices[:, 1]]
         self.zmns_interp = self.zs[indices[:, 0], indices[:, 1]]
         (self._gamma, self._gammadash_theta, self._gammadash_phi,
-            self._normal, self._unitnormal) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
+            self._normal, self._unitnormal, self._area_element) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
         # if hasattr(self, 'bmnc'):
         #     self._AbsB = self._set_AbsB()
         
@@ -217,8 +217,9 @@ class SurfaceRZFourier:
 
         normal = jnp.cross(gammadash_phi, gammadash_theta, axis=2)
         unitnormal = normal / jnp.linalg.norm(normal, axis=2, keepdims=True)
+        area_element = jnp.linalg.norm(jnp.cross(gammadash_theta, gammadash_phi, axis=2), axis=2)
         
-        return (gamma, gammadash_theta, gammadash_phi, normal, unitnormal)
+        return (gamma, gammadash_theta, gammadash_phi, normal, unitnormal, area_element)
     
     @partial(jit, static_argnames=['self'])
     def _set_AbsB(self):
@@ -246,6 +247,10 @@ class SurfaceRZFourier:
     def unitnormal(self):
         return self._unitnormal
     
+    @property
+    def area_element(self):
+        return self._area_element
+
     @property
     def AbsB(self):
         return self._AbsB

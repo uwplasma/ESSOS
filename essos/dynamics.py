@@ -1,3 +1,4 @@
+from pyexpat import model
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -598,50 +599,6 @@ class Tracing():
             
         self._trajectories = self.trace()
         
-        if self.particles is not None:
-            self.energy = jnp.zeros((self.particles.nparticles, self.times_to_trace))
-            
-        if model == 'GuidingCenter' or  model == 'GuidingCenterAdaptative' :
-            @jit
-            def compute_energy_gc(trajectory):
-                xyz = trajectory[:, :3]
-                vpar = trajectory[:, 3]
-                AbsB = vmap(self.field.AbsB)(xyz)
-                mu = (self.particles.energy - self.particles.mass * vpar[0]**2 / 2) / AbsB[0]
-                return self.particles.mass * vpar**2 / 2 + mu * AbsB
-            self.energy = vmap(compute_energy_gc)(self._trajectories)         
-        elif model == 'GuidingCenterCollisions':
-            @jit
-            def compute_energy_gc(trajectory):
-                return 0.5*self.particles.mass* trajectory[:, 3]**2
-            self.energy = vmap(compute_energy_gc)(self._trajectories)
-        elif model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative' :
-            @jit
-            def compute_energy_gc(trajectory):
-                xyz = trajectory[:, :3]                
-                vpar = trajectory[:, 3]*SPEED_OF_LIGHT
-                mu = trajectory[:, 4]*self.particles.mass*SPEED_OF_LIGHT**2
-                AbsB = vmap(self.field.AbsB)(xyz)
-                return self.particles.mass * vpar**2 / 2 + mu*AbsB
-            self.energy = vmap(compute_energy_gc)(self._trajectories)
-            @jit
-            def compute_vperp_gc(trajectory):
-                xyz = trajectory[:, :3]                
-                mu = trajectory[:, 4]*self.particles.mass*SPEED_OF_LIGHT**2
-                AbsB = vmap(self.field.AbsB)(xyz)
-                return jnp.sqrt(2.*mu*AbsB/self.particles.mass)
-            self.vperp_final = vmap(compute_vperp_gc)(self._trajectories)     
-        elif model == 'FullOrbit' or model == 'FullOrbit_Boris' or model == 'FullOrbitCollisions':
-            @jit
-            def compute_energy_fo(trajectory):
-                vxvyvz = trajectory[:, 3:]
-                return self.particles.mass / 2 * (vxvyvz[:, 0]**2 + vxvyvz[:, 1]**2 + vxvyvz[:, 2]**2)
-            self.energy = vmap(compute_energy_fo)(self._trajectories)
-        elif model == 'FieldLine' or model== 'FieldLineAdaptative':
-            self.energy = jnp.ones((len(initial_conditions), self.times_to_trace))
-        
-
-
         self.trajectories_xyz = vmap(lambda xyz: vmap(lambda point: self.field.to_xyz(point[:3]))(xyz))(self.trajectories)
         
         if isinstance(field, Vmec):
@@ -883,10 +840,11 @@ class Tracing():
         self._trajectories = value
     
     def energy(self):
-        assert self.model in ['GuidingCenter', 'FullOrbit'], "Energy calculation is only available for GuidingCenter and FullOrbit models"
+        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
         mass = self.particles.mass
 
-        if self.model == 'GuidingCenter':
+        if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative' or \
+           self.model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsMuAdaptative':
             initial_xyz = self.initial_conditions[:, :3]
             initial_vparallel = self.initial_conditions[:, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
@@ -898,17 +856,24 @@ class Tracing():
                 return 0.5 * mass * jnp.square(vpar) + mu * AbsB
             
             energy = vmap(compute_energy)(self.trajectories, mu_array)
-            
+    
+        elif self.model == 'GuidingCenterCollisions':
+            def compute_energy(trajectory):
+                return 0.5 * mass * trajectory[:, 3]**2
+            energy = vmap(compute_energy)(self.trajectories)
+
         elif self.model == 'FullOrbit':
             def compute_energy(trajectory):
                 vxvyvz = trajectory[:, 3:]
                 v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)
                 return 0.5 * mass * v_squared
-            
             energy = vmap(compute_energy)(self.trajectories)
 
+        elif self.model == 'FieldLine' or self.model == 'FieldLineAdaptative':
+            energy = jnp.ones((len(self.initial_conditions), self.times_to_trace))
+            
         return energy
-    
+
     def to_vtk(self, filename):
         try: import numpy as np
         except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
@@ -1085,8 +1050,8 @@ class Tracing():
     
     def _tree_flatten(self):
         children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
-        aux_data = {'field': self.field, 'model': self.model, 'method': self.method, 'maxtime': self.maxtime, 'timesteps': self.timesteps,'stepsize': 
-                    self.stepsize, 'tol_step_size': self.tol_step_size, 'particles': self.particles, 'condition': self.condition}  # static values
+        aux_data = {'field': self.field, 'electric_field': self.electric_field, 'model': self.model, 'maxtime': self.maxtime, 'timestep': self.timestep,
+                    'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc}  # static values
         return (children, aux_data)
 
     @classmethod

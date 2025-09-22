@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from jax import block_until_ready
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_json
+from essos.coils import Coils
 from essos.dynamics import Tracing
 
 # Input parameters
@@ -19,7 +19,7 @@ num_steps = 6000
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_json(json_file)
+coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
 # Initialize particles

@@ -20,7 +20,7 @@ sharding = NamedSharding(mesh, PartitionSpec("dev", None))
 
 ntheta=30
 nphi=30
-input = os.path.join('input_files','input.rotating_ellipse')
+input = os.path.join(os.path.dirname(__file__), 'input_files','input.rotating_ellipse')
 surface_initial = SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='half period')
 
 # Optimization parameters
