@@ -14,6 +14,7 @@ from essos.interpolated_field import (
     InterpolatedField,
     _cart_to_cyl_vectors,
     _cyl_to_cart_vectors,
+    InterpolatedVmecNative,
 )
 
 # --------------------------------------------------------------------------------------
@@ -360,3 +361,216 @@ def test_cyl_cart_roundtrip_vectors():
     xyz = _cyl_to_cart_vectors(phi, v)
     cyl = _cart_to_cyl_vectors(phi, xyz)
     assert jnp.allclose(cyl, v, atol=1e-12, rtol=1e-12)
+
+# --------------------------------------------------------------------------------------
+# InterpolatedVmecNative tests
+# --------------------------------------------------------------------------------------
+
+class MockVmec:
+    """
+    Minimal stand-in that behaves like Vmec for native (s,θ,φ) calls,
+    using functions that are linear in (s,θ,φ) so trilinear interpolation
+    should be exact on any grid.
+    """
+    def __init__(self, nfp=4, R0=10.0):
+        self.nfp = nfp
+        self.R0 = R0
+
+        # Coeffs for linear forms: a0 + a1*s + a2*th + a3*ph
+        self.bc_a = jnp.array([
+            [ 0.1,  0.4, -0.3,  0.2],    # B_cov[0]
+            [-0.2,  0.1,  0.5,  0.7],    # B_cov[1]
+            [ 0.3, -0.6,  0.2, -0.4],    # B_cov[2]
+        ])
+        self.bn_a = jnp.array([
+            [ 0.05, -0.2,  0.1,  0.3],   # B_con[0]
+            [-0.1,   0.3,  0.4, -0.2],   # B_con[1]
+            [ 0.6,   0.5, -0.3,  0.1],   # B_con[2]
+        ])
+        self.g_a  = jnp.array([1.1, 0.2, -0.15, 0.05]) # sqrtg
+
+    # ---------- helpers ----------
+    @staticmethod
+    def _lin(a, s, th, ph):
+        # a: (4,) -> a0 + a1*s + a2*th + a3*ph
+        return a[0] + a[1]*s + a[2]*th + a[3]*ph
+
+    # ---------- native API ----------
+    def B_covariant(self, points):
+        s, th, ph = points
+        return jnp.array([self._lin(self.bc_a[0], s, th, ph),
+                          self._lin(self.bc_a[1], s, th, ph),
+                          self._lin(self.bc_a[2], s, th, ph)])
+
+    def B_contravariant(self, points):
+        s, th, ph = points
+        return jnp.array([self._lin(self.bn_a[0], s, th, ph),
+                          self._lin(self.bn_a[1], s, th, ph),
+                          self._lin(self.bn_a[2], s, th, ph)])
+
+    def sqrtg(self, points):
+        s, th, ph = points
+        return self._lin(self.g_a, s, th, ph)
+
+    def to_xyz(self, points):
+        # simple tokamak-like embedding: R = R0 + s*cos(th), Z = s*sin(th)
+        # X=R*cos(ph), Y=R*sin(ph)
+        s, th, ph = points
+        R = self.R0 + s*jnp.cos(th)
+        Z = s*jnp.sin(th)
+        X = R*jnp.cos(ph)
+        Y = R*jnp.sin(ph)
+        return jnp.array([X, Y, Z])
+
+    def AbsB(self, points):
+        # Just a linear combination; not physically meaningful, but deterministic.
+        # (Used only for shape/broadcast tests in InterpolatedVmecNative.)
+        s, th, ph = points
+        return 2.0 + 0.1*s - 0.05*th + 0.02*ph
+
+
+def _sample_native_box(key, srange, trange, prange, N):
+    s0, s1, _ = srange
+    t0, t1, _ = trange
+    p0, p1, _ = prange
+    u = jax.random.uniform(key, (N, 3))
+    s  = s0 + (s1 - s0) * u[:, 0]
+    th = t0 + (t1 - t0) * u[:, 1]
+    ph = p0 + (p1 - p0) * u[:, 2]
+    return jnp.stack([s, th, ph], axis=1)
+
+
+def test_vmec_native_build_and_exact_linear():
+    """
+    Since MockVmec is linear in (s,θ,φ), the trilinear RGI should be exact across the grid.
+    """
+    vm = MockVmec(nfp=4)
+    interp = InterpolatedVmecNative(
+        vm,
+        srange=(0.0, 1.0, 16),
+        thetarange=(0.0, 2*math.pi, 17),
+        phirange=(0.0, 2*math.pi/vm.nfp, 19)
+    ).build_all()
+
+    key = jax.random.PRNGKey(0)
+    pts = _sample_native_box(key, interp.srange, interp.thetarange, interp.phirange, N=512)
+
+    Bc_true = jax.vmap(vm.B_covariant)(pts)
+    Bn_true = jax.vmap(vm.B_contravariant)(pts)
+    g_true  = jax.vmap(vm.sqrtg)(pts)
+
+    Bc_pred = interp.B_covariant(pts)
+    Bn_pred = interp.B_contravariant(pts)
+    g_pred  = interp.sqrtg(pts)
+
+    assert Bc_pred.shape == (512, 3)
+    assert Bn_pred.shape == (512, 3)
+    assert g_pred.shape  == (512,)
+    assert jnp.allclose(Bc_pred, Bc_true, atol=1e-12, rtol=1e-12)
+    assert jnp.allclose(Bn_pred, Bn_true, atol=1e-12, rtol=1e-12)
+    assert jnp.allclose(g_pred,  g_true,  atol=1e-12, rtol=1e-12)
+
+
+def test_vmec_native_shapes_and_broadcast():
+    vm = MockVmec()
+    interp = InterpolatedVmecNative(
+        vm,
+        srange=(0.0, 1.0, 8),
+        thetarange=(0.0, 2*math.pi, 9),
+        phirange=(0.0, 2*math.pi/vm.nfp, 10)
+    ).build_all()
+
+    # single point
+    p = jnp.array([0.3, 1.1, 0.2])
+    assert interp.B_covariant(p).shape == (3,)
+    assert interp.B_contravariant(p).shape == (3,)
+    assert jnp.shape(interp.sqrtg(p)) == ()
+
+    # batched (N,3)
+    P = jnp.stack([p, p + 0.01], axis=0)
+    assert interp.B_covariant(P).shape == (2, 3)
+    assert interp.B_contravariant(P).shape == (2, 3)
+    assert interp.sqrtg(P).shape == (2,)
+
+    # higher-rank (...,3)
+    P3 = jnp.stack([P, P], axis=0)           # (2,2,3)
+    # to_xyz/AbsB must broadcast over any leading dims
+    XYZ = interp.to_xyz(P3)
+    AB  = interp.AbsB(P3)
+    assert XYZ.shape == (2, 2, 3)
+    assert AB.shape  == (2, 2)
+
+    # compare to underlying vmec for correctness on (N,3)
+    Bc_true = jax.vmap(vm.B_covariant)(P)
+    Bc_pred = interp.B_covariant(P)
+    assert jnp.allclose(Bc_pred, Bc_true, atol=1e-12, rtol=1e-12)
+
+
+def test_vmec_native_jit_smoke():
+    vm = MockVmec()
+    interp = InterpolatedVmecNative(vm).build_all()
+
+    f1 = jax.jit(interp.B_covariant)
+    f2 = jax.jit(interp.B_contravariant)
+    f3 = jax.jit(interp.sqrtg)
+    f4 = jax.jit(interp.to_xyz)
+    f5 = jax.jit(interp.AbsB)
+
+    p = jnp.array([0.25, 0.5, 0.1])
+    # They should run and match non-jitted outputs
+    assert jnp.allclose(f1(p), interp.B_covariant(p))
+    assert jnp.allclose(f2(p), interp.B_contravariant(p))
+    assert jnp.allclose(f3(p), interp.sqrtg(p))
+    assert jnp.allclose(f4(p), interp.to_xyz(p))
+    assert jnp.allclose(f5(p), interp.AbsB(p))
+
+
+def test_vmec_native_edge_points_in_range():
+    """
+    Evaluate exactly on edges of the interpolation domain; should be finite and consistent.
+    """
+    vm = MockVmec()
+    s0, s1, ns = (0.0, 1.0, 7)
+    t0, t1, nt = (0.0, 2*math.pi, 8)
+    p0, p1, np_ = (0.0, 2*math.pi/vm.nfp, 9)
+    interp = InterpolatedVmecNative(vm,
+                                    srange=(s0, s1, ns),
+                                    thetarange=(t0, t1, nt),
+                                    phirange=(p0, p1, np_)).build_all()
+
+    # corners
+    pts = jnp.array([
+        [s0, t0, p0],
+        [s1, t1, p1],
+        [s0, t1, p1],
+        [s1, t0, p0],
+    ])
+    for fn_true, fn_pred in [
+        (lambda q: jax.vmap(vm.B_covariant)(q), interp.B_covariant),
+        (lambda q: jax.vmap(vm.B_contravariant)(q), interp.B_contravariant),
+        (lambda q: jax.vmap(vm.sqrtg)(q), interp.sqrtg),
+    ]:
+        A = fn_pred(pts)
+        B = fn_true(pts)
+        assert jnp.all(jnp.isfinite(A))
+        assert jnp.allclose(A, B, atol=1e-12, rtol=1e-12)
+
+
+def test_vmec_native_to_xyz_roundtrip_shapes():
+    """
+    Not an exact inverse test (we don’t have stp<-xyz), but we can at least check
+    that to_xyz preserves leading batch dims and gives plausible ranges.
+    """
+    vm = MockVmec(R0=10.0)
+    interp = InterpolatedVmecNative(vm,
+                                    srange=(0.0, 1.0, 6),
+                                    thetarange=(0.0, 2*math.pi, 7),
+                                    phirange=(0.0, 2*math.pi/vm.nfp, 8)).build_all()
+
+    key = jax.random.PRNGKey(123)
+    pts = _sample_native_box(key, interp.srange, interp.thetarange, interp.phirange, N=128)  # (128,3)
+    xyz = interp.to_xyz(pts)
+    assert xyz.shape == (128, 3)
+    # plausible radii near R0..R0+1
+    R = jnp.linalg.norm(xyz[:, :2], axis=1)
+    assert jnp.all((R >= vm.R0 - 1.01) & (R <= vm.R0 + 1.01))
