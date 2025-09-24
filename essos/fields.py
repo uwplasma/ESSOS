@@ -73,6 +73,15 @@ class BiotSavart():
     def kappa(self, points):
         return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
     
+
+    @partial(jit, static_argnames=['self'])
+    def A(self, points):
+        dif_R = (jnp.array(points)-self.gamma)
+        dA = self.gamma_dash / jnp.linalg.norm(dif_R, axis=-1, keepdims=True)
+        A_vec = jnp.sum(jnp.mean(self.currents[:, None, None] * dA * 1e-7, axis=1),axis=0)
+        return A_vec
+
+
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         return points
@@ -181,6 +190,14 @@ class BiotSavart_from_gamma():
     def kappa(self, points):
         return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
     
+
+    @partial(jit, static_argnames=['self'])
+    def A(self, points):
+        dif_R = (jnp.array(points)-self.gamma)
+        dA = self.gamma_dash / jnp.linalg.norm(dif_R, axis=-1, keepdims=True)
+        A_vec = jnp.sum(jnp.mean(self.currents[:, None, None] * dA * 1e-7, axis=1),axis=0)
+        return A_vec
+
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         return points
@@ -349,6 +366,7 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def kappa(self, points):
         return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
+
 
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
