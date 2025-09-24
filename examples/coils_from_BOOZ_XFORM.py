@@ -302,4 +302,4 @@ for i in range(ncoils):
     plt.axvline(x=phi1D[i], color='black', linewidth=2.5)
 plt.colorbar(label='|B| (T)')
 
-plt.show()
+plt.savefig('modB_Boozerplot.png', dpi=300)

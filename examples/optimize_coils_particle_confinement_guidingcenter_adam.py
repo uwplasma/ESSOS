@@ -7,7 +7,7 @@ from jax import jit, grad
 import matplotlib.pyplot as plt
 from essos.dynamics import Particles, Tracing
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
-from essos.objective_functions import loss_particle_r_cross_max
+from essos.objective_functions import loss_particle_r_cross_max_constraint
 from essos.objective_functions import loss_coil_curvature,loss_coil_length, loss_normB_axis_average
 from functools import partial
 import optax
@@ -55,7 +55,7 @@ t=maxtimes[0]
 curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
 length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
 Baxis_average_partial=partial(loss_normB_axis_average,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
-r_max_partial = partial(loss_particle_r_cross_max, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model = model,num_steps=num_steps)
+r_max_partial = partial(loss_particle_r_cross_max_constraint, particles=particles,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,maxtime=t,model = model,num_steps=num_steps)
 
 params=coils_initial.x
 optimizer=optax.adabelief(learning_rate=0.003)
@@ -111,8 +111,7 @@ ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')#ax4.legend()
 plt.tight_layout()
 # plt.savefig(f'opt_adam.pdf')
-plt.show()
-
+plt.savefig('optimize_coils_particle_confinement_guidingcenter_adam.png', dpi=300)
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
 # # Load the coils from a json file
