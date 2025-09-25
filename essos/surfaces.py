@@ -58,62 +58,72 @@ def nested_lists_to_array(ll):
     for jm, l in enumerate(ll):
         arr = arr.at[jm, :len(l)].set(jnp.array([x if x is not None else 0 for x in l]))
     return arr
+
     
 
 class SurfaceRZFourier:
     def __init__(self, vmec=None, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus',
-                 rc=None, zs=None, nfp=None):
+                 rc=None, zs=None, nfp=None, mpol=None, ntor=None):
         if rc is not None:
             self.rc = rc
             self.zs = zs
             self.nfp = nfp
-            self.mpol = rc.shape[0]
-            self.ntor = (rc.shape[1] - 1) // 2
-            m1d = jnp.arange(self.mpol)
-            n1d = jnp.arange(-self.ntor, self.ntor + 1)
-            n2d, m2d = jnp.meshgrid(n1d, m1d)
-            self.xm = m2d.flatten()[self.ntor:]
-            self.xn = self.nfp*n2d.flatten()[self.ntor:]
-            indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
-            self.rmnc_interp = self.rc[indices[:, 0], indices[:, 1]]
-            self.zmns_interp = self.zs[indices[:, 0], indices[:, 1]]   
+            self.mpol = mpol
+            self.ntor = ntor
+            #m1d = jnp.tile(jnp.arange(-self.ntor, self.ntor + 1),self.mpol)
+            #n1d = jnp.arange(-self.ntor, self.ntor + 1)
+            #n2d, m2d = jnp.meshgrid(n1d, m1d)
+            self.xm =  jnp.repeat(jnp.arange(self.mpol+1), 2*self.ntor+1)[self.ntor:]#m2d.flatten()[self.ntor:]
+            self.xn = self.nfp*jnp.tile(jnp.arange(-self.ntor, self.ntor + 1), self.mpol+1)[self.ntor:]#m2d.flatten()[self.ntor:]  
+            #indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
+            self.rmnc_interp = self.rc
+            self.zmns_interp = self.zs   
         elif isinstance(vmec, str):
             self.input_filename = vmec
             import f90nml
-            all_namelists = f90nml.read(vmec)
+            all_namelists = f90nml.Parser().read(vmec)
             nml = all_namelists['indata']
             if 'nfp' in nml:
                 self.nfp = nml['nfp']
             else:
                 self.nfp = 1
-            rc = nested_lists_to_array(nml['rbc'])
-            zs = nested_lists_to_array(nml['zbs'])
-            rbc_first_n = nml.start_index['rbc'][0]
-            rbc_last_n = rbc_first_n + rc.shape[1] - 1
-            zbs_first_n = nml.start_index['zbs'][0]
-            zbs_last_n = zbs_first_n + zs.shape[1] - 1
-            self.ntor = jnp.max(jnp.abs(jnp.array([rbc_first_n, rbc_last_n, zbs_first_n, zbs_last_n], dtype='i')))
-            rbc_first_m = nml.start_index['rbc'][1]
-            rbc_last_m = rbc_first_m + rc.shape[0] - 1
-            zbs_first_m = nml.start_index['zbs'][1]
-            zbs_last_m = zbs_first_m + zs.shape[0] - 1
-            self.mpol = max(rbc_last_m, zbs_last_m)
-            self.rc = jnp.zeros((self.mpol, 2 * self.ntor + 1))
-            self.zs = jnp.zeros((self.mpol, 2 * self.ntor + 1))
-            m_indices_rc = jnp.arange(rc.shape[0]) + nml.start_index['rbc'][1]
-            n_indices_rc = jnp.arange(rc.shape[1]) + nml.start_index['rbc'][0] + self.ntor
-            self.rc = self.rc.at[m_indices_rc[:, None], n_indices_rc].set(rc)
-            m_indices_zs = jnp.arange(zs.shape[0]) + nml.start_index['zbs'][1]
-            n_indices_zs = jnp.arange(zs.shape[1]) + nml.start_index['zbs'][0] + self.ntor
-            self.zs = self.zs.at[m_indices_zs[:, None], n_indices_zs].set(zs)
-            m1d = jnp.arange(self.mpol)
-            n1d = jnp.arange(-self.ntor, self.ntor + 1)
-            n2d, m2d = jnp.meshgrid(n1d, m1d)
-            self.xm = m2d.flatten()[self.ntor:]
-            self.xn = self.nfp*n2d.flatten()[self.ntor:]
-            indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
-            self.rmnc_interp = self.rc[indices[:, 0], indices[:, 1]]
-            self.zmns_interp = self.zs[indices[:, 0], indices[:, 1]]              
+            rc = jnp.ravel(nested_lists_to_array(nml['rbc']))[2:]
+            zs = jnp.ravel(nested_lists_to_array(nml['zbs']))[2:]
+            #rbc_first_n = nml.start_index['rbc'][0]
+            #rbc_last_n = rbc_first_n + rc.shape[1] - 1
+            #zbs_first_n = nml.start_index['zbs'][0]
+            #zbs_last_n = zbs_first_n + zs.shape[1] - 1
+            #self.ntor = jnp.max(jnp.abs(jnp.array([rbc_first_n, rbc_last_n, zbs_first_n, zbs_last_n], dtype='i')))
+            #rbc_first_m = nml.start_index['rbc'][1]
+            #rbc_last_m = rbc_first_m + rc.shape[0] - 1
+            #zbs_first_m = nml.start_index['zbs'][1]
+            #zbs_last_m = zbs_first_m + zs.shape[0] - 1
+            self.ntor = nml['ntor']
+            self.mpol = nml['mpol']            
+            self.rc = jnp.zeros((self.mpol*( 2 * self.ntor + 1)-self.ntor))
+            self.zs = jnp.zeros((self.mpol*( 2 * self.ntor + 1)-self.ntor))            
+            #self.rc = jnp.zeros((self.mpol, 2 * self.ntor + 1))
+            #self.zs = jnp.zeros((self.mpol, 2 * self.ntor + 1))
+            #m_indices_rc = jnp.arange(rc.shape[0]) + nml.start_index['rbc'][1]
+            #n_indices_rc = jnp.arange(rc.shape[1]) + nml.start_index['rbc'][0] + self.ntor
+            #self.rc = self.rc.at[m_indices_rc[:, None], n_indices_rc].set(rc)
+            #m_indices_zs = jnp.arange(zs.shape[0]) + nml.start_index['zbs'][1]
+            #n_indices_zs = jnp.arange(zs.shape[1]) + nml.start_index['zbs'][0] + self.ntor
+            #self.zs = self.zs.at[m_indices_zs[:, None], n_indices_zs].set(zs)
+            #m1d = jnp.arange(self.mpol)
+            #n1d = jnp.arange(-self.ntor, self.ntor + 1)
+            #n2d, m2d = jnp.meshgrid(n1d, m1d)
+            #self.xm = m2d.flatten()[self.ntor:]
+            #self.xn = self.nfp*n2d.flatten()[self.ntor:]
+            #indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
+            #self.rmnc_interp = self.rc[indices[:, 0], indices[:, 1]]
+            #self.zmns_interp = self.zs[indices[:, 0], indices[:, 1]]   
+            self.rc=rc
+            self.zs=zs    
+            self.rmnc_interp = self.rc
+            self.zmns_interp = self.zs   
+            self.xm =  jnp.repeat(jnp.arange(self.mpol+1), 2*self.ntor+1)[self.ntor:]#m2d.flatten()[self.ntor:]
+            self.xn = self.nfp*jnp.tile(jnp.arange(-self.ntor, self.ntor + 1), self.mpol+1)[self.ntor:]#m2d.flatten()[self.ntor:]                             
         else:
             try:
                 self.nfp = vmec.nfp
@@ -135,13 +145,16 @@ class SurfaceRZFourier:
                 self.bmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bmnc[1:, :])
                 self.mpol = vmec.mpol
                 self.ntor = vmec.ntor
-                self.num_dofs = 2 * (self.mpol + 1) * (2 * self.ntor + 1) - self.ntor - (self.ntor + 1)
-                shape = (int(jnp.max(self.xm)) + 1, int(jnp.max(self.xn)) + 1)
-                self.rc = jnp.zeros(shape)
-                self.zs = jnp.zeros(shape)
+                self.num_dofs = 2 * ((self.mpol + 1) * (2 * self.ntor + 1) - self.ntor )
+                #shape = (int(jnp.max(self.xm)) + 1, int(jnp.max(self.xn)) + 1)
+                #self.rc = jnp.zeros(shape)
+                #self.zs = jnp.zeros(shape)
                 indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
-                self.rc = self.rc.at[indices[:, 0], indices[:, 1]].set(self.rmnc_interp)
-                self.zs = self.zs.at[indices[:, 0], indices[:, 1]].set(self.zmns_interp)
+                self.rc = self.rmnc_interp
+                self.zs = self.zmns_interp
+                #self.zs = self.zs.at[indices[:, 0], indices[:, 1]].set(self.zmns_interp)                
+                #self.rc = self.rc.at[indices[:, 0], indices[:, 1]].set(self.rmnc_interp)
+                #self.zs = self.zs.at[indices[:, 0], indices[:, 1]].set(self.zmns_interp)
             except:
                 raise ValueError("vmec must be a Vmec object or a string pointing to a VMEC input file.")
         self.ntheta = ntheta
@@ -154,9 +167,9 @@ class SurfaceRZFourier:
         self.quadpoints_theta = jnp.linspace(0, 2 * jnp.pi, num=self.ntheta, endpoint=True if close else False)
         self.quadpoints_phi   = jnp.linspace(0, 2 * jnp.pi * end_val / div, num=self.nphi, endpoint=True if close else False)
         self.theta_2d, self.phi_2d = jnp.meshgrid(self.quadpoints_theta, self.quadpoints_phi)
-        self.num_dofs_rc = len(jnp.ravel(self.rc)[self.ntor:])
-        self.num_dofs_zs = len(jnp.ravel(self.zs)[self.ntor:])
-        self._dofs = jnp.concatenate((jnp.ravel(self.rc)[self.ntor:], jnp.ravel(self.zs)[self.ntor:]))
+        self.num_dofs_rc = len(jnp.ravel(self.rc))
+        self.num_dofs_zs = len(jnp.ravel(self.zs))
+        self._dofs = jnp.concatenate((jnp.ravel(self.rc), jnp.ravel(self.zs)))
         
         self.angles =  jnp.einsum('i,jk->ijk', self.xm, self.theta_2d) - jnp.einsum('i,jk->ijk', self.xn, self.phi_2d)
     
@@ -173,11 +186,11 @@ class SurfaceRZFourier:
     @dofs.setter
     def dofs(self, new_dofs):
         self._dofs = new_dofs
-        self.rc = jnp.concatenate((jnp.zeros(self.ntor),new_dofs[:self.num_dofs_rc])).reshape(self.rc.shape)
-        self.zs = jnp.concatenate((jnp.zeros(self.ntor),new_dofs[self.num_dofs_rc:])).reshape(self.zs.shape)
+        self.rc = new_dofs[:self.num_dofs_rc]
+        self.zs = new_dofs[self.num_dofs_rc:]
         indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
-        self.rmnc_interp = self.rc[indices[:, 0], indices[:, 1]]
-        self.zmns_interp = self.zs[indices[:, 0], indices[:, 1]]
+        self.rmnc_interp = self.rc
+        self.zmns_interp = self.zs
         (self._gamma, self._gammadash_theta, self._gammadash_phi,
             self._normal, self._unitnormal) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
         # if hasattr(self, 'bmnc'):
@@ -273,18 +286,26 @@ class SurfaceRZFourier:
         rc_old, zs_old = self.rc, self.zs
         mpol_old, ntor_old = self.mpol, self.ntor
 
-        rc_new = jnp.zeros((mpol, 2 * ntor + 1))
-        zs_new = jnp.zeros((mpol, 2 * ntor + 1))
-
+        #rc_new = jnp.zeros((mpol, 2 * ntor + 1))
+        #zs_new = jnp.zeros((mpol, 2 * ntor + 1))
+        rc_new = jnp.zeros((mpol*( 2 * ntor + 1)-ntor))
+        zs_new = jnp.zeros((mpol*( 2 * ntor + 1)-ntor))
         m_keep = min(mpol_old, mpol)
         n_keep = min(ntor_old, ntor)
 
-        old_slice = slice(ntor_old - n_keep, ntor_old + n_keep + 1)
-        new_slice = slice(ntor     - n_keep, ntor     + n_keep + 1)
+        keep_index=m_keep*(2*n_keep+1)
 
+        xm_new =  jnp.repeat(jnp.arange(mpol+1), 2*ntor+1)[ntor:]#m2d.flatten()[self.ntor:]
+        xn_new = self.nfp*jnp.tile(jnp.arange(-ntor, ntor + 1), mpol+1)[ntor:]#m2d.flatten()[self.ntor:] 
         # Copy overlapping region
-        rc_new = rc_new.at[:m_keep, new_slice].set(rc_old[:m_keep, old_slice])
-        zs_new = zs_new.at[:m_keep, new_slice].set(zs_old[:m_keep, old_slice])
+        for l in range(len(xm_new)):
+            old_slice = slice(ntor_old - n_keep, ntor_old + n_keep + 1)
+            new_slice = slice(ntor - n_keep, ntor + n_keep + 1)
+            #rc_new = rc_new.at[m, new_slice].set(rc_old[m, old_slice])
+            #zs_new = zs_new.at[m, new_slice].set(zs_old[m, old_slice])
+            if xm_new[l]<=m_keep and jnp.abs(xn_new[l])<=n_keep:
+                rc_new = rc_new.at[l].set(rc_old[(self.xm[l]+1)*(self.xn/self.nfp)+self.xm[l]*self.ntor])
+                zs_new = zs_new.at[l].set(zs_old[(self.xm[l]+1)*(self.xn/self.nfp)+self.xm[l]*self.ntor])
 
         # Update attributes
         self.mpol, self.ntor = mpol, ntor

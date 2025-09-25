@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
+number_of_processors_to_use = 2 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -18,9 +18,9 @@ from jax import config
 config.update("jax_enable_x64", True)
 
 # Input parameters
-tmax = 1.e-5
+tmax = 1.e-4
 dt=1.e-8
-times_to_trace=100
+times_to_trace=1000
 nparticles_per_core=10
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 1.25
@@ -40,7 +40,7 @@ field = BiotSavart(coils)
 Z0 = jnp.zeros(nparticles)
 phi0 = jnp.zeros(nparticles)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-particles = Particles(initial_xyz=initial_xyz,initial_vparallel_over_v=1.0*jnp.ones(nparticles), mass=mass, energy=energy)
+particles = Particles(initial_xyz=initial_xyz,initial_vparallel_over_v=-0.1*jnp.ones(nparticles), mass=mass, energy=energy)
 
 
 #Initialize background species
@@ -65,8 +65,8 @@ pitch_sigma=jnp.sqrt(2.**2/12)
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterCollisionsMuFixed', particles=particles,
-                  maxtime=tmax, timestep=dt,times_to_trace=times_to_trace,species=species,tag_gc=0.)
+tracing = Tracing(field=field, model='GuidingCenter', particles=particles,
+                  maxtime=tmax, timestep=dt,times_to_trace=times_to_trace,species=species,tag_gc=1.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 
@@ -82,8 +82,9 @@ tracing.plot(ax=ax1, show=False)
 
 for i, trajectory in enumerate(trajectories):
     ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i,0])/tracing.energy[i,0], label=f'Particle {i+1}')     
-    ax3.plot(tracing.times, 299792458*trajectory[:, 3]/jnp.sqrt(tracing.energy[i]/mass*2.), label=f'Particle {i+1}')    
-    ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
+    ax3.plot(tracing.times, SPEED_OF_LIGHT*trajectory[:, 3]/jnp.sqrt(tracing.energy[i]/mass*2.), label=f'Particle {i+1}')    
+    if i==1 or i==3:
+        ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 
 
 
@@ -101,7 +102,7 @@ plt.savefig('traj.pdf')
 
 
 v=jnp.sqrt(tracing.energy*2./particles.mass)
-vpar=trajectories[:,:,3]
+vpar=trajectories[:,:,3]*299792458
 vperp=tracing.vperp_final
 pitch=vpar/v
 

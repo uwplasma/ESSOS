@@ -12,10 +12,10 @@ from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_A
 from essos.dynamics import Tracing, Particles
 
 # Input parameters
-tmax = 1.e-4
+tmax = 1.e-3
 timestep=1.e-8
-times_to_trace=1000
-nparticles_per_core=2
+times_to_trace=10000
+nparticles_per_core=10
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 17.0
 atol=1.e-7
@@ -64,13 +64,13 @@ coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 
 for i, trajectory in enumerate(trajectories):
-    ax2.plot(tracing.times, jnp.abs(tracing.energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
+    ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i][0])/particles.energy, label=f'Particle {i+1}')
     ax3.plot(tracing.times, trajectory[:, 3]/particles.total_speed, label=f'Particle {i+1}')
     #ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 
 ax2.set_xlabel('Time (s)')
-ax2.set_ylabel('Relative Energy Error')
+ax2.set_ylabel(' Energy Variation')
 ax3.set_ylabel(r'$v_{\parallel}/v$')
 ax2.legend()
 ax3.set_xlabel('Time (s)')
@@ -79,7 +79,7 @@ ax4.set_xlabel('R (m)')
 ax4.set_ylabel('Z (m)')
 ax4.legend()
 plt.tight_layout()
-plt.show()
+plt.savefig('tracing_gc.png', dpi=300)
 
 
 ## Save results in vtk format to analyze in Paraview

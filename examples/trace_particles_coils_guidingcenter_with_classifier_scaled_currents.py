@@ -15,10 +15,10 @@ from essos.dynamics import Tracing, Particles
 from essos.objective_functions import normB_axis
 
 # Input parameters
-tmax = 1.e-4
+tmax = 1.e-3
 timestep=1.e-8
 times_to_trace=1000
-nparticles_per_core=2
+nparticles_per_core=10
 nparticles = number_of_processors_to_use*nparticles_per_core
 R0 = 17.0
 atol=1.e-7
@@ -90,7 +90,7 @@ ax4.set_ylabel('Z (m)')
 ax4.legend()
 plt.tight_layout()
 plt.show()
-
+plt.savefig('tracing_gc_adaptative.png', dpi=300)
 ## Save results in vtk format to analyze in Paraview
 # tracing.to_vtk('trajectories')
 # coils.to_vtk('coils')

@@ -12,17 +12,18 @@ from essos.qfm import QfmSurface
 from essos.fields import Vmec, BiotSavart
 
 # Load initial guess surface
-ntheta=63
-nphi=64
+ntheta=34
+nphi=35
 vmec = os.path.join('input_files','input.rotating_ellipse')
 surf = SurfaceRZFourier(vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=False)
-surf.change_resolution(6,6)
+#surf.change_resolution(2,2)
 
 initialsurf = SurfaceRZFourier(vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=False)
 
 # Load target VMEC surface
-truevmec = Vmec(os.path.join(os.path.dirname(__file__), 'input_files', 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
+truevmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
                 ntheta=ntheta, nphi=nphi, range_torus='half period', close=False)
+
 
 # Load coils and construct field
 from essos.coils import Coils_from_json
@@ -31,7 +32,7 @@ field = BiotSavart(coils)
 
 # QFM optimization setup
 method = 'alm' # lbfgs, slsqp, alm
-label = 'multi'  # 'area', 'volume', 'toroidal_flux'
+label = 'toroidal_flux'  # 'area', 'volume', 'toroidal_flux'
 initial_label = None
 targetlabel = None
 
@@ -45,8 +46,8 @@ targetlabel_volume = truevmec.surface.volume
 initial_label_area = surf.area
 targetlabel_area = truevmec.surface.area
 tol = 1e-6
-constraint_weight = 1e10
-maxiter = 2000
+constraint_weight = 1e4
+maxiter = 1000
 
 BdotN_over_B_initial = BdotN_over_B(surf, BiotSavart(coils))
 

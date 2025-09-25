@@ -54,7 +54,7 @@ class QfmSurface:
             ntheta=surface.ntheta,
             nphi=surface.nphi,
             range_torus=surface.range_torus,
-            close=False
+            close=False,mpol=surface.mpol,ntor=surface.ntor
         )
         s.x = x
         return s
@@ -127,11 +127,11 @@ class QfmSurface:
         """
         surf = self._build_surface_with_x(self.surface_optimize, x)
         if self.label == "volume":
-            val = surf.volume - self.targetlabel
+            val = surf.volume - self.targetlabel_volume
         elif self.label == "area":
-            val = surf.area - self.targetlabel
+            val = surf.area - self.targetlabel_area
         elif self.label == "toroidal_flux":
-            val = self._toroidal_flux(surf) - self.targetlabel
+            val = self._toroidal_flux(surf) - self.targetlabel_flux
         else:
             raise ValueError(f"Unsupported label: {self.label}")
         return val
@@ -204,14 +204,14 @@ class QfmSurface:
         x0 = self.surface_optimize.x
         
         # params for alm
-        penalty = 0.1 #Intial penalty values
-        multiplier=0.5 #Initial lagrange multiplier values
+        penalty = 10. #Intial penalty values
+        multiplier=1. #Initial lagrange multiplier values
         sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
         model_lagrangian='Squared'  #Use standard augmented lagragian suitable for bounded optimizers 
         #Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
 
-        beta=2.                                     #penalty update parameter
-        mu_max=1.e4                                #Maximum penalty parameter allowed
+        beta=10.                                     #penalty update parameter
+        mu_max=1.e7                                #Maximum penalty parameter allowed
         alpha=0.99                                  #These are parameters only used if gradient descent and adaaptative mu
         gamma=1.e-2
         epsilon=1.e-8
@@ -223,7 +223,7 @@ class QfmSurface:
             alm.eq(self.constraint_area,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
             alm.eq(self.constraint_volume,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
             alm.eq(self.constraint_flux,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-            alm.eq(self.objective_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad)            
+            #alm.eq(self.objective_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad)            
         )
 
         #Initializing lagrange multipliers
@@ -231,7 +231,7 @@ class QfmSurface:
         #parameters are a tuple of the primal/main optimisation parameters and the lagrange multipliers
         params = x0, lagrange_params
 
-        ALM=alm.ALM_model_jaxopt_lbfgsb(constraint_alm,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+        ALM=alm.ALM_model_jaxopt_lbfgsb(constraint_alm,loss=self.objective,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
         #This is just to initialize an empty state for the lagrange multiplier update and get some information
         lag_state,grad,info=ALM.init(params)
