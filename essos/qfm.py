@@ -34,9 +34,9 @@ class QfmSurface:
         return jnp.sum(jnp.sum(A_vals * dl, axis=1))
 
     def _build_surface_with_x(self, surface, x):
-        rc_safe = device_get(surface.rc)   # <- Ensure it's not a tracer
+        rc_safe = device_get(surface.rc)
         zs_safe = device_get(surface.zs)
-        x_safe  = device_get(x)            # <- Ensure it's not a tracer
+        x_safe  = device_get(x)
 
         s = SurfaceRZFourier(
             rc=rc_safe,
@@ -190,42 +190,16 @@ class QfmSurface:
     def run(
         self,
         method: str = "SLSQP",
-        # General optimization parameters
         tol: float = 1e-6,
         maxiter: int = 1000,
-
-        # Method-specific parameters
         x0=None,
         constraint_weight: float = 1e-3,
         printlog: bool = True,
         **kwargs
     ):
-        """
-        Main optimization function to run either SLSQP or LBFGS methods.
-
-        Args:
-            method (str): Optimization method to use, either 'SLSQP' or 'LBFGS'.
-            tol (float): Tolerance for stopping criteria.
-            maxiter (int): Maximum number of iterations.
-            x0 (array): Initial guess for optimization.
-            constraint_weight (float): Weight for the constraint term in penalty function.
-            printlog (bool): Whether to print log information.
-            **kwargs: Additional arguments to pass to the specific optimization method.
-
-        Returns:
-            dict: A dictionary containing the optimization result, including:
-                - 'fun': Final objective function value.
-                - 'gradient': Final gradient.
-                - 'iter': Number of iterations.
-                - 'info': Optimization details.
-                - 'success': Whether the optimization was successful.
-                - 's': Optimized surface.
-        """
         
-        # Convert method to uppercase to standardize comparison
         method_up = method.upper()
         
-        # Validate method input
         if method_up == "SLSQP":
             return self.minimize_slsqp(
                 x0=x0,

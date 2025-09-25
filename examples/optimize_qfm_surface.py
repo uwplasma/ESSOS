@@ -3,7 +3,7 @@ number_of_processors_to_use = 5
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 
 import jax.numpy as jnp
-from jax import device_get  # ← 最小改动：用于避免 tracer 泄漏
+from jax import device_get
 import matplotlib.pyplot as plt
 from time import time
 
@@ -31,7 +31,7 @@ coils = Coils_from_json("input_files/stellarator_coils.json")
 field = BiotSavart(coils)
 
 # QFM optimization setup
-method = 'slsqp' # lbfgs, slsqp
+method = 'lbfgs' # lbfgs, slsqp
 label = 'area'  # 'area', 'volume', 'toroidal_flux'
 
 if method == 'lbfgs':
