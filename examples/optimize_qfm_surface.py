@@ -32,7 +32,7 @@ field = BiotSavart(coils)
 
 # QFM optimization setup
 method = 'slsqp' # lbfgs, slsqp
-label = 'toroidal_flux'  # 'area', 'volume', 'toroidal_flux'
+label = 'area'  # 'area', 'volume', 'toroidal_flux'
 
 if method == 'lbfgs':
     tol = 1e-4
@@ -70,14 +70,14 @@ result = qfm.run(
     maxiter=maxiter,
     method=method,
     constraint_weight=constraint_weight,
-    log_every=10  # 仅对 LBFGS 有意义，SLSQP 保留无害
+    printlog=1
 )
 
 print('done')
 end_time = time()
 
 # Evaluate final objective and constraint
-# ← 最小改动：把 x_opt 拉回 host，避免写入 surf.x 时出现 tracer 泄漏
+
 x_opt = device_get(result["s"].x)
 qfm_loss = float(jnp.asarray(qfm.objective(x_opt)))
 c_loss = float(jnp.asarray(qfm.constraint(x_opt)))

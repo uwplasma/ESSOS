@@ -1,6 +1,5 @@
-# qfm_jax.py
 import jax
-from jax import vmap, grad, value_and_grad, device_get
+from jax import vmap, grad, device_get
 import jax.numpy as jnp
 from jaxopt import LBFGS
 from essos.surfaces import SurfaceRZFourier
@@ -35,9 +34,9 @@ class QfmSurface:
         return jnp.sum(jnp.sum(A_vals * dl, axis=1))
 
     def _build_surface_with_x(self, surface, x):
-        rc_safe = device_get(surface.rc)   # <- 确保不是 tracer
+        rc_safe = device_get(surface.rc)   # <- Ensure it's not a tracer
         zs_safe = device_get(surface.zs)
-        x_safe  = device_get(x)            # <- 确保不是 tracer
+        x_safe  = device_get(x)            # <- Ensure it's not a tracer
 
         s = SurfaceRZFourier(
             rc=rc_safe,
@@ -65,7 +64,6 @@ class QfmSurface:
         surf.x = x_old
         return value
 
-
     def constraint(self, x):
         surf = self.surface_optimize
         x_old = surf.x
@@ -77,44 +75,50 @@ class QfmSurface:
             "toroidal_flux": self._toroidal_flux(surf) - self.targetlabel
         }[self.label]
 
-        c = raw_c / jnp.abs(self.targetlabel) 
+        c = raw_c / jnp.abs(self.targetlabel)
 
         surf.x = x_old
         return c
-
 
     def penalty_objective(self, x, constraint_weight=1.0):
         r = self.objective(x)
         c = self.constraint(x)
         return r + 0.5 * constraint_weight * c**2
 
-    def default_callback(self, info):
+    def _callback(self, info, printlog=True):
         if isinstance(info, dict):
             # LBFGS
             it = info.get("iter", -1)
             r = info["objective"]
             c = info["constraint"]
-            print(f"[LBFGS iter {it}] objective={r:.6e} constraint={c:.3e} "
-                f"penalty={info['penalty']:.6e} grad_norm={info['grad_norm']:.3e}")
+            penalty = info["penalty"]
+            grad_norm = info["grad_norm"]
+
+            # Print logs if printlog is True
+            if printlog:
+                print(f"[LBFGS iter {it}] objective={r:.6e} constraint={c:.3e} "
+                      f"penalty={penalty:.6e} grad_norm={grad_norm:.3e}")
         else:
             # SLSQP
-            # 最小修改：用 self 属性跟踪迭代次数
             it = getattr(self, "_slsqp_iter", 0) + 1
             setattr(self, "_slsqp_iter", it)
 
-            x = jnp.array(info)
-            obj = float(self.objective(x))
-            cst = float(self.constraint(x))
-            penalty = float(self.penalty_objective(x))
-            grad_norm = float(jnp.linalg.norm(grad(lambda z: self.penalty_objective(z))(x)))
-            print(f"[SLSQP iter {it}] objective={obj:.6e} constraint={cst:.3e} "
-                f"penalty={penalty:.6e} grad_norm={grad_norm:.3e}")
+            obj = float(self.objective(info))
+            cst = float(self.constraint(info))
+            penalty = float(self.penalty_objective(info))
+            grad_norm = float(jnp.linalg.norm(grad(lambda z: self.penalty_objective(z))(info)))
+
+            # Print logs if printlog is True
+            if printlog:
+                print(f"[SLSQP iter {it}] objective={obj:.6e} constraint={cst:.3e} "
+                      f"penalty={penalty:.6e} grad_norm={grad_norm:.3e}")
+
 
     def minimize_lbfgs(self, x0=None, tol=1e-6, maxiter=1000, constraint_weight=1e4,
-                    return_trace=False, log_every=1, callback=None, **kwargs):
+                        printlog=True, **kwargs):
         x0 = self.surface_optimize.x if x0 is None else x0
 
-        # ---------- 定义目标函数，返回 scalar + aux dict（全用 jnp.array） ----------
+        # ---------- Define objective function, return scalar + aux dict (all use jnp.array) ----------
         def fn(x):
             value = self.penalty_objective(x, constraint_weight)
             aux = {
@@ -137,18 +141,13 @@ class QfmSurface:
             info["grad_norm"] = float(jnp.linalg.norm(grad(lambda z: self.penalty_objective(z, constraint_weight))(x)))
             info["error"] = float(state.error)
 
-            if return_trace:
-                trace.append(info)
-
-            if callback is None:
-                self.default_callback(info)
-            else:
-                callback(info)
+            # Ensure we call _callback for logging every step if printlog is True
+            self._callback(info, printlog)
 
             if state.error <= tol:
                 break
 
-        x_safe = device_get(x)  # 拉回 host
+        x_safe = device_get(x)  # Move back to host
         self.surface_optimize = self._build_surface_with_x(self.surface_optimize, x_safe)
 
         return {
@@ -160,10 +159,10 @@ class QfmSurface:
             "s": self.surface_optimize,
         }
 
-
-    def minimize_slsqp(self, x0=None, tol=1e-6, maxiter=1000, **kwargs):
+    def minimize_slsqp(self, x0=None, tol=1e-6, maxiter=1000, printlog=True, **kwargs):
         x0 = jnp.array(self.surface_optimize.x if x0 is None else x0)
 
+        # Run the SLSQP optimizer
         res = minimize(
             fun=lambda x: float(self.objective(x)),
             x0=x0,
@@ -171,52 +170,68 @@ class QfmSurface:
             constraints={"type": "eq", "fun": lambda x: float(self.constraint(x))},
             tol=tol,
             options={"maxiter": maxiter, "disp": False},
-            callback=self.default_callback
+            callback=lambda x: self._callback(x, printlog)  # Use internal callback directly
         )
+
+        # Store the optimized x in the surface
         x_safe = device_get(res.x)
         self.surface_optimize = self._build_surface_with_x(self.surface_optimize, x_safe)
 
+        # Return the result with optimization trace
         return {
             "fun": res.fun,
             "gradient": jnp.array(jax.grad(self.objective)(res.x)),
             "iter": res.nit,
             "info": res,
             "success": res.success,
-            "s": self.surface_optimize,
+            "s": self.surface_optimize
         }
 
     def run(
         self,
         method: str = "SLSQP",
-        # 通用优化参数
+        # General optimization parameters
         tol: float = 1e-6,
         maxiter: int = 1000,
 
-        # LBFGS 专用参数
+        # Method-specific parameters
         x0=None,
-        constraint_weight: float = 1e4,
-        return_trace: bool = False,
-        log_every: int = 1,
-
-        # 可选非必须参数（注释保留）
-        # early_stop: bool = False,    # LBFGS 可选早停策略
-        # c_tol: float = 5e-7,         # LBFGS 可选约束容忍度
-        # rel_tol: float = 1e-5,       # LBFGS 可选相对误差容忍度
-        # g_tol: float = 5e-1,         # LBFGS 可选梯度容忍度
-        # patience: int = 50,          # LBFGS 可选早停耐心值
-        **kwargs                        # 额外参数自动传递给优化函数
+        constraint_weight: float = 1e-3,
+        printlog: bool = True,
+        **kwargs
     ):
         """
-        统一优化入口：
-        - method="SLSQP": 使用 scipy.optimize.minimize 的 SLSQP 等式约束优化
-        - method="LBFGS": 使用 jaxopt LBFGS 带惩罚项优化，可返回逐步 trace，支持 log
+        Main optimization function to run either SLSQP or LBFGS methods.
+
+        Args:
+            method (str): Optimization method to use, either 'SLSQP' or 'LBFGS'.
+            tol (float): Tolerance for stopping criteria.
+            maxiter (int): Maximum number of iterations.
+            x0 (array): Initial guess for optimization.
+            constraint_weight (float): Weight for the constraint term in penalty function.
+            printlog (bool): Whether to print log information.
+            **kwargs: Additional arguments to pass to the specific optimization method.
+
+        Returns:
+            dict: A dictionary containing the optimization result, including:
+                - 'fun': Final objective function value.
+                - 'gradient': Final gradient.
+                - 'iter': Number of iterations.
+                - 'info': Optimization details.
+                - 'success': Whether the optimization was successful.
+                - 's': Optimized surface.
         """
+        
+        # Convert method to uppercase to standardize comparison
         method_up = method.upper()
+        
+        # Validate method input
         if method_up == "SLSQP":
             return self.minimize_slsqp(
                 x0=x0,
                 tol=tol,
                 maxiter=maxiter,
+                printlog=printlog,
                 **kwargs
             )
         elif method_up == "LBFGS":
@@ -225,8 +240,7 @@ class QfmSurface:
                 tol=tol,
                 maxiter=maxiter,
                 constraint_weight=constraint_weight,
-                return_trace=return_trace,
-                log_every=log_every,
+                printlog=printlog,
                 **kwargs
             )
         else:
