@@ -130,69 +130,69 @@ plt.show()
 
 
 
-# Field line tracing
-from jax import block_until_ready
-from essos.dynamics import Tracing
+# # Field line tracing
+# from jax import block_until_ready
+# from essos.dynamics import Tracing
 
-tmax = 100000000000
-nfieldlines_per_core = 5
-nfieldlines = nfieldlines_per_core * number_of_processors_to_use
-R0 = jnp.linspace(12.2, 13.5, nfieldlines)
-trace_tolerance = 1e-7
-num_steps = 60000
+# tmax = 100000000000
+# nfieldlines_per_core = 5
+# nfieldlines = nfieldlines_per_core * number_of_processors_to_use
+# R0 = jnp.linspace(12.2, 13.5, nfieldlines)
+# trace_tolerance = 1e-7
+# num_steps = 60000
 
-Z0 = jnp.zeros(nfieldlines)
-phi0 = jnp.zeros(nfieldlines)
-initial_xyz = jnp.array([R0 * jnp.cos(phi0), R0 * jnp.sin(phi0), Z0]).T
+# Z0 = jnp.zeros(nfieldlines)
+# phi0 = jnp.zeros(nfieldlines)
+# initial_xyz = jnp.array([R0 * jnp.cos(phi0), R0 * jnp.sin(phi0), Z0]).T
 
-time0 = time()
-tracing = block_until_ready(Tracing(
-    field=field,
-    model='FieldLineAdaptative',
-    initial_conditions=initial_xyz,
-    maxtime=tmax,
-    times_to_trace=num_steps,
-    atol=trace_tolerance,
-    rtol=trace_tolerance
-))
-print(f"ESSOS tracing took {time() - time0:.2f} seconds")
+# time0 = time()
+# tracing = block_until_ready(Tracing(
+#     field=field,
+#     model='FieldLineAdaptative',
+#     initial_conditions=initial_xyz,
+#     maxtime=tmax,
+#     times_to_trace=num_steps,
+#     atol=trace_tolerance,
+#     rtol=trace_tolerance
+# ))
+# print(f"ESSOS tracing took {time() - time0:.2f} seconds")
 
-trajectories = tracing.trajectories
-traj = trajectories[0]
-R, phi, Z = traj[:, 0], traj[:, 1], traj[:, 2]
+# trajectories = tracing.trajectories
+# traj = trajectories[0]
+# R, phi, Z = traj[:, 0], traj[:, 1], traj[:, 2]
 
-phi_u = jnp.unwrap(phi)
-phi0_cross = jnp.where((phi_u[:-1] < 0) & (phi_u[1:] >= 0))[0]
-phi90_cross = jnp.where((phi_u[:-1] < jnp.pi / 2) & (phi_u[1:] >= jnp.pi / 2))[0]
+# phi_u = jnp.unwrap(phi)
+# phi0_cross = jnp.where((phi_u[:-1] < 0) & (phi_u[1:] >= 0))[0]
+# phi90_cross = jnp.where((phi_u[:-1] < jnp.pi / 2) & (phi_u[1:] >= jnp.pi / 2))[0]
 
-theta = jnp.linspace(0, 2 * jnp.pi, 200)
+# theta = jnp.linspace(0, 2 * jnp.pi, 200)
 
-def compute_rz_on_phi(surface, theta, phi=0.0):
-    angles = jnp.outer(theta, surface.xm) - phi * surface.xn
-    R = jnp.sum(surface.rmnc_interp * jnp.cos(angles), axis=1)
-    Z = jnp.sum(surface.zmns_interp * jnp.sin(angles), axis=1)
-    return R, Z
+# def compute_rz_on_phi(surface, theta, phi=0.0):
+#     angles = jnp.outer(theta, surface.xm) - phi * surface.xn
+#     R = jnp.sum(surface.rmnc_interp * jnp.cos(angles), axis=1)
+#     Z = jnp.sum(surface.zmns_interp * jnp.sin(angles), axis=1)
+#     return R, Z
 
-# Contours from optimized surface
-R0_opt, Z0_opt = compute_rz_on_phi(result['s'], theta, phi=0.0)
-R90_opt, Z90_opt = compute_rz_on_phi(result['s'], theta, phi=jnp.pi/2)
+# # Contours from optimized surface
+# R0_opt, Z0_opt = compute_rz_on_phi(result['s'], theta, phi=0.0)
+# R90_opt, Z90_opt = compute_rz_on_phi(result['s'], theta, phi=jnp.pi/2)
 
-# Contours from true VMEC surface
-R0_true, Z0_true = compute_rz_on_phi(truevmec.surface, theta, phi=0.0)
-R90_true, Z90_true = compute_rz_on_phi(truevmec.surface, theta, phi=jnp.pi/2)
+# # Contours from true VMEC surface
+# R0_true, Z0_true = compute_rz_on_phi(truevmec.surface, theta, phi=0.0)
+# R90_true, Z90_true = compute_rz_on_phi(truevmec.surface, theta, phi=jnp.pi/2)
 
-fig, ax = plt.subplots(figsize=(6, 6))
+# fig, ax = plt.subplots(figsize=(6, 6))
 
-tracing.poincare_plot(ax=ax, show=False, shifts=[0, jnp.pi / 2])
-ax.plot(R0_opt, Z0_opt, color='black', linewidth=1.5, label=r"Optimized @ $\phi = 0$")
-ax.plot(R90_opt, Z90_opt, color='black', linestyle='--', linewidth=1.5, label=r"Optimized @ $\phi = \pi/2$")
-ax.plot(R0_true, Z0_true, color='blue', linewidth=1.2, label=r"True VMEC @ $\phi = 0$")
-ax.plot(R90_true, Z90_true, color='blue', linestyle='--', linewidth=1.2, label=r"True VMEC @ $\phi = \pi/2$")
+# tracing.poincare_plot(ax=ax, show=False, shifts=[0, jnp.pi / 2])
+# ax.plot(R0_opt, Z0_opt, color='black', linewidth=1.5, label=r"Optimized @ $\phi = 0$")
+# ax.plot(R90_opt, Z90_opt, color='black', linestyle='--', linewidth=1.5, label=r"Optimized @ $\phi = \pi/2$")
+# ax.plot(R0_true, Z0_true, color='blue', linewidth=1.2, label=r"True VMEC @ $\phi = 0$")
+# ax.plot(R90_true, Z90_true, color='blue', linestyle='--', linewidth=1.2, label=r"True VMEC @ $\phi = \pi/2$")
 
-ax.set_xlabel("R")
-ax.set_ylabel("Z")
-ax.set_title("Poincaré + Surfaces Comparison @ φ = 0 and π/2")
-ax.legend()
-ax.axis("equal")
-plt.tight_layout()
-plt.show()
+# ax.set_xlabel("R")
+# ax.set_ylabel("Z")
+# ax.set_title("Poincaré + Surfaces Comparison @ φ = 0 and π/2")
+# ax.legend()
+# ax.axis("equal")
+# plt.tight_layout()
+# plt.show()
