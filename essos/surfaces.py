@@ -258,10 +258,15 @@ class SurfaceRZFourier:
 
     @property
     def area(self):
-        n = self.normal  # (nphi, ntheta, 3)
-        norm_n = jnp.linalg.norm(n, axis=2)  # shape: (nphi, ntheta)
-        avg_area = jnp.mean(norm_n)
-        return avg_area
+        n = self.normal  # shape: (nphi, ntheta, 3)
+        norm_n = jnp.linalg.norm(n, axis=2)  
+
+        dphi = 2 * jnp.pi / self.nphi
+        dtheta = 2 * jnp.pi / self.ntheta
+
+        area = jnp.sum(norm_n) * dphi * dtheta
+        return area
+
 
     def change_resolution(self, mpol: int, ntor: int):
         """
