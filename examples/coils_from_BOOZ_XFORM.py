@@ -45,7 +45,7 @@ tolerance_optimization = 1e-6
 s_surface = 0.9
 
 x_scale = False
-use_circular_coils = False
+use_circular_coils = True
 plot_fieldlines = True
 
 Poincare_plot_phi = jnp.array([0])
@@ -189,7 +189,7 @@ time0 = time()
 coils_optimized = optimize_loss_function(loss_BdotN, initial_dofs=coils_initial.x, coils=coils_initial, tolerance_optimization=tolerance_optimization,
                                   maximum_function_evaluations=maximum_function_evaluations, vmec=vmec_ESSOS,
                                   max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature, min_distance_cc=min_distance_cc,
-                                  log_csv_path=f"opt_" + file_to_use + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + ".csv", x_scale=x_scale)
+                                  log_csv_path=os.path.join(output_dir, f"opt_" + file_to_use + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + ".csv"), x_scale=x_scale)
 print(f"Optimization took {time()-time0:.2f} seconds")
 BdotN_over_B_initial = BdotN_over_B(vmec_ESSOS.surface, BiotSavart(coils_initial))
 BdotN_over_B_optimized = BdotN_over_B(vmec_ESSOS.surface, BiotSavart(coils_optimized))
