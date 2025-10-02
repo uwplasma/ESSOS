@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.11
 import os
-number_of_processors_to_use = 5 # Parallelization, this should divide nfieldlines
+number_of_processors_to_use = 6 # Parallelization, this should divide nfieldlines
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 import numpy as np
 from time import time
@@ -26,24 +26,26 @@ from plot_helpers import (
 file_to_use = 'LandremanPaul2021_QH_reactorScale_lowres'
 
 ntheta = 41
-ncoils = 4
+ncoils = 5
 tmax = 1100
 nfieldlines_per_core=1
 trace_tolerance = 1e-9
 num_steps = 22000
-order_Fourier_coils = 4
+order_Fourier_coils = 5
 current_on_each_coil = 2e8
 refine_nphi_for_surface_plot = max(4, number_of_processors_to_use)
+n_segments_coils = 80
 
-radial_extension_of_the_surface = 0.001
-max_coil_length_amplification = 3.0
-max_coil_curvature_amplification = 0.5
-min_distance_cc = 0.2
-maximum_function_evaluations = 100
+radial_extension_of_the_surface = 0.01
+max_coil_length_amplification = 3.5
+max_coil_curvature_amplification = 1.0/max_coil_length_amplification/3
+min_distance_cc = 0.05
+maximum_function_evaluations = 1000
 tolerance_optimization = 1e-6
-s_surface = 0.95
+s_surface = 0.9
 
-use_circular_coils = True
+x_scale = False
+use_circular_coils = False
 plot_fieldlines = True
 
 Poincare_plot_phi = jnp.array([0])
@@ -155,16 +157,16 @@ def CreateEquallySpacedCurves_from_axis(n_curves: int, order: int, R: float, r: 
     return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
 # curves_circular = CreateEquallySpacedCurves(n_curves=ncoils, order=order_Fourier_coils,
 #                                 R=major_radius_coils, r=minor_radius_coils,
-#                                 n_segments=ntheta, nfp=vmec_ESSOS.nfp, stellsym=True)
+#                                 n_segments=n_segments_coils, nfp=vmec_ESSOS.nfp, stellsym=True)
 curves_circular = CreateEquallySpacedCurves_from_axis(n_curves=ncoils, order=order_Fourier_coils,
                                 R=major_radius_coils, r=minor_radius_coils,
-                                n_segments=ntheta, nfp=vmec_ESSOS.nfp, stellsym=True,
+                                n_segments=n_segments_coils, nfp=vmec_ESSOS.nfp, stellsym=True,
                                 rc=vmec_ESSOS.raxis_cc, zs=-vmec_ESSOS.zaxis_cs)
 
 
 time0 = time()
-dofs, gamma_uni = fit_dofs_from_coils(coils_gamma[:ncoils], order=order_Fourier_coils, n_segments=ntheta, assume_uniform=True)
-curves_from_BOOZ_XFORM = Curves(dofs=dofs, n_segments=ntheta, nfp=b.nfp, stellsym=True)
+dofs, gamma_uni = fit_dofs_from_coils(coils_gamma[:ncoils], order=order_Fourier_coils, n_segments=n_segments_coils, assume_uniform=True)
+curves_from_BOOZ_XFORM = Curves(dofs=dofs, n_segments=n_segments_coils, nfp=b.nfp, stellsym=True)
 print(f"Fitting coils took {time()-time0:.2f} seconds")
 
 if use_circular_coils:
@@ -183,10 +185,12 @@ max_coil_length = jnp.sum(initial_length).copy()*max_coil_length_amplification
 max_coil_curvature = float(jnp.max(initial_curvature)*max_coil_curvature_amplification)
 
 print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
+time0 = time()
 coils_optimized = optimize_loss_function(loss_BdotN, initial_dofs=coils_initial.x, coils=coils_initial, tolerance_optimization=tolerance_optimization,
                                   maximum_function_evaluations=maximum_function_evaluations, vmec=vmec_ESSOS,
                                   max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature, min_distance_cc=min_distance_cc,
-                                  log_csv_path=f"opt_" + ("circular" if use_circular_coils else "booz") + ".csv",)
+                                  log_csv_path=f"opt_" + file_to_use + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + ".csv", x_scale=x_scale)
+print(f"Optimization took {time()-time0:.2f} seconds")
 BdotN_over_B_initial = BdotN_over_B(vmec_ESSOS.surface, BiotSavart(coils_initial))
 BdotN_over_B_optimized = BdotN_over_B(vmec_ESSOS.surface, BiotSavart(coils_optimized))
 curvature=jnp.mean(BiotSavart(coils_optimized).coils.curvature, axis=1)
@@ -257,7 +261,7 @@ if plot_fieldlines_constant_phi:
         coils_gamma_phi[i, :, 2] = Z_phi[:, i]
     time0 = time()
     dofs_phi, gamma_uni_phi = fit_dofs_from_coils(coils_gamma_phi[:ncoils], order=order_Fourier_coils, n_segments=ntheta, assume_uniform=True)
-    curves_phi = Curves(dofs=dofs_phi, n_segments=ntheta, nfp=b.nfp, stellsym=True)
+    curves_phi = Curves(dofs=dofs_phi, n_segments=n_segments_coils, nfp=b.nfp, stellsym=True)
     coils_phi = Coils(curves=curves_phi, currents=[-current_on_each_coil]*(ncoils))
     field_coils_phi = BiotSavart(coils_phi)
     print(f"Fitting coils took {time()-time0:.2f} seconds")
@@ -281,8 +285,8 @@ fig.update_layout(
     hovermode=False,
     margin=dict(l=0, r=0, t=25, b=0),
 )
-fig.write_image(os.path.join(output_dir, '3D_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + '.png'), scale=4, width=800, height=600)
-fig.write_html(os.path.join(output_dir, '3D_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + '.html'))
+fig.write_image(os.path.join(output_dir, '3D_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + '.png'), scale=4, width=800, height=600)
+fig.write_html(os.path.join(output_dir, '3D_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + '.html'))
 fig.show()
 
 # Now plot the 2D Poincare plot with Matplotlib (ax2 only)
@@ -322,7 +326,7 @@ for iradius in range(nfieldlines):
     ax2.plot(R, Z, 'r--', linewidth=1.5, label='Surfaces of Constant Cylindrical Angle' if iradius ==0 else '_nolegend_')
 ax2.legend()
 plt.tight_layout()
-plt.savefig(os.path.join(output_dir, 'poincare_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + '.png'), dpi=300)
+plt.savefig(os.path.join(output_dir, 'poincare_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + '.png'), dpi=300)
 
 fig = plt.figure()
 plt.contourf(phi_Boozerplot, theta_Boozerplot, modB_Boozerplot, levels=6)
@@ -331,9 +335,23 @@ plt.ylabel(r'Boozer poloidal angle $\theta$')
 for i in range(ncoils):
     plt.axvline(x=phi1D[i], color='black', linewidth=2.5)
 plt.colorbar(label='|B| (T)')
-fig.savefig(os.path.join(output_dir, 'modB_Boozerplot_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + '.png'), dpi=300)
+fig.savefig(os.path.join(output_dir, 'modB_Boozerplot_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + '.png'), dpi=300)
 
-if os.path.exists("opt_circular.csv") and os.path.exists("opt_booz.csv"):
-    plot_loss_logs(["opt_circular.csv", "opt_booz.csv"], labels=None, out_path=os.path.join(output_dir, ("loss_compare"+file_to_use+".png")), ylog=True)
+all_files = [os.path.join(output_dir, f"opt_" + file_to_use + suffix + ".csv") for suffix in ["circular", "booz", "circular_xscale", "booz_xscale"]]
+existing_files = []
+labels = []
+for fname in all_files:
+    if os.path.exists(fname):
+        existing_files.append(fname)
+        if "circular" in fname and "xscale" in fname:
+            labels.append("Circular (xscale)")
+        elif "booz" in fname and "xscale" in fname:
+            labels.append("Boozer (xscale)")
+        elif "circular" in fname:
+            labels.append("Circular")
+        elif "booz" in fname:
+            labels.append("Boozer")
+if existing_files:
+    plot_loss_logs(existing_files, out_path=os.path.join(output_dir, "loss_compare_"+file_to_use+".png"), ylog=True, labels=labels)
 
 plt.show()

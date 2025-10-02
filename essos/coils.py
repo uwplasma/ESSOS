@@ -183,6 +183,56 @@ class Curves:
     def curvature(self):
         return self._curvature
     
+    # === Helper to build per-DOF metadata (for the base/independent curves only) ===
+    def dof_metadata(self):
+        """
+        Returns a list of dicts (one per coefficient in self._dofs.ravel()):
+          {
+            "curve": i_curve,          # 0..n_base_curves-1
+            "axis":  axis_char,        # 'x','y','z'
+            "kind":  kind_char,        # '0' (k=0 cos), 's' (sin), 'c' (cos)
+            "order": k_int             # 0,1,2,...
+            "name":  string label      # e.g. 'x0', 'xs(1)', 'xc(3)', 'y0', 'zc(2)', ...
+          }
+        The ordering matches self._dofs.ravel() exactly.
+        """
+        meta = []
+        n_curves, _, ncols = self._dofs.shape  # ncols = 2*order+1
+        ordmax = ncols // 2
+        axes = ['x', 'y', 'z']
+        for ic in range(n_curves):
+            for iax, ax in enumerate(axes):
+                # index 0 is the constant (cos k=0) term:
+                meta.append(dict(curve=ic, axis=ax, kind='0', order=0, name=f"{ax}0"))
+                # then for k=1..ordmax: (2*k-1) -> sin(k), (2*k) -> cos(k)
+                for k in range(1, ordmax+1):
+                    meta.append(dict(curve=ic, axis=ax, kind='s', order=k, name=f"{ax}s({k})"))
+                    meta.append(dict(curve=ic, axis=ax, kind='c', order=k, name=f"{ax}c({k})"))
+        return meta
+
+    # === Flattened DOF names in the same order as self._dofs.ravel() ===
+    @property
+    def dof_names(self):
+        return [m["name"] for m in self.dof_metadata()]
+
+    # === A per-DOF scale vector for least_squares(x_scale=...) ===
+    def fourier_x_scale(self, alpha: float = 1.6, min_scale: float = 1e-9):
+        """
+        Returns a 1D jnp.array with one scale per coefficient in self._dofs.ravel().
+        - k=0 terms get scale 1.0
+        - k>=1 terms get exp(-alpha*k)/exp(-alpha), clipped below by min_scale
+        """
+        meta = self.dof_metadata()
+        # vectorize orders:
+        orders = jnp.array([m["order"] for m in meta])
+        # scaled so that k=1 => 1.0, k increases => smaller:
+        scales = jnp.exp(-alpha * orders) / jnp.exp(-alpha)
+        # but k=0 (constant) should have scale 1.0 exactly:
+        scales = jnp.where(orders == 0, 1.0, scales)
+        # floor:
+        scales = jnp.maximum(scales, min_scale)
+        return scales
+    
     def __len__(self):
         return jnp.size(self.curves, 0)
     
@@ -393,6 +443,22 @@ class Coils(Curves):
     @property
     def currents(self):
         return self._currents
+    
+    # === Names for the full parameter vector x = [curve_dofs, current_dofs] ===
+    @property
+    def param_names(self):
+        # base (independent) curves only:
+        curve_names = super().dof_names
+        # normalized current DOFs live in self._dofs_currents (one per base coil)
+        nI = self._dofs_currents.size
+        current_names = [f"I({i})" for i in range(nI)]
+        return curve_names + current_names
+
+    # === x_scale for least_squares, aligned with self.x ===
+    def x_scale_for_optimization(self, alpha: float = 1.6, min_scale: float = 1e-9, current_scale: float = 1.0):
+        curve_scale = super().fourier_x_scale(alpha=alpha, min_scale=min_scale)
+        current_scale_vec = jnp.ones(self._dofs_currents.size) * current_scale
+        return jnp.concatenate([curve_scale, current_scale_vec])
 
     def __getitem__(self, key):
         if isinstance(key, int):

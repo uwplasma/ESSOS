@@ -26,7 +26,7 @@ def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
     return new_field_nearaxis
 
 def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30,
-                           method='L-BFGS-B', log_csv_path: str | None = None, log_every: int = 1, **kwargs):
+                           method='L-BFGS-B', log_csv_path: str | None = None, log_every: int = 1, x_scale=False, **kwargs):
     len_dofs_curves = len(jnp.ravel(coils.dofs_curves))
     nfp = coils.nfp
     stellsym = coils.stellsym
@@ -40,44 +40,40 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     callback = None
     if log_csv_path is not None:
         os.makedirs(os.path.dirname(os.path.abspath(log_csv_path)), exist_ok=True)
-        # header
         with open(log_csv_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["iter", "seconds", "loss", "step_norm"])
-
         t0 = time.time()
         k = {"i": 0}
         prev_x = {"x": None}
-
         def _cb(xk):
             # Compute residuals and loss: 0.5 * ||r||^2
             r = loss_partial(xk)
             r = np.asarray(device_get(r)).ravel()
             loss = 0.5 * float(r @ r)
-
             step_norm = (np.linalg.norm(xk - prev_x["x"])
                          if prev_x["x"] is not None else np.nan)
             prev_x["x"] = xk.copy()
-
             if (k["i"] % log_every) == 0:
                 with open(log_csv_path, "a", newline="") as f:
                     csv.writer(f).writerow([k["i"], time.time() - t0, loss, step_norm])
-
             k["i"] += 1
-
         callback = _cb
+
+    x_scale_function = coils.x_scale_for_optimization(alpha=1.2, min_scale=1e-9, current_scale=1)
 
     ## Without JAX gradients, using finite differences
     # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,
     #                         ftol=tolerance_optimization, gtol=tolerance_optimization,
-    #                         xtol=1e-14, max_nfev=maximum_function_evaluations)
+    #                         xtol=1e-14, max_nfev=maximum_function_evaluations,
+    #                         callback = callback, x_scale = x_scale_function if x_scale else None)
     
     ## With JAX gradients
     jac_loss_partial = jit(grad(loss_partial))
     result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
                            ftol=tolerance_optimization, gtol=tolerance_optimization,
                            xtol=1e-14, max_nfev=maximum_function_evaluations,
-                           callback = callback,)
+                           callback = callback, x_scale = x_scale_function if x_scale else None)
     ##result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
     ##                  tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
     

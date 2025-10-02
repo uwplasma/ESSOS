@@ -12,9 +12,9 @@
 !  NITER_ARRAY =           1200          2000          3000          4000
 !          5000          6000         20000
 
-  NS_ARRAY =                12            50
+  NS_ARRAY =                12           151
   FTOL_ARRAY =    1.000000E-17  1.000000E-15
-  NITER_ARRAY =           1000          5000
+  NITER_ARRAY =           1000         10000
 
   PRECON_TYPE = 'none'
   PREC2D_THRESHOLD =   1.000000E-19
@@ -23,8 +23,8 @@
   NFP = 0002
 !  MPOL = 0016
 !  NTOR = 0012
-  MPOL = 005
-  NTOR = 005
+  MPOL = 008
+  NTOR = 008
   PHIEDGE =    5.048228826746E+001
   NTHETA = 0000
   NZETA = 0000

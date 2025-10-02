@@ -368,10 +368,10 @@ def loss_BdotN(x, vmec, dofs_curves, currents_scale, nfp, max_coil_length=42,
     linking_number = loss_linking_mnumber(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)
 
     bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
-    coil_length_loss    = 1e5*jnp.max(jnp.concatenate([jnp.array([jnp.sum(coil_length)-max_coil_length]),jnp.array([0])]))#jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
-    coil_curvature_loss = 1e5*jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
-    coil_coil_distance_loss = 1e3*coil_coil_distance
-    linking_number_loss = 1e5*linking_number
+    coil_length_loss    = 1e6*jnp.max(jnp.concatenate([jnp.array([jnp.sum(coil_length)-max_coil_length]),jnp.array([0])]))#jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
+    coil_curvature_loss = 1e6*jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
+    coil_coil_distance_loss = 1e6*coil_coil_distance
+    linking_number_loss = 1e6*linking_number
 
     return bdotn_over_b_loss+coil_length_loss+coil_curvature_loss+coil_coil_distance_loss+linking_number_loss
 
