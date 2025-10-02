@@ -286,7 +286,7 @@ def normB_axis(field, npoints=15,target_B_on_axis=5.7):
 def loss_coil_length(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,max_coil_length=31):
     field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)    
     coil_length=jnp.ravel(field.coils_length)
-    return jnp.ravel(jnp.array([jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))]))
+    return coil_length#jnp.ravel(jnp.array([jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))]))
 
 # @partial(jit, static_argnums=(0))
 def loss_coil_curvature(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,max_coil_curvature=0.4):
@@ -355,22 +355,25 @@ def loss_bdotn_over_b(x, vmec, dofs_curves, currents_scale, nfp, n_segments=60, 
     field = BiotSavart(coils)
     return jnp.sum(jnp.abs(BdotN_over_B(vmec.surface, field)))
 
-
-@partial(jit, static_argnums=(1, 4, 5, 6, 7))
+from jax.debug import print as jprint
+@partial(jit, static_argnums=(1, 4, 6, 7))
 def loss_BdotN(x, vmec, dofs_curves, currents_scale, nfp, max_coil_length=42,
-               n_segments=60, stellsym=True, max_coil_curvature=0.1):
+               n_segments=60, stellsym=True, max_coil_curvature=0.1, min_distance_cc=0.01):
     field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
     
     bdotn_over_b = BdotN_over_B(vmec.surface, field)
     coil_length = loss_coil_length(x,dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_length=max_coil_length)
     coil_curvature = loss_coil_curvature(x,dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,max_coil_curvature=max_coil_curvature)
-    
-    
+    coil_coil_distance = loss_cc_distance(x,dofs_curves,currents_scale,nfp,n_segments,stellsym,min_distance_cc=min_distance_cc)
+    linking_number = loss_linking_mnumber(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)
+
     bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
-    coil_length_loss    = jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
-    coil_curvature_loss = jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
-    
-    return bdotn_over_b_loss+coil_length_loss+coil_curvature_loss
+    coil_length_loss    = 1e5*jnp.max(jnp.concatenate([jnp.array([jnp.sum(coil_length)-max_coil_length]),jnp.array([0])]))#jnp.max(jnp.concatenate([coil_length-max_coil_length,jnp.array([0])]))
+    coil_curvature_loss = 1e5*jnp.max(jnp.concatenate([coil_curvature-max_coil_curvature,jnp.array([0])]))
+    coil_coil_distance_loss = 1e3*coil_coil_distance
+    linking_number_loss = 1e5*linking_number
+
+    return bdotn_over_b_loss+coil_length_loss+coil_curvature_loss+coil_coil_distance_loss+linking_number_loss
 
 @partial(jit, static_argnums=(1, 4, 5, 6))
 def loss_BdotN_only(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True):
@@ -447,11 +450,20 @@ def loss_cc_distance_array(x,dofs_curves,currents_scale,nfp,n_segments=60,stells
     result=jnp.triu(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,coils.gamma,coils.gamma_dash,min_distance_cc,downsample),k=1)
     return result[result != 0.0].flatten()
 
+from jax.nn import softplus
+
+def _stride_mask(n, step):
+    """Boolean mask of length n selecting indices 0, step, 2*step, ... (JIT-safe)."""
+    step = jnp.maximum(1, step)              # can be traced
+    step = jnp.minimum(step, n)              # avoid empty selection
+    idx = jnp.arange(n)                      # unit step, static
+    return (idx % step) == 0                 # traced-safe
 
 
 #One curve to curve distance (
 #reused from Simsopt, no changes were necessary)
-def cc_distance_pure(gamma1, l1, gamma2, l2, minimum_distance, downsample=1):
+def cc_distance_pure(gamma1, l1, gamma2, l2, minimum_distance, downsample=1,
+                          smooth_beta=20.0, eps=1e-12):
     """
     Compute the curve-curve distance penalty between two curves.
 
@@ -474,14 +486,42 @@ def cc_distance_pure(gamma1, l1, gamma2, l2, minimum_distance, downsample=1):
 
     Returns:
         float: The curve-curve distance penalty value.
+    Smooth, numerically safe curve-curve distance penalty.
+    - smooth_beta: larger = closer to hard ReLU; 20–50 is usually fine.
+    - eps: tiny number to keep norms/distances well-conditioned.
     """
-    gamma1 = gamma1[::downsample, :]
-    gamma2 = gamma2[::downsample, :]
-    l1 = l1[::downsample, :]
-    l2 = l2[::downsample, :]
-    dists = jnp.sqrt(jnp.sum((gamma1[:, None, :] - gamma2[None, :, :])**2, axis=2))
-    alen = jnp.linalg.norm(l1, axis=1)[:, None] * jnp.linalg.norm(l2, axis=1)[None, :]
-    return jnp.sum(alen * jnp.maximum(minimum_distance-dists, 0)**2)/(gamma1.shape[0]*gamma2.shape[0])
+    m = gamma1.shape[0]
+    n = gamma2.shape[0]
+
+    # masks (static shape)
+    keep1 = _stride_mask(m, downsample)      # (m,)
+    keep2 = _stride_mask(n, downsample)      # (n,)
+
+    # pairwise distances (full grid)
+    diff  = gamma1[:, None, :] - gamma2[None, :, :]
+    dists = jnp.linalg.norm(diff + eps, axis=2)   # (m, n)
+
+    # quadrature "weights" from tangent magnitudes
+    a1 = jnp.linalg.norm(l1, axis=1) + eps        # (m,)
+    a2 = jnp.linalg.norm(l2, axis=1) + eps        # (n,)
+
+    # zero-out skipped rows/cols
+    a1_eff = a1 * keep1.astype(a1.dtype)          # (m,)
+    a2_eff = a2 * keep2.astype(a2.dtype)          # (n,)
+    alen   = a1_eff[:, None] * a2_eff[None, :]    # (m, n)
+
+    # smooth hinge: softplus(min_d - d) ~= relu(min_d - d)
+    delta = minimum_distance - dists
+    hinge = softplus(smooth_beta * delta) / smooth_beta
+
+    penalty = alen * (hinge ** 2)
+
+    # effective counts (can be traced; scalar is fine)
+    m_eff = jnp.maximum(jnp.sum(keep1), 1)
+    n_eff = jnp.maximum(jnp.sum(keep2), 1)
+    denom = m_eff * n_eff
+
+    return jnp.sum(penalty) / denom
 
 
 
@@ -506,7 +546,7 @@ def cs_distance_pure(gammac, lc, gammas, ns, minimum_distance):
         * jnp.linalg.norm(ns, axis=1)[None, :]
     return jnp.mean(integralweight * jnp.maximum(minimum_distance-dists, 0)**2)
 
-
+FOURPI = 4.0 * jnp.pi
 
 #This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
 # In that case we would do the candidates method from simsopt entirely
@@ -514,15 +554,22 @@ def loss_linking_mnumber(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym
     coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
     #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
     # (needs change if quadpoints are allowed to be different)
-    dphi=coils.quadpoints[1]-coils.quadpoints[0]
-    result=jnp.sum(jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
-                                        in_axes=(None,None,0,0,None))(coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    dphi),k=1))
-    return result
+    dphi  = coils.quadpoints[1] - coils.quadpoints[0]
+    dphi = dphi * downsample
 
+    # Downsample by slicing (compile-time constant 'downsample' => OK)
+    G = coils.gamma[:, 0:-1:downsample, :]       # (C, P, 3)
+    L = coils.gamma_dash[:, 0:-1:downsample, :]  # (C, P, 3)
+
+    # vectorize over coil pairs (upper triangular)
+    def pair_link(i, j):
+        return linking_number_pure(G[i], L[i], G[j], L[j], dphi)
+
+    C = G.shape[0]
+    I, J = jnp.triu_indices(C, k=1)
+    vals = jax.vmap(pair_link)(I, J)  # (C*(C-1)/2,)
+
+    return jnp.sum(vals**2)
 
 #This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
 # In that case we would do the candidates method from simsopt entirely
@@ -530,19 +577,57 @@ def loss_linking_mnumber_constarint(x,dofs_curves,currents_scale,nfp,n_segments=
     coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
     #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
     # (needs change if quadpoints are allowed to be different)
-    dphi=coils.quadpoints[1]-coils.quadpoints[0]
-    result=jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
-                                        in_axes=(None,None,0,0,None))(coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    dphi)+1.e-18,k=1)  
-    #The 1.e-18 above is just to get all the correct values in the following mask
-    return result[result != 0.0].flatten()
+    dphi  = coils.quadpoints[1] - coils.quadpoints[0]
+    dphi = dphi * downsample
+
+    G = coils.gamma[:, 0:-1:downsample, :]
+    L = coils.gamma_dash[:, 0:-1:downsample, :]
+
+    def pair_link(i, j):
+        return linking_number_pure(G[i], L[i], G[j], L[j], dphi)
+
+    C = G.shape[0]
+    I, J = jnp.triu_indices(C, k=1)
+    vals = jax.vmap(pair_link)(I, J)  # (num_pairs,)
+
+    # keep masking logic; add tiny epsilon only to avoid exact zeros:
+    vals = vals + 1e-18
+    upper = jnp.triu(jnp.eye(C), k=1)
+    # Build a (C,C) matrix with upper-tri entries = vals for original flattening pattern:
+    # (Since you only need the vector, simply return vals directly.)
+    return vals  # already 1D residual vector; no zeros to filter
 
 def linking_number_pure(gamma1, lc1, gamma2, lc2,dphi):
-    linking_number_ij=jnp.sum(jnp.abs(jax.vmap(integrand_linking_number, in_axes=(0, 0, 0, 0,None,None))(gamma1, lc1, gamma2, lc2,dphi,dphi)/ (4*jnp.pi)))
-    return linking_number_ij
+    """
+    Numerically safe Gauss linking integral with full pairwise quadrature.
+    - SAME signature as SIMSOPT.
+    - Removes |.| (nonsmooth); returns the signed estimate.
+    - Regularizes 1/||r||^3 with eps to avoid inf/NaN.
+    """
+    eps = 1e-9  # you can tune this (e.g., 1e-10 .. 1e-7) to your geometry scale
+
+    # pairwise differences (P1,P2,3)
+    r12 = gamma1[:, None, :] - gamma2[None, :, :]
+    r2  = jnp.sum(r12 * r12, axis=2)
+    inv_r3 = (r2 + eps*eps) ** (-1.5)
+
+    # pairwise cross of tangents (P1,P2,3)
+    c12 = jnp.cross(lc1[:, None, :], lc2[None, :, :])
+
+    # dot and weighted contribution
+    dot = jnp.sum(r12 * c12, axis=2)
+    contrib = dot * inv_r3 * (dphi * dphi) / FOURPI  # (P1,P2)
+
+    # Optional mild clipping to guard extreme spikes if coils nearly touch
+    # max_inv_r3 = (1.0 / (eps ** 3))
+    # contrib = jnp.clip(contrib, -max_inv_r3 * dphi * dphi / FOURPI, max_inv_r3 * dphi * dphi / FOURPI)
+
+    # Normalize by number of pairs to keep scale stable vs. downsampling
+    P1 = gamma1.shape[0]
+    P2 = gamma2.shape[0]
+    denom = jnp.maximum(P1 * P2, 1)
+
+    return jnp.sum(contrib) / denom  # signed scalar
 
 def integrand_linking_number(r1,dr1,r2,dr2,dphi1,dphi2):
     """
@@ -559,8 +644,11 @@ def integrand_linking_number(r1,dr1,r2,dr2,dphi1,dphi2):
     Returns:
         float: The integrand value for the linking number.
     """
-    return jnp.dot((r1-r2), jnp.cross(dr1, dr2)) / jnp.linalg.norm(r1-r2)**3*dphi1*dphi2
-
+    eps = 1e-9  # regularization (set to your geometric units)
+    r12   = r1 - r2
+    r2    = jnp.dot(r12, r12)
+    inv_r3 = (r2 + eps*eps) ** (-1.5)
+    return (jnp.dot(r12, jnp.cross(dr1, dr2)) * inv_r3) * dphi1 * dphi2 / FOURPI
 
 
 #Loss function penalizing force on coils using Landremann-Hurwitz method

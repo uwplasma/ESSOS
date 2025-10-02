@@ -1,12 +1,14 @@
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-from jax import jit, grad
+from jax import jit, grad, device_get
 from functools import partial
 from essos.coils import Curves, Coils
 from scipy.optimize import least_squares, minimize
 from essos.fields import near_axis
 from essos.surfaces import SurfaceRZFourier
+import numpy as np
+import time, csv, os
 
 def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
     len_rc = len(field_nearaxis.rc)
@@ -23,7 +25,8 @@ def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
                                     nphi=field_nearaxis.nphi, spsi=field_nearaxis.spsi, sG=field_nearaxis.sG, nfp=field_nearaxis.nfp)
     return new_field_nearaxis
 
-def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, method='L-BFGS-B', **kwargs):
+def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30,
+                           method='L-BFGS-B', log_csv_path: str | None = None, log_every: int = 1, **kwargs):
     len_dofs_curves = len(jnp.ravel(coils.dofs_curves))
     nfp = coils.nfp
     stellsym = coils.stellsym
@@ -33,16 +36,48 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     
     loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym, **kwargs)
     
+    # ---- optional CSV logger ----
+    callback = None
+    if log_csv_path is not None:
+        os.makedirs(os.path.dirname(os.path.abspath(log_csv_path)), exist_ok=True)
+        # header
+        with open(log_csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["iter", "seconds", "loss", "step_norm"])
+
+        t0 = time.time()
+        k = {"i": 0}
+        prev_x = {"x": None}
+
+        def _cb(xk):
+            # Compute residuals and loss: 0.5 * ||r||^2
+            r = loss_partial(xk)
+            r = np.asarray(device_get(r)).ravel()
+            loss = 0.5 * float(r @ r)
+
+            step_norm = (np.linalg.norm(xk - prev_x["x"])
+                         if prev_x["x"] is not None else np.nan)
+            prev_x["x"] = xk.copy()
+
+            if (k["i"] % log_every) == 0:
+                with open(log_csv_path, "a", newline="") as f:
+                    csv.writer(f).writerow([k["i"], time.time() - t0, loss, step_norm])
+
+            k["i"] += 1
+
+        callback = _cb
+
     ## Without JAX gradients, using finite differences
-    result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,
-                            ftol=tolerance_optimization, gtol=tolerance_optimization,
-                            xtol=1e-14, max_nfev=maximum_function_evaluations)
+    # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,
+    #                         ftol=tolerance_optimization, gtol=tolerance_optimization,
+    #                         xtol=1e-14, max_nfev=maximum_function_evaluations)
     
     ## With JAX gradients
-    ##jac_loss_partial = jit(grad(loss_partial))
-    # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
-    #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
-    #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
+    jac_loss_partial = jit(grad(loss_partial))
+    result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
+                           ftol=tolerance_optimization, gtol=tolerance_optimization,
+                           xtol=1e-14, max_nfev=maximum_function_evaluations,
+                           callback = callback,)
     ##result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
     ##                  tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
     
