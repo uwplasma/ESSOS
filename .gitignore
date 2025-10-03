@@ -174,3 +174,10 @@ essos/version.py
 *.vts
 *.xml
 examples/input.optimized
+parvmecinfo.txt
+jxbout_*
+threed1*
+mercier.*
+timings.*
+output_files
+output_files/*

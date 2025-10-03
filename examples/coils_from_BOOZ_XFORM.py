@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.11
 import os
-number_of_processors_to_use = 6 # Parallelization, this should divide nfieldlines
+number_of_processors_to_use = 4 # Parallelization, this should divide nfieldlines
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 import numpy as np
 from time import time
@@ -22,8 +22,8 @@ from plot_helpers import (
     plot_loss_logs
 )
 
-# file_to_use = 'LandremanPaul2021_QA_reactorScale_lowres'
-file_to_use = 'LandremanPaul2021_QH_reactorScale_lowres'
+file_to_use = 'LandremanPaul2021_QA_reactorScale_lowres'
+# file_to_use = 'LandremanPaul2021_QH_reactorScale_lowres'
 
 ntheta = 41
 ncoils = 5
@@ -31,21 +31,21 @@ tmax = 1100
 nfieldlines_per_core=1
 trace_tolerance = 1e-9
 num_steps = 22000
-order_Fourier_coils = 5
+order_Fourier_coils = 4
 current_on_each_coil = 2e8
 refine_nphi_for_surface_plot = max(4, number_of_processors_to_use)
-n_segments_coils = 80
+n_segments_coils = 70
 
 radial_extension_of_the_surface = 0.01
 max_coil_length_amplification = 3.5
-max_coil_curvature_amplification = 1.0/max_coil_length_amplification/3
-min_distance_cc = 0.05
-maximum_function_evaluations = 1000
+max_coil_curvature_amplification = 1.0/5
+min_distance_cc = 0.2
+maximum_function_evaluations = 500
 tolerance_optimization = 1e-6
-s_surface = 0.9
+s_surface = 0.95
 
-x_scale = False
-use_circular_coils = True
+x_scale = True
+use_circular_coils = False
 plot_fieldlines = True
 
 Poincare_plot_phi = jnp.array([0])
@@ -73,7 +73,7 @@ print(f"Computing Boozer harmonics took {time()-time0:.2f} seconds")
 current_on_each_coil = current_on_each_coil / ncoils*vmec.wout.Aminor_p**2/1.7**2
 nfieldlines = number_of_processors_to_use*nfieldlines_per_core
 nphi   = ncoils * 2 * b.nfp
-vmec_ESSOS = VmecESSOS(wout_filename, ntheta=ntheta, nphi=nphi*refine_nphi_for_surface_plot, range_torus='half period', s=s_surface)
+vmec_ESSOS = VmecESSOS(wout_filename, ntheta=ntheta, nphi=int(nphi*refine_nphi_for_surface_plot/b.nfp), range_torus='half period', s=s_surface)
 
 theta1D = np.linspace(0, 2 * np.pi, ntheta)
 phi1D = jnp.linspace(2*jnp.pi/nphi/2, 2*jnp.pi + 2*jnp.pi/nphi/2, nphi, endpoint=False)
@@ -285,7 +285,7 @@ fig.update_layout(
     hovermode=False,
     margin=dict(l=0, r=0, t=25, b=0),
 )
-fig.write_image(os.path.join(output_dir, '3D_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + '.png'), scale=4, width=800, height=600)
+# fig.write_image(os.path.join(output_dir, '3D_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + '.png'), scale=4, width=800, height=600)
 fig.write_html(os.path.join(output_dir, '3D_'+file_to_use+'_' + ("circular" if use_circular_coils else "booz") + ("_xscale" if x_scale else "") + '.html'))
 fig.show()
 

@@ -37,6 +37,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym, **kwargs)
     
     # ---- optional CSV logger ----
+    from essos.objective_functions import field_from_dofs, BdotN_over_B
     callback = None
     if log_csv_path is not None:
         os.makedirs(os.path.dirname(os.path.abspath(log_csv_path)), exist_ok=True)
@@ -48,6 +49,11 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
         prev_x = {"x": None}
         def _cb(xk):
             # Compute residuals and loss: 0.5 * ||r||^2
+            # try:
+            #     field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
+            #     bdotn_over_b = BdotN_over_B(vmec.surface, field)
+            #     loss = jnp.sum(jnp.abs(bdotn_over_b))
+            # except:
             r = loss_partial(xk)
             r = np.asarray(device_get(r)).ravel()
             loss = 0.5 * float(r @ r)
@@ -73,7 +79,9 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
                            ftol=tolerance_optimization, gtol=tolerance_optimization,
                            xtol=1e-14, max_nfev=maximum_function_evaluations,
-                           callback = callback, x_scale = x_scale_function if x_scale else None)
+                           x_scale = x_scale_function if x_scale else None,
+                           callback = callback,
+                           )
     ##result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
     ##                  tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
     
