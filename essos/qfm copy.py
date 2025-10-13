@@ -10,23 +10,20 @@ from essos.coils import Coils
 from functools import partial
 
 class QfmSurface:
-    def __init__(self, field, surface: SurfaceRZFourier, label: str, targetlabel_area: float = None,targetlabel_volume: float = None,targetlabel_flux: float = None,targetlabel_flux_final: float = None,targetlabel_flux_poloidal: float = None,targetlabel_flux_poloidal_final: float = None,toroidal_flux_idx: int = 0,poloidal_flux_idx: int = 0):
+    def __init__(self, field, surface: SurfaceRZFourier, label: str, targetlabel_area: float = None,targetlabel_volume: float = None,targetlabel_flux: float = None,targetlabel_flux_final: float = None,toroidal_flux_idx: int = 0):
         assert label in ["area", "volume", "toroidal_flux","multi"], f"Unsupported label: {label}"
         
         self.field = field
         self.surface = surface  
         self.surface_optimize = self._build_surface_with_x(surface, surface.x)  
         self.label = label
-        self.toroidal_flux_idx = int(toroidal_flux_idx) 
-        self.poloidal_flux_idx = int(poloidal_flux_idx)           
+        self.toroidal_flux_idx = int(toroidal_flux_idx)  
         self.name = str(id(self))
         self.targetlabel = {
             "volume": targetlabel_volume,
             "area": targetlabel_area,
             "toroidal_flux": targetlabel_flux,
-            "toroidal_flux_final": targetlabel_flux_final,
-            "poloidal_flux": targetlabel_flux_poloidal,
-            "poloidal_flux_final": targetlabel_flux_poloidal_final}
+            "toroidal_flux_final": targetlabel_flux_final}
 
         if label=='multi':
             if self.targetlabel["volume"] == None:
@@ -35,12 +32,6 @@ class QfmSurface:
                 self.targetlabel["area"] = surface.area
             if self.targetlabel["toroidal_flux"] == None:
                 self.targetlabel["toroidal_flux"] = self._toroidal_flux(surface)    
-            if self.targetlabel["toroidal_flux_final"] == None:
-                self.targetlabel["toroidal_flux_final"] = self._toroidal_flux_final(surface)
-            if self.targetlabel["poloidal_flux"] == None:
-                self.targetlabel["poloidal_flux"] = self._poloidal_flux(surface)    
-            if self.targetlabel["poloidal_flux_final"] == None:
-                self.targetlabel["poloidal_flux_final"] = self._poloidal_flux_final(surface)                                        
         elif label=='volume':
             if self.targetlabel["volume"] == None:
                 self.targetlabel["volume"] = surface.volume
@@ -53,46 +44,32 @@ class QfmSurface:
                         
         
     def _toroidal_flux(self, surf: SurfaceRZFourier) -> jnp.ndarray:
+        #idx = self.toroidal_flux_idx
+        #gamma = surf.gamma
+        #curve = gamma[idx, :, :]          
+        #dl = jnp.roll(curve, -1, axis=0) - curve 
+        #A_vals = vmap(self.field.A)(curve)
+        #Adl = jnp.sum(A_vals * dl, axis=1) 
+        #tf = jnp.sum(Adl)
+        #return tf
         curve = surf.gamma[self.toroidal_flux_idx]
         dl = jnp.roll(curve, -1, axis=0) - curve
         A_vals = vmap(self.field.A)(curve)
-        return jnp.sum(jnp.sum(A_vals * dl, axis=1))        
-        #curve = surf.gamma[self.toroidal_flux_idx]
-        #dl = surf.gammadash_theta[self.toroidal_flux_idx]
-        #A_vals = vmap(self.field.A)(curve)        
-        #return jnp.sum(jnp.sum(A_vals * dl, axis=1))/self.surface.ntheta
+        return jnp.sum(jnp.sum(A_vals * dl, axis=1))
 
     def _toroidal_flux_final(self, surf: SurfaceRZFourier) -> jnp.ndarray:
-        curve = surf.gamma[62]
+        #idx = self.toroidal_flux_idx
+        #gamma = surf.gamma
+        #curve = gamma[idx, :, :]          
+        #dl = jnp.roll(curve, -1, axis=0) - curve 
+        #A_vals = vmap(self.field.A)(curve)
+        #Adl = jnp.sum(A_vals * dl, axis=1) 
+        #tf = jnp.sum(Adl)
+        #return tf
+        curve = surf.gamma[-1]
         dl = jnp.roll(curve, -1, axis=0) - curve
         A_vals = vmap(self.field.A)(curve)
         return jnp.sum(jnp.sum(A_vals * dl, axis=1))
-        #curve = surf.gamma[self.toroidal_flux_idx]
-        #dl = surf.gammadash_theta[self.toroidal_flux_idx]
-        #A_vals = vmap(self.field.A)(curve)        
-        #return jnp.sum(jnp.sum(A_vals * dl, axis=1))/self.surface.ntheta        
-
-
-    def _poloidal_flux(self, surf: SurfaceRZFourier) -> jnp.ndarray:
-        curve = surf.gamma[:,self.poloidal_flux_idx,:]
-        dl = jnp.roll(curve, -1, axis=0) - curve
-        A_vals = vmap(self.field.A)(curve)
-        return jnp.sum(jnp.sum(A_vals * dl, axis=1))        
-        #curve = surf.gamma[:,self.poloidal_flux_idx,:]
-        #dl = surf.gammadash_phi[:,self.poloidal_flux_idx,:]
-        #A_vals = vmap(self.field.A)(curve)        
-        #return jnp.sum(jnp.sum(A_vals * dl, axis=1))/self.surface.nphi
-
-    def _poloidal_flux_final(self, surf: SurfaceRZFourier) -> jnp.ndarray:
-        curve = surf.gamma[:,32,:]
-        dl = jnp.roll(curve, -1, axis=0) - curve
-        A_vals = vmap(self.field.A)(curve)
-        return jnp.sum(jnp.sum(A_vals * dl, axis=1))
-        #curve = surf.gamma[self.poloidal_flux_idx]
-        #dl = surf.gammadash_phi[self.poloidal_flux_idx]
-        #A_vals = vmap(self.field.A)(curve)        
-        #return jnp.sum(jnp.sum(A_vals * dl, axis=1))/self.surface.nphi        
-
 
 #    def _build_surface_with_x(self, surface: SurfaceRZFourier, x):
 #        s = SurfaceRZFourier(
@@ -140,25 +117,32 @@ class QfmSurface:
 
 
     def objective(self, x):
-        self.surface_optimize.x=x
-        N = self.surface_optimize.unitnormal
-        norm_N = jnp.linalg.norm(self.surface_optimize.normal, axis=2)
-        points = self.surface_optimize.gamma.reshape(-1, 3)
+        surf = self.surface_optimize
+        x_old = surf.x          
+        surf.x = x              
+        N = surf.unitnormal
+        norm_N = jnp.linalg.norm(surf.normal, axis=2)
+        points = surf.gamma.reshape(-1, 3)
         B = vmap(self.field.B)(points).reshape(N.shape)
         B_n = jnp.sum(B * N, axis=2)
         norm_B = jnp.linalg.norm(B, axis=2)
         value = jnp.sum(B_n**2 * norm_N) / jnp.sum(norm_B**2 * norm_N)
+        surf.x = x_old
         return value
 
     def objective_constraint(self, x):
-        self.surface_optimize.x=x
-        N = self.surface_optimize.unitnormal
-        norm_N = jnp.linalg.norm(self.surface_optimize.normal, axis=2)
-        points = self.surface_optimize.gamma.reshape(-1, 3)
+        surf = self.surface_optimize
+        x_old = surf.x          
+        surf.x = x             
+        #surf = self._build_surface_with_x(self.surface_optimize, x)
+        N = surf.unitnormal
+        norm_N = jnp.linalg.norm(surf.normal, axis=2)
+        points = surf.gamma.reshape(-1, 3)
         B = vmap(self.field.B)(points).reshape(N.shape)
         B_n = jnp.sum(B * N, axis=2)
         norm_B = jnp.linalg.norm(B, axis=2)
         value = jnp.sum(B_n**2 * norm_N) / jnp.sum(norm_B**2 * norm_N)
+        surf.x = x_old
         return jnp.abs(value-1.e-6)/1.e-6        
 
 
@@ -183,49 +167,62 @@ class QfmSurface:
     #     return val
 
     def constraint(self, x):
-        self.surface_optimize.x=x
+        surf = self.surface_optimize
+        x_old = surf.x
+        surf.x = x
+
         raw_c = {
-            "volume": self.surface_optimize.volume - self.targetlabel["volume"],
-            "area": self.surface_optimize.area - self.targetlabel["area"],
-            "toroidal_flux": self._toroidal_flux(self.surface_optimize) - self.targetlabel["toroidal_flux"],
+            "volume": surf.volume - self.targetlabel["volume"],
+            "area": surf.area - self.targetlabel["area"],
+            "toroidal_flux": self._toroidal_flux(surf) - self.targetlabel["toroidal_flux"],
         }[self.label]
 
         c = raw_c / jnp.abs(self.targetlabel[self.label])
+
+        surf.x = x_old
         return c
 
 
 
     def constraint_area(self, x):
-        self.surface_optimize.x=x
-        val = (self.surface_optimize.area - self.targetlabel["area"]) / jnp.abs(self.targetlabel["area"])
+        surf = self.surface_optimize
+        x_old = surf.x
+        surf.x = x
+        val = (surf.area - self.targetlabel["area"]) / jnp.abs(self.targetlabel["area"])
+        surf.x = x_old
         return val
 
     def constraint_volume(self, x):
-        self.surface_optimize.x=x
-        val = (self.surface_optimize.volume - self.targetlabel["volume"]) / jnp.abs(self.targetlabel["volume"])
+        surf = self.surface_optimize
+        x_old = surf.x
+        surf.x = x
+        val = (surf.volume - self.targetlabel["volume"]) / jnp.abs(self.targetlabel["volume"])
+        surf.x = x_old
         return val        
 
 
     def constraint_flux(self, x):
-        self.surface_optimize.x=x
-        val = (self._toroidal_flux(self.surface_optimize) - self.targetlabel["toroidal_flux"]) / jnp.abs(self.targetlabel["toroidal_flux"])
+        surf = self.surface_optimize
+        x_old = surf.x
+        surf.x = x
+        val = (self._toroidal_flux(surf) - self.targetlabel["toroidal_flux"]) / jnp.abs(self.targetlabel["toroidal_flux"])
+        surf.x = x_old
         return val      
 
+    def constraint_flux(self, x):
+        surf = self.surface_optimize
+        x_old = surf.x
+        surf.x = x
+        val = (self._toroidal_flux(surf) - self.targetlabel["toroidal_flux"]) / jnp.abs(self.targetlabel["toroidal_flux"])
+        surf.x = x_old
+        return val      
 
     def constraint_flux_final(self, x):
-        self.surface_optimize.x=x
-        val = (self._toroidal_flux_final(self.surface_optimize) - self.targetlabel["toroidal_flux"]) / jnp.abs(self.targetlabel["toroidal_flux"])
-        return val      
-
-    def constraint_flux_poloidal(self, x):
-        self.surface_optimize.x=x
-        val = (self._poloidal_flux(self.surface_optimize) - self.targetlabel["poloidal_flux"]) / jnp.abs(self.targetlabel["poloidal_flux"])
-        return val      
-
-
-    def constraint_flux_poloidal_final(self, x):
-        self.surface_optimize.x=x
-        val = (self._poloidal_flux_final(self.surface_optimize) - self.targetlabel["poloidal_flux"]) / jnp.abs(self.targetlabel["poloidal_flux"])
+        surf = self.surface_optimize
+        x_old = surf.x
+        surf.x = x
+        val = (self._toroidal_flux_final(surf) - self.targetlabel["toroidal_flux_final"]) / jnp.abs(self.targetlabel["toroidal_flux_final"])
+        surf.x = x_old
         return val      
 
     def penalty_objective(self, x, constraint_weight=1.0):
@@ -347,13 +344,13 @@ class QfmSurface:
         x0 = jnp.array(self.surface_optimize.x if x0 is None else x0)
         
         # params for alm
-        penalty = 0.01#1.e-6 #Intial penalty values
+        penalty = 1.e-6 #Intial penalty values
         multiplier=0. #Initial lagrange multiplier values
         sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
         model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers 
         #Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
 
-        beta=2.#10.                                     #penalty update parameter
+        beta=10.                                     #penalty update parameter
         mu_max=1.e7                                #Maximum penalty parameter allowed
         alpha=0.99                                  #These are parameters only used if gradient descent and adaaptative mu
         gamma=1.e-2
@@ -366,10 +363,8 @@ class QfmSurface:
             alm.eq(self.constraint_area,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
             alm.eq(self.constraint_volume,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
             alm.eq(self.constraint_flux,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-            alm.eq(self.constraint_flux_final,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-            #alm.eq(self.constraint_flux_poloidal,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-            #alm.eq(self.constraint_flux_poloidal_final,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),            
-            #alm.eq(self.objective_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad)            
+            #alm.eq(self.constraint_flux_final,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+            #alm.eq(self.objective,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad)            
         )
 
         #Initializing lagrange multipliers
@@ -398,8 +393,8 @@ class QfmSurface:
             #print('lagrange',params[1])
             i=i+1
 
-        #x_safe = params[0]
-        self.surface_optimize.x =params[0]# self._build_surface_with_x(self.surface_optimize, x_safe)        
+        x_safe = device_get(params[0])
+        self.surface_optimize = self._build_surface_with_x(self.surface_optimize, x_safe)        
         return {
             "fun": info[0],
             "gradient": grad[0],
@@ -524,7 +519,7 @@ class QfmSurface_with_coils:
         #return tf
         curve = surf.gamma[self.toroidal_flux_idx]
         dl = jnp.roll(curve, -1, axis=0) - curve
-        A_vals = vmap(BiotSavart(self.coils_optimize).A)(curve)
+        A_vals = vmap(BiotSavart(self.coils).A)(curve)
         return jnp.sum(jnp.sum(A_vals * dl, axis=1))
 
     def _toroidal_flux_final(self, surf: SurfaceRZFourier) -> jnp.ndarray:
@@ -538,7 +533,7 @@ class QfmSurface_with_coils:
         #return tf
         curve = surf.gamma[-1]
         dl = jnp.roll(curve, -1, axis=0) - curve
-        A_vals = vmap(BiotSavart(self.coils_optimize).A)(curve)
+        A_vals = vmap(BiotSavart(self.coils).A)(curve)
         return jnp.sum(jnp.sum(A_vals * dl, axis=1))
 
 #    def _build_surface_with_x(self, surface: SurfaceRZFourier, x):
@@ -555,13 +550,13 @@ class QfmSurface_with_coils:
 #        return s
 
     def _build_surface_with_x(self, surface, x):
-        #rc_safe = device_get(surface.rc)
-        #zs_safe = device_get(surface.zs)
-        #x_safe  = device_get(x)
+        rc_safe = device_get(surface.rc)
+        zs_safe = device_get(surface.zs)
+        x_safe  = device_get(x)
 
         s = SurfaceRZFourier(
-            rc=surface.rc,
-            zs=surface.zs,
+            rc=rc_safe,
+            zs=zs_safe,
             nfp=int(surface.nfp),
             ntheta=int(surface.ntheta),
             nphi=int(surface.nphi),
@@ -570,18 +565,18 @@ class QfmSurface_with_coils:
             ntor=int(surface.ntor),
             close=True
         )
-        s.x = x
+        s.x = x_safe
         return s
 
-
     def _build_coils_with_x(self, coils, x):
+        x_safe  = x#device_get(x)
 
         c = Coils(
             curves=coils,
             currents= coils.currents[0:coils.dofs.shape[0]]
         )
-        c.x = x
-        return c          
+        c.x = x_safe
+        return c        
 
     # def objective(self, x):
     #     surf = self._build_surface_with_x(self.surface_optimize, x)
@@ -597,37 +592,52 @@ class QfmSurface_with_coils:
 
 
     def objective(self, x):
-        self.surface_optimize.x=x[0:len(self.surface_optimize.x)]
-        #self.coils_optimize.x=x[len(self.surface_optimize.x):] 
-        self.coils_optimize=self.coils_optimize.x=x[len(self.surface_optimize.x):]                     
-        N = self.surface_optimize.unitnormal
-        norm_N = jnp.linalg.norm(self.surface_optimize.normal, axis=2)
-        points = self.surface_optimize.gamma.reshape(-1, 3)
-        B = vmap(BiotSavart(self.coils_optimize).B)(points).reshape(N.shape)
+        surf = self.surface_optimize
+        coils=self.coils_optimize
+        x_surf_old = surf.x          
+        surf.x = x[0:len(surf.x)]
+        x_coils_old = coils.x
+        coils.x = x[len(surf.x):]              
+        N = surf.unitnormal
+        norm_N = jnp.linalg.norm(surf.normal, axis=2)
+        points = surf.gamma.reshape(-1, 3)
+        B = vmap(BiotSavart(coils).B)(points).reshape(N.shape)
         B_n = jnp.sum(B * N, axis=2)
         norm_B = jnp.linalg.norm(B, axis=2)
         value = jnp.sum(B_n**2 * norm_N) / jnp.sum(norm_B**2 * norm_N)
+        surf.x = x_surf_old
+        coils.x = x_coils_old
         return value
 
     def objective_constraint(self, x):
-        self.surface_optimize.x=x[0:len(self.surface_optimize.x)]
-        #self.coils_optimize.x=x[len(self.surface_optimize.x):] 
-        self.coils_optimize=self.coils_optimize.x=x[len(self.surface_optimize.x):]                 
-        N = self.surface_optimize.unitnormal
-        norm_N = jnp.linalg.norm(self.surface_optimize.normal, axis=2)
-        points = self.surface_optimize.gamma.reshape(-1, 3)
-        B = vmap(BiotSavart(self.coils_optimize).B)(points).reshape(N.shape)
+        surf = self.surface_optimize
+        coils=self.coils_optimize
+        x_surf_old = surf.x          
+        surf.x = x[0:len(surf.x)]
+        x_coils_old = coils.x
+        coils.x = x[len(surf.x):]              
+        N = surf.unitnormal
+        norm_N = jnp.linalg.norm(surf.normal, axis=2)
+        points = surf.gamma.reshape(-1, 3)
+        B = vmap(BiotSavart(coils).B)(points).reshape(N.shape)
         B_n = jnp.sum(B * N, axis=2)
         norm_B = jnp.linalg.norm(B, axis=2)
-        value = jnp.sum(B_n**2 * norm_N) / jnp.sum(norm_B**2 * norm_N)        
+        value = jnp.sum(B_n**2 * norm_N) / jnp.sum(norm_B**2 * norm_N)
+        surf.x = x_surf_old
+        coils.x = x_coils_old
         return jnp.abs(value-1.e-6)/1.e-6        
 
 
     def loss_coils(self, x):
-        self.surface_optimize.x=x[0:len(self.surface_optimize.x)]
-        #self.coils_optimize.x=x[len(self.surface_optimize.x):] 
-        self.coils_optimize=self.coils_optimize.x=x[len(self.surface_optimize.x):]      
-        val=self.coil_loss(self.coils_optimize.x)
+        surf = self.surface_optimize
+        coils=self.coils_optimize
+        x_surf_old = surf.x          
+        surf.x = x[0:len(surf.x)]
+        x_coils_old = coils.x
+        coils.x = x[len(surf.x):] 
+        val=self.coil_loss(coils.x)
+        surf.x = x_surf_old
+        coils.x = x_coils_old
         return val+self.objective(x)        
 
 
@@ -650,57 +660,91 @@ class QfmSurface_with_coils:
     #     return val
 
     def constraint(self, x):
-        self.surface_optimize.x=x[0:len(self.surface_optimize.x)]
-        #self.coils_optimize.x=x[len(self.surface_optimize.x):] 
-        self.coils_optimize=self.coils_optimize.x=x[len(self.surface_optimize.x):]      
+        surf = self.surface_optimize
+        coils=self.coils_optimize
+        x_surf_old = surf.x          
+        surf.x = x[0:len(surf.x)]
+        x_coils_old = coils.x
+        coils.x = x[len(surf.x):] 
 
         raw_c = {
-            "volume": self.surface_optimize.volume - self.targetlabel["volume"],
-            "area": self.surface_optimize.area - self.targetlabel["area"],
-            "toroidal_flux": self._toroidal_flux(self.surface_optimize) - self.targetlabel["toroidal_flux"],
+            "volume": surf.volume - self.targetlabel["volume"],
+            "area": surf.area - self.targetlabel["area"],
+            "toroidal_flux": self._toroidal_flux(surf) - self.targetlabel["toroidal_flux"],
         }[self.label]
 
         c = raw_c / jnp.abs(self.targetlabel[self.label])
+
+        surf.x = x_surf_old
+        coils.x = x_coils_old
         return c
 
 
 
     def constraint_area(self, x):
-        self.surface_optimize.x=x[0:len(self.surface_optimize.x)]
-        #self.coils_optimize.x=x[len(self.surface_optimize.x):] 
-        self.coils_optimize=self.coils_optimize.x=x[len(self.surface_optimize.x):]           
-        val = (self.surface_optimize.area - self.targetlabel["area"]) / jnp.abs(self.targetlabel["area"])
+        surf = self.surface_optimize
+        coils=self.coils_optimize
+        x_surf_old = surf.x          
+        surf.x = x[0:len(surf.x)]
+        x_coils_old = coils.x
+        coils.x = x[len(surf.x):] 
+        val = (surf.area - self.targetlabel["area"]) / jnp.abs(self.targetlabel["area"])
+
+        surf.x = x_surf_old
+        coils.x = x_coils_old
         return val
 
     def constraint_volume(self, x):
-        self.surface_optimize.x=x[0:len(self.surface_optimize.x)]
-        #self.coils_optimize.x=x[len(self.surface_optimize.x):] 
-        self.coils_optimize=self.coils_optimize.x=x[len(self.surface_optimize.x):]      
-        val = (self.surface_optimize.volume - self.targetlabel["volume"]) / jnp.abs(self.targetlabel["volume"])
+        surf = self.surface_optimize
+        coils=self.coils_optimize
+        x_surf_old = surf.x          
+        surf.x = x[0:len(surf.x)]
+        x_coils_old = coils.x
+        coils.x = x[len(surf.x):] 
+        val = (surf.volume - self.targetlabel["volume"]) / jnp.abs(self.targetlabel["volume"])
+
+        surf.x = x_surf_old
+        coils.x = x_coils_old
         return val        
 
 
   
 
     def constraint_flux(self, x):
-        self.surface_optimize.x=x[0:len(self.surface_optimize.x)]
-        #self.coils_optimize.x=x[len(self.surface_optimize.x):] 
-        self.coils_optimize=self.coils_optimize.x=x[len(self.surface_optimize.x):]      
-        val = (self._toroidal_flux(self.surface_optimize) - self.targetlabel["toroidal_flux"]) / jnp.abs(self.targetlabel["toroidal_flux"])
+        surf = self.surface_optimize
+        coils=self.coils_optimize
+        x_surf_old = surf.x          
+        surf.x = x[0:len(surf.x)]
+        x_coils_old = coils.x
+        coils.x = x[len(surf.x):] 
+        val = (self._toroidal_flux(surf) - self.targetlabel["toroidal_flux"]) / jnp.abs(self.targetlabel["toroidal_flux"])
+
+        surf.x = x_surf_old
+        coils.x = x_coils_old
         return val      
 
     def constraint_flux_final(self, x):
-        self.surface_optimize.x=x[0:len(self.surface_optimize.x)]
-        #self.coils_optimize.x=x[len(self.surface_optimize.x):] 
-        self.coils_optimize=self.coils_optimize.x=x[len(self.surface_optimize.x):]       
-        val = (self._toroidal_flux_final(self.surface_optimize) - self.targetlabel["toroidal_flux_final"]) / jnp.abs(self.targetlabel["toroidal_flux_final"])
+        surf = self.surface_optimize
+        coils=self.coils_optimize
+        x_surf_old = surf.x          
+        surf.x = x[0:len(surf.x)]
+        x_coils_old = coils.x
+        coils.x = x[len(surf.x):] 
+        val = (self._toroidal_flux_final(surf) - self.targetlabel["toroidal_flux_final"]) / jnp.abs(self.targetlabel["toroidal_flux_final"])
+        surf.x = x_surf_old
+        coils.x = x_coils_old
         return val
 
     def new_constraint(self, x,coil_constraint_idx: lambda x: 0.0):
-        self.surface_optimize.x=x[0:len(self.surface_optimize.x)]
-        #self.coils_optimize.x=x[len(self.surface_optimize.x):] 
-        self.coils_optimize=self.coils_optimize.x=x[len(self.surface_optimize.x):]        
-        val=coil_constraint_idx(self.coils_optimize.x)
+        surf = self.surface_optimize
+        coils=self.coils_optimize
+        #x_surf_old = surf.x          
+        #surf.x = x[0:len(surf.x)]
+        #x_coils_old = coils.x
+        coils.x = x[len(surf.x):] 
+        val=coil_constraint_idx(x[len(surf.x):])
+        #surf.x = x_surf_old
+        #coils.x = x_coils_old
         return val                  
 
     def penalty_objective(self, x, constraint_weight=1.0):
@@ -821,7 +865,7 @@ class QfmSurface_with_coils:
         #params to optimize
         x0_surf = jnp.array(self.surface_optimize.x if x0 is None else x0[0:len(self.surface_optimize.x)])
         x0_coils = jnp.array(self.coils_optimize.x if x0 is None else x0[len(self.surface_optimize.x):])
-        x0_total = jnp.concatenate([x0_surf,x0_coils])
+        x0 = jnp.concatenate([x0_surf,x0_coils])
         # params for alm
         penalty = 1.e-6 #Intial penalty values
         multiplier=0. #Initial lagrange multiplier values
@@ -855,9 +899,9 @@ class QfmSurface_with_coils:
                 alm.eq(partial(self.new_constraint,coil_constraint_idx=func),model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad))
 
         #Initializing lagrange multipliers
-        lagrange_params=constraint_alm.init(x0_total)
+        lagrange_params=constraint_alm.init(x0)
         #parameters are a tuple of the primal/main optimisation parameters and the lagrange multipliers
-        params = x0_total, lagrange_params
+        params = x0, lagrange_params
 
         ALM=alm.ALM_model_jaxopt_lbfgsb(constraint_alm,loss=self.loss_coils,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
@@ -880,9 +924,11 @@ class QfmSurface_with_coils:
             #print('lagrange',params[1])
             i=i+1
 
-        self.surface_optimize.x=params[0][0:len(self.surface_optimize.x)]# self._build_surface_with_x(self.surface_optimize, x_safe) 
-        self.coils_optimize.x=params[0][len(self.surface_optimize.x):]# self._build_surface_with_x(self.surface_optimize, x_safe)         
-        #self.coils_optimize=self._build_coils_with_x(self.coils_optimize, params[0][len(self.surface_optimize.x):])            
+
+        x_surf_safe = device_get(params[0][0:len(self.surface_optimize.x)])  # Move back to host
+        self.surface_optimize = self._build_surface_with_x(self.surface_optimize, x_surf_safe)        
+        x_coils_safe = device_get(params[0][len(self.surface_optimize.x):])  # Move back to host
+        self.surface_optimize = self._build_coils_with_x(self.coils_optimize, x_coils_safe)           
         return {
             "fun": info[0],
             "gradient": grad[0],

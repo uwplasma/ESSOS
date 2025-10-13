@@ -12,30 +12,12 @@ sharding = NamedSharding(mesh, PartitionSpec("dev", None))
 
 @partial(jit, static_argnames=['surface','field'])
 def toroidal_flux(surface, field, idx=0) -> jnp.ndarray:
-    curve = surface.gamma[idx]    
+    gamma = surface.gamma
+    curve = gamma[idx, :, :]
     dl = jnp.roll(curve, -1, axis=0) - curve
     A_vals = vmap(field.A)(curve)
     Adl = jnp.sum(A_vals * dl, axis=1) 
     tf = jnp.sum(Adl)
-    #curve = surface.gamma[idx]    
-    #dl = surface.gammadash_theta[idx]
-    #A_vals = vmap(field.A)(curve)
-    #Adl = jnp.sum(A_vals * dl, axis=1)/surface.ntheta 
-    #tf = jnp.sum(Adl)    
-    return tf
-
-@partial(jit, static_argnames=['surface','field'])
-def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
-    curve = surface.gamma[:,idx,:]    
-    dl = jnp.roll(curve, -1, axis=0) - curve
-    A_vals = vmap(field.A)(curve)
-    Adl = jnp.sum(A_vals * dl, axis=1) 
-    tf = jnp.sum(Adl)
-    #curve = surface.gamma[:,idx,:]    
-    #dl = surface.gammadash_phi[:,idx,:]
-    #A_vals = vmap(field.A)(curve)
-    #Adl = jnp.sum(A_vals * dl, axis=1)/surface.nphi 
-    #tf = jnp.sum(Adl)    
     return tf
 
 @partial(jit, static_argnames=['surface','field'])
@@ -48,8 +30,6 @@ def B_on_surface(surface, field):
     B_on_surface = jit(vmap(field.B), in_shardings=sharding, out_shardings=sharding)(gamma_sharded)
     B_on_surface = B_on_surface.reshape(nphi, ntheta, 3)
     return B_on_surface
-
-    
 
 @partial(jit, static_argnames=['surface','field'])
 def BdotN(surface, field):
@@ -371,16 +351,13 @@ class SurfaceRZFourier:
         m_keep = min(mpol_old, mpol)
         n_keep = min(ntor_old, ntor)
 
-        xm_old=self.xm
-        xn_old=self.xn
+        keep_index=(m_keep+1)*(2*n_keep+1)-n_keep
+
         self.xm =  jnp.repeat(jnp.arange(mpol+1), 2*ntor+1)[ntor:]
         self.xn = self.nfp*jnp.tile(jnp.arange(-ntor, ntor + 1), mpol+1)[ntor:]
         # Copy overlapping region
-        for l in range(len(self.xm)):
-            if self.xm[l]<=m_keep and jnp.abs(self.xn[l]/self.nfp)<=n_keep:
-                index=self.xm[l]*(ntor_old*2+1)-self.xn[l]//self.nfp
-                rc_new=rc_new.at[l].set(self.rc[index])
-                zs_new=zs_new.at[l].set(self.zs[index])
+        rc_new=rc_new.at[0:keep_index].set(self.rc[0:keep_index])
+        zs_new=zs_new.at[0:keep_index].set(self.zs[0:keep_index])
 
 
         # Update attributes
@@ -404,10 +381,12 @@ class SurfaceRZFourier:
         self.quadpoints_phi   = jnp.linspace(0, 2 * jnp.pi * end_val / div, num=nphi, endpoint=True if close else False)
         self.theta_2d, self.phi_2d = jnp.meshgrid(self.quadpoints_theta, self.quadpoints_phi)
 
-        self.angles = (jnp.einsum('i,jk->ijk', self.xm, self.theta_2d)- jnp.einsum('i,jk->ijk', self.xn, self.phi_2d))
+        self.angles = (
+            jnp.einsum('i,jk->ijk', self.xm, self.theta_2d)
+            - jnp.einsum('i,jk->ijk', self.xn, self.phi_2d)
+        )
         (self._gamma, self._gammadash_theta, self._gammadash_phi,
         self._normal, self._unitnormal) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
-
 
         # Recompute AbsB if available
         if hasattr(self, 'bmnc'):
@@ -630,14 +609,6 @@ def signed_distance_from_surface_extras(xyz, surface):
     sign_of_interiorpoint = jnp.sign(jnp.sum((a_point_in_the_surface-gammas[0, :])*n[0, :]))
     signed_dists = mindist * sign_of_interiorpoint
     return signed_dists
-
-
-
-def plot_scalar_on_flux_surface(surface, scalar_map):
-    '''
-        surface: the surface object in which to plot the scalar_map
-        scalar_map: a scalar_map as function of theta and phi
-    ''' 
 
 
 

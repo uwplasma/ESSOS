@@ -325,7 +325,13 @@ def loss_coil_length_new(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym
     return jnp.maximum(coil_length-max_coil_length,0.0)
 
 
-
+# @partial(jit, static_argnums=(0, 1))
+def loss_normB_axis_average_new(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True, npoints=15,target_B_on_axis=5.7):
+    field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)
+    R_axis=field.r_axis
+    phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
+    B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
+    return jnp.abs(jnp.average(B_axis)-target_B_on_axis)
 
 
 

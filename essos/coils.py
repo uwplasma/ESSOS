@@ -93,7 +93,7 @@ class Curves:
         assert jnp.size(new_dofs, 1) == 3
         assert jnp.size(new_dofs, 2) % 2 == 1
         self._dofs = new_dofs
-        self._order = jnp.size(new_dofs, 2)//2
+        self._order = jnp.size(new_dofs, 2)//2 #Order is the same as before, to change order a different method should be used
         self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
         self._set_gamma()
     
@@ -390,6 +390,7 @@ class Coils(Curves):
         self.dofs_curves = jnp.reshape(new_dofs_curves, (self.dofs_curves.shape))
         self.dofs_currents = new_dofs_currents
     
+
     @property
     def currents(self):
         return self._currents

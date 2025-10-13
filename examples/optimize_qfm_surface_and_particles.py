@@ -7,22 +7,21 @@ import matplotlib.pyplot as plt
 from time import time
 from jax import device_get
 
-from essos.surfaces import BdotN_over_B, toroidal_flux,poloidal_flux
+from essos.surfaces import BdotN_over_B, toroidal_flux
 from essos.surfaces import SurfaceRZFourier
 from essos.qfm import QfmSurface 
 from essos.fields import Vmec, BiotSavart
 
 # Load initial guess surface
-ntheta=64
-nphi=64
-mpol=6
-ntor=6
+ntheta=32
+nphi=32
+mpol=2
+ntor=2
 vmec = os.path.join('input_files','input.toroidal_surface')
-surf = SurfaceRZFourier(vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
-surf.change_resolution(mpol,ntor)
+surf = SurfaceRZFourier(vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True)
+#surf.change_resolution(2,2)
 
 initialsurf = SurfaceRZFourier(vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True)
-initialsurf.change_resolution(mpol,ntor)
 
 # Load target VMEC surface
 truevmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
@@ -31,7 +30,7 @@ truevmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', 'wout_Lan
 
 # Load coils and construct field
 from essos.coils import Coils_from_json
-coils = Coils_from_json("input_files/stellarator_coils_normal_40.json") # from optimize_coils_vmec_surface.py
+coils = Coils_from_json("input_files/qfm_test_coils.json") # from optimize_coils_vmec_surface.py
 field = BiotSavart(coils)
 
 # QFM optimization setup
@@ -45,23 +44,20 @@ elif method == 'slsqp':
 elif method == 'alm':
     tol = 1e-6
 
-maxiter = 20000
+maxiter = 1000
 constraint_weight = 1e-3
-factor=1.1
+
 
 initial_label_flux = toroidal_flux(surf, field)
-targetlabel_flux = toroidal_flux(truevmec.surface, field,idx=0)*factor
-targetlabel_flux_final = toroidal_flux(truevmec.surface, field,idx=-1)*factor
+targetlabel_flux = toroidal_flux(truevmec.surface, field)
+targetlabel_flux_final = toroidal_flux(truevmec.surface, field,idx=-1)
 
-initial_label_flux_poloidal = poloidal_flux(surf, field)
-targetlabel_flux_poloidal = poloidal_flux(truevmec.surface, field,idx=0)*factor
-targetlabel_flux_poloidal_final = poloidal_flux(truevmec.surface, field,idx=-1)*factor
 
-initial_label_volume = surf.volume*factor
+initial_label_volume = surf.volume
 targetlabel_volume = truevmec.surface.volume
 
 initial_label_area = surf.area
-targetlabel_area = truevmec.surface.area*factor
+targetlabel_area = truevmec.surface.area
 
 
 
@@ -106,16 +102,14 @@ print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e
 initial_area = surf.area
 initial_volume = surf.volume
 initial_tf = toroidal_flux(surf, field)
-initial_pf = poloidal_flux(surf, field)
 
 final_area = result['s'].area
 final_volume = result['s'].volume
 final_tf = toroidal_flux(result['s'], field)
-final_pf = poloidal_flux(result['s'], field)
 
-print(f"Initial labels -> area: {initial_area:.6e}, volume: {initial_volume:.6e}, toroidal_flux: {initial_tf:.6e},poloidal_flux: {initial_pf:.6e}")
-print(f"target label: {label}   target label value: {targetlabel_area:.6e}, {targetlabel_volume:.6e}, {targetlabel_flux:.6e}, {targetlabel_flux_poloidal:.6e}")
-print(f"Final labels   -> area: {final_area:.6e}, volume: {final_volume:.6e}, toroidal_flux: {final_tf:.6e}, poloidal_flux: {final_pf:.6e}")
+print(f"Initial labels -> area: {initial_area:.6e}, volume: {initial_volume:.6e}, toroidal_flux: {initial_tf:.6e}")
+print(f"target label: {label}   target label value: {targetlabel_area:.6e}, {targetlabel_volume:.6e}, {targetlabel_flux:.6e}")
+print(f"Final labels   -> area: {final_area:.6e}, volume: {final_volume:.6e}, toroidal_flux: {final_tf:.6e}")
 
 
 # Plot surfaces
@@ -130,7 +124,6 @@ ax3 = fig.add_subplot(133, projection='3d')
 
 
 initialsurf.plot(ax=ax1, show=False)
-#surf.plot(ax=ax2, show=False)
 truevmec.surface.plot(ax=ax2, show=False)
 result['s'].plot(ax=ax3, show=False)
 
@@ -208,65 +201,3 @@ ax.legend()
 ax.axis("equal")
 plt.tight_layout()
 plt.savefig('optimize_qfm_surface_poincare.png', dpi=300)
-
-from essos.surfaces import B_on_surface
-
-B_final= B_on_surface(result['s'], field)
-jac_cov=jnp.linalg.norm(jnp.einsum('ijk,ijk->ij',result['s'].normal, jnp.cross(result['s'].gammadash_theta,result['s'].gammadash_phi,axis=-1)),keepdims=True)
-grad_alpha_final = -jnp.cross(B_final, result['s'].unitnormal, axis=-1)
-grad_psi = jnp.cross(result['s'].gammadash_theta, result['s'].gammadash_phi, axis=-1)/jac_cov
-#grad_psi=jnp.true_divide(grad_psi,jnp.linalg.norm(grad_psi,axis=-1,keepdims=True))
-grad_theta = jnp.cross(result['s'].normal, result['s'].gammadash_phi, axis=-1)/jac_cov
-#grad_theta=jnp.true_divide(grad_theta,jnp.linalg.norm(grad_theta,axis=-1,keepdims=True))
-grad_phi = jnp.cross(result['s'].normal, result['s'].gammadash_theta, axis=-1)/jac_cov
-jacobian=jnp.einsum('ijk,ijk->ij',grad_psi, jnp.cross(grad_theta,grad_phi,axis=-1))
-#grad_phi=jnp.true_divide(grad_phi,jnp.linalg.norm(grad_phi,axis=-1,keepdims=True))
-e_phi=jnp.cross(grad_phi,grad_psi , axis=-1)
-B_contravariant_psi=jnp.einsum('ijk,ijk->ij',B_final, grad_psi)*jacobian
-B_contravariant_theta=jnp.einsum('ijk,ijk->ij',B_final, grad_theta)*jacobian
-B_contravariant_phi=jnp.einsum('ijk,ijk->ij',B_final, grad_phi)*jacobian
-iota=jnp.average(B_contravariant_theta)/jnp.average(B_contravariant_phi)#*result['s'].nfp
-modB=jnp.linalg.norm(B_final,axis=-1)
-
-
-fig, ax = plt.subplots(figsize=(6, 6))
-plt.contour(result['s'].phi_2d,result['s'].theta_2d, modB, levels=20, cmap='viridis') # Using 20 levels and 'viridis' colorma
-plt.colorbar()
-plt.savefig('modB.png', dpi=300)
-
-fig, ax = plt.subplots(figsize=(6, 6))
-plt.contour(result['s'].phi_2d,result['s'].theta_2d,B_contravariant_psi, levels=200, cmap='viridis') # Using 20 levels and 'viridis' colorma
-plt.colorbar()
-plt.savefig('Bsup_psi.png', dpi=300)
-
-fig, ax = plt.subplots(figsize=(6, 6))
-plt.contour(result['s'].phi_2d,result['s'].theta_2d,B_contravariant_theta, levels=200, cmap='viridis') # Using 20 levels and 'viridis' colorma
-plt.colorbar()
-plt.savefig('Bsup_theta.png', dpi=300)
-
-fig, ax = plt.subplots(figsize=(6, 6))
-plt.contour(result['s'].phi_2d,result['s'].theta_2d,B_contravariant_phi, levels=200, cmap='viridis') # Using 20 levels and 'viridis' colorma
-plt.colorbar()
-plt.savefig('Bsup_phi.png', dpi=300)
-
-
-fig, ax = plt.subplots(figsize=(6, 6))
-plt.contour(result['s'].phi_2d,result['s'].theta_2d, iota, levels=20, cmap='viridis') # Using 20 levels and 'viridis' colorma
-plt.colorbar()
-plt.savefig('iota.png', dpi=300)
-
-poloidal_flux(truevmec.surface, field,idx=40)/toroidal_flux(truevmec.surface, field,idx=40)
-
-
-fig, ax = plt.subplots(figsize=(6, 6))
-plt.contour(result['s'].phi_2d,result['s'].theta_2d,jacobian, levels=200, cmap='viridis') # Using 20 levels and 'viridis' colorma
-plt.colorbar()
-plt.savefig('jacobian.png', dpi=300)
-
-for i in range(truevmec.surface.nphi):
-    for j in range(truevmec.surface.ntheta):
-        pol_av=jnp.sum(poloidal_flux(truevmec.surface, field,idx=j)*jacobian[i,j])
-
-for i in range(truevmec.surface.nphi):
-    for j in range(truevmec.surface.ntheta):
-        tol_av=jnp.sum(toroidal_flux(truevmec.surface, field,idx=i)*jacobian[i,j])

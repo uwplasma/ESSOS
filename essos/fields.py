@@ -205,7 +205,7 @@ class BiotSavart_from_gamma():
 
 
 class Vmec():
-    def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus'):
+    def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus',s_vmec=1.0):
         self.wout_filename = wout_filename
         from netCDF4 import Dataset
         self.nc = Dataset(self.wout_filename)
@@ -233,7 +233,7 @@ class Vmec():
         self.mpol = int(jnp.max(self.xm)+1)
         self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
         self.range_torus = range_torus
-        self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
+        self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,s=s_vmec)
         self.Aminor_p = jnp.array(self.nc.variables["Aminor_p"][:])
         #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
         
