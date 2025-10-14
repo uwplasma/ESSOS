@@ -162,8 +162,7 @@ vmec.surface.plot(ax=ax1, show=False)
 coils_optimized.plot(ax=ax2, show=False)
 vmec.surface.plot(ax=ax2, show=False)
 plt.tight_layout()
-plt.show()
-
+plt.savefig('stochastic.pdf')
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
 # # Load the coils from a json file

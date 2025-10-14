@@ -31,8 +31,8 @@ shift_surface_plot_for_phi = jnp.pi
 plot_fieldlines_constant_phi = False
 show_coils_fitted_to_Fourier = False
 
-input_dir = os.path.join(os.path.dirname(__file__), 'input_files')
-output_dir = os.path.join(os.path.dirname(__file__), 'output_files')
+input_dir = os.path.join(os.path.dirname(__name__), 'input_files')
+output_dir = os.path.join(os.path.dirname(__name__), 'output_files')
 os.makedirs(output_dir, exist_ok=True)
 
 wout_filename = os.path.join(input_dir, 'wout_'+file_to_use+'.nc')
@@ -159,30 +159,25 @@ if plot_fieldlines_constant_phi:
     Z_phi = np.zeros_like(theta)
     phi1D_phi = jnp.linspace(2*jnp.pi/nphi/2, 2*jnp.pi + 2*jnp.pi/nphi/2, nphi, endpoint=False)
     phi_phi, _ = np.meshgrid(phi1D_phi, theta1D)
-        
     for jmn in range(b.mnmax):
         angle = b.xm[jmn] * theta - b.xn[jmn] * phi_phi
         sinangle = np.sin(angle)
         cosangle = np.cos(angle)
         R_phi += b.rmnc[jmn, js_phi] * cosangle
         Z_phi += b.zmns[jmn, js_phi] * sinangle
-
     X_phi = R_phi * np.cos(phi_phi)
     Y_phi = R_phi * np.sin(phi_phi)
     line_marker = dict(color='green', width=line_width)
-        
     index = 0
     for i, j, k in zip(X_phi.T, Y_phi.T, Z_phi.T):
         index += 1
         showlegend = False
         data.append(go.Scatter3d(x=i, y=j, z=k, mode='lines', line=line_marker, showlegend=showlegend, name=r"Constant $\phi$ contours"))
-
     coils_gamma_phi = np.zeros((ncoils, ntheta, 3))
     for i in range(ncoils):
         coils_gamma_phi[i, :, 0] = X_phi[:, i]
         coils_gamma_phi[i, :, 1] = Y_phi[:, i]
         coils_gamma_phi[i, :, 2] = Z_phi[:, i]
-        
     time0 = time()
     dofs_phi, gamma_uni_phi = fit_dofs_from_coils(coils_gamma_phi[:ncoils], order=order_Fourier_coils, n_segments=ntheta, assume_uniform=True)
     curves_phi = Curves(dofs=dofs_phi, n_segments=ntheta, nfp=b.nfp, stellsym=True)

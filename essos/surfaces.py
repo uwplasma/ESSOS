@@ -478,15 +478,11 @@ class SurfaceRZFourier:
         nml += 'LASYM = .FALSE.\n'
         nml += f'NFP = {self.nfp}\n'
 
-        for m in range(self.mpol + 1):
-            nmin = -self.ntor
-            if m == 0:
-                nmin = 0
-            for n in range(nmin, self.ntor + 1):
-                rc = self.rc[m, n + self.ntor]
-                zs = self.zs[m, n + self.ntor]
-                if jnp.abs(rc) > 0 or jnp.abs(zs) > 0:
-                    nml += f"RBC({n:4d},{m:4d}) ={rc:23.15e},    ZBS({n:4d},{m:4d}) ={zs:23.15e}\n"
+        # Copy overlapping region
+        for l in range(len(self.xm)):
+            rc = self.rc[l]
+            zs = self.zs[l]
+            nml += f"RBC({self.xn[l]:4d},{self.xm[l]:4d}) ={rc:23.15e},    ZBS({self.xn[l]:4d},{self.xm[l]:4d}) ={zs:23.15e}\n"
         nml += '/\n'
         
         with open(filename, 'w') as f:

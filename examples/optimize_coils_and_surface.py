@@ -122,7 +122,7 @@ def loss_coils_and_surface(x, surface_all, field_nearaxis, dofs_curves, currents
                n_segments=60, stellsym=True, max_coil_curvature=0.5, target_B_on_surface=5.7):
     
     field=field_from_dofs(x[:-len(surface_all.x)-len(field_nearaxis.x)] ,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym)     
-    surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
+    surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta,mpol=surface_all.mpol,ntor=surface_all.ntor)
     surface.dofs = x[-len(surface_all.x)-len(field_nearaxis.x):-len(field_nearaxis.x)]
     
     field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(x[-len(field_nearaxis.x):], field_nearaxis)
@@ -232,8 +232,7 @@ surface_optimized.plot(ax=ax2, show=False)
 field_nearaxis_optimized.plot(r=major_radius_coils/12, ax=ax2, show=False)
 # tracing_optimized.plot(ax=ax2, show=False)
 plt.tight_layout()
-plt.show()
-
+plt.savefig('opt_coils_surf.pdf')
 # Save the surface to a VMEC file
 surface_optimized.to_vmec('input.optimized')
 
@@ -244,6 +243,7 @@ field_nearaxis_initial.to_vtk('initial_field_nearaxis', r=major_radius_coils/12,
 surface_optimized.to_vtk('optimized_surface', field=BiotSavart(coils_optimized))
 coils_optimized.to_vtk('optimized_coils')
 field_nearaxis_optimized.to_vtk('optimized_field_nearaxis', r=major_radius_coils/12, field=BiotSavart(coils_optimized))
+
 # tracing_initial.to_vtk('initial_tracing')
 # tracing_optimized.to_vtk('optimized_tracing')
 

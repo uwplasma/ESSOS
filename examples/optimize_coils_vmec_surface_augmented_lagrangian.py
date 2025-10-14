@@ -16,7 +16,7 @@ import essos.augmented_lagrangian as alm
 from functools import partial
 
 # Optimization parameters
-maximum_function_evaluations=1000
+maximum_function_evaluations=100
 max_coil_length = 40
 max_coil_curvature = 0.5
 B_on_axis=5.7
@@ -176,7 +176,7 @@ coils_optimized_alm.plot(ax=ax2, show=False,color='orange', label='Optimized wit
 vmec.surface.plot(ax=ax2, show=False)
 plt.legend()
 plt.tight_layout()
-plt.savefig('comparison')
+plt.show()
 
 # # Save the coils to a json file
 coils_optimized_alm.to_json("stellarator_coils_alm.json")
@@ -198,87 +198,87 @@ coils_optimized.to_json("stellarator_coils.json")
 
 
 
-# # Field line tracing
-from jax import block_until_ready
-from essos.dynamics import Tracing
+# # # Field line tracing
+# from jax import block_until_ready
+# from essos.dynamics import Tracing
 
 
-field_optimized=BiotSavart(coils_optimized)
-field_optimized_alm=BiotSavart(coils_optimized_alm)
-tmax = 100000000000
-nfieldlines_per_core = 13
-nfieldlines = nfieldlines_per_core * number_of_processors_to_use
-R0 = jnp.linspace(12.2, 13.5, nfieldlines)
-trace_tolerance = 1e-7
-num_steps = 60000
+# field_optimized=BiotSavart(coils_optimized)
+# field_optimized_alm=BiotSavart(coils_optimized_alm)
+# tmax = 100000000000
+# nfieldlines_per_core = 13
+# nfieldlines = nfieldlines_per_core * number_of_processors_to_use
+# R0 = jnp.linspace(12.2, 13.5, nfieldlines)
+# trace_tolerance = 1e-7
+# num_steps = 60000
 
-Z0 = jnp.zeros(nfieldlines)
-phi0 = jnp.zeros(nfieldlines)
-initial_xyz = jnp.array([R0 * jnp.cos(phi0), R0 * jnp.sin(phi0), Z0]).T
+# Z0 = jnp.zeros(nfieldlines)
+# phi0 = jnp.zeros(nfieldlines)
+# initial_xyz = jnp.array([R0 * jnp.cos(phi0), R0 * jnp.sin(phi0), Z0]).T
 
-time0 = time()
-tracing = block_until_ready(Tracing(
-    field=field_optimized,
-    model='FieldLineAdaptative',
-    initial_conditions=initial_xyz,
-    maxtime=tmax,
-    times_to_trace=num_steps,
-    atol=trace_tolerance,
-    rtol=trace_tolerance
-))
-
-
-tracing_alm = block_until_ready(Tracing(
-    field=field_optimized_alm,
-    model='FieldLineAdaptative',
-    initial_conditions=initial_xyz,
-    maxtime=tmax,
-    times_to_trace=num_steps,
-    atol=trace_tolerance,
-    rtol=trace_tolerance
-))
-print(f"ESSOS tracing took {time() - time0:.2f} seconds")
+# time0 = time()
+# tracing = block_until_ready(Tracing(
+#     field=field_optimized,
+#     model='FieldLineAdaptative',
+#     initial_conditions=initial_xyz,
+#     maxtime=tmax,
+#     times_to_trace=num_steps,
+#     atol=trace_tolerance,
+#     rtol=trace_tolerance
+# ))
 
 
-def compute_rz_on_phi(surface, theta, phi=0.0):
-    angles = jnp.outer(theta, surface.xm) - phi * surface.xn
-    R = jnp.sum(surface.rmnc_interp * jnp.cos(angles), axis=1)
-    Z = jnp.sum(surface.zmns_interp * jnp.sin(angles), axis=1)
-    return R, Z
+# tracing_alm = block_until_ready(Tracing(
+#     field=field_optimized_alm,
+#     model='FieldLineAdaptative',
+#     initial_conditions=initial_xyz,
+#     maxtime=tmax,
+#     times_to_trace=num_steps,
+#     atol=trace_tolerance,
+#     rtol=trace_tolerance
+# ))
+# print(f"ESSOS tracing took {time() - time0:.2f} seconds")
 
 
-theta = jnp.linspace(0, 2 * jnp.pi, 200)
-
-# # Contours from true VMEC surface
-R0_true, Z0_true = compute_rz_on_phi(vmec.surface, theta, phi=0.0)
-R90_true, Z90_true = compute_rz_on_phi(vmec.surface, theta, phi=jnp.pi/2)
-
-fig, ax = plt.subplots(figsize=(6, 6))
-
-tracing.poincare_plot(ax=ax, show=False, shifts=[0, jnp.pi / 2])
-ax.plot(R0_true, Z0_true, color='blue', linewidth=1.2, label=r"True VMEC @ $\phi = 0$")
-ax.plot(R90_true, Z90_true, color='blue', linestyle='--', linewidth=1.2, label=r"True VMEC @ $\phi = \pi/2$")
-
-ax.set_xlabel("R")
-ax.set_ylabel("Z")
-ax.set_title("Poincaré + Surfaces Comparison @ φ = 0 and π/2")
-ax.legend()
-ax.axis("equal")
-plt.tight_layout()
-plt.savefig('poincare_coils_normal.png', dpi=300)
+# def compute_rz_on_phi(surface, theta, phi=0.0):
+#     angles = jnp.outer(theta, surface.xm) - phi * surface.xn
+#     R = jnp.sum(surface.rmnc_interp * jnp.cos(angles), axis=1)
+#     Z = jnp.sum(surface.zmns_interp * jnp.sin(angles), axis=1)
+#     return R, Z
 
 
+# theta = jnp.linspace(0, 2 * jnp.pi, 200)
 
-fig, ax = plt.subplots(figsize=(6, 6))
+# # # Contours from true VMEC surface
+# R0_true, Z0_true = compute_rz_on_phi(vmec.surface, theta, phi=0.0)
+# R90_true, Z90_true = compute_rz_on_phi(vmec.surface, theta, phi=jnp.pi/2)
 
-tracing_alm.poincare_plot(ax=ax, show=False, shifts=[0, jnp.pi / 2])
-ax.plot(R0_true, Z0_true, color='blue', linewidth=1.2, label=r"True VMEC @ $\phi = 0$")
-ax.plot(R90_true, Z90_true, color='blue', linestyle='--', linewidth=1.2, label=r"True VMEC @ $\phi = \pi/2$")
+# fig, ax = plt.subplots(figsize=(6, 6))
 
-ax.set_xlabel("R")
-ax.set_ylabel("Z")
-ax.set_title("Poincaré + Surfaces Comparison @ φ = 0 and π/2")
-ax.legend()
-ax.axis("equal")
-plt.tight_layout()
-plt.savefig('poincare_coils_alm.png', dpi=300)
+# tracing.poincare_plot(ax=ax, show=False, shifts=[0, jnp.pi / 2])
+# ax.plot(R0_true, Z0_true, color='blue', linewidth=1.2, label=r"True VMEC @ $\phi = 0$")
+# ax.plot(R90_true, Z90_true, color='blue', linestyle='--', linewidth=1.2, label=r"True VMEC @ $\phi = \pi/2$")
+
+# ax.set_xlabel("R")
+# ax.set_ylabel("Z")
+# ax.set_title("Poincaré + Surfaces Comparison @ φ = 0 and π/2")
+# ax.legend()
+# ax.axis("equal")
+# plt.tight_layout()
+# plt.show()
+
+
+
+# fig, ax = plt.subplots(figsize=(6, 6))
+
+# tracing_alm.poincare_plot(ax=ax, show=False, shifts=[0, jnp.pi / 2])
+# ax.plot(R0_true, Z0_true, color='blue', linewidth=1.2, label=r"True VMEC @ $\phi = 0$")
+# ax.plot(R90_true, Z90_true, color='blue', linestyle='--', linewidth=1.2, label=r"True VMEC @ $\phi = \pi/2$")
+
+# ax.set_xlabel("R")
+# ax.set_ylabel("Z")
+# ax.set_title("Poincaré + Surfaces Comparison @ φ = 0 and π/2")
+# ax.legend()
+# ax.axis("equal")
+# plt.tight_layout()
+# plt.show()

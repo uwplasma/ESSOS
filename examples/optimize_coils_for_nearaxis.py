@@ -73,7 +73,7 @@ tracing_initial.plot(ax=ax1, show=False)
 coils_optimized.plot(ax=ax2, show=False)
 field.plot(ax=ax2, show=False, alpha=0.2)
 tracing_optimized.plot(ax=ax2, show=False)
-plt.show()
+plt.savefig('coils_for_NAE.pdf')
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
