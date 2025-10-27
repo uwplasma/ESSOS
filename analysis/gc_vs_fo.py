@@ -36,7 +36,7 @@ particles_traped = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, 
 particles = particles_passing.join(particles_traped, field=field)
 
 # Tracing parameters
-tmax = 1e-3
+tmax = 1e-5
 trace_tolerance = 1e-14
 dt_gc = 1e-7
 dt_fo = 1e-9
@@ -46,15 +46,15 @@ num_steps_fo = int(tmax/dt_fo)
 # Trace in ESSOS
 time0 = time()
 tracing_gc = Tracing(field=field, model='GuidingCenter', particles=particles,
-                  maxtime=tmax, timestep=num_steps_gc, atol=trace_tolerance, rtol=trace_tolerance,
+                  maxtime=tmax, timestep=dt_gc, atol=trace_tolerance, rtol=trace_tolerance,
                   times_to_trace=200)
 trajectories_guidingcenter = block_until_ready(tracing_gc.trajectories)
 print(f"ESSOS guiding center tracing took {time()-time0:.2f} seconds")
 
 time0 = time()
 tracing_fo = Tracing(field=field, model='FullOrbit', particles=particles, maxtime=tmax,
-                     timestep=num_steps_fo, atol=trace_tolerance, rtol=trace_tolerance,
-                     times_to_trace=200)
+                     timestep=dt_fo, atol=trace_tolerance, rtol=trace_tolerance,
+                     times_to_trace=600)
 
 block_until_ready(tracing_fo.trajectories)
 print(f"ESSOS full orbit tracing took {time()-time0:.2f} seconds")

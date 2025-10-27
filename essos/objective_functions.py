@@ -8,7 +8,7 @@ from functools import partial
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart,BiotSavart_from_gamma
 from essos.surfaces import BdotN_over_B, BdotN
-from essos.coils import Curves, Coils,compute_curvature
+from essos.coils import Curves, Coils
 from essos.optimization import new_nearaxis_from_x_and_old_nearaxis
 from essos.constants import mu_0
 from essos.coil_perturbation import perturb_curves_systematic, perturb_curves_statistic
@@ -292,9 +292,9 @@ def loss_coil_curvature(coils, max_coil_curvature=0):
     return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
 
 def compute_candidates(coils, min_separation):
-    centers = coils.curves[:, :, 0]
-    a_n = coils.curves[:, :, 2 : 2*coils.order+1 : 2]
-    b_n = coils.curves[:, :, 1 : 2*coils.order : 2]
+    centers = coils.curves.curves[:, :, 0]
+    a_n = coils.curves.curves[:, :, 2 : 2*coils.order+1 : 2]
+    b_n = coils.curves.curves[:, :, 1 : 2*coils.order : 2]
     radii = jnp.sum(jnp.linalg.norm(a_n, axis=1)+jnp.linalg.norm(b_n, axis=1), axis=1)
 
     i_vals, j_vals = jnp.triu_indices(len(coils), k=1)
@@ -570,7 +570,7 @@ def loss_lorentz_force_coils(x,dofs_curves,currents_scale,nfp,n_segments=60,stel
 def lp_force_pure(index,gamma, gamma_dash,gamma_dashdash,currents,quadpoints,p, threshold):
     """Pure function for minimizing the Lorentz force on a coil.
     """
-    regularization = regularization_circ(1./jnp.average(compute_curvature( gamma_dash.at[index].get(), gamma_dashdash.at[index].get())))
+    regularization = regularization_circ(1./jnp.average(Curves.compute_curvature( gamma_dash.at[index].get(), gamma_dashdash.at[index].get())))
     B_mutual=jax.vmap(BiotSavart_from_gamma(jnp.roll(gamma, -index, axis=0)[1:],
                                  jnp.roll(gamma_dash, -index, axis=0)[1:],
                                  jnp.roll(gamma_dashdash, -index, axis=0)[1:],

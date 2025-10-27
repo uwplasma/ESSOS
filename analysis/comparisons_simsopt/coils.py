@@ -80,6 +80,7 @@ for nfp, curves_stel, currents_stel, name in zip(nfp_array, curves_array, curren
     [curve.gammadash() for curve in curves_simsopt]
     [curve.gammadashdash() for curve in curves_simsopt]
     coils_essos.gamma
+    coils_essos.reset_cache()
     
     # Running the second time for coils characteristics comparison
     start_time = time()
