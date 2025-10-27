@@ -117,7 +117,7 @@ class Curves:
 
     # curves property
     @property
-    def all_curves(self):
+    def curves(self):
         if self._curves is None:
             self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
         return self._curves
@@ -695,3 +695,101 @@ def apply_symmetries_to_currents(base_currents, nfp, stellsym):
                 current = -base_currents[i] if flip else base_currents[i]
                 currents.append(current)
     return jnp.array(currents)
+
+def _resample_closed_curve_uniform_one(g: jnp.ndarray, n_segments: int) -> jnp.ndarray:
+    """
+    One-curve arclength resample to n_segments points on t∈[0,1), piecewise linear.
+    g: (M,3) closed curve (first≈last not required; we close internally).
+    Returns: (n_segments,3)
+    """
+    # Close the loop
+    g0 = g[0:1, :]
+    g_ext = jnp.concatenate([g, g0], axis=0)           # (M+1,3)
+    seg = g_ext[1:] - g_ext[:-1]                       # (M,3)
+    seg_len = jnp.linalg.norm(seg, axis=1)             # (M,)
+    cum = jnp.concatenate([jnp.array([0.0]), jnp.cumsum(seg_len)], axis=0)  # (M+1,)
+    total = cum[-1]
+    # Uniform targets in arclength (exclude total to avoid duplicate)
+    s_targets = jnp.linspace(0.0, total, n_segments, endpoint=False)  # (n_segments,)
+    # For each s_t, find i with cum[i] <= s_t < cum[i+1]
+    idx = jnp.searchsorted(cum, s_targets, side='right') - 1          # (n_segments,)
+    idx = jnp.clip(idx, 0, seg.shape[0]-1)
+    s0 = cum[idx]
+    s1 = cum[idx+1]
+    w = (s_targets - s0) / jnp.maximum(s1 - s0, 1e-20)               # (n_segments,)
+    p0 = g_ext[idx]
+    p1 = g_ext[idx+1]
+    return p0 + w[:, None] * (p1 - p0)                               # (n_segments,3)
+
+def _resample_closed_curve_uniform_batch(gammas: jnp.ndarray, n_segments: int) -> jnp.ndarray:
+    """
+    Batch arclength resample.
+    gammas: (Ncoils, M, 3) (all curves same M; if not, pre-interp in index space).
+    Returns: (Ncoils, n_segments, 3)
+    """
+    return vmap(_resample_closed_curve_uniform_one, in_axes=(0, None))(gammas, n_segments)
+
+@partial(jit, static_argnames=('order',))
+def _fit_real_fourier_batch(gamma_uni: jnp.ndarray, order: int) -> jnp.ndarray:
+    """
+    gamma_uni: (Ncoils, Nseg, 3), samples at t_j = j/Nseg, j=0..Nseg-1
+    Returns dofs: (Ncoils, 3, 2*order+1) with [a0, sin1, cos1, ..., sinK, cosK].
+    """
+    Ncoils, Nseg, _ = gamma_uni.shape        # Nseg is static if n_segments was static upstream
+    Kmax = min(order, Nseg // 2)             # <-- Python int (static)
+
+    g = jnp.transpose(gamma_uni, (0, 2, 1))  # (Ncoils, 3, Nseg)
+    F = jnp.fft.rfft(g, axis=-1) / Nseg      # (Ncoils, 3, Nseg//2 + 1)
+
+    a0 = F[..., 0].real                      # (Ncoils, 3)
+
+    # Static slice (OK under jit)
+    Fk = F[..., 1:1 + Kmax]                  # (Ncoils, 3, Kmax)
+
+    cos_k =  2.0 * Fk.real                   # (Ncoils, 3, Kmax)
+    sin_k = -2.0 * Fk.imag                   # (Ncoils, 3, Kmax)
+
+    # Pad to 'order' if needed (pad width is also static here)
+    if Kmax < order:
+        pad = order - Kmax
+        zshape = (cos_k.shape[0], cos_k.shape[1], pad)
+        z = jnp.zeros(zshape, dtype=gamma_uni.dtype)
+        cos_k = jnp.concatenate([cos_k, z], axis=-1)   # (Ncoils, 3, order)
+        sin_k = jnp.concatenate([sin_k, z], axis=-1)   # (Ncoils, 3, order)
+
+    inter = jnp.empty((Ncoils, 3, 2*order), dtype=gamma_uni.dtype)
+    inter = inter.at[..., 0::2].set(sin_k)   # sin₁, sin₂, ...
+    inter = inter.at[..., 1::2].set(cos_k)   # cos₁, cos₂, ...
+
+    dofs = jnp.concatenate([a0[..., None], inter], axis=-1)  # (Ncoils, 3, 2*order+1)
+    return dofs
+
+@partial(jit, static_argnames=('order','n_segments','assume_uniform'))
+def fit_dofs_from_coils(
+    coils_gamma: jnp.ndarray,
+    order: int,
+    n_segments: int,
+    assume_uniform: bool = False,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Fast path (batched + JIT + rFFT).
+    coils_gamma: (Ncoils, M, 3) JAX array. If M != n_segments and assume_uniform=True,
+                 curves are uniformly subsampled in index space. If assume_uniform=False,
+                 do arclength resampling (slower but accurate).
+    Returns:
+      dofs: (Ncoils, 3, 2*order+1)
+      gamma_resampled: (Ncoils, n_segments, 3)
+    """
+    Ncoils, M, _ = coils_gamma.shape
+    if assume_uniform:
+        if M == n_segments:
+            gamma_uni = coils_gamma
+        else:
+            # uniform subsampling in index space (fast)
+            idx = jnp.floor(jnp.linspace(0, M, n_segments, endpoint=False)).astype(int) % M
+            gamma_uni = coils_gamma[:, idx, :]
+    else:
+        gamma_uni = _resample_closed_curve_uniform_batch(coils_gamma, n_segments)  # arclength (vmapped)
+
+    dofs = _fit_real_fourier_batch(gamma_uni, order)  # rFFT-based fit
+    return dofs, gamma_uni

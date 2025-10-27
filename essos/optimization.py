@@ -64,7 +64,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
             dofs_currents = result.x[len_dofs_curves:-len(surface_all.x)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
-            new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
+            new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta,mpol=surface_all.mpol,ntor=surface_all.ntor)
             new_surface.dofs = result.x[-len(surface_all.x):]
             return new_coils, new_surface
         elif 'surface_all' in kwargs and 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['surface_all'].x) + len(kwargs['field_nearaxis'].x):
@@ -73,7 +73,7 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
             dofs_currents = result.x[len_dofs_curves:-len(surface_all.x)-len(field_nearaxis.x)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
-            new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta)
+            new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta,mpol=surface_all.mpol,ntor=surface_all.ntor)
             new_surface.dofs = result.x[-len(surface_all.x)-len(field_nearaxis.x):-len(field_nearaxis.x)]
             new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(result.x[-len(field_nearaxis.x):], field_nearaxis)
             return new_coils, new_surface, new_field_nearaxis

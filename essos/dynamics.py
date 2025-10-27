@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
-from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter
+from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
 from essos.coils import Coils
@@ -517,6 +517,7 @@ class Tracing():
         self.particles = particles
         self.species=species
         self.tag_gc=tag_gc
+        self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
@@ -663,7 +664,7 @@ class Tracing():
                     #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
                     max_steps=10000000000,
                     event = Event(self.condition),
-                    progress_meter=TqdmProgressMeter(),                    
+                    progress_meter=self.progress_meter,
                 ).ys
             elif self.model == 'GuidingCenterCollisionsMuAdaptative':
                 import warnings
@@ -689,7 +690,7 @@ class Tracing():
                     stepsize_controller=ClipStepSizeController(controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,dtmin=dt0,dtmax=1.e-4,force_dtmin=True),step_ts=self.times,store_rejected_steps=self.rejected_steps),
                     max_steps=10000000000,
                     event = Event(self.condition),
-                    progress_meter=TqdmProgressMeter(),
+                    progress_meter=self.progress_meter,
                 ).ys     
             elif self.model == 'GuidingCenterCollisionsMuFixed':
                 import warnings
@@ -713,7 +714,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     max_steps=10000000000,
                     event = Event(self.condition),
-                    progress_meter=TqdmProgressMeter(),
+                    progress_meter=self.progress_meter,
                 ).ys       
             elif self.model == 'GuidingCenterCollisionsMuIto':
                 import warnings
@@ -737,7 +738,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     max_steps=10000000000,
                     event = Event(self.condition),
-                    progress_meter=TqdmProgressMeter(),
+                    progress_meter=self.progress_meter,
                 ).ys                                       
             elif self.model == 'FullOrbitCollisions':
                 import warnings
@@ -763,7 +764,7 @@ class Tracing():
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
                     max_steps=10000000000,
                     event = Event(self.condition),
-                    progress_meter=TqdmProgressMeter()                   
+                    progress_meter=self.progress_meter,
                 ).ys          
             elif self.model == 'GuidingCenterAdaptative' :  
                 import warnings
@@ -774,12 +775,12 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Tsit5(),
+                    solver=diffrax.Dopri8(),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    progress_meter=TqdmProgressMeter(),
+                    progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
                     max_steps=10000000000,
                     event = Event(self.condition)
@@ -793,12 +794,12 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Tsit5(),
+                    solver=diffrax.Dopri8(),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    progress_meter=TqdmProgressMeter(),
+                    progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
                     max_steps=10000000000,
                     event = Event(self.condition)
@@ -813,19 +814,19 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Tsit5(),
+                    solver=diffrax.Dopri8(),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=True,
                     # adjoint=DirectAdjoint(),
-                    progress_meter=TqdmProgressMeter(),
+                    progress_meter=self.progress_meter,
                     max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys
             return trajectory
         
         return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
-            device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
+                    device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
         #x=jax.device_put(self.initial_conditions, sharding)
         #y=jax.device_put(self.particles.random_keys, sharding_index)        
         #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
