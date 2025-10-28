@@ -121,46 +121,56 @@ class Curves:
         if self._curves is None:
             self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
         return self._curves
-    
-    # compute_curvature static method
-    @staticmethod
-    def compute_curvature(gammadash, gammadashdash):
-        return jnp.linalg.norm(jnp.cross(gammadash, gammadashdash, axis=1), axis=1) / jnp.linalg.norm(gammadash, axis=1)**3
 
     # _compute_gamma method
     @jit
     def _compute_gamma(self):
-        def fori_createdata(order_index: int, data: jnp.ndarray) -> jnp.ndarray:
-            return data[0] + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order_index - 1],                             jnp.sin(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order_index],                             jnp.cos(2 * jnp.pi * order_index * self.quadpoints)), \
-                   data[1] + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order_index - 1],  2*jnp.pi   *order_index   *jnp.cos(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order_index], -2*jnp.pi   *order_index   *jnp.sin(2 * jnp.pi * order_index * self.quadpoints)), \
-                   data[2] + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order_index - 1], -4*jnp.pi**2*order_index**2*jnp.sin(2 * jnp.pi * order_index * self.quadpoints)) + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order_index], -4*jnp.pi**2*order_index**2*jnp.cos(2 * jnp.pi * order_index * self.quadpoints))
-        
-        gamma0          = jnp.einsum("ij,k->ikj", self.curves[:, :, 0], jnp.ones(self.n_segments))
-        gamma_dash0     = jnp.zeros((jnp.size(self.curves, 0), self.n_segments, 3))
-        gamma_dashdash0 = jnp.zeros((jnp.size(self.curves, 0), self.n_segments, 3))
+        def create_data(order: int) -> jnp.ndarray:
+            return jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order - 1], jnp.sin(2 * jnp.pi * order * self.quadpoints)) \
+                 + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order], jnp.cos(2 * jnp.pi * order * self.quadpoints))
+        gamma_0 = jnp.einsum("ij,k->ikj", self.curves[:, :, 0], jnp.ones(self.n_segments))
+        gamma_n = vmap(create_data)(jnp.arange(1, self.order+1))
+        return gamma_0 + jnp.sum(gamma_n, axis=0)
 
-        gamma, gamma_dash, gamma_dashdash = fori_loop(1, self.order+1, fori_createdata, (gamma0, gamma_dash0, gamma_dashdash0))
-        return gamma, gamma_dash, gamma_dashdash
-    
     # gamma property
     @property
     def gamma(self):
         if self._gamma is None:
-            self._gamma, self._gamma_dash, self._gamma_dashdash = self._compute_gamma()
+            self._gamma = self._compute_gamma()
         return self._gamma
+
+    # _compute_gamma_dash method
+    @jit
+    def _compute_gamma_dash(self):
+        def create_data(order: int) -> jnp.ndarray:
+            return jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order - 1], 2*jnp.pi * order * jnp.cos(2 * jnp.pi * order * self.quadpoints)) \
+                 + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order], -2 * jnp.pi * order * jnp.sin(2 * jnp.pi * order * self.quadpoints))
+        gamma_dash_0 = jnp.zeros((jnp.size(self.curves, 0), self.n_segments, 3))
+        gamma_dash_n = vmap(create_data)(jnp.arange(1, self.order+1))
+        return gamma_dash_0 + jnp.sum(gamma_dash_n, axis=0)
 
     # gamma_dash property
     @property
     def gamma_dash(self):
         if self._gamma_dash is None:
-            self._gamma, self._gamma_dash, self._gamma_dashdash = self._compute_gamma()
+            self._gamma_dash = self._compute_gamma_dash()
         return self._gamma_dash
+
+    # _compute_gamma_dashdash method
+    @jit
+    def _compute_gamma_dashdash(self):
+        def create_data(order: int) -> jnp.ndarray:
+            return jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order - 1], -4*jnp.pi**2 * order**2 * jnp.sin(2 * jnp.pi * order * self.quadpoints)) \
+                 + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order], -4*jnp.pi**2 * order**2 * jnp.cos(2 * jnp.pi * order * self.quadpoints))
+        gamma_dashdash_0 = jnp.zeros((jnp.size(self.curves, 0), self.n_segments, 3))
+        gamma_dashdash_n = vmap(create_data)(jnp.arange(1, self.order+1))
+        return gamma_dashdash_0 + jnp.sum(gamma_dashdash_n, axis=0)
 
     # gamma_dashdash property
     @property
     def gamma_dashdash(self):
         if self._gamma_dashdash is None:
-            self._gamma, self._gamma_dash, self._gamma_dashdash = self._compute_gamma()
+            self._gamma_dashdash = self._compute_gamma_dashdash()
         return self._gamma_dashdash
 
     # length property
@@ -170,6 +180,12 @@ class Curves:
             self._length = jnp.mean(jnp.linalg.norm(self.gamma_dash, axis=2), axis=1)
         return self._length
     
+    # compute_curvature static method
+    @staticmethod
+    @jit
+    def compute_curvature(gammadash, gammadashdash):
+        return jnp.linalg.norm(jnp.cross(gammadash, gammadashdash, axis=1), axis=1) / jnp.linalg.norm(gammadash, axis=1)**3
+
     # curvature property
     @property
     def curvature(self):
@@ -358,8 +374,8 @@ class Coils:
         
     """
     def __init__(self, curves: Curves, currents: jnp.ndarray):
-        if hasattr(curves, 'n_base_curves') and hasattr(currents, 'size'):
-            assert curves.n_base_curves == currents.size, "Number of base curves and number of currents must be the same"
+        # if hasattr(curves, 'n_base_curves') and hasattr(currents, 'size'):
+        #     assert curves.n_base_curves == currents.size, "Number of base curves and number of currents must be the same"
 
         self.curves = curves
         self._dofs_currents_raw = currents  # Non-normalized base currents
