@@ -13,11 +13,12 @@ from essos.qfm import QfmSurface
 from essos.fields import Vmec, BiotSavart
 
 # Load initial guess surface
-ntheta=128
-nphi=128
-mpol=5
-ntor=5
-
+ntheta=60
+nphi=60
+mpol=7
+ntor=7
+mpol_cut=7
+ntor_cut=1
 # # Load coils and field
 # json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'QH_simple_scaled.json')
 # coils = Coils_from_simsopt(json_file,nfp=4)
@@ -36,60 +37,48 @@ ntor=5
 #initialsurf.change_resolution(mpol,ntor)
 
 
-filename='wout_LandremanPaul2021_QA_reactorScale_lowres.nc'
-filename_vmec=os.path.join('input_files','input.toroidal_surface')
-#filename='wout_QH_simple_scaled.nc'
+#filename='wout_LandremanPaul2021_QA_reactorScale_lowres.nc'
+filename_vmec=os.path.join('input_files','input.toroidal_surface_nfp4')
+filename='wout_QH_simple_scaled.nc'
+filename_coils='QH_simple_scaled.json'
 # Load target VMEC surface
 #truevmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
 #                ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
+#truevmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
+
 truevmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
+vmec_s1p0 = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
 
-#surf_to_opt=os.path.join('input_files','input_files', filename_vmec)
+#surf_to_opt=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
 
-#surf = surf_to_opt.surface
-#surf.change_resolution(2,2)
-#surf.change_resolution(mpol,ntor)
-
-
-
-#initial=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename_vmec),
-#                ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
-#initialsurf = initial.surface
-#initialsurf.change_resolution(2,2)
-
-surf = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+surf = SurfaceRZFourier(vmec=vmec_s1p0,s=1.0, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+surf.change_resolution(mpol_cut,ntor_cut)
 surf.change_resolution(mpol,ntor)
 
-initialsurf = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+initialsurf = SurfaceRZFourier(vmec=vmec_s1p0,s=1.0, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+initialsurf.change_resolution(mpol_cut,ntor_cut)
 initialsurf.change_resolution(mpol,ntor)
 
 
+
+
+vmec_s0p98=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=0.98)
 truevmec_2 = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=0.98)
 
-#surf_to_opt_2=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename_vmec),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=0.98)
 
-#surf_2 = surf_to_opt_2.surface
-#surf_2.change_resolution(2,2)
-#surf_2.change_resolution(mpol,ntor)
-
-##initial_2=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename_vmec),
-#                ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=0.98)
-##initialsurf_2 = initial_2.surface
-#initialsurf_2.change_resolution(2,2)
-
-surf_2 = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+surf_2 = SurfaceRZFourier(vmec=vmec_s0p98,s=0.98, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+surf_2.change_resolution(mpol_cut,ntor_cut)
 surf_2.change_resolution(mpol,ntor)
 
-initialsurf_2 = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
-surf.change_resolution(mpol,ntor)
+initialsurf_2 = SurfaceRZFourier(vmec=vmec_s0p98,s=0.98, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+initialsurf_2.change_resolution(mpol_cut,ntor_cut)
 initialsurf_2.change_resolution(mpol,ntor)
-
 
 # Load coils and construct field
 from essos.coils import Coils_from_json,Coils_from_simsopt
-coils = Coils_from_json("input_files/stellarator_coils_normal.json") # from optimize_coils_vmec_surface.py
-#json_file = os.path.join(os.path.dirname(__name__), 'input_files', filename_coils)
-#coils = Coils_from_simsopt(json_file,nfp=2)
+#coils = Coils_from_json("input_files/stellarator_coils_normal.json") # from optimize_coils_vmec_surface.py
+json_file = os.path.join(os.path.dirname(__name__), 'input_files', filename_coils)
+coils = Coils_from_simsopt(json_file,nfp=4)
 field = BiotSavart(coils)
 
 # QFM optimization setup
@@ -103,7 +92,7 @@ elif method == 'slsqp':
 elif method == 'alm':
     tol = 1e-6
 
-maxiter = 10000
+maxiter = 1000
 constraint_weight = 1e-3
 factor=1.
 
@@ -245,7 +234,7 @@ coils.plot(ax=ax3, show=False)
 
 initialsurf.plot(ax=ax1, show=False)
 surf.plot(ax=ax2, show=False)
-truevmec.surface.plot(ax=ax1, show=False)
+#truevmec.surface.plot(ax=ax1, show=False)
 truevmec.surface.plot(ax=ax2, show=False)
 result['s'].plot(ax=ax3, show=False)
 
@@ -254,7 +243,7 @@ ax2.set_title("True VMEC Surface")
 ax3.set_title("Final Surface")
 
 plt.tight_layout()
-plt.savefig('optimize_qfm_surface.png', dpi=300)
+plt.savefig('optimize_qfm_surface_nfp4.png', dpi=300)
 
 
 #Plot surfaces 2 at s=0.98
@@ -274,7 +263,7 @@ ax1.set_title("Initial Surface s=0.98")
 ax2.set_title("True VMEC Surface s=0.98")
 ax3.set_title("Final Surface s=0.98")
 plt.tight_layout()
-plt.savefig('optimize_qfm_surface_2.png', dpi=300)
+plt.savefig('optimize_qfm_surface_2_nfp4.png', dpi=300)
 
 
 

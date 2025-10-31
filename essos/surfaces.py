@@ -93,8 +93,8 @@ class SurfaceRZFourier:
             #m1d = jnp.tile(jnp.arange(-self.ntor, self.ntor + 1),self.mpol)
             #n1d = jnp.arange(-self.ntor, self.ntor + 1)
             #n2d, m2d = jnp.meshgrid(n1d, m1d)
-            self.xm =  jnp.repeat(jnp.arange(self.mpol+1), 2*self.ntor+1)[self.ntor:]#m2d.flatten()[self.ntor:]
-            self.xn = self.nfp*jnp.tile(jnp.arange(-self.ntor, self.ntor + 1), self.mpol+1)[self.ntor:]#m2d.flatten()[self.ntor:]  
+            self.xm =  jnp.repeat(jnp.arange(self.mpol), 2*(self.ntor-1)+1)[self.ntor-1:]#m2d.flatten()[self.ntor:]
+            self.xn = self.nfp*jnp.tile(jnp.arange(-(self.ntor-1), (self.ntor-1)+ 1), self.mpol)[self.ntor-1:]#m2d.flatten()[self.ntor:]  
             #indices = jnp.array([self.xm, self.xn / self.nfp + self.ntor], dtype=int).T
             self.rmnc_interp = self.rc
             self.zmns_interp = self.zs   
@@ -120,8 +120,8 @@ class SurfaceRZFourier:
             #zbs_last_m = zbs_first_m + zs.shape[0] - 1
             self.ntor = nml['ntor']
             self.mpol = nml['mpol']            
-            self.rc = jnp.zeros((self.mpol*( 2 * self.ntor + 1)-self.ntor))
-            self.zs = jnp.zeros((self.mpol*( 2 * self.ntor + 1)-self.ntor))            
+            self.rc = jnp.zeros((self.mpol*( 2 * (self.ntor-1) + 1)-(self.ntor-1)))
+            self.zs = jnp.zeros((self.mpol*( 2 * (self.ntor-1) + 1)-(self.ntor-1)))            
             #self.rc = jnp.zeros((self.mpol, 2 * self.ntor + 1))
             #self.zs = jnp.zeros((self.mpol, 2 * self.ntor + 1))
             #m_indices_rc = jnp.arange(rc.shape[0]) + nml.start_index['rbc'][1]
@@ -142,8 +142,8 @@ class SurfaceRZFourier:
             self.zs=zs    
             self.rmnc_interp = self.rc
             self.zmns_interp = self.zs   
-            self.xm =  jnp.repeat(jnp.arange(self.mpol+1), 2*self.ntor+1)[self.ntor:]#m2d.flatten()[self.ntor:]
-            self.xn = self.nfp*jnp.tile(jnp.arange(-self.ntor, self.ntor + 1), self.mpol+1)[self.ntor:]#m2d.flatten()[self.ntor:]                             
+            self.xm =  jnp.repeat(jnp.arange(self.mpol), 2*(self.ntor-1)+1)[self.ntor-1:]#m2d.flatten()[self.ntor:]
+            self.xn = self.nfp*jnp.tile(jnp.arange(-(self.ntor-1), (self.ntor-1)+ 1), self.mpol)[self.ntor-1:]#m2d.flatten()[self.ntor:]                             
         else:
             try:
                 self.nfp = vmec.nfp
@@ -165,7 +165,7 @@ class SurfaceRZFourier:
                 self.bmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bmnc[1:, :])
                 self.mpol = vmec.mpol
                 self.ntor = vmec.ntor
-                self.num_dofs = 2 * ((self.mpol + 1) * (2 * self.ntor + 1) - self.ntor )
+                self.num_dofs = 2 * ((self.mpol) * (2 * (self.ntor-1) + 1) - (self.ntor-1) )
                 #shape = (int(jnp.max(self.xm)) + 1, int(jnp.max(self.xn)) + 1)
                 #self.rc = jnp.zeros(shape)
                 #self.zs = jnp.zeros(shape)
@@ -366,19 +366,20 @@ class SurfaceRZFourier:
 
         #rc_new = jnp.zeros((mpol, 2 * ntor + 1))
         #zs_new = jnp.zeros((mpol, 2 * ntor + 1))
-        rc_new = jnp.zeros(((mpol+1)*( 2 * ntor + 1)-ntor))
-        zs_new = jnp.zeros(((mpol+1)*( 2 * ntor + 1)-ntor))
+        rc_new = jnp.zeros(((mpol)*( 2 * (ntor-1) + 1)-(ntor-1)))
+        zs_new = jnp.zeros(((mpol)*( 2 * (ntor-1) + 1)-(ntor-1)))
         m_keep = min(mpol_old, mpol)
         n_keep = min(ntor_old, ntor)
 
         xm_old=self.xm
         xn_old=self.xn
-        self.xm =  jnp.repeat(jnp.arange(mpol+1), 2*ntor+1)[ntor:]
-        self.xn = self.nfp*jnp.tile(jnp.arange(-ntor, ntor + 1), mpol+1)[ntor:]
+        
+        self.xm =  jnp.repeat(jnp.arange(mpol), 2*(ntor-1)+1)[ntor-1:]
+        self.xn = self.nfp*jnp.tile(jnp.arange(-(ntor-1), (ntor-1) + 1), mpol)[ntor-1:]
         # Copy overlapping region
         for l in range(len(self.xm)):
-            if self.xm[l]<=m_keep and jnp.abs(self.xn[l]/self.nfp)<=n_keep:
-                index=self.xm[l]*(ntor_old*2+1)-self.xn[l]//self.nfp
+            if self.xm[l]<=(m_keep-1) and jnp.abs(self.xn[l]/self.nfp)<=(n_keep-1):
+                index=self.xm[l]*((ntor_old-1)*2+1)+self.xn[l]//self.nfp
                 rc_new=rc_new.at[l].set(self.rc[index])
                 zs_new=zs_new.at[l].set(self.zs[index])
 

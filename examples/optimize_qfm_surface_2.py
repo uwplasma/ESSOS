@@ -13,8 +13,8 @@ from essos.qfm import QfmSurface
 from essos.fields import Vmec, BiotSavart
 
 # Load initial guess surface
-ntheta=128
-nphi=128
+ntheta=60
+nphi=60
 mpol=5
 ntor=5
 
@@ -39,57 +39,74 @@ ntor=5
 filename='wout_LandremanPaul2021_QA_reactorScale_lowres.nc'
 filename_vmec=os.path.join('input_files','input.toroidal_surface')
 #filename='wout_QH_simple_scaled.nc'
+filename_coils='QH_simple_scaled.json'
 # Load target VMEC surface
 #truevmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
 #                ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
 truevmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
+vmec_s1p0 = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
 
-#surf_to_opt=os.path.join('input_files','input_files', filename_vmec)
+#surf_to_opt=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
+
+surf = SurfaceRZFourier(vmec=vmec_s1p0,s=1.0, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+surf.change_resolution(3,1)
+surf.change_resolution(mpol,ntor)
+
+initialsurf = SurfaceRZFourier(vmec=vmec_s1p0,s=1.0, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+initialsurf.change_resolution(3,1)
+initialsurf.change_resolution(mpol,ntor)
 
 #surf = surf_to_opt.surface
-#surf.change_resolution(2,2)
+#surf.change_resolution(3,3)
 #surf.change_resolution(mpol,ntor)
 
 
 
-#initial=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename_vmec),
+#initial=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),
 #                ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=1.0)
 #initialsurf = initial.surface
 #initialsurf.change_resolution(2,2)
 
-surf = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
-surf.change_resolution(mpol,ntor)
+##surf = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+##surf.change_resolution(mpol,ntor)
 
-initialsurf = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
-initialsurf.change_resolution(mpol,ntor)
+##initialsurf = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True)
+##initialsurf.change_resolution(mpol,ntor)
 
-
+vmec_s0p98=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=0.98)
 truevmec_2 = Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=0.98)
 
-#surf_to_opt_2=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename_vmec),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=0.98)
+
+surf_2 = SurfaceRZFourier(vmec=vmec_s0p98,s=0.98, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+surf_2.change_resolution(3,1)
+surf_2.change_resolution(mpol,ntor)
+
+initialsurf_2 = SurfaceRZFourier(vmec=vmec_s0p98,s=0.98, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+initialsurf_2.change_resolution(3,1)
+initialsurf_2.change_resolution(mpol,ntor)
+#surf_to_opt_2=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=0.98)
 
 #surf_2 = surf_to_opt_2.surface
 #surf_2.change_resolution(2,2)
 #surf_2.change_resolution(mpol,ntor)
 
-##initial_2=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename_vmec),
+#initial_2=Vmec(os.path.join(os.path.dirname(__name__), 'input_files', filename),
 #                ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,s_vmec=0.98)
-##initialsurf_2 = initial_2.surface
+#initialsurf_2 = initial_2.surface
 #initialsurf_2.change_resolution(2,2)
 
-surf_2 = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
-surf_2.change_resolution(mpol,ntor)
+##surf_2 = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
+##surf_2.change_resolution(mpol,ntor)
 
-initialsurf_2 = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True,rescaling_type='L_infty',rescaling_factor=1.2)
-surf.change_resolution(mpol,ntor)
-initialsurf_2.change_resolution(mpol,ntor)
+##initialsurf_2 = SurfaceRZFourier(filename_vmec, ntheta=ntheta, nphi=nphi, range_torus='half period', close=True)
+##initialsurf_2.change_resolution(mpol,ntor)
 
 
 # Load coils and construct field
 from essos.coils import Coils_from_json,Coils_from_simsopt
 coils = Coils_from_json("input_files/stellarator_coils_normal.json") # from optimize_coils_vmec_surface.py
 #json_file = os.path.join(os.path.dirname(__name__), 'input_files', filename_coils)
-#coils = Coils_from_simsopt(json_file,nfp=2)
+#coils = Coils_from_simsopt(json_file,nfp=4)
 field = BiotSavart(coils)
 
 # QFM optimization setup
@@ -244,8 +261,8 @@ coils.plot(ax=ax3, show=False)
 
 
 initialsurf.plot(ax=ax1, show=False)
-surf.plot(ax=ax2, show=False)
-truevmec.surface.plot(ax=ax1, show=False)
+#surf.plot(ax=ax2, show=False)
+#truevmec.surface.plot(ax=ax1, show=False)
 truevmec.surface.plot(ax=ax2, show=False)
 result['s'].plot(ax=ax3, show=False)
 
@@ -267,7 +284,7 @@ coils.plot(ax=ax2, show=False)
 coils.plot(ax=ax3, show=False)
 initialsurf_2.plot(ax=ax1, show=False)
 #surf_2.plot(ax=ax2, show=False)
-truevmec_2.surface.plot(ax=ax1, show=False)
+#truevmec_2.surface.plot(ax=ax1, show=False)
 truevmec_2.surface.plot(ax=ax2, show=False)
 result_2['s'].plot(ax=ax3, show=False)
 ax1.set_title("Initial Surface s=0.98")
@@ -275,7 +292,6 @@ ax2.set_title("True VMEC Surface s=0.98")
 ax3.set_title("Final Surface s=0.98")
 plt.tight_layout()
 plt.savefig('optimize_qfm_surface_2.png', dpi=300)
-
 
 
 # # Field line tracing
@@ -324,7 +340,9 @@ def compute_rz_on_phi(surface, theta, phi=0.0):
 # # Contours from optimized surface
 R0_opt, Z0_opt = compute_rz_on_phi(result['s'], theta, phi=0.0)
 R90_opt, Z90_opt = compute_rz_on_phi(result['s'], theta, phi=jnp.pi/2)
-
+# # Contours from optimized surface
+R0_opt_2, Z0_opt_2 = compute_rz_on_phi(result_2['s'], theta, phi=0.0)
+R90_opt_2, Z90_opt_2 = compute_rz_on_phi(result_2['s'], theta, phi=jnp.pi/2)
 # # Contours from true VMEC surface
 R0_true, Z0_true = compute_rz_on_phi(truevmec.surface, theta, phi=0.0)
 R90_true, Z90_true = compute_rz_on_phi(truevmec.surface, theta, phi=jnp.pi/2)
@@ -334,8 +352,11 @@ fig, ax = plt.subplots(figsize=(6, 6))
 tracing.poincare_plot(ax=ax, show=False, shifts=[0, jnp.pi / 2])
 ax.plot(R0_opt, Z0_opt, color='black', linewidth=1.5, label=r"Optimized @ $\phi = 0$")
 ax.plot(R90_opt, Z90_opt, color='black', linestyle='--', linewidth=1.5, label=r"Optimized @ $\phi = \pi/2$")
-ax.plot(R0_true, Z0_true, color='blue', linewidth=1.2, label=r"True VMEC @ $\phi = 0$")
-ax.plot(R90_true, Z90_true, color='blue', linestyle='--', linewidth=1.2, label=r"True VMEC @ $\phi = \pi/2$")
+
+ax.plot(R0_opt_2, Z0_opt_2, color='red', linewidth=1.5, label=r"Optimized @ $\phi = 0 s=0.98$")
+ax.plot(R90_opt_2, Z90_opt_2, color='red', linestyle='--', linewidth=1.5, label=r"Optimized @ $\phi = \pi/2, s=0.98$")
+#ax.plot(R0_true, Z0_true, color='blue', linewidth=1.2, label=r"True VMEC @ $\phi = 0$")
+#ax.plot(R90_true, Z90_true, color='blue', linestyle='--', linewidth=1.2, label=r"True VMEC @ $\phi = \pi/2$")
 
 ax.set_xlabel("R")
 ax.set_ylabel("Z")
@@ -345,6 +366,9 @@ ax.axis("equal")
 plt.tight_layout()
 plt.savefig('optimize_qfm_surface_poincare.png', dpi=300)
 
+
+
+
 from essos.surfaces import B_on_surface
 
 B_final= B_on_surface(result['s'], field)
@@ -352,8 +376,6 @@ e_s=(result['s'].gamma-result_2['s'].gamma)/0.02
 jac=jnp.einsum('ijk,ijk->ij',e_s, jnp.cross(result['s'].gammadash_theta,result['s'].gammadash_phi,axis=-1))
 jac_g = jac[:, :, jnp.newaxis]
 jac_g = jnp.repeat(jac_g, 3, axis=2)
-
-jac_cov=jnp.linalg.norm(jnp.einsum('ijk,ijk->ij',e_r, jnp.cross(result['s'].gammadash_theta,result['s'].gammadash_phi,axis=-1)),keepdims=True)
 grad_alpha_final = -jnp.cross(B_final, result['s'].unitnormal, axis=-1)
 grad_psi = jnp.cross(result['s'].gammadash_theta, result['s'].gammadash_phi, axis=-1)/jac_g
 #grad_psi=jnp.true_divide(grad_psi,jnp.linalg.norm(grad_psi,axis=-1,keepdims=True))
