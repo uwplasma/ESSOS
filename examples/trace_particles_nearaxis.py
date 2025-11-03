@@ -8,25 +8,42 @@ from essos.fields import near_axis_test
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ONE_EV
 from essos.dynamics import Tracing, Particles
 import numpy as np
+#To read from UWplasma stellarator database
+import requests
+
+# Load nearaxis configuration from UWplasma stellarator database
+url="https://stellarator.physics.wisc.edu/backend/api/configs"
 
 
+#choose a configuration id from the database
+config_id=100
+config = next(cfg for cfg in requests.get(url).json()["configs"] if cfg["id"] == config_id)
+rc=[1, config["rc1"], config["rc2"], config["rc3"]]
+zs=[0, config["zs1"], config["zs2"], config["zs3"]]
+nfp=config["nfp"] 
+etabar=config["etabar"]
+    
+
+# Initialize Near-Axis field QH nfp=4
+#rc=jnp.array([1.0,-0.5997117])
+#zs=jnp.array([0.0,-0.66064245])
+#etabar=1.3164784
+#nfp=4
 
 
-# Initialize Near-Axis field
-rc=jnp.array([1.0,-0.43428007])
-zs=jnp.array([0.0,-0.37919226])
-etabar=-1.088421
+# Initialize Near-Axis field QA nfp=3
 #rc=jnp.array([1, 0.045])
 #zs=jnp.array([0,-0.045])
 #etabar=0.9
-nfp=3
+#nfp=3
+
 field = near_axis_test(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
 
 
 # Input parameters
 timestep = 1.e-8
-times_to_trace=100000
-nparticles_per_core=2
+times_to_trace=1000
+nparticles_per_core=50
 nparticles = number_of_processors_to_use*nparticles_per_core
 n_particles_to_plot = min(4, nparticles)
 atol = 1e-8
