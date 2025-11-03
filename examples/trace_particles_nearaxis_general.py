@@ -4,25 +4,34 @@ os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_pr
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from essos.fields import near_axis_test
+from essos.fields import near_axis_general_frame
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ONE_EV
 from essos.dynamics import Tracing, Particles
 import numpy as np
+import pickle 
 
-
-
-
+file_path = 'input_files/QI_stel_optuna_964.pkl' 
+file=open(file_path, 'rb')
+input_params=pickle.load(file)
 # Initialize Near-Axis field
-rc=jnp.array([1.0,-0.43428007])
-zs=jnp.array([0.0,-0.37919226])
-etabar=-1.088421
-#rc=jnp.array([1, 0.045])
-#zs=jnp.array([0,-0.045])
-#etabar=0.9
-nfp=3
-field = near_axis_test(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
-
-
+rc=input_params['rc']
+zs=input_params['zs']
+nfp=input_params['nfp']
+X1c = input_params['X1c']
+Y1c = input_params['Y1c']
+B0 = input_params['B0']
+I2 = input_params['I2']
+B2s=input_params['B2s']
+B2c=input_params['B2c']
+p2=input_params['p2']
+sG = input_params['sG']
+spsi = input_params['spsi']
+nphi = input_params['nphi']
+sigma0 = input_params['sigma0']
+order = input_params['order']
+field = near_axis_general_frame(rc=rc, zs=zs,  nfp=nfp, X1c = X1c, Y1c = Y1c, B0 = B0, I2 = I2, B2s=B2s,
+                                B2c=B2c, p2=p2,sG = sG, spsi = spsi, nphi = nphi, sigma0 = sigma0, 
+                                order=order, frame="centroid")
 # Input parameters
 timestep = 1.e-8
 times_to_trace=100000
@@ -47,7 +56,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,charge=A
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles, maxtime=tmax,
+tracing = Tracing(field=field, model='GuidingCenter', particles=particles, maxtime=tmax,
                   timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol,r_max=1.8)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
@@ -62,7 +71,7 @@ ax4 = fig.add_subplot(224)
 
 # Plot 5 random particles
 ## Plot trajectories in 3D
-field.plot(ax=ax1, show=False,r=0.2,alpha=0.3,cmap='jet')
+####field.plot(ax=ax1, show=False,r=0.2,alpha=0.3,cmap='jet')
 tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 for i in np.random.choice(nparticles, size=n_particles_to_plot, replace=False):
     trajectory = trajectories[i]

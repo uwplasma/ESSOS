@@ -9,7 +9,7 @@ from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, T
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
 from essos.coils import Coils
-from essos.fields import BiotSavart, Vmec
+from essos.fields import BiotSavart, Vmec, near_axis_test, near_axis_general_frame
 from essos.surfaces import SurfaceClassifier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
@@ -473,7 +473,7 @@ def FieldLine(t,
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
-                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None):
+                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,r_max=0.99):
         
         if electric_field==None:
             self.electric_field = Electric_field_zero()
@@ -518,6 +518,20 @@ class Tracing():
                         s, _, _, _ = y
                         return s-1	        
                 self.condition = condition_Vmec
+            if isinstance(field, near_axis_test) or isinstance(field, near_axis_general_frame):
+                if model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative'  or model=='GuidingCenterCollisions':
+                    def condition_nearxis(t, y, args, **kwargs):
+                        s, _, _, _ ,_= y
+                        return s-(r_max+0.01)
+                elif model == 'FieldLine' or model== 'FieldLineAdaptative':
+                    def condition_nearaxis(t, y, args, **kwargs):
+                        s, _, _ = y
+                        return s-(r_max+0.01)
+                else:
+                    def condition_nearaxis(t, y, args, **kwargs):
+                        s, _, _, _ = y
+                        return s-(r_max+0.01)	        
+                self.condition = condition_nearaxis                
             elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
                 if model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative' or model=='GuidingCenterCollisions':
                     def condition_BioSavart(t, y, args, **kwargs):
@@ -630,11 +644,11 @@ class Tracing():
 
         self.trajectories_xyz = vmap(lambda xyz: vmap(lambda point: self.field.to_xyz(point[:3]))(xyz))(self.trajectories)
         
-        if isinstance(field, Vmec):
+        if isinstance(field, Vmec) or isinstance(field, near_axis_test) or isinstance(field, near_axis_general_frame):
             if self.model == 'GuidingCenterCollisions' or model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsAdaptative':
-                self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_collisions()                    
+                self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_collisions(r_max=r_max)                    
             else:                
-                self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction()
+                self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction(r_max=r_max)
         elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
             if self.model == 'GuidingCenterCollisions' or model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsAdaptative':
                 self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_BioSavart_collisions(boundary)                    
