@@ -188,7 +188,7 @@ class SurfaceRZFourier:
         nfp = int(nc.variables["nfp"][0])
         xm = jnp.array(nc.variables["xm"][:])
         xn = jnp.array(nc.variables["xn"][:])
-        mpol = int(jnp.max(xm)+1)
+        mpol = int(jnp.max(xm))
         ntor = int(jnp.max(jnp.abs(xn)) / nfp)
         
         ns = nc.variables["ns"][0]

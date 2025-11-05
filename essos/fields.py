@@ -226,7 +226,7 @@ class Vmec():
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
         self.r_axis = self.rmnc[0, 0]
         self.z_axis=self.zmns[0,0]
-        self.mpol = int(jnp.max(self.xm)+1)
+        self.mpol = int(jnp.max(self.xm))
         self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
