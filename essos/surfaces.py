@@ -4,14 +4,15 @@ import jax.numpy as jnp
 from jax.scipy.interpolate import RegularGridInterpolator
 from jax import tree_util, jit, vmap, devices, device_put
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax.experimental.pjit import pjit
 from essos.plot import fix_matplotlib_3d
 import jaxkd
 
 mesh = Mesh(devices(), ("dev",))
-sharding = NamedSharding(mesh, PartitionSpec("dev", None))
+sharding = NamedSharding(mesh, PartitionSpec("dev"))
 
 
-@partial(jit, static_argnames=['surface','field'])
+@jit
 def toroidal_flux(surface, field, idx=0) -> jnp.ndarray:
     curve = surface.gamma[idx]    
     dl = jnp.roll(curve, -1, axis=0) - curve
@@ -25,7 +26,7 @@ def toroidal_flux(surface, field, idx=0) -> jnp.ndarray:
     #tf = jnp.sum(Adl)    
     return tf
 
-@partial(jit, static_argnames=['surface','field'])
+@jit
 def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
     curve = surface.gamma[:,idx,:]    
     dl = jnp.roll(curve, -1, axis=0) - curve
@@ -39,39 +40,40 @@ def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
     #tf = jnp.sum(Adl)    
     return tf
 
-@partial(jit, static_argnames=['surface','field'])
+# @jit
+@partial(pjit, in_shardings=(sharding, None), out_shardings=sharding)
 def B_on_surface(surface, field):
     ntheta = surface.ntheta
     nphi = surface.nphi
     gamma = surface.gamma
     gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
-    gamma_sharded = device_put(gamma_reshaped, sharding)
-    B_on_surface = jit(vmap(field.B), in_shardings=sharding, out_shardings=sharding)(gamma_sharded)
-    B_on_surface = B_on_surface.reshape(nphi, ntheta, 3)
-    return B_on_surface
 
+    # Map field.B over all positions
+    B_on_surface = vmap(field.B)(gamma_reshaped)
+
+    return B_on_surface.reshape(nphi, ntheta, 3)
     
 
-@partial(jit, static_argnames=['surface','field'])
+@jit
 def BdotN(surface, field):
     B_surface = B_on_surface(surface, field)
     B_dot_n = jnp.sum(B_surface * surface.unitnormal, axis=2)
     return B_dot_n
 
-@partial(jit, static_argnames=['surface','field'])
+@jit
 def BdotN_over_B(surface, field, **kwargs):
     return BdotN(surface, field) / jnp.linalg.norm(B_on_surface(surface, field), axis=2)
 
-@partial(jit, static_argnames=['surface','field'])
+@jit
 def _squared_flux_local(surface, field):
     return 0.5 * jnp.mean(BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
                           * surface.area_element)
 
-@partial(jit, static_argnames=['surface','field'])
+@jit
 def _squared_flux_global(surface, field):
     return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element)
 
-@partial(jit, static_argnames=['surface','field'])
+@jit
 def _squared_flux_normalized(surface, field):
     return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element) / \
                  jnp.mean(jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
@@ -669,8 +671,6 @@ class SurfaceRZFourier:
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        print([jax.core.get_aval(c) for c in children])
-        print([jax.core.get_aval(val) for val in aux_data.values() if not isinstance(val, str)])
         return cls(*children, **aux_data)
 
 tree_util.register_pytree_node(SurfaceRZFourier,
