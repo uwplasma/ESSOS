@@ -1,7 +1,6 @@
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-from jax.lax import fori_loop
 from jax import tree_util, jit, vmap
 from functools import partial
 from .plot import fix_matplotlib_3d
@@ -132,12 +131,11 @@ class Curves:
         gamma_n = vmap(create_data)(jnp.arange(1, self.order+1))
         return gamma_0 + jnp.sum(gamma_n, axis=0)
 
+    # TODO change gamma from a property to a method
     # gamma property
     @property
     def gamma(self):
-        if self._gamma is None:
-            self._gamma = self._compute_gamma()
-        return self._gamma
+        return self._compute_gamma()
 
     # _compute_gamma_dash method
     @jit
@@ -145,16 +143,13 @@ class Curves:
         def create_data(order: int) -> jnp.ndarray:
             return jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order - 1], 2*jnp.pi * order * jnp.cos(2 * jnp.pi * order * self.quadpoints)) \
                  + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order], -2 * jnp.pi * order * jnp.sin(2 * jnp.pi * order * self.quadpoints))
-        gamma_dash_0 = jnp.zeros((jnp.size(self.curves, 0), self.n_segments, 3))
         gamma_dash_n = vmap(create_data)(jnp.arange(1, self.order+1))
-        return gamma_dash_0 + jnp.sum(gamma_dash_n, axis=0)
+        return jnp.sum(gamma_dash_n, axis=0)
 
     # gamma_dash property
     @property
     def gamma_dash(self):
-        if self._gamma_dash is None:
-            self._gamma_dash = self._compute_gamma_dash()
-        return self._gamma_dash
+        return self._compute_gamma_dash()
 
     # _compute_gamma_dashdash method
     @jit
@@ -162,16 +157,13 @@ class Curves:
         def create_data(order: int) -> jnp.ndarray:
             return jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order - 1], -4*jnp.pi**2 * order**2 * jnp.sin(2 * jnp.pi * order * self.quadpoints)) \
                  + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order], -4*jnp.pi**2 * order**2 * jnp.cos(2 * jnp.pi * order * self.quadpoints))
-        gamma_dashdash_0 = jnp.zeros((jnp.size(self.curves, 0), self.n_segments, 3))
         gamma_dashdash_n = vmap(create_data)(jnp.arange(1, self.order+1))
-        return gamma_dashdash_0 + jnp.sum(gamma_dashdash_n, axis=0)
+        return jnp.sum(gamma_dashdash_n, axis=0)
 
     # gamma_dashdash property
     @property
     def gamma_dashdash(self):
-        if self._gamma_dashdash is None:
-            self._gamma_dashdash = self._compute_gamma_dashdash()
-        return self._gamma_dashdash
+        return self._compute_gamma_dashdash()
 
     # length property
     @property
@@ -189,10 +181,13 @@ class Curves:
     # curvature property
     @property
     def curvature(self):
-        if self._curvature is None:
-            self._curvature = vmap(self.compute_curvature)(self.gamma_dash, self.gamma_dashdash)
-        return self._curvature
+        return vmap(self.compute_curvature)(self.gamma_dash, self.gamma_dashdash)
     
+    # copy method
+    def copy(self):
+        deep_copy = tree_util.tree_map(lambda x: x.copy(), self)
+        return deep_copy
+
     # magic methods
     def __str__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
@@ -360,6 +355,7 @@ tree_util.register_pytree_node(Curves,
                                Curves._tree_flatten,
                                Curves._tree_unflatten)
 
+# TODO: change currents logic: save dofs_currents as dynamic -> alter main
 class Coils:
     """ Class to store the coils
 
@@ -517,8 +513,18 @@ class Coils:
     def n_segments(self, new_n_segments):
         self.curves.n_segments = new_n_segments
 
-    # magic methods
+    # copy method
+    def copy(self):
+        coils = Coils(self.curves.copy(), self.dofs_currents_raw.copy())
 
+        # Initialize caches
+        coils._dofs_currents = self.dofs_currents
+        coils._currents_scale = self.currents_scale
+        coils._currents = self._currents
+
+        return coils
+    
+    # magic methods
     def __str__(self):
         return f"nfp stellsym order\n{self.nfp} {self.stellsym} {self.order}\n"\
              + f"Degrees of freedom\n{repr(self.dofs.tolist())}\n" \
