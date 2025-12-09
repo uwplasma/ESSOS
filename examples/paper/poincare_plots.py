@@ -34,7 +34,7 @@ energy = 4000*ONE_EV
 print("cyclotron period:", 1/(ELEMENTARY_CHARGE*0.3/mass))
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), '../input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
@@ -101,7 +101,7 @@ print(f"ESSOS tracing of {nparticles} particles with GC for {tmax_gc:.1e}s took 
 # plt.grid(visible=False)
 # plt.tight_layout()
 # plt.savefig(os.path.join(output_dir, 'poincare_plot_fl.png'), dpi=300)
-# plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" , 'poincare_plot_fl.png'), dpi=300)
+# plt.savefig(os.path.join(os.path.dirname(__file__),  'poincare_plot_fl.png'), dpi=300)
 
 
 # fig, ax = plt.subplots(figsize=(9, 6))
@@ -115,7 +115,7 @@ print(f"ESSOS tracing of {nparticles} particles with GC for {tmax_gc:.1e}s took 
 # plt.grid(visible=False)
 # plt.tight_layout()
 # plt.savefig(os.path.join(output_dir 'poincare_plot_fo.png'), dpi=300)
-# plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" , 'poincare_plot_fo.png'), dpi=300)
+# plt.savefig(os.path.join(os.path.dirname(__file__),  'poincare_plot_fo.png'), dpi=300)
 
 
 # fig, ax = plt.subplots(figsize=(9, 6))
@@ -129,6 +129,6 @@ print(f"ESSOS tracing of {nparticles} particles with GC for {tmax_gc:.1e}s took 
 # plt.grid(visible=False)
 # plt.tight_layout()
 # plt.savefig(os.path.join(output_dir, 'poincare_plot_gc.png'), dpi=300)
-# plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" , 'poincare_plot_gc.png'), dpi=300)
+# plt.savefig(os.path.join(os.path.dirname(__file__),  'poincare_plot_gc.png'), dpi=300)
 
 # plt.show()

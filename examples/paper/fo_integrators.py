@@ -85,7 +85,6 @@ plt.grid(axis='x', which='both', linestyle='--', linewidth=0.6)
 plt.grid(axis='y', which='major', linestyle='--', linewidth=0.6)
 plt.tight_layout()
 plt.savefig(os.path.join(output_dir, 'fo_integration.pdf'))
-plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/", 'fo_integration.pdf'))
 plt.show()
 
 ## Save results in vtk format to analyze in Paraview

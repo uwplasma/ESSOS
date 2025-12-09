@@ -121,5 +121,4 @@ for spine in plt.gca().spines.values():
     spine.set_zorder(0)
 plt.tight_layout()
 plt.savefig(os.path.join(output_dir, 'gradients.pdf'))
-plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" ,'gradients.pdf'))
 plt.show()

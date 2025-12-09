@@ -17,7 +17,7 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
     
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), '../input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
@@ -68,16 +68,16 @@ tracing_fo.plot(ax=ax, show=False)
 plt.tight_layout()
 
 plt.figure(figsize=(9, 6))
-plt.plot(tracing_gc.times*1000, jnp.abs(tracing_gc.energy()[0]/particles.energy-1), label='Guiding Center', color='red')
-plt.plot(tracing_fo.times*1000, jnp.abs(tracing_fo.energy()[0]/particles.energy-1), label='Full Orbit', color='blue')
+plt.plot(tracing_gc.times[1:]*1000, jnp.abs(tracing_gc.energy()[0][1:]/particles.energy-1)+1e-17, label='Guiding Center', color='red')
+plt.plot(tracing_fo.times[1:]*1000, jnp.abs(tracing_fo.energy()[0][1:]/particles.energy-1)+1e-17, label='Full Orbit', color='blue')
 plt.xlabel('Time (ms)')
 plt.ylabel('Relative energy error')
 plt.xlim(0, tmax*1000)
-plt.ylim(bottom=0)
+# plt.ylim(bottom=0)
+plt.yscale('log')
 plt.legend()
 plt.tight_layout()
 plt.savefig(os.path.join(output_dir, 'energies.png'), dpi=300)
-plt.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/" ,'energies.png'), dpi=300)
 
 plt.show()
 

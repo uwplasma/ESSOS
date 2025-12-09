@@ -95,7 +95,6 @@ for spine in ax_tol.spines.values():
     spine.set_zorder(0)
 
 fig.savefig(os.path.join(output_dir, 'gc_integration.pdf'))
-fig.savefig(os.path.join(os.path.dirname(__file__), "../../../../UW/article/figures/", 'gc_integration.pdf'))
 fig_tol.savefig(os.path.join(output_dir, 'energy_vs_tol.pdf'))
 plt.show()
 
