@@ -20,7 +20,15 @@ class MagneticField():
     @jit
     def B(self, points):
         raise NotImplementedError("B method not implemented")
+    
+    @jit
+    def A(self, points):
+        raise NotImplementedError("B method not implemented")
 
+    @jit
+    def grad_B_dot_GradAbsB(self,points):
+        raise NotImplementedError("B method not implemented")
+    
     @jit
     def B_covariant(self, points):
         return self.B(points)
@@ -87,6 +95,25 @@ class BiotSavart(MagneticField):
         dB = jnp.cross(self.coils.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif_R, axis=0)**3
         dB_sum = jnp.einsum("i,bai", self.coils.currents*1e-7, dB, optimize="greedy")
         return jnp.mean(dB_sum, axis=0)
+
+
+
+    @jit
+    def grad_B_dot_GradAbsB(self,points):
+        def B_dot_GradAbsB(points):
+            return jnp.sum(self.B(points) * self.dAbsB_by_dX(points), axis=-1)
+        grad_B_dot_GradAbsB=jax.grad(B_dot_GradAbsB)(points)
+        return grad_B_dot_GradAbsB
+    
+
+    @jit
+    def A(self, points):
+        dif_R = (jnp.array(points)-self.coils.gamma)
+        dA = self.coils.gamma_dash / jnp.linalg.norm(dif_R, axis=-1, keepdims=True)
+        A_vec = jnp.sum(jnp.mean(self.coils.currents[:, None, None] * dA * 1e-7, axis=1),axis=0)
+        return A_vec    
+
+
 
     @jit
     def to_xyz(self, points):

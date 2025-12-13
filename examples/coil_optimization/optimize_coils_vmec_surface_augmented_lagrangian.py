@@ -215,12 +215,3 @@ if EXPORT:
     init_coils.to_vtk(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
     opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
     opt_coils_alm.to_vtk(os.path.join(output_filepath, "opt_coils_alm_vmec_surface.json"))    
-
-
-
-
-
-
-
-
-

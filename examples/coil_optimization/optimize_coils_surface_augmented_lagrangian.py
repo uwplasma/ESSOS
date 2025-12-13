@@ -1,0 +1,631 @@
+import os
+number_of_processors_to_use = 1 # Parallelization, this should divide ntheta*nphi
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
+from time import time
+import jax.numpy as jnp
+from jax import vmap
+import matplotlib.pyplot as plt
+from essos.optimization import optimize_loss_function
+from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.fields import BiotSavart
+from essos.surfaces import SurfaceRZFourier, BdotN_over_B, toroidal_flux, B_on_surface
+from essos.losses import custom_loss, base_loss
+
+import essos.augmented_lagrangian as alm
+from functools import partial
+#  In this exmple, `scipy.optimize.least_squares` is used for the normal optimization, but any other optimizer, e.g. from 
+#  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
+from scipy.optimize import least_squares
+
+# Optimization parameters
+maximum_function_evaluations=100
+
+
+input_filepath = os.path.join(os.path.dirname(__name__), "../input_files")
+vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
+filename_coils=os.path.join(input_filepath,'LandremanPaul2021_QA_coils.json')
+
+target_coils=Coils.from_json(filename_coils)
+target_field = BiotSavart(Coils.from_json(filename_coils))
+target_surface_2 = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=32, nphi=32, range_torus='half period',close=True)
+target_surface_1 = SurfaceRZFourier.from_wout_file(vmec_input, s=0.98, ntheta=32, nphi=32, range_torus='half period',close=True)
+target_surface_0 = SurfaceRZFourier.from_wout_file(vmec_input, s=0.96, ntheta=32, nphi=32, range_torus='half period',close=True)
+""" Creating starting coils and surface """
+N_COILS = 4; FOURIER_ORDER = 3; LARGE_R = 10.; SMALL_R = 5.7; NFP = 2; N_SEGMENTS = 30; STELLSYM = True  # Curve parameters
+COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
+
+init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
+init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
+init_field = BiotSavart(init_coils)
+init_surface_1=SurfaceRZFourier.from_wout_file(vmec_input, s=0.98, ntheta=32, nphi=32,close=True, range_torus='half period',scaling_factor=-1.2,scaling_type=jnp.inf)
+init_surface_2=SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=32, nphi=32, close=True,range_torus='half period',scaling_factor=-1.2,scaling_type=jnp.inf)
+
+
+""" Creating the loss functions """
+def iota(field, surface,surface2,target_iota=0.5,delta_s=0.02):
+    B_on_surface_2= B_on_surface(surface, field)
+    #Contravariant psi/s basis vector on surface_2
+    e_s=(surface.gamma-surface2.gamma)/delta_s
+    #Calculate jacobian
+    jac=jnp.einsum('ijk,ijk->ij',e_s, jnp.cross(surface.gammadash_theta,surface.gammadash_phi,axis=-1))
+    jac_g = jac[:, :, jnp.newaxis]
+    jac_g = jnp.repeat(jac_g, 3, axis=2)
+    #jac_cov=jnp.linalg.norm(jnp.einsum('ijk,ijk->ij',e_r, jnp.cross(result['s'].gammadash_theta,result['s'].gammadash_phi,axis=-1)),keepdims=True)
+    #grad_alpha_final = -jnp.cross(B_on_surface_2, surface_2.unitnormal, axis=-1)
+    #Covariant basis vectors on surface 2
+    ##grad_psi = jnp.cross(surface.gammadash_theta,surface.gammadash_phi, axis=-1)/jac_g
+    #grad_psi=jnp.true_divide(grad_psi,jnp.linalg.norm(grad_psi,axis=-1,keepdims=True))
+    grad_theta = -jnp.cross(e_s, surface.gammadash_phi, axis=-1)/jac_g
+    grad_phi = jnp.cross(e_s, surface.gammadash_theta, axis=-1)/jac_g
+    #grad_phi=jnp.true_divide(grad_phi,jnp.linalg.norm(grad_phi,axis=-1,keepdims=True))
+    #e_phi=jnp.cross(grad_phi,grad_psi , axis=-1)
+    ###B_contravariant_psi=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_psi)*jac
+    B_contravariant_theta=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_theta)*jac
+    B_contravariant_phi=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_phi)*jac
+    iota=jnp.average(B_contravariant_theta)/jnp.average(B_contravariant_phi)#*result['s'].nfp
+    #modB=jnp.linalg.norm(B_on_surface_2,axis=-1)    
+    return iota
+
+
+""" Setting the losses weights and targets """
+LENGTH_WEIGHT = 1.; LENGTH_TARGET = 40.
+CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.5
+NORMAL_FIELD_WEIGHT = 1.
+BDOTN_TARGET=1.e-6
+Area_Target=target_surface_2.area
+Area_Target_2=target_surface_1.area
+Area_Target_3=target_surface_0.area
+Volume_Target=target_surface_2.volume
+Volume_Target_2=target_surface_1.volume
+Volume_Target_3=target_surface_0.volume
+Toroidal_Flux_target=toroidal_flux(target_surface_2,target_field)
+Toroidal_Flux_target_2=toroidal_flux(target_surface_1,target_field)
+Toroidal_Flux_target_3=toroidal_flux(target_surface_0,target_field)
+iota_target=iota(target_field, target_surface_2,target_surface_1,delta_s=0.02)
+
+
+
+
+
+
+
+
+""" Creating the loss functions """
+# def loss_bdotn(field, surface):
+#     return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+
+# def BdotN_constraint(field,surface,target_tol=1.e-6):
+#     bdotn_over_b = BdotN_over_B(surface, field)
+#     bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
+#     return bdotn_over_b_loss
+
+# def loss_length_constraint(field,surface,target_length=40.0):
+#     return jnp.maximum(0, field.coils.length - target_length)
+
+# def loss_curvature_contraint(field,surface,target_curvature=0.5):
+#     return jnp.maximum(0, field.coils.curvature - target_curvature)
+
+
+# def loss_length(field,target_length=40.0):
+#     return jnp.mean(jnp.maximum(0, field.coils.length - target_length))
+
+# def loss_curvature(field,target_curvature=0.5):
+#     return jnp.mean(jnp.maximum(0, field.coils.curvature - target_curvature))
+
+
+
+# """ Surface Constraints """
+
+# def loss_area_contraint(field,surface,target_area=900.):
+#     return jnp.maximum(0, (surface.area - target_area))#/target_area))
+
+# def loss_volume_contraint(field,surface,target_volume=2000):
+#     return jnp.maximum(0, (surface.volume - target_volume)/target_volume)
+
+# def loss_toroidal_flux_contraint(field,surface,target_toroidal_flux=1.e-5):
+#     return jnp.maximum(0, (toroidal_flux(surface,field) - target_toroidal_flux)/target_toroidal_flux)
+
+
+# """ Geometry cost functions """
+
+# def loss_quasisymmetry(field,surface):
+#     # Calculating ∇(B · ∇|B|) on the surface
+#     gamma_reshaped = jnp.reshape(surface.gamma, (-1, 3))
+#     grad_B_dot_grad_absB_on_surface = vmap(field.grad_B_dot_GradAbsB)(gamma_reshaped)
+#     # Calculating ∇ψ · ∇|B| on the surface)
+#     grad_absB_on_surface = vmap(field.dAbsB_by_dX)(gamma_reshaped)
+#     normal_reshaped = jnp.reshape(surface.unitnormal, (-1, 3))
+#     normal_cross_grad_absB_on_surface = jnp.cross(normal_reshaped, grad_absB_on_surface)
+#     qs_residual = jnp.mean(jnp.abs(jnp.sum(normal_cross_grad_absB_on_surface * grad_B_dot_grad_absB_on_surface, axis=-1)))/(1.e-7)**3
+#     return qs_residual
+
+
+# def loss_quasisymmetry_constraint(field,surface,target_QS=0.0001):
+#     # Calculating ∇(B · ∇|B|) on the surface
+#     gamma_reshaped = jnp.reshape(surface.gamma, (-1, 3))
+#     grad_B_dot_grad_absB_on_surface = vmap(field.grad_B_dot_GradAbsB)(gamma_reshaped)
+#     # Calculating ∇ψ · ∇|B| on the surface)
+#     grad_absB_on_surface = vmap(field.dAbsB_by_dX)(gamma_reshaped)
+#     normal_reshaped = jnp.reshape(surface.unitnormal, (-1, 3))
+#     normal_cross_grad_absB_on_surface = jnp.cross(normal_reshaped, grad_absB_on_surface)
+#     qs_residual = jnp.sum(jnp.maximum(jnp.abs(jnp.sum(normal_cross_grad_absB_on_surface * grad_B_dot_grad_absB_on_surface, axis=-1))-target_QS,0.0))/(1.e-7)**3
+#     return qs_residual
+
+
+""" Creating the loss functions """
+def loss_bdotn(field, surface,surface2):
+    return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+
+def BdotN_constraint(field,surface,surface2,target_tol=1.e-6):
+    bdotn_over_b = BdotN_over_B(surface, field)
+    bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
+    return bdotn_over_b_loss
+
+def BdotN_constraint_2(field,surface,surface2,target_tol=1.e-6):
+    bdotn_over_b = BdotN_over_B(surface2, field)
+    bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
+    return bdotn_over_b_loss
+
+def loss_length_constraint(field,surface,surface2,target_length=40.0):
+    return jnp.maximum(0, field.coils.length - target_length)
+
+def loss_curvature_contraint(field,surface,surface2,target_curvature=0.5):
+    return jnp.maximum(0, field.coils.curvature - target_curvature)
+
+
+
+
+
+""" Surface Constraints """
+
+def loss_area_contraint(field,surface,surface2,target_area=900.):
+    return jnp.maximum(0, -(surface.area - target_area)/target_area)
+
+def loss_area_contraint_2(field,surface,surface2,target_area=890):
+    return jnp.maximum(0, (surface2.area - target_area)/target_area)
+
+def loss_area_contraint_3(field,surface,surface2,target_area=890):
+    return jnp.maximum(0, -(surface2.area - target_area)/target_area)
+
+def loss_volume_contraint(field,surface,surface2,target_volume=2000):
+    return jnp.maximum(0, -(surface.volume - target_volume)/target_volume)
+
+
+def loss_volume_contraint_2(field,surface,surface2,target_volume=2000):
+    return jnp.maximum(0, (surface2.volume - target_volume)/target_volume)
+
+def loss_volume_contraint_3(field,surface,surface2,target_volume=2000):
+    return jnp.maximum(0, -(surface2.volume - target_volume)/target_volume)
+
+def loss_toroidal_flux_contraint(field,surface,surface2,target_toroidal_flux=1.e-5):
+    return jnp.maximum(0, (toroidal_flux(surface,field) - target_toroidal_flux)/jnp.abs(target_toroidal_flux))
+
+
+def loss_toroidal_flux_contraint_2(field,surface,surface2,target_toroidal_flux=1.e-5):
+    return jnp.maximum(0, -(toroidal_flux(surface2,field) - target_toroidal_flux)/jnp.abs(target_toroidal_flux))
+
+
+def loss_toroidal_flux_contraint_3(field,surface,surface2,target_toroidal_flux=1.e-5):
+    return jnp.maximum(0, (toroidal_flux(surface2,field) - target_toroidal_flux)/jnp.abs(target_toroidal_flux))
+
+def loss_surface_distance(field,surface,surface2):
+    return jnp.maximum(0,-(surface.gamma - surface2.gamma))
+
+
+""" Geometry cost functions """
+
+def loss_quasisymmetry(field,surface,surface2):
+    # Calculating ∇(B · ∇|B|) on the surface
+    gamma_reshaped = jnp.reshape(surface.gamma, (-1, 3))
+    grad_B_dot_grad_absB_on_surface = vmap(field.grad_B_dot_GradAbsB)(gamma_reshaped)
+    # Calculating ∇ψ · ∇|B| on the surface)
+    grad_absB_on_surface = vmap(field.dAbsB_by_dX)(gamma_reshaped)
+    normal_reshaped = jnp.reshape(surface.unitnormal, (-1, 3))
+    normal_cross_grad_absB_on_surface = jnp.cross(normal_reshaped, grad_absB_on_surface)
+    qs_residual = jnp.mean(jnp.abs(jnp.sum(normal_cross_grad_absB_on_surface * grad_B_dot_grad_absB_on_surface, axis=-1)))/(1.e-7)**3
+    return qs_residual
+
+
+def loss_quasisymmetry_2(field,surface,surface2):
+    # Calculating ∇(B · ∇|B|) on the surface
+    gamma_reshaped = jnp.reshape(surface2.gamma, (-1, 3))
+    grad_B_dot_grad_absB_on_surface = vmap(field.grad_B_dot_GradAbsB)(gamma_reshaped)
+    # Calculating ∇ψ · ∇|B| on the surface)
+    grad_absB_on_surface = vmap(field.dAbsB_by_dX)(gamma_reshaped)
+    normal_reshaped = jnp.reshape(surface2.unitnormal, (-1, 3))
+    normal_cross_grad_absB_on_surface = jnp.cross(normal_reshaped, grad_absB_on_surface)
+    qs_residual = jnp.mean(jnp.abs(jnp.sum(normal_cross_grad_absB_on_surface * grad_B_dot_grad_absB_on_surface, axis=-1)))/(1.e-7)**3
+    return qs_residual
+
+
+
+def loss_quasisymmetry_constraint(field,surface,surface2,target_QS=0.0001):
+    # Calculating ∇(B · ∇|B|) on the surface
+    gamma_reshaped = jnp.reshape(surface.gamma, (-1, 3))
+    grad_B_dot_grad_absB_on_surface = vmap(field.grad_B_dot_GradAbsB)(gamma_reshaped)
+    # Calculating ∇ψ · ∇|B| on the surface)
+    grad_absB_on_surface = vmap(field.dAbsB_by_dX)(gamma_reshaped)
+    normal_reshaped = jnp.reshape(surface.unitnormal, (-1, 3))
+    normal_cross_grad_absB_on_surface = jnp.cross(normal_reshaped, grad_absB_on_surface)
+    qs_residual = jnp.sum(jnp.maximum(jnp.abs(jnp.sum(normal_cross_grad_absB_on_surface * grad_B_dot_grad_absB_on_surface, axis=-1))-target_QS,0.0))/(1.e-7)**3
+    return qs_residual
+
+
+
+def loss_quasisymmetry_constraint_2(field,surface,surface2,target_QS=0.0001):
+    # Calculating ∇(B · ∇|B|) on the surface
+    gamma_reshaped = jnp.reshape(surface2.gamma, (-1, 3))
+    grad_B_dot_grad_absB_on_surface = vmap(field.grad_B_dot_GradAbsB)(gamma_reshaped)
+    # Calculating ∇ψ · ∇|B| on the surface)
+    grad_absB_on_surface = vmap(field.dAbsB_by_dX)(gamma_reshaped)
+    normal_reshaped = jnp.reshape(surface2.unitnormal, (-1, 3))
+    normal_cross_grad_absB_on_surface = jnp.cross(normal_reshaped, grad_absB_on_surface)
+    qs_residual = jnp.sum(jnp.maximum(jnp.abs(jnp.sum(normal_cross_grad_absB_on_surface * grad_B_dot_grad_absB_on_surface, axis=-1))-target_QS,0.0))/(1.e-7)**3
+    return qs_residual
+
+
+
+""" Creating the loss functions """
+def loss_iota(field, surface,surface2,target_iota=0.5,delta_s=0.02):
+    B_on_surface_2= B_on_surface(surface, field)
+    #Contravariant psi/s basis vector on surface_2
+    e_s=(surface.gamma-surface2.gamma)/delta_s
+    #Calculate jacobian
+    jac=jnp.einsum('ijk,ijk->ij',e_s, jnp.cross(surface.gammadash_theta,surface.gammadash_phi,axis=-1))
+    jac_g = jac[:, :, jnp.newaxis]
+    jac_g = jnp.repeat(jac_g, 3, axis=2)
+    #jac_cov=jnp.linalg.norm(jnp.einsum('ijk,ijk->ij',e_r, jnp.cross(result['s'].gammadash_theta,result['s'].gammadash_phi,axis=-1)),keepdims=True)
+    #grad_alpha_final = -jnp.cross(B_on_surface_2, surface_2.unitnormal, axis=-1)
+    #Covariant basis vectors on surface 2
+    ##grad_psi = jnp.cross(surface.gammadash_theta,surface.gammadash_phi, axis=-1)/jac_g
+    #grad_psi=jnp.true_divide(grad_psi,jnp.linalg.norm(grad_psi,axis=-1,keepdims=True))
+    grad_theta = -jnp.cross(e_s, surface.gammadash_phi, axis=-1)/jac_g
+    grad_phi = jnp.cross(e_s, surface.gammadash_theta, axis=-1)/jac_g
+    #grad_phi=jnp.true_divide(grad_phi,jnp.linalg.norm(grad_phi,axis=-1,keepdims=True))
+    #e_phi=jnp.cross(grad_phi,grad_psi , axis=-1)
+    ###B_contravariant_psi=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_psi)*jac
+    B_contravariant_theta=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_theta)*jac
+    B_contravariant_phi=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_phi)*jac
+    iota=jnp.average(B_contravariant_theta)/jnp.average(B_contravariant_phi)#*result['s'].nfp
+    #modB=jnp.linalg.norm(B_on_surface_2,axis=-1)    
+    return iota-target_iota
+
+
+
+""" Defining custom losses """
+# L_normal_field = custom_loss(loss_bdotn, "field", "surface")
+# L_normal_field_constraint = custom_loss(BdotN_constraint, "field",  "surface",target_tol=BDOTN_TARGET)
+# L_length_constraint = custom_loss(loss_length_constraint, "field", "surface",target_length=LENGTH_TARGET)
+# L_curvature_constraint = custom_loss(loss_curvature_contraint, "field", "surface",target_curvature=CURVATURE_TARGET)
+# L_length = custom_loss(loss_length, "field")
+# L_curvature = custom_loss(loss_curvature, "field")
+
+# L_area= custom_loss(loss_area_contraint, "field",  "surface",target_area=Area_Target)
+
+# L_QS= custom_loss(loss_quasisymmetry, "field",  "surface")
+# L_QS_constraint= custom_loss(loss_quasisymmetry_constraint, "field",  "surface",target_QS=0.0001)
+
+# L_normal_field = custom_loss(loss_bdotn, "field", surface=init_surface_2)
+# L_normal_field_constraint = custom_loss(BdotN_constraint, "field",  surface=init_surface_2,target_tol=BDOTN_TARGET)
+# L_length_constraint = custom_loss(loss_length_constraint, "field", surface=init_surface_2,target_length=LENGTH_TARGET)
+# L_curvature_constraint = custom_loss(loss_curvature_contraint, "field", surface=init_surface_2,target_curvature=CURVATURE_TARGET)
+
+# L_area= custom_loss(loss_area_contraint, "field",  "surface",target_area=Area_Target)
+
+# L_QS= custom_loss(loss_quasisymmetry, "field",  "surface")
+
+
+L_normal_field = custom_loss(loss_bdotn, "field", "surface", "surface2")
+L_normal_field_constraint = custom_loss(BdotN_constraint, "field",  "surface","surface2",target_tol=BDOTN_TARGET)
+L_normal_field_constraint_2 = custom_loss(BdotN_constraint_2, "field",  "surface","surface2",target_tol=BDOTN_TARGET)
+L_length_constraint = custom_loss(loss_length_constraint, "field", "surface","surface2",target_length=LENGTH_TARGET)
+L_curvature_constraint = custom_loss(loss_curvature_contraint, "field", "surface","surface2",target_curvature=CURVATURE_TARGET)
+
+
+L_area= custom_loss(loss_area_contraint, "field",  "surface","surface2",target_area=Area_Target)
+L_area_2= custom_loss(loss_area_contraint_2, "field",  "surface","surface2",target_area=Area_Target)
+L_area_3= custom_loss(loss_area_contraint_3, "field",  "surface","surface2",target_area=Area_Target_2)
+L_volume= custom_loss(loss_volume_contraint, "field",  "surface","surface2",target_volume=Volume_Target)
+L_volume_2= custom_loss(loss_volume_contraint_2, "field",  "surface","surface2",target_volume=Volume_Target)
+L_volume_3= custom_loss(loss_volume_contraint_3, "field",  "surface","surface2",target_volume=Volume_Target_2)
+L_toroidal_flux= custom_loss(loss_toroidal_flux_contraint, "field",  "surface","surface2",target_toroidal_flux=Toroidal_Flux_target)
+L_toroidal_flux_2= custom_loss(loss_toroidal_flux_contraint_2, "field",  "surface","surface2",target_toroidal_flux=Toroidal_Flux_target)
+L_toroidal_flux_3= custom_loss(loss_toroidal_flux_contraint_3, "field",  "surface","surface2",target_toroidal_flux=Toroidal_Flux_target_2)
+
+L_QS= custom_loss(loss_quasisymmetry, "field",  "surface","surface2")
+L_QS_2= custom_loss(loss_quasisymmetry_2, "field",  "surface","surface2")
+L_QS_constraint= custom_loss(loss_quasisymmetry_constraint, "field",  "surface","surface2",target_QS=0.000001)
+L_QS_constraint_2= custom_loss(loss_quasisymmetry_constraint_2, "field",  "surface","surface2",target_QS=0.000001)
+
+L_iota=custom_loss(loss_iota, "field",  "surface","surface2",target_iota=iota_target,delta_s=0.02)
+
+L_surface_distance=custom_loss(loss_surface_distance, "field",  "surface","surface2")
+
+L_loss=L_QS+L_QS_2
+
+
+""" Defining total loss + setting dependencies """
+# L_normal_field.dependencies = {"field": init_field,"surface": init_surface_2}
+# L_length_constraint.dependencies = {"field": init_field,"surface": init_surface_2}
+# L_curvature_constraint.dependencies = {"field": init_field,"surface": init_surface_2}
+# L_normal_field_constraint.dependencies = {"field": init_field,"surface": init_surface_2}
+# L_length.dependencies = {"field": init_field}
+# L_curvature.dependencies = {"field": init_field}
+
+# L_area.dependencies = {"field": init_field,"surface": init_surface_2}
+
+# L_QS.dependencies = {"field": init_field,"surface": init_surface_2}
+# L_QS_constraint.dependencies = {"field": init_field,"surface": init_surface_2}
+
+
+# L_normal_field.dependencies = {"field": init_field}
+# L_length_constraint.dependencies = {"field": init_field}
+# L_curvature_constraint.dependencies = {"field": init_field}
+# L_normal_field_constraint.dependencies = {"field": init_field}
+
+# L_area.dependencies = {"field": init_field}
+
+# L_QS.dependencies = {"field": init_field}
+
+
+L_normal_field.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_length_constraint.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_curvature_constraint.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_normal_field_constraint.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_normal_field_constraint_2.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+
+L_area.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_area_2.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_area_3.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_area.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_volume.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_volume_2.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_volume_3.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_toroidal_flux.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_toroidal_flux_2.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_toroidal_flux_3.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+
+L_QS.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_QS_2.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_QS_constraint.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_QS_constraint_2.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+
+L_iota.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+L_surface_distance.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+
+
+L_loss.dependencies = {"field": init_field,"surface": init_surface_2,"surface2": init_surface_1}
+
+
+
+# Create the constraints
+penalty = 0.1 #Intial penalty values
+multiplier=0.5 #Initial lagrange multiplier values
+sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
+model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers 
+#Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
+
+
+#Construct constraints
+constraints = alm.combine(
+alm.eq(L_curvature_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_length_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_normal_field_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+#alm.eq(L_QS_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+#alm.eq(L_QS_constraint_2,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_area,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_area_2,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_area_3,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_volume,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_volume_2,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_volume_3,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_toroidal_flux,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_toroidal_flux_2,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_toroidal_flux_3,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_normal_field_constraint_2,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+alm.eq(L_iota,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+#alm.eq(L_surface_distance,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+)
+
+
+
+beta=2.                                     #penalty update parameter
+mu_max=1.e4                                #Maximum penalty parameter allowed
+alpha=0.99                                  #These are parameters only used if gradient descent and adaaptative mu
+gamma=1.e-2
+epsilon=1.e-8
+omega_tol=1.e-7    #desired grad_tolerance, associated with grad of lagrangian to main parameters
+eta_tol=1.e-7    #desired contraint tolerance, associated with variation of contraints
+
+
+
+#If loss=cost_function(x) is not prescribed, f(x)=0 is considered, uncomment second line to use B dot N as a loss and not a constraint
+#ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+ALM=alm.ALM_model_jaxopt_lbfgsb(loss=L_loss,constraints=constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+
+
+
+
+
+#Initializing lagrange multipliers
+lagrange_params=constraints.init(L_loss.starting_dofs)
+#parameters are a tuple of the primal/main optimisation parameters and the lagrange multipliers
+params = L_normal_field.starting_dofs, lagrange_params
+#This is just to initialize an empty state for the lagrange multiplier update and get some information
+lag_state,grad,info=ALM.init(params)
+
+#Initializing first tolerances for the inner minimisation loop iteration
+mu_average=alm.penalty_average(lagrange_params)
+omega=1./mu_average
+eta=1./mu_average**0.1
+
+
+""" Optimizing  with alm"""
+t_start = time()
+
+i=0
+while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
+    #One step of ALM optimization
+    params, lag_state,grad,info,eta,omega = ALM.update(params,lag_state,grad,info,eta,omega)    
+    #if i % 5 == 0:
+    #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
+    print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')
+    #print('lagrange',params[1])
+    i=i+1
+
+t_end = time()
+
+
+opt_field_alm = L_normal_field_constraint.dofs_to_pytree(params[0])[0]
+opt_coils_alm = opt_field_alm.coils
+
+opt_surface_alm_2= L_normal_field_constraint.dofs_to_pytree(params[0])[1]
+opt_surface_alm_1= L_normal_field_constraint.dofs_to_pytree(params[0])[2]
+
+
+
+
+""" Defining total loss for nornmal optimization"""
+L_total = NORMAL_FIELD_WEIGHT*L_normal_field+ LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature
+L_total.dependencies = {"field": init_field}
+
+""" Optimizing the total loss """
+t_start = time()
+res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=maximum_function_evaluations)
+t_end = time()
+
+print(f"\nOptimization took {t_end - t_start:.2f} seconds")
+print("Initial loss:", L_total(L_total.starting_dofs))    
+print("Loss after optimization:", L_total(res.x))
+
+opt_field = L_total.dofs_to_pytree(res.x)["field"]
+opt_coils = opt_field.coils
+
+
+print(f"\nOptimization took {t_end - t_start:.2f} seconds")
+print("Initial B dot N:", jnp.max(BdotN_over_B(init_surface_2, init_field)))    
+print("B dot N after optimization:", jnp.max(BdotN_over_B(init_surface_2, opt_field)))
+print("B dot N after optimization alm:", jnp.max(BdotN_over_B(opt_surface_alm_1, opt_field_alm)))
+print("Initial curvature :", jnp.average(init_field.coils.curvature,axis=0))    
+print("Curvature after optimization:",jnp.average(opt_field.coils.curvature,axis=0))
+print("Curvature after optimization alm:",jnp.average(opt_field_alm.coils.curvature,axis=0))
+print("Curvature target:",CURVATURE_TARGET)
+print("Initial length :", init_field.coils.length)    
+print("Length after optimization:",opt_field.coils.length)
+print("Length after optimization alm:",opt_field_alm.coils.length)
+print("Length target:",LENGTH_TARGET)
+
+
+
+
+fig = plt.figure(figsize=(8, 4))
+
+ax1 = fig.add_subplot(131, projection='3d')
+init_coils.plot(ax=ax1, show=False,label='Initial coils')
+init_surface_2.plot(ax=ax1, show=False)
+ax2 = fig.add_subplot(132, projection='3d')
+init_surface_2.plot(ax=ax2, show=False,color='red')
+init_surface_1.plot(ax=ax2, show=False)
+ax3 = fig.add_subplot(133, projection='3d')
+opt_coils_alm.plot(ax=ax3, show=False,label='ALM optimized coils')
+opt_surface_alm_2.plot(ax=ax3, show=False)
+opt_surface_alm_1.plot(ax=ax3, show=False)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+EXPORT = False
+if EXPORT:
+    output_filepath = os.path.join(os.path.dirname(__file__), "output")
+
+    """ Save the coils to a json file """
+    init_coils.to_json(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
+    opt_coils.to_json(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
+
+    """ Save results in vtk format to analyze in Paraview """
+    surface.to_vtk(os.path.join(output_filepath, "init_surface_vmec_surface.json"), field=init_field)
+    surface.to_vtk(os.path.join(output_filepath, "final_surface_vmec_surface.json"), field=opt_field)
+    init_coils.to_vtk(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
+    opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
+    opt_coils_alm.to_vtk(os.path.join(output_filepath, "opt_coils_alm_vmec_surface.json"))    
+
+
+
+
+
+
+
+init_field.coils.to_vtk('coils_initial')
+opt_coils_alm.to_vtk('coils_optimized')
+opt_surface_alm_1.to_vtk('surface_1_optimized')
+opt_surface_alm_2.to_vtk('surface_2_optimized')
+
+
+import pyvista as pv
+coils_init_file='coils_initial.vtu'
+coils_opt_file='coils_optimized.vtu'
+surf_1_file='surface_1_optimized.vts'
+surf_2_file='surface_2_optimized.vts'
+
+# Load the coil and field files
+surf1_mesh = pv.read(surf_1_file)
+surf2_mesh = pv.read(surf_2_file)
+coils_mesh = pv.read(coils_opt_file)
+coils_init_mesh = pv.read(coils_init_file)
+#Function to use with pyvista plotter to change rcamera rotation based on aximuthal angle and elevation angle
+def camera_rotation(pl,azim_angle=0,elev_angle=0):
+    cam = pl.camera
+    # Load current camera state
+    pos = jnp.array(cam.position)
+    f = jnp.array(cam.focal_point)
+    up = jnp.array(cam.up)
+    # Camera vector (from focal point to camera)
+    v = pos - f
+    r = jnp.linalg.norm(v)
+    # Convert to spherical coordinates
+    x, y, z = v
+    theta = jnp.arctan2(y, x)        # azimuth angle
+    phi   = jnp.arccos(z / r)        # polar angle
+    # Apply changes (in radians)
+    theta += jnp.radians(azim_angle)
+    phi   += jnp.radians(elev_angle)
+    # Clamp phi to avoid flipping over the poles
+    phi = jnp.clip(phi, 1e-3, jnp.pi - 1e-3)
+    # Convert back to Cartesian, maintaining SAME radius (zoom)
+    vx = r * jnp.sin(phi) * jnp.cos(theta)
+    vy = r * jnp.sin(phi) * jnp.sin(theta)
+    vz = r * jnp.cos(phi)
+    # Update camera
+    cam.position = f + jnp.array([vx, vy, vz])
+    cam.up = up  # preserve the original up vector
+
+
+# Set up the plotter for 1st elevation parameter and savefig
+pl=pv.Plotter(off_screen=True) #make off_screen false to prompt show
+pl.add_mesh(field_mesh, cmap='grey',show_scalar_bar=False)
+pl.add_mesh(coils_mesh,style='wireframe',render_lines_as_tubes=True, color='gold', line_width=5)
+camera_rotation(pl,azim_default,elev_angle=elevParams[0])
+pl.render()
+#pl.show(screenshot='coils_nearaxis_paraview_style_view1.png')
+pl.screenshot('coils_nearaxis_paraview_style_view1.png')
+
+
+# Set up the plotter for 2nd elevation parameter and savefig
+pl=pv.Plotter(off_screen=False) #make off_screen false to prompt show
+pl.add_mesh(surf1_mesh, show_scalar_bar=False,color='blue')
+pl.add_mesh(surf2_mesh,show_scalar_bar=False,color='red')
+pl.add_mesh(coils_mesh,style='wireframe',render_lines_as_tubes=True, color='gold', line_width=5)
+pl.add_mesh(coils_init_mesh,style='wireframe',render_lines_as_tubes=True, color='silver', line_width=5)
+camera_rotation(pl,-100.,elev_angle=12)
+pl.render()
+pl.show()
+#pl.screenshot('coils_nearaxis_paraview_style_view2.png')
+
+# Set up the plotter for 2nd elevation parameter and savefig
+pl=pv.Plotter(off_screen=True) #make off_screen false to prompt show
+pl.add_mesh(field_mesh,,show_scalar_bar=False)
+pl.add_mesh(coils_mesh,style='wireframe',render_lines_as_tubes=True, color='gold', line_width=5)
+camera_rotation(pl,azim_default,elevParams[2])
+pl.render()
+#pl.show(screenshot='coils_nearaxis_paraview_style_view3.png')
+pl.screenshot('coils_nearaxis_paraview_style_view3.png')

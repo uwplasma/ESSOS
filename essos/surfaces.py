@@ -167,7 +167,7 @@ class SurfaceRZFourier:
         return surface
     
     @classmethod
-    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus'):
+    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus',scaling_type=2,scaling_factor=0.0):
         nfp = vmec.nfp
         mpol = vmec.mpol
         ntor = vmec.ntor
@@ -176,14 +176,14 @@ class SurfaceRZFourier:
         rc = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(vmec.rmnc)
         zs = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(vmec.zmns)
 
-        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
+        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,scaling_factor=scaling_factor,scaling_type=scaling_type)
         surface._xm = vmec.xm
         surface._xn = vmec.xn
 
         return surface
 
     @classmethod
-    def from_wout_file(cls, file, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus'):
+    def from_wout_file(cls, file, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus',scaling_type=2,scaling_factor=0.0):
         from netCDF4 import Dataset
         nc = Dataset(file)
 
@@ -198,7 +198,7 @@ class SurfaceRZFourier:
         rc = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(jnp.array(nc.variables["rmnc"][:]))
         zs = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(jnp.array(nc.variables["zmns"][:]))
 
-        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
+        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,scaling_factor=scaling_factor,scaling_type=scaling_type)
         surface._xm = xm
         surface._xn = xn
 
@@ -395,7 +395,8 @@ class SurfaceRZFourier:
         sin_phi2d = jnp.sin(phi2d)
         cos_phi2d = jnp.cos(phi2d)
         rc = self.rc; zs = self.zs; xm = self.xm; xn = self.xn
-
+        #rmnc_interp = self.rc; zmns_interp = self.zs; xm = self.xm; xn = self.xn
+        
         print(rc.shape, cos_angles.shape)
         R = jnp.einsum('i,ijk->jk', rc, cos_angles)
         Z = jnp.einsum('i,ijk->jk', zs, sin_angles)
@@ -407,13 +408,27 @@ class SurfaceRZFourier:
         dZ_dtheta = jnp.einsum('i,ijk->jk', xm * zs, cos_angles)
         dX_dtheta = dR_dtheta * cos_phi2d
         dY_dtheta = dR_dtheta * sin_phi2d
-        gammadash_theta = jnp.stack([dX_dtheta, dY_dtheta, dZ_dtheta], axis=-1)
+        gammadash_theta = 2.*jnp.pi*jnp.stack([dX_dtheta, dY_dtheta, dZ_dtheta], axis=-1)
 
         dR_dphi = jnp.einsum('i,ijk->jk', xn*rc, sin_angles)
         dZ_dphi = -jnp.einsum('i,ijk->jk', xn*zs, cos_angles)
         dX_dphi = dR_dphi * cos_phi2d - R * sin_phi2d
         dY_dphi = dR_dphi * sin_phi2d + R * cos_phi2d
-        gammadash_phi = jnp.stack([dX_dphi, dY_dphi, dZ_dphi], axis=-1)
+        gammadash_phi = 2.*jnp.pi*jnp.stack([dX_dphi, dY_dphi, dZ_dphi], axis=-1)
+
+        # r_coordinate = jnp.einsum('i,ijk->jk', rmnc_interp, cos_angles)
+        # z_coordinate = jnp.einsum('i,ijk->jk', zmns_interp, sin_angles)
+        # gamma = jnp.transpose(jnp.array([r_coordinate * jnp.cos(phi2d), r_coordinate * jnp.sin(phi2d), z_coordinate]), (1, 2, 0))
+
+        # dX_dtheta = jnp.einsum('i,ijk,i->jk', -self.xm, sin_angles, rmnc_interp) * jnp.cos(phi2d)
+        # dY_dtheta = jnp.einsum('i,ijk,i->jk', -self.xm, sin_angles, rmnc_interp) * jnp.sin(phi2d)
+        # dZ_dtheta = jnp.einsum('i,ijk,i->jk',  self.xm, cos_angles, zmns_interp)
+        # gammadash_theta = 2*jnp.pi*jnp.transpose(jnp.array([dX_dtheta, dY_dtheta, dZ_dtheta]), (1, 2, 0))
+
+        # dX_dphi = jnp.einsum('i,ijk,i->jk',  self.xn, sin_angles, rmnc_interp) * jnp.cos(phi2d) - r_coordinate * jnp.sin(phi2d)
+        # dY_dphi = jnp.einsum('i,ijk,i->jk',  self.xn, sin_angles, rmnc_interp) * jnp.sin(phi2d) + r_coordinate * jnp.cos(phi2d)
+        # dZ_dphi = jnp.einsum('i,ijk,i->jk', -self.xn, cos_angles, zmns_interp)
+        # gammadash_phi = 2*jnp.pi*jnp.transpose(jnp.array([dX_dphi, dY_dphi, dZ_dphi]), (1, 2, 0))        
         
         return gamma, gammadash_theta, gammadash_phi
     
@@ -439,7 +454,7 @@ class SurfaceRZFourier:
     # _compute_properties method
     @jit
     def _compute_properties(self):
-        normal = jnp.cross(self.gammadash_theta, self.gammadash_phi, axis=2)
+        normal = jnp.cross(self.gammadash_phi, self.gammadash_theta, axis=2)
         unitnormal = normal / jnp.linalg.norm(normal, axis=2, keepdims=True)
         area_element = jnp.linalg.norm(normal, axis=2)
         return normal, unitnormal, area_element
@@ -480,8 +495,10 @@ class SurfaceRZFourier:
         n = self.normal    # shape: (nphi, ntheta, 3)
 
         integrand = jnp.sum(xyz * n, axis=2)  # dot(x, n), shape: (nphi, ntheta)
-        volume = jnp.mean(integrand) / 3.0
+        volume = jnp.sum(integrand) / (3.0*self.nphi*self.ntheta)
         return volume
+
+
 
     @property
     def area(self):
