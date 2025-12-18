@@ -152,9 +152,11 @@ class SurfaceRZFourier:
 
 
     @classmethod
-    def from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus'):
+    def from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus',scaling_type=2,scaling_factor=0.0):
         from f90nml import Parser
-        nml = Parser().read(file)['indata']
+        all_namelists = Parser().read(file)
+        nml = all_namelists['indata']        
+        #nml = Parser().read(file)['indata']
 
         nfp = nml["nfp"] if "nfp" in nml else 1
         mpol = nml['mpol']            
@@ -163,7 +165,7 @@ class SurfaceRZFourier:
         rc = jnp.ravel(nested_lists_to_array(nml['rbc']))[2:]
         zs = jnp.ravel(nested_lists_to_array(nml['zbs']))[2:]
 
-        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
+        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,scaling_factor=scaling_factor,scaling_type=scaling_type)
         return surface
     
     @classmethod
