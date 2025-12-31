@@ -18,8 +18,9 @@ from functools import partial
 from scipy.optimize import least_squares
 
 # Optimization parameters
-maximum_function_evaluations=100
-
+maximum_function_evaluations=3000
+ntheta = 60
+nphi=60
 
 input_filepath = os.path.join(os.path.dirname(__name__), "../input_files")
 vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
@@ -29,9 +30,9 @@ toroidal_input_1=os.path.join(input_filepath, 'input.toroidal_surface_1')
 
 target_coils=Coils.from_json(filename_coils)
 target_field = BiotSavart(Coils.from_json(filename_coils))
-target_surface_2 = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=60, nphi=60, range_torus='half period',close=True)
-target_surface_1 = SurfaceRZFourier.from_wout_file(vmec_input, s=0.98, ntheta=60, nphi=60, range_torus='half period',close=True)
-target_surface_0 = SurfaceRZFourier.from_wout_file(vmec_input, s=0.96, ntheta=60, nphi=60, range_torus='half period',close=True)
+target_surface_2 = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=ntheta, nphi=nphi, range_torus='half period',close=True)
+target_surface_1 = SurfaceRZFourier.from_wout_file(vmec_input, s=0.98, ntheta=ntheta, nphi=nphi, range_torus='half period',close=True)
+#target_surface_0 = SurfaceRZFourier.from_wout_file(vmec_input, s=0.96, ntheta=ntheta, nphi=nphi, range_torus='half period',close=True)
 """ Creating starting coils and surface """
 N_COILS = 4; FOURIER_ORDER = 6; LARGE_R = 10.; SMALL_R = 5.7; NFP = 2; N_SEGMENTS = 60; STELLSYM = True  # Curve parameters
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
@@ -39,8 +40,8 @@ COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
 init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
 init_field = BiotSavart(init_coils)
-init_surface_1=SurfaceRZFourier.from_wout_file(vmec_input, s=0.98, ntheta=60, nphi=60,close=True, range_torus='half period',scaling_factor=-1.2,scaling_type=jnp.inf)
-init_surface_2=SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=60, nphi=60, close=True,range_torus='half period',scaling_factor=-1.2,scaling_type=jnp.inf)
+init_surface_1=SurfaceRZFourier.from_wout_file(vmec_input, s=0.98, ntheta=ntheta, nphi=nphi,close=True, range_torus='half period',scaling_factor=-1.2,scaling_type=jnp.inf)
+init_surface_2=SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=ntheta, nphi=nphi, close=True,range_torus='half period',scaling_factor=-1.2,scaling_type=jnp.inf)
 #init_surface_1=SurfaceRZFourier.from_input_file(toroidal_input, ntheta=60, nphi=60,close=True, range_torus='half period',scaling_factor=-1.2,scaling_type=jnp.inf)
 #init_surface_2=SurfaceRZFourier.from_input_file(toroidal_input_1, ntheta=60, nphi=60, close=True,range_torus='half period',scaling_factor=-1.2,scaling_type=jnp.inf)
 
@@ -77,13 +78,13 @@ NORMAL_FIELD_WEIGHT = 1.
 BDOTN_TARGET=1.e-6
 Area_Target=target_surface_2.area
 Area_Target_2=target_surface_1.area
-Area_Target_3=target_surface_0.area
+#Area_Target_3=target_surface_0.area
 Volume_Target=target_surface_2.volume
 Volume_Target_2=target_surface_1.volume
-Volume_Target_3=target_surface_0.volume
+#Volume_Target_3=target_surface_0.volume
 Toroidal_Flux_target=toroidal_flux(target_surface_2,target_field)
 Toroidal_Flux_target_2=toroidal_flux(target_surface_1,target_field)
-Toroidal_Flux_target_3=toroidal_flux(target_surface_0,target_field)
+#Toroidal_Flux_target_3=toroidal_flux(target_surface_0,target_field)
 iota_target=iota(target_field, target_surface_2,target_surface_1,delta_s=0.02)
 
 
@@ -305,7 +306,6 @@ L_normal_field.dependencies = {"field": init_field,"surface": init_surface_2}
 L_length_constraint.dependencies = {"field": init_field,"surface": init_surface_2}
 L_curvature_constraint.dependencies = {"field": init_field,"surface": init_surface_2}
 L_normal_field_constraint.dependencies = {"field": init_field,"surface": init_surface_2}
-L__constraint.dependencies = {"field": init_field,"surface": init_surface_2}
 
 
 L_area.dependencies = {"field": init_field,"surface": init_surface_2}
@@ -341,7 +341,7 @@ alm.eq(L_QS_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,
 alm.eq(L_area,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(L_volume,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(L_toroidal_flux,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-alm.eq(L_iota,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+#alm.eq(L_iota,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 )
 
 
@@ -381,7 +381,7 @@ eta=1./mu_average**0.1
 t_start = time()
 
 i=0
-while i<=2000 and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
+while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
     #One step of ALM optimization
     params, lag_state,grad,info,eta,omega = ALM.update(params,lag_state,grad,info,eta,omega)    
     #if i % 5 == 0:
@@ -410,34 +410,13 @@ opt_surface_alm_2= L_normal_field_constraint.dofs_to_pytree(params[0])[1]
 
 
 
-
-""" Defining total loss for nornmal optimization"""
-L_total = NORMAL_FIELD_WEIGHT*L_normal_field+ LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature
-L_total.dependencies = {"field": init_field}
-
-""" Optimizing the total loss """
-t_start = time()
-res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=maximum_function_evaluations)
-t_end = time()
-
-print(f"\nOptimization took {t_end - t_start:.2f} seconds")
-print("Initial loss:", L_total(L_total.starting_dofs))    
-print("Loss after optimization:", L_total(res.x))
-
-opt_field = L_total.dofs_to_pytree(res.x)["field"]
-opt_coils = opt_field.coils
-
-
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")
 print("Initial B dot N:", jnp.max(BdotN_over_B(init_surface_2, init_field)))    
-print("B dot N after optimization:", jnp.max(BdotN_over_B(init_surface_2, opt_field)))
-print("B dot N after optimization alm:", jnp.max(BdotN_over_B(opt_surface_alm_1, opt_field_alm)))
+print("B dot N after optimization alm:", jnp.max(BdotN_over_B(opt_surface_alm_2, opt_field_alm)))
 print("Initial curvature :", jnp.average(init_field.coils.curvature,axis=0))    
-print("Curvature after optimization:",jnp.average(opt_field.coils.curvature,axis=0))
 print("Curvature after optimization alm:",jnp.average(opt_field_alm.coils.curvature,axis=0))
 print("Curvature target:",CURVATURE_TARGET)
 print("Initial length :", init_field.coils.length)    
-print("Length after optimization:",opt_field.coils.length)
 print("Length after optimization alm:",opt_field_alm.coils.length)
 print("Length target:",LENGTH_TARGET)
 
@@ -449,32 +428,15 @@ fig = plt.figure(figsize=(8, 4))
 ax1 = fig.add_subplot(131, projection='3d')
 init_coils.plot(ax=ax1, show=False,label='Initial coils')
 init_surface_2.plot(ax=ax1, show=False)
-init_surface_1.plot(ax=ax1, show=False)
 ax2 = fig.add_subplot(132, projection='3d')
 opt_surface_alm_2.plot(ax=ax2, show=False,color='red')
-opt_surface_alm_1.plot(ax=ax2, show=False)
 ax3 = fig.add_subplot(133, projection='3d')
 opt_coils_alm.plot(ax=ax3, show=False,label='ALM optimized coils')
 opt_surface_alm_2.plot(ax=ax3, show=False)
-opt_surface_alm_1.plot(ax=ax3, show=False)
 plt.legend()
 plt.tight_layout()
 plt.savefig('coils_and_surfaces.pdf')
 
-EXPORT = False
-if EXPORT:
-    output_filepath = os.path.join(os.path.dirname(__file__), "output")
-
-    """ Save the coils to a json file """
-    init_coils.to_json(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
-    opt_coils.to_json(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
-
-    """ Save results in vtk format to analyze in Paraview """
-    surface.to_vtk(os.path.join(output_filepath, "init_surface_vmec_surface.json"), field=init_field)
-    surface.to_vtk(os.path.join(output_filepath, "final_surface_vmec_surface.json"), field=opt_field)
-    init_coils.to_vtk(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
-    opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
-    opt_coils_alm.to_vtk(os.path.join(output_filepath, "opt_coils_alm_vmec_surface.json"))    
 
 
 
@@ -486,7 +448,9 @@ from essos.dynamics import Tracing
 tmax = 100000000000
 nfieldlines_per_core = 40
 nfieldlines = nfieldlines_per_core * number_of_processors_to_use
-R0 = jnp.linspace(11.2, 14.9, nfieldlines)
+#R0 = jnp.linspace(11.2, 14.9, nfieldlines)
+R0 = jnp.linspace(11.2, 13., nfieldlines)
+
 trace_tolerance = 1e-7
 num_steps = 60000
 
@@ -524,14 +488,14 @@ def compute_rz_on_phi(surface, theta, phi=0.0):
 
 # # Contours from optimized surface
 R0_opt, Z0_opt = compute_rz_on_phi(opt_surface_alm_2, theta, phi=0.0)
-R90_opt, Z90_opt = compute_rz_on_phi(opt_surface_alm_2, theta, phi=jnp.pi/4)
+R90_opt, Z90_opt = compute_rz_on_phi(opt_surface_alm_2, theta, phi=jnp.pi/2)
 # # Contours from true VMEC surface
 R0_true, Z0_true = compute_rz_on_phi(target_surface_2, theta, phi=0.0)
 R90_true, Z90_true = compute_rz_on_phi(target_surface_2, theta, phi=jnp.pi/2)
 
 fig, ax = plt.subplots(figsize=(6, 6))
 
-tracing.poincare_plot(ax=ax, show=False, shifts=[0, jnp.pi / 4])
+tracing.poincare_plot(ax=ax, show=False, shifts=[0, jnp.pi / 2])
 ax.plot(R0_opt, Z0_opt, color='black', linewidth=1.5, label=r"Optimized @ $\phi = 0$")
 ax.plot(R90_opt, Z90_opt, color='black', linestyle='--', linewidth=1.5, label=r"Optimized @ $\phi = \pi/2$")
 
@@ -550,7 +514,8 @@ plt.savefig('optimize_qfm_surface_poincare.png', dpi=300)
 
 
 
-
+init_coils.to_json("init_coils_vmec_surface.json")
+opt_coils_alm.to_json( "opt_coils_vmec_surface.json")
 
 init_field.coils.to_vtk('coils_initial')
 opt_coils_alm.to_vtk('coils_optimized')
@@ -597,32 +562,23 @@ def camera_rotation(pl,azim_angle=0,elev_angle=0):
     cam.up = up  # preserve the original up vector
 
 
-# Set up the plotter for 1st elevation parameter and savefig
-pl=pv.Plotter(off_screen=True) #make off_screen false to prompt show
-pl.add_mesh(field_mesh, cmap='grey',show_scalar_bar=False)
-pl.add_mesh(coils_mesh,style='wireframe',render_lines_as_tubes=True, color='gold', line_width=5)
-camera_rotation(pl,azim_default,elev_angle=elevParams[0])
-pl.render()
-#pl.show(screenshot='coils_nearaxis_paraview_style_view1.png')
-pl.screenshot('coils_nearaxis_paraview_style_view1.png')
 
 
 # Set up the plotter for 2nd elevation parameter and savefig
 pl=pv.Plotter(off_screen=True) #make off_screen false to prompt show
-#pl.add_mesh(surf1_mesh, show_scalar_bar=False,color='blue')
 pl.add_mesh(surf2_mesh,show_scalar_bar=False,color='red')
 pl.add_mesh(coils_mesh,style='wireframe',render_lines_as_tubes=True, color='gold', line_width=5)
-pl.add_mesh(coils_init_mesh,style='wireframe',render_lines_as_tubes=True, color='silver', line_width=5)
 camera_rotation(pl,-100.,elev_angle=12)
 pl.render()
 #pl.show()
-pl.screenshot('coils_nearaxis_paraview_style_view2.png')
+pl.screenshot('coils_paraviw_style.png')
 
-# Set up the plotter for 2nd elevation parameter and savefig
-pl=pv.Plotter(off_screen=True) #make off_screen false to prompt show
-pl.add_mesh(field_mesh,,show_scalar_bar=False)
-pl.add_mesh(coils_mesh,style='wireframe',render_lines_as_tubes=True, color='gold', line_width=5)
-camera_rotation(pl,azim_default,elevParams[2])
-pl.render()
-#pl.show(screenshot='coils_nearaxis_paraview_style_view3.png')
-pl.screenshot('coils_nearaxis_paraview_style_view3.png')
+
+B_final= B_on_surface(opt_surface_alm_2, opt_field_alm)
+modB=jnp.linalg.norm(B_final,axis=-1)
+
+
+fig, ax = plt.subplots(figsize=(6, 6))
+plt.contour(opt_surface_alm_2.phi2d,opt_surface_alm_2.theta2d, modB, levels=20, cmap='viridis') # Using 20 levels and 'viridis' colorma
+plt.colorbar()
+plt.savefig('modB.png', dpi=300)
