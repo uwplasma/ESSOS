@@ -10,10 +10,10 @@ from simsopt.field.magneticfieldclasses import DipoleField as SimsoptDipoleField
 import numpy as np
 import gc
 import jax
+from essos.util import read_famus_dipoles
 
 
 jax.config.update('jax_enable_x64', True)
-jax.config.update('jax_captured_constants_warn_bytes', -1)
 
 
 script_dir = os.path.dirname(__file__)
@@ -46,11 +46,12 @@ grid_sizes = [2, 4, 8, 16, 32]
 essos_times = []
 simsopt_times = []
 
+data = read_famus_dipoles(famus_file)
 for n in grid_sizes:
  print(f"Processing grid size {n}x{n}")
  try:
      result = compare_dipole_fields(
-         surface_file, famus_file, output_dir=output_dir, plot=(n == 16), nphi=n, ntheta=n
+         surface_file, famus_file,data, output_dir=output_dir, plot=(n == 16), nphi=n, ntheta=n
      )
      if len(result) == 6:
          field_essos, s_plot, gamma, unitnormal, essos_time, simsopt_time = result
@@ -81,5 +82,5 @@ plt.legend()
 plt.grid(True)
 plt.xticks(grid_sizes)
 plt.ylim(bottom=0)
+plt.show()
 plt.savefig(os.path.join(output_dir, 'timing_plot.png'), bbox_inches='tight')
-plt.close()
