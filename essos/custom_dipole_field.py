@@ -10,14 +10,13 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
-from .util import read_famus_dipoles
-from .fields import DipoleField
+from essos.util import read_famus_dipoles
+from essos.fields import DipoleField
 jax.config.update('jax_enable_x64', True)
-jax.config.update('jax_captured_constants_warn_bytes', -1)
 
-def compare_dipole_fields(surface_file, famus_file, output_dir="output", plot=False, nphi=16, ntheta=16):
+def compare_dipole_fields(surface_file, famus_file,data, output_dir="output", plot=False, nphi=16, ntheta=16):
     """Compare SIMSOPT and custom dipole field calculations."""
-    positions, moments, Ic, pho = read_famus_dipoles(famus_file)
+    positions, moments, Ic, pho = data 
     mask = (Ic == 1)
     positions = positions[mask]
     moments = moments[mask]
@@ -68,9 +67,14 @@ def compare_dipole_fields(surface_file, famus_file, output_dir="output", plot=Fa
             ax.set_ylabel('Theta')
             ax.set_title(title)
             ims.append(im)
-        plt.subplots_adjust(bottom=0.35, wspace=0.3, left=0.05, right=0.95)
-        cbar_ax = fig.add_axes([0.1, 0.05, 0.8, 0.05]) 
-        cbar = fig.colorbar(ims[0], cax=cbar_ax, orientation='horizontal', label='B·n (T)')
+            #ax.colorbar(im,orientation='horizontal', label='B·n (T)')
+            fig.colorbar(im, ax=ax, orientation='horizontal',
+                         fraction=0.046, pad=0.25, label='B·n (T)')
+
+
+        #plt.subplots_adjust(bottom=0.35, wspace=0.3, left=0.05, right=0.95)
+        #cbar_ax = fig.add_axes([0.1, 0.05, 0.8, 0.05]) 
+        #cbar = fig.colorbar(ims[0], cax=cbar_ax, orientation='horizontal', label='B·n (T)')
         os.makedirs(output_dir, exist_ok=True)
         plt.savefig(os.path.join(output_dir, 'b_n_plot.png'), bbox_inches='tight', dpi=150)
         plt.close(fig) 
