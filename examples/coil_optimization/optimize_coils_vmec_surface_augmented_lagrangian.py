@@ -2,6 +2,7 @@ import os
 number_of_processors_to_use = 1 # Parallelization, this should divide ntheta*nphi
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.optimization import optimize_loss_function
@@ -47,21 +48,22 @@ def loss(field, surface):
 def BdotN_constraint(field,surface,target_tol=1.e-6):
     bdotn_over_b = BdotN_over_B(surface, field)
     bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
+    #bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum((jnp.square(bdotn_over_b)-target_tol)/target_tol,0.0)))
     return bdotn_over_b_loss
 
 def loss_length_constraint(field):
     return jnp.maximum(0, field.coils.length - LENGTH_TARGET)
+    #return jnp.maximum(0, (field.coils.length - LENGTH_TARGET)/LENGTH_TARGET)
 
 def loss_curvature_contraint(field):
     return jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET)
-
+    #return jnp.mean(jnp.maximum(0, (field.coils.curvature - CURVATURE_TARGET)/CURVATURE_TARGET))
 
 def loss_length(field):
     return jnp.mean(jnp.maximum(0, field.coils.length - LENGTH_TARGET))
 
 def loss_curvature(field):
     return jnp.mean(jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET))
-
 
 
 """ Defining custom losses """
@@ -83,20 +85,20 @@ L_curvature.dependencies = {"field": init_field}
 
 
 
+
+
+
 # Create the constraints
-penalty = 0.1 #Intial penalty values
-multiplier=0.5 #Initial lagrange multiplier values
+penalty = 1.0 #Intial penalty values
+multiplier=0. #Initial lagrange multiplier values
+#Initializing first tolerances for the inner minimisation loop iteration
+omega=1./penalty
+eta=1./penalty**0.1
 sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
 model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers 
 #Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
+model_mu='Tolerance'
 
-
-#Construct constraints
-constraints = alm.combine(
-alm.eq(L_curvature_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-alm.eq(L_length_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-#alm.eq(L_normal_field_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad)
-)
 
 
 
@@ -108,23 +110,53 @@ epsilon=1.e-8
 omega_tol=1.e-7    #desired grad_tolerance, associated with grad of lagrangian to main parameters
 eta_tol=1.e-7    #desired contraint tolerance, associated with variation of contraints
 
+#curvature_constraint=alm.ScaledConstraint(alm.eq(loss_curvature_contraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad))
+#length_constraint=alm.ScaledConstraint(alm.eq(loss_length_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad))
+#field_constraint=alm.ScaledConstraint(alm.eq(BdotN_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad))
+curvature_constraint=alm.eq(loss_curvature_contraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad)
+length_constraint=alm.eq(loss_length_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad)
+field_constraint=alm.eq(BdotN_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad)
+
+
+
+
+
+
+
+C_normal_field_constraint = alm.SelectiveConstraint(field_constraint, "field", surface=surface, target_tol=BdotN_Target_tol)
+C_length_constraint = alm.SelectiveConstraint(length_constraint, "field")
+C_curvature_constraint = alm.SelectiveConstraint(curvature_constraint, "field")
+
+
+
+C_Total_constraint = alm.combine(C_normal_field_constraint, C_length_constraint, C_curvature_constraint)
+
+
+
+
+
+
+C_normal_field_constraint.dependencies = {"field": init_field}
+C_length_constraint.dependencies = {"field": init_field}
+C_curvature_constraint.dependencies = {"field": init_field}
+C_Total_constraint.dependencies = {"field": init_field} 
+
+
+
 
 
 #If loss=cost_function(x) is not prescribed, f(x)=0 is considered, uncomment second line to use B dot N as a loss and not a constraint
 #ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-ALM=alm.ALM_model_jaxopt_lbfgsb(loss=L_normal_field,constraints=constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+ALM=alm.ALM_model_jaxopt_lbfgsb(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
 #Initializing lagrange multipliers
-lagrange_params=constraints.init(init_field.dofs)
+lagrange_params=C_Total_constraint.init(init_field.dofs)
 #parameters are a tuple of the primal/main optimisation parameters and the lagrange multipliers
 params = init_field.dofs, lagrange_params
 #This is just to initialize an empty state for the lagrange multiplier update and get some information
 lag_state,grad,info=ALM.init(params)
 
-#Initializing first tolerances for the inner minimisation loop iteration
-mu_average=alm.penalty_average(lagrange_params)
-omega=1./mu_average
-eta=1./mu_average**0.1
+
 
 
 
@@ -137,7 +169,7 @@ t_start = time()
 i=0
 while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
     #One step of ALM optimization
-    params, lag_state,grad,info,eta,omega = ALM.update(params,lag_state,grad,info,eta,omega)    
+    params, lag_state,grad,info = ALM.update(params,lag_state,grad,info)    
     #if i % 5 == 0:
     #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
     print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')

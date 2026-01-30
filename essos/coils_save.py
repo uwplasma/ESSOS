@@ -25,9 +25,7 @@ class Curves:
                  dofs:        jnp.ndarray,
                  n_segments:  int = 100,
                  nfp:         int = 1,
-                 stellsym:    bool = True,
-                 scaling_type: int = 2,
-                 scaling_factor: float = 0):
+                 stellsym:    bool = True):
         if hasattr(dofs, 'shape'):
             assert len(dofs.shape) == 3, "dofs must be a 3D array with shape (n_curves, 3, 2*order+1)"
             assert dofs.shape[1] == 3, "dofs must have shape (n_curves, 3, 2*order+1)"
@@ -42,10 +40,6 @@ class Curves:
         self._n_segments = n_segments
         self._nfp = nfp
         self._stellsym = stellsym
-
-        self._scaling_type = scaling_type  # 1 for L-1 norm, 2 for L-2 norm, jnp.inf for L-infinity norm
-        self._scaling_factor = scaling_factor
-        self._scaling = None
 
         self.quadpoints = jnp.linspace(0, 1, self._n_segments, endpoint=False)
         self._curves = None
@@ -67,13 +61,12 @@ class Curves:
     # dofs property and setter
     @property
     def dofs(self):
-        # Apply scaling to each coordinate (X, Y, Z) independently
-        return self._dofs * self.scaling[None, None, :]
+        return jnp.array(self._dofs)
     
     @dofs.setter
     def dofs(self, new_dofs):
         self.reset_cache()
-        self._dofs = new_dofs / self.scaling[None, None, :]
+        self._dofs = new_dofs
     
     # n_segments property and setter
     @property
@@ -106,53 +99,15 @@ class Curves:
         self.reset_cache()
         self._stellsym = new_stellsym
     
-    # scaling_type property and setter
-    @property
-    def scaling_type(self):
-        return self._scaling_type
-    
-    @scaling_type.setter
-    def scaling_type(self, new_type):
-        self._scaling_type = new_type
-        self._scaling = None
-
-    # scaling_factor property and setter
-    @property
-    def scaling_factor(self):
-        return self._scaling_factor
-    
-    @scaling_factor.setter
-    def scaling_factor(self, new_factor):
-        self._scaling_factor = new_factor
-        self._scaling = None
-
-    # scaling property
-    @property
-    def scaling(self):
-        if self._scaling is None:
-            # Mode order array: [0, 1, 1, 2, 2, 3, 3, ...]
-            # Index 0: constant term (order 0)
-            # Index 2*k-1 and 2*k: sin and cos terms for order k
-            mode_orders = jnp.concatenate([
-                jnp.array([0.0]),
-                jnp.repeat(jnp.arange(1, self.order + 1, dtype=float), 2)
-            ])
-            self._scaling = jnp.exp(self.scaling_factor * mode_orders)
-        return self._scaling
-    
     # order property and setter
     @property
     def order(self):
-        return self._dofs.shape[2]//2
+        return self.dofs.shape[2]//2
     
     @order.setter
     def order(self, new_order):
         self.reset_cache()
-        # Get unscaled dofs, resize, then store unscaled
-        old_scaling = self.scaling
-        unscaled_dofs = self._dofs
-        self._dofs = jnp.pad(unscaled_dofs, ((0,0), (0,0), (0, max(0, 2*(new_order-self.order)))))[:, :, :2*(new_order)+1]
-        self._scaling = None  # Force recalculation for new order
+        self._dofs = jnp.pad(self.dofs, ((0,0), (0,0), (0, max(0, 2*(new_order-self.order)))))[:, :, :2*(new_order)+1]
     
     # n_base_curves property
     @property
@@ -163,8 +118,7 @@ class Curves:
     @property
     def curves(self):
         if self._curves is None:
-            # Use unscaled dofs for physical curve representation
-            self._curves = apply_symmetries_to_curves(self._dofs, self.nfp, self.stellsym)
+            self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
         return self._curves
 
     # _compute_gamma method
@@ -369,7 +323,7 @@ class Curves:
         polyLinesToVTK(str(filename), np.array(x), np.array(y), np.array(z), pointsPerLine=np.array(ppl), pointData=pointData)
 
     @classmethod
-    def from_simsopt(cls, simsopt_curves, nfp=1, stellsym=True, scaling_type=2, scaling_factor=0.0):
+    def from_simsopt(cls, simsopt_curves, nfp=1, stellsym=True):
         """
         Create a Curves object from a list of simsopt curves.
         This assumes curves have all nfp and stellsym symmetries.
@@ -384,15 +338,13 @@ class Curves:
             [curve.x for curve in simsopt_curves]
         ), (len(simsopt_curves), 3, 2*simsopt_curves[0].order+1))
         n_segments = len(simsopt_curves[0].quadpoints)
-        return cls(dofs, n_segments, nfp, stellsym, scaling_type, scaling_factor)
+        return cls(dofs, n_segments, nfp, stellsym)
     
     def _tree_flatten(self):
         children = (self._dofs,)  # arrays / dynamic values
         aux_data = {"n_segments": self._n_segments,
                     "nfp": self._nfp,
-                    "stellsym": self._stellsym,
-                    "scaling_type": self._scaling_type,
-                    "scaling_factor": self._scaling_factor}  # static values
+                    "stellsym": self._stellsym}  # static values
         return (children, aux_data)
 
     @classmethod
@@ -667,7 +619,7 @@ class Coils:
         self.curves.to_vtk(*args, **kwargs)
 
     @classmethod
-    def from_simsopt(cls, simsopt_coils, nfp=1, stellsym=True, scaling_type=2, scaling_factor=0.0):
+    def from_simsopt(cls, simsopt_coils, nfp=1, stellsym=True):
         """ This assumes coils have all nfp and stellsym symmetries"""
         if isinstance(simsopt_coils, str):
             from simsopt import load
@@ -675,7 +627,7 @@ class Coils:
             simsopt_coils = bs.coils
         curves = [c.curve for c in simsopt_coils]
         currents = jnp.array([c.current.get_value() for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]])
-        return cls(Curves.from_simsopt(curves, nfp, stellsym, scaling_type, scaling_factor), currents)
+        return cls(Curves.from_simsopt(curves, nfp, stellsym), currents)
     
     @classmethod
     def from_json(cls, filename: str):
@@ -683,9 +635,7 @@ class Coils:
         import json
         with open(filename, "r") as file:
             data = json.load(file)
-        scaling_type = data.get("scaling_type", 2)
-        scaling_factor = data.get("scaling_factor", 0.0)
-        curves = Curves(jnp.array(data["dofs_curves"]), data["n_segments"], data["nfp"], data["stellsym"], scaling_type, scaling_factor)
+        curves = Curves(jnp.array(data["dofs_curves"]), data["n_segments"], data["nfp"], data["stellsym"])
         currents = jnp.array(data["dofs_currents"])
         return cls(curves, currents)
     
@@ -709,9 +659,7 @@ def CreateEquallySpacedCurves(n_curves:   int,
                               r:          float,
                               n_segments: int = 100,
                               nfp:        int = 1,
-                              stellsym:   bool = False,
-                              scaling_type: int = 2,
-                              scaling_factor: float = 0) -> Curves:
+                              stellsym:   bool = False) -> Curves:
     """ Creates n_curves equally spaced on a torus of major radius R and minor radius r using Fourier
     representation up to the specified order."""
     angles = (jnp.arange(n_curves) + 0.5) * (2 * jnp.pi) / ((1 + int(stellsym)) * nfp * n_curves)
@@ -722,7 +670,7 @@ def CreateEquallySpacedCurves(n_curves:   int,
     curves = curves.at[:, 1, 0].set(jnp.sin(angles) * R)  # y[0]
     curves = curves.at[:, 1, 2].set(jnp.sin(angles) * r)  # y[2]
     curves = curves.at[:, 2, 1].set(-r)                   # z[1] (constant for all)
-    return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym, scaling_type=scaling_type, scaling_factor=scaling_factor)
+    return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
 
 @partial(jit, static_argnames=["flip"])
 def RotatedCurve(curve, phi, flip):

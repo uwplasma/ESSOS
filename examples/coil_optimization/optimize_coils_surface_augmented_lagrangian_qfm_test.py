@@ -25,7 +25,8 @@ nphi=60
 input_filepath = os.path.join(os.path.dirname(__name__), "../input_files")
 vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
 toroidal_input=os.path.join(input_filepath, 'input.toroidal_surface')
-filename_coils=os.path.join(input_filepath,'opt_coils_vmec_surface.json')
+#filename_coils=os.path.join(input_filepath,'opt_coils_vmec_surface.json')
+filename_coils=os.path.join(input_filepath,'stellarator_coils_normal.json')
 
 target_coils=Coils.from_json(filename_coils)
 target_field = BiotSavart(Coils.from_json(filename_coils))
@@ -40,7 +41,7 @@ init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
 init_field = BiotSavart(init_coils)
 
 init_surface_2=SurfaceRZFourier.from_input_file(toroidal_input, ntheta=60, nphi=60,close=True, range_torus='half period',scaling_factor=-1.2,scaling_type=jnp.inf)
-
+#init_surface_2=SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=ntheta, nphi=nphi, range_torus='half period',close=True)
 
 
 """ Setting the losses weights and targets """
@@ -128,7 +129,7 @@ model_lagrangian='Standard'  #Use standard augmented lagragian suitable for boun
 
 #Construct constraints
 constraints = alm.combine(
-alm.eq(L_normal_field_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
+#alm.eq(L_normal_field_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(L_area,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(L_volume,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
 alm.eq(L_toroidal_flux,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
@@ -148,7 +149,7 @@ eta_tol=1.e-7    #desired contraint tolerance, associated with variation of cont
 
 #If loss=cost_function(x) is not prescribed, f(x)=0 is considered, uncomment second line to use B dot N as a loss and not a constraint
 #ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-ALM=alm.ALM_model_jaxopt_lbfgsb(constraints=constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+ALM=alm.ALM_model_jaxopt_lbfgsb(loss=L_normal_field,constraints=constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
 
 
@@ -238,6 +239,8 @@ nfieldlines_per_core = 40
 nfieldlines = nfieldlines_per_core * number_of_processors_to_use
 #R0 = jnp.linspace(11.2, 14.9, nfieldlines)
 R0 = jnp.linspace(11.2, 13., nfieldlines)
+R0 = jnp.linspace(11.5, 13., nfieldlines)
+
 
 trace_tolerance = 1e-7
 num_steps = 60000
@@ -248,7 +251,7 @@ initial_xyz = jnp.array([R0 * jnp.cos(phi0), R0 * jnp.sin(phi0), Z0]).T
 
 time0 = time()
 tracing = block_until_ready(Tracing(
-    field=opt_field_alm,
+    field=target_field,
     model='FieldLineAdaptative',
     initial_conditions=initial_xyz,
     maxtime=tmax,
@@ -275,8 +278,8 @@ def compute_rz_on_phi(surface, theta, phi=0.0):
     return R, Z
 
 # # Contours from optimized surface
-R0_opt, Z0_opt = compute_rz_on_phi(opt_surface_alm_2, theta, phi=0.0)
-R90_opt, Z90_opt = compute_rz_on_phi(opt_surface_alm_2, theta, phi=jnp.pi/2)
+R0_opt, Z0_opt = compute_rz_on_phi(opt_surface_alm, theta, phi=0.0)
+R90_opt, Z90_opt = compute_rz_on_phi(opt_surface_alm, theta, phi=jnp.pi/2)
 # # Contours from true VMEC surface
 R0_true, Z0_true = compute_rz_on_phi(target_surface_2, theta, phi=0.0)
 R90_true, Z90_true = compute_rz_on_phi(target_surface_2, theta, phi=jnp.pi/2)
@@ -362,11 +365,11 @@ pl.render()
 pl.screenshot('coils_paraviw_style.png')
 
 
-B_final= B_on_surface(opt_surface_alm_2, opt_field_alm)
+B_final= B_on_surface(opt_surface_alm, target_field)
 modB=jnp.linalg.norm(B_final,axis=-1)
 
 
 fig, ax = plt.subplots(figsize=(6, 6))
-plt.contour(opt_surface_alm_2.phi2d,opt_surface_alm_2.theta2d, modB, levels=20, cmap='viridis') # Using 20 levels and 'viridis' colorma
+plt.contour(opt_surface_alm.phi2d,opt_surface_alm.theta2d, modB, levels=20, cmap='viridis') # Using 20 levels and 'viridis' colorma
 plt.colorbar()
 plt.savefig('modB.png', dpi=300)

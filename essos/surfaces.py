@@ -118,7 +118,7 @@ class SurfaceRZFourier:
         assert isinstance(ntheta, int) and ntheta > 0, "ntheta must be a positive integer."
         assert isinstance(nphi, int) and nphi > 0, "nphi must be a positive integer."
         assert isinstance(close, bool), "close must be a boolean."
-        assert range_torus in ['full torus', 'half period'], f"Unknown range_torus: {range_torus}. Choose 'full torus' or 'half period'."
+        assert range_torus in ['full torus', 'half period','full period'], f"Unknown range_torus: {range_torus}. Choose 'full torus' or 'half period'."
 
         self._rc = rc
         self._zs = zs
@@ -322,6 +322,8 @@ class SurfaceRZFourier:
             div, end_val = 1., 1.
         elif self.range_torus == "half period":
             div, end_val = self.nfp, 0.5
+        elif self.range_torus == "full period":
+            div, end_val = self.nfp, 1.0            
         quadpoints_theta = jnp.linspace(0, 2 * jnp.pi, num=self.ntheta, endpoint=self.close)
         quadpoints_phi   = jnp.linspace(0, 2 * jnp.pi * end_val / div, num=self.nphi, endpoint=self.close)
         theta2d, phi2d = jnp.meshgrid(quadpoints_theta, quadpoints_phi)
@@ -516,6 +518,91 @@ class SurfaceRZFourier:
 
         area = jnp.sum(norm_n) * dphi * dtheta
         return area
+
+    def change_resolution(self, mpol=None, ntor=None, ntheta=None, nphi=None):
+        """
+        Change the number of m and n modes (mpol and ntor) and optionally the grid resolution.
+        
+        Parameters
+        ----------
+        mpol : int, optional
+            New maximum poloidal mode number. If None, keeps current value.
+        ntor : int, optional
+            New maximum toroidal mode number. If None, keeps current value.
+        ntheta : int, optional
+            New number of theta grid points. If None, keeps current value.
+        nphi : int, optional
+            New number of phi grid points. If None, keeps current value.
+            
+        Notes
+        -----
+        - New Fourier coefficients (for modes not in the old representation) are initialized to zero.
+        - Old coefficients outside the new range are discarded.
+        - Existing modes are preserved when possible.
+        - The dofs property automatically updates to reflect the new mode structure.
+        """
+        # Store old values
+        rc_old = self._rc
+        zs_old = self._zs
+        mpol_old = self._mpol
+        ntor_old = self._ntor
+        xm_old = self.xm
+        xn_old = self.xn
+        
+        # Set new values (use old values if not specified)
+        mpol_new = mpol if mpol is not None else mpol_old
+        ntor_new = ntor if ntor is not None else ntor_old
+        
+        # Validate inputs
+        assert isinstance(mpol_new, int) and mpol_new >= 0, "mpol must be a non-negative integer."
+        assert isinstance(ntor_new, int) and ntor_new >= 0, "ntor must be a non-negative integer."
+        
+        # Calculate new array size
+        size_new = (mpol_new + 1) * (2 * ntor_new + 1) - ntor_new
+        
+        # Initialize new coefficient arrays with zeros
+        rc_new = jnp.zeros(size_new)
+        zs_new = jnp.zeros(size_new)
+        
+        # Calculate new xm and xn arrays
+        xm_new = jnp.repeat(jnp.arange(mpol_new + 1), 2 * ntor_new + 1)[ntor_new:]
+        xn_new = self._nfp * jnp.tile(jnp.arange(-ntor_new, ntor_new + 1), mpol_new + 1)[ntor_new:]
+        
+        # Vectorized mode matching using JAX operations
+        # Create a 2D comparison matrix: (new_modes, old_modes)
+        m_match = xm_new[:, None] == xm_old[None, :]  # Shape: (size_new, size_old)
+        n_match = xn_new[:, None] == xn_old[None, :]  # Shape: (size_new, size_old)
+        mode_match = m_match & n_match  # True where both m and n match
+        
+        # For each new mode, find if there's a matching old mode
+        # jnp.any(mode_match, axis=1) tells us which new modes have a match
+        # jnp.argmax(mode_match, axis=1) gives us the index of the first match
+        has_match = jnp.any(mode_match, axis=1)
+        old_indices = jnp.argmax(mode_match, axis=1)
+        
+        # Copy values from old arrays where matches exist
+        rc_new = jnp.where(has_match, rc_old[old_indices], rc_new)
+        zs_new = jnp.where(has_match, zs_old[old_indices], zs_new)
+        
+        # Update the object's attributes
+        self._mpol = mpol_new
+        self._ntor = ntor_new
+        self._rc = rc_new
+        self._zs = zs_new
+        
+        # Update grid resolution if requested
+        if ntheta is not None:
+            assert isinstance(ntheta, int) and ntheta > 0, "ntheta must be a positive integer."
+            self._ntheta = ntheta
+        if nphi is not None:
+            assert isinstance(nphi, int) and nphi > 0, "nphi must be a positive integer."
+            self._nphi = nphi
+        
+        # Reset all cached values (including scaling since it depends on xm/xn)
+        self.reset_cache()
+        self._scaling = None  # Reset scaling since it depends on mpol/ntor
+        if ntheta is not None or nphi is not None:
+            self.reset_mesh()
 
     # def change_resolution(self, mpol: int, ntor: int, ntheta=None, nphi=None,close=True):
     #     """
