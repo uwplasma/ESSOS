@@ -24,7 +24,7 @@ rtol = 1e-8
 energy=FUSION_ALPHA_PARTICLE_ENERGY
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+wout_file = os.path.join(os.path.dirname(__file__), "../input_files", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 vmec = Vmec(wout_file)
 
 # Initialize particles
@@ -56,7 +56,7 @@ tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 for i in np.random.choice(nparticles, size=n_particles_to_plot, replace=False):
     trajectory = trajectories[i]
     ## Plot energy error
-    ax2.plot(tracing.times[2:], jnp.abs(tracing.energy[i][2:]-particles.energy)/particles.energy, label=f'Particle {i+1}')
+    ax2.plot(tracing.times[2:], jnp.abs(tracing.energy()[i][2:]-particles.energy)/particles.energy, label=f'Particle {i+1}')
     ## Plot velocity parallel to the magnetic field
     ax3.plot(tracing.times, trajectory[:, 3]/particles.total_speed, label=f'Particle {i+1}')
     ## Plot s-coordinate

@@ -242,7 +242,7 @@ class Vmec():
         self.mpol = int(jnp.max(self.xm))
         self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
         self.range_torus = range_torus
-        self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
+        self._surface = SurfaceRZFourier.from_vmec(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
         self.Aminor_p = jnp.array(self.nc.variables["Aminor_p"][:])
         #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
         
