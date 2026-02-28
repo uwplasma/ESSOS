@@ -67,12 +67,13 @@ class MagneticField():
 class BiotSavart(MagneticField):
     def __init__(self, coils):
         self.coils = coils
-        # self.r_axis=jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(self.coils.dofs_curves)))
-        # self.z_axis=jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
+        self._r_axis = None
+        self._z_axis = None
     
     @property
     def dofs(self):
         return self.coils.dofs
+    
     @dofs.setter
     def dofs(self, new_dofs):
         self.coils.dofs = new_dofs
@@ -87,6 +88,18 @@ class BiotSavart(MagneticField):
         dB = jnp.cross(self.coils.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif_R, axis=0)**3
         dB_sum = jnp.einsum("i,bai", self.coils.currents*1e-7, dB, optimize="greedy")
         return jnp.mean(dB_sum, axis=0)
+
+    @property
+    def r_axis(self):
+        if self._r_axis is None:
+            self._r_axis = jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(self.coils.dofs_curves)))
+        return self._r_axis
+
+    @property
+    def z_axis(self):
+        if self._z_axis is None:
+            self._z_axis = jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
+        return self._z_axis    
 
     @jit
     def to_xyz(self, points):

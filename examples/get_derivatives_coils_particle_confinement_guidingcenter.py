@@ -1,29 +1,20 @@
 
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
-os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
-from jax import grad
+from jax import vmap
 import jax.numpy as jnp
-from essos.dynamics import Particles
 from essos.coils import Coils, CreateEquallySpacedCurves
-from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis_average
-from functools import partial
+from essos.fields import BiotSavart
+from essos.losses import custom_loss
 
 # Optimization parameters
-target_B_on_axis = 5.7
-max_coil_length = 31
-max_coil_curvature = 0.4
-n_particles_per_core=1
-nparticles = number_of_processors_to_use*n_particles_per_core
 order_Fourier_series_coils = 2
 number_coil_points = 80
-maximum_function_evaluations = 301
-maxtimes = [1.e-6]
-t=maxtimes[0]
-num_steps=100
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
-model = 'GuidingCenterAdaptative'
+
+LENGTH_TARGET = 31
+CURVATURE_TARGET = 0.4
+AXIS_B_TARGET = 5.7
 
 # Initialize coils
 current_on_each_coil = 1.84e7
@@ -35,34 +26,31 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    n_segments=number_coil_points,
                                    nfp=number_of_field_periods, stellsym=True)
 coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
+field = BiotSavart(coils_initial)
 
-len_dofs_curves = len(jnp.ravel(coils_initial.dofs_curves))
-nfp = coils_initial.nfp
-stellsym = coils_initial.stellsym
-n_segments = coils_initial.n_segments
-dofs_curves_shape = coils_initial.dofs_curves.shape
-currents_scale = coils_initial.currents_scale
+""" Creating the loss functions """
+def loss_length(field):
+    return jnp.mean(jnp.maximum(0, field.coils.length - LENGTH_TARGET))
 
-# Initialize particles
-phi_array = jnp.linspace(0, 2*jnp.pi, nparticles)
-initial_xyz=jnp.array([major_radius_coils*jnp.cos(phi_array), major_radius_coils*jnp.sin(phi_array), 0*phi_array]).T
-particles = Particles(initial_xyz=initial_xyz)
+def loss_curvature(field):
+    return jnp.mean(jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET))
 
-# Objective functions
-## Curvature
-curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
-## Length
-length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
-## B on axis
-Baxis_average_partial=partial(loss_normB_axis_average,dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
-## All terms put together
-def total_loss(params):
-    return jnp.sum(jnp.square(curvature_partial(params)+length_partial(params)+Baxis_average_partial(params)))
+def loss_normB_axis_average(field):
+    R_axis=field.r_axis
+    phi_array = jnp.linspace(0, 2 * jnp.pi, 15)
+    B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
+    return jnp.mean(jnp.maximum(0, B_axis - AXIS_B_TARGET))
+
+curvature_loss = custom_loss(loss_curvature, "field")
+length_loss = custom_loss(loss_length, "field")
+Baxis_average_loss = custom_loss(loss_normB_axis_average, "field")
+total_loss = curvature_loss + length_loss + Baxis_average_loss
+total_loss.dependencies = {"field": field}
 
 ## Take the gradients
-params=coils_initial.x
-loss=total_loss(params)
-gradients=grad(total_loss)(params)
+params = total_loss.starting_dofs
+loss = total_loss(params)
+gradients = total_loss.grad(params)
 
 print('Objective function: {:.2E}'.format(loss))
 print('Gradients (derivative of objective function with respect to coils): ',gradients)
