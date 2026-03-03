@@ -8,7 +8,7 @@ print(jax.devices())
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from essos.coils import Coils, CreateEquallySpacedCurves,Curves
+from essos.coils import Coils, Curves, CreateEquallySpacedCurves, Coils_from_gammas
 from functools import partial
 from essos.coil_perturbation import GaussianSampler
 from essos.coil_perturbation import perturb_curves_statistic,perturb_curves_systematic
@@ -31,20 +31,22 @@ curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
                                    R=major_radius_coils, r=minor_radius_coils,
                                    n_segments=number_coil_points,
                                    nfp=number_of_field_periods, stellsym=True)
-coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
+base_gamma = Curves(curves.dofs, curves.n_segments, nfp=1, stellsym=False).gamma
+base_currents = jnp.array([current_on_each_coil] * number_coils_per_half_field_period)
+coils_initial = Coils_from_gammas(base_gamma, currents=base_currents, nfp=number_of_field_periods, stellsym=True)
 
 
 
-g=GaussianSampler(coils_initial.quadpoints,sigma=0.2,length_scale=0.1,n_derivs=2)
+g=GaussianSampler(curves.quadpoints,sigma=0.2,length_scale=0.1,n_derivs=2)
 
 #Split the key for reproducibility  
 key=0
 split_keys=jax.random.split(jax.random.key(key), num=2)
 #Add systematic error
-coils_sys = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
+coils_sys = Coils_from_gammas(base_gamma, currents=base_currents, nfp=number_of_field_periods, stellsym=True)
 perturb_curves_systematic(coils_sys, g, key=split_keys[0])
 # Add statistical error
-coils_stat = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
+coils_stat = Coils_from_gammas(base_gamma, currents=base_currents, nfp=number_of_field_periods, stellsym=True)
 perturb_curves_statistic(coils_stat, g, key=split_keys[1])
 # Add both systematic and statistical errors
 coils_perturbed = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)

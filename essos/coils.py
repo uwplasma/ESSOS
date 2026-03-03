@@ -815,3 +815,546 @@ def fit_dofs_from_coils(
 
     dofs = _fit_real_fourier_batch(gamma_uni, order)  # rFFT-based fit
     return dofs, gamma_uni
+
+
+class Coils_from_gammas:
+    """ Class to store coils from gamma (discretized curve coordinates) instead of Fourier coefficients
+    
+    This class is compatible with the Coils class but stores dofs as the actual gamma values
+    rather than Fourier expansion coefficients. Derivatives are computed numerically.
+
+    Attributes:
+        dofs_gamma (jnp.ndarray - shape (n_base_curves, n_segments, 3)): Base discretized curves (dofs)
+        gamma (jnp.ndarray - shape (n_curves, n_segments, 3)): Discretized curves after symmetry expansion
+        currents (jnp.ndarray - shape (n_curves,)): Currents after symmetry expansion
+        n_segments (int): Number of segments in the discretization
+        nfp (int): Number of field periods
+        stellsym (bool): Stellarator symmetry
+        dofs_currents_raw (jnp.ndarray - shape (n_base_curves,)): Non-normalized base currents
+        currents_scale (float): Normalization factor for the currents
+        dofs_currents (jnp.ndarray - shape (n_base_curves,)): Normalized base currents
+    """
+    def __init__(self, gamma: jnp.ndarray, currents: jnp.ndarray, nfp: int = 1, stellsym: bool = False):
+        """
+        Initialize Coils_from_gammas
+        
+        Args:
+            gamma: shape (n_base_curves, n_segments, 3) - base discretized curve coordinates
+            currents: shape (n_base_curves,) - base currents for each unique curve
+            nfp: Number of field periods (default: 1)
+            stellsym: Stellarator symmetry (default: False)
+        """
+        gamma = jnp.asarray(gamma)
+        currents = jnp.asarray(currents)
+
+        assert gamma.ndim == 3, "gamma must be a 3D array with shape (n_curves, n_segments, 3)"
+        assert gamma.shape[2] == 3, "gamma must have shape (n_curves, n_segments, 3)"
+
+        if currents.ndim == 0:
+            currents = jnp.full((gamma.shape[0],), currents)
+        elif currents.ndim == 1 and currents.shape[0] == 1 and gamma.shape[0] != 1:
+            currents = jnp.full((gamma.shape[0],), currents[0])
+
+        assert isinstance(nfp, int) and nfp > 0, "nfp must be a positive integer"
+        assert isinstance(stellsym, bool), "stellsym must be a boolean"
+        assert currents.ndim == 1, "currents must be a scalar or a 1D array"
+        assert gamma.shape[0] == currents.shape[0], (
+            f"Number of base curves must match number of base currents. "
+            f"Got gamma.shape[0]={gamma.shape[0]} and currents.shape[0]={currents.shape[0]}"
+        )
+
+        n_sym = nfp * (1 + int(stellsym))
+        if n_sym > 1 and gamma.shape[0] % n_sym == 0:
+            n_base_candidate = gamma.shape[0] // n_sym
+            gamma_base_candidate = gamma[:n_base_candidate]
+            gamma_expanded_candidate = apply_symmetries_to_gammas(gamma_base_candidate, nfp, stellsym)
+            currents_base_candidate = currents[:n_base_candidate]
+            currents_expanded_candidate = apply_symmetries_to_currents(currents_base_candidate, nfp, stellsym)
+
+            if (
+                gamma_expanded_candidate.shape == gamma.shape
+                and currents_expanded_candidate.shape == currents.shape
+                and jnp.allclose(gamma_expanded_candidate, gamma)
+                and jnp.allclose(currents_expanded_candidate, currents)
+            ):
+                gamma = gamma_base_candidate
+                currents = currents_base_candidate
+        
+        self._gamma = gamma
+        self._dofs_currents_raw = currents
+        self._n_segments = gamma.shape[1]
+        self._nfp = nfp
+        self._stellsym = stellsym
+        
+        self._gamma_dash = None
+        self._gamma_dashdash = None
+        self._length = None
+        self._curvature = None
+        self._currents_scale = None
+        self._dofs_currents = None
+        self._currents = None
+    
+    # reset_cache method
+    def reset_cache(self):
+        self._gamma_dash = None
+        self._gamma_dashdash = None
+        self._length = None
+        self._curvature = None
+        self._currents_scale = None
+        self._dofs_currents = None
+        self._currents = None
+    
+    # dofs_gamma property and setter
+    @property
+    def dofs_gamma(self):
+        return jnp.array(self._gamma)
+
+    @dofs_gamma.setter
+    def dofs_gamma(self, new_dofs_gamma):
+        new_dofs_gamma = jnp.asarray(new_dofs_gamma)
+        assert new_dofs_gamma.ndim == 3, "dofs_gamma must have shape (n_base_curves, n_segments, 3)"
+        assert new_dofs_gamma.shape[2] == 3, "dofs_gamma must have shape (n_base_curves, n_segments, 3)"
+        self.reset_cache()
+        self._gamma = new_dofs_gamma
+        self._n_segments = new_dofs_gamma.shape[1]
+
+    # gamma property and setter (symmetry-expanded)
+    @property
+    def gamma(self):
+        return apply_symmetries_to_gammas(self.dofs_gamma, self.nfp, self.stellsym)
+    
+    @gamma.setter
+    def gamma(self, new_gamma):
+        new_gamma = jnp.asarray(new_gamma)
+        assert new_gamma.ndim == 3, "gamma must be a 3D array with shape (n_curves, n_segments, 3)"
+        assert new_gamma.shape[2] == 3, "gamma must have shape (n_curves, n_segments, 3)"
+        
+        n_sym = self.nfp * (1 + int(self.stellsym))
+        n_base = self.n_base_curves
+
+        if new_gamma.shape[0] == n_base:
+            self.dofs_gamma = new_gamma
+            return
+        assert new_gamma.shape[0] == n_base * n_sym, (
+            f"Expected gamma with {n_base} (base) or {n_base*n_sym} (expanded) curves, "
+            f"got {new_gamma.shape[0]}"
+        )
+        # Ordering in apply_symmetries_to_gammas ensures the first n_base curves are k=0, flip=False (base)
+        self.dofs_gamma = new_gamma[:n_base]
+    
+    # n_segments property
+    @property
+    def n_segments(self):
+        return self._n_segments
+
+    @property
+    def n_base_curves(self):
+        return self.dofs_gamma.shape[0]
+    
+    # nfp property
+    @property
+    def nfp(self):
+        return self._nfp
+    
+    # stellsym property
+    @property
+    def stellsym(self):
+        return self._stellsym
+    
+    # dofs_currents_raw property and setter
+    @property
+    def dofs_currents_raw(self):
+        return jnp.array(self._dofs_currents_raw)
+    
+    @dofs_currents_raw.setter
+    def dofs_currents_raw(self, new_dofs_currents_raw):
+        new_dofs_currents_raw = jnp.asarray(new_dofs_currents_raw)
+        assert new_dofs_currents_raw.ndim == 1, "dofs_currents_raw must be a 1D array"
+        assert new_dofs_currents_raw.shape[0] == self.n_base_curves, (
+            f"Expected {self.n_base_curves} base currents, got {new_dofs_currents_raw.shape[0]}"
+        )
+        self.reset_cache()
+        self._dofs_currents_raw = jnp.asarray(new_dofs_currents_raw)
+    
+    # currents_scale property and setter
+    @property
+    def currents_scale(self):
+        if self._currents_scale is None:
+            self._currents_scale = jnp.mean(jnp.abs(self.dofs_currents_raw))
+        return self._currents_scale
+    
+    @currents_scale.setter
+    def currents_scale(self, new_currents_scale):
+        self._dofs_currents_raw = self.dofs_currents * new_currents_scale
+        self._currents_scale = new_currents_scale
+        self._currents = None
+    
+    # dofs_currents property and setter
+    @property
+    def dofs_currents(self):
+        if self._dofs_currents is None:
+            self._dofs_currents = self.dofs_currents_raw / self.currents_scale
+        return self._dofs_currents
+    
+    @dofs_currents.setter
+    def dofs_currents(self, new_dofs_currents):
+        self.dofs_currents_raw = new_dofs_currents * self.currents_scale
+    
+    # currents property
+    @property
+    def currents(self):
+        if self._currents is None:
+            self._currents = apply_symmetries_to_currents(self.dofs_currents_raw, self.nfp, self.stellsym)
+        return self._currents
+    
+    # dofs property and setter (flattened gamma + currents)
+    @property
+    def dofs(self):
+        return jnp.hstack([self.dofs_gamma.ravel(), self.dofs_currents])
+    
+    @dofs.setter
+    def dofs(self, new_dofs):
+        n_gamma_dofs = jnp.size(self.dofs_gamma)
+        self.dofs_gamma = jnp.reshape(new_dofs[:n_gamma_dofs], self.dofs_gamma.shape)
+        self.dofs_currents = new_dofs[n_gamma_dofs:]
+    
+    # x property and setter (for compatibility with simsopt)
+    @property
+    def x(self):
+        return self.dofs
+    
+    @x.setter
+    def x(self, new_dofs):
+        self.dofs = new_dofs
+    
+    # Compute derivatives using finite differences (circular)
+    def _compute_gamma_dash(self):
+        """Compute first derivative using finite differences on periodic curve"""
+        base_gamma = self.dofs_gamma
+        gamma_shift_forward = jnp.roll(base_gamma, -1, axis=1)
+        gamma_shift_backward = jnp.roll(base_gamma, 1, axis=1)
+        base_gamma_dash = (gamma_shift_forward - gamma_shift_backward) / 2.0 * self._n_segments
+        return apply_symmetries_to_gammas(base_gamma_dash, self.nfp, self.stellsym)
+    
+    def _compute_gamma_dashdash(self):
+        """Compute second derivative using finite differences on periodic curve"""
+        base_gamma = self.dofs_gamma
+        gamma_shift_forward = jnp.roll(base_gamma, -1, axis=1)
+        gamma_shift_backward = jnp.roll(base_gamma, 1, axis=1)
+        base_gamma_dashdash = (gamma_shift_forward - 2.0 * base_gamma + gamma_shift_backward) * (self._n_segments ** 2)
+        return apply_symmetries_to_gammas(base_gamma_dashdash, self.nfp, self.stellsym)
+    
+    # gamma_dash property
+    @property
+    def gamma_dash(self):
+        if self._gamma_dash is None:
+            self._gamma_dash = self._compute_gamma_dash()
+        return self._gamma_dash
+    
+    # gamma_dashdash property
+    @property
+    def gamma_dashdash(self):
+        if self._gamma_dashdash is None:
+            self._gamma_dashdash = self._compute_gamma_dashdash()
+        return self._gamma_dashdash
+    
+    # length property
+    @property
+    def length(self):
+        if self._length is None:
+            self._length = jnp.mean(jnp.linalg.norm(self.gamma_dash, axis=2), axis=1)
+        return self._length
+    
+    # curvature property
+    @staticmethod
+    @jit
+    def compute_curvature(gammadash, gammadashdash):
+        return jnp.linalg.norm(jnp.cross(gammadash, gammadashdash, axis=1), axis=1) / jnp.linalg.norm(gammadash, axis=1)**3
+    
+    @property
+    def curvature(self):
+        return vmap(self.compute_curvature)(self.gamma_dash, self.gamma_dashdash)
+    
+    # copy method
+    def copy(self):
+        coils = Coils_from_gammas(self.dofs_gamma.copy(), self.dofs_currents_raw.copy(), 
+                                   nfp=self.nfp, stellsym=self.stellsym)
+        
+        # Initialize caches
+        coils._gamma_dash = self._gamma_dash
+        coils._gamma_dashdash = self._gamma_dashdash
+        coils._length = self._length
+        coils._curvature = self._curvature
+        coils._currents_scale = self.currents_scale
+        coils._dofs_currents = self.dofs_currents
+        coils._currents = self._currents
+        
+        return coils
+    
+    # magic methods
+    def __str__(self):
+        return f"Coils_from_gammas with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
+             + f"n_segments: {self.n_segments}\n" \
+             + f"nfp: {self.nfp}, stellsym: {self.stellsym}\n" \
+             + f"Degrees of freedom shape: {self.dofs.shape}\n" \
+             + f"Currents scaling factor: {self.currents_scale}\n"
+    
+    def __repr__(self):
+        return f"Coils_from_gammas with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
+             + f"n_segments: {self.n_segments}\n" \
+             + f"nfp: {self.nfp}, stellsym: {self.stellsym}\n" \
+             + f"Degrees of freedom shape: {self.dofs.shape}\n" \
+             + f"Currents scaling factor: {self.currents_scale}\n"
+    
+    def __len__(self):
+        return self.gamma.shape[0]
+    
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return Coils_from_gammas(jnp.expand_dims(self.gamma[key], 0), jnp.expand_dims(self.currents[key], 0), 
+                                     nfp=1, stellsym=False)
+        elif isinstance(key, (slice, jnp.ndarray)):
+            return Coils_from_gammas(self.gamma[key], self.currents[key], nfp=1, stellsym=False)
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(key)}, expected int, slice or jnp.ndarray.")
+    
+    def __add__(self, other):
+        if isinstance(other, Coils_from_gammas):
+            return Coils_from_gammas(
+                jnp.concatenate((self.gamma, other.gamma), axis=0),
+                jnp.concatenate((self.currents, other.currents), axis=0),
+                nfp=1, stellsym=False  # Combined coils lose symmetry structure
+            )
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils_from_gammas.")
+    
+    def __contains__(self, other):
+        if isinstance(other, Coils_from_gammas):
+            return jnp.all(jnp.isin(other.dofs, self.dofs))
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils_from_gammas.")
+    
+    def __eq__(self, other):
+        if isinstance(other, Coils_from_gammas):
+            if self.dofs.shape != other.dofs.shape:
+                return False
+            return jnp.all(self.gamma == other.gamma) and jnp.all(self.dofs_currents == other.dofs_currents)
+        else:
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils_from_gammas.")
+    
+    def __ne__(self, other):
+        return not self.__eq__(other)
+    
+    def __iter__(self):
+        self.iter_idx = 0
+        return self
+    
+    def __next__(self):
+        if self.iter_idx < len(self):
+            result = self[self.iter_idx]
+            self.iter_idx += 1
+            return result
+        else:
+            raise StopIteration
+    
+    # Saving and loading methods
+    def save_coils(self, filename: str, text=""):
+        """Save the coils to a file"""
+        with open(filename, "a") as file:
+            file.write(f"n_segments: {self.n_segments}\n")
+            file.write(f"nfp: {self.nfp}, stellsym: {self.stellsym}\n")
+            file.write(f"Base gamma dofs\n")
+            file.write(f"{repr(self.dofs_gamma.tolist())}\n")
+            file.write(f"Currents degrees of freedom\n")
+            file.write(f"{repr(self.dofs_currents.tolist())}\n")
+            file.write(f"Currents scaling factor\n")
+            file.write(f"{self.currents_scale}\n")
+            file.write(f"{text}\n")
+    
+    def to_json(self, filename: str):
+        """Save coils to JSON file"""
+        data = {
+            "n_segments": self.n_segments,
+            "nfp": self.nfp,
+            "stellsym": self.stellsym,
+            "dofs_gamma": self.dofs_gamma.tolist(),
+            "dofs_currents": self.dofs_currents.tolist(),
+        }
+        import json
+        with open(filename, 'w') as file:
+            json.dump(data, file)
+    
+    @classmethod
+    def from_json(cls, filename: str):
+        """Create Coils_from_gammas from JSON file"""
+        import json
+        with open(filename, "r") as file:
+            data = json.load(file)
+        gamma_data = data.get("dofs_gamma", data.get("gamma"))
+        gamma = jnp.array(gamma_data)
+        currents = jnp.array(data["dofs_currents"])
+        nfp = data.get("nfp", 1)
+        stellsym = data.get("stellsym", False)
+        if "dofs_gamma" not in data and gamma.shape[0] % (nfp * (1 + int(stellsym))) == 0:
+            n_base = gamma.shape[0] // (nfp * (1 + int(stellsym)))
+            gamma = gamma[:n_base]
+            currents = currents[:n_base]
+        return cls(gamma, currents, nfp=nfp, stellsym=stellsym)
+    
+    def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True, 
+             color="brown", linewidth=3, label=None, **kwargs):
+        """Plot the coils"""
+        def rep(data):
+            if close:
+                return jnp.concatenate((data, [data[0]]))
+            else:
+                return data
+        import matplotlib.pyplot as plt
+        if ax is None or ax.name != "3d":
+            fig = plt.figure()
+            ax = fig.add_subplot(projection='3d')
+        label_count = 0
+        for gamma, gammadash in zip(self.gamma, self.gamma_dash):
+            x = rep(gamma[:, 0])
+            y = rep(gamma[:, 1])
+            z = rep(gamma[:, 2])
+            if plot_derivative:
+                xt = rep(gammadash[:, 0])
+                yt = rep(gammadash[:, 1])
+                zt = rep(gammadash[:, 2])
+            if label_count == 0:
+                ax.plot(x, y, z, **kwargs, color=color, linewidth=linewidth, label=label)
+                label_count += 1
+            else:
+                ax.plot(x, y, z, **kwargs, color=color, linewidth=linewidth)
+            if plot_derivative:
+                ax.quiver(x, y, z, 0.1 * xt, 0.1 * yt, 0.1 * zt, arrow_length_ratio=0.1, color='r')
+        if axis_equal:
+            fix_matplotlib_3d(ax)
+        if show:
+            plt.show()
+    
+    def to_vtk(self, filename: str, close: bool = True, extra_data=None):
+        """Export coils to VTK format"""
+        try:
+            import numpy as np
+        except ImportError:
+            raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
+        try:
+            from pyevtk.hl import polyLinesToVTK
+        except ImportError:
+            raise ImportError("The 'pyevtk' library is required. Please install it using 'pip install pyevtk'.")
+        
+        def wrap(data):
+            return jnp.concatenate([data, jnp.array([data[0]])])
+        
+        gammas = self.gamma
+        if close:
+            x = jnp.concatenate([wrap(gamma[:, 0]) for gamma in gammas])
+            y = jnp.concatenate([wrap(gamma[:, 1]) for gamma in gammas])
+            z = jnp.concatenate([wrap(gamma[:, 2]) for gamma in gammas])
+            ppl = jnp.asarray([gamma.shape[0] + 1 for gamma in gammas])
+        else:
+            x = jnp.concatenate([gamma[:, 0] for gamma in gammas])
+            y = jnp.concatenate([gamma[:, 1] for gamma in gammas])
+            z = jnp.concatenate([gamma[:, 2] for gamma in gammas])
+            ppl = jnp.asarray([gamma.shape[0] for gamma in gammas])
+        
+        data = jnp.concatenate([i * jnp.ones((ppl[i],)) for i in range(len(gammas))])
+        pointData = {'idx': np.array(data)}
+        if extra_data is not None:
+            pointData = {**pointData, **extra_data}
+        polyLinesToVTK(str(filename), np.array(x), np.array(y), np.array(z), 
+                       pointsPerLine=np.array(ppl), pointData=pointData)
+    
+    def to_simsopt(self):
+        """Convert to simsopt coils"""
+        from simsopt.geo import CurveXYZFourier
+        from simsopt.field import coils_via_symmetries, Current as Current_SIMSOPT
+        
+        curves_simsopt = []
+        currents_simsopt = []
+        
+        # Fit Fourier coefficients from base gammas
+        for g, current in zip(self.dofs_gamma, self.dofs_currents_raw):
+            # Fit Fourier coefficients
+            order = (self.n_segments // 2) - 1
+            dofs, _ = fit_dofs_from_coils(jnp.expand_dims(g, 0), order, self.n_segments)
+            
+            curve = CurveXYZFourier(self.n_segments, order)
+            curve.x = jnp.reshape(dofs[0], curve.x.shape)
+            curves_simsopt.append(curve)
+            currents_simsopt.append(Current_SIMSOPT(current))
+        
+        return coils_via_symmetries(curves_simsopt, currents_simsopt, self.nfp, self.stellsym)
+    
+    @classmethod
+    def from_simsopt(cls, simsopt_coils, nfp: int = 1, stellsym: bool = False):
+        """Create from simsopt coils
+        
+        Args:
+            simsopt_coils: List of simsopt coils or path to simsopt file
+            nfp: Number of field periods (default: 1)
+            stellsym: Stellarator symmetry (default: False)
+        """
+        if isinstance(simsopt_coils, str):
+            from simsopt import load
+            bs = load(simsopt_coils)
+            simsopt_coils = bs.coils
+        
+        gammas = []
+        currents = []
+        
+        for coil in simsopt_coils:
+            gamma = jnp.array(coil.curve.gamma())
+            gammas.append(gamma)
+            currents.append(coil.current.get_value())
+        
+        gamma_array = jnp.array(gammas)
+        currents_array = jnp.array(currents)
+
+        n_sym = nfp * (1 + int(stellsym))
+        if n_sym > 1 and gamma_array.shape[0] % n_sym == 0:
+            n_base = gamma_array.shape[0] // n_sym
+            gamma_array = gamma_array[:n_base]
+            currents_array = currents_array[:n_base]
+
+        return cls(gamma_array, currents_array, nfp=nfp, stellsym=stellsym)
+    
+    @classmethod
+    def from_Coils(cls, coils: Coils):
+        """Create from a standard Coils object"""
+        base_gamma = Curves(coils.dofs_curves, coils.n_segments, nfp=1, stellsym=False).gamma
+        currents = coils.dofs_currents_raw
+        return cls(base_gamma, currents, nfp=coils.nfp, stellsym=coils.stellsym)
+    
+    def to_Coils(self, order: int = None) -> Coils:
+        """Convert to standard Coils object
+        
+        Args:
+            order: Fourier order for fitted curves (default: n_segments // 2 - 1)
+        """
+        if order is None:
+            order = (self.n_segments // 2) - 1
+        
+        dofs, _ = fit_dofs_from_coils(self.dofs_gamma, order, self.n_segments)
+        curves = Curves(dofs, self.n_segments, nfp=self.nfp, stellsym=self.stellsym)
+        return Coils(curves, self.dofs_currents_raw)
+    
+    def _tree_flatten(self):
+        children = (self._gamma, self._dofs_currents_raw)
+        aux_data = {
+            "n_segments": self._n_segments,
+            "nfp": self._nfp,
+            "stellsym": self._stellsym
+        }
+        return (children, aux_data)
+    
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        gamma, currents = children
+        return cls(gamma, currents, nfp=aux_data["nfp"], stellsym=aux_data["stellsym"])
+
+tree_util.register_pytree_node(Coils_from_gammas,
+                               Coils_from_gammas._tree_flatten,
+                               Coils_from_gammas._tree_unflatten)
