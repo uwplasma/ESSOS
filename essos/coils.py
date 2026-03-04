@@ -817,7 +817,7 @@ def fit_dofs_from_coils(
     return dofs, gamma_uni
 
 
-class Coils_from_gammas:
+class CoilsFromGamma:
     """ Class to store coils from gamma (discretized curve coordinates) instead of Fourier coefficients
     
     This class is compatible with the Coils class but stores dofs as the actual gamma values
@@ -836,8 +836,7 @@ class Coils_from_gammas:
     """
     def __init__(self, gamma: jnp.ndarray, currents: jnp.ndarray, nfp: int = 1, stellsym: bool = False):
         """
-        Initialize Coils_from_gammas
-        
+        Initialize CoilsFromGamma with discretized curve coordinates and currents, applying symmetries if possible.
         Args:
             gamma: shape (n_base_curves, n_segments, 3) - base discretized curve coordinates
             currents: shape (n_base_curves,) - base currents for each unique curve
@@ -1077,7 +1076,7 @@ class Coils_from_gammas:
     
     # copy method
     def copy(self):
-        coils = Coils_from_gammas(self.dofs_gamma.copy(), self.dofs_currents_raw.copy(), 
+        coils = CoilsFromGamma(self.dofs_gamma.copy(), self.dofs_currents_raw.copy(), 
                                    nfp=self.nfp, stellsym=self.stellsym)
         
         # Initialize caches
@@ -1093,14 +1092,14 @@ class Coils_from_gammas:
     
     # magic methods
     def __str__(self):
-        return f"Coils_from_gammas with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
+        return f"CoilsFromGamma with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
              + f"n_segments: {self.n_segments}\n" \
              + f"nfp: {self.nfp}, stellsym: {self.stellsym}\n" \
              + f"Degrees of freedom shape: {self.dofs.shape}\n" \
              + f"Currents scaling factor: {self.currents_scale}\n"
     
     def __repr__(self):
-        return f"Coils_from_gammas with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
+        return f"CoilsFromGamma with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
              + f"n_segments: {self.n_segments}\n" \
              + f"nfp: {self.nfp}, stellsym: {self.stellsym}\n" \
              + f"Degrees of freedom shape: {self.dofs.shape}\n" \
@@ -1111,36 +1110,36 @@ class Coils_from_gammas:
     
     def __getitem__(self, key):
         if isinstance(key, int):
-            return Coils_from_gammas(jnp.expand_dims(self.gamma[key], 0), jnp.expand_dims(self.currents[key], 0), 
+            return CoilsFromGamma(jnp.expand_dims(self.gamma[key], 0), jnp.expand_dims(self.currents[key], 0), 
                                      nfp=1, stellsym=False)
         elif isinstance(key, (slice, jnp.ndarray)):
-            return Coils_from_gammas(self.gamma[key], self.currents[key], nfp=1, stellsym=False)
+            return CoilsFromGamma(self.gamma[key], self.currents[key], nfp=1, stellsym=False)
         else:
             raise TypeError(f"Invalid argument type. Got {type(key)}, expected int, slice or jnp.ndarray.")
     
     def __add__(self, other):
-        if isinstance(other, Coils_from_gammas):
-            return Coils_from_gammas(
+        if isinstance(other, CoilsFromGamma):
+            return CoilsFromGamma(
                 jnp.concatenate((self.gamma, other.gamma), axis=0),
                 jnp.concatenate((self.currents, other.currents), axis=0),
                 nfp=1, stellsym=False  # Combined coils lose symmetry structure
             )
         else:
-            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils_from_gammas.")
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected CoilsFromGamma.")
     
     def __contains__(self, other):
-        if isinstance(other, Coils_from_gammas):
+        if isinstance(other, CoilsFromGamma):
             return jnp.all(jnp.isin(other.dofs, self.dofs))
         else:
-            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils_from_gammas.")
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected CoilsFromGamma.")
     
     def __eq__(self, other):
-        if isinstance(other, Coils_from_gammas):
+        if isinstance(other, CoilsFromGamma):
             if self.dofs.shape != other.dofs.shape:
                 return False
             return jnp.all(self.gamma == other.gamma) and jnp.all(self.dofs_currents == other.dofs_currents)
         else:
-            raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils_from_gammas.")
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected CoilsFromGamma.")
     
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -1186,7 +1185,7 @@ class Coils_from_gammas:
     
     @classmethod
     def from_json(cls, filename: str):
-        """Create Coils_from_gammas from JSON file"""
+        """Create CoilsFromGamma from JSON file"""
         import json
         with open(filename, "r") as file:
             data = json.load(file)
@@ -1355,6 +1354,6 @@ class Coils_from_gammas:
         gamma, currents = children
         return cls(gamma, currents, nfp=aux_data["nfp"], stellsym=aux_data["stellsym"])
 
-tree_util.register_pytree_node(Coils_from_gammas,
-                               Coils_from_gammas._tree_flatten,
-                               Coils_from_gammas._tree_unflatten)
+tree_util.register_pytree_node(CoilsFromGamma,
+                               CoilsFromGamma._tree_flatten,
+                               CoilsFromGamma._tree_unflatten)

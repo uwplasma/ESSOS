@@ -3,7 +3,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import jit, vmap
 from jaxtyping import Array, Float  # https://github.com/google/jaxtyping
-from essos.coils import Curves, Coils, Coils_from_gammas, apply_symmetries_to_gammas, fit_dofs_from_coils
+from essos.coils import Curves, Coils, CoilsFromGamma, fit_dofs_from_coils
 from functools import partial
 
 
@@ -211,7 +211,7 @@ def perturb_curves_systematic(curves, sampler:GaussianSampler, key=None):
     Perturbations are applied to base curves and symmetries are reapplied.
     
     Args:
-        curves: Curves or Coils_from_gammas to be perturbed.
+        curves: Curves or CoilsFromGamma to be perturbed.
         sampler: the gaussian sampler used to get the perturbations
         key: the seed which will be split to generate random 
         but reproducible perturbations
@@ -219,7 +219,7 @@ def perturb_curves_systematic(curves, sampler:GaussianSampler, key=None):
     Returns:
         The curves given as an input are modified and thus no return is done
     """
-    if isinstance(curves, Coils_from_gammas):
+    if isinstance(curves, CoilsFromGamma):
         # Systematic perturbation on base dofs only. Symmetry is applied by the class properties.
         n_base_curves = curves.n_base_curves
         new_seeds = jax.random.split(key, num=n_base_curves)
@@ -247,52 +247,50 @@ def perturb_curves_systematic(curves, sampler:GaussianSampler, key=None):
         curves.dofs = dofs_new
         return
 
-    raise TypeError(f"Unsupported type {type(curves)}. Expected Curves, Coils, or Coils_from_gammas.")
+    raise TypeError(f"Unsupported type {type(curves)}. Expected Curves, Coils, or CoilsFromGamma.")
     #return curves  
 
 
 def perturb_curves_statistic(curves, sampler:GaussianSampler, key=None):
     """
-    Apply a statistic perturbation to all the coils. 
-    This means taht an independent perturbation is applied every coil
-    including repeated coils 
+    Apply a statistical perturbation to all the coils. 
+    This means that an independent perturbation is applied to every coil
+    including repeated coils.
     
     Args:
-        curves: curves to be perturbed.
+        curves: curves to be perturbed (not modified).
         sampler: the gaussian sampler used to get the perturbations
-        key: the seed which will be splited to geenerate random 
-        but reproducible pertubations
+        key: the seed which will be split to generate random 
+        but reproducible perturbations
                 
     Returns:
-        The curves given as an input are modified and thus no return is done
+        A new perturbed curves object of the same type as the input.
+        The original input object is not modified.
+        
+    Note:
+        Statistical perturbations require disabling symmetry (nfp=1, stellsym=False)
+        since each coil gets an independent perturbation.
     """
     n_curves = curves.gamma.shape[0]
     new_seeds = jax.random.split(key, num=n_curves)
     perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
     gamma_perturbed = curves.gamma + perturbation[:, 0, :, :]
 
-    if isinstance(curves, Coils_from_gammas):
-        # Statistical perturbation is independent for all coils, so we store all coils as dofs and disable symmetry.
+    if isinstance(curves, CoilsFromGamma):
+        # Statistical perturbation is independent for all coils, so we return a new object with no symmetry.
         expanded_currents = curves.currents
-        curves._nfp = 1
-        curves._stellsym = False
-        curves.dofs_gamma = gamma_perturbed
-        curves.dofs_currents_raw = expanded_currents
-        return
+        return CoilsFromGamma(gamma_perturbed, currents=expanded_currents, nfp=1, stellsym=False)
 
     if isinstance(curves, Coils):
+        # Capture the expanded currents and create new curves object with no symmetry.
+        expanded_currents = curves.currents
         dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments)
-        curves.curves = Curves(dofs_new, curves.n_segments, nfp=1, stellsym=False)
-        curves.dofs_currents_raw = curves.currents
-        return
+        new_curves = Curves(dofs_new, curves.n_segments, nfp=1, stellsym=False)
+        return Coils(curves=new_curves, currents=expanded_currents)
 
     if isinstance(curves, Curves):
         dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments)
-        curves.dofs = dofs_new
-        curves.nfp = 1
-        curves.stellsym = False
-        return
+        return Curves(dofs_new, curves.n_segments, nfp=1, stellsym=False)
 
-    raise TypeError(f"Unsupported type {type(curves)}. Expected Curves, Coils, or Coils_from_gammas.")
-    #return curves  
+    raise TypeError(f"Unsupported type {type(curves)}. Expected Curves, Coils, or CoilsFromGamma.")  
 
