@@ -25,7 +25,15 @@ class Curves:
                  dofs:        jnp.ndarray,
                  n_segments:  int = 100,
                  nfp:         int = 1,
-                 stellsym:    bool = True):
+                 stellsym:    bool = True,
+                 scaling_type: int = 2,
+                 scaling_factor: float = 0,
+                 scale_fixed: float = 1.0):
+        """Initialize Curves.
+        
+        Args:
+            scale_fixed: fixed multiplier applied to all modes (default=1.0, use >1.0 for equilibration)
+        """
         if hasattr(dofs, 'shape'):
             assert len(dofs.shape) == 3, "dofs must be a 3D array with shape (n_curves, 3, 2*order+1)"
             assert dofs.shape[1] == 3, "dofs must have shape (n_curves, 3, 2*order+1)"
@@ -40,6 +48,11 @@ class Curves:
         self._n_segments = n_segments
         self._nfp = nfp
         self._stellsym = stellsym
+
+        self._scaling_type = scaling_type  # 1 for L-1 norm, 2 for L-2 norm, jnp.inf for L-infinity norm
+        self._scaling_factor = scaling_factor
+        self._scale_fixed = scale_fixed
+        self._scaling = None
 
         self.quadpoints = jnp.linspace(0, 1, self._n_segments, endpoint=False)
         self._curves = None
@@ -61,12 +74,13 @@ class Curves:
     # dofs property and setter
     @property
     def dofs(self):
-        return jnp.array(self._dofs)
+        # Apply scaling to each coordinate (X, Y, Z) independently
+        return self._dofs * self.scaling[None, None, :]
     
     @dofs.setter
     def dofs(self, new_dofs):
         self.reset_cache()
-        self._dofs = new_dofs
+        self._dofs = new_dofs / self.scaling[None, None, :]
     
     # n_segments property and setter
     @property
@@ -99,15 +113,64 @@ class Curves:
         self.reset_cache()
         self._stellsym = new_stellsym
     
+    # scaling_type property and setter
+    @property
+    def scaling_type(self):
+        return self._scaling_type
+    
+    @scaling_type.setter
+    def scaling_type(self, new_type):
+        self._scaling_type = new_type
+        self._scaling = None
+
+    # scaling_factor property and setter
+    @property
+    def scaling_factor(self):
+        return self._scaling_factor
+    
+    @scaling_factor.setter
+    def scaling_factor(self, new_factor):
+        self._scaling_factor = new_factor
+        self._scaling = None
+
+    # scale_fixed property and setter
+    @property
+    def scale_fixed(self):
+        return self._scale_fixed
+    
+    @scale_fixed.setter
+    def scale_fixed(self, new_scale):
+        self._scale_fixed = new_scale
+        self._scaling = None
+
+    # scaling property
+    @property
+    def scaling(self):
+        if self._scaling is None:
+            # Mode order array: [0, 1, 1, 2, 2, 3, 3, ...]
+            # Index 0: constant term (order 0)
+            # Index 2*k-1 and 2*k: sin and cos terms for order k
+            mode_orders = jnp.concatenate([
+                jnp.array([0.0]),
+                jnp.repeat(jnp.arange(1, self.order + 1, dtype=float), 2)
+            ])
+            mode_scaling = jnp.exp(self.scaling_factor * mode_orders)
+            self._scaling = mode_scaling * self.scale_fixed
+        return self._scaling
+    
     # order property and setter
     @property
     def order(self):
-        return self.dofs.shape[2]//2
+        return self._dofs.shape[2]//2
     
     @order.setter
     def order(self, new_order):
         self.reset_cache()
-        self._dofs = jnp.pad(self.dofs, ((0,0), (0,0), (0, max(0, 2*(new_order-self.order)))))[:, :, :2*(new_order)+1]
+        # Get unscaled dofs, resize, then store unscaled
+        old_scaling = self.scaling
+        unscaled_dofs = self._dofs
+        self._dofs = jnp.pad(unscaled_dofs, ((0,0), (0,0), (0, max(0, 2*(new_order-self.order)))))[:, :, :2*(new_order)+1]
+        self._scaling = None  # Force recalculation for new order
     
     # n_base_curves property
     @property
@@ -118,7 +181,8 @@ class Curves:
     @property
     def curves(self):
         if self._curves is None:
-            self._curves = apply_symmetries_to_curves(self.dofs, self.nfp, self.stellsym)
+            # Use unscaled dofs for physical curve representation
+            self._curves = apply_symmetries_to_curves(self._dofs, self.nfp, self.stellsym)
         return self._curves
 
     # _compute_gamma method
@@ -323,7 +387,7 @@ class Curves:
         polyLinesToVTK(str(filename), np.array(x), np.array(y), np.array(z), pointsPerLine=np.array(ppl), pointData=pointData)
 
     @classmethod
-    def from_simsopt(cls, simsopt_curves, nfp=1, stellsym=True):
+    def from_simsopt(cls, simsopt_curves, nfp=1, stellsym=True, scaling_type=2, scaling_factor=0.0):
         """
         Create a Curves object from a list of simsopt curves.
         This assumes curves have all nfp and stellsym symmetries.
@@ -338,13 +402,15 @@ class Curves:
             [curve.x for curve in simsopt_curves]
         ), (len(simsopt_curves), 3, 2*simsopt_curves[0].order+1))
         n_segments = len(simsopt_curves[0].quadpoints)
-        return cls(dofs, n_segments, nfp, stellsym)
+        return cls(dofs, n_segments, nfp, stellsym, scaling_type, scaling_factor)
     
     def _tree_flatten(self):
         children = (self._dofs,)  # arrays / dynamic values
         aux_data = {"n_segments": self._n_segments,
                     "nfp": self._nfp,
-                    "stellsym": self._stellsym}  # static values
+                    "stellsym": self._stellsym,
+                    "scaling_type": self._scaling_type,
+                    "scaling_factor": self._scaling_factor}  # static values
         return (children, aux_data)
 
     @classmethod
@@ -600,17 +666,30 @@ class Coils:
         return coils_via_symmetries(cuves_simsopt, currents_simsopt, self.nfp, self.stellsym)
     
     def to_json(self, filename: str):
+        """Save coils to JSON with proper scaling metadata.
+        
+        Saves raw unscaled DOFs (_dofs) along with all scaling parameters
+        to ensure perfect reconstruction on load.
+        """
         data = {
             "nfp": self.nfp,
             "stellsym": self.stellsym,
             "order": self.order,
             "n_segments": self.n_segments,
-            "dofs_curves": self.dofs_curves.tolist(),
-            "dofs_currents": self.dofs_currents.tolist(),
+            # Save RAW unscaled curve DOFs
+            "dofs_curves_raw": jnp.asarray(self.curves._dofs).tolist(),
+            # Save curve scaling metadata
+            "scaling_type": self.curves.scaling_type,
+            "scaling_factor": float(self.curves.scaling_factor),
+            "scale_fixed": float(self.curves.scale_fixed),
+            # Save RAW unscaled currents
+            "dofs_currents_raw": jnp.asarray(self._dofs_currents_raw).tolist(),
+            # Save current scale if computed (optional for backward compat)
+            "currents_scale": float(self.currents_scale) if self._currents_scale is not None else None,
         }
         import json
         with open(filename, 'w') as file:
-            json.dump(data, file)
+            json.dump(data, file, indent=2)
     
     def plot(self, *args, **kwargs):
         self.curves.plot(*args, **kwargs)
@@ -619,7 +698,7 @@ class Coils:
         self.curves.to_vtk(*args, **kwargs)
 
     @classmethod
-    def from_simsopt(cls, simsopt_coils, nfp=1, stellsym=True):
+    def from_simsopt(cls, simsopt_coils, nfp=1, stellsym=True, scaling_type=2, scaling_factor=0.0):
         """ This assumes coils have all nfp and stellsym symmetries"""
         if isinstance(simsopt_coils, str):
             from simsopt import load
@@ -627,17 +706,60 @@ class Coils:
             simsopt_coils = bs.coils
         curves = [c.curve for c in simsopt_coils]
         currents = jnp.array([c.current.get_value() for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]])
-        return cls(Curves.from_simsopt(curves, nfp, stellsym), currents)
+        return cls(Curves.from_simsopt(curves, nfp, stellsym, scaling_type, scaling_factor), currents)
     
     @classmethod
     def from_json(cls, filename: str):
-        """ Creates a Coils object from a json file"""
+        """Load coils from JSON with proper scaling metadata.
+        
+        Supports both new format (with raw DOFs and scaling) and legacy format
+        (with scaled DOFs) for backward compatibility.
+        """
         import json
         with open(filename, "r") as file:
             data = json.load(file)
-        curves = Curves(jnp.array(data["dofs_curves"]), data["n_segments"], data["nfp"], data["stellsym"])
-        currents = jnp.array(data["dofs_currents"])
-        return cls(curves, currents)
+        
+        # Extract scaling metadata (with defaults for legacy files)
+        scaling_type = data.get("scaling_type", 2)
+        scaling_factor = data.get("scaling_factor", 0.0)
+        scale_fixed = data.get("scale_fixed", 1.0)
+        
+        # Check if using NEW format (raw DOFs) or LEGACY format (scaled DOFs)
+        if "dofs_curves_raw" in data:
+            # NEW FORMAT: Raw unscaled DOFs with full metadata
+            curves = Curves(
+                jnp.array(data["dofs_curves_raw"]),  # Raw _dofs
+                data["n_segments"],
+                data["nfp"],
+                data["stellsym"],
+                scaling_type,
+                scaling_factor,
+                scale_fixed
+            )
+            currents_raw = jnp.array(data["dofs_currents_raw"])
+        else:
+            # LEGACY FORMAT: Assume "dofs_curves" are raw DOFs (old behavior)
+            # This maintains backward compatibility with old JSON files
+            curves = Curves(
+                jnp.array(data["dofs_curves"]),  # Treat as raw for legacy
+                data["n_segments"],
+                data["nfp"],
+                data["stellsym"],
+                scaling_type,
+                scaling_factor,
+                scale_fixed
+            )
+            # Legacy files may have scaled or raw currents - treat as raw
+            currents_raw = jnp.array(data["dofs_currents"])
+        
+        # Create Coils object with raw currents
+        coils = cls(curves, currents_raw)
+        
+        # Optionally restore currents_scale if saved (new format only)
+        if "currents_scale" in data and data["currents_scale"] is not None:
+            coils._currents_scale = data["currents_scale"]
+        
+        return coils
     
     def _tree_flatten(self):
         children = (self.curves, self._dofs_currents_raw)  # arrays / dynamic values
@@ -659,9 +781,16 @@ def CreateEquallySpacedCurves(n_curves:   int,
                               r:          float,
                               n_segments: int = 100,
                               nfp:        int = 1,
-                              stellsym:   bool = False) -> Curves:
+                              stellsym:   bool = False,
+                              scaling_type: int = 2,
+                              scaling_factor: float = 0,
+                              scale_fixed: float = 1.0) -> Curves:
     """ Creates n_curves equally spaced on a torus of major radius R and minor radius r using Fourier
-    representation up to the specified order."""
+    representation up to the specified order.
+    
+    Args:
+        scale_fixed: fixed multiplier applied to all modes (default=1.0, use >1.0 for equilibration)
+    """
     angles = (jnp.arange(n_curves) + 0.5) * (2 * jnp.pi) / ((1 + int(stellsym)) * nfp * n_curves)
     curves = jnp.zeros((n_curves, 3, 1 + 2 * order))
 
@@ -670,7 +799,289 @@ def CreateEquallySpacedCurves(n_curves:   int,
     curves = curves.at[:, 1, 0].set(jnp.sin(angles) * R)  # y[0]
     curves = curves.at[:, 1, 2].set(jnp.sin(angles) * r)  # y[2]
     curves = curves.at[:, 2, 1].set(-r)                   # z[1] (constant for all)
-    return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
+    return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym, scaling_type=scaling_type, scaling_factor=scaling_factor, scale_fixed=scale_fixed)
+
+def extract_axis_from_surface(surface, n_samples: int = 200):
+    """Extract the magnetic axis from a SurfaceRZFourier object.
+    
+    The axis corresponds to the m=0 (theta=0) modes in the surface Fourier representation.
+    
+    Args:
+        surface: SurfaceRZFourier object
+        n_samples: Number of toroidal samples to use for evaluating the axis
+        
+    Returns:
+        axis_gamma: (n_samples, 3) array of axis positions in Cartesian coordinates
+    """
+    # Get the m=0 modes (axis modes)
+    m0_mask = surface.xm == 0
+    rc_axis = surface.rc[m0_mask]  # R coefficients for m=0
+    zs_axis = surface.zs[m0_mask]  # Z coefficients for m=0
+    xn_axis = surface.xn[m0_mask]  # toroidal mode numbers
+    
+    # Sample toroidal angle
+    phi = jnp.linspace(0, 2 * jnp.pi, n_samples, endpoint=False)
+    
+    # Compute R(phi) and Z(phi) for the axis
+    # Surface uses: angles = m*theta - n*phi
+    # At theta=0 (axis): R = sum rc*cos(-n*phi) = sum rc*cos(n*phi)
+    #                    Z = sum zs*sin(-n*phi) = -sum zs*sin(n*phi)
+    angles_axis = jnp.outer(phi, xn_axis)  # (n_samples, n_modes)
+    R_axis = jnp.sum(rc_axis * jnp.cos(angles_axis), axis=1)  # (n_samples,)
+    Z_axis = -jnp.sum(zs_axis * jnp.sin(angles_axis), axis=1)  # (n_samples,) - note the minus sign!
+    
+    # Convert to Cartesian coordinates
+    X_axis = R_axis * jnp.cos(phi)
+    Y_axis = R_axis * jnp.sin(phi)
+    
+    axis_gamma = jnp.stack([X_axis, Y_axis, Z_axis], axis=1)  # (n_samples, 3)
+    
+    return axis_gamma
+
+def CreateCoilsAroundAxis(n_coils: int,
+                          order: int,
+                          coil_radius: float,
+                          n_samples: int = 200,
+                          axis_major_radius: float = 1.0,
+                          axis_shape: str = 'circle',
+                          axis_pitch: float = 0.0,
+                          axis_twist_rate: float = 0.0,
+                          axis_function = None,
+                          surface = None,
+                          n_segments: int = 100,
+                          nfp: int = 1,
+                          stellsym: bool = False,
+                          scaling_type: int = 2,
+                          scaling_factor: float = 0,
+                          scale_fixed: float = 1.0) -> Curves:
+    """Creates n_coils equally spaced around a custom axis, using Fourier representation.
+
+    Each coil is a circle of radius coil_radius, positioned in the Frenet frame perpendicular
+    to the axis. This generalizes CreateEquallySpacedCurves to support various axis types.
+    
+    Args:
+        n_coils: Number of coils to create
+        order: Fourier order of the coil representation
+        coil_radius: Radius of each circular coil
+        n_samples: Number of samples for coil discretization
+        axis_major_radius: Major radius (for circle/ellipse/helical axes)
+        axis_shape: Shape of the axis ('circle', 'ellipse', 'helical', 'custom', or 'surface')
+        axis_pitch: Pitch (for helical axis)
+        axis_twist_rate: Twist rate for Frenet frame rotation
+        axis_function: Custom axis function (for axis_shape='custom')
+        surface: SurfaceRZFourier object (if provided, extracts axis from m=0 modes and overrides axis_shape)
+        n_segments: Number of segments for curve discretization
+        nfp: Number of field periods
+        stellsym: Stellarator symmetry
+        scaling_type: Scaling type for DOF equilibration
+        scaling_factor: Scaling factor for DOF equilibration
+        scale_fixed: Fixed multiplier for all modes
+        
+    Returns:
+        Curves object with coils around the specified axis
+    """
+    # Override axis_shape if surface is provided
+    if surface is not None:
+        axis_shape = 'surface'
+        # Use surface properties if not already set
+        if nfp == 1 and stellsym == False:  # Check if defaults were used
+            nfp = surface.nfp
+    
+    # Helper function: compute axis curve
+    def compute_axis_curve(phi, axis_shape_local, R, pitch, twist, axis_func, surf=None):
+        if axis_shape_local == 'circle':
+            x = R * jnp.cos(phi)
+            y = R * jnp.sin(phi)
+            z = jnp.zeros_like(phi)
+        elif axis_shape_local == 'ellipse':
+            aspect_ratio = 1.0
+            x = R * jnp.cos(phi)
+            y = R * aspect_ratio * jnp.sin(phi)
+            z = jnp.zeros_like(phi)
+        elif axis_shape_local == 'helical':
+            x = R * jnp.cos(phi)
+            y = R * jnp.sin(phi)
+            z = pitch * phi / (2 * jnp.pi)
+        elif axis_shape_local == 'surface':
+            # Extract axis from surface m=0 modes
+            # Surface convention: angles = m*theta - n*phi, at theta=0: sin(-n*phi) = -sin(n*phi)
+            m0_mask = surf.xm == 0
+            rc_axis = surf.rc[m0_mask]
+            zs_axis = surf.zs[m0_mask]
+            xn_axis = surf.xn[m0_mask]
+            
+            angles = xn_axis * phi
+            R_val = jnp.sum(rc_axis * jnp.cos(angles))
+            Z = -jnp.sum(zs_axis * jnp.sin(angles))  # Note the minus sign!
+            x = R_val * jnp.cos(phi)
+            y = R_val * jnp.sin(phi)
+            z = Z
+        elif axis_shape_local == 'custom':
+            return axis_func(phi)
+        else:
+            x = R * jnp.cos(phi)
+            y = R * jnp.sin(phi)
+            z = jnp.zeros_like(phi)
+        return jnp.stack([x, y, z], axis=-1)
+
+    # Helper function: compute Frenet frame
+    def compute_frenet_frame(phi, axis_shape_local, R, pitch, twist, axis_func, surf=None):
+        # Compute tangent vector using automatic differentiation for custom/surface axes
+        if (axis_shape_local == 'custom' and axis_func is not None) or axis_shape_local == 'surface':
+            from jax import jacfwd
+            if axis_shape_local == 'surface':
+                axis_fn = lambda p: compute_axis_curve(p, 'surface', R, pitch, twist, None, surf)
+            else:
+                axis_fn = axis_func
+            tangent = jacfwd(axis_fn)(phi)
+            tangent_norm = jnp.linalg.norm(tangent)
+            tangent = tangent / jnp.maximum(tangent_norm, 1e-12)
+        else:
+            # Numerical derivative for standard axes
+            eps = 1e-8
+            axis_plus = compute_axis_curve(phi + eps, axis_shape_local, R, pitch, twist, axis_func, surf)
+            axis_minus = compute_axis_curve(phi - eps, axis_shape_local, R, pitch, twist, axis_func, surf)
+            tangent = (axis_plus - axis_minus) / (2 * eps)
+            tangent_norm = jnp.linalg.norm(tangent)
+            tangent = tangent / jnp.maximum(tangent_norm, 1e-12)
+
+        # For surface-based axes, use the surface's radial direction (∂/∂θ at θ=0)
+        if axis_shape_local == 'surface':
+            # Extract surface Fourier coefficients
+            rc = surf.rc
+            zs = surf.zs
+            xm = surf.xm
+            xn = surf.xn
+            
+            # Compute ∂R/∂θ and ∂Z/∂θ at θ=0 (radial direction from axis)
+            # Surface: R = Σ rc*cos(m*θ - n*φ), Z = Σ zs*sin(m*θ - n*φ)
+            # ∂R/∂θ = -Σ m*rc*sin(m*θ - n*φ), at θ=0: = -Σ m*rc*sin(-n*φ) = Σ m*rc*sin(n*φ)
+            # ∂Z/∂θ =  Σ m*zs*cos(m*θ - n*φ), at θ=0: =  Σ m*zs*cos(-n*φ) = Σ m*zs*cos(n*φ)
+            angles_for_derivative = xn * phi  # n*phi (not -n*phi)
+            dR_dtheta = jnp.sum(xm * rc * jnp.sin(angles_for_derivative))
+            dZ_dtheta = jnp.sum(xm * zs * jnp.cos(angles_for_derivative))
+            
+            # Convert to Cartesian: radial direction in (R, phi, Z) cylindrical coordinates
+            cos_phi = jnp.cos(phi)
+            sin_phi = jnp.sin(phi)
+            
+            # At the axis, R is given by m=0 modes
+            m0_mask = xm == 0
+            R_axis = jnp.sum(rc[m0_mask] * jnp.cos(-xn[m0_mask] * phi))
+            
+            # Radial direction: ∂(X,Y,Z)/∂θ at θ=0
+            dX_dtheta = dR_dtheta * cos_phi
+            dY_dtheta = dR_dtheta * sin_phi
+            # dZ_dtheta already computed
+            
+            radial_dir = jnp.array([dX_dtheta, dY_dtheta, dZ_dtheta])
+            
+            # Orthogonalize radial direction w.r.t. tangent
+            dot_rt = jnp.dot(radial_dir, tangent)
+            n1 = radial_dir - dot_rt * tangent
+            n1_norm = jnp.linalg.norm(n1)
+            
+            # If radial direction is parallel to tangent (shouldn't happen), fall back to Gram-Schmidt
+            if n1_norm < 1e-6:
+                ref_z = jnp.array([0.0, 0.0, 1.0])
+                dot_z = jnp.dot(ref_z, tangent)
+                n1 = ref_z - dot_z * tangent
+                n1_norm = jnp.linalg.norm(n1)
+                if n1_norm < 1e-6:
+                    ref_x = jnp.array([1.0, 0.0, 0.0])
+                    dot_x = jnp.dot(ref_x, tangent)
+                    n1 = ref_x - dot_x * tangent
+                    n1_norm = jnp.linalg.norm(n1)
+            
+            n1 = n1 / jnp.maximum(n1_norm, 1e-12)
+        else:
+            # Compute n1 perpendicular to tangent using Gram-Schmidt
+            # Try z-direction first
+            ref_z = jnp.array([0.0, 0.0, 1.0])
+            dot_z = jnp.dot(ref_z, tangent)
+            n1 = ref_z - dot_z * tangent
+            n1_norm = jnp.linalg.norm(n1)
+            
+            # If n1 is too small (tangent nearly parallel to z), use x-direction
+            if n1_norm < 1e-6:
+                ref_x = jnp.array([1.0, 0.0, 0.0])
+                dot_x = jnp.dot(ref_x, tangent)
+                n1 = ref_x - dot_x * tangent
+                n1_norm = jnp.linalg.norm(n1)
+            
+            n1 = n1 / jnp.maximum(n1_norm, 1e-12)
+
+        # Compute n2 = tangent × n1 to complete the orthonormal frame
+        n2 = jnp.cross(tangent, n1)
+        n2_norm = jnp.linalg.norm(n2)
+        n2 = n2 / jnp.maximum(n2_norm, 1e-12)
+
+        # Apply twist rotation
+        if jnp.abs(twist) > 1e-12:
+            twist_angle = twist * phi
+            cos_t = jnp.cos(twist_angle)
+            sin_t = jnp.sin(twist_angle)
+            n1_rot = cos_t * n1 + sin_t * n2
+            n2_rot = -sin_t * n1 + cos_t * n2
+            n1 = n1_rot
+            n2 = n2_rot
+
+        return n1, n2
+
+    # Generate coil positions using arc-length parametrization
+    # This ensures equal spacing along the actual axis geometry for any axis type
+    n_arc_samples = 1000  # Fine sampling for accurate arc-length computation
+    phi_arc = jnp.linspace(0, 2 * jnp.pi, n_arc_samples, endpoint=True)
+    
+    # Compute axis points along the full toroidal path
+    axis_arc_pts = jnp.array([compute_axis_curve(p, axis_shape, axis_major_radius, axis_pitch, 
+                                                   axis_twist_rate, axis_function, surface) 
+                              for p in phi_arc])
+    
+    # Compute arc-length increments and cumulative arc-length
+    deltas = jnp.linalg.norm(jnp.diff(axis_arc_pts, axis=0), axis=1)
+    cumulative_arc = jnp.concatenate([jnp.array([0.0]), jnp.cumsum(deltas)])
+    
+    # Total arc-length of one full 2π rotation
+    total_arc = cumulative_arc[-1]
+    
+    # Define target arc-lengths for equally-spaced coils
+    # Divide total arc-length by the number of base coils (accounting for symmetries)
+    coil_segment_arc = total_arc / ((1 + int(stellsym)) * nfp * n_coils)
+    
+    # Offset by half a segment to avoid positioning coils on symmetry planes when stellsym=True
+    offset_arc = coil_segment_arc / 2.0 if stellsym else 0.0
+    target_arcs = offset_arc + jnp.arange(n_coils) * coil_segment_arc
+    
+    # Find phi values corresponding to target arc-lengths via linear interpolation
+    coil_phi_positions = jnp.interp(target_arcs, cumulative_arc, phi_arc)
+
+    # Sample each coil
+    coil_theta_samples = jnp.linspace(0, 2 * jnp.pi, n_samples, endpoint=False)
+    coils_gamma = []
+
+    for coil_idx in range(n_coils):
+        phi_coil = coil_phi_positions[coil_idx]
+
+        # Compute axis position and Frenet frame at this phi
+        axis_pos = compute_axis_curve(phi_coil, axis_shape, axis_major_radius, axis_pitch, axis_twist_rate, axis_function, surface)
+        n1, n2 = compute_frenet_frame(phi_coil, axis_shape, axis_major_radius, axis_pitch, axis_twist_rate, axis_function, surface)
+
+        # Create circular coil in the Frenet frame plane
+        coil_points = jnp.zeros((n_samples, 3))
+        for sample_idx, theta in enumerate(coil_theta_samples):
+            point = axis_pos + coil_radius * (jnp.cos(theta) * n1 + jnp.sin(theta) * n2)
+            coil_points = coil_points.at[sample_idx].set(point)
+
+        coils_gamma.append(coil_points)
+
+    coils_gamma = jnp.array(coils_gamma)  # (n_coils, n_samples, 3)
+
+    # Fit Fourier coefficients from the discretized coils
+    dofs, _ = fit_dofs_from_coils(coils_gamma, order, n_segments, assume_uniform=False)
+
+    return Curves(dofs, n_segments=n_segments, nfp=nfp, stellsym=stellsym,
+                  scaling_type=scaling_type, scaling_factor=scaling_factor, scale_fixed=scale_fixed)
 
 @partial(jit, static_argnames=["flip"])
 def RotatedCurve(curve, phi, flip):
@@ -815,7 +1226,6 @@ def fit_dofs_from_coils(
 
     dofs = _fit_real_fourier_batch(gamma_uni, order)  # rFFT-based fit
     return dofs, gamma_uni
-
 
 class CoilsFromGamma:
     """ Class to store coils from gamma (discretized curve coordinates) instead of Fourier coefficients
@@ -1072,7 +1482,9 @@ class CoilsFromGamma:
     
     @property
     def curvature(self):
-        return vmap(self.compute_curvature)(self.gamma_dash, self.gamma_dashdash)
+        if self._curvature is None:
+            self._curvature = vmap(self.compute_curvature)(self.gamma_dash, self.gamma_dashdash)
+        return self._curvature
     
     # copy method
     def copy(self):

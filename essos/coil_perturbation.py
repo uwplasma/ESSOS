@@ -233,7 +233,7 @@ def perturb_curves_systematic(curves, sampler:GaussianSampler, key=None):
         perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
         base_gamma = Curves(curves.dofs_curves, curves.n_segments, nfp=1, stellsym=False).gamma
         perturbed_base_gamma = base_gamma + perturbation[:, 0, :, :]
-        dofs_new, _ = fit_dofs_from_coils(perturbed_base_gamma, curves.order, curves.n_segments)
+        dofs_new, _ = fit_dofs_from_coils(perturbed_base_gamma, curves.order, curves.n_segments,assume_uniform=True)
         curves.dofs_curves = dofs_new
         return
 
@@ -243,7 +243,7 @@ def perturb_curves_systematic(curves, sampler:GaussianSampler, key=None):
         perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
         base_gamma = Curves(curves.dofs, curves.n_segments, nfp=1, stellsym=False).gamma
         perturbed_base_gamma = base_gamma + perturbation[:, 0, :, :]
-        dofs_new, _ = fit_dofs_from_coils(perturbed_base_gamma, curves.order, curves.n_segments)
+        dofs_new, _ = fit_dofs_from_coils(perturbed_base_gamma, curves.order, curves.n_segments,assume_uniform=True)
         curves.dofs = dofs_new
         return
 
@@ -284,12 +284,12 @@ def perturb_curves_statistic(curves, sampler:GaussianSampler, key=None):
     if isinstance(curves, Coils):
         # Capture the expanded currents and create new curves object with no symmetry.
         expanded_currents = curves.currents
-        dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments)
+        dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments,assume_uniform=True)
         new_curves = Curves(dofs_new, curves.n_segments, nfp=1, stellsym=False)
         return Coils(curves=new_curves, currents=expanded_currents)
 
     if isinstance(curves, Curves):
-        dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments)
+        dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments,assume_uniform=True)
         return Curves(dofs_new, curves.n_segments, nfp=1, stellsym=False)
 
     raise TypeError(f"Unsupported type {type(curves)}. Expected Curves, Coils, or CoilsFromGamma.")  

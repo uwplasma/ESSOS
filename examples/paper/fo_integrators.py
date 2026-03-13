@@ -17,7 +17,7 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), '../input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
@@ -39,16 +39,22 @@ num_steps = int(tmax/dt)
 
 fig, ax = plt.subplots(figsize=(9, 6))
 
-method_names = ['Tsit5', 'Dopri5', 'Dopri8', 'Boris']
-methods = [getattr(diffrax, method) for method in method_names[:-1]] + ['Boris']
-for method_name, method in zip(method_names, methods):
-    if method_name != 'Boris':
+method_names = ['Boris']  # Only Boris is supported with current Tracing API
+for method_name in method_names:
+    if method_name == 'Boris':
+        model = 'FullOrbit_Boris'
+    else:
+        model = 'FullOrbit'
+    
+    # Adaptive tolerance tests (only for Boris which has adaptive support)
+    if method_name == 'Boris':
         energies = []
         tracing_times = []
         for trace_tolerance in [1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15]:
             time0 = time()
-            tracing = Tracing('FullOrbit', field, tmax, method=method, timesteps=num_steps,
-                              stepsize='adaptive', tol_step_size=trace_tolerance, particles=particles)
+            tracing = Tracing(field=field, model=model, particles=particles,
+                              maxtime=tmax, times_to_trace=num_steps,
+                              rtol=trace_tolerance, atol=trace_tolerance)
             block_until_ready(tracing.trajectories)
             tracing_times += [time() - time0]
             
@@ -57,14 +63,15 @@ for method_name, method in zip(method_names, methods):
             energies += [jnp.mean(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
         ax.plot(tracing_times, energies, label=f'{method_name} adapt', marker='o', markersize=3, linestyle='-')
 
+    # Constant step size tests
     energies = []
     tracing_times = []
     for n_points_in_gyration in [10, 20, 50, 75, 100, 150, 200]:
         dt = 1/(n_points_in_gyration*cyclotron_frequency)
         num_steps = int(tmax/dt)
         time0 = time()
-        tracing = Tracing('FullOrbit', field, tmax, method=method, timesteps=num_steps,
-                          stepsize="constant", particles=particles)
+        tracing = Tracing(field=field, model=model, particles=particles,
+                          maxtime=tmax, times_to_trace=num_steps, timestep=dt)
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
         
