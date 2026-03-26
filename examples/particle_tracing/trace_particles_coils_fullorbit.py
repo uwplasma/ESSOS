@@ -6,7 +6,7 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_json
+from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 
@@ -22,8 +22,8 @@ mass=PROTON_MASS
 energy=4000*ONE_EV
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_json(json_file)
+json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
 # Initialize particles
@@ -50,7 +50,7 @@ coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False)
 
 for i, trajectory in enumerate(trajectories):
-    ax2.plot(tracing.times, jnp.abs(tracing.energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}', linewidth=0.2)
+    ax2.plot(tracing.times, jnp.abs(tracing.energy()[i]-particles.energy)/particles.energy, label=f'Particle {i+1}', linewidth=0.2)
     def compute_v_parallel(trajectory_t):
         magnetic_field_unit_vector = field.B(trajectory_t[:3]) / field.AbsB(trajectory_t[:3])
         return jnp.dot(trajectory_t[3:], magnetic_field_unit_vector)

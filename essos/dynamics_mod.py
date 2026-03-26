@@ -18,25 +18,24 @@ from essos.plot import fix_matplotlib_3d
 from essos.util import roots
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu_D_ab
 
-# mesh = Mesh(jax.devices(), ("dev",))
-# spec=PartitionSpec("dev", None)
-# spec_index=PartitionSpec("dev")
-# sharding = NamedSharding(mesh, spec)
-# sharding_index = NamedSharding(mesh, spec_index)
+USE_SHARDING = False  # Set to True to enable multi-device parallelization
 
-# If multiple devices are available, set up sharding for parallelization. Otherwise, set sharding to None.
-if len(jax.devices()) > 1:
-        mesh = Mesh(jax.devices(), ("dev",))
+if USE_SHARDING:
+    _devices = jax.devices()
+    if len(_devices) > 1:
+        mesh = Mesh(_devices, ("dev",))
         spec = PartitionSpec("dev", None)
         spec_index = PartitionSpec("dev")
         sharding = NamedSharding(mesh, spec)
         sharding_index = NamedSharding(mesh, spec_index)
+    else:
+        mesh = None
+        sharding = None
+        sharding_index = None
 else:
     mesh = None
     sharding = None
     sharding_index = None
-
-
 
 def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
     """
@@ -114,8 +113,6 @@ class Particles():
         initial_vparallel_over_v = jnp.concatenate((self.initial_vparallel_over_v, other.initial_vparallel_over_v), axis=0)
 
         return Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=initial_vparallel_over_v, charge=charge, mass=mass, energy=energy, field=field)
-
-
     
     @classmethod
     def InitializeParticlesAroundSurfaceAxis(cls, surface, n_particles, 
@@ -296,7 +293,6 @@ class Particles():
                   mass=mass, 
                   energy=energy,
                   field=field)
-
 
 
 @partial(jit, static_argnums=(2))
@@ -715,7 +711,9 @@ class Tracing():
         self.particles = particles
         self.species=species
         self.tag_gc=tag_gc
-        self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
+        # Use NoProgressMeter during optimization (when particles is None or being used for loss computation)
+        # Use TqdmProgressMeter for standalone tracing (when called directly)
+        self.progress_meter =TqdmProgressMeter()
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
@@ -1042,7 +1040,7 @@ class Tracing():
         self._trajectories = value
     
     def energy(self):
-        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
+        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
         mass = self.particles.mass
 
         if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
@@ -1069,7 +1067,7 @@ class Tracing():
                 return 0.5 * mass * trajectory[:, 3]**2
             energy = vmap(compute_energy)(self.trajectories)
 
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris':
+        elif self.model == 'FullOrbit':
             def compute_energy(trajectory):
                 vxvyvz = trajectory[:, 3:]
                 v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)
@@ -1080,50 +1078,19 @@ class Tracing():
             energy = jnp.ones((len(self.initial_conditions), self.times_to_trace))
             
         return energy
-    
-    
+
+
+
     def v_perp(self):
-        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
-        mass = self.particles.mass
-
-        if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
-            initial_xyz = self.initial_conditions[:, :3]
-            initial_vparallel = self.initial_conditions[:, 3]
-            initial_B = vmap(self.field.AbsB)(initial_xyz)
-            mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
-            def compute_vperp(trajectory, mu):
-                xyz = trajectory[:, :3]
-                AbsB = vmap(self.field.AbsB)(xyz)                
-                return jnp.sqrt(mu * AbsB/mass*2.)
-            v_perp = vmap(compute_vperp)(self.trajectories, mu_array)
-
-        elif  self.model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsMuAdaptative':
-            def compute_vperp(trajectory):
+        if  self.model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsMuAdaptative':
+            def compute_energy(trajectory):
                 xyz = trajectory[:, :3]
                 mu = trajectory[:, 4]*self.particles.mass*SPEED_OF_LIGHT**2
                 AbsB = vmap(self.field.AbsB)(xyz)
                 return jnp.sqrt(mu*AbsB/self.particles.mass*2.)
-            v_perp = vmap(compute_vperp)(self.trajectories)           
-        elif self.model == 'GuidingCenterCollisions':
-            def compute_vperp(trajectory):
-                vpar=trajectory[:, 3]*trajectory[:, 4]
-                v=trajectory[:, 4]*SPEED_OF_LIGHT
-                return jnp.sqrt(v**2-vpar**2)
-            v_perp = vmap(compute_vperp)(self.trajectories)
-
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris':
-            def compute_vperp(trajectory):
-                xyz = trajectory[:, :3]
-                vxvyvz = trajectory[:, 3:]
-                B = vmap(self.field.B)(xyz)
-                vperp_squared = jnp.sum(jnp.square(vxvyvz), axis=1) - jnp.square(jnp.sum(vxvyvz * B, axis=1) / jnp.linalg.norm(B, axis=1))
-                return jnp.sqrt(vperp_squared)
-            v_perp = vmap(compute_vperp)(self.trajectories)
-
-        elif self.model == 'FieldLine' or self.model == 'FieldLineAdaptative':
-            v_perp = jnp.ones((len(self.initial_conditions), self.times_to_trace))
-            
+            v_perp = vmap(compute_energy)(self.trajectories)            
         return v_perp
+
 
     def to_vtk(self, filename):
         try: import numpy as np
@@ -1150,7 +1117,6 @@ class Tracing():
             fix_matplotlib_3d(ax)
         if show:
             plt.show()
-            
             
     @partial(jit, static_argnums=(0,1))
     def loss_fraction_BioSavart(self, boundary):
@@ -1235,7 +1201,7 @@ class Tracing():
         # Gather energy at loss time for particles that lost - use clip to keep indices valid
         safe_indices = jnp.clip(lost_indices, 0, ntimesteps - 1)
         particle_indices = jnp.arange(nparticles)
-        lost_energies = jnp.where(has_lost, self.energy()[particle_indices, safe_indices], 0.)
+        lost_energies = jnp.where(has_lost, self.energy[particle_indices, safe_indices], 0.)
         
         # Gather positions at loss time for particles that lost
         lost_positions = jnp.where(

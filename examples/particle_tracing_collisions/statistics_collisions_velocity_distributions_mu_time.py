@@ -5,23 +5,23 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib.colors
-from essos.fields import BiotSavart
-from essos.coils import Coils_from_json
-from essos.constants import PROTON_MASS, ONE_EV,ELECTRON_MASS,SPEED_OF_LIGHT
+from essos.fields import BiotSavart,Vmec
+from essos.constants import PROTON_MASS, ONE_EV,ELECTRON_MASS,SPEED_OF_LIGHT,ELEMENTARY_CHARGE
 from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies,gamma_ab
 import numpy as np
 import jax 
 
+
 # Input parameters
 light_speed=SPEED_OF_LIGHT
-tmax = 1.e-5
+tmax = 1.e-4
 dt=1.e-8
-nparticles_per_core=10
+nparticles_per_core=100
 nparticles = number_of_processors_to_use*nparticles_per_core
-R0 = 1.25#jnp.linspace(1.23, 1.27, nparticles)
+s=0.25
 trace_tolerance = 1e-7
-times_to_trace=100
+times_to_trace=1000
 mass=PROTON_MASS
 mass_a=4.*mass
 mass_e=ELECTRON_MASS
@@ -42,15 +42,15 @@ vth_c_a2=energy*2./mass_a/light_speed**2
 
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_json(json_file)
-field = BiotSavart(coils)
+wout_file = os.path.join(os.path.dirname(__name__), 'input_files',"wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+vmec = Vmec(wout_file, ntheta=60, nphi=60, range_torus='half period', close=True)
 
-# Initialize particles
-Z0 = jnp.zeros(nparticles)
-phi0 = jnp.zeros(nparticles)
-initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
-particles = Particles(initial_xyz=initial_xyz,initial_vparallel_over_v=-1.*jnp.ones(nparticles), mass=mass, energy=energy)
+theta = jnp.zeros(nparticles)
+phi = jnp.zeros(nparticles)
+
+initial_xyz=jnp.array([[s]*nparticles, theta, phi]).T
+particles = Particles(initial_xyz=initial_xyz, mass=mass,
+                      charge=ELEMENTARY_CHARGE, energy=energy, field=vmec,initial_vparallel_over_v=1.0*jnp.ones(nparticles))
 
 
 #Initialize background species
@@ -82,67 +82,49 @@ vperp_sigma=vth_c*jnp.sqrt(2.-jnp.pi/2.)
 pitch_mean=0.
 pitch_sigma=jnp.sqrt(2.**2/12)
 
-#import jax
-#import jax.numpy as jnp
-#from essos.dynamics import GuidingCenterCollisionsDriftMu as GCCD
-#from essos.dynamics import GuidingCenterCollisionsDiffusionMu as GCCDiff
-#from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab
-#B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
-#mu=particles.initial_vperpendicular**2*particles.mass*0.5/B_particle/particles.mass
-#initial_conditions = jnp.concatenate([particles.initial_xyz,particles.initial_vparallel[:, None],mu[:, None]],axis=1)  
-#args = (field, particles,species)
-#GCCD(0,initial_conditions[0],args)
-#GCCDiff(0,initial_conditions[0],args)
-#initial_condition=initial_conditions[0]
-#initial_condition = jnp.concatenate([particles.initial_xyz,total_speed_temp[:, None], particles.initial_vparallel_over_v[:, None]], axis=1)[0]
-#initial_condition = jnp.concatenate([particles.initial_xyz,total_speed_temp[:, None], particles.initial_vparallel_over_v[:, None]], axis=1)[0]
-
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterCollisionsMuFixed', particles=particles,
+tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuFixed', particles=particles,
                   maxtime=tmax, timestep=dt,times_to_trace=times_to_trace,species=species,tag_gc=0.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
-
-# Plot trajectories, velocity parallel to the magnetic field, and energy error
 fig = plt.figure(figsize=(9, 8))
-ax1 = fig.add_subplot(221, projection='3d')
+ax1 = fig.add_subplot(221)#, projection='3d')
 ax2 = fig.add_subplot(222)
 ax3 = fig.add_subplot(223)
 ax4 = fig.add_subplot(224)
 
-coils.plot(ax=ax1, show=False)
-tracing.plot(ax=ax1, show=False)
+#vmec.plot(ax=ax1, show=False)
+#tracing.plot(ax=ax1, show=False)
 
-v=jnp.sqrt(tracing.energy*2./particles.mass)
+# Plot only a random subset of 10 particles in 3D
+subset_size = 10
+subset_indices = np.random.choice(len(trajectories), subset_size, replace=False)
 
-for i, trajectory in enumerate(trajectories):
-    #ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i,0])/tracing.energy[i,0], label=f'Particle {i+1}')
-    ax2.plot(tracing.times, (v[i]-v[i,0])/v[i,0], label=f'Particle {i+1}')    
-    ax3.plot(tracing.times, trajectory[:, 3]/jnp.sqrt(tracing.energy[i]/mass*2.), label=f'Particle {i+1}')
+for i in subset_indices:
+    trajectory = trajectories[i]
+    ax1.plot(trajectory[:,0], trajectory[:,1], trajectory[:,2], label=f'Particle {i+1}')
+    ax2.plot(tracing.times, (tracing.energy()[i]-tracing.energy()[i,0])/tracing.energy()[i,0], label=f'Particle {i+1}')     
+    ax3.plot(tracing.times, 299792458*trajectory[:, 3]/jnp.sqrt(tracing.energy()[i]/mass*2.), label=f'Particle {i+1}')    
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 
 
 
 
-ax2.set_xlabel('Time (s)')
+ax2.set_xlabel(r'$t~[\mathrm{s}]$')
 ax2.set_ylabel('Normalized energy variation')
 ax3.set_ylabel(r'$v_{\parallel}/v$')
-#ax2.legend()
-ax3.set_xlabel('Time (s)')
-#ax3.legend()
-ax4.set_xlabel('R (m)')
-ax4.set_ylabel('Z (m)')
-#ax4.legend()
+ax3.set_xlabel(r'$t~[\mathrm{s}]$')
+ax4.set_xlabel(r'$R~[\mathrm{m}]$')
+ax4.set_ylabel(r'$Z~[\mathrm{m}]$')
 plt.tight_layout()
-plt.savefig('traj.pdf')
+plt.savefig('traj_time.pdf')
 
 
-
-v=jnp.sqrt(tracing.energy*2./particles.mass)
-#pitch=trajectories[:,:,3]/v
-vpar=trajectories[:,:,3]
-vperp=tracing.vperp_final
+v=jnp.sqrt(tracing.energy()*2./particles.mass)
+vpar=trajectories[:,:,3]*SPEED_OF_LIGHT
+vpar=jnp.where(jnp.isfinite(vpar), vpar, jnp.nan)
+vperp=tracing.v_perp()
 pitch=vpar/v
 # Plot distribution in velocities initial t and final 
 fig3 = plt.figure(figsize=(9, 8))
@@ -212,12 +194,12 @@ ax82 = fig2.add_subplot(258)
 ax92 = fig2.add_subplot(259)
 nbins=64
 
-v0=jnp.sqrt(tracing.energy[:,0]*2./particles.mass)
-vfinal=jnp.sqrt(tracing.energy[:,-1]*2./particles.mass)
-vperp0=tracing.vperp_final[:,0]
-vperpfinal=tracing.vperp_final[:,-1]
-vpar0=trajectories[:,0,3]
-vparfinal=trajectories[:,-1,3]
+v0=jnp.sqrt(tracing.energy()[:,0]*2./particles.mass)/SPEED_OF_LIGHT
+vfinal=jnp.sqrt(tracing.energy()[:,-1]*2./particles.mass)/SPEED_OF_LIGHT
+vperp0=tracing.v_perp()[:,0]/SPEED_OF_LIGHT
+vperpfinal=tracing.v_perp()[:,-1]/SPEED_OF_LIGHT
+vpar0=vpar[:,0]/SPEED_OF_LIGHT
+vparfinal=vpar[:,-1]/SPEED_OF_LIGHT
 pitch0=vpar0/v0
 pitch_final=vparfinal/vfinal
 
@@ -339,7 +321,16 @@ ax92.set_ylabel('Counts')
 ax92.set_xlabel(r'$t_{final}$')
 
 plt.tight_layout()
-plt.savefig('dist.pdf')
+
+# Improved time distribution plot
+plt.figure(figsize=(7, 5))
+plt.hist(good_t_final, bins=nbins, color='c', edgecolor='black', alpha=0.7)
+plt.title(r'$t_{final}$ Distribution', fontweight='bold')
+plt.xlabel(r'$t_{final}$', fontweight='bold')
+plt.ylabel('Counts', fontweight='bold')
+plt.tight_layout()
+plt.rcParams.update({'font.size': 18, 'font.weight': 'bold'})
+plt.savefig('dist_time.pdf', dpi=300)
 
 ## Save results in vtk format to analyze in Paraview
 # tracing.to_vtk('trajectories')

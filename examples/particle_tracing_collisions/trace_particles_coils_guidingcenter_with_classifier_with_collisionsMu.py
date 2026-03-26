@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart,Vmec
 from essos.surfaces import SurfaceClassifier
-from essos.coils import Coils_from_json,Coils_from_simsopt
+from essos.coils import Coils
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ONE_EV,ELECTRON_MASS,PROTON_MASS,SPEED_OF_LIGHT
 from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies
@@ -48,7 +48,7 @@ species = BackgroundSpecies(number_species=number_species, mass_array=mass_array
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'QH_simple_scaled.json')#'SIMSOPT_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_simsopt(json_file,nfp=4)
+coils = Coils.from_simsopt(json_file,nfp=4)
 field = BiotSavart(coils)
 
 
@@ -89,8 +89,8 @@ tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 
 for i, trajectory in enumerate(trajectories):
     #ax2.plot(tracing.times, jnp.abs(tracing.energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
-    ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i][0])/particles.energy, label=f'Particle {i+1}')    
-    ax3.plot(tracing.times, trajectory[:, 3]*SPEED_OF_LIGHT/particles.total_speed, label=f'Particle {i+1}')
+    ax2.plot(tracing.times, (tracing.energy()[i]-tracing.energy()[i][0])/tracing.energy()[i][0], label=f'Particle {i+1}')    
+    ax3.plot(tracing.times, trajectory[:, 3]*SPEED_OF_LIGHT/tracing.energy()[i], label=f'Particle {i+1}')
     #ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 ax2.set_xlabel('Time (s)')

@@ -2,7 +2,7 @@ import jax
 # from build.lib.essos import coils
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-from jax import jit, vmap
+from jax import jit, vmap,lax
 from jax.lax import fori_loop
 from functools import partial
 from essos.dynamics import Tracing
@@ -282,44 +282,6 @@ def loss_normB_axis_average(x,dofs_curves,currents_scale,nfp,n_segments=60,stell
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
     return jnp.array([jnp.absolute(jnp.average(B_axis)-target_B_on_axis)])
 
-@partial(jit, static_argnames=['max_coil_length'])
-def loss_coil_length(coils, max_coil_length=0):
-    return jnp.square(coils.length/max_coil_length - 1)
-
-@partial(jit, static_argnames=['max_coil_curvature'])
-def loss_coil_curvature(coils, max_coil_curvature=0):
-    pointwise_curvature_loss = jnp.square(jnp.maximum(coils.curvature-max_coil_curvature, 0))
-    return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
-
-def compute_candidates(coils, min_separation):
-    centers = coils.curves.curves[:, :, 0]
-    a_n = coils.curves.curves[:, :, 2 : 2*coils.order+1 : 2]
-    b_n = coils.curves.curves[:, :, 1 : 2*coils.order : 2]
-    radii = jnp.sum(jnp.linalg.norm(a_n, axis=1)+jnp.linalg.norm(b_n, axis=1), axis=1)
-
-    i_vals, j_vals = jnp.triu_indices(len(coils), k=1)
-    centers_dists = jnp.linalg.norm(centers[i_vals] - centers[j_vals], axis=1)
-    mask = centers_dists <= min_separation + radii[i_vals] + radii[j_vals]
-
-    return i_vals[mask], j_vals[mask]
-
-@partial(jit, static_argnames=['min_separation'])
-def loss_coil_separation(coils, min_separation, candidates=None):
-    if candidates is None:
-        candidates = jnp.triu_indices(len(coils), k=1)
-
-    def pair_loss(i, j):
-        gamma_i = coils.gamma[i]
-        gamma_dash_i = jnp.linalg.norm(coils.gamma_dash[i], axis=-1)
-        gamma_j = coils.gamma[j]
-        gamma_dash_j = jnp.linalg.norm(coils.gamma_dash[j], axis=-1)
-        dists = jnp.linalg.norm(gamma_i[:, None, :] - gamma_j[None, :, :], axis=2)
-        penalty = jnp.maximum(0, min_separation - dists)
-        return jnp.mean(jnp.square(penalty)*gamma_dash_i*gamma_dash_j)
-
-    losses = jax.vmap(pair_loss)(*candidates)
-    return jnp.sum(losses)
-
 
 
 
@@ -337,6 +299,11 @@ def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, curr
     loss = jnp.concatenate((normB_axis_loss, coil_length_loss, coil_curvature_loss,particles_drift_loss))
     return jnp.sum(loss)
 
+
+
+
+
+###################  B ON SURAFCE LOSSES ##########################
 
 @partial(jit, static_argnums=(1, 4, 5, 6))
 def loss_bdotn_over_b(x, vmec, dofs_curves, currents_scale, nfp, n_segments=60, stellsym=True):
@@ -410,177 +377,240 @@ def loss_BdotN_only_constraint_stochastic(x,sampler,N_samples, vmec, dofs_curves
 
 
 
-#This is thr quickest way to get coil-surface distance (but I guess not the most efficient way for large sizes). 
-# In that case we would do the candidates method from simsopt entirely
-def loss_cs_distance(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.sum(jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,min_distance_cs))
-    return result
-
-#Same as above but for individual constraints (useful in case one wants to target the several pairs individually)
-def loss_cs_distance_array(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,min_distance_cs)
-    return result.flatten()
-
-#This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
-# In that case we would do the candidates method from simsopt entirely
-def loss_cc_distance(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cc=0.7,downsample=1):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.sum(jnp.triu(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,coils.gamma,coils.gamma_dash,min_distance_cc,downsample),k=1))
-    return result
-
-#Same as above but for individual constraints (useful in case one wants to target the several pairs individually)
-def loss_cc_distance_array(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cc=0.7,downsample=1):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.triu(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,coils.gamma,coils.gamma_dash,min_distance_cc,downsample),k=1)
-    return result[result != 0.0].flatten()
 
 
 
-#One curve to curve distance (
-#reused from Simsopt, no changes were necessary)
-def cc_distance_pure(gamma1, l1, gamma2, l2, minimum_distance, downsample=1):
+######################### COIL GEOMETRY LOSSES #################################
+
+@partial(jit, static_argnames=['max_coil_length'])
+def loss_coil_length(coils, max_coil_length=0):
+    return jnp.square(coils.length/max_coil_length - 1)
+
+@partial(jit, static_argnames=['max_coil_curvature'])
+def loss_coil_curvature(coils, max_coil_curvature=0):
+    pointwise_curvature_loss = jnp.square(jnp.maximum(coils.curvature-max_coil_curvature, 0))
+    return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
+
+def compute_candidates(coils, min_separation):
+    centers = coils.curves.curves[:, :, 0]
+    a_n = coils.curves.curves[:, :, 2 : 2*coils.order+1 : 2]
+    b_n = coils.curves.curves[:, :, 1 : 2*coils.order : 2]
+    radii = jnp.sum(jnp.linalg.norm(a_n, axis=1)+jnp.linalg.norm(b_n, axis=1), axis=1)
+
+    i_vals, j_vals = jnp.triu_indices(len(coils), k=1)
+    centers_dists = jnp.linalg.norm(centers[i_vals] - centers[j_vals], axis=1)
+    mask = centers_dists <= min_separation + radii[i_vals] + radii[j_vals]
+
+    return i_vals[mask], j_vals[mask]
+
+
+# Blockwise, memory-efficient coil separation loss
+@partial(jit, static_argnames=["min_separation", "block_size"])
+def loss_coil_separation(coils, min_separation, candidates=None, block_size=None):
     """
-    Compute the curve-curve distance penalty between two curves.
-
+    Memory-efficient coil separation loss using blockwise vmap.
     Args:
-        gamma1 (array-like): Points along the first curve.
-        l1 (array-like): Tangent vectors along the first curve.
-        gamma2 (array-like): Points along the second curve.
-        l2 (array-like): Tangent vectors along the second curve.
-        minimum_distance (float): The minimum allowed distance between curves.
-        downsample (int, default=1): 
-            Factor by which to downsample the quadrature points 
-            by skipping through the array by a factor of ``downsample``,
-            e.g. curve.gamma()[::downsample, :]. 
-            Setting this parameter to a value larger than 1 will speed up the calculation,
-            which may be useful if the set of coils is large, though it may introduce
-            inaccuracy if ``downsample`` is set too large, or not a multiple of the 
-            total number of quadrature points (since this will produce a nonuniform set of points). 
-            This parameter is used to speed up expensive calculations during optimization, 
-            while retaining higher accuracy for the other objectives. 
-
+        coils: Coils object
+        min_separation: Minimum allowed separation
+        candidates: Optional tuple of (i, j) coil index arrays
+        block_size: Block size for memory efficiency. If None, uses full vmap (no chunking)
     Returns:
-        float: The curve-curve distance penalty value.
+        Scalar loss (sum over all coil pairs)
     """
-    gamma1 = gamma1[::downsample, :]
-    gamma2 = gamma2[::downsample, :]
-    l1 = l1[::downsample, :]
-    l2 = l2[::downsample, :]
-    dists = jnp.sqrt(jnp.sum((gamma1[:, None, :] - gamma2[None, :, :])**2, axis=2))
-    alen = jnp.linalg.norm(l1, axis=1)[:, None] * jnp.linalg.norm(l2, axis=1)[None, :]
-    return jnp.sum(alen * jnp.maximum(minimum_distance-dists, 0)**2)/(gamma1.shape[0]*gamma2.shape[0])
+    if candidates is None:
+        candidates = jnp.triu_indices(len(coils), k=1)
 
+    def pair_loss(i, j):
+        gamma_i = coils.gamma[i]
+        gamma_dash_i = jnp.linalg.norm(coils.gamma_dash[i], axis=-1)
+        gamma_j = coils.gamma[j]
+        gamma_dash_j = jnp.linalg.norm(coils.gamma_dash[j], axis=-1)
+        n_points = gamma_i.shape[0]
 
+        # If block_size is None, use full vmap (no chunking)
+        use_block_size = n_points if block_size is None else block_size
 
-#One coil to surface distance (reused from Simsopt, no changes were necessary)
-def cs_distance_pure(gammac, lc, gammas, ns, minimum_distance):
+        def block_sum(carry, block_idx):
+            start = block_idx * use_block_size
+            end = jnp.minimum(start + use_block_size, n_points)
+            block_gamma_j = gamma_j[start:end]
+            block_gamma_dash_j = gamma_dash_j[start:end]
+            # Compute distances for block
+            dists_block = jnp.linalg.norm(gamma_i[:, None, :] - block_gamma_j[None, :, :], axis=2)
+            penalty_block = jnp.maximum(0, min_separation - dists_block)
+            # gamma_dash_i: (N,), block_gamma_dash_j: (block,)
+            weighted_penalty = jnp.square(penalty_block) * gamma_dash_i[:, None] * block_gamma_dash_j[None, :]
+            return carry + jnp.sum(weighted_penalty), None
+
+        n_blocks = (n_points + use_block_size - 1) // use_block_size
+        total, _ = lax.fori_loop(0, n_blocks, block_sum, 0.0)
+        norm = gamma_i.shape[0] * gamma_j.shape[0]
+        return total / norm
+
+    losses = jax.vmap(pair_loss)(*candidates)
+    return jnp.sum(losses)
+
+# Blockwise, memory-efficient coil-surface distance loss
+@partial(jit, static_argnames=["min_distance", "block_size", "nfp", "stellsym"])
+def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
     """
-    Compute the curve-surface distance penalty between a curve and a surface.
-
+    Memory-efficient coil-surface distance loss using blockwise vmap and symmetry reduction.
     Args:
-        gammac (array-like): Points along the curve.
-        lc (array-like): Tangent vectors along the curve.
-        gammas (array-like): Points on the surface.
-        ns (array-like): Surface normal vectors.
-        minimum_distance (float): The minimum allowed distance between curve and surface.
-
+        coils: Coils object
+        surface: Surface object (with gamma, unitnormal)
+        min_distance: Minimum allowed coil-surface distance
+        block_size: Block size for memory efficiency. If None, uses full vmap (no chunking)
+        nfp: Number of field periods
+        stellsym: Whether stellarator symmetry is present
     Returns:
-        float: The curve-surface distance penalty value.
+        Scalar loss (sum over all relevant coil-surface pairs)
     """
-    dists = jnp.sqrt(jnp.sum(
-        (gammac[:, None, :] - gammas[None, :, :])**2, axis=2))
-    integralweight = jnp.linalg.norm(lc, axis=1)[:, None] \
-        * jnp.linalg.norm(ns, axis=1)[None, :]
-    return jnp.mean(integralweight * jnp.maximum(minimum_distance-dists, 0)**2)
+    n_coils = coils.gamma.shape[0]
+    n_points_coil = coils.gamma.shape[1]
+    surface_points = surface.gamma.reshape(-1, 3)
+    surface_normals = surface.unitnormal.reshape(-1, 3)
+    n_points_surface = surface_points.shape[0]
+
+    # Only check unique coils for symmetry
+    if surface.stellsym:
+        n_unique_coils = n_coils // (2 * surface.nfp)
+    else:
+        n_unique_coils = n_coils // surface.nfp
+    n_unique_coils = max(1, n_unique_coils)
+    unique_coil_indices = jnp.arange(n_unique_coils)
+
+    def single_coil_loss(idx):
+        gamma_i = coils.gamma[idx]
+        gamma_dash_i = coils.gamma_dash[idx]
+        gamma_dash_norm = jnp.linalg.norm(gamma_dash_i, axis=1)
+        n_points = gamma_i.shape[0]
+
+        # If block_size is None, use full vmap (no chunking)
+        use_block_size = n_points_surface if block_size is None else block_size
+
+        def block_sum(carry, block_idx):
+            start = block_idx * use_block_size
+            end = jnp.minimum(start + use_block_size, n_points_surface)
+            block_surface_points = surface_points[start:end]
+            block_surface_normals = surface_normals[start:end]
+            # Compute distances for block
+            dists_block = jnp.linalg.norm(gamma_i[:, None, :] - block_surface_points[None, :, :], axis=2)
+            # Optionally, could use surface normals for weighted penalty (not used here)
+            penalty_block = jnp.maximum(0, min_distance - dists_block)
+            weighted_penalty = jnp.square(penalty_block) * gamma_dash_norm[:, None]
+            return carry + jnp.sum(weighted_penalty), None
+
+        n_blocks = (n_points_surface + use_block_size - 1) // use_block_size
+        total, _ = lax.fori_loop(0, n_blocks, block_sum, 0.0)
+        norm = gamma_i.shape[0] * n_points_surface
+        return total / norm
+
+    losses = jax.vmap(single_coil_loss)(unique_coil_indices)
+    return jnp.sum(losses)
+
+
+# Blockwise vmap linking number loss (memory efficient, fully differentiable)
+def loss_linkingnumber(coils, candidates=None, block_size=None):
+    if candidates is None:
+        candidates = jnp.triu_indices(len(coils), k=1)
+    dphi = coils.quadpoints[1] - coils.quadpoints[0]
+
+    def pair_linking(i, j):
+        gamma_i = coils.gamma[i]
+        gamma_dash_i = coils.gamma_dash[i]
+        gamma_j = coils.gamma[j]
+        gamma_dash_j = coils.gamma_dash[j]
+        n_points = gamma_j.shape[0]
+
+        # If block_size is None, use full vmap (no chunking)
+        use_block_size = n_points if block_size is None else block_size
+
+        def block_sum(carry, block_idx):
+            start = block_idx * use_block_size
+            end = jnp.minimum(start + use_block_size, n_points)
+            block_gamma_j = gamma_j[start:end]
+            block_gamma_dash_j = gamma_dash_j[start:end]
+            # vmap over the block
+            def integrand(r2, dr2):
+                diff = gamma_i - r2  # (N, 3)
+                cross = jnp.cross(gamma_dash_i, dr2)  # (N, 3)
+                norm = jnp.linalg.norm(diff, axis=1)
+                # (N,) dot (N,3) with (N,3) -> (N,)
+                return jnp.sum(diff * cross, axis=1) / (norm**3 + 1e-12)
+            block_vals = jax.vmap(integrand, in_axes=(0, 0))(block_gamma_j, block_gamma_dash_j)
+            return carry + jnp.sum(block_vals), None
+
+        n_blocks = (n_points + use_block_size - 1) // use_block_size
+        total, _ = lax.fori_loop(0, n_blocks, block_sum, 0.0)
+        linking = total * (dphi ** 2) / (4 * jnp.pi)
+        return jnp.abs(linking)
+
+    losses = jax.vmap(pair_linking)(*candidates)
+    return jnp.sum(losses)
 
 
 
-#This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
-# In that case we would do the candidates method from simsopt entirely
-def loss_linking_mnumber(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,downsample=1):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
-    # (needs change if quadpoints are allowed to be different)
-    dphi=coils.quadpoints[1]-coils.quadpoints[0]
-    result=jnp.sum(jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
-                                        in_axes=(None,None,0,0,None))(coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    dphi),k=1))
-    return result
 
-
-#This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
-# In that case we would do the candidates method from simsopt entirely
-def loss_linking_mnumber_constarint(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,downsample=1):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
-    # (needs change if quadpoints are allowed to be different)
-    dphi=coils.quadpoints[1]-coils.quadpoints[0]
-    result=jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
-                                        in_axes=(None,None,0,0,None))(coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    dphi)+1.e-18,k=1)  
-    #The 1.e-18 above is just to get all the correct values in the following mask
-    return result[result != 0.0].flatten()
-
-def linking_number_pure(gamma1, lc1, gamma2, lc2,dphi):
-    linking_number_ij=jnp.sum(jnp.abs(jax.vmap(integrand_linking_number, in_axes=(0, 0, 0, 0,None,None))(gamma1, lc1, gamma2, lc2,dphi,dphi)/ (4*jnp.pi)))
-    return linking_number_ij
-
-def integrand_linking_number(r1,dr1,r2,dr2,dphi1,dphi2):
+#  Lorentz force loss: accepts Coils object, keyword args, JAX-friendly
+@partial(jit, static_argnames=["p", "threshold", "block_size"])
+def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
     """
-    Compute the integrand for the linking number between two curves.
-
+    Loss function penalizing Lorentz force on coils using Landreman-Hurwitz method.
     Args:
-        r1 (array-like): Points along the first curve.
-        dr1 (array-like): Tangent vectors along the first curve.
-        r2 (array-like): Points along the second curve.
-        dr2 (array-like): Tangent vectors along the second curve.
-        dphi1 (array-like): increments of quadpoints 1  
-        dphi2 (array-like): increments of quadpoints 2               
-
+        coils: Coils object (with gamma, gamma_dash, gamma_dashdash, currents, quadpoints)
+        p: Power for penalty (default 1)
+        threshold: Force threshold (default 0.5e6)
+        block_size: Block size for memory efficiency. If None, uses full vmap (no chunking)
     Returns:
-        float: The integrand value for the linking number.
+        Scalar loss (sum over all coils)
     """
-    return jnp.dot((r1-r2), jnp.cross(dr1, dr2)) / jnp.linalg.norm(r1-r2)**3*dphi1*dphi2
+    n_coils = coils.gamma.shape[0]
+    indices = jnp.arange(n_coils)
+    def single_coil_loss(idx):
+        n_points = coils.gamma.shape[1]
+        mask = jnp.arange(n_coils) != idx
+        gamma_i = coils.gamma[idx]
+        gamma_dash_i = coils.gamma_dash[idx]
+        gamma_dashdash_i = coils.gamma_dashdash[idx]
+        current_i = coils.currents[idx]
+        quadpoints = coils.quadpoints
+        curvature = Curves.compute_curvature(gamma_dash_i, gamma_dashdash_i)
+        regularization = regularization_circ(1. / jnp.mean(curvature))
+        gamma_others = coils.gamma[mask]
+        gamma_dash_others = coils.gamma_dash[mask]
+        gamma_dashdash_others = coils.gamma_dashdash[mask]
+        currents_others = coils.currents[mask]
+        biot_savart = BiotSavart_from_gamma(gamma_others, gamma_dash_others, gamma_dashdash_others, currents_others)
+
+        # If block_size is None, use full vmap (no chunking)
+        use_block_size = n_points if block_size is None else block_size
+
+        def block_sum(carry, block_idx):
+            start = block_idx * use_block_size
+            end = jnp.minimum(start + use_block_size, n_points)
+            block_gamma = gamma_i[start:end]
+            block_B_mutual = jax.vmap(biot_savart.B)(block_gamma)
+            block_gammadash = gamma_dash_i[start:end]
+            block_gammadash_norm = jnp.linalg.norm(block_gammadash, axis=1)
+            block_tangent = block_gammadash / block_gammadash_norm[:, None]
+            block_B_self = B_regularized_pure(
+                block_gamma, block_gammadash, gamma_dashdash_i[start:end],
+                quadpoints, current_i, regularization
+            )
+            block_force = jnp.cross(current_i * block_tangent, block_B_self + block_B_mutual)
+            block_force_norm = jnp.linalg.norm(block_force, axis=1)
+            block_penalty = jnp.sum(jnp.maximum(block_force_norm - threshold, 0) ** p * block_gammadash_norm)
+            return carry + block_penalty, None
+
+        n_blocks = (n_points + use_block_size - 1) // use_block_size
+        total_penalty, _ = lax.fori_loop(0, n_blocks, block_sum, 0.0)
+        return total_penalty * (1. / p)
+
+    penalties = jax.vmap(single_coil_loss)(indices)
+    return jnp.sum(penalties)
 
 
 
-#Loss function penalizing force on coils using Landremann-Hurwitz method
-def loss_lorentz_force_coils(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,p=1,threshold=0.5e+6):
-    coils=coils_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments, stellsym) 
-    curves_indeces=jnp.arange(coils.gamma.shape[0])
-    #We want to calculate tangeng cross [B_self + B_mutual] for each coil
-    #B_self is the self-field of the coil, B_mutual is the field from the other coils
-    force_penalty=jax.vmap(lp_force_pure,in_axes=(0,None,None,None,None,None,None,None))(curves_indeces,coils.gamma,
-                                                                                 coils.gamma_dash,coils.gamma_dashdash,coils.currents,coils.quadpoints,p, threshold)
-    return force_penalty
-
-
-
-
-
-
-def lp_force_pure(index,gamma, gamma_dash,gamma_dashdash,currents,quadpoints,p, threshold):
-    """Pure function for minimizing the Lorentz force on a coil.
-    """
-    regularization = regularization_circ(1./jnp.average(Curves.compute_curvature( gamma_dash.at[index].get(), gamma_dashdash.at[index].get())))
-    B_mutual=jax.vmap(BiotSavart_from_gamma(jnp.roll(gamma, -index, axis=0)[1:],
-                                 jnp.roll(gamma_dash, -index, axis=0)[1:],
-                                 jnp.roll(gamma_dashdash, -index, axis=0)[1:],
-                                 jnp.roll(currents, -index, axis=0)[1:]).B,in_axes=0)(gamma[index])
-    B_self = B_regularized_pure(gamma.at[index].get(),gamma_dash.at[index].get(), gamma_dashdash.at[index].get(), quadpoints, currents[index], regularization)
-    gammadash_norm = jnp.linalg.norm(gamma_dash.at[index].get(), axis=1)[:, None]
-    tangent = gamma_dash.at[index].get() / gammadash_norm
-    force = jnp.cross(currents.at[index].get() * tangent, B_self + B_mutual)
-    force_norm = jnp.linalg.norm(force, axis=1)[:, None]
-    return (jnp.sum(jnp.maximum(force_norm - threshold, 0)**p * gammadash_norm))*(1./p)
 
 
 
@@ -653,3 +683,7 @@ def rectangular_xsection_delta(a, b):
 #    bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
 
 #    return bdotn_over_b_loss
+
+
+
+#######################  SURFACE GEOMETRY LOSSES ##########################

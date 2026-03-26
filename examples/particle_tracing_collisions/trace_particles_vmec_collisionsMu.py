@@ -71,9 +71,9 @@ tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 for i in np.random.choice(nparticles, size=n_particles_to_plot, replace=False):
     trajectory = trajectories[i]
     ## Plot energy error
-    ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i][0])/tracing.energy[i][0], label=f'Particle {i+1}')
+    ax2.plot(tracing.times, (tracing.energy()[i]-tracing.energy()[i,0])/tracing.energy()[i,0], label=f'Particle {i+1}')
     ## Plot velocity parallel to the magnetic field
-    ax3.plot(tracing.times, trajectory[:, 3]*SPEED_OF_LIGHT/jnp.sqrt(tracing.energy[i]/particles.mass*2.), label=f'Particle {i+1}')
+    ax3.plot(tracing.times, trajectory[:, 3]*SPEED_OF_LIGHT/jnp.sqrt(tracing.energy()[i]/particles.mass*2.), label=f'Particle {i+1}')
     ## Plot s-coordinate
     ax4.plot(tracing.times, trajectory[:,0], label=f'Particle {i+1}')
     # ax4.set_ylabel(r'$s=\psi/\psi_b$')
