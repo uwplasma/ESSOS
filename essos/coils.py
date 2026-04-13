@@ -493,6 +493,131 @@ class Coils_from_simsopt(Coils):
         currents = jnp.array([c.current.get_value() for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]])
         super().__init__(Curves_from_simsopt(curves, nfp, stellsym), currents)
 
+class Coils_from_desc(Coils):
+    """
+    Convert a DESC CoilSet/MixedCoilSet directly to ESSOS Coils.
+
+    For simple CoilSets, ESSOS handles symmetry expansion via nfp/stellsym.
+    For MixedCoilSets with sub-members and possible mixed symmetry all coils are expanded
+    and passed to ESSOS with nfp=1, stellsym=False.
+
+    Usage
+    -----
+        coils = Coils_from_desc("my_coilset.h5", nfp=2, stellsym=True, order=16, n_segments=100)
+        field = BiotSavart(coils)
+    """
+
+    def __init__(
+        self,
+        desc_coilset_path: str,
+        nfp: int = 1,
+        stellsym: bool = False,
+        order: int = 10,
+        n_segments: int = 100,
+        n_quadrature: int = 200,
+    ):
+        try:
+            from desc.coils import MixedCoilSet
+        except ImportError:
+            raise ImportError("DESC is required. Install it with: pip install desc-ae")
+
+        # use local variables, not self.x, to avoid triggering Curves property setters
+        # before super().__init__() is called
+        _nfp = nfp
+        _stellsym = stellsym
+
+        def _flatten_coils(coilset):
+            """Flatten potentially nested MixedCoilSet into a simple list of coils."""
+            coil_list = []
+            for c in coilset.coils:
+                if hasattr(c, 'coils'):
+                    coil_list.extend(c.coils)
+                else:
+                    coil_list.append(c)
+            return coil_list
+
+        def _is_mixed(coilset):
+            """True if sub-members have differing NFP or stellsym from each other."""
+            nfps = [getattr(m, 'NFP', 1) for m in coilset.coils]
+            syms = [getattr(m, 'sym', False) for m in coilset.coils]
+            return len(set(nfps)) > 1 or len(set(syms)) > 1
+
+        def _extract_gamma_and_currents(coilset):
+            """
+            For simple coilsets: load base coils, let ESSOS expand via nfp/stellsym.
+            For mixed coilsets: expand each sub-member using its own symmetry,
+            flatten everything, and override to nfp=1, stellsym=False.
+            """
+            nonlocal _nfp, _stellsym
+
+            if _is_mixed(coilset):
+                print(
+                    "Warning: MixedCoilSet with heterogeneous NFP/stellsym detected. "
+                    "Expanding all sub-members and using nfp=1, stellsym=False in ESSOS."
+                )
+                gammas, currents = [], []
+
+                '''
+                for member in coilset.coils:
+                    nfp = getattr(member, 'NFP', 1)
+                    stellsym = getattr(member, 'sym', False)
+                    expanded = member.from_symmetry(member, NFP=nfp) if (nfp > 1 or stellsym) else member
+                    for coil in (expanded.coils if hasattr(expanded, 'coils') else [expanded]):
+                        xyz = coil.compute("x", grid=n_quadrature, basis="xyz")["x"]
+                        gammas.append(jnp.array(xyz))
+                        currents.append(float(coil.current))
+                _nfp = 1
+                _stellsym = False
+                '''
+
+                for member in coilset.coils:
+                    member_nfp = getattr(member, 'NFP', 1)
+                    member_stellsym = getattr(member, 'sym', False)
+
+                    expanded = member
+                    if member_stellsym:
+                        expanded = expanded.from_symmetry(expanded, NFP=1, sym=True)
+                    if member_nfp > 1:
+                        expanded = expanded.from_symmetry(expanded, NFP=member_nfp, sym=False)
+
+                    n_expanded = len(expanded.coils) if hasattr(expanded, 'coils') else 1
+                    n_base = len(member.coils) if hasattr(member, 'coils') else 1
+                    n_expected = n_base * member_nfp * (1 + int(member_stellsym))
+
+                    for coil in (expanded.coils if hasattr(expanded, 'coils') else [expanded]):
+                        xyz = coil.compute("x", grid=n_quadrature, basis="xyz")["x"]
+                        gammas.append(jnp.array(xyz))
+                        currents.append(float(coil.current))
+                _nfp = 1
+                _stellsym = False
+            else:
+                # Original working code — DESC stores base coils, ESSOS expands
+                coil_list = _flatten_coils(coilset)
+                print(f"Base coils in DESC file: {len(coil_list)} (nfp={_nfp}, stellsym={_stellsym})")
+                gammas, currents = [], []
+                for coil in coil_list:
+                    xyz = coil.compute("x", grid=n_quadrature, basis="xyz")["x"]
+                    gammas.append(jnp.array(xyz))
+                    currents.append(float(coil.current))
+
+            return jnp.array(gammas), jnp.array(currents)
+
+        coilset = MixedCoilSet.load(desc_coilset_path)
+        gammas, currents = _extract_gamma_and_currents(coilset)
+
+        dofs, _ = fit_dofs_from_coils(
+            gammas,
+            order=order,
+            n_segments=n_quadrature,
+            assume_uniform=True,
+        )
+
+        super().__init__(
+            Curves(dofs, n_segments=n_segments, nfp=_nfp, stellsym=_stellsym),
+            currents
+        )
+        
+
 tree_util.register_pytree_node(Coils,
                                Coils._tree_flatten,
                                Coils._tree_unflatten)
