@@ -17,7 +17,7 @@ trace_tolerance = 1e-10
 num_steps = 10000
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__file__), 'input_files',"wout_QH_simple_scaled.nc")
+wout_file = os.path.join(os.path.dirname(__name__), 'input_files',"wout_QH_simple_scaled.nc")
 vmec = Vmec(wout_file)
 
 # Initialize particles
