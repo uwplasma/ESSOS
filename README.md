@@ -139,6 +139,83 @@ To run the tests, use `pytest`:
 pytest .
 ```
 
+## VMEC Exterior Fields
+ESSOS can consume a `virtual_casing_jax` VMEC exterior field through
+`essos.vmec_extender.VmecExtendedField`:
+
+```python
+import vmec_jax
+from virtual_casing_jax import ExteriorFieldConfig
+from essos.vmec_extender import build_vmec_extended_field
+from essos.dynamics import Tracing
+
+run = vmec_jax.run_fixed_boundary("input.vmec")
+field = build_vmec_extended_field(
+    vmec_state=run.state,
+    vmec_static=run.static,
+    indata=run.indata,
+    coil_field=coil_field,
+    config=ExteriorFieldConfig(digits=8),
+)
+
+tracing = Tracing(
+    field=field,
+    model="FieldLineAdaptative",
+    initial_conditions=initial_xyz,
+    maxtime=1000,
+    times_to_trace=6000,
+)
+tracing.poincare_plot()
+```
+
+The wrapped plasma field uses the `internal` virtual-casing branch by default,
+so the total exterior field is `B_coils + B_internal^VC`. This workflow is for
+field-line tracing, gridded export, diagnostics, and smooth exterior-field
+objectives. It is not a self-consistent SOL plasma solver.
+
+The command line entry point provides early `validate`, `grid`, and `trace`
+workflows:
+
+```sh
+essos-vmec-extender validate \
+  --input input.vmec \
+  --wout wout.nc \
+  --coils coils.json \
+  --src-nphi 64 --src-ntheta 64 \
+  --digits 8 \
+  --out results/validation.json
+
+essos-vmec-extender grid \
+  --input input.vmec \
+  --wout wout.nc \
+  --coils coils.json \
+  --R 0.8:2.0:128 \
+  --phi 0:1.57079632679:64 \
+  --Z=-0.8:0.8:128 \
+  --out results/extended_field.nc
+
+essos-vmec-extender trace \
+  --input input.vmec \
+  --wout wout.nc \
+  --coils coils.json \
+  --seeds seeds.json \
+  --nturns 200 \
+  --phis 0,1.57079632679 \
+  --out results/trace.npz \
+  --plot results/poincare.pdf
+```
+
+`validate` reports surface orientation, VMEC `B·n`, internal/external branch
+identity, and coil-coupled normal-field diagnostics when coils are supplied.
+The coil metrics are diagnostics until the wout/coils pair is known to be a
+matched free-boundary benchmark with validated units and sign conventions.
+
+For a small reproducible benchmark of the validation, grid, and trace workflows:
+
+```sh
+python benchmarks/vmec_extender_cli_benchmark.py --out results/vmec_extender_benchmark.json
+```
+
 ## Project Roadmap
 - [ ] Allow several optimization algorithms
 - [ ] Allow plotly and/or Mayavi visualization
@@ -203,4 +280,3 @@ This project is protected under the MIT License. For more details, refer to the 
 - We acknowledge the help of the whole [UWPlasma](https://rogerio.physics.wisc.edu/) plasma group.
 
 ---
-

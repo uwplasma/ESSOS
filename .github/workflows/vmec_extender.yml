@@ -1,0 +1,57 @@
+name: VMEC Extender Coordinated Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      virtual_casing_jax_ref:
+        description: virtual_casing_jax git ref to test against
+        required: false
+        default: main
+      vmec_jax_ref:
+        description: vmec_jax git ref to test against
+        required: false
+        default: main
+
+jobs:
+  extender-smoke:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout ESSOS
+        uses: actions/checkout@v4
+        with:
+          path: ESSOS
+      - name: Checkout virtual_casing_jax
+        uses: actions/checkout@v4
+        with:
+          repository: uwplasma/virtual_casing_jax
+          ref: ${{ inputs.virtual_casing_jax_ref }}
+          path: virtual_casing_jax
+      - name: Checkout vmec_jax
+        uses: actions/checkout@v4
+        with:
+          repository: uwplasma/vmec_jax
+          ref: ${{ inputs.vmec_jax_ref }}
+          path: vmec_jax
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install coordinated packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e virtual_casing_jax
+          python -m pip install -e vmec_jax
+          python -m pip install -e ESSOS
+          python -m pip install pytest
+      - name: Run extender tests and bundled examples
+        env:
+          JAX_ENABLE_X64: "1"
+          JAX_PLATFORMS: cpu
+        run: |
+          cd ESSOS
+          python -m pytest -q tests/test_vmec_extended_field_adapter.py tests/test_vmec_extender_cli.py tests/test_vmec_extender_real_validation.py
+          python examples/validate_vmec_extender.py
+          python examples/export_vmec_extender_grid.py
+          python examples/trace_fieldlines_vmec_extender.py
+          python benchmarks/vmec_extender_cli_benchmark.py

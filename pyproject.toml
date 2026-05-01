@@ -27,7 +27,20 @@ keywords = ["Plasma",
      "Simulation",
      "JAX"]
  
-dependencies = [ "jax", "jaxlib", "tqdm", "matplotlib", "diffrax", "optax", "jaxopt", "optimistix", "scipy", "jaxkd", "netcdf4"]
+dependencies = [
+    "jax",
+    "jaxlib",
+    "tqdm",
+    "matplotlib",
+    "diffrax",
+    "optax",
+    "jaxopt",
+    "optimistix",
+    "scipy",
+    "jaxkd",
+    "netcdf4",
+    "optuna",
+]
  
 requires-python = ">=3.10"
 
@@ -36,4 +49,4 @@ Homepage = "https://github.com/uwplasma/ESSOS"
 
 [project.scripts]
 essos = "essos.__main__:main"
- 
+essos-vmec-extender = "essos.vmec_extender_cli:main"

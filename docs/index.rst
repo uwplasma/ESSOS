@@ -25,3 +25,6 @@ stellarator coils to improve plasma confinement.
    :caption: Contents:
 
    getting_started
+   vmec_extender_cli
+   vmec_extender_trace
+   connection_length
