@@ -17,24 +17,26 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - name: Checkout ESSOS
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: ESSOS
       - name: Checkout virtual_casing_jax
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: uwplasma/virtual_casing_jax
           ref: ${{ inputs.virtual_casing_jax_ref }}
           path: virtual_casing_jax
       - name: Checkout vmec_jax
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: uwplasma/vmec_jax
           ref: ${{ inputs.vmec_jax_ref }}
           path: vmec_jax
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install coordinated packages
