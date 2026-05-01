@@ -31,6 +31,7 @@ class FakeVCField:
         self.B_total = self.surface_data.B_total
         self._vc = FakeVCOp()
         self.external_B_fn = None
+        self.schedule_levels = ((4, 4),)
 
         class Config:
             digits = 3
@@ -92,6 +93,8 @@ def test_validate_cli_writes_json(monkeypatch, tmp_path, capsys):
     data = json.loads(out.read_text())
     assert data["status"] == "ok"
     assert data["branch_identity_relative_l2"] == 0.0
+    assert data["vcp_levels_requested"] == [[4, 4]]
+    assert data["vcp_levels_effective"] == [[4, 4]]
     assert "B_dot_n_rms_normalized" in data
     assert "status" in capsys.readouterr().out
 

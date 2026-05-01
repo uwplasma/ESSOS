@@ -52,6 +52,10 @@ def _parse_chunk_arg(value):
     return int(value)
 
 
+def _levels_for_json(levels):
+    return [[int(nt), int(np)] for nt, np in tuple(levels)]
+
+
 def _load_coil_field(path):
     if path is None:
         return None
@@ -174,6 +178,10 @@ def cmd_validate(args):
         "source_nphi": int(surface.gamma.shape[1]),
         "source_ntheta": int(surface.gamma.shape[2]),
         "branch": str(vc_field.config.branch),
+        "vcp_levels_requested": _levels_for_json(vc_field.config.levels),
+        "vcp_levels_effective": _levels_for_json(
+            getattr(vc_field, "schedule_levels", vc_field.config.levels)
+        ),
         "surface_orientation": "outward_enforced_by_bridge",
     }
     metrics.update(_surface_metrics(surface))
@@ -206,7 +214,10 @@ def cmd_grid(args):
         "source_nphi": int(field.vc_field.surface_data.gamma.shape[1]),
         "source_ntheta": int(field.vc_field.surface_data.gamma.shape[2]),
         "vcp_digits": int(field.vc_field.config.digits),
-        "vcp_levels": tuple(tuple(x) for x in field.vc_field.config.levels),
+        "vcp_levels_requested": tuple(tuple(x) for x in field.vc_field.config.levels),
+        "vcp_levels_effective": tuple(
+            tuple(x) for x in getattr(field.vc_field, "schedule_levels", field.vc_field.config.levels)
+        ),
         "coil_source": str(args.coils) if args.coils is not None else "",
         "units": "SI-like VMEC/coil units",
         "coordinate_convention": "R, physical phi, Z",

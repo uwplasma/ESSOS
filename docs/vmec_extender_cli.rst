@@ -28,6 +28,7 @@ Validation metrics
 * internal/external branch identity on the LCFS;
 * coil plus internal-branch normal-field cancellation when coils are supplied;
 * external-branch versus coil normal-field parity when coils are supplied;
+* requested and effective fixed-schedule levels;
 * runtime and source-grid metadata.
 
 The coil metrics are diagnostics unless the wout/coils pair is known to be a
@@ -54,6 +55,10 @@ virtual-casing sign convention:
 .. code-block:: text
 
    B_total_out = B_coils + B_internal^VC
+
+For ``NFP > 1``, the effective schedule levels may differ from requested
+levels because ``virtual_casing_jax`` rounds toroidal schedule sizes up to a
+multiple of ``NFP`` to preserve field-period covariance.
 
 Trace
 -----
