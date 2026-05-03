@@ -84,6 +84,112 @@ def load_seed_points(path) -> np.ndarray:
     return pts
 
 
+def trajectories_xyz_to_rphiz(trajectories_xyz) -> np.ndarray:
+    """Convert Cartesian trajectories to ``(R, unwrapped phi, Z)`` arrays."""
+    xyz = np.asarray(trajectories_xyz, dtype=float)
+    if xyz.ndim != 3 or xyz.shape[-1] != 3:
+        raise ValueError(f"trajectories_xyz must have shape (nlines, nsteps, 3), got {xyz.shape}")
+    R = np.hypot(xyz[..., 0], xyz[..., 1])
+    phi = np.unwrap(np.arctan2(xyz[..., 1], xyz[..., 0]), axis=1)
+    return np.stack((R, phi, xyz[..., 2]), axis=-1)
+
+
+def _arc_lengths(trajectories_xyz) -> np.ndarray:
+    xyz = np.asarray(trajectories_xyz, dtype=float)
+    if xyz.shape[1] < 2:
+        return np.zeros(xyz.shape[0], dtype=float)
+    return np.sum(np.linalg.norm(np.diff(xyz, axis=1), axis=-1), axis=1)
+
+
+def _flatten_section_major(samples: np.ndarray) -> np.ndarray:
+    return np.transpose(samples, (1, 0, 2)).reshape((-1, 3))
+
+
+def fieldline_samples_from_xyz_trajectories(
+    trajectories_xyz,
+    *,
+    sample_stride: int | None = None,
+    sample_phi_period: float | None = None,
+    sample_nsections: int | None = None,
+) -> dict[str, np.ndarray]:
+    """Return comparator-ready field-line samples from traced Cartesian paths.
+
+    The flattened point order matches STELLOPT/FIELDLINES HDF5 loading in
+    ``virtual_casing_jax``: section index varies slowest and line index varies
+    fastest.
+    """
+    rphiz = trajectories_xyz_to_rphiz(trajectories_xyz)
+    nlines, nsteps, _ = rphiz.shape
+
+    if sample_phi_period is not None:
+        period = float(sample_phi_period)
+        if period <= 0.0:
+            raise ValueError("sample_phi_period must be positive")
+        phi = rphiz[..., 1]
+        lower = max(float(np.min(line_phi)) for line_phi in phi)
+        upper = min(float(np.max(line_phi)) for line_phi in phi)
+        start = np.ceil(lower / period) * period
+        if sample_nsections is None:
+            if start > upper:
+                raise ValueError("no common phi sections are covered by all field lines")
+            targets = start + period * np.arange(int(np.floor((upper - start) / period)) + 1)
+        else:
+            if sample_nsections <= 0:
+                raise ValueError("sample_nsections must be positive")
+            targets = start + period * np.arange(int(sample_nsections))
+            if targets[-1] > upper + 1e-12:
+                raise ValueError("requested phi sections exceed the common traced phi interval")
+        samples = np.empty((nlines, len(targets), 3), dtype=float)
+        for i in range(nlines):
+            order = np.argsort(phi[i])
+            phi_i = phi[i, order]
+            R_i = rphiz[i, order, 0]
+            Z_i = rphiz[i, order, 2]
+            samples[i, :, 0] = np.interp(targets, phi_i, R_i)
+            samples[i, :, 1] = targets
+            samples[i, :, 2] = np.interp(targets, phi_i, Z_i)
+        section_phi = np.broadcast_to(targets[:, None], (len(targets), nlines)).reshape(-1)
+    else:
+        stride = 1 if sample_stride is None else int(sample_stride)
+        if stride <= 0:
+            raise ValueError("sample_stride must be positive")
+        indices = np.arange(0, nsteps, stride, dtype=int)
+        samples = rphiz[:, indices, :]
+        section_phi = np.transpose(samples[:, :, 1], (1, 0)).reshape(-1)
+
+    nsections = samples.shape[1]
+    return {
+        "poincare_rphiz": _flatten_section_major(samples),
+        "line_id": np.broadcast_to(np.arange(nlines, dtype=float), (nsections, nlines)).reshape(-1),
+        "section_phi": section_phi,
+        "connection_lengths": _arc_lengths(trajectories_xyz),
+    }
+
+
+def write_fieldline_samples_npz(
+    path,
+    trajectories_xyz,
+    *,
+    sample_stride: int | None = None,
+    sample_phi_period: float | None = None,
+    sample_nsections: int | None = None,
+    metadata: dict | None = None,
+) -> dict[str, np.ndarray]:
+    """Write field-line samples in the external benchmark comparator schema."""
+    samples = fieldline_samples_from_xyz_trajectories(
+        trajectories_xyz,
+        sample_stride=sample_stride,
+        sample_phi_period=sample_phi_period,
+        sample_nsections=sample_nsections,
+    )
+    payload = dict(samples)
+    if metadata is not None:
+        payload["metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True))
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    np.savez(path, **payload)
+    return samples
+
+
 def _build_field_from_args(args):
     return build_vmec_extended_field(
         vmec_input=args.input,
@@ -259,6 +365,24 @@ def cmd_trace(args):
             times=times,
             initial_xyz=np.asarray(initial_xyz),
         )
+    samples_shape = None
+    if args.samples_out is not None:
+        samples = write_fieldline_samples_npz(
+            args.samples_out,
+            trajectories_xyz,
+            sample_stride=args.sample_stride,
+            sample_phi_period=args.sample_phi_period,
+            sample_nsections=args.sample_nsections,
+            metadata={
+                "source": "ESSOS vmec_extender trace",
+                "sample_stride": args.sample_stride,
+                "sample_phi_period": args.sample_phi_period,
+                "sample_nsections": args.sample_nsections,
+                "maxtime": maxtime,
+                "times_to_trace": int(args.times_to_trace),
+            },
+        )
+        samples_shape = list(samples["poincare_rphiz"].shape)
     if args.plot is not None:
         import matplotlib.pyplot as plt
 
@@ -275,8 +399,10 @@ def cmd_trace(args):
             {
                 "status": "ok",
                 "out": str(args.out) if args.out is not None else None,
+                "samples_out": str(args.samples_out) if args.samples_out is not None else None,
                 "plot": str(args.plot) if args.plot is not None else None,
                 "shape": list(trajectories.shape),
+                "samples_shape": samples_shape,
                 "runtime_seconds": time.perf_counter() - t0,
             },
             indent=2,
@@ -326,6 +452,10 @@ def build_parser():
     trace.add_argument("--atol", type=float, default=1e-7)
     trace.add_argument("--rtol", type=float, default=1e-7)
     trace.add_argument("--out", type=Path, default=None, help="Optional .npz trajectory output")
+    trace.add_argument("--samples-out", type=Path, default=None, help="Optional benchmark-compatible .npz field-line samples")
+    trace.add_argument("--sample-stride", type=int, default=None, help="Sample every N saved trace points for --samples-out")
+    trace.add_argument("--sample-phi-period", type=float, default=None, help="Sample common unwrapped toroidal-phi sections")
+    trace.add_argument("--sample-nsections", type=int, default=None, help="Number of phi sections for --sample-phi-period")
     trace.add_argument("--plot", type=Path, default=None, help="Optional Poincare plot output")
     trace.set_defaults(func=cmd_trace)
     return parser

@@ -41,6 +41,10 @@ if __name__ == "__main__":
                 "4",
                 "--out",
                 str(output_dir / "vmec_extender_trace.npz"),
+                "--samples-out",
+                str(output_dir / "vmec_extender_trace_samples.npz"),
+                "--sample-stride",
+                "1",
             ]
         )
     )

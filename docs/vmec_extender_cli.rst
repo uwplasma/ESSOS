@@ -73,6 +73,8 @@ Trace
      --nturns 200 \
      --phis 0,1.57079632679 \
      --out results/trace.npz \
+     --samples-out results/trace_samples.npz \
+     --sample-phi-period 2.09439510239 \
      --plot results/poincare.pdf
 
 Seed files may be JSON lists of Cartesian points:
@@ -82,6 +84,16 @@ Seed files may be JSON lists of Cartesian points:
    [[1.8, 0.0, 0.0], [1.85, 0.0, 0.02]]
 
 or dictionaries with ``xyz`` or ``R_phi_Z`` keys.
+
+When ``--samples-out`` is provided, the trace command also writes a
+benchmark-compatible NPZ file with ``poincare_rphiz``, ``line_id``,
+``section_phi``, and approximate arc-length ``connection_lengths``. This is the
+candidate-side file contract consumed by the ``virtual_casing_jax``
+FIELDLINES/TORLINES comparator. Use ``--sample-stride`` to sample every N saved
+trace points, or ``--sample-phi-period`` with optional ``--sample-nsections``
+to interpolate common unwrapped toroidal-phi sections. For direct
+STELLOPT/FIELDLINES comparisons, choose the same physical section spacing used
+by the reference output, for example ``2*pi/nfp`` for field-period sections.
 
 Benchmark Smoke
 ---------------
