@@ -17,7 +17,7 @@ ENABLE_X64      = True
 N_PARALLEL_STARTS = 4     # +1, -1, 0, and (N-3) random starts
 
 FB_ONLY_STEPS    = 2000   # Stage 1: minimize fB only (continuous relaxation)
-FD_ANNEAL_STEPS  = 2000   # Stage 2: anneal discreteness penalty wD from 0 → MAX_WD
+FD_ANNEAL_STEPS  = 2000   # Stage 2: anneal discreteness penalty wD 
 
 FB_ONLY_LR_MAX      = 0.03
 FB_ONLY_LR_MIN_FRAC = 0.1
@@ -28,8 +28,8 @@ FD_ANNEAL_LR_MIN_FRAC = 0.05
 MAX_WD       = 1.0
 LOG_INTERVAL = 500
 
-REFERENCE_M0_SCALE = 0.074625   # zot80 dipole moment magnitude [A·m²]
-B_MAX_T = 1.465                  
+REFERENCE_M0_SCALE = 0.074625   # zot80 dipole moment magnitude
+B_MAX_T = 1.465                  # NdFeB remanent field [T]
 MU0     = 4 * np.pi * 1e-7
 
 SURFACE_RANGE  = "full torus"
@@ -41,8 +41,8 @@ SIMSOPT_SRC = ESSOS_ROOT.parent / "simsopt" / "src"
 
 DEFAULT_SURF_FILE = ESSOS_ROOT / "essos" / "input.muse"
 DEFAULT_COIL_FILE = SIMSOPT_SRC.parent / "tests" / "test_files" / "muse_tf_coils.focus"
-DEFAULT_MAG_FILE  = SIMSOPT_SRC.parent / "tests" / "test_files" / "zot80.focus"
-DEFAULT_INPUT_BUNDLE = None  
+DEFAULT_MAG_FILE  = ESSOS_ROOT / "essos" / "examples" / "input_files" / "zot80.focus"
+DEFAULT_INPUT_BUNDLE = ESSOS_ROOT / "essos" / "examples" / "input_files" / "muse_opt_inputs_64x64.npz"
 
 
 if "jax" in sys.modules:
@@ -68,12 +68,17 @@ backend_name = str(jax.default_backend()).lower()
 print(f"JAX backend: {backend_name}  |  devices: {[str(d) for d in jax.devices()]}")
 
 
+
+# ESSOS / SIMSOPT IMPORTS
+
+
 for p in [str(ESSOS_ROOT), str(SIMSOPT_SRC)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
 from essos.fields import DipoleField
 from essos.optimization import compute_G_parallel
+
 
 
 def load_from_bundle(path):
@@ -152,13 +157,15 @@ surface_xyz    = np.asarray(surface_xyz,    np.float64)
 surface_normal = np.asarray(surface_normal, np.float64)
 
 
+
 zot80_norms = np.linalg.norm(np.asarray(moments), axis=1)
 print(f"zot80 |m| mean: {zot80_norms.mean():.6f}  (reference: {REFERENCE_M0_SCALE})")
 if abs(zot80_norms.mean() - REFERENCE_M0_SCALE) >= 1e-6:
     raise RuntimeError("Moment scale mismatch — check REFERENCE_M0_SCALE.")
 
-# GRID
 
+
+# GRID
 
 M_MAX = B_MAX_T / MU0
 
@@ -167,7 +174,7 @@ native_norms        = np.linalg.norm(np.asarray(moments), axis=1)
 magnet_orientations = np.asarray(moments, np.float64) / native_norms[:, None]
 n_magnets           = len(magnet_positions)
 M0_SCALE            = REFERENCE_M0_SCALE
-volume_per_cell     = (M0_SCALE / M_MAX) * 1e6   
+volume_per_cell     = (M0_SCALE / M_MAX) * 1e6   # per unit-rho magnet
 
 print("=" * 70)
 print("MUSE PM Optimization — fB + Discreteness (zot80 native lattice)")
@@ -177,6 +184,7 @@ print("=" * 70)
 
 
 # BUILD G MATRIX
+
 
 print("\n--- Build G matrix ---")
 magnet_moments   = magnet_orientations * M0_SCALE
@@ -254,7 +262,9 @@ def get_lr_and_wd(step):
     return lr, wD
 
 
+# ================================================================
 # OPTIMIZATION
+# ================================================================
 
 TOTAL_STEPS = FB_ONLY_STEPS + FD_ANNEAL_STEPS
 
@@ -408,3 +418,54 @@ print("Saved figure6_fB_discrete.png")
 del G_jax, Bn_jax
 gc.collect()
 jax.clear_caches()
+
+
+
+nphi_s, ntheta_s = surface_xyz.shape[0], surface_xyz.shape[1]
+phi_coords   = np.linspace(0, 1, nphi_s)
+theta_coords = np.linspace(0, 1, ntheta_s)
+
+# Before: TF coils only (Bn_fixed)
+Bn_before = Bn_f32.astype(np.float64).reshape(nphi_s, ntheta_s)
+
+# After: coils + optimized discrete PMs
+Bn_pm     = (G_f32.astype(np.float64) @ pho_discrete).reshape(nphi_s, ntheta_s)
+Bn_after  = Bn_before + Bn_pm
+
+abs_max = max(np.abs(Bn_before).max(), np.abs(Bn_after).max())
+levels  = np.linspace(-abs_max, abs_max, 21)
+
+fig2, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+im1 = axes[0].contourf(phi_coords, theta_coords, Bn_before.T,
+                        levels=levels, cmap="RdBu_r", extend="both")
+axes[0].set_title("$B \\cdot \\hat{n}$ — TF coils only (before)", fontsize=12)
+axes[0].set_xlabel("Toroidal angle $\\phi$")
+axes[0].set_ylabel("Poloidal angle $\\theta$")
+plt.colorbar(im1, ax=axes[0], label="$B \\cdot \\hat{n}$ [T]")
+
+rms_before = float(np.sqrt(np.mean(Bn_before**2)))
+axes[0].text(0.02, 0.97, f"RMS = {rms_before:.3e} T",
+             transform=axes[0].transAxes, va="top", fontsize=10,
+             bbox=dict(boxstyle="round", facecolor="white", alpha=0.8))
+
+im2 = axes[1].contourf(phi_coords, theta_coords, Bn_after.T,
+                        levels=levels, cmap="RdBu_r", extend="both")
+axes[1].set_title("$B \\cdot \\hat{n}$ — coils + PMs (after)", fontsize=12)
+axes[1].set_xlabel("Toroidal angle $\\phi$")
+axes[1].set_ylabel("Poloidal angle $\\theta$")
+plt.colorbar(im2, ax=axes[1], label="$B \\cdot \\hat{n}$ [T]")
+
+rms_after = float(np.sqrt(np.mean(Bn_after**2)))
+axes[1].text(0.02, 0.97, f"RMS = {rms_after:.3e} T",
+             transform=axes[1].transAxes, va="top", fontsize=10,
+             bbox=dict(boxstyle="round", facecolor="white", alpha=0.8))
+
+plt.suptitle(
+    f"Normal field on plasma surface — RMS reduction: "
+    f"{rms_before:.3e} → {rms_after:.3e} T  ({rms_before/rms_after:.1f}×)",
+    fontsize=12)
+plt.tight_layout()
+plt.savefig("Bn_before_after.png", dpi=200, bbox_inches="tight")
+plt.show()
+print("Saved Bn_before_after.png")
