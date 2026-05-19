@@ -324,11 +324,11 @@ class Vmec():
         return jnp.array([X, Y, Z])
 
 class near_axis():
-    def __init__(self, rc=jnp.array([1, 0.1]), zs=jnp.array([0, 0.1]), etabar=1.0,
+    def __init__(self, rc=(1.0, 0.1), zs=(0.0, 0.1), etabar=1.0,
                     B0=1, sigma0=0, I2=0, nphi=31, spsi=1, sG=1, nfp=2, order='r1', B2c=0, p2=0):
         assert nphi % 2 == 1, 'nphi must be odd'
-        self.rc = jnp.array(rc)
-        self.zs = jnp.array(zs)
+        self.rc = jnp.array(rc, dtype=jnp.float32)
+        self.zs = jnp.array(zs, dtype=jnp.float32)
         self.etabar = etabar
         self.nphi = nphi
         self.sigma0 = sigma0
@@ -824,25 +824,60 @@ tree_util.register_pytree_node(near_axis,
 
 
 class DipoleField:
+    """
+    Custom dipole field class for ESSOS, compatible with SimSOPT.
+    
+    This class computes the magnetic field from a set of dipoles, applying stellarator symmetries if specified. It supports caching the last field computation for efficiency and incremental updates to dipole pho values. The field is computed using the Biot-Savart law for dipoles, JIT-compiled with vmap for vectorization over evaluation points.
+    
+    Parameters:
+    dipole_positions : jnp.ndarray
+        Dipole positions, shape (N, 3).
+    dipole_moments : jnp.ndarray
+        Dipole moments, shape (N, 3).
+    pho_values : jnp.ndarray
+        Pho values for scaling moments, shape (N,).
+    stellsym : bool, optional
+        Apply stellarator symmetry (default False).
+    nfp : int, optional
+        Number of field periods (default 1).
+    coordinate_flag : str, optional
+        Coordinate system ('cartesian' or 'cylindrical', default 'cartesian').
+    R0 : float, optional
+        Major radius for cylindrical coordinates (default 1.0).
+    scale_factor : float, optional
+        Global scale factor for moments (default 1.0).
+    """
     def __init__(self, dipole_positions, dipole_moments, pho_values, stellsym=False, nfp=1, coordinate_flag='cartesian', R0=1.0, scale_factor=1.0):
         self.mu0_over_4pi = 1e-7
         self.R0 = R0
         self.pho_values = pho_values
+        self.scale_factor = scale_factor
         scaled_moments = dipole_moments * scale_factor
         self.dipole_positions, self.dipole_moments = self._apply_symmetries(dipole_positions, scaled_moments, stellsym, nfp, coordinate_flag)
         self.n_dipoles = self.dipole_positions.shape[0]
         self._last_field = None
         self._last_eval_points = None
-        self._compute_field = jit(vmap(lambda x: jnp.sum(
-            vmap(lambda pos, mom: self._compute_single_dipole_field(x, pos, mom), in_axes=(0, 0))(
-                self.dipole_positions, self.dipole_moments
-            ), axis=0
-        ), in_axes=0))
-
+        self._compute_field = jit(vmap(lambda x: jnp.sum(vmap(lambda pos, mom: self._compute_single_dipole_field(x, pos, mom), in_axes=(0, 0))(self.dipole_positions, self.dipole_moments), axis=0), in_axes=0))
+    
     @staticmethod
     @jit
     def _compute_single_dipole_field(x_eval, pos, mom):
-        mu0_over_4pi = 1e-7  
+        """
+        Compute magnetic field from a single dipole using the Biot-Savart law.
+        
+        Parameters:
+        x_eval : jnp.ndarray
+            Evaluation point, shape (3,).
+        pos : jnp.ndarray
+            Dipole position, shape (3,).
+        mom : jnp.ndarray
+            Dipole moment, shape (3,).
+        
+        Returns:
+        B : jnp.ndarray
+            Magnetic field at x_eval, shape (3,).
+        """
+        mu0_over_4pi = 1e-7
         r_vec = x_eval - pos
         r_mag = jnp.linalg.norm(r_vec) + 1e-12
         r_hat = r_vec / r_mag
@@ -850,27 +885,105 @@ class DipoleField:
         return B
 
     @partial(jit, static_argnames=['self'])
+    def compute_interaction_matrix(self, surf_pts, surf_n):
+       
+        positions = self.dipole_positions
+        moments = self.dipole_moments
+        def calc_matrix_column(mag_idx):
+            pos_j = positions[mag_idx]
+            mom_j = moments[mag_idx]
+            
+            B_vectors = vmap(lambda x: self._compute_single_dipole_field(x, pos_j, mom_j))(surf_pts)
+      
+            Bn_column = jnp.sum(B_vectors * surf_n, axis=1)
+            return Bn_column
+
+        magnet_indices = jnp.arange(self.n_dipoles)
+        G_T = vmap(calc_matrix_column)(magnet_indices)
+        
+        return G_T.T 
+    
+    @partial(jit, static_argnames=['self'])
     def B(self, eval_points, chunk_size=512):
+        """
+        Compute magnetic field at eval points, with caching included.
+        
+        Parameters:
+        eval_points : jnp.ndarray
+            Evaluation points, shape (N, 3).
+        chunk_size : int, optional
+            Chunk size for memory efficiency (default 512).
+        
+        Returns:
+        B : jnp.ndarray
+            Magnetic field, shape (N, 3).
+        """
         if not hasattr(self, '_last_field') or self._last_field is None or eval_points.shape[0] != self._last_eval_points.shape[0]:
             with jax.ensure_compile_time_eval():
                 self._last_field = self._compute_field(eval_points)
                 self._last_eval_points = eval_points
         return self._last_field
-
+    
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, eval_points):
+        """
+        Compute covariant magnetic field.
+        
+        Parameters:
+        eval_points : jnp.ndarray
+            Evaluation points, shape (N, 3).
+        
+        Returns:
+        B : jnp.ndarray
+            Magnetic field, shape (N, 3).
+        """
         return self.B(eval_points)
-
+    
     @partial(jit, static_argnames=['self'])
     def B_contravariant(self, eval_points):
+        """
+        Compute contravariant magnetic field.
+        
+        Parameters:
+        eval_points : jnp.ndarray
+            Evaluation points, shape (N, 3).
+        
+        Returns:
+        B : jnp.ndarray
+            Magnetic field, shape (N, 3).
+        """
         return self.B(eval_points)
-
+    
     @partial(jit, static_argnames=['self'])
     def AbsB(self, eval_points):
+        """
+        Compute magnetic field magnitude.
+        
+        Parameters:
+        eval_points : jnp.ndarray
+            Evaluation points, shape (N, 3).
+        
+        Returns:
+        AbsB : jnp.ndarray
+            Field magnitude, shape (N,).
+        """
         B = self.B(eval_points)
         return jnp.linalg.norm(B, axis=-1)
-
+    
     def dAbsB_by_dX(self, eval_points, eps=1e-6):
+        """
+        Compute gradient of field magnitude.
+        
+        Parameters:
+        eval_points : jnp.ndarray
+            Evaluation points, shape (N, 3).
+        eps : float, optional
+            Finite difference step size (default 1e-6).
+        
+        Returns:
+        grad_B : jnp.ndarray
+            Gradient, shape (N, 3).
+        """
         is_single_point = len(eval_points.shape) == 1 and eval_points.shape[0] == 3
         if is_single_point:
             eval_points = eval_points.reshape(1, 3)
@@ -887,8 +1000,23 @@ class DipoleField:
         if is_single_point:
             grad_B = grad_B.squeeze(0)
         return grad_B
-
+    
     def update_dipole_pho(self, dipole_idx, new_pho, eval_points):
+        """
+        Update pho value for a dipole and recompute the field incrementally.
+        
+        Parameters
+        dipole_idx : int
+            Index of the dipole to update.
+        new_pho : float
+            New pho value.
+        eval_points : jnp.ndarray
+            Evaluation points, shape (N, 3).
+        
+        Returns
+        updated_field : jnp.ndarray
+            Updated magnetic field, shape (N, 3).
+        """
         if self._last_field is None or len(eval_points) != self._last_eval_points.shape[0]:
             raise ValueError("Call B with the same eval_points before updating a dipole.")
         old_moment = self.dipole_moments[dipole_idx]
@@ -907,8 +1035,29 @@ class DipoleField:
         self.pho_values = self.pho_values.at[dipole_idx].set(new_pho)
         self.dipole_moments = self.dipole_moments.at[dipole_idx].set(new_moment)
         return updated_field
-
+    
     def _apply_symmetries(self, positions, moments, stellsym=False, nfp=1, coordinate_flag='cartesian'):
+        """
+        Apply stellarator symmetries to dipole positions and moments.
+        
+        Parameters:
+        positions : jnp.ndarray
+            Original dipole positions, shape (N, 3).
+        moments : jnp.ndarray
+            Original dipole moments, shape (N, 3).
+        stellsym : bool, optional
+            Apply stellarator symmetry (default False).
+        nfp : int, optional
+            Number of field periods (default 1).
+        coordinate_flag : str, optional
+            Coordinate system ('cartesian' or 'cylindrical', default 'cartesian').
+        
+        Returns:
+        all_pos : jnp.ndarray
+            Symmetrized positions, shape (M, 3), where M = N * (1 or 2) * nfp.
+        all_mom : jnp.ndarray
+            Symmetrized moments, shape (M, 3).
+        """
         step = 1
         pos = positions[::step]
         mom = moments[::step]

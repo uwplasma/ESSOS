@@ -1,3 +1,4 @@
+import numpy as np
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -11,9 +12,6 @@ from essos.surfaces import SurfaceRZFourier
 def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
     len_rc = len(field_nearaxis.rc)
     len_zs = len(field_nearaxis.zs)
-    # # keeping the first rc and zs the same
-    # new_field_nearaxis_rc = jnp.concatenate((jnp.array([field_nearaxis.rc[0]]),new_field_nearaxis_x[:len_rc][1:]))
-    # new_field_nearaxis_zs = jnp.concatenate((jnp.array([field_nearaxis.zs[0]]),new_field_nearaxis_x[len_rc:len_rc+len_zs][1:]))
     new_field_nearaxis_rc = new_field_nearaxis_x[:len_rc]
     new_field_nearaxis_zs = new_field_nearaxis_x[len_rc:len_rc+len_zs]
     new_field_nearaxis_etabar = new_field_nearaxis_x[-1]
@@ -33,18 +31,9 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     
     loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym, **kwargs)
     
-    ## Without JAX gradients, using finite differences
-    result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,
-                            ftol=tolerance_optimization, gtol=tolerance_optimization,
-                            xtol=1e-14, max_nfev=maximum_function_evaluations)
-    
-    ## With JAX gradients
-    ##jac_loss_partial = jit(grad(loss_partial))
-    # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
-    #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
-    #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
-    ##result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
-    ##                  tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
+    jac_loss_partial = jit(grad(loss_partial))
+    result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
+                      tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
     
     dofs_curves = jnp.reshape(result.x[:len_dofs_curves], (dofs_curves_shape))
     try:
@@ -80,3 +69,70 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     except Exception as e:
         jax.debug.print("Error: {}", e)
         return None
+
+
+
+MU0_4PI = 1.0e-7
+
+def compute_G_parallel(pm_obj, surf_pts, surf_n):
+
+    n_devices = jax.device_count()
+    n_points = len(surf_pts)
+    
+    remainder = n_points % n_devices
+    if remainder != 0:
+        pad_len = n_devices - remainder
+        surf_pts = np.vstack([surf_pts, np.zeros((pad_len, 3))])
+        surf_n = np.vstack([surf_n, np.zeros((pad_len, 3))])
+    
+    batch_size = len(surf_pts) // n_devices
+    pts_sharded = surf_pts.reshape(n_devices, batch_size, 3)
+    n_sharded = surf_n.reshape(n_devices, batch_size, 3)
+    
+    m_pos = jnp.array(pm_obj.dipole_positions)
+    m_mom = jnp.array(pm_obj.dipole_moments)
+    
+    def device_kernel(pts, norms):
+        P = jnp.expand_dims(pts, 1)
+        M_pos, M_vec = jnp.expand_dims(m_pos, 0), jnp.expand_dims(m_mom, 0)
+        R = P - M_pos
+        R_mag = jnp.linalg.norm(R, axis=2, keepdims=True)
+        dot_mr = jnp.sum(M_vec * R, axis=2, keepdims=True)
+        dot_rn = jnp.sum(R * jnp.expand_dims(norms, 1), axis=2, keepdims=True)
+        dot_mn = jnp.sum(M_vec * jnp.expand_dims(norms, 1), axis=2, keepdims=True)
+        
+        term1 = 3.0 * dot_mr * dot_rn / (R_mag**5 + 1e-30)
+        term2 = -dot_mn / (R_mag**3 + 1e-30)
+        return jnp.squeeze((term1 + term2) * MU0_4PI, axis=2)
+
+    pts_d = jax.device_put_sharded(list(pts_sharded), jax.local_devices())
+    n_d = jax.device_put_sharded(list(n_sharded), jax.local_devices())
+    
+    G_sharded = jax.pmap(device_kernel)(pts_d, n_d)
+    G_sharded.block_until_ready()
+    
+    G_full = G_sharded.reshape(-1, len(m_pos))
+    if remainder != 0: 
+        G_full = G_full[:n_points]
+        
+    return G_full
+
+def scaled_loss(pho, G, Bn_fix, area_w, loss_scale):
+
+    Bn_mags = jnp.dot(G, pho)
+    fB_true = 0.5 * jnp.sum((Bn_mags + Bn_fix)**2) * area_w
+    return fB_true * loss_scale
+
+def normalized_loss(pho, G, Bn_fix, area_w, f_B_init, f_D_init, w_D_val):
+
+    Bn_mags = jnp.dot(G, pho)
+    fB_raw = 0.5 * jnp.sum((Bn_mags + Bn_fix)**2) * area_w
+    
+    norm_pho = pho 
+    fD_raw = jnp.sum(jnp.abs(norm_pho) * (1.0 - jnp.abs(norm_pho)))
+
+    scale_B = 1.0 / f_B_init
+    scale_D = 1.0 / (f_D_init + 1e-12)
+    
+    loss = (1.0 * fB_raw * scale_B) + (w_D_val * fD_raw * scale_D)
+    return loss
