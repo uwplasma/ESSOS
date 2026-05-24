@@ -68,7 +68,7 @@ def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn(
     assert loss_weight_result == 496
 
     optimized_coils=optimizer.optimize_with_optax(weights, method="adam", lr=1e-2)
-    assert optimized_coils.currents_scale==0.01999998979999997872
+    assert optimized_coils.currents_scale == pytest.approx(0.01999998979999997872)
 
     dofs_curves=optimized_coils.dofs_curves
     currents_scale=optimized_coils.currents_scale
