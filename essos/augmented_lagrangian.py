@@ -11,6 +11,11 @@ import optax
 import jaxopt
 import optimistix
 
+if not hasattr(jax, "tree_map"):
+    jax.tree_map = jax.tree_util.tree_map  # compatibility for older jaxopt releases
+
+_tree_map = jax.tree_util.tree_map
+
 class LagrangeMultiplier(NamedTuple):
     """A class containing constrain parameters for Augmented Lagrangian Method"""
     value: Any
@@ -29,16 +34,16 @@ def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1
     pred = lambda x: isinstance(x, LagrangeMultiplier)
     if model_mu=='Constant':
         #jax.debug.print('{m}', m=model_mu)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+        return _tree_map(lambda x,y: LagrangeMultiplier(y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)
     elif model_mu=='Mu_Monotonic':     
         #jax.debug.print('{m}', m=model_mu)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+        return _tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)
     elif model_mu=='Mu_Conditional_True':
         #jax.debug.print('True {m}', m=model_mu)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+        return _tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)
     elif model_mu=='Mu_Conditional_False':
         #jax.debug.print('False {m}', m=model_mu)            
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+        return _tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)
     elif model_mu=='Mu_Tolerance_True':
         #jax.debug.print('Standard True {m}', m=model_mu)    
         mu_average=penalty_average(params)
@@ -46,7 +51,7 @@ def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1
         #omega=omega/mu_average    
         eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
         omega=jnp.maximum(omega/mu_average,omega_tol)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+        return _tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega
     elif model_mu=='Mu_Tolerance_False':
         #jax.debug.print('Standard False {m}', m=model_mu)    
         mu_average=penalty_average(params)        
@@ -56,12 +61,12 @@ def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1
         #jax.debug.print('HMMMMMM mu_av {m}', m=mu_average)          
         #jax.debug.print('HMMMMMM eta {m}', m=eta)    
         omega=jnp.maximum(1./mu_average,omega_tol)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
-        #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+        return _tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega
+        #return _tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega
     elif model_mu=='Mu_Adaptative':
         #jax.debug.print('True {m}', m=model_mu)            
         #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*y.value,-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred)
+        return _tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*y.value,-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred)
 
 
 
@@ -74,16 +79,16 @@ def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,
     pred = lambda x: isinstance(x, LagrangeMultiplier)
     if model_mu=='Constant':
         #jax.debug.print('{m}', m=model_mu)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier((y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+        return _tree_map(lambda x,y: LagrangeMultiplier((y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)
     elif model_mu=='Mu_Monotonic':     
         #jax.debug.print('{m}', m=model_mu)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+        return _tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)
     elif model_mu=='Mu_Conditional_True':
         #jax.debug.print('True {m}', m=model_mu)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+        return _tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)
     elif model_mu=='Mu_Conditional_False':
         #jax.debug.print('False {m}', m=model_mu)            
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+        return _tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)
     elif model_mu=='Mu_Tolerance_True':
         #jax.debug.print('Squared True {m}', m=model_mu)   
         mu_average=penalty_average(params)
@@ -91,7 +96,7 @@ def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,
         #omega=omega/mu_average    
         eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
         omega=jnp.maximum(omega/mu_average,omega_tol)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+        return _tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega
     elif model_mu=='Mu_Tolerance_False':
         #jax.debug.print('Squared False {m}', m=model_mu)    
         mu_average=penalty_average(params)        
@@ -99,12 +104,12 @@ def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,
         #omega=1./mu_average    
         eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
         omega=jnp.maximum(1./mu_average,omega_tol)        
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
-        #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+        return _tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega
+        #return _tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega
     elif model_mu=='Mu_Adaptative':
         #jax.debug.print('True {m}', m=model_mu)            
         #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
-        return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*(y.value-x.value/x.penalty),-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*(y.penalty*2.+(x.value/x.penalty)**2)),params,updates,is_leaf=pred)
+        return _tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*(y.value-x.value/x.penalty),-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*(y.penalty*2.+(x.value/x.penalty)**2)),params,updates,is_leaf=pred)
 
 
 
@@ -718,4 +723,3 @@ def ALM_model_optimistix_LevenbergMarquardt(constraints: Constraint,#List of con
 
 
     return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
-

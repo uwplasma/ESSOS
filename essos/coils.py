@@ -475,6 +475,17 @@ class Coils(Curves):
         with open(filename, "w") as file:
             json.dump(data, file)
 
+    def to_mgrid(self, filename: str, **kwargs):
+        """Write a VMEC mgrid file by evaluating this coil set.
+
+        This mirrors SIMSOPT's ``MagneticField.to_mgrid`` grid convention.
+        Keyword arguments are forwarded to :func:`essos.mgrid.coils_to_mgrid`.
+        """
+
+        from .mgrid import coils_to_mgrid
+
+        return coils_to_mgrid(self, filename, **kwargs)
+
 class Coils_from_json(Coils):
     def __init__(self, filename: str):
         import json
