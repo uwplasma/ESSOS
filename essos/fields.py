@@ -15,12 +15,10 @@ class BiotSavart():
         self.currents = coils.currents
         self.gamma = coils.gamma
         self.gamma_dash = coils.gamma_dash
-        #self.gamma_dashdash = coils.gamma_dashdash
         self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in self.gamma_dash])
         self.coils_curvature= vmap(compute_curvature)(self.gamma_dash, coils.gamma_dashdash)        
         self.r_axis=jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(self.coils.dofs_curves)))
         self.z_axis=jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
-
 
     @partial(jit, static_argnames=['self'])
     def sqrtg(self, points):
@@ -48,7 +46,6 @@ class BiotSavart():
     @partial(jit, static_argnames=['self'])
     def dB_by_dX(self, points):
         return jacfwd(self.B)(points)
-    
     
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
@@ -78,13 +75,11 @@ class BiotSavart():
         return points
 
 
-
 class BiotSavart_from_gamma():
     def __init__(self, gamma,gamma_dash,gamma_dashdash, currents):
         self.currents = currents
         self.gamma = gamma
         self.gamma_dash = gamma_dash
-        #self.gamma_dashdash = gamma_dashdash
         self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in gamma_dash])
         self.coils_curvature= vmap(compute_curvature)(gamma_dash, gamma_dashdash)
         self.r_axis=jnp.average(jnp.linalg.norm(jnp.average(gamma,axis=1)[:,0:2],axis=1))
@@ -117,7 +112,6 @@ class BiotSavart_from_gamma():
     def dB_by_dX(self, points):
         return jacfwd(self.B)(points)
     
-    
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
@@ -144,7 +138,6 @@ class BiotSavart_from_gamma():
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         return points
-
 
 
 class Vmec():
@@ -178,7 +171,6 @@ class Vmec():
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
         self.Aminor_p = jnp.array(self.nc.variables["Aminor_p"][:])
-        #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
         
     @property
     def surface(self):
@@ -215,8 +207,6 @@ class Vmec():
         sqrt_g_vmec = jnp.dot(gmnc_interp, cosangle_nyq)
         return sqrt_g_vmec
 
-
-
     @partial(jit, static_argnames=['self'])
     def B(self, points):
         s, theta, phi = points
@@ -225,50 +215,39 @@ class Vmec():
         zmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.zmns)
         d_rmnc_d_s_interp = vmap(lambda row: grad(lambda s: jnp.interp(s, self.s_full_grid, row))(s), in_axes=1)(self.rmnc)
         d_zmns_d_s_interp = vmap(lambda row: grad(lambda s: jnp.interp(s, self.s_full_grid, row))(s), in_axes=1)(self.zmns)
-        
         cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
         B_sub_s, B_sub_theta, B_sub_phi = self.B_covariant(points)
         sqrt_g_vmec = jnp.dot(gmnc_interp, cosangle_nyq)
-        
         cosangle  = jnp.cos(self.xm * theta - self.xn * phi)
         sinangle  = jnp.sin(self.xm * theta - self.xn * phi)
         msinangle = self.xm * sinangle
         nsinangle = self.xn * sinangle
         mcosangle = self.xm * cosangle
         ncosangle = self.xn * cosangle
-        
         sinphi = jnp.sin(phi)
         cosphi = jnp.cos(phi)
-        
         R = jnp.dot(rmnc_interp, cosangle)
         d_R_d_theta = jnp.dot(rmnc_interp, -msinangle)
         d_R_d_phi   = jnp.dot(rmnc_interp, nsinangle)
         d_R_d_s     = jnp.dot(d_rmnc_d_s_interp, cosangle)
-        
         d_X_d_theta = d_R_d_theta * cosphi
         d_X_d_phi = d_R_d_phi * cosphi - R * sinphi
         d_X_d_s = d_R_d_s * cosphi
-
         d_Y_d_theta = d_R_d_theta * sinphi
         d_Y_d_phi = d_R_d_phi * sinphi + R * cosphi
         d_Y_d_s = d_R_d_s * sinphi
-        
         d_Z_d_s = jnp.dot(d_zmns_d_s_interp, sinangle)
         d_Z_d_theta = jnp.dot(zmns_interp, mcosangle)
         d_Z_d_phi = jnp.dot(zmns_interp, -ncosangle)
-
         grad_s_X = (d_Y_d_theta * d_Z_d_phi - d_Z_d_theta * d_Y_d_phi) / sqrt_g_vmec
         grad_s_Y = (d_Z_d_theta * d_X_d_phi - d_X_d_theta * d_Z_d_phi) / sqrt_g_vmec
         grad_s_Z = (d_X_d_theta * d_Y_d_phi - d_Y_d_theta * d_X_d_phi) / sqrt_g_vmec
-
         grad_theta_X = (d_Y_d_phi * d_Z_d_s - d_Z_d_phi * d_Y_d_s) / sqrt_g_vmec
         grad_theta_Y = (d_Z_d_phi * d_X_d_s - d_X_d_phi * d_Z_d_s) / sqrt_g_vmec
         grad_theta_Z = (d_X_d_phi * d_Y_d_s - d_Y_d_phi * d_X_d_s) / sqrt_g_vmec
-
         grad_phi_X = (d_Y_d_s * d_Z_d_theta - d_Z_d_s * d_Y_d_theta) / sqrt_g_vmec
         grad_phi_Y = (d_Z_d_s * d_X_d_theta - d_X_d_s * d_Z_d_theta) / sqrt_g_vmec
         grad_phi_Z = (d_X_d_s * d_Y_d_theta - d_Y_d_s * d_X_d_theta) / sqrt_g_vmec
-        
         return jnp.array([B_sub_s * grad_s_X + B_sub_theta * grad_theta_X + B_sub_phi * grad_phi_X,
                           B_sub_s * grad_s_Y + B_sub_theta * grad_theta_Y + B_sub_phi * grad_phi_Y,
                           B_sub_s * grad_s_Z + B_sub_theta * grad_theta_Z + B_sub_phi * grad_phi_Z])
@@ -284,8 +263,6 @@ class Vmec():
     def dB_by_dX(self, points):
         return jacfwd(self.B)(points)
 
-
-    
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
@@ -300,7 +277,6 @@ class Vmec():
         return jnp.array([grad_B_cov[2][1] -grad_B_cov[1][2],
                           grad_B_cov[0][2] -grad_B_cov[2][0],
                           grad_B_cov[1][0] -grad_B_cov[0][1]])/self.sqrtg(points)
-    
     
     @partial(jit, static_argnames=['self'])
     def curl_b(self, points):
@@ -337,15 +313,12 @@ class near_axis():
         self.sG = sG
         self.B0 = B0
         self.nfp = nfp
-        self.order = order # not used
-        self.B2c = B2c # not used
-        self.p2 = p2 # not used
-        
+        self.order = order
+        self.B2c = B2c
+        self.p2 = p2
         self._dofs = jnp.concatenate((jnp.ravel(self.rc), jnp.ravel(self.zs), jnp.array([etabar])))
-        
         self.phi = jnp.linspace(0, 2 * jnp.pi / self.nfp, self.nphi, endpoint=False)
         self.nfourier = max(len(self.rc), len(self.zs))
-        
         parameters = self.calculate(self.rc, self.zs, self.etabar)
         (self.R0, self.Z0, self.sigma, self.elongation, self.B_axis, self.grad_B_axis, self.axis_length, self.iota, self.iotaN, self.G0,
          self.helicity, self.X1c_untwisted, self.X1s_untwisted, self.Y1s_untwisted, self.Y1c_untwisted,
@@ -377,9 +350,9 @@ class near_axis():
         self.dofs = new_x
         
     def _tree_flatten(self):
-        children = (self.rc, self.zs, self.etabar, self.B0, self.sigma0, self.I2)  # arrays / dynamic values
+        children = (self.rc, self.zs, self.etabar, self.B0, self.sigma0, self.I2)
         aux_data = {"nphi": self.nphi, "spsi": self.spsi, "sG": self.sG,
-                    "nfp": self.nfp, "order": self.order, "B2c": self.B2c, "p2": self.p2}  # static values
+                    "nfp": self.nfp, "order": self.order, "B2c": self.B2c, "p2": self.p2}
         return (children, aux_data)
 
     @classmethod
@@ -425,7 +398,6 @@ class near_axis():
         sigma0 = self.sigma0
         I2 = self.I2
         d_phi = phi[1] - phi[0]
-        
         n_values = jnp.arange(nfourier) * nfp
 
         @jit
@@ -467,7 +439,6 @@ class near_axis():
             return (jnp.sum(delta_quadrant) + increment - decrement) * spsi * sG
 
         summed_values = jnp.sum(jax.vmap(compute_terms)(jnp.arange(nfourier)), axis=0)
-
         R0, Z0, R0p, Z0p, R0pp, Z0pp, R0ppp, Z0ppp = summed_values
         d_l_d_phi = jnp.sqrt(R0 * R0 + R0p * R0p + Z0p * Z0p)
         d2_l_d_phi2 = (R0 * R0p + R0p * R0pp + Z0p * Z0pp) / d_l_d_phi
@@ -475,26 +446,20 @@ class near_axis():
         abs_G0_over_B0 = 1 / B0_over_abs_G0
         d_l_d_varphi = abs_G0_over_B0
         G0 = sG * abs_G0_over_B0 * B0
-
         d_r_d_phi_cylindrical = jnp.stack([R0p, R0, Z0p]).T
         d2_r_d_phi2_cylindrical = jnp.stack([R0pp - R0, 2 * R0p, Z0pp]).T
         d3_r_d_phi3_cylindrical = jnp.stack([R0ppp - 3 * R0p, 3 * R0pp - R0, Z0ppp]).T
-
-
         d_tangent_d_l_cylindrical = (-d_r_d_phi_cylindrical * d2_l_d_phi2[:, None] / d_l_d_phi[:, None] \
                                     +d2_r_d_phi2_cylindrical) / (d_l_d_phi[:, None] * d_l_d_phi[:, None])
         curvature = jnp.sqrt(jnp.sum(d_tangent_d_l_cylindrical**2, axis=1))
         axis_length = jnp.sum(d_l_d_phi) * d_phi * nfp
         varphi = jnp.concatenate([jnp.zeros(1), jnp.cumsum(d_l_d_phi[:-1] + d_l_d_phi[1:])]) * (0.5 * d_phi * 2 * jnp.pi / axis_length)
-
         tangent_cylindrical = d_r_d_phi_cylindrical / d_l_d_phi[:, None]
         normal_cylindrical = d_tangent_d_l_cylindrical / curvature[:, None]
         binormal_cylindrical = jnp.cross(tangent_cylindrical, normal_cylindrical)
-
         torsion_numerator = jnp.sum(d_r_d_phi_cylindrical * jnp.cross(d2_r_d_phi2_cylindrical, d3_r_d_phi3_cylindrical), axis=1)
         torsion_denominator = jnp.sum(jnp.cross(d_r_d_phi_cylindrical, d2_r_d_phi2_cylindrical)**2, axis=1)
         torsion = torsion_numerator / torsion_denominator
-
         d_d_phi = spectral_diff_matrix_jax()
         d_varphi_d_phi = B0_over_abs_G0 * d_l_d_phi
         d_d_varphi = d_d_phi / d_varphi_d_phi[:, None]
@@ -537,20 +502,17 @@ class near_axis():
         iota = sigma[0]
         iotaN = iota + helicity * nfp
         sigma = replace_first_element(sigma, sigma0)
-
         X1c = etabar / curvature
         Y1s = sG * spsi * curvature / etabar
         Y1c = sG * spsi * curvature * sigma / etabar
         p = + X1c * X1c + Y1s * Y1s + Y1c * Y1c
         q = - X1c * Y1s
         elongation = (p + jnp.sqrt(p * p - 4 * q * q)) / (2 * jnp.abs(q))
-        
         B_axis_cylindrical = sG * B0 * tangent_cylindrical.T
         B_x = jnp.cos(phi) * B_axis_cylindrical[0] - jnp.sin(phi) * B_axis_cylindrical[1]
         B_y = jnp.sin(phi) * B_axis_cylindrical[0] + jnp.cos(phi) * B_axis_cylindrical[1]
         B_z = B_axis_cylindrical[2]
         B_axis = jnp.array([B_x, B_y, B_z])
-
         d_X1c_d_varphi = -etabar / curvature**2
         d_Y1s_d_varphi = jnp.matmul(d_d_varphi, Y1s)
         d_Y1c_d_varphi = jnp.matmul(d_d_varphi, Y1c)
@@ -586,28 +548,23 @@ class near_axis():
             cosphi*sinphi*(nablaB[0, 1] + nablaB[1, 0]) + cosphi**2*nablaB[1, 1], 
             sinphi*nablaB[0, 2] + cosphi*nablaB[1, 2]], 
             [cosphi*nablaB[2, 0] - sinphi*nablaB[2, 1], sinphi*nablaB[2, 0] + cosphi*nablaB[2, 1], 
-            nablaB[2, 2]]
-                ])
-        
+            nablaB[2, 2]]])
         grad_B_colon_grad_B = tn * tn + nt * nt \
                             + bb * bb + nn * nn \
                             + nb * nb + bn * bn \
                             + tt * tt
         L_grad_B = self.B0 * jnp.sqrt(2 / grad_B_colon_grad_B)
         inv_L_grad_B = 1.0 / L_grad_B
-        
         X1c_untwisted = jnp.where(helicity == 0, X1c, X1c * jnp.cos(-helicity * nfp * varphi))
         X1s_untwisted = jnp.where(helicity == 0, 0 * X1c, X1c * jnp.sin(-helicity * nfp * varphi))
         Y1s_untwisted = jnp.where(helicity == 0, Y1s, Y1s * jnp.cos(-helicity * nfp * varphi) + Y1c * jnp.sin(-helicity * nfp * varphi))
         Y1c_untwisted = jnp.where(helicity == 0, Y1c, Y1s * (-jnp.sin(-helicity * nfp * varphi)) + Y1c * jnp.cos(-helicity * nfp * varphi))
-        
         normal_R = normal_cylindrical[:,0]
         normal_phi = normal_cylindrical[:,1]
         normal_z = normal_cylindrical[:,2]
         binormal_R = binormal_cylindrical[:,0]
         binormal_phi = binormal_cylindrical[:,1]
         binormal_z = binormal_cylindrical[:,2]
-        
         return (R0, Z0, sigma, elongation, B_axis, grad_B_axis, axis_length, iota, iotaN, G0,
                 helicity, X1c_untwisted, X1s_untwisted, Y1s_untwisted, Y1c_untwisted,
                 normal_R, normal_phi, normal_z, binormal_R, binormal_phi, binormal_z,
@@ -616,8 +573,6 @@ class near_axis():
     @jit
     def interpolated_array_at_point(self,array,point):
         sp=jnp.interp(jnp.array([point]), jnp.append(self.phi,2*jnp.pi/self.nfp), jnp.append(array,array[0]), period=2*jnp.pi/self.nfp)[0]
-        ## Using interpax would make the interpolation slightly more accurate, but it is too slow at the moment
-        # sp=interpax.interp1d(jnp.array([point]), jnp.append(self.phi,2*jnp.pi/self.nfp), jnp.append(array,array[0]), method="cubic", period=2*jnp.pi/self.nfp)[0]
         return sp
         
     @jit
@@ -691,48 +646,37 @@ class near_axis():
         R_2D, Z_2D, phi0_2D = vmap(compute_for_theta)(theta)
         return R_2D, Z_2D, phi0_2D
 
-
     @partial(jit, static_argnames=['mpol', 'ntor'])
     def to_Fourier(self, R_2D, Z_2D, nfp, mpol, ntor):
         ntheta, nphi_conversion = R_2D.shape
         theta = jnp.linspace(0, 2 * jnp.pi, ntheta, endpoint=False)
         phi_conversion = jnp.linspace(0, 2 * jnp.pi / nfp, nphi_conversion, endpoint=False)
-        
         phi2d, theta2d = jnp.meshgrid(phi_conversion, theta, indexing='xy')
         factor = 2 / (ntheta * nphi_conversion)
 
         def compute_RBC_ZBS(m, n):
             angle = m * theta2d - n * nfp * phi2d
             sinangle, cosangle = jnp.sin(angle), jnp.cos(angle)
-
-            # Conditional scaling of factor2
             factor2 = jax.lax.cond(
                 (ntheta % 2 == 0) & (m == (ntheta / 2)),
-                lambda _: factor / 2, lambda _: factor,
-                operand=None)
-
+                lambda _: factor / 2, lambda _: factor, operand=None)
             factor2 = jax.lax.cond(
                 (nphi_conversion % 2 == 0) & (abs(n) == (nphi_conversion / 2)),
-                lambda _: factor2 / 2, lambda _: factor2,
-                operand=None)
-
+                lambda _: factor2 / 2, lambda _: factor2, operand=None)
             return jnp.sum(R_2D * cosangle * factor2), jnp.sum(Z_2D * sinangle * factor2)
 
         m_vals = jnp.arange(mpol + 1)
         n_vals = jnp.concatenate([jnp.array([1]), jnp.arange(-ntor, ntor + 1)]) if mpol == 0 else jnp.arange(-ntor, ntor + 1)
         RBC, ZBS = vmap(lambda n: vmap(lambda m: compute_RBC_ZBS(m, n))(m_vals))(n_vals)
-
         RBC = RBC.at[ntor, 0].set(jnp.sum(R_2D) / (ntheta * nphi_conversion))
         ZBS = ZBS.at[:ntor, 0].set(0)
         RBC = RBC.at[:ntor, 0].set(0)
         return RBC, ZBS
 
-
     @partial(jit, static_argnames=['ntheta_fourier', 'mpol', 'ntor', 'ntheta', 'nphi'])
     def get_boundary(self, r=0.1, ntheta=30, nphi=120, ntheta_fourier=20, mpol=5, ntor=5):
         R_2D, Z_2D, _ = self.Frenet_to_cylindrical(r, ntheta=ntheta_fourier)
         RBC, ZBS = self.to_Fourier(R_2D, Z_2D, self.nfp, mpol=mpol, ntor=ntor)
-
         theta1D = jnp.linspace(0, 2 * jnp.pi, ntheta)
         phi1D = jnp.linspace(0, 2 * jnp.pi, nphi)
         phi2D, theta2D = jnp.meshgrid(phi1D, theta1D, indexing='ij')
@@ -743,10 +687,8 @@ class near_axis():
 
         m_vals = jnp.arange(mpol + 1)
         n_vals = jnp.arange(-ntor, ntor + 1)
-
         R_2Dnew, Z_2Dnew = vmap(lambda m: vmap(lambda n: compute_RZ(m, n))(n_vals))(m_vals)
         R_2Dnew, Z_2Dnew = R_2Dnew.sum(axis=(0, 1)), Z_2Dnew.sum(axis=(0, 1))
-
         x_2D_plot = R_2Dnew.T * jnp.cos(phi1D)
         y_2D_plot = R_2Dnew.T * jnp.sin(phi1D)
         z_2D_plot = Z_2Dnew.T
@@ -795,9 +737,9 @@ class near_axis():
             
     def to_vtk(self, filename, r=0.1, ntheta=40, nphi=120, ntheta_fourier=20, extra_data=None, field=None):
         try: import numpy as np
-        except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
+        except ImportError: raise ImportError("The 'numpy' library is required.")
         try: from pyevtk.hl import gridToVTK
-        except ImportError: raise ImportError("The 'pyevtk' library is required. Please install it using 'pip install pyevtk'.")
+        except ImportError: raise ImportError("The 'pyevtk' library is required.")
         x, y, z, _ = self.get_boundary(r=r, ntheta=ntheta, nphi=nphi, ntheta_fourier=ntheta_fourier)
         x = np.array(x.T.reshape((1, nphi, ntheta)).copy())
         y = np.array(y.T.reshape((1, nphi, ntheta)).copy())
@@ -821,62 +763,85 @@ tree_util.register_pytree_node(near_axis,
                                near_axis._tree_unflatten)
 
 
-
-
 class DipoleField:
     """
-    Custom dipole field class for ESSOS, compatible with SimSOPT.
-    
-    This class computes the magnetic field from a set of dipoles, applying stellarator symmetries if specified. It supports caching the last field computation for efficiency and incremental updates to dipole pho values. The field is computed using the Biot-Savart law for dipoles, JIT-compiled with vmap for vectorization over evaluation points.
-    
-    Parameters:
-    dipole_positions : jnp.ndarray
-        Dipole positions, shape (N, 3).
-    dipole_moments : jnp.ndarray
-        Dipole moments, shape (N, 3).
-    pho_values : jnp.ndarray
-        Pho values for scaling moments, shape (N,).
+    Magnetic field from a collection of magnetic dipoles.
+
+    Supports optional precomputation of the interaction matrix G for fast
+    optimization. When surf_pts and surf_n are provided at construction,
+    G is computed once in __init__ and stored as self.G. The optimizer
+    then uses the fast matrix-vector multiply:
+
+        Bn_total = self.G @ pho + Bn_fixed
+
+    rather than recomputing dipole geometry every step. This follows the
+    same pattern as DESC's ObjectiveFunction.build() — expensive geometry
+    is precomputed once, and compute() (or in our case the Adam step) is
+    just fast arithmetic.
+
+    Parameters
+    ----------
+    dipole_positions : jnp.ndarray, shape (N, 3)
+        Magnet center positions [m].
+    dipole_moments : jnp.ndarray, shape (N, 3)
+        Dipole moment vectors [A·m²].
+    pho_values : jnp.ndarray, shape (N,)
+        Magnet strengths in [-1, 1].
     stellsym : bool, optional
         Apply stellarator symmetry (default False).
     nfp : int, optional
         Number of field periods (default 1).
     coordinate_flag : str, optional
-        Coordinate system ('cartesian' or 'cylindrical', default 'cartesian').
+        'cartesian' or 'cylindrical' (default 'cartesian').
     R0 : float, optional
         Major radius for cylindrical coordinates (default 1.0).
     scale_factor : float, optional
-        Global scale factor for moments (default 1.0).
+        Global scale factor applied to dipole_moments (default 1.0).
+    surf_pts : jnp.ndarray, shape (M, 3), optional
+        Surface quadrature points. If provided with surf_n, G is precomputed.
+    surf_n : jnp.ndarray, shape (M, 3), optional
+        Surface outward unit normals. Required with surf_pts to build G.
     """
-    def __init__(self, dipole_positions, dipole_moments, pho_values, stellsym=False, nfp=1, coordinate_flag='cartesian', R0=1.0, scale_factor=1.0):
+    def __init__(self, dipole_positions, dipole_moments, pho_values,
+                 stellsym=False, nfp=1, coordinate_flag='cartesian',
+                 R0=1.0, scale_factor=1.0,
+                 surf_pts=None, surf_n=None):
         self.mu0_over_4pi = 1e-7
         self.R0 = R0
         self.pho_values = pho_values
         self.scale_factor = scale_factor
         scaled_moments = dipole_moments * scale_factor
-        self.dipole_positions, self.dipole_moments = self._apply_symmetries(dipole_positions, scaled_moments, stellsym, nfp, coordinate_flag)
+        self.dipole_positions, self.dipole_moments = self._apply_symmetries(
+            dipole_positions, scaled_moments, stellsym, nfp, coordinate_flag)
         self.n_dipoles = self.dipole_positions.shape[0]
         self._last_field = None
         self._last_eval_points = None
-        self._compute_field = jit(vmap(lambda x: jnp.sum(vmap(lambda pos, mom: self._compute_single_dipole_field(x, pos, mom), in_axes=(0, 0))(self.dipole_positions, self.dipole_moments), axis=0), in_axes=0))
-    
+        self._compute_field = jit(vmap(
+            lambda x: jnp.sum(vmap(
+                lambda pos, mom: self._compute_single_dipole_field(x, pos, mom),
+                in_axes=(0, 0))(self.dipole_positions, self.dipole_moments), axis=0),
+            in_axes=0))
+
+        # Precompute interaction matrix G if surface points are provided.
+        #
+        # G[i, j] = Bn contribution of magnet j at surface point i at pho=1.
+        #
+        # During optimization only pho changes — magnet positions and orientations
+        # are fixed. So we compute G once here (~8s for 99k magnets) and each
+        # Adam step is just: Bn_total = G @ pho + Bn_fixed  (~0.15s).
+        #
+        # Using DipoleField.B() directly in the loop recomputes all distances
+        # and angles every step, making it ~1000x slower.
+        if surf_pts is not None and surf_n is not None:
+            from essos.optimization import compute_G_parallel
+            self.G = compute_G_parallel(self, surf_pts, surf_n)
+        else:
+            self.G = None
+
     @staticmethod
     @jit
     def _compute_single_dipole_field(x_eval, pos, mom):
-        """
-        Compute magnetic field from a single dipole using the Biot-Savart law.
-        
-        Parameters:
-        x_eval : jnp.ndarray
-            Evaluation point, shape (3,).
-        pos : jnp.ndarray
-            Dipole position, shape (3,).
-        mom : jnp.ndarray
-            Dipole moment, shape (3,).
-        
-        Returns:
-        B : jnp.ndarray
-            Magnetic field at x_eval, shape (3,).
-        """
+        """Magnetic field from a single dipole at x_eval (Biot-Savart)."""
         mu0_over_4pi = 1e-7
         r_vec = x_eval - pos
         r_mag = jnp.linalg.norm(r_vec) + 1e-12
@@ -886,38 +851,32 @@ class DipoleField:
 
     @partial(jit, static_argnames=['self'])
     def compute_interaction_matrix(self, surf_pts, surf_n):
-       
+        """
+        Build the interaction matrix G, shape (n_surf_pts, n_dipoles).
+
+        G[i, j] = normal component of B from magnet j at surface point i,
+        evaluated at unit pho (full magnetization).
+
+        Called automatically in __init__ when surf_pts and surf_n are provided.
+        Can also be called manually if surface points change after construction.
+        """
         positions = self.dipole_positions
         moments = self.dipole_moments
+
         def calc_matrix_column(mag_idx):
             pos_j = positions[mag_idx]
             mom_j = moments[mag_idx]
-            
             B_vectors = vmap(lambda x: self._compute_single_dipole_field(x, pos_j, mom_j))(surf_pts)
-      
             Bn_column = jnp.sum(B_vectors * surf_n, axis=1)
             return Bn_column
 
         magnet_indices = jnp.arange(self.n_dipoles)
         G_T = vmap(calc_matrix_column)(magnet_indices)
-        
-        return G_T.T 
-    
+        return G_T.T
+
     @partial(jit, static_argnames=['self'])
     def B(self, eval_points, chunk_size=512):
-        """
-        Compute magnetic field at eval points, with caching included.
-        
-        Parameters:
-        eval_points : jnp.ndarray
-            Evaluation points, shape (N, 3).
-        chunk_size : int, optional
-            Chunk size for memory efficiency (default 512).
-        
-        Returns:
-        B : jnp.ndarray
-            Magnetic field, shape (N, 3).
-        """
+        """Magnetic field at eval_points (with caching)."""
         if not hasattr(self, '_last_field') or self._last_field is None or eval_points.shape[0] != self._last_eval_points.shape[0]:
             with jax.ensure_compile_time_eval():
                 self._last_field = self._compute_field(eval_points)
@@ -926,97 +885,34 @@ class DipoleField:
     
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, eval_points):
-        """
-        Compute covariant magnetic field.
-        
-        Parameters:
-        eval_points : jnp.ndarray
-            Evaluation points, shape (N, 3).
-        
-        Returns:
-        B : jnp.ndarray
-            Magnetic field, shape (N, 3).
-        """
         return self.B(eval_points)
     
     @partial(jit, static_argnames=['self'])
     def B_contravariant(self, eval_points):
-        """
-        Compute contravariant magnetic field.
-        
-        Parameters:
-        eval_points : jnp.ndarray
-            Evaluation points, shape (N, 3).
-        
-        Returns:
-        B : jnp.ndarray
-            Magnetic field, shape (N, 3).
-        """
         return self.B(eval_points)
     
     @partial(jit, static_argnames=['self'])
     def AbsB(self, eval_points):
-        """
-        Compute magnetic field magnitude.
-        
-        Parameters:
-        eval_points : jnp.ndarray
-            Evaluation points, shape (N, 3).
-        
-        Returns:
-        AbsB : jnp.ndarray
-            Field magnitude, shape (N,).
-        """
-        B = self.B(eval_points)
-        return jnp.linalg.norm(B, axis=-1)
+        return jnp.linalg.norm(self.B(eval_points), axis=-1)
     
     def dAbsB_by_dX(self, eval_points, eps=1e-6):
-        """
-        Compute gradient of field magnitude.
-        
-        Parameters:
-        eval_points : jnp.ndarray
-            Evaluation points, shape (N, 3).
-        eps : float, optional
-            Finite difference step size (default 1e-6).
-        
-        Returns:
-        grad_B : jnp.ndarray
-            Gradient, shape (N, 3).
-        """
+        """Gradient of |B| via finite differences."""
         is_single_point = len(eval_points.shape) == 1 and eval_points.shape[0] == 3
         if is_single_point:
             eval_points = eval_points.reshape(1, 3)
         elif len(eval_points.shape) != 2 or eval_points.shape[1] != 3:
-            raise ValueError(f"eval_points must be 2D with shape (n, 3) or 1D with length 3, got {eval_points.shape}")
+            raise ValueError(f"eval_points must be shape (n,3) or (3,), got {eval_points.shape}")
         n_points = len(eval_points)
         grad_B = jnp.zeros((n_points, 3))
         for i in range(3):
-            delta = jnp.zeros((n_points, 3))
-            delta = delta.at[:, i].set(eps)
-            B_plus = self.AbsB(eval_points + delta)
-            B_minus = self.AbsB(eval_points - delta)
-            grad_B = grad_B.at[:, i].set((B_plus - B_minus) / (2 * eps))
+            delta = jnp.zeros((n_points, 3)).at[:, i].set(eps)
+            grad_B = grad_B.at[:, i].set((self.AbsB(eval_points + delta) - self.AbsB(eval_points - delta)) / (2 * eps))
         if is_single_point:
             grad_B = grad_B.squeeze(0)
         return grad_B
     
     def update_dipole_pho(self, dipole_idx, new_pho, eval_points):
-        """
-        Update pho value for a dipole and recompute the field incrementally.
-        
-        Parameters
-        dipole_idx : int
-            Index of the dipole to update.
-        new_pho : float
-            New pho value.
-        eval_points : jnp.ndarray
-            Evaluation points, shape (N, 3).
-        
-        Returns
-        updated_field : jnp.ndarray
-            Updated magnetic field, shape (N, 3).
-        """
+        """Incrementally update one dipole's pho and recompute the field."""
         if self._last_field is None or len(eval_points) != self._last_eval_points.shape[0]:
             raise ValueError("Call B with the same eval_points before updating a dipole.")
         old_moment = self.dipole_moments[dipole_idx]
@@ -1037,27 +933,7 @@ class DipoleField:
         return updated_field
     
     def _apply_symmetries(self, positions, moments, stellsym=False, nfp=1, coordinate_flag='cartesian'):
-        """
-        Apply stellarator symmetries to dipole positions and moments.
-        
-        Parameters:
-        positions : jnp.ndarray
-            Original dipole positions, shape (N, 3).
-        moments : jnp.ndarray
-            Original dipole moments, shape (N, 3).
-        stellsym : bool, optional
-            Apply stellarator symmetry (default False).
-        nfp : int, optional
-            Number of field periods (default 1).
-        coordinate_flag : str, optional
-            Coordinate system ('cartesian' or 'cylindrical', default 'cartesian').
-        
-        Returns:
-        all_pos : jnp.ndarray
-            Symmetrized positions, shape (M, 3), where M = N * (1 or 2) * nfp.
-        all_mom : jnp.ndarray
-            Symmetrized moments, shape (M, 3).
-        """
+        """Apply stellarator symmetries to positions and moments."""
         step = 1
         pos = positions[::step]
         mom = moments[::step]
