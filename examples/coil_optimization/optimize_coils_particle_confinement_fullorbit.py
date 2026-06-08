@@ -10,6 +10,7 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 from essos.optimization import optimize_loss_function
 from essos.objective_functions import loss_optimize_coils_for_particle_confinement
+from essos.fields import BiotSavart
 
 # Optimization parameters
 target_B_on_axis = 5.7
