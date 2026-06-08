@@ -6,50 +6,50 @@ import os
 import sys
 import time
 from pathlib import Path
-from essos.fields import DipoleField
-import numpy as np
-import jax
-import jax.numpy as jnp
 
-JAX_PLATFORM    = "cpu"   
+import numpy as np
+
+# ================================================================fin
+# CONFIGURATION
+# ================================================================
+
+JAX_PLATFORM    = "cpu"   # "cpu", "gpu", or "auto"
 CPU_THREADS     = 4
 ENABLE_X64      = True
 
-N_PARALLEL_STARTS = 4     
+N_PARALLEL_STARTS = 4     # +1, -1, 0, and (N-3) random starts
 
-FB_ONLY_STEPS    = 2000   # Stage 1: minimize fB only 
-FD_ANNEAL_STEPS  = 2000   # Stage 2: anneal discreteness penalty wD from 0 to MAX_WD
+FB_ONLY_STEPS    = 2000   # Stage 1: minimize fB only (continuous relaxation)
+FD_ANNEAL_STEPS  = 2000   # Stage 2: anneal discreteness penalty wD from 0 → MAX_WD
 
 FB_ONLY_LR_MAX      = 0.03
 FB_ONLY_LR_MIN_FRAC = 0.1
 
-FD_ANNEAL_LR_MAX      = 0.01
+FD_ANNEAL_LR_MAX      = 0.005
 FD_ANNEAL_LR_MIN_FRAC = 0.05
 
 MAX_WD       = 1.0
 LOG_INTERVAL = 500
 
-VOLUME_TARGET_CM3 = 4000.0    # Target Volume
-W_VOLUME_TARGET   = 100.0  # penalty weight
+
+VOLUME_TARGET_CM3 = 3600.0    #target the MUSE paper value
+W_VOLUME_TARGET   = 300.0  # quadratic penalty weight
 
 REFERENCE_M0_SCALE = 0.074625   # zot80 dipole moment magnitude 
 B_MAX_T = 1.465                  
 MU0     = 4 * np.pi * 1e-7
 
-SURFACE_RANGE  = "full torus"
+SURFACE_RANGE  = "half period"
 SURFACE_NPHI   = 64
 SURFACE_NTHETA = 64
-
 
 ESSOS_ROOT  = Path(__file__).resolve().parents[2]
 SIMSOPT_SRC = ESSOS_ROOT.parent / "simsopt" / "src"
 
 DEFAULT_SURF_FILE = ESSOS_ROOT / "essos" / "input.muse"
 DEFAULT_COIL_FILE = SIMSOPT_SRC.parent / "tests" / "test_files" / "muse_tf_coils.focus"
-DEFAULT_MAG_FILE  = ESSOS_ROOT / "essos" / "examples" / "input_files" / "zot80.focus"
+DEFAULT_MAG_FILE  = SIMSOPT_SRC.parent / "tests" / "test_files" / "zot80.focus"
 DEFAULT_INPUT_BUNDLE = ESSOS_ROOT / "essos" / "examples" / "input_files" / "muse_opt_inputs_64x64.npz"
-
-
 
 if "jax" in sys.modules:
     print("WARNING: JAX already imported — device selection may not take effect.")
@@ -65,6 +65,8 @@ if JAX_PLATFORM == "cpu":
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
         os.environ.setdefault(var, str(CPU_THREADS))
 
+import jax
+import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", ENABLE_X64)
 
@@ -72,10 +74,13 @@ backend_name = str(jax.default_backend()).lower()
 print(f"JAX backend: {backend_name}  |  devices: {[str(d) for d in jax.devices()]}")
 
 
-
 for p in [str(ESSOS_ROOT), str(SIMSOPT_SRC)]:
     if p not in sys.path:
         sys.path.insert(0, p)
+
+from essos.fields import DipoleField
+sys.path.insert(0, str(ESSOS_ROOT / "essos" / "examples"))
+from compute_G_symmetric import compute_G_symmetric
 
 
 
@@ -146,16 +151,23 @@ if missing:
             SURFACE_RANGE, SURFACE_NPHI, SURFACE_NTHETA,
         )
 
+
+if area_w < 1e-6:
+    area_w *= 10000.0
 area_weight = float(area_w)
 surface_xyz    = np.asarray(surface_xyz,    np.float64)
 surface_normal = np.asarray(surface_normal, np.float64)
 
+
+
+
 zot80_norms = np.linalg.norm(np.asarray(moments), axis=1)
 print(f"zot80 |m| mean: {zot80_norms.mean():.6f}  (reference: {REFERENCE_M0_SCALE})")
+if abs(zot80_norms.mean() - REFERENCE_M0_SCALE) >= 1e-6:
+    raise RuntimeError("Moment scale mismatch — check REFERENCE_M0_SCALE.")
 
 
 
-# Grid: Zot80
 
 M_MAX = B_MAX_T / MU0
 
@@ -164,7 +176,7 @@ native_norms        = np.linalg.norm(np.asarray(moments), axis=1)
 magnet_orientations = np.asarray(moments, np.float64) / native_norms[:, None]
 n_magnets           = len(magnet_positions)
 M0_SCALE            = REFERENCE_M0_SCALE
-volume_per_cell     = (M0_SCALE / M_MAX) * 1e6   
+volume_per_cell     = (M0_SCALE / M_MAX) * 1e6   # cm³ per unit-rho magnet
 
 print("=" * 70)
 print("MUSE PM Optimization — fB + Discreteness (zot80 native lattice)")
@@ -172,7 +184,8 @@ print(f"Backend: {backend_name}  |  Starts: {N_PARALLEL_STARTS}")
 print(f"Magnets: {n_magnets}  |  M0={M0_SCALE:.6f} A·m²  |  V_cell={volume_per_cell:.4f} cm³")
 print("=" * 70)
 
-# Build G Matrix
+
+# BUILD G MATRIX
 
 print("\n--- Build G matrix ---")
 magnet_moments   = magnet_orientations * M0_SCALE
@@ -181,21 +194,22 @@ surface_pts_flat = jnp.asarray(surface_xyz.reshape(-1, 3),    JAX_DTYPE)
 surface_nrm_flat = jnp.asarray(surface_normal.reshape(-1, 3), JAX_DTYPE)
 
 t0 = time.time()
-dipole_field = DipoleField(
+G_f32 = np.asarray(compute_G_symmetric(
     jnp.asarray(magnet_positions, JAX_DTYPE),
     jnp.asarray(magnet_moments,   JAX_DTYPE),
-    jnp.zeros(n_magnets,          JAX_DTYPE),
-    scale_factor=1.0,
-    surf_pts=surface_pts_flat,
-    surf_n=surface_nrm_flat,
-)
-G_f32  = np.asarray(dipole_field.G, np.float32)
+    surface_pts_flat,
+    surface_nrm_flat,
+    nfp=2,
+    stellsym=True,
+), np.float32)
 Bn_f32 = np.asarray(Bn_fixed, np.float32)
 gc.collect()
 
 fB_gen0 = float(0.5 * np.dot(Bn_f32.astype(np.float64), Bn_f32.astype(np.float64)) * area_weight)
 print(f"G: {G_f32.shape}  {G_f32.nbytes/1e9:.2f} GB  {time.time()-t0:.1f}s")
 print(f"fB(rho=0) = {fB_gen0:.4e}  (legacy: {fB_gen0/1e4:.4e})")
+
+
 
 
 G_jax  = jnp.asarray(G_f32)
@@ -257,6 +271,7 @@ def get_lr_and_wd(step):
     return lr, wD
 
 
+
 # OPTIMIZATION
 
 TOTAL_STEPS = FB_ONLY_STEPS + FD_ANNEAL_STEPS
@@ -315,6 +330,7 @@ for i, name in enumerate(start_names[:N_PARALLEL_STARTS]):
           f"{'below gen0' if fB_cont[i] < fB_gen0 else 'above gen0'}")
 
 
+
 discrete_results = []
 for i, name in enumerate(start_names[:N_PARALLEL_STARTS]):
     pho_d = np.zeros(n_magnets, np.float64)
@@ -366,8 +382,8 @@ np.save("grid_positions.npy", magnet_positions)
 np.save("grid_moments.npy",   magnet_moments)
 print("\nSaved: pho_optimized.npy, pho_continuous.npy, grid_positions.npy, grid_moments.npy")
 
-# Plotting
 
+# PLOTTING
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  
 
@@ -415,11 +431,15 @@ gc.collect()
 jax.clear_caches()
 
 
+
+
 nphi_s, ntheta_s = surface_xyz.shape[0], surface_xyz.shape[1]
 phi_coords   = np.linspace(0, 1, nphi_s)
 theta_coords = np.linspace(0, 1, ntheta_s)
 
+
 Bn_before = Bn_f32.astype(np.float64).reshape(nphi_s, ntheta_s)
+
 
 Bn_pm     = (G_f32.astype(np.float64) @ pho_discrete).reshape(nphi_s, ntheta_s)
 Bn_after  = Bn_before + Bn_pm
