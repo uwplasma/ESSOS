@@ -2,7 +2,9 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.coils import Coils, CreateEquallySpacedCurves
-from essos.fields import near_axis, BiotSavart
+from essos.fields import BiotSavart
+from pyqsc_jax.near_axis import near_axis
+
 from essos.dynamics import Tracing
 from essos.optimization import optimize_loss_function
 from essos.objective_functions import loss_coils_for_nearaxis
