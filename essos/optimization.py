@@ -5,7 +5,7 @@ from jax import jit, grad
 from functools import partial
 from essos.coils import Curves, Coils
 from scipy.optimize import least_squares, minimize
-from essos.fields import near_axis
+from pyqsc_jax.near_axis import near_axis
 from essos.surfaces import SurfaceRZFourier
 
 def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
