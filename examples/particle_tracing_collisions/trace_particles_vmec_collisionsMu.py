@@ -27,7 +27,7 @@ rtol=1e-6
 energy=FUSION_ALPHA_PARTICLE_ENERGY
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__name__), 'input_files',"wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+wout_file = os.path.join(os.path.dirname(__file__), '..', 'input_files',"wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 vmec = Vmec(wout_file)
 
 # Initialize particles

@@ -56,7 +56,7 @@ currents_scale = coils_initial.currents_scale
 
 ntheta=30
 nphi=30
-input = os.path.join(os.path.dirname(__name__),'input_files','input.toroidal_surface')
+input = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'input.toroidal_surface')
 surface= SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='full torus')
 timeI=time()
 boundary=SurfaceClassifier(surface,h=0.1)
@@ -170,8 +170,8 @@ plt.show()
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
 # # Load the coils from a json file
-# from essos.coils import Coils_from_json
-# coils = Coils_from_json("stellarator_coils.json")
+# from essos.coils import Coils
+# coils = Coils.from_json("stellarator_coils.json")
 
 # # Save results in vtk format to analyze in Paraview
 # tracing_initial.to_vtk('trajectories_initial')

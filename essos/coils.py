@@ -135,7 +135,15 @@ class Curves:
     # gamma property
     @property
     def gamma(self):
+        # Allow downstream code (e.g. coil_perturbation) to override the
+        # computed gamma; otherwise compute from Fourier coefficients.
+        if self._gamma is not None:
+            return self._gamma
         return self._compute_gamma()
+
+    @gamma.setter
+    def gamma(self, value):
+        self._gamma = value
 
     # _compute_gamma_dash method
     @jit
@@ -149,7 +157,13 @@ class Curves:
     # gamma_dash property
     @property
     def gamma_dash(self):
+        if self._gamma_dash is not None:
+            return self._gamma_dash
         return self._compute_gamma_dash()
+
+    @gamma_dash.setter
+    def gamma_dash(self, value):
+        self._gamma_dash = value
 
     # _compute_gamma_dashdash method
     @jit
@@ -163,7 +177,13 @@ class Curves:
     # gamma_dashdash property
     @property
     def gamma_dashdash(self):
+        if self._gamma_dashdash is not None:
+            return self._gamma_dashdash
         return self._compute_gamma_dashdash()
+
+    @gamma_dashdash.setter
+    def gamma_dashdash(self, value):
+        self._gamma_dashdash = value
 
     # length property
     @property

@@ -29,8 +29,8 @@ def perturbed_coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_seg
     #Split once the key/seed given for one pertubred stellarator
     split_keys = jax.random.split(jax.random.key(key), 2)
     #Internally the following functions will then further split the two keys avoiding repeating keys
-    perturb_curves_systematic(coils, sampler, key=split_keys[0])
-    perturb_curves_statistic(coils, sampler, key=split_keys[1])
+    perturb_curves_systematic(coils.curves, sampler, key=split_keys[0])
+    perturb_curves_statistic(coils.curves, sampler, key=split_keys[1])
     return coils
 
 def field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
@@ -331,7 +331,7 @@ def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, curr
 
     particles_drift_loss = loss_particle_radial_drift(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym, particles=particles, maxtime=maxtime, num_steps=num_steps, trace_tolerance=trace_tolerance, model=model,boundary=boundary)
     normB_axis_loss = loss_normB_axis(x,dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
-    coil_length_loss    = jnp.maximum(0, jnp.max(field.coils.length-max_coil_length))
+    coil_length_loss    = jnp.maximum(0, field.coils.length-max_coil_length)
     coil_curvature_loss = jnp.maximum(0, jnp.mean(field.coils.curvature, axis=1)-max_coil_curvature)
 
     loss = jnp.concatenate((normB_axis_loss, coil_length_loss, coil_curvature_loss,particles_drift_loss))
@@ -350,11 +350,12 @@ def loss_bdotn_over_b(x, vmec, dofs_curves, currents_scale, nfp, n_segments=60, 
 
 
 @partial(jit, static_argnums=(1, 4, 5, 6, 7))
-def loss_BdotN(x, vmec, dofs_curves, currents_scale, nfp, max_coil_length=42,
-               n_segments=60, stellsym=True, max_coil_curvature=0.1):
+def loss_BdotN(x, vmec=None, dofs_curves=None, currents_scale=None, nfp=None, max_coil_length=42,
+               n_segments=60, stellsym=True, max_coil_curvature=0.1, surface=None):
     field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
     
-    bdotn_over_b = BdotN_over_B(vmec.surface, field)
+    # Accept either a vmec (use vmec.surface) or an explicit surface
+    bdotn_over_b = BdotN_over_B(surface if surface is not None else vmec.surface, field)
     bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
 
     coil_length_loss    = jnp.maximum(0, jnp.max(field.coils.length-max_coil_length))
@@ -653,3 +654,31 @@ def rectangular_xsection_delta(a, b):
 #    bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
 
 #    return bdotn_over_b_loss
+
+# ----------------------------------------------------------------------
+# Restored flat-vector loss wrappers for examples in PR #29.
+# These take a flat parameter vector `x` plus the metadata needed to
+# reconstruct coils, then delegate to the existing object-based losses.
+# Kept additive/backward-compatible so the new API stays primary.
+# ----------------------------------------------------------------------
+
+def loss_coil_curvature_new(x, dofs_curves, currents_scale, nfp,
+                            n_segments=60, stellsym=True,
+                            max_coil_curvature=0.4):
+    """Flat-vector wrapper around loss_coil_curvature."""
+    coils = coils_from_dofs(x, dofs_curves, currents_scale, nfp, n_segments, stellsym)
+    return loss_coil_curvature(coils, max_coil_curvature)
+
+
+def loss_coil_length_new(x, dofs_curves, currents_scale, nfp,
+                         n_segments=60, stellsym=True,
+                         max_coil_length=42):
+    """Flat-vector wrapper around loss_coil_length."""
+    coils = coils_from_dofs(x, dofs_curves, currents_scale, nfp, n_segments, stellsym)
+    return loss_coil_length(coils, max_coil_length)
+
+
+# Constraint-form alias used by augmented-Lagrangian examples.
+# Same signature/behaviour as loss_particle_r_cross_max; the violation
+# vector it returns IS the constraint value.
+loss_particle_r_cross_max_constraint = loss_particle_r_cross_max

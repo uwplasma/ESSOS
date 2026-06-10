@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib.colors
 from essos.fields import BiotSavart
-from essos.coils import Coils_from_json
+from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV,ELECTRON_MASS,SPEED_OF_LIGHT
 from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies,gamma_ab
@@ -37,8 +37,8 @@ energy=T_test*ONE_EV
 
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
-coils = Coils_from_json(json_file)
+json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
 # Initialize particles
