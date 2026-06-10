@@ -107,11 +107,41 @@ def nested_lists_to_array(ll):
     
 
 class SurfaceRZFourier:
-    def __init__(self, rc, zs, nfp, mpol, ntor, ntheta=30, nphi=30, close=True, range_torus='full torus',
+    def __init__(self, rc=None, zs=None, nfp=None, mpol=None, ntor=None, ntheta=30, nphi=30, close=True, range_torus='full torus',
                  scaling_type=2, scaling_factor=0):
         """ rc, zs: dynamic arrays 
-            nfp, mpol, ntor: static """
-        
+            nfp, mpol, ntor: static
+            
+            Backward-compat: rc may also be a filename (string) or a Vmec-like object,
+            in which case the remaining params are loaded from it (any explicit
+            keyword overrides take precedence). """
+
+        # --- Polymorphic-first-arg dispatch (additive, preserves old behaviour) ---
+        _xm_from_vmec = None
+        _xn_from_vmec = None
+        if isinstance(rc, str):
+            # Load from input.* namelist file
+            from f90nml import Parser
+            nml = Parser().read(rc)['indata']
+            if nfp is None:  nfp  = nml["nfp"] if "nfp" in nml else 1
+            if mpol is None: mpol = nml['mpol']
+            if ntor is None: ntor = nml['ntor']
+            rc = jnp.ravel(nested_lists_to_array(nml['rbc']))[2:]
+            zs = jnp.ravel(nested_lists_to_array(nml['zbs']))[2:]
+        elif rc is not None and not hasattr(rc, '__len__') and hasattr(rc, 'nfp') and hasattr(rc, 'rmnc'):
+            # Vmec-like object: replicate from_vmec(s=1) logic
+            vmec = rc
+            s = 1
+            if nfp is None:  nfp  = vmec.nfp
+            if mpol is None: mpol = vmec.mpol
+            if ntor is None: ntor = vmec.ntor
+            s_full_grid = vmec.s_full_grid
+            rc = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(vmec.rmnc)
+            zs = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(vmec.zmns)
+            _xm_from_vmec = vmec.xm
+            _xn_from_vmec = vmec.xn
+        # --- End dispatch ---
+
         assert isinstance(nfp, int) and nfp > 0, "nfp must be a positive integer."
         assert isinstance(mpol, int) and mpol >= 0, "mpol must be a non-negative integer."
         assert isinstance(ntor, int) and ntor >= 0, "ntor must be a non-negative integer."
@@ -132,8 +162,8 @@ class SurfaceRZFourier:
         self._normal = None
         self._unitnormal = None
         self._area_element = None
-        self._xm = None
-        self._xn = None
+        self._xm = _xm_from_vmec
+        self._xn = _xn_from_vmec
 
         self._ntheta = ntheta
         self._nphi = nphi

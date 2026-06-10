@@ -1,5 +1,5 @@
 import os
-number_of_processors_to_use = 8 # Parallelization, this should divide ntheta*nphi
+number_of_processors_to_use = 1 # Parallelization, this should divide ntheta*nphi
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax.numpy as jnp
@@ -8,7 +8,7 @@ from essos.surfaces import BdotN_over_B
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
 from essos.fields import Vmec, BiotSavart
 from essos.objective_functions import loss_BdotN_only_constraint_stochastic,loss_coil_curvature_new,loss_coil_length_new,loss_BdotN_only_stochastic
-from essos.objective_functions import loss_coil_curvature,loss_coil_length
+from essos.objective_functions import loss_coil_curvature_new as loss_coil_curvature, loss_coil_length_new as loss_coil_length
 from essos.coil_perturbation import GaussianSampler
 
 import essos.augmented_lagrangian as alm
@@ -30,7 +30,7 @@ nphi=32
 
 
 # Initialize VMEC field
-vmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files',
+vmec = Vmec(os.path.join(os.path.dirname(__file__), '..', 'input_files',
              'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
             ntheta=ntheta, nphi=nphi, range_torus='full torus')
 
@@ -63,7 +63,7 @@ n_derivs=2
 N_samples=10  #Number of samples for the stochastic perturbation
 #Create a Gaussian sampler for perturbation
 #This sampler will be used to perturb the coils
-sampler=GaussianSampler(coils_initial.quadpoints,sigma=sigma,length_scale=length_scale,n_derivs=n_derivs)
+sampler=GaussianSampler(coils_initial.curves.quadpoints,sigma=sigma,length_scale=length_scale,n_derivs=n_derivs)
 
 
 
@@ -167,8 +167,8 @@ plt.show()
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
 # # Load the coils from a json file
-# from essos.coils import Coils_from_json
-# coils = Coils_from_json("stellarator_coils.json")
+# from essos.coils import Coils
+# coils = Coils.from_json("stellarator_coils.json")
 
 # # Save results in vtk format to analyze in Paraview
 # from essos.fields import BiotSavart

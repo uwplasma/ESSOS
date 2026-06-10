@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from essos.dynamics import Particles, Tracing
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
 from essos.objective_functions import loss_particle_r_cross_max_constraint
-from essos.objective_functions import loss_coil_curvature,loss_coil_length, loss_normB_axis_average
+from essos.objective_functions import loss_coil_curvature_new as loss_coil_curvature, loss_coil_length_new as loss_coil_length, loss_normB_axis_average
 from functools import partial
 import optax
 
@@ -115,8 +115,8 @@ plt.savefig('optimize_coils_particle_confinement_guidingcenter_adam.png', dpi=30
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
 # # Load the coils from a json file
-# from essos.coils import Coils_from_json
-# coils = Coils_from_json("stellarator_coils.json")
+# from essos.coils import Coils
+# coils = Coils.from_json("stellarator_coils.json")
 
 # # Save results in vtk format to analyze in Paraview
 # tracing_initial.to_vtk('trajectories_initial')

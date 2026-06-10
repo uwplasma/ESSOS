@@ -489,7 +489,8 @@ def FieldLine(t,
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
-                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None):
+                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
+                 solver=None):
         
         if electric_field==None:
             self.electric_field = Electric_field_zero()
@@ -518,6 +519,8 @@ class Tracing():
         self.species=species
         self.tag_gc=tag_gc
         self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
+        # Optional override of the default solver (defaults preserve previous behaviour).
+        self.solver = solver
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
@@ -775,7 +778,7 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Dopri8(),
+                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
@@ -794,7 +797,7 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Dopri8(),
+                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
@@ -814,7 +817,7 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Dopri8(),
+                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=True,
@@ -863,7 +866,7 @@ class Tracing():
                 return 0.5 * mass * trajectory[:, 3]**2
             energy = vmap(compute_energy)(self.trajectories)
 
-        elif self.model == 'FullOrbit':
+        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris':
             def compute_energy(trajectory):
                 vxvyvz = trajectory[:, 3:]
                 v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)

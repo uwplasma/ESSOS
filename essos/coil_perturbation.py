@@ -52,7 +52,7 @@ def matrix_sqrt_via_spectral(A):
     eigvals, Q = jnp.linalg.eigh(A)  # A = Q Λ Q^T
 
     # Ensure numerical stability (clip small negatives to 0)
-    eigvals = jnp.clip(eigvals, a_min=0)
+    eigvals = jnp.clip(eigvals, min=0)
 
     sqrt_eigvals = jnp.sqrt(eigvals)
     sqrt_A = Q @ jnp.diag(sqrt_eigvals) @ Q.T

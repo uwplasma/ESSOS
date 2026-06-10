@@ -25,13 +25,13 @@ energy=FUSION_ALPHA_PARTICLE_ENERGY
 
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__name__), '../input_files', 'QH_simple_scaled.json')
+json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'QH_simple_scaled.json')
 coils = Coils.from_simsopt(json_file)
 field = BiotSavart(coils)
 
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__name__), '../input_files','wout_QH_simple_scaled.nc')
+wout_file = os.path.join(os.path.dirname(__file__), '..', 'input_files','wout_QH_simple_scaled.nc')
 vmec = Vmec(wout_file)
 
 timeI=time()

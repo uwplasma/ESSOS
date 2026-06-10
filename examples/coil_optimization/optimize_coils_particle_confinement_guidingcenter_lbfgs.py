@@ -114,8 +114,8 @@ plt.show()
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
 # # Load the coils from a json file
-# from essos.coils import Coils_from_json
-# coils = Coils_from_json("stellarator_coils.json")
+# from essos.coils import Coils
+# coils = Coils.from_json("stellarator_coils.json")
 
 # # Save results in vtk format to analyze in Paraview
 # tracing_initial.to_vtk('trajectories_initial')

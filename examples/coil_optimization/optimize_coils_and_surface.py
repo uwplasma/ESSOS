@@ -22,7 +22,7 @@ ntheta=30
 nphi=30
 mpol=2
 ntor=2
-input = os.path.join(os.path.dirname(__file__), 'input_files','input.rotating_ellipse')
+input = os.path.join(os.path.dirname(__file__), '..', 'input_files','input.rotating_ellipse')
 surface_initial = SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='half period', mpol=mpol, ntor=ntor)
 
 # Optimization parameters
@@ -252,5 +252,5 @@ field_nearaxis_optimized.to_vtk('optimized_field_nearaxis', r=major_radius_coils
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
 # # Load the coils from a json file
-# from essos.coils import Coils_from_json
-# coils = Coils_from_json("stellarator_coils.json")
+# from essos.coils import Coils
+# coils = Coils.from_json("stellarator_coils.json")

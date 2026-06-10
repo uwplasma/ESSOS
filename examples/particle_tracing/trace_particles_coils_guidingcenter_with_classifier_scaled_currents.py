@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart,Vmec
 from essos.surfaces import SurfaceClassifier
-from essos.coils import Coils_from_json,Coils_from_simsopt
+from essos.coils import Coils
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ONE_EV
 from essos.dynamics import Tracing, Particles
 from essos.objective_functions import normB_axis
@@ -28,8 +28,8 @@ energy=FUSION_ALPHA_PARTICLE_ENERGY
 
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__name__), 'input_files', 'QH_simple_scaled.json')
-coils = Coils_from_simsopt(json_file,nfp=4)
+json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'QH_simple_scaled.json')
+coils = Coils.from_simsopt(json_file,nfp=4)
 field = BiotSavart(coils)
 
 #renormalize coisl to have B_target=5.7 on axis
@@ -41,7 +41,7 @@ field=BiotSavart(coils)
 #B_axis_new=normB_axis(field,npoints=200)
 #print(jnp.average(B_axis_new))
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__name__), 'input_files','wout_QH_simple_scaled.nc')
+wout_file = os.path.join(os.path.dirname(__file__), '..', 'input_files','wout_QH_simple_scaled.nc')
 vmec = Vmec(wout_file)
 
 timeI=time()
