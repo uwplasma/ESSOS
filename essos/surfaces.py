@@ -109,14 +109,16 @@ def nested_lists_to_array(ll):
 class SurfaceRZFourier:
     def __init__(self, rc=None, zs=None, nfp=None, mpol=None, ntor=None, ntheta=30, nphi=30, close=True, range_torus='full torus',
                  scaling_type=2, scaling_factor=0):
-        """ rc, zs: dynamic arrays 
+        """ rc, zs: dynamic arrays
             nfp, mpol, ntor: static
-            
-            Backward-compat: rc may also be a filename (string) or a Vmec-like object,
-            in which case the remaining params are loaded from it (any explicit
-            keyword overrides take precedence). """
 
-        # --- Polymorphic-first-arg dispatch (additive, preserves old behaviour) ---
+            As a convenience, the first argument (rc) may instead be a filename
+            string or a Vmec-like object. In that case rc, zs, nfp, mpol and ntor
+            are read from that source, matching what from_input_file / from_vmec
+            do; any of those values passed explicitly as keywords take priority. """
+
+        # --- Resolve the first argument: it may be a filename, a Vmec object, or
+        # --- the rc array itself. Existing rc/zs/... calls are unchanged.
         _xm_from_vmec = None
         _xn_from_vmec = None
         if isinstance(rc, str):

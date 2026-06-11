@@ -655,17 +655,20 @@ def rectangular_xsection_delta(a, b):
 
 #    return bdotn_over_b_loss
 
-# ----------------------------------------------------------------------
-# Restored flat-vector loss wrappers for examples in PR #29.
-# These take a flat parameter vector `x` plus the metadata needed to
-# reconstruct coils, then delegate to the existing object-based losses.
-# Kept additive/backward-compatible so the new API stays primary.
-# ----------------------------------------------------------------------
-
 def loss_coil_curvature_new(x, dofs_curves, currents_scale, nfp,
                             n_segments=60, stellsym=True,
                             max_coil_curvature=0.4):
-    """Flat-vector wrapper around loss_coil_curvature."""
+    """Curvature penalty as a function of the optimization vector x.
+
+    Unlike loss_coil_curvature, which takes a Coils object, this version takes
+    the flat degrees-of-freedom vector x used by the optimizers. It rebuilds the
+    Coils from x (via coils_from_dofs) and then evaluates loss_coil_curvature.
+
+    x : flat array of curve Fourier coefficients followed by currents.
+    dofs_curves, currents_scale, nfp, n_segments, stellsym : geometry metadata
+        needed to reconstruct the Coils from x.
+    max_coil_curvature : curvature above this value is penalized.
+    """
     coils = coils_from_dofs(x, dofs_curves, currents_scale, nfp, n_segments, stellsym)
     return loss_coil_curvature(coils, max_coil_curvature)
 
@@ -673,12 +676,21 @@ def loss_coil_curvature_new(x, dofs_curves, currents_scale, nfp,
 def loss_coil_length_new(x, dofs_curves, currents_scale, nfp,
                          n_segments=60, stellsym=True,
                          max_coil_length=42):
-    """Flat-vector wrapper around loss_coil_length."""
+    """Coil-length penalty as a function of the optimization vector x.
+
+    Flat-vector counterpart of loss_coil_length: it rebuilds the Coils from the
+    optimization vector x (via coils_from_dofs) and evaluates loss_coil_length.
+
+    x : flat array of curve Fourier coefficients followed by currents.
+    dofs_curves, currents_scale, nfp, n_segments, stellsym : geometry metadata
+        needed to reconstruct the Coils from x.
+    max_coil_length : length above this value is penalized.
+    """
     coils = coils_from_dofs(x, dofs_curves, currents_scale, nfp, n_segments, stellsym)
     return loss_coil_length(coils, max_coil_length)
 
 
-# Constraint-form alias used by augmented-Lagrangian examples.
-# Same signature/behaviour as loss_particle_r_cross_max; the violation
-# vector it returns IS the constraint value.
+# loss_particle_r_cross_max already returns the per-particle constraint
+# violation, which is exactly what the augmented-Lagrangian examples expect from
+# a "_constraint" loss, so this name is an alias for it.
 loss_particle_r_cross_max_constraint = loss_particle_r_cross_max
