@@ -519,7 +519,13 @@ class Tracing():
         self.species=species
         self.tag_gc=tag_gc
         self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
-        # Optional override of the default solver (defaults preserve previous behaviour).
+        # Diffrax solver to use for the adaptive integrators. If left as None,
+        # each integrator falls back to its previous default (Dopri8), so
+        # existing call sites are unaffected. Selecting the solver here (rather
+        # than hard-coding it) lets the integrator-comparison examples sweep
+        # several solvers. The fallback is a plain Python branch on this
+        # attribute, so it is resolved at trace time and does not affect
+        # differentiability of the traced trajectories.
         self.solver = solver
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
