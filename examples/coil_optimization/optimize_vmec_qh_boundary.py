@@ -3,11 +3,13 @@ import sys
 from pathlib import Path
 from time import time
 
+import jax
 import jax.numpy as jnp
 from matplotlib import cm, colors
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import least_squares
+from jax.flatten_util import ravel_pytree
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -23,6 +25,7 @@ from vmec_jax.config import config_from_indata
 from vmec_jax.namelist import read_indata
 from vmec_jax.optimization import extend_boundary_for_max_mode, smooth_min_abs_iota_residual
 from vmec_jax.plotting import bmag_from_state_physical, surface_rz_from_state_physical
+from vmec_jax.quasisymmetry import quasisymmetry_ratio_residual_from_state
 from vmec_jax.static import build_static
 
 
@@ -74,6 +77,7 @@ vmec = VmecJAXBoundary(
     max_iter=25,
     vmec_project=True,
     verbose=False,
+    scaling_type=jnp.inf,
     scaling_factor=VMEC_SCALING_FACTOR,
 )
 vmec.with_mode_selection(
@@ -285,6 +289,7 @@ def qs_objective_sumsq(vmec):
 
 L_total = custom_loss(loss_total, "vmec")
 L_total.dependencies = {"vmec": vmec}
+starting_dofs, _dofs_to_tree = ravel_pytree({"vmec": vmec})
 
 
 print(f"Using VMEC input: {INPUT_FILE}")
@@ -303,33 +308,107 @@ print(vmec.parameter_summary())
 
 vmec.reset_solve_counter()
 t_start = time()
-r0_jax, g0_jax = L_total.value_and_grad(L_total.starting_dofs)
-r0 = float(r0_jax)
-g0 = np.asarray(g0_jax, dtype=float)
+def _residual_vector_from_vmec(vmec_obj, surfaces=OPT_SURFACES, M=HELICITY_M, N=HELICITY_N):
+    state = vmec_obj.state
+    parts = []
+
+    aspect = jnp.nan_to_num(
+        vmec_obj.aspect_ratio_from_state(state),
+        nan=1.0e6,
+        posinf=1.0e6,
+        neginf=-1.0e6,
+    )
+    parts.append(jnp.asarray([jnp.sqrt(ASPECT_WEIGHT) * (aspect - TARGET_ASPECT)], dtype=jnp.float64))
+
+    qs = quasisymmetry_ratio_residual_from_state(
+        state=state,
+        static=vmec_obj.static,
+        indata=vmec_obj.indata,
+        signgs=int(vmec_obj.signgs),
+        surfaces=surfaces,
+        helicity_m=int(M),
+        helicity_n=int(N),
+        ntheta=int(OPT_QS_NTHETA),
+        nphi=int(OPT_QS_NPHI),
+        flux_local=vmec_obj.flux,
+        pressure_local=vmec_obj.pressure,
+    )
+    qs_residual = jnp.nan_to_num(
+        jnp.asarray(qs["residuals1d"], dtype=jnp.float64),
+        nan=1.0e6,
+        posinf=1.0e6,
+        neginf=1.0e6,
+    )
+    nsurf = int(np.asarray(surfaces).size)
+    qs_residual_2d = jnp.reshape(qs_residual, (nsurf, int(OPT_QS_NTHETA) * int(OPT_QS_NPHI)))
+    qs_surface_residual = jnp.sqrt(jnp.sum(qs_residual_2d**2, axis=1) + 1.0e-32)
+    parts.append(jnp.sqrt(QS_WEIGHT) * qs_surface_residual)
+
+    if USE_IOTA_FLOOR:
+        mean_abs_iota = jnp.nan_to_num(vmec_obj.mean_abs_iota_from_state(state), nan=0.0)
+        iota_residual = smooth_min_abs_iota_residual(
+            mean_abs_iota,
+            TARGET_ABS_MEAN_IOTA_MIN,
+            softness=1.0e-3,
+        )
+        parts.append(jnp.asarray([jnp.sqrt(IOTA_WEIGHT) * iota_residual], dtype=jnp.float64))
+
+    return jnp.concatenate(parts)
+
+
+def _residual_vector(dofs):
+    vmec_obj = _dofs_to_tree(jnp.asarray(dofs, dtype=jnp.float64))["vmec"]
+    return _residual_vector_from_vmec(vmec_obj)
+
+
+_lsq_cache = {"x": None, "residual": None, "jac": None}
+
+
+def _residual_and_jacobian(dofs):
+    x = np.asarray(dofs, dtype=float)
+    cached_x = _lsq_cache["x"]
+    if cached_x is not None and np.array_equal(x, cached_x):
+        return _lsq_cache["residual"], _lsq_cache["jac"]
+
+    x_jax = jnp.asarray(x, dtype=jnp.float64)
+    residual = np.asarray(_residual_vector(x_jax), dtype=float)
+    jac = np.asarray(jax.jacrev(_residual_vector)(x_jax), dtype=float)
+    _lsq_cache["x"] = x.copy()
+    _lsq_cache["residual"] = residual
+    _lsq_cache["jac"] = jac
+    return residual, jac
+
+
+def _lsq_residual(dofs):
+    return _residual_and_jacobian(dofs)[0]
+
+
+def _lsq_jacobian(dofs):
+    return _residual_and_jacobian(dofs)[1]
+
+
+r0_vec, J0 = _residual_and_jacobian(starting_dofs)
+r0 = float(L_total(starting_dofs))
+g0 = J0.T @ r0_vec
 solves_after_initial_value_grad = vmec.get_solve_counter()
 print("Initial gradient norm:", float(np.linalg.norm(g0)))
 print("Initial gradient:", g0)
 
-def _objective_and_grad(dofs):
-    value, grad = L_total.value_and_grad(jnp.asarray(dofs))
-    return float(value), np.asarray(grad, dtype=float)
-
-res = minimize(
-    _objective_and_grad,
-    np.asarray(L_total.starting_dofs, dtype=float),
-    jac=True,
-    method="BFGS",
-    options={
-        "disp": True,
-        "gtol": GTOL,
-        "maxiter": None if jnp.isinf(MAX_NFEV) else int(MAX_NFEV),
-    },
+res = least_squares(
+    _lsq_residual,
+    np.asarray(starting_dofs, dtype=float),
+    jac=_lsq_jacobian,
+    verbose=2,
+    ftol=FTOL,
+    gtol=GTOL,
+    xtol=XTOL,
+    max_nfev=None if jnp.isinf(MAX_NFEV) else int(MAX_NFEV),
 )
 t_end = time()
 total_solves_after_opt = vmec.get_solve_counter()
 
 opt_x = jnp.asarray(res.x)
-opt_vmec = L_total.dofs_to_pytree(opt_x)["vmec"]
+opt_vmec = _dofs_to_tree(opt_x)["vmec"]
 r1 = float(L_total(opt_x))
 total_solves_after_final_eval = vmec.get_solve_counter()
 
