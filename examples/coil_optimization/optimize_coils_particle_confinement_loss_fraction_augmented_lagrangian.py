@@ -57,7 +57,7 @@ currents_scale = coils_initial.currents_scale
 ntheta=30
 nphi=30
 input = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'input.toroidal_surface')
-surface= SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='full torus')
+surface= SurfaceRZFourier.from_input_file(input, ntheta=ntheta, nphi=nphi, range_torus='full torus')
 timeI=time()
 boundary=SurfaceClassifier(surface,h=0.1)
 print(f"ESSOS boundary took {time()-timeI:.2f} seconds")
