@@ -27,7 +27,8 @@ def copy_coils_from_field(field):
 
 def perturbed_field_from_field(field, key, sampler):
     coils = copy_coils_from_field(field)
-    split_keys = jax.random.split(key, 2)
+    base_key = jax.random.key(key)
+    split_keys = jax.random.split(base_key, 2)
     perturb_curves_systematic(coils, sampler, key=split_keys[0])
     coils = perturb_curves_statistic(coils, sampler, key=split_keys[1])
     return BiotSavart(coils)
@@ -93,7 +94,7 @@ LENGTH_SCALE = 0.4 * jnp.pi
 N_DERIVS = 2
 N_samples = 10
 sampler = GaussianSampler(coils_initial.curves.quadpoints, sigma=SIGMA, length_scale=LENGTH_SCALE, n_derivs=N_DERIVS)
-stochastic_keys = jax.random.split(jax.random.PRNGKey(0), N_samples)
+stochastic_keys = jnp.arange(N_samples)
 
 """ Defining custom losses """
 L_normal_field = custom_loss(loss_bdotn_stochastic, "field", surface=surface, sampler=sampler, keys=stochastic_keys)
