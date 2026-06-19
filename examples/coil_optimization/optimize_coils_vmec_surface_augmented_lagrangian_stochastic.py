@@ -71,7 +71,7 @@ N_COILS = 4
 NTHETA = 32
 NPHI = 32
 
-input_filepath = os.path.join(os.path.dirname(__file__), "input_files")
+input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_input = os.path.join(input_filepath, "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 
 """ Creating starting coils and surface """
