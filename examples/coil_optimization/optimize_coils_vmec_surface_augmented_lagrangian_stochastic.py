@@ -142,17 +142,12 @@ lagrange_params = C_total_constraint.init(field_initial.dofs)
 params = field_initial.dofs, lagrange_params
 lag_state, grad, info = ALM.init(params)
 
-# Initializing first tolerances for the inner minimisation loop iteration
-mu_average = alm.penalty_average(lagrange_params)
-omega = 1.0 / mu_average
-eta = 1.0 / mu_average**0.1
-
 print(f"Optimizing coils with {maximum_function_evaluations} function evaluations using stochastic ALM.")
 time0 = time()
 
 i = 0
 while i <= maximum_function_evaluations and (jnp.linalg.norm(grad[0]) > omega_tol or alm.norm_constraints(info[2]) > eta_tol):
-    params, lag_state, grad, info, eta, omega = ALM.update(params, lag_state, grad, info, eta, omega)
+    params, lag_state, grad, info = ALM.update(params, lag_state, grad, info)
     print(f"i: {i}, loss f: {info[0]:g}, loss L: {info[1]:g}, " f"infeasibility: {alm.total_infeasibility(info[2]):g}")
     i += 1
 
