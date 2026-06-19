@@ -23,7 +23,7 @@ nphi=30
 mpol=2
 ntor=2
 input = os.path.join(os.path.dirname(__file__), '..', 'input_files','input.rotating_ellipse')
-surface_initial = SurfaceRZFourier(input, ntheta=ntheta, nphi=nphi, range_torus='half period', mpol=mpol, ntor=ntor)
+surface_initial = SurfaceRZFourier.from_input_file(input, ntheta=ntheta, nphi=nphi, range_torus='half period')
 
 # Optimization parameters
 max_coil_length = 38

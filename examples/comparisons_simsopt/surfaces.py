@@ -43,7 +43,7 @@ curves_essos = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_pe
                                    nfp=number_of_field_periods, stellsym=True)
 coils_essos = Coils(curves=curves_essos, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 field_essos = BiotSavart(coils_essos)
-surface_essos = SurfaceRZFourier_ESSOS(vmec, ntheta=ntheta, nphi=nphi, close=False)
+surface_essos = SurfaceRZFourier_ESSOS.from_vmec(vmec, ntheta=ntheta, nphi=nphi, close=False)
 # surface_essos.to_vtk("essos_surface")
 
 coils_simsopt = coils_essos.to_simsopt()

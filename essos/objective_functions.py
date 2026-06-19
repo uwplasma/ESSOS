@@ -350,12 +350,11 @@ def loss_bdotn_over_b(x, vmec, dofs_curves, currents_scale, nfp, n_segments=60, 
 
 
 @partial(jit, static_argnums=(1, 4, 5, 6, 7))
-def loss_BdotN(x, vmec=None, dofs_curves=None, currents_scale=None, nfp=None, max_coil_length=42,
-               n_segments=60, stellsym=True, max_coil_curvature=0.1, surface=None):
+def loss_BdotN(x, vmec, dofs_curves, currents_scale, nfp, max_coil_length=42,
+               n_segments=60, stellsym=True, max_coil_curvature=0.1):
     field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    
-    # Accept either a vmec (use vmec.surface) or an explicit surface
-    bdotn_over_b = BdotN_over_B(surface if surface is not None else vmec.surface, field)
+
+    bdotn_over_b = BdotN_over_B(vmec.surface, field)
     bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
 
     coil_length_loss    = jnp.maximum(0, jnp.max(field.coils.length-max_coil_length))
