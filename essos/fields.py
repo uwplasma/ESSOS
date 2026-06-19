@@ -1010,14 +1010,14 @@ class DipoleField:
         self.dipole_moments = scaled_moments
         
         self.dipole_positions_full, self.dipole_moments_full = self._apply_symmetries(
-            dipole_positions, scaled_moments, stellsym, nfp, coordinate_flag)
+            dipole_positions, scaled_moments, stellsym, coordinate_flag)
         self.n_dipoles = self.dipole_positions.shape[0]
         self._last_field = None
         self._last_eval_points = None
         self._compute_field = jit(vmap(
             lambda x: jnp.sum(vmap(
                 lambda pos, mom: self._compute_single_dipole_field(x, pos, mom),
-                in_axes=(0, 0))(self.dipole_positions, self.dipole_moments), axis=0),
+                in_axes=(0, 0))(self.dipole_positions_full, self.dipole_moments_full), axis=0),
             in_axes=0))
 
         # Precompute interaction matrix G if surface points are provided.
@@ -1047,7 +1047,7 @@ class DipoleField:
         B = (3 * jnp.dot(mom, r_hat) / r_mag**3 * r_hat - mom / r_mag**3) * mu0_over_4pi
         return B
 
-    def compute_interaction_matrix(surf_pts, surf_n, stellsym=True):
+    def compute_interaction_matrix(self,surf_pts, surf_n, stellsym=True):
         """
         Build G (n_surf, n_mag) summing contributions from all symmetric copies.
         Uses pmap for fast parallel computation.
@@ -1086,7 +1086,7 @@ class DipoleField:
                 dot_mn = jnp.sum(M_vec * N, axis=2, keepdims=True)
                 term1  = 3.0 * dot_mr * dot_rn / (R_mag**5 + 1e-30)
                 term2  = -dot_mn / (R_mag**3 + 1e-30)
-                return jnp.squeeze((term1 + term2) * MU0_4PI, axis=2)
+                return jnp.squeeze((term1 + term2) * 1e-7, axis=2)
         
             pts_d = jax.device_put_sharded(list(pts_s), jax.local_devices())
             n_d   = jax.device_put_sharded(list(n_s),   jax.local_devices())
@@ -1116,7 +1116,6 @@ class DipoleField:
         return G
 
 
-        
 
     @partial(jit, static_argnames=['self'])
     def B(self, eval_points, chunk_size=512):
@@ -1176,7 +1175,7 @@ class DipoleField:
         self.dipole_moments = self.dipole_moments.at[dipole_idx].set(new_moment)
         return updated_field
     
-    def _apply_symmetries(self, positions, moments, stellsym=False, nfp=1, coordinate_flag='cartesian'):
+    def _apply_symmetries(self, positions, moments, stellsym=False, coordinate_flag='cartesian'):
         """Apply stellarator symmetries to positions and moments."""
         step = 1
         pos = positions[::step]
@@ -1191,8 +1190,8 @@ class DipoleField:
         for stell in stell_list:
             pos_stell = pos * jnp.array([1.0, stell, stell])
             mom_stell = mom * jnp.array([stell, 1.0, 1.0]) if stellsym else mom
-            for i in range(nfp):
-                angle = 2 * jnp.pi * i / nfp
+            for i in range(self.nfp):
+                angle = 2 * jnp.pi * i / self.nfp
                 R = jnp.array([[jnp.cos(angle), -jnp.sin(angle), 0.0],
                                [jnp.sin(angle), jnp.cos(angle), 0.0],
                                [0.0, 0.0, 1.0]])
