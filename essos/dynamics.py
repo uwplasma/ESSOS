@@ -1061,7 +1061,8 @@ class Tracing():
     def _tree_flatten(self):
         children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
         aux_data = {'field': self.field, 'electric_field': self.electric_field, 'model': self.model, 'maxtime': self.maxtime, 'timestep': self.timestep,
-                    'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc}  # static values
+                    'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc,
+                    'solver': self.solver}  # static values
         return (children, aux_data)
 
     @classmethod
