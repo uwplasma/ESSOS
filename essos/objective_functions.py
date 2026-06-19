@@ -166,7 +166,7 @@ def loss_particle_Br(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=3
 
 def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None,target_iota=0.41):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=1.e-8,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary,target)
+                      timestep=1.e-8,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
     R_axis=tracing.field.r_axis
     Z_axis=tracing.field.z_axis

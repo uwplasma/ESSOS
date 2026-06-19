@@ -179,7 +179,7 @@ while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or
 t_end = time()
 
 
-opt_field_alm = L_normal_field_constraint.dofs_to_pytree(params[0])[0]
+opt_field_alm = C_normal_field_constraint.dofs_to_pytree(params[0])[0]
 opt_coils_alm = opt_field_alm.coils
 
 

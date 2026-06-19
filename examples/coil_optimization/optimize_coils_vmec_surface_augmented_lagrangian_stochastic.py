@@ -1,178 +1,188 @@
 import os
-number_of_processors_to_use = 8 # Parallelization, this should divide ntheta*nphi
-os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
+
+number_of_processors_to_use = 8  # Parallelization, this should divide ntheta*nphi
+os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={number_of_processors_to_use}"
+
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from essos.surfaces import BdotN_over_B
-from essos.coils import Coils, CreateEquallySpacedCurves,Curves
-from essos.fields import Vmec, BiotSavart
-from essos.objective_functions import loss_BdotN_only_constraint_stochastic,loss_coil_curvature_new,loss_coil_length_new,loss_BdotN_only_stochastic
-from essos.objective_functions import loss_coil_curvature,loss_coil_length
-from essos.coil_perturbation import GaussianSampler
 
 import essos.augmented_lagrangian as alm
-from functools import partial
+from essos.coil_perturbation import (
+    GaussianSampler,
+    perturb_curves_statistic,
+    perturb_curves_systematic,
+)
+from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.fields import BiotSavart, Vmec
+from essos.losses import custom_loss
+from essos.surfaces import BdotN_over_B
+
+
+""" Creating stochastic field losses """
+def copy_coils_from_field(field):
+    return field.coils.copy()
+
+
+def perturbed_field_from_field(field, key, sampler):
+    coils = copy_coils_from_field(field)
+    split_keys = jax.random.split(key, 2)
+    perturb_curves_systematic(coils, sampler, key=split_keys[0])
+    coils = perturb_curves_statistic(coils, sampler, key=split_keys[1])
+    return BiotSavart(coils)
+
+
+def loss_bdotn_stochastic(field, surface, sampler, keys):
+    def perturbed_loss(key):
+        perturbed_field = perturbed_field_from_field(field, key, sampler)
+        bdotn_over_b = BdotN_over_B(surface, perturbed_field)
+        return jnp.sum(jnp.abs(bdotn_over_b))
+
+    return jnp.mean(jax.vmap(perturbed_loss)(keys))
+
+
+def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6):
+    def perturbed_square(key):
+        perturbed_field = perturbed_field_from_field(field, key, sampler)
+        return jnp.square(BdotN_over_B(surface, perturbed_field))
+
+    expected_square = jnp.mean(jax.vmap(perturbed_square)(keys), axis=0)
+    return jnp.sqrt(jnp.sum(jnp.maximum(expected_square - target_tol, 0.0)))
+
+
+def loss_length_constraint(field, max_coil_length):
+    return jnp.maximum(0.0, field.coils.length - max_coil_length)
+
+
+def loss_curvature_constraint(field, max_coil_curvature):
+    return jnp.maximum(0.0, field.coils.curvature - max_coil_curvature)
+
 
 # Optimization parameters
-maximum_function_evaluations=10
-max_coil_length = 40
-max_coil_curvature = 0.5
-bdotn_tol=1.e-6
-order_Fourier_series_coils = 6
-number_coil_points = order_Fourier_series_coils*10
-number_coils_per_half_field_period = 4
-ntheta=32
-nphi=32
+maximum_function_evaluations = 10
 
+MAX_COIL_LENGTH = 40.0
+MAX_COIL_CURVATURE = 0.5
+BDOTN_TARGET_TOL = 1.0e-6
+FOURIER_ORDER = 6
+N_SEGMENTS = FOURIER_ORDER * 10
+N_COILS = 4
+NTHETA = 32
+NPHI = 32
 
+input_filepath = os.path.join(os.path.dirname(__file__), "input_files")
+vmec_input = os.path.join(input_filepath, "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 
+""" Creating starting coils and surface """
+vmec = Vmec(vmec_input, ntheta=NTHETA, nphi=NPHI, range_torus="full torus")
+surface = vmec.surface
 
-
-# Initialize VMEC field
-vmec = Vmec(os.path.join(os.path.dirname(__name__), 'input_files',
-             'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
-            ntheta=ntheta, nphi=nphi, range_torus='full torus')
-
-# Initialize coils
-current_on_each_coil = 1
+COIL_CURRENT = 1.0
 number_of_field_periods = vmec.nfp
 major_radius_coils = vmec.r_axis
-minor_radius_coils = vmec.r_axis/1.5
-curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
-                                   order=order_Fourier_series_coils,
-                                   R=major_radius_coils, r=minor_radius_coils,
-                                   n_segments=number_coil_points,
-                                   nfp=number_of_field_periods, stellsym=True)
-coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
+minor_radius_coils = vmec.r_axis / 1.5
+curves = CreateEquallySpacedCurves(n_curves=N_COILS,order=FOURIER_ORDER, R=major_radius_coils,
+                                   r=minor_radius_coils,n_segments=N_SEGMENTS,  nfp=number_of_field_periods,stellsym=True)
+coils_initial = Coils(curves=curves,currents=[COIL_CURRENT] * N_COILS)
+field_initial = BiotSavart(coils_initial)
 
-len_dofs_curves = len(jnp.ravel(coils_initial.dofs_curves))
-nfp = coils_initial.nfp
-stellsym = coils_initial.stellsym
-n_segments = coils_initial.n_segments
-dofs_curves = coils_initial.dofs_curves
-currents_scale = coils_initial.currents_scale
-dofs_curves_shape = coils_initial.dofs_curves.shape
+""" Setting the stochastic sampling parameters """
+SIGMA = 0.01
+LENGTH_SCALE = 0.4 * jnp.pi
+N_DERIVS = 2
+N_samples = 10
+sampler = GaussianSampler(coils_initial.curves.quadpoints, sigma=SIGMA, length_scale=LENGTH_SCALE, n_derivs=N_DERIVS)
+stochastic_keys = jax.random.split(jax.random.PRNGKey(0), N_samples)
 
+""" Defining custom losses """
+L_normal_field = custom_loss(loss_bdotn_stochastic, "field", surface=surface, sampler=sampler, keys=stochastic_keys)
+L_normal_field_constraint = custom_loss(constraint_bdotn_stochastic, "field", surface=surface, sampler=sampler, keys=stochastic_keys, target_tol=BDOTN_TARGET_TOL)
+L_length_constraint = custom_loss(loss_length_constraint, "field", max_coil_length=MAX_COIL_LENGTH)
+L_curvature_constraint = custom_loss(loss_curvature_constraint, "field", max_coil_curvature=MAX_COIL_CURVATURE)
 
+""" Defining total loss + setting dependencies """
+L_normal_field.dependencies = {"field": field_initial}
+L_normal_field_constraint.dependencies = {"field": field_initial}
+L_length_constraint.dependencies = {"field": field_initial}
+L_curvature_constraint.dependencies = {"field": field_initial}
 
-#Sampling parameters
-sigma=0.01
-length_scale=0.4*jnp.pi
-n_derivs=2
-N_samples=10  #Number of samples for the stochastic perturbation
-#Create a Gaussian sampler for perturbation
-#This sampler will be used to perturb the coils
-sampler=GaussianSampler(coils_initial.quadpoints,sigma=sigma,length_scale=length_scale,n_derivs=n_derivs)
+""" Creating the constraints """
+penalty = 0.1
+multiplier = 0.5
+sq_grad = 0.0
+model_lagrangian = "Standard"
 
+beta = 2.0
+mu_max = 1.0e4
+alpha = 0.99
+gamma = 1.0e-2
+epsilon = 1.0e-8
+omega_tol = 1.0e-7
+eta_tol = 1.0e-7
 
+normal_field_constraint = alm.eq(constraint_bdotn_stochastic, model_lagrangian=model_lagrangian, multiplier=multiplier, penalty=penalty, sq_grad=sq_grad)
+length_constraint = alm.eq(loss_length_constraint, model_lagrangian=model_lagrangian, multiplier=multiplier, penalty=penalty, sq_grad=sq_grad)
+curvature_constraint = alm.eq(loss_curvature_constraint, model_lagrangian=model_lagrangian, multiplier=multiplier, penalty=penalty, sq_grad=sq_grad)
 
+C_normal_field_constraint = alm.SelectiveConstraint(normal_field_constraint, "field", surface=surface, sampler=sampler, keys=stochastic_keys, target_tol=BDOTN_TARGET_TOL)
+C_length_constraint = alm.SelectiveConstraint(length_constraint, "field", max_coil_length=MAX_COIL_LENGTH)
+C_curvature_constraint = alm.SelectiveConstraint(curvature_constraint, "field", max_coil_curvature=MAX_COIL_CURVATURE)
+C_total_constraint = alm.combine(C_normal_field_constraint, C_length_constraint, C_curvature_constraint)
 
-# Create the constraints
-penalty = 0.1 #Intial penalty values
-multiplier=0.5 #Initial lagrange multiplier values
-sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
-model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers 
-#Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
+C_normal_field_constraint.dependencies = {"field": field_initial}
+C_length_constraint.dependencies = {"field": field_initial}
+C_curvature_constraint.dependencies = {"field": field_initial}
+C_total_constraint.dependencies = {"field": field_initial}
 
+ALM = alm.ALM_model_jaxopt_lbfgsb(constraints=C_total_constraint, model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max, alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol)
 
-curvature_partial=partial(loss_coil_curvature, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_curvature=max_coil_curvature)
-length_partial=partial(loss_coil_length, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym,max_coil_length=max_coil_length)
-bdotn_partial=partial(loss_BdotN_only_constraint_stochastic,sampler=sampler,N_samples=N_samples, vmec=vmec, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym,target_tol=bdotn_tol)
-bdotn_only_partial=partial(loss_BdotN_only_stochastic,sampler=sampler,N_samples=N_samples, vmec=vmec, dofs_curves=coils_initial.dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym)
+""" Optimizing with alm """
+lagrange_params = C_total_constraint.init(field_initial.dofs)
+params = field_initial.dofs, lagrange_params
+lag_state, grad, info = ALM.init(params)
 
-#Construct constraints
-constraints = alm.combine(
-alm.eq(curvature_partial,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-alm.eq(length_partial,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad),
-alm.eq(bdotn_partial,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,sq_grad=sq_grad)
-)
+# Initializing first tolerances for the inner minimisation loop iteration
+mu_average = alm.penalty_average(lagrange_params)
+omega = 1.0 / mu_average
+eta = 1.0 / mu_average**0.1
 
-
-
-beta=2.                                     #penalty update parameter
-mu_max=1.e4                                #Maximum penalty parameter allowed
-alpha=0.99                                  #These are parameters only used if gradient descent and adaaptative mu
-gamma=1.e-2
-epsilon=1.e-8
-omega_tol=1.e-7    #desired grad_tolerance, associated with grad of lagrangian to main parameters
-eta_tol=1.e-7    #desired contraint tolerance, associated with variation of contraints
-
-
-
-#If loss=cost_function(x) is not prescribed, f(x)=0 is considered
-ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-
-#Initializing lagrange multipliers
-lagrange_params=constraints.init(coils_initial.x)
-#parameters are a tuple of the primal/main optimisation parameters and the lagrange multipliers
-params = coils_initial.x, lagrange_params
-#This is just to initialize an empty state for the lagrange multiplier update and get some information
-lag_state,grad,info=ALM.init(params)
-
-#Initializing first tolerances for the inner minimisation loop iteration
-mu_average=alm.penalty_average(lagrange_params)
-omega=1./mu_average
-eta=1./mu_average**0.1
-
-
-
-
-# Optimize coils
-print(f'Optimizing coils with {maximum_function_evaluations} function evaluations using stochastic and ALM.')
+print(f"Optimizing coils with {maximum_function_evaluations} function evaluations using stochastic ALM.")
 time0 = time()
 
+i = 0
+while i <= maximum_function_evaluations and (jnp.linalg.norm(grad[0]) > omega_tol or alm.norm_constraints(info[2]) > eta_tol):
+    params, lag_state, grad, info, eta, omega = ALM.update(params, lag_state, grad, info, eta, omega)
+    print(f"i: {i}, loss f: {info[0]:g}, loss L: {info[1]:g}, " f"infeasibility: {alm.total_infeasibility(info[2]):g}")
+    i += 1
 
-i=0
-while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
-    #One step of ALM optimization
-    params, lag_state,grad,info,eta,omega = ALM.update(params,lag_state,grad,info,eta,omega)    
-    #if i % 5 == 0:
-    #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
-    print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')
-    #print('lagrange',params[1])
-    i=i+1
+field_optimized = C_normal_field_constraint.dofs_to_pytree(params[0])[0]
+coils_optimized = field_optimized.coils
 
+print(f"Stochastic optimization with ALM took {time() - time0:.2f} seconds")
 
+BdotN_over_B_initial = BdotN_over_B(surface, field_initial)
+BdotN_over_B_optimized = BdotN_over_B(surface, field_optimized)
+curvature = jnp.mean(field_optimized.coils.curvature, axis=1)
+length = jnp.max(jnp.ravel(field_optimized.coils.length))
+stochastic_loss_initial = L_normal_field(L_normal_field.starting_dofs)
+stochastic_loss_final = L_normal_field(params[0])
 
-dofs_curves = jnp.reshape(params[0][:len_dofs_curves], (dofs_curves_shape))
-dofs_currents = params[0][len_dofs_curves:]
-curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-coils_optimized = Coils(curves=curves, currents=dofs_currents*coils_initial.currents_scale)
-
-print(f"Stochastic optimization with ALM took {time()-time0:.2f} seconds")
-
-
-BdotN_over_B_initial = BdotN_over_B(vmec.surface, BiotSavart(coils_initial))
-BdotN_over_B_optimized = BdotN_over_B(vmec.surface, BiotSavart(coils_optimized))
-curvature=jnp.mean(BiotSavart(coils_optimized).coils.curvature, axis=1)
-length=jnp.max(jnp.ravel(BiotSavart(coils_optimized).coils.length))
-print(f"Mean curvature: ",curvature)
-print(f"Length:", length)
+print("Mean curvature:", curvature)
+print("Length:", length)
+print(f"Stochastic |BdotN/B| loss before optimization: {stochastic_loss_initial:.2e}")
+print(f"Stochastic |BdotN/B| loss after optimization: {stochastic_loss_final:.2e}")
 print(f"Maximum BdotN/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
 print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
-print(f"Average BdotN/B before optimization: {jnp.average(jnp.absolute(BdotN_over_B_initial)):.2e}")
-print(f"Average BdotN/B after optimization: {jnp.average(jnp.absolute(BdotN_over_B_optimized)):.2e}")
-# Plot coils, before and after optimization
+print(f"Average BdotN/B before optimization: {jnp.average(jnp.abs(BdotN_over_B_initial)):.2e}")
+print(f"Average BdotN/B after optimization: {jnp.average(jnp.abs(BdotN_over_B_optimized)):.2e}")
+
 fig = plt.figure(figsize=(8, 4))
-ax1 = fig.add_subplot(121, projection='3d')
-ax2 = fig.add_subplot(122, projection='3d')
+ax1 = fig.add_subplot(121, projection="3d")
+ax2 = fig.add_subplot(122, projection="3d")
 coils_initial.plot(ax=ax1, show=False)
-vmec.surface.plot(ax=ax1, show=False)
+surface.plot(ax=ax1, show=False)
 coils_optimized.plot(ax=ax2, show=False)
-vmec.surface.plot(ax=ax2, show=False)
+surface.plot(ax=ax2, show=False)
 plt.tight_layout()
 plt.show()
-
-# # Save the coils to a json file
-# coils_optimized.to_json("stellarator_coils.json")
-# # Load the coils from a json file
-# from essos.coils import Coils_from_json
-# coils = Coils_from_json("stellarator_coils.json")
-
-# # Save results in vtk format to analyze in Paraview
-# from essos.fields import BiotSavart
-# vmec.surface.to_vtk('surface_initial', field=BiotSavart(coils_initial))
-# vmec.surface.to_vtk('surface_final',   field=BiotSavart(coils_optimized))
-# coils_initial.to_vtk('coils_initial')
-# coils_optimized.to_vtk('coils_optimized')
