@@ -53,11 +53,12 @@ def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6
 
 
 def loss_length_constraint(field, max_coil_length):
-    return jnp.maximum(0.0, field.coils.length - max_coil_length)
+    return jnp.square(field.coils.length / max_coil_length - 1.0)
 
 
 def loss_curvature_constraint(field, max_coil_curvature):
-    return jnp.maximum(0.0, field.coils.curvature - max_coil_curvature)
+    pointwise_curvature_loss = jnp.square(jnp.maximum(field.coils.curvature - max_coil_curvature, 0.0))
+    return jnp.mean(pointwise_curvature_loss * jnp.linalg.norm(field.coils.gamma_dash, axis=-1), axis=1)
 
 
 # Optimization parameters
