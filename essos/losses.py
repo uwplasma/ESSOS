@@ -29,7 +29,7 @@ class base_loss:
     @property
     def dependencies_buffer(self):
         if self._dependencies_buffer is None:
-            self._dependencies_buffer = tree_util.tree_map(lambda x: jnp.zeros_like(x), self.dependencies)
+            self._dependencies_buffer = tree_util.tree_map(jnp.zeros_like, self.dependencies)
         return self._dependencies_buffer
 
     def __add__(self, other):
