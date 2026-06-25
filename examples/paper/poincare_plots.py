@@ -59,7 +59,7 @@ particles = Particles(initial_xyz=initial_xyz_particles, mass=mass, energy=energ
 
 time0 = time()
 tracing_fo = Tracing(field=field, model='FullOrbit', particles=particles, maxtime=tmax_fo,
-                     timesteps=timesteps_fo, tol_step_size=trace_tolerance)
+                     timestep=dt_fo, atol=trace_tolerance, rtol=trace_tolerance)
 # tracing_fo.trajectories = tracing_fo.trajectories[:, 0::100, :]
 # tracing_fo.times = tracing_fo.times[0::100]
 # tracing_fo.energy = tracing_fo.energy[:, 0::100]
@@ -68,7 +68,7 @@ print(f"ESSOS tracing of {nparticles} particles with FO for {tmax_fo:.1e}s took 
 
 time0 = time()
 tracing_gc = Tracing(field=field, model='GuidingCenter', particles=particles, maxtime=tmax_gc,
-                     timesteps=timesteps_gc, tol_step_size=trace_tolerance)
+                     timestep=dt_gc, atol=trace_tolerance, rtol=trace_tolerance)
 block_until_ready(tracing_gc)
 print(f"ESSOS tracing of {nparticles} particles with GC for {tmax_gc:.1e}s took {time()-time0:.2f} seconds")
 

@@ -1,6 +1,6 @@
 import os
 from functools import partial
-number_of_processors_to_use = 8 # Parallelization, this should divide ntheta*nphi
+number_of_processors_to_use = 2 # Parallelization: must divide ntheta*nphi (50 here)
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 from jax import jit, grad, block_until_ready
@@ -27,7 +27,7 @@ ntheta=32
 nphi=32
 
 # Initialize VMEC field
-vmec = Vmec(os.path.join(os.path.dirname(__file__), '../examples/input_files',
+vmec = Vmec(os.path.join(os.path.dirname(__file__), '../input_files',
             'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
             ntheta=ntheta, nphi=nphi, range_torus='half period')
 

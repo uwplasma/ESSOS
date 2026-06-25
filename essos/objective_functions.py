@@ -31,8 +31,8 @@ def perturbed_coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_seg
     #Split once the key/seed given for one pertubred stellarator
     split_keys = jax.random.split(jax.random.key(key), 2)
     #Internally the following functions will then further split the two keys avoiding repeating keys
-    perturb_curves_systematic(coils, sampler, key=split_keys[0])
-    perturb_curves_statistic(coils, sampler, key=split_keys[1])
+    perturb_curves_systematic(coils.curves, sampler, key=split_keys[0])
+    perturb_curves_statistic(coils.curves, sampler, key=split_keys[1])
     return coils
 
 ########################## NEAR-AXIS FIELD LOSSES ##########################
@@ -212,12 +212,17 @@ def loss_bdotn_over_b(x, vmec, dofs_curves, currents_scale, nfp, n_segments=60, 
     return jnp.sum(jnp.abs(BdotN_over_B(vmec.surface, field)))
 
 
-@partial(jit, static_argnums=(1, 4, 5, 6, 7))
-def loss_BdotN(x, vmec, dofs_curves, currents_scale, nfp, max_coil_length=42,
-               n_segments=60, stellsym=True, max_coil_curvature=0.1):
+@partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
+def loss_BdotN(x, vmec=None, dofs_curves=None, currents_scale=None, nfp=None, max_coil_length=42,
+               n_segments=60, stellsym=True, max_coil_curvature=0.1, surface=None):
+    # Normal-field penalty against a target boundary. Provide the boundary as
+    # either a Vmec (vmec=, uses vmec.surface) or a SurfaceRZFourier (surface=).
+    assert (vmec is not None) ^ (surface is not None), "Provide exactly one of vmec= or surface=."
+    target_surface = surface if surface is not None else vmec.surface
+
     field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    
-    bdotn_over_b = BdotN_over_B(vmec.surface, field)
+
+    bdotn_over_b = BdotN_over_B(target_surface, field)
     bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
 
     coil_length_loss    = jnp.maximum(0, jnp.max(field.coils.length-max_coil_length))

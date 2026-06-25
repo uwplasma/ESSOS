@@ -34,51 +34,47 @@ particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, initial
 
 # Tracing parameters
 tmax = 1e-4
-dt = 1e-9
-num_steps = int(tmax/dt)
 
 fig, ax = plt.subplots(figsize=(9, 6))
 
-method_names = ['Boris']  # Only Boris is supported with current Tracing API
-for method_name in method_names:
-    if method_name == 'Boris':
-        model = 'FullOrbit_Boris'
-    else:
-        model = 'FullOrbit'
-    
-    # Adaptive tolerance tests (only for Boris which has adaptive support)
-    if method_name == 'Boris':
-        energies = []
-        tracing_times = []
-        for trace_tolerance in [1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15]:
-            time0 = time()
-            tracing = Tracing(field=field, model=model, particles=particles,
-                              maxtime=tmax, times_to_trace=num_steps,
-                              rtol=trace_tolerance, atol=trace_tolerance)
-            block_until_ready(tracing.trajectories)
-            tracing_times += [time() - time0]
-            
-            print(f"Tracing with adaptive {method_name} and tolerance {trace_tolerance:.0e} took {tracing_times[-1]:.2f} seconds")
-            
-            energies += [jnp.mean(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
-        ax.plot(tracing_times, energies, label=f'{method_name} adapt', marker='o', markersize=3, linestyle='-')
-
-    # Constant step size tests
+# Adaptive Runge-Kutta solvers: for each solver, sweep the integration tolerance
+# and record (computation time, energy error). Tighter tolerance -> smaller error
+# but longer runtime, which traces out each curve in the time-vs-error plot.
+adaptive_solvers = [('Tsit5', diffrax.Tsit5), ('Dopri5', diffrax.Dopri5), ('Dopri8', diffrax.Dopri8)]
+for method_name, solver_class in adaptive_solvers:
     energies = []
     tracing_times = []
-    for n_points_in_gyration in [10, 20, 50, 75, 100, 150, 200]:
-        dt = 1/(n_points_in_gyration*cyclotron_frequency)
-        num_steps = int(tmax/dt)
+    for trace_tolerance in [1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15]:
         time0 = time()
-        tracing = Tracing(field=field, model=model, particles=particles,
-                          maxtime=tmax, times_to_trace=num_steps, timestep=dt)
+        tracing = Tracing(field=field, model='FullOrbit', particles=particles,
+                          maxtime=tmax, timestep=1e-9,
+                          atol=trace_tolerance, rtol=trace_tolerance,
+                          solver=solver_class())
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
-        
-        print(f"Tracing with {method_name} and step {dt:.2e} took {tracing_times[-1]:.2f} seconds")
-        
+
+        print(f"Tracing with adaptive {method_name} and tolerance {trace_tolerance:.0e} took {tracing_times[-1]:.2f} seconds")
+
         energies += [jnp.mean(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
-    ax.plot(tracing_times, energies, label=f'{method_name}', marker='o', markersize=4, linestyle='-')
+    ax.plot(tracing_times, energies, label=f'{method_name} adapt', marker='o', markersize=3, linestyle='-')
+
+# Boris pusher: a fixed-step symplectic integrator. Instead of a tolerance, we
+# sweep the number of timesteps per gyration (more points per orbit -> smaller
+# step -> smaller error), which traces out its own time-vs-error curve.
+energies = []
+tracing_times = []
+for n_points_in_gyration in [10, 20, 50, 75, 100, 150, 200]:
+    dt = 1/(n_points_in_gyration*cyclotron_frequency)
+    time0 = time()
+    tracing = Tracing(field=field, model='FullOrbit_Boris', particles=particles,
+                      maxtime=tmax, timestep=dt)
+    block_until_ready(tracing.trajectories)
+    tracing_times += [time() - time0]
+
+    print(f"Tracing with Boris and step {dt:.2e} took {tracing_times[-1]:.2f} seconds")
+
+    energies += [jnp.mean(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
+ax.plot(tracing_times, energies, label='Boris', marker='o', markersize=4, linestyle='-')
 
 
 ax.legend(fontsize=15, loc='upper left')

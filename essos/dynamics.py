@@ -687,7 +687,8 @@ def FieldLine(t,
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
-                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None):
+                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
+                 solver=None):
         
         if electric_field==None:
             self.electric_field = Electric_field_zero()
@@ -716,6 +717,14 @@ class Tracing():
         self.species=species
         self.tag_gc=tag_gc
         self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
+        # Diffrax solver to use for the adaptive integrators. If left as None,
+        # each integrator falls back to its previous default (Dopri8), so
+        # existing call sites are unaffected. Selecting the solver here (rather
+        # than hard-coding it) lets the integrator-comparison examples sweep
+        # several solvers. The fallback is a plain Python branch on this
+        # attribute, so it is resolved at trace time and does not affect
+        # differentiability of the traced trajectories.
+        self.solver = solver
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
@@ -973,7 +982,7 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Dopri8(),
+                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
@@ -992,7 +1001,7 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Dopri8(),
+                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=False,
@@ -1012,7 +1021,7 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Dopri8(),
+                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
                     throw=True,
@@ -1963,7 +1972,8 @@ class Tracing():
     def _tree_flatten(self):
         children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
         aux_data = {'field': self.field, 'electric_field': self.electric_field, 'model': self.model, 'maxtime': self.maxtime, 'timestep': self.timestep,
-                    'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc}  # static values
+                    'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc,
+                    'solver': self.solver}  # static values
         return (children, aux_data)
 
     @classmethod

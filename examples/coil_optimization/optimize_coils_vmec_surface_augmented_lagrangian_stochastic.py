@@ -1,10 +1,8 @@
 import os
+number_of_processors_to_use = 1 # Parallelization, this should divide ntheta*nphi
+os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 
-number_of_processors_to_use = 8  # Parallelization, this should divide ntheta*nphi
-os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={number_of_processors_to_use}"
-
-import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
@@ -183,3 +181,4 @@ coils_optimized.plot(ax=ax2, show=False)
 surface.plot(ax=ax2, show=False)
 plt.tight_layout()
 plt.show()
+

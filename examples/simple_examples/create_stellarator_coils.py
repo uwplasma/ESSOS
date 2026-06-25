@@ -32,8 +32,8 @@ coils.plot()
 # # Save the coils to a json file
 # coils.to_json("stellarator_coils.json")
 # # Load the coils from a json file
-# from essos.coils import Coils_from_json
-# coils = Coils_from_json("stellarator_coils.json")
+# from essos.coils import Coils
+# coils = Coils.from_json("stellarator_coils.json")
 
 # # View coils in Paraview
 # coils.to_vtk('stellarator_coils')

@@ -11,13 +11,14 @@ from essos.fields import BiotSavart
 from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE
 from essos.dynamics import Tracing, Particles
+import diffrax
 
 output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 # Load coils and field
-json_file = os.path.join(os.path.dirname(__file__), '../examples/input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+json_file = os.path.join(os.path.dirname(__file__), '../input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
@@ -30,49 +31,40 @@ print("cyclotron period:", 1/cyclotron_frequency)
 
 # Particles initialization
 initial_xyz=jnp.array([[1.23, 0, 0]])
-particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, initial_vparallel_over_v=[0.8])
+particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, initial_vparallel_over_v=[0.8], field=field)
 
 # Tracing parameters
 tmax = 1e-4
 
+# Two figures: energy error vs computation time, and energy error vs tolerance.
 fig, ax = plt.subplots(figsize=(9, 6))
 fig_tol, ax_tol = plt.subplots(figsize=(9, 6))
 markers = ["o-", "^-", "*-", "s-"]
-for method, marker in zip(['Tsit5', 'Dopri5', 'Dopri8', 'Kvaerno5'], markers):
-    dt = 1e-7
-    num_steps = int(tmax/dt)
+# For each adaptive solver, sweep the integration tolerance and record both the
+# resulting energy error and the wall-clock time. Kvaerno5 is implicit; the
+# others are explicit Runge-Kutta methods.
+solvers = [('Tsit5', diffrax.Tsit5),
+           ('Dopri5', diffrax.Dopri5),
+           ('Dopri8', diffrax.Dopri8),
+           ('Kvaerno5', diffrax.Kvaerno5)]
+for (method, solver_class), marker in zip(solvers, markers):
     energies = []
     tracing_times = []
     tolerances = [1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16]
     for tolerance in tolerances:
         time0 = time()
-        tracing = Tracing('GuidingCenter', field, tmax, method=method, timesteps=num_steps,
-                          stepsize='adaptive', tol_step_size=tolerance, particles=particles)
+        tracing = Tracing(field=field, model='GuidingCenter', particles=particles,
+                          maxtime=tmax, timestep=1e-7,
+                          atol=tolerance, rtol=tolerance,
+                          solver=solver_class())
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
-        
+
         print(f"Tracing with adaptive {method} and {tolerance=:.0e} took {tracing_times[-1]:.2f} seconds")
-        
+
         energies += [jnp.max(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
     ax.plot(tracing_times, energies, label=f'{method} adapt', marker='o', markersize=3)
     ax_tol.plot(tolerances, energies, marker, label=f'{method} adapt', clip_on=False, linewidth=2.5)
-
-    if method == 'Kvaerno5': continue
-
-    energies = []
-    tracing_times = []
-    for dt in [4e-7, 2e-7, 1e-7, 8e-8, 6e-8, 4e-8, 2e-8, 1e-8]:
-        num_steps = int(tmax/dt)
-        time0 = time()
-        tracing = Tracing('GuidingCenter', field, tmax, method=method, 
-                          timesteps=num_steps, stepsize="constant", particles=particles)
-        block_until_ready(tracing.trajectories)
-        tracing_times += [time() - time0]
-        
-        print(f"Tracing with {method} and {dt=:.2e} took {tracing_times[-1]:.2f} seconds")
-        
-        energies += [jnp.max(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
-    ax.plot(tracing_times, energies, label=f'{method}', marker='o', markersize=4, linestyle='-')
     gc.collect()
 
 ax.set_xlabel('Computation time (s)')
