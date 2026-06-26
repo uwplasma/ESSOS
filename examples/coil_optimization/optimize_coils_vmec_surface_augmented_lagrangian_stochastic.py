@@ -3,6 +3,7 @@ number_of_processors_to_use = 1 # Parallelization, this should divide ntheta*nph
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 

@@ -1,6 +1,5 @@
 import jax
 
-from ESSOS_Cópia.essos.objective_functions import field_from_dofs
 # from build.lib.essos import coils
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
