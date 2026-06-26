@@ -388,7 +388,6 @@ class SurfaceRZFourier:
     @jit
     def _compute_gamma(self):
         angles = self.angles
-        print(angles.shape)
         sin_angles = jnp.sin(angles)
         cos_angles = jnp.cos(angles)
         phi2d = self.phi2d
@@ -396,7 +395,6 @@ class SurfaceRZFourier:
         cos_phi2d = jnp.cos(phi2d)
         rc = self.rc; zs = self.zs; xm = self.xm; xn = self.xn
 
-        print(rc.shape, cos_angles.shape)
         R = jnp.einsum('i,ijk->jk', rc, cos_angles)
         Z = jnp.einsum('i,ijk->jk', zs, sin_angles)
         X = R * cos_phi2d
