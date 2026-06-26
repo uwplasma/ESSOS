@@ -326,22 +326,27 @@ def loss_coil_separation(coils, min_separation, candidates=None, block_size=None
         n_points = gamma_i.shape[0]
 
         # If block_size is None, use full vmap (no chunking)
-        use_block_size = n_points if block_size is None else block_size
+        use_block_size = min(n_points, n_points if block_size is None else block_size)
+        n_blocks = (n_points + use_block_size - 1) // use_block_size
+        padded_points = n_blocks * use_block_size
+        pad_width = padded_points - n_points
 
-        def block_sum(carry, block_idx):
-            start = block_idx * use_block_size
-            end = jnp.minimum(start + use_block_size, n_points)
-            block_gamma_j = gamma_j[start:end]
-            block_gamma_dash_j = gamma_dash_j[start:end]
-            # Compute distances for block
+        gamma_j_blocks = jnp.pad(gamma_j, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        gamma_dash_j_blocks = jnp.pad(gamma_dash_j, (0, pad_width)).reshape(n_blocks, use_block_size)
+        valid_blocks = (jnp.arange(padded_points) < n_points).reshape(n_blocks, use_block_size)
+
+        def block_sum(block_gamma_j, block_gamma_dash_j, block_valid):
             dists_block = jnp.linalg.norm(gamma_i[:, None, :] - block_gamma_j[None, :, :], axis=2)
             penalty_block = jnp.maximum(0, min_separation - dists_block)
-            # gamma_dash_i: (N,), block_gamma_dash_j: (block,)
-            weighted_penalty = jnp.square(penalty_block) * gamma_dash_i[:, None] * block_gamma_dash_j[None, :]
-            return carry + jnp.sum(weighted_penalty), None
+            weighted_penalty = (
+                jnp.square(penalty_block)
+                * gamma_dash_i[:, None]
+                * block_gamma_dash_j[None, :]
+                * block_valid[None, :]
+            )
+            return jnp.sum(weighted_penalty)
 
-        n_blocks = (n_points + use_block_size - 1) // use_block_size
-        total, _ = lax.fori_loop(0, n_blocks, block_sum, 0.0)
+        total = jnp.sum(jax.vmap(block_sum)(gamma_j_blocks, gamma_dash_j_blocks, valid_blocks))
         norm = gamma_i.shape[0] * gamma_j.shape[0]
         return total / norm
 
@@ -349,7 +354,7 @@ def loss_coil_separation(coils, min_separation, candidates=None, block_size=None
     return jnp.sum(losses)
 
 # Blockwise, memory-efficient coil-surface distance loss
-@partial(jit, static_argnames=["min_distance", "block_size", "nfp", "stellsym"])
+@partial(jit, static_argnames=["min_distance", "block_size"])
 def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
     """
     Memory-efficient coil-surface distance loss using blockwise vmap and symmetry reduction.
@@ -384,22 +389,21 @@ def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
         n_points = gamma_i.shape[0]
 
         # If block_size is None, use full vmap (no chunking)
-        use_block_size = n_points_surface if block_size is None else block_size
-
-        def block_sum(carry, block_idx):
-            start = block_idx * use_block_size
-            end = jnp.minimum(start + use_block_size, n_points_surface)
-            block_surface_points = surface_points[start:end]
-            block_surface_normals = surface_normals[start:end]
-            # Compute distances for block
-            dists_block = jnp.linalg.norm(gamma_i[:, None, :] - block_surface_points[None, :, :], axis=2)
-            # Optionally, could use surface normals for weighted penalty (not used here)
-            penalty_block = jnp.maximum(0, min_distance - dists_block)
-            weighted_penalty = jnp.square(penalty_block) * gamma_dash_norm[:, None]
-            return carry + jnp.sum(weighted_penalty), None
-
+        use_block_size = min(n_points_surface, n_points_surface if block_size is None else block_size)
         n_blocks = (n_points_surface + use_block_size - 1) // use_block_size
-        total, _ = lax.fori_loop(0, n_blocks, block_sum, 0.0)
+        padded_points = n_blocks * use_block_size
+        pad_width = padded_points - n_points_surface
+
+        surface_point_blocks = jnp.pad(surface_points, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        valid_blocks = (jnp.arange(padded_points) < n_points_surface).reshape(n_blocks, use_block_size)
+
+        def block_sum(block_surface_points, block_valid):
+            dists_block = jnp.linalg.norm(gamma_i[:, None, :] - block_surface_points[None, :, :], axis=2)
+            penalty_block = jnp.maximum(0, min_distance - dists_block)
+            weighted_penalty = jnp.square(penalty_block) * gamma_dash_norm[:, None] * block_valid[None, :]
+            return jnp.sum(weighted_penalty)
+
+        total = jnp.sum(jax.vmap(block_sum)(surface_point_blocks, valid_blocks))
         norm = gamma_i.shape[0] * n_points_surface
         return total / norm
 
@@ -408,6 +412,7 @@ def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
 
 
 # Blockwise vmap linking number loss (memory efficient, fully differentiable)
+@partial(jit, static_argnames=["block_size"])
 def loss_linkingnumber(coils, candidates=None, block_size=None):
     if candidates is None:
         candidates = jnp.triu_indices(len(coils), k=1)
@@ -421,25 +426,26 @@ def loss_linkingnumber(coils, candidates=None, block_size=None):
         n_points = gamma_j.shape[0]
 
         # If block_size is None, use full vmap (no chunking)
-        use_block_size = n_points if block_size is None else block_size
-
-        def block_sum(carry, block_idx):
-            start = block_idx * use_block_size
-            end = jnp.minimum(start + use_block_size, n_points)
-            block_gamma_j = gamma_j[start:end]
-            block_gamma_dash_j = gamma_dash_j[start:end]
-            # vmap over the block
-            def integrand(r2, dr2):
-                diff = gamma_i - r2  # (N, 3)
-                cross = jnp.cross(gamma_dash_i, dr2)  # (N, 3)
-                norm = jnp.linalg.norm(diff, axis=1)
-                # (N,) dot (N,3) with (N,3) -> (N,)
-                return jnp.sum(diff * cross, axis=1) / (norm**3 + 1e-12)
-            block_vals = jax.vmap(integrand, in_axes=(0, 0))(block_gamma_j, block_gamma_dash_j)
-            return carry + jnp.sum(block_vals), None
-
+        use_block_size = min(n_points, n_points if block_size is None else block_size)
         n_blocks = (n_points + use_block_size - 1) // use_block_size
-        total, _ = lax.fori_loop(0, n_blocks, block_sum, 0.0)
+        padded_points = n_blocks * use_block_size
+        pad_width = padded_points - n_points
+
+        gamma_j_blocks = jnp.pad(gamma_j, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        gamma_dash_j_blocks = jnp.pad(gamma_dash_j, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        valid_blocks = (jnp.arange(padded_points) < n_points).reshape(n_blocks, use_block_size)
+
+        def block_sum(block_gamma_j, block_gamma_dash_j, block_valid):
+            def integrand(r2, dr2):
+                diff = gamma_i - r2
+                cross = jnp.cross(gamma_dash_i, dr2)
+                norm = jnp.linalg.norm(diff, axis=1)
+                return jnp.sum(diff * cross, axis=1) / (norm**3 + 1e-12)
+
+            block_vals = jax.vmap(integrand, in_axes=(0, 0))(block_gamma_j, block_gamma_dash_j)
+            return jnp.sum(block_vals * block_valid[:, None])
+
+        total = jnp.sum(jax.vmap(block_sum)(gamma_j_blocks, gamma_dash_j_blocks, valid_blocks))
         linking = total * (dphi ** 2) / (4 * jnp.pi)
         return jnp.abs(linking)
 
@@ -464,9 +470,13 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
     """
     n_coils = coils.gamma.shape[0]
     indices = jnp.arange(n_coils)
+    other_indices = jnp.array([
+        [j for j in range(n_coils) if j != i]
+        for i in range(n_coils)
+    ], dtype=jnp.int32)
+
     def single_coil_loss(idx):
         n_points = coils.gamma.shape[1]
-        mask = jnp.arange(n_coils) != idx
         gamma_i = coils.gamma[idx]
         gamma_dash_i = coils.gamma_dash[idx]
         gamma_dashdash_i = coils.gamma_dashdash[idx]
@@ -474,34 +484,22 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
         quadpoints = coils.quadpoints
         curvature = Curves.compute_curvature(gamma_dash_i, gamma_dashdash_i)
         regularization = regularization_circ(1. / jnp.mean(curvature))
-        gamma_others = coils.gamma[mask]
-        gamma_dash_others = coils.gamma_dash[mask]
-        gamma_dashdash_others = coils.gamma_dashdash[mask]
-        currents_others = coils.currents[mask]
+        other_idx = other_indices[idx]
+        gamma_others = coils.gamma[other_idx]
+        gamma_dash_others = coils.gamma_dash[other_idx]
+        gamma_dashdash_others = coils.gamma_dashdash[other_idx]
+        currents_others = coils.currents[other_idx]
         biot_savart = BiotSavart_from_gamma(gamma_others, gamma_dash_others, gamma_dashdash_others, currents_others)
-
-        # If block_size is None, use full vmap (no chunking)
-        use_block_size = n_points if block_size is None else block_size
-
-        def block_sum(carry, block_idx):
-            start = block_idx * use_block_size
-            end = jnp.minimum(start + use_block_size, n_points)
-            block_gamma = gamma_i[start:end]
-            block_B_mutual = jax.vmap(biot_savart.B)(block_gamma)
-            block_gammadash = gamma_dash_i[start:end]
-            block_gammadash_norm = jnp.linalg.norm(block_gammadash, axis=1)
-            block_tangent = block_gammadash / block_gammadash_norm[:, None]
-            block_B_self = B_regularized_pure(
-                block_gamma, block_gammadash, gamma_dashdash_i[start:end],
-                quadpoints, current_i, regularization
-            )
-            block_force = jnp.cross(current_i * block_tangent, block_B_self + block_B_mutual)
-            block_force_norm = jnp.linalg.norm(block_force, axis=1)
-            block_penalty = jnp.sum(jnp.maximum(block_force_norm - threshold, 0) ** p * block_gammadash_norm)
-            return carry + block_penalty, None
-
-        n_blocks = (n_points + use_block_size - 1) // use_block_size
-        total_penalty, _ = lax.fori_loop(0, n_blocks, block_sum, 0.0)
+        block_B_mutual = jax.vmap(biot_savart.B)(gamma_i)
+        block_gammadash_norm = jnp.linalg.norm(gamma_dash_i, axis=1)
+        block_tangent = gamma_dash_i / block_gammadash_norm[:, None]
+        block_B_self = B_regularized_pure(
+            gamma_i, gamma_dash_i, gamma_dashdash_i,
+            quadpoints, current_i, regularization
+        )
+        block_force = jnp.cross(current_i * block_tangent, block_B_self + block_B_mutual)
+        block_force_norm = jnp.linalg.norm(block_force, axis=1)
+        total_penalty = jnp.sum(jnp.maximum(block_force_norm - threshold, 0) ** p * block_gammadash_norm)
         return total_penalty * (1. / p)
 
     penalties = jax.vmap(single_coil_loss)(indices)
