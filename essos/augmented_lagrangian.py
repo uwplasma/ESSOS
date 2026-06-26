@@ -15,150 +15,493 @@ class LagrangeMultiplier(NamedTuple):
     """A class containing constrain parameters for Augmented Lagrangian Method"""
     value: Any
     penalty: Any
+    omega: Any
+    eta: Any
     sq_grad: Any  #For updating squared gradient in case of adaptative penalty and multiplier evolution
 
 
 
 
-#This is used for the usual augmented lagrangian form 
-def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
-    """Different methods for updating multipliers and penalties
+# #This is used for the usual augmented lagrangian form 
+# def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
+#     """Different methods for updating multipliers and penalties
+#     """
+
+
+#     pred = lambda x: isinstance(x, LagrangeMultiplier)
+#     if model_mu=='Constant':
+#         #jax.debug.print('{m}', m=model_mu)
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+#     elif model_mu=='Mu_Monotonic':     
+#         #jax.debug.print('{m}', m=model_mu)        
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+#     elif model_mu=='Mu_Conditional_True':
+#         #jax.debug.print('True {m}', m=model_mu)        
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+#     elif model_mu=='Mu_Conditional_False':
+#         #jax.debug.print('False {m}', m=model_mu)            
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+#     elif model_mu=='Mu_Tolerance_True':
+#         #jax.debug.print('Standard True {m}', m=model_mu)    
+#         mu_average=penalty_average(params)
+#         #eta=eta/mu_average**(0.1)
+#         #omega=omega/mu_average    
+#         eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
+#         omega=jnp.maximum(omega/mu_average,omega_tol)
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+#     elif model_mu=='Mu_Tolerance_False':
+#         #jax.debug.print('Standard False {m}', m=model_mu)    
+#         mu_average=penalty_average(params)        
+#         #eta=1./mu_average**(0.1)
+#         #omega=1./mu_average    
+#         eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
+#         #jax.debug.print('HMMMMMM mu_av {m}', m=mu_average)          
+#         #jax.debug.print('HMMMMMM eta {m}', m=eta)    
+#         omega=jnp.maximum(1./mu_average,omega_tol)        
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#     elif model_mu=='Mu_Tolerance_Adaptative_True':
+#         #jax.debug.print('Standard True {m}', m=model_mu)    
+#         mu_average=penalty_average(params)
+#         #eta=eta/mu_average**(0.1)
+#         #omega=omega/mu_average    
+#         eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
+#         omega=jnp.maximum(omega/mu_average,omega_tol)
+#         ##return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred),eta,omega          
+#     elif model_mu=='Mu_Tolerance_Adaptative_False':
+#         #jax.debug.print('Standard False {m}', m=model_mu)    
+#         mu_average=penalty_average(params)        
+#         #eta=1./mu_average**(0.1)
+#         #omega=1./mu_average    
+#         eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
+#         #jax.debug.print('HMMMMMM mu_av {m}', m=mu_average)          
+#         #jax.debug.print('HMMMMMM eta {m}', m=eta)    
+#         omega=jnp.maximum(1./mu_average,omega_tol)        
+#         ##return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.maximum(x.penalty,gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred),eta,omega                            
+#     elif model_mu=='Mu_Tolerance_Adaptative_Linear_True':
+#         #jax.debug.print('Standard True {m}', m=model_mu)    
+#         mu_average=penalty_average(params)
+#         #eta=eta/mu_average**(0.1)
+#         #omega=omega/mu_average    
+#         eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
+#         omega=jnp.maximum(omega/mu_average,omega_tol)
+#         ##return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*jnp.abs(y.value)),params,updates,is_leaf=pred),eta,omega          
+#     elif model_mu=='Mu_Tolerance_Adaptative_Linear_False':
+#         #jax.debug.print('Standard False {m}', m=model_mu)    
+#         mu_average=penalty_average(params)        
+#         #eta=1./mu_average**(0.1)
+#         #omega=1./mu_average    
+#         eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
+#         #jax.debug.print('HMMMMMM mu_av {m}', m=mu_average)          
+#         #jax.debug.print('HMMMMMM eta {m}', m=eta)    
+#         omega=jnp.maximum(1./mu_average,omega_tol)        
+#         ##return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.maximum(x.penalty,x.penalty*(1.+gamma*(alpha*x.sq_grad+(1.-alpha)*jnp.abs(y.value)))),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*jnp.abs(y.value)),params,updates,is_leaf=pred),eta,omega           
+#     elif model_mu=='Mu_Tolerance_Adaptative_SOTA_True':
+#         #jax.debug.print('Standard True {m}', m=model_mu)    
+#         mu_average=penalty_average(params)
+#         #eta=eta/mu_average**(0.1)
+#         #omega=omega/mu_average    
+#         eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
+#         omega=jnp.maximum(omega/mu_average,omega_tol)
+#         ##return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+#     elif model_mu=='Mu_Tolerance_Adaptative_SOTA_False':
+#         #jax.debug.print('Standard False {m}', m=model_mu)    
+#         mu_average=penalty_average(params)        
+#         #eta=1./mu_average**(0.1)
+#         #omega=1./mu_average    
+#         eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
+#         #jax.debug.print('HMMMMMM mu_av {m}', m=mu_average)          
+#         #jax.debug.print('HMMMMMM eta {m}', m=eta)    
+#         omega=jnp.maximum(1./mu_average,omega_tol)        
+#         ##return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#         #util_tree=jax.jax.tree_util.tree_map(lambda x: jax.nn.softmax(jnp.abs(x)),updates,is_leaf=pred)          
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(x.penalty*(1.+jnp.abs(y.value)),mu_max),0.0*x.sq_grad),params,updates,is_leaf=pred),eta,omega           
+#     elif model_mu=='Mu_Adaptative':
+#         #jax.debug.print('True {m}', m=model_mu)            
+#         #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*y.value,-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred)
+#         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma*(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty**2.)+epsilon)*y.value,-x.penalty+gamma*(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty**2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty**2.),params,updates,is_leaf=pred)
+#         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0),params,updates,is_leaf=pred)
+
+
+
+# #This is used for the squared form of the augmented Lagrangioan
+# def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
+#     """Different methods for updating multipliers and penalties)
+#     """
+
+
+#     pred = lambda x: isinstance(x, LagrangeMultiplier)
+#     if model_mu=='Constant':
+#         #jax.debug.print('{m}', m=model_mu)
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier((y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+#     elif model_mu=='Mu_Monotonic':     
+#         #jax.debug.print('{m}', m=model_mu)        
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+#     elif model_mu=='Mu_Conditional_True':
+#         #jax.debug.print('True {m}', m=model_mu)        
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+#     elif model_mu=='Mu_Conditional_False':
+#         #jax.debug.print('False {m}', m=model_mu)            
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+#     elif model_mu=='Mu_Tolerance_True':
+#         #jax.debug.print('Squared True {m}', m=model_mu)   
+#         mu_average=penalty_average(params)
+#         #eta=eta/mu_average**(0.1)
+#         #omega=omega/mu_average    
+#         eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
+#         omega=jnp.maximum(omega/mu_average,omega_tol)
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+#     elif model_mu=='Mu_Tolerance_False':
+#         #jax.debug.print('Squared False {m}', m=model_mu)    
+#         mu_average=penalty_average(params)        
+#         #eta=1./mu_average**(0.1)
+#         #omega=1./mu_average    
+#         eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
+#         omega=jnp.maximum(1./mu_average,omega_tol)        
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#     elif model_mu=='Mu_Tolerance_Adaptative_True':
+#         #jax.debug.print('Squared True {m}', m=model_mu)   
+#         mu_average=penalty_average(params)
+#         #eta=eta/mu_average**(0.1)
+#         #omega=omega/mu_average    
+#         eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
+#         omega=jnp.maximum(omega/mu_average,omega_tol)
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+#     elif model_mu=='Mu_Tolerance_Adaptative_False':
+#         #jax.debug.print('Squared False {m}', m=model_mu)    
+#         mu_average=penalty_average(params)        
+#         #eta=1./mu_average**(0.1)
+#         #omega=1./mu_average    
+#         eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
+#         omega=jnp.maximum(1./mu_average,omega_tol)        
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+#     elif model_mu=='Mu_Adaptative':
+#         #jax.debug.print('True {m}', m=model_mu)            
+#         #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
+#         #return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*(y.value-x.value/x.penalty),-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*(y.penalty*2.+(x.value/x.penalty)**2)),params,updates,is_leaf=pred)
+#         return jax.jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma*(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*(y.value-x.value/x.penalty),-x.penalty+gamma*(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*(y.penalty*2.+(x.value/x.penalty)**2)),params,updates,is_leaf=pred)
+
+
+
+
+# def lagrange_update(model_lagrangian='Standard'):
+#     """A gradient transformation for Optax that prepares an MDMM gradient
+#     descent ascent update from a normal gradient descent update.
+
+#     It should be used like this with a base optimizer:
+#         optimizer = optax.chain(
+#             optax.sgd(1e-3),
+#             mdmm_jax.optax_prepare_update(),
+#         )
+
+#     Returns:
+#         An Optax gradient transformation that converts a gradient descent update
+#         into a gradient descent ascent update.
+#     """
+#     def init_fn(params):
+#         del params
+#         return optax.EmptyState()
+
+#     # def update_fn(lagrange_params,updates, state,eta,omega, params=None,model_mu='Constant',beta=2.,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
+#     #     del params
+#     #     if model_lagrangian=='Standard' :
+#     #         return update_method(lagrange_params,updates,eta,omega,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol), state
+#     #     elif model_lagrangian=='Squared' :
+#     #         return update_method_squared(lagrange_params,updates,eta,omega,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol), state
+#     #     else:
+#     #         print('Lagrangian model not available please select Standard or Squared ')
+#     #         os._exit(0)              
+
+#     return optax.GradientTransformation(init_fn, update_fn)
+
+
+
+
+
+class BaseConstraint:
+    """A minimal mutable container holding `init` and `loss` callables for a constraint.
+
+    This mirrors the simple tuple-like behavior used elsewhere but allows
+    attribute access and matches the `base_loss` style in `losses.py`.
     """
+    def __init__(self, init: Callable, loss: Callable):
+        self.init = init
+        self.loss = loss
 
 
-    pred = lambda x: isinstance(x, LagrangeMultiplier)
-    if model_mu=='Constant':
-        #jax.debug.print('{m}', m=model_mu)
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
-    elif model_mu=='Mu_Monotonic':     
-        #jax.debug.print('{m}', m=model_mu)        
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
-    elif model_mu=='Mu_Conditional_True':
-        #jax.debug.print('True {m}', m=model_mu)        
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
-    elif model_mu=='Mu_Conditional_False':
-        #jax.debug.print('False {m}', m=model_mu)            
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
-    elif model_mu=='Mu_Tolerance_True':
-        #jax.debug.print('Standard True {m}', m=model_mu)    
-        mu_average=penalty_average(params)
-        #eta=eta/mu_average**(0.1)
-        #omega=omega/mu_average    
-        eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
-        omega=jnp.maximum(omega/mu_average,omega_tol)
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
-    elif model_mu=='Mu_Tolerance_False':
-        #jax.debug.print('Standard False {m}', m=model_mu)    
-        mu_average=penalty_average(params)        
-        #eta=1./mu_average**(0.1)
-        #omega=1./mu_average    
-        eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
-        #jax.debug.print('HMMMMMM mu_av {m}', m=mu_average)          
-        #jax.debug.print('HMMMMMM eta {m}', m=eta)    
-        omega=jnp.maximum(1./mu_average,omega_tol)        
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
-        #return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
-    elif model_mu=='Mu_Adaptative':
-        #jax.debug.print('True {m}', m=model_mu)            
-        #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*y.value,-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred)
+class CompositeConstraint:
+    """Mutable composite constraint container.
 
-
-
-#This is used for the squared form of the augmented Lagrangioan
-def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
-    """Different methods for updating multipliers and penalties)
+    Exposes `init` and `loss` callables (same as `Constraint`) while
+    allowing attaching metadata like `arg_names`, `_dependencies`, and
+    `selective_map`. `set_dependencies` will propagate dependencies to any
+    contained `SelectiveConstraint` instances.
     """
+    def __init__(self, init_fn: Callable, loss_fn: Callable, selective_map=None, arg_names=None):
+        self.init = init_fn
+        self.loss = loss_fn
+        self.selective_map = selective_map or {}
+        # keep ordered list of dependency names
+        self.arg_names = list(arg_names) if arg_names is not None else []
+        self._dependencies = {}
+        self._starting_dofs = None
+        self._dofs_to_pytree = None
+
+    @property
+    def dependencies(self):
+        return self._dependencies
+
+    @dependencies.setter
+    def dependencies(self, value):
+        if not isinstance(value, dict):
+            raise TypeError("dependencies must be a dictionary mapping names to arrays")
+        self._dependencies = value
+        for selective in self.selective_map.values():
+            selective.dependencies = value
+
+    def set_dependencies(self, deps):
+        self.dependencies = deps
+
+    @property
+    def starting_dofs(self):
+        if self._starting_dofs is None:
+            if not self._dependencies:
+                raise RuntimeError("dependencies must be set on composite before accessing starting_dofs")
+            vals = tuple(self._dependencies[name] for name in self.arg_names)
+            self._starting_dofs, self._dofs_to_pytree = jax.flatten_util.ravel_pytree(vals)
+        return self._starting_dofs
+
+    @property
+    def dofs_to_pytree(self):
+        if self._dofs_to_pytree is None:
+            _ = self.starting_dofs
+        return self._dofs_to_pytree
 
 
-    pred = lambda x: isinstance(x, LagrangeMultiplier)
-    if model_mu=='Constant':
-        #jax.debug.print('{m}', m=model_mu)
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier((y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
-    elif model_mu=='Mu_Monotonic':     
-        #jax.debug.print('{m}', m=model_mu)        
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
-    elif model_mu=='Mu_Conditional_True':
-        #jax.debug.print('True {m}', m=model_mu)        
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
-    elif model_mu=='Mu_Conditional_False':
-        #jax.debug.print('False {m}', m=model_mu)            
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
-    elif model_mu=='Mu_Tolerance_True':
-        #jax.debug.print('Squared True {m}', m=model_mu)   
-        mu_average=penalty_average(params)
-        #eta=eta/mu_average**(0.1)
-        #omega=omega/mu_average    
-        eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
-        omega=jnp.maximum(omega/mu_average,omega_tol)
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
-    elif model_mu=='Mu_Tolerance_False':
-        #jax.debug.print('Squared False {m}', m=model_mu)    
-        mu_average=penalty_average(params)        
-        #eta=1./mu_average**(0.1)
-        #omega=1./mu_average    
-        eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
-        omega=jnp.maximum(1./mu_average,omega_tol)        
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
-        #return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
-    elif model_mu=='Mu_Adaptative':
-        #jax.debug.print('True {m}', m=model_mu)            
-        #Note that y.penalty is the derivative with respect to mu and so it is 0.5*C(x)**2, like the derivative with respect to lambda is C(x)
-        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*(y.value-x.value/x.penalty),-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*(y.penalty*2.+(x.value/x.penalty)**2)),params,updates,is_leaf=pred)
-
-
-
-
-def lagrange_update(model_lagrangian='Standard'):
-    """A gradient transformation for Optax that prepares an MDMM gradient
-    descent ascent update from a normal gradient descent update.
-
-    It should be used like this with a base optimizer:
-        optimizer = optax.chain(
-            optax.sgd(1e-3),
-            mdmm_jax.optax_prepare_update(),
-        )
-
-    Returns:
-        An Optax gradient transformation that converts a gradient descent update
-        into a gradient descent ascent update.
-    """
-    def init_fn(params):
-        del params
-        return optax.EmptyState()
-
-    def update_fn(lagrange_params,updates, state,eta,omega, params=None,model_mu='Constant',beta=2.,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
-        del params
-        if model_lagrangian=='Standard' :
-            return update_method(lagrange_params,updates,eta,omega,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol), state
-        elif model_lagrangian=='Squared' :
-            return update_method_squared(lagrange_params,updates,eta,omega,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol), state
-        else:
-            print('Lagrangian model not available please select Standard or Squared ')
-            os._exit(0)              
-
-    return optax.GradientTransformation(init_fn, update_fn)
-
-
-
-
-
-class Constraint(NamedTuple):
-    """A pair of pure functions implementing a constraint.
-
+class SelectiveConstraint:
+    """Wraps a constraint with selective named dependencies, similar to custom_loss.
+    
+    This allows constraints to only depend on a subset of the available degrees of freedom
+    by name, enabling combination of constraints with different argument requirements.
+    No need to specify indices - just the dependency names!
+    
+    Why filtering is necessary:
+    - Different constraints may require different subsets of arguments (e.g., one depends on 
+      'field' only, another on 'coil' only, a third on both).
+    - Named filtering ensures each constraint receives only its required arguments, avoiding:
+      * Unnecessary computations with unused data
+      * Constraints expecting different signatures from breaking
+      * Wasteful memory transfer of irrelevant arrays
+    - Enables flexible constraint composition where DOF dependencies vary.
+    
     Attributes:
-        init: A pure function which, when called with an example instance of
-            the arguments to the constraint functions, returns a pytree
-            containing the constraint's learnable parameters.
-        loss: A pure function which, when called with the the learnable
-            parameters returned by init() followed by the arguments to the
-            constraint functions, returns the loss value for the constraint.
+        constraint: The underlying Constraint (init_fn, loss_fn) tuple
+        arg_names: Tuple of argument names that this constraint depends on
+        dependencies: Dictionary mapping dependency names to their arrays/objects
+    
+    Example:
+        # Create constraints on different DOF subsets - no indices needed!
+        field_constraint = alm.eq(lambda field: jnp.sum(field**2))
+        surface_constraint = alm.eq(lambda surface: jnp.sum(surface**2))
+        
+        selective1 = SelectiveConstraint(field_constraint, 'field')
+        selective2 = SelectiveConstraint(surface_constraint, 'surface')
+        
+        combined = alm.combine(selective1, selective2)
+        # Set dependencies by name
+        combined.dependencies = {'field': field_array, 'surface': surface_array}
     """
-    init: Callable
-    loss: Callable
+    def __init__(self, constraint: BaseConstraint, *arg_names, **kwargs):
+        """Initialize a SelectiveConstraint with named dependencies.
+        
+        Args:
+            constraint: A Constraint (init_fn, loss_fn) tuple
+            *arg_names: Names of the arguments this constraint depends on (order matters!)
+        """
+        if not (hasattr(constraint, 'init') and hasattr(constraint, 'loss')):
+            raise TypeError(f"constraint must provide `init` and `loss` callables, got {type(constraint)}")
+        if not arg_names:
+            raise ValueError("At least one argument name must be provided")
+        
+        self.constraint = constraint
+        self.arg_names = arg_names
+        self.kwargs = kwargs
+        self._dependencies = {}
+        self._starting_dofs = None
+        self._dofs_to_pytree = None
+    
+    @property
+    def dependencies(self):
+        """Get the dependencies dictionary."""
+        return self._dependencies
+    
+    @dependencies.setter
+    def dependencies(self, value):
+        """Set dependencies (mapping of arg_names to their values)."""
+        if not isinstance(value, dict):
+            raise TypeError("dependencies must be a dictionary mapping names to arrays")
+        self._dependencies = value
+    
+    def _get_filtered_args(self):
+        """Extract only the required arguments from dependencies by name."""
+        filtered_args = []
+        for name in self.arg_names:
+            if name not in self._dependencies:
+                raise KeyError(
+                    f"SelectiveConstraint '{self.arg_names}' depends on '{name}', "
+                    f"but it's not in dependencies dict. Available: {list(self._dependencies.keys())}"
+                )
+            filtered_args.append(self._dependencies[name])
+        return tuple(filtered_args)
+
+    @property
+    def starting_dofs(self):
+        if self._starting_dofs is None:
+            if not self._dependencies:
+                raise RuntimeError("dependencies must be set before accessing starting_dofs")
+            vals = tuple(self._dependencies[name] for name in self.arg_names)
+            self._starting_dofs, self._dofs_to_pytree = jax.flatten_util.ravel_pytree(vals)
+        return self._starting_dofs
+
+    @property
+    def dofs_to_pytree(self):
+        if self._dofs_to_pytree is None:
+            _ = self.starting_dofs
+        return self._dofs_to_pytree
+    
+    def init(self, *args, **kwargs):
+        """Initialize constraint parameters using current dependencies."""
+        # Prefer explicit call-time args/kwargs; otherwise use stored dependencies and constructor kwargs
+        if args or kwargs:
+            return self.constraint.init(*args, **kwargs, **self.kwargs)
+        args = self._get_filtered_args()
+        return self.constraint.init(*args, **self.kwargs)
+    
+    def loss(self, params, *args, **kwargs):
+        """Compute loss using current dependencies.
+        
+        Args:
+            params: Constraint parameters from init()
+            
+        Returns:
+            (loss_value, constraint_info) tuple
+        """
+        # Prefer explicit call-time args/kwargs; otherwise use stored dependencies and constructor kwargs
+        if args or kwargs:
+            return self.constraint.loss(params, *args, **kwargs, **self.kwargs)
+        args = self._get_filtered_args()
+        return self.constraint.loss(params, *args, **self.kwargs)
 
 
-def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,sq_grad=0., weight=1., reduction=jnp.sum):
+class ScaledConstraint:
+    """Wraps a constraint with automatic or user-specified scaling.
+    
+    Useful when combining constraints with vastly different magnitudes.
+    Automatically normalizes constraint output by its initial norm or element-wise absolute values.
+    
+    Attributes:
+        constraint: The underlying Constraint (init_fn, loss_fn) tuple
+        scale_factor: Scalar to multiply constraint output (auto-computed or user-specified)
+        auto_scale: Whether to auto-compute scale_factor from initial constraint norm
+        elementwise_scale: If True, scale by 1/abs(constraint) element-wise; if False, scale by 1/norm
+    
+    Example:
+        # Auto-scale based on initial constraint norm (default)
+        constraint = alm.eq(lambda x: jnp.sum(x**2))
+        scaled = ScaledConstraint(constraint, auto_scale=True, elementwise_scale=False)
+        
+        # Auto-scale element-wise
+        scaled = ScaledConstraint(constraint, auto_scale=True, elementwise_scale=True)
+        
+        # Or use fixed scaling
+        scaled = ScaledConstraint(constraint, scale_factor=1.0, auto_scale=False)
+    """
+    def __init__(self, constraint: BaseConstraint, scale_factor=1.0, auto_scale=True, elementwise_scale=False):
+        """Initialize a ScaledConstraint.
+        
+        Args:
+            constraint: A Constraint (init_fn, loss_fn) tuple
+            scale_factor: Fixed scaling factor (ignored if auto_scale=True)
+            auto_scale: If True, automatically compute scale_factor from initial constraint
+            elementwise_scale: If True, scale element-wise by 1/abs(constraint); if False, scale by 1/norm
+        """
+        if not (hasattr(constraint, 'init') and hasattr(constraint, 'loss')):
+            raise TypeError(f"constraint must provide `init` and `loss` callables, got {type(constraint)}")
+        
+        if not auto_scale and scale_factor <= 0:
+            raise ValueError(f"scale_factor must be positive, got {scale_factor}")
+        
+        self.constraint = constraint
+        self.scale_factor = scale_factor
+        self.auto_scale = auto_scale
+        self.elementwise_scale = elementwise_scale
+        self._initial_scale = None
+        self._initial_scale_scalar = None  # For loss_value scaling
+    
+    def init(self, *args, **kwargs):
+        """Initialize constraint parameters and compute scale factor if needed."""
+        params = self.constraint.init(*args, **kwargs)
+        
+        # If auto_scale, compute initial constraint scaling
+        if self.auto_scale:
+            _, constraint_info = self.constraint.loss(params, *args, **kwargs)
+            constraint_flat, unflatten_fn = jax.flatten_util.ravel_pytree(constraint_info)
+            
+            if self.elementwise_scale:
+                # Element-wise scaling: scale = 1 / abs(constraint_flat)
+                scale_flat = 1.0 / jnp.maximum(jnp.abs(constraint_flat), 1.)
+                # Unflatten to match constraint_info structure
+                self._initial_scale = unflatten_fn(scale_flat)
+                # For loss_value, use mean of element-wise scales
+                self._initial_scale_scalar = jnp.linalg.norm(scale_flat)
+            else:
+                # Norm-based scaling: scale = 1 / norm(constraint_flat)
+                scale_scalar = 1.0 / jnp.maximum(jnp.linalg.norm(constraint_flat), 1.)
+                self._initial_scale = scale_scalar
+                self._initial_scale_scalar = scale_scalar
+        
+        return params
+    
+    def loss(self, params, *args, **kwargs):
+        """Compute scaled constraint loss.
+        
+        Args:
+            params: Constraint parameters from init()
+            *args: Arguments to constraint
+            **kwargs: Keyword arguments
+            
+        Returns:
+            (scaled_loss_value, constraint_info) tuple
+        """
+        loss_value, constraint_info = self.constraint.loss(params, *args, **kwargs)
+        
+        # Apply scaling
+        if self.auto_scale and self._initial_scale is not None:
+            # Scale loss_value with scalar
+            loss_scale = self._initial_scale_scalar
+            # Scale constraint_info with potentially element-wise scale
+            info_scale = self._initial_scale
+        else:
+            loss_scale = self.scale_factor
+            info_scale = self.scale_factor
+        
+        return loss_value * loss_scale, jax.tree_util.tree_map(lambda x: x * info_scale, constraint_info)
+
+
+
+def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,omega=1.0,eta=1.0,sq_grad=0., weight=1., reduction=jnp.sum):
+
     """Represents an equality constraint, g(x) = 0.
 
     Args:
@@ -177,7 +520,11 @@ def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,sq_grad=0., we
     """
 
     def init_fn(*args, **kwargs):
-        return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),sq_grad+jnp.zeros_like(fun(*args, **kwargs)))}
+        return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),
+                                             eta+jnp.zeros_like(fun(*args, **kwargs)),
+                                             omega+jnp.zeros_like(fun(*args, **kwargs)),
+                                             sq_grad+jnp.zeros_like(fun(*args, **kwargs)))}
+        #return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),sq_grad+jnp.maximum(jnp.square(fun(*args, **kwargs)),1.e-4))}
 
     if model_lagrangian=='Standard':
         def loss_fn(params, *args, **kwargs):
@@ -188,10 +535,10 @@ def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,sq_grad=0., we
             inf = fun(*args, **kwargs)
             return weight * reduction(-params['lambda'].value * inf + params['lambda'].penalty* inf ** 2 / 2+ params['lambda'].value**2 /(2.*params['lambda'].penalty)), inf
 
-    return Constraint(init_fn, loss_fn)
+    return BaseConstraint(init_fn, loss_fn)
 
 
-def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1., sq_grad=0.,weight=1., reduction=jnp.sum):
+def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1.,omega=1.0,eta=1.0, sq_grad=0.,weight=1., reduction=jnp.sum):
     """Represents an inequality constraint, h(x) >= 0, which uses a slack
     variable internally to convert it to an equality constraint.
 
@@ -212,8 +559,11 @@ def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1., sq_grad=0.,
 
     def init_fn(*args, **kwargs):
         out = fun(*args, **kwargs)
-        return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),sq_grad+jnp.zeros_like(fun(*args, **kwargs))),
-                'slack': jax.nn.relu(out) ** 0.5}
+        return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),
+                                             eta+jnp.zeros_like(fun(*args, **kwargs)),
+                                             omega+jnp.zeros_like(fun(*args, **kwargs)),
+                                             sq_grad+jnp.zeros_like(fun(*args, **kwargs))),
+                                            'slack': jax.nn.relu(out) ** 0.5}
 
     if model_lagrangian=='Standard':
         def loss_fn(params, *args, **kwargs):
@@ -224,28 +574,179 @@ def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1., sq_grad=0.,
             inf = fun(*args, **kwargs) - params['slack'] ** 2
             return weight * reduction(-params['lambda'].value * inf + params['lambda'].penalty * inf ** 2 / 2+ params['lambda'].value**2 /(2.*params['lambda'].penalty)), inf
 
-    return Constraint(init_fn, loss_fn)
+    return BaseConstraint(init_fn, loss_fn)
 
 
 def combine(*args):
-    """Combines multiple constraint tuples into a single constraint tuple.
+    """Combines constraints with selective named dependencies, mirroring losses.py.
+    
+    Each SelectiveConstraint specifies which named arguments it depends on.
+    Regular Constraints still work (they receive all arguments positionally).
+    
+    The returned combined constraint supports both:
+    - Old style: `combined.init(arg1, arg2); combined.loss(params, arg1, arg2)`
+    - New style: Set `combined.dependencies = {...}` and call `combined.init/loss()`
+    
+    Implementation optimizes for JIT by pre-wrapping constraint functions at combination time,
+    avoiding dynamic control flow inside the loss/init functions.
+    
+    Validation:
+        - All constraints must be Constraint or SelectiveConstraint objects
+        - Constraint outputs must be compatible (all scalars, all same shape, etc.)
 
     Args:
-        *args: A series of constraint (init_fn, loss_fn) tuples.
+        *args: A series of constraint (init_fn, loss_fn) tuples or SelectiveConstraint objects.
 
     Returns:
-        A single (init_fn, loss_fn) tuple that wraps the input constraints.
+        A combined Constraint with optional `.dependencies` and `.arg_names` attributes.
+        
+    Raises:
+        ValueError: If no constraints provided or constraint types are invalid
+        TypeError: If constraint objects are not Constraint or SelectiveConstraint
     """
-    init_fns, loss_fns = zip(*args)
+    if not args:
+        raise ValueError("At least one constraint must be provided to combine()")
+    
+    # Separate init_fns and loss_fns, tracking SelectiveConstraints
+    constraints_list = []
+    selective_map = {}  # Maps position to SelectiveConstraint
+    all_arg_names = []  # ordered list of unique arg names for named dependency mode
 
+    for i, arg in enumerate(args):
+        # Extract the underlying callable pair and record selective wrappers
+        if isinstance(arg, SelectiveConstraint):
+            c = arg.constraint
+            selective_map[i] = arg
+            # preserve order and uniqueness of arg names
+            for name in arg.arg_names:
+                if name not in all_arg_names:
+                    all_arg_names.append(name)
+        else:
+            c = arg
+
+        # Accept tuple (init_fn, loss_fn) or objects with .init and .loss
+        if isinstance(c, tuple) and len(c) == 2:
+            init_fn, loss_fn = c
+        elif hasattr(c, 'init') and hasattr(c, 'loss'):
+            init_fn, loss_fn = c.init, c.loss
+        else:
+            raise TypeError(
+                f"Constraint {i} must be SelectiveConstraint, BaseConstraint-like, or (init_fn, loss_fn) tuple, got {type(arg)}"
+            )
+
+        constraints_list.append((init_fn, loss_fn))
+
+    init_fns, loss_fns = zip(*constraints_list)
+
+    # Pre-wrap constraint functions to bake in filtering at combination time
+    # This avoids dynamic control flow (if/else) inside JIT-compiled functions
+    wrapped_init_fns = []
+    wrapped_loss_fns = []
+    
+    for i, (init_fn, loss_fn) in enumerate(zip(init_fns, loss_fns)):
+        if i in selective_map:
+            selective = selective_map[i]
+            
+            # Wrap init_fn to use named dependencies
+            def make_init_wrapper(s, f):
+                def wrapped_init(*a, **kw):
+                    # Merge constructor kwargs with call-time kwargs, prefer call-time
+                    merged_kw = {**s.kwargs, **kw}
+                    if a or kw:
+                        # If first arg looks like the flat dofs (array or tracer), map it
+                        first = a[0] if a else None
+                        is_object_like = hasattr(first, 'B') or hasattr(first, 'coils') or hasattr(first, 'dofs') or isinstance(first, dict)
+                        looks_flat = (hasattr(first, 'ndim') or hasattr(first, 'shape') or hasattr(first, 'aval'))
+                        if a and (looks_flat and not is_object_like):
+                            # Try per-selective unravel first; if it fails, fall back to composite unravel
+                            try:
+                                pytrees = s.dofs_to_pytree(a[0])
+                                return f(*pytrees, **merged_kw)
+                            except Exception:
+                                # fall back to composite-level mapping if available
+                                if hasattr(s, '_composite_index_map') and hasattr(combined, 'dofs_to_pytree'):
+                                    all_pytrees = combined.dofs_to_pytree(a[0])
+                                    pytrees = tuple(all_pytrees[idx] for idx in s._composite_index_map)
+                                    return f(*pytrees, **merged_kw)
+                                raise
+                        if is_object_like:
+                            return f(*a, **merged_kw)
+                        # fall through to use stored dependencies
+                    filtered_args = s._get_filtered_args()
+                    return f(*filtered_args, **s.kwargs)
+                return wrapped_init
+            wrapped_init_fns.append(make_init_wrapper(selective, init_fn))
+            
+            # Wrap loss_fn to use named dependencies
+            def make_loss_wrapper(s, f):
+                def wrapped_loss(p, *a, **kw):
+                    merged_kw = {**s.kwargs, **kw}
+                    if a or kw:
+                        first = a[0] if a else None
+                        is_object_like = hasattr(first, 'B') or hasattr(first, 'coils') or hasattr(first, 'dofs') or isinstance(first, dict)
+                        looks_flat = (hasattr(first, 'ndim') or hasattr(first, 'shape') or hasattr(first, 'aval'))
+                        if a and (looks_flat and not is_object_like):
+                            try:
+                                pytrees = s.dofs_to_pytree(a[0])
+                                return f(p, *pytrees, **merged_kw)
+                            except Exception:
+                                if hasattr(s, '_composite_index_map') and hasattr(combined, 'dofs_to_pytree'):
+                                    all_pytrees = combined.dofs_to_pytree(a[0])
+                                    pytrees = tuple(all_pytrees[idx] for idx in s._composite_index_map)
+                                    return f(p, *pytrees, **merged_kw)
+                                raise
+                        if is_object_like:
+                            return f(p, *a, **merged_kw)
+                        # fall through to stored dependencies
+                    filtered_args = s._get_filtered_args()
+                    return f(p, *filtered_args, **s.kwargs)
+                return wrapped_loss
+            wrapped_loss_fns.append(make_loss_wrapper(selective, loss_fn))
+        else:
+            # Regular constraints: pass-through wrappers that accept all args
+            def make_init_wrapper_all(f):
+                def wrapped_init(*args, **kwargs):
+                    return f(*args, **kwargs)
+                return wrapped_init
+            wrapped_init_fns.append(make_init_wrapper_all(init_fn))
+            
+            def make_loss_wrapper_all(f):
+                def wrapped_loss(p, *args, **kwargs):
+                    return f(p, *args, **kwargs)
+                return wrapped_loss
+            wrapped_loss_fns.append(make_loss_wrapper_all(loss_fn))
+
+    # Now init_fn and loss_fn are clean - no control flow, just list comprehensions
     def init_fn(*args, **kwargs):
-        return tuple(fn(*args, **kwargs) for fn in init_fns)
+        """Initialize all constraints using pre-wrapped functions."""
+        results = [fn(*args, **kwargs) for fn in wrapped_init_fns]
+        return tuple(results)
 
     def loss_fn(params, *args, **kwargs):
-        outs = [fn(p, *args, **kwargs) for p, fn in zip(params, loss_fns)]
+        """Compute total loss from all constraints using pre-wrapped functions."""
+        outs = [fn(p, *args, **kwargs) for p, fn in zip(params, wrapped_loss_fns)]
         return sum(x[0] for x in outs), tuple(x[1] for x in outs)
 
-    return Constraint(init_fn, loss_fn)
+    combined = CompositeConstraint(init_fn, loss_fn, selective_map=selective_map, arg_names=all_arg_names)
+
+
+    # keep legacy-style attributes for compatibility
+    combined._dependencies = {}
+    combined.selective_map = selective_map
+
+    # Precompute mapping from composite arg_names -> indices for each selective
+    for sel in selective_map.values():
+        sel._composite_index_map = tuple(combined.arg_names.index(n) for n in sel.arg_names)
+
+    # Add property for dependency management (keeps previous API)
+    def set_dependencies(deps):
+        combined._dependencies = deps
+        for selective in selective_map.values():
+            selective.dependencies = deps
+
+    combined.set_dependencies = set_dependencies
+
+    return combined
 
 
 
@@ -271,6 +772,178 @@ def penalty_average(tree):
     return jnp.average(penalty[0])
 
 
+def apply_mu_tolerance_per_constraint(constraint_dict, grad_dict, constraint_info, constraint_info_prev=None, model_lagrangian='Standard', model_mu='Mu_Adaptative_1', beta=2.0, mu_max=1.e4, alpha=0.99, gamma=1.e-2, epsilon=1.e-8, eta_tol=1.e-4, omega_tol=1.e-6, decrease_tol=0.75):
+    """Apply Mu update rule for vectorized constraints.
+    
+    Supports three strategies:
+    - Mu_Tolerance: All elements updated together based on norm, uses average penalty
+    - Mu_Adaptative_1: Element-wise updates using eta parameter
+    - Mu_Adaptative_2: Element-wise updates using decrease tolerance criterion
+    
+    Args:
+        constraint_dict: dict with 'lambda' and optionally 'slack' keys containing LagrangeMultiplier objects
+        grad_dict: dict with gradients matching the constraint_dict structure
+        constraint_info: current constraint violation information (array or scalar)
+        constraint_info_prev: previous constraint violation info (needed for Mu_Adaptative_2)
+        model_lagrangian: 'Standard' or 'Squared' lagrangian formulation
+        model_mu: 'Mu_Tolerance' (global norm, avg penalty), 'Mu_Adaptative_1' (element-wise eta), or 'Mu_Adaptative_2' (element-wise decrease)
+        decrease_tol: tolerance for decrease criterion in Mu_Adaptative_2 (default 0.75 = 25% decrease)
+    """
+    pred = lambda x: isinstance(x, LagrangeMultiplier)
+    
+    # Extract eta and omega from the first LagrangeMultiplier
+    first_key = list(constraint_dict.keys())[0]
+    eta_val = constraint_dict[first_key].eta
+    omega_val = constraint_dict[first_key].omega
+    
+    # Extract penalty values
+    constraint_penalty = jax.tree_util.tree_map(lambda x: x.penalty, constraint_dict, is_leaf=pred)
+    penalty_val = constraint_penalty[first_key]
+    
+    # Get constraint absolute values (element-wise)
+    constraint_abs = jnp.abs(constraint_info)
+    
+
+    # Element-wise strategies (Mu_Adaptative_1 or Mu_Adaptative_2)
+    # Compute updated eta and omega (element-wise)
+    eta_updated = jnp.maximum(eta_val / jnp.power(penalty_val, 0.1), eta_tol)
+    omega_updated = jnp.maximum(omega_val / penalty_val, omega_tol)
+    
+    eta_updated_false = jnp.maximum(1. / jnp.power(penalty_val, 0.1), eta_tol)
+    omega_updated_false = jnp.maximum(1.0 / penalty_val, omega_tol)
+    
+    # Determine if constraints are satisfied based on model_mu strategy
+    if model_mu == 'Mu_Adaptative_1':
+        # Strategy 1: Use eta parameter - constraint satisfied if abs(constraint) < eta
+        is_satisfied = constraint_abs < eta_val
+    
+    elif model_mu == 'Mu_Adaptative_2':
+        # Strategy 2: Use decrease tolerance - constraint satisfied if abs(constraint) <= decrease_tol * abs(constraint_prev)
+        if constraint_info_prev is None:
+            # If no previous constraint, fall back to eta-based check
+            is_satisfied = constraint_abs < eta_val
+        else:
+            constraint_abs_prev = jnp.abs(constraint_info_prev)
+            # Check if constraint decreased by specified tolerance factor
+            is_satisfied = constraint_abs <= decrease_tol * constraint_abs_prev
+    else:
+        # Default to Mu_Adaptative_1
+        is_satisfied = constraint_abs < eta_val
+    
+    if model_lagrangian == 'Standard':
+        # For satisfied constraints: update lambda value, set penalty change to 0
+        # For unsatisfied constraints: set lambda to 0, increase penalty
+        updated_dict = jax.tree_util.tree_map(
+            lambda x, y: LagrangeMultiplier(
+                jnp.where(is_satisfied, x.penalty * y.value, 0.0 * x.value),  # lambda update
+                jnp.where(is_satisfied, 0.0 * x.penalty, jnp.minimum(beta * x.penalty, mu_max) - x.penalty),  # penalty change
+                jnp.where(is_satisfied, -x.omega+omega_updated, -x.omega+omega_updated_false),  # omega
+                jnp.where(is_satisfied, -x.eta+eta_updated, -x.eta+eta_updated_false),  # eta
+                0.0 * x.sq_grad
+            ),
+            constraint_dict, grad_dict, is_leaf=pred
+        )
+    
+    elif model_lagrangian == 'Squared':
+        # For Squared lagrangian: lambda update differs
+        updated_dict = jax.tree_util.tree_map(
+            lambda x, y: LagrangeMultiplier(
+                jnp.where(is_satisfied, x.penalty * (y.value - x.value / x.penalty), 0.0 * x.value),  # lambda update
+                jnp.where(is_satisfied, 0.0 * x.penalty, jnp.minimum(beta * x.penalty, mu_max) - x.penalty),  # penalty change
+                jnp.where(is_satisfied, -x.omega+omega_updated, -x.omega+omega_updated_false),  # omega
+                jnp.where(is_satisfied, -x.eta+eta_updated, -x.eta+eta_updated_false),  # eta
+                0.0 * x.sq_grad
+            ),
+            constraint_dict, grad_dict, is_leaf=pred
+        )
+    
+    return updated_dict
+
+
+def apply_mu_tolerance_all_constraints(constraint_dicts_map, grad_dicts_map=None, constraint_infos_map=None, model_lagrangian='Standard', beta=2.0, mu_max=1.e4, alpha=0.99, gamma=1.e-2, epsilon=1.e-8, eta_tol=1.e-4, omega_tol=1.e-6):
+    """Apply Mu_Tolerance across all constraints (JAX-compatible, no Python loops or dict indexing).
+
+    This mirrors the per-constraint updater but computes a single global
+    decision using all constraint infos, then applies the same update to
+    every constraint's Lagrange multipliers.
+    Args:
+        constraint_dicts_map: pytree mapping keys -> per-constraint lagrange dicts
+        grad_dicts_map: optional pytree of matching shapes with gradient/info dicts
+        constraint_infos_map: optional pytree mapping keys -> constraint info pytrees
+    Returns:
+        pytree with updated LagrangeMultiplier dicts matching `constraint_dicts_map`.
+    """
+    pred = lambda x: isinstance(x, LagrangeMultiplier)
+
+    # Build global flat vector of all constraint infos
+    if constraint_infos_map is None:
+        global_norm = jnp.array(0.0)
+    else:
+        flat_map = jax.tree_util.tree_map(lambda info: jax.flatten_util.ravel_pytree(info)[0], constraint_infos_map)
+        leaves = jax.tree_util.tree_leaves(flat_map)
+        global_norm = jnp.linalg.norm(jnp.concatenate(leaves) if leaves else jnp.array(0.0))
+
+    # Extract eta/omega/penalty from all LagrangeMultipliers directly - no nested tree_map
+    # This matches the pattern in penalty_average function which works inside JIT
+    eta_pytree = jax.tree_util.tree_map(lambda x: x.eta, constraint_dicts_map, is_leaf=pred)
+    omega_pytree = jax.tree_util.tree_map(lambda x: x.omega, constraint_dicts_map, is_leaf=pred)
+    penalty_pytree = jax.tree_util.tree_map(lambda x: x.penalty, constraint_dicts_map, is_leaf=pred)
+    
+    # Flatten to get scalar values
+    eta_flat = jax.flatten_util.ravel_pytree(eta_pytree)[0]
+    omega_flat = jax.flatten_util.ravel_pytree(omega_pytree)[0]
+    penalty_flat = jax.flatten_util.ravel_pytree(penalty_pytree)[0]
+    
+    global_eta = jnp.mean(eta_flat) if eta_flat.size > 0 else eta_tol
+    global_omega = jnp.mean(omega_flat) if omega_flat.size > 0 else omega_tol
+    mu_average = jnp.mean(penalty_flat) if penalty_flat.size > 0 else 1.0
+
+    is_satisfied = global_norm < global_eta
+    
+    # Compute updated eta and omega based on satisfaction
+    eta_updated = jnp.maximum(global_eta / jnp.power(mu_average, 0.1), eta_tol)
+    omega_updated = jnp.maximum(global_omega / mu_average, omega_tol)
+    
+    eta_updated_false = jnp.maximum(1. / jnp.power(mu_average, 0.1), eta_tol)
+    omega_updated_false = jnp.maximum(1.0 / mu_average, omega_tol)
+
+    # Prepare grad_map fallback (zeroed) if not provided
+    if grad_dicts_map is None:
+        def _zero_leaf(leaf):
+            return LagrangeMultiplier(jnp.zeros_like(leaf.value), jnp.zeros_like(leaf.penalty), jnp.zeros_like(leaf.omega), jnp.zeros_like(leaf.eta), jnp.zeros_like(leaf.sq_grad))
+        grad_map_full = jax.tree_util.tree_map(lambda c: jax.tree_util.tree_map(_zero_leaf, c, is_leaf=pred), constraint_dicts_map)
+    else:
+        grad_map_full = grad_dicts_map
+
+    def _update_single(cdict, gdict):
+        if model_lagrangian == 'Standard':
+            return jax.tree_util.tree_map(
+                lambda x, y: LagrangeMultiplier(
+                    jnp.where(is_satisfied, x.penalty * y.value, 0.0 * x.value),
+                    jnp.where(is_satisfied, 0.0 * x.penalty, jnp.minimum(beta * x.penalty, mu_max) - x.penalty),
+                    jnp.where(is_satisfied, -x.omega + omega_updated, -x.omega + omega_updated_false),
+                    jnp.where(is_satisfied, -x.eta + eta_updated, -x.eta + eta_updated_false),
+                    0.0 * x.sq_grad
+                ),
+                cdict, gdict, is_leaf=pred
+            )
+        else:
+            return jax.tree_util.tree_map(
+                lambda x, y: LagrangeMultiplier(
+                    jnp.where(is_satisfied, x.penalty * (y.value - x.value / x.penalty), 0.0 * x.value),
+                    jnp.where(is_satisfied, 0.0 * x.penalty, jnp.minimum(beta * x.penalty, mu_max) - x.penalty),
+                    jnp.where(is_satisfied, -x.omega + omega_updated, -x.omega + omega_updated_false),
+                    jnp.where(is_satisfied, -x.eta + eta_updated, -x.eta + eta_updated_false),
+                    0.0 * x.sq_grad
+                ),
+                cdict, gdict, is_leaf=pred
+            )
+
+    # Map over constraint dicts, treating dicts as leaves (not LagrangeMultipliers)
+    updated_map = jax.tree_util.tree_map(_update_single, constraint_dicts_map, grad_map_full, is_leaf=lambda x: isinstance(x, dict))
+    return updated_map
+
+
 
 
 
@@ -285,10 +958,10 @@ class ALM(NamedTuple):
 
 #This can use optax gradient descent optimizers with different mu updating methods
 def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from OPTAX
-    constraints: Constraint,     #List of constraints
+    constraints: BaseConstraint,     #List of constraints
     loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
     model_lagrangian='Standard' ,            #Model to use for updating lagrange multipliers
-    model_mu='Constant' ,            #Model to use for updating lagrange multipliers    
+    model_mu='Mu_Tolerance' ,            #Model to use for updating lagrange multipliers    
     beta=2.0,
     mu_max=1.e4,
     alpha=0.99,
@@ -299,87 +972,48 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
     **kargs,                   #Extra key arguments for loss
 ):
 
-
-    if model_mu=='Mu_Tolerance_LBFGS':
-        @jax.jit
-        def init_fn(params,**kargs):
-            main_params,lagrange_params=params
-            main_state = optimizer.init(main_params)
-            lag_state=lagrange_update(model_lagrangian=model_lagrangian).init(lagrange_params)
-            opt_state=main_state,lag_state
-            value,grad=jax.value_and_grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)          
-            return opt_state,grad,value[0],value[1]
-    else:
-        @jax.jit
-        def init_fn(params,**kargs):
-            main_params,lagrange_params=params
-            main_state = optimizer.init(main_params)
-            lag_state=lagrange_update(model_lagrangian=model_lagrangian).init(lagrange_params)
-            opt_state=main_state,lag_state
-            grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)          
-            return opt_state,grad,info        
+    @jax.jit
+    def init_fn(params,**kargs):
+        main_params,lagrange_params=params
+        main_state = optimizer.init(main_params)
+        lag_state=None
+        grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)          
+        return (main_state,lag_state),grad,info
 
     # Define the Augmented lagrangian
     if model_lagrangian=='Standard':
         def lagrangian(main_params,lagrange_params,**kargs):
-            main_loss = jnp.linalg.norm(loss(main_params,**kargs)) #The norm here is to ensure we have a scalr from the loss which should be a vector
+            main_loss = jnp.linalg.norm(loss(main_params,**kargs))
             mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
             return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
-
-        # Augmented Lagrangian
-        def lagrangian_lbfgs(main_params,lagrange_params,**kargs):
-            main_loss = jnp.linalg.norm(loss(main_params,**kargs))
-            mdmm_loss, _ = constraints.loss(lagrange_params, main_params)  
-            return  main_loss+mdmm_loss
 
     elif model_lagrangian=='Squared':
         def lagrangian(main_params,lagrange_params,**kargs):
             main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))   
-            #Here we take the square because the term appearing in this Lagrangian
             mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
             return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
 
-        # Augmented Lagrangian
-        def lagrangian_lbfgs(main_params,lagrange_params,**kargs):
-            #Here we take the square because the term appearing in this Lagrangian            
-            main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
-            mdmm_loss, _ = constraints.loss(lagrange_params, main_params)  
-            return  main_loss+mdmm_loss
-
-    if model_mu=='Mu_Conditional':
-        # Do the optimization step     
-        @partial(jit, static_argnums=(6,7,8,9,10,11,12,13))
-        def update_fn(params, opt_state,grad,info,eta,omega,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+    if model_mu=='Mu_Adaptative_2':
+        @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+        def update_fn(params, opt_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
             main_state,lag_state=opt_state
             main_params,lagrange_params=params
-            main_updates, main_state = optimizer.update(grad[0], main_state) 
-            main_params = optax.apply_updates(main_params, main_updates)
-            params=main_params,lagrange_params                        
-            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)             
-            true_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Conditional_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-            false_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Conditional_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
-            lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
-            lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
-            params=main_params,lagrange_params
-            opt_state=main_state,lag_state
-            eta=norm_constraints(info[2])
-            return params,opt_state,grad,info,eta,omega  
-    elif model_mu=='Mu_Tolerance':
-        # Do the optimization step     
-        @partial(jit, static_argnums=(6,7,8,9,10,11,12,13))
-        def update_fn(params, opt_state,grad,info,eta,omega,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
-            main_state,lag_state=opt_state
-            #While loop on omega
+            
+            # Extract omega values from lagrange_params to calculate omega_min
+            pred = lambda x: isinstance(x, LagrangeMultiplier)
+            omega_vals = jax.tree_util.tree_map(lambda x: x.omega, lagrange_params, is_leaf=pred)
+            omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
+            omega_min = jnp.min(omega_flat)
+            
+            # While loop on omega
             state=params,main_state,grad,info
             def condition(state):
                 _,_,grad,_=state
-                return jnp.linalg.norm(grad[0]*main_params)> omega
+                return jnp.linalg.norm(grad[0])> omega_min
 
             def minimization_loop(state):
                 params,main_state,grad,info=state
                 main_params,lagrange_params=params
-                #jax.debug.print('Loop omega: {omega}', omega=omega)   
-                #jax.debug.print('Loop grad: {grad}', grad=jnp.linalg.norm(grad[0]))                                              
                 main_updates, main_state = optimizer.update(grad[0], main_state) 
                 main_params = optax.apply_updates(main_params, main_updates)
                 params=main_params,lagrange_params                        
@@ -389,74 +1023,98 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
 
             params,main_state,grad,info=jax.lax.while_loop(condition,minimization_loop,state)
             main_params,lagrange_params=params
-            true_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-            false_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
-            lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
-            lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
+            old_info=info[2]
+            
+            # Apply per-constraint Mu_Adaptative_2 updates
+            lag_updates = jax.tree_util.tree_map(
+                lambda lag_p, grad_c, c_info, c_old_info: apply_mu_tolerance_per_constraint(
+                    lag_p, grad_c, c_info, constraint_info_prev=c_old_info,
+                    model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                ),
+                lagrange_params, grad[1], info[2], old_info,
+                is_leaf=lambda x: isinstance(x, dict)
+            )
+            
+            lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
             params=main_params,lagrange_params
             grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
             opt_state=main_state,lag_state
-            eta=lag_updates[1]
-            omega=lag_updates[2]
-            #jax.debug.print('eta {omega}:', omega=eta)   
-            #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))   
-            return params,opt_state,grad,info,eta,omega   
-    elif model_mu=='Mu_Tolerance_LBFGS':
-        # Do the optimization step     
-        @partial(jit, static_argnums=(7,8,9,10,11,12,13,14))
-        def update_fn(params, opt_state,grad,value,info,eta,omega,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+            return params,opt_state,grad,info
+
+    elif model_mu=='Mu_Tolerance' or model_mu=='Mu_Adaptative_1':
+        @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+        def update_fn(params, opt_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
             main_state,lag_state=opt_state
-            #While loop on omega
-            state=params,main_state,grad,value,info
+            main_params,lagrange_params=params
+            
+            # Extract omega values from lagrange_params to calculate omega_min
+            pred = lambda x: isinstance(x, LagrangeMultiplier)
+            omega_vals = jax.tree_util.tree_map(lambda x: x.omega, lagrange_params, is_leaf=pred)
+            omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
+            omega_min = jnp.min(omega_flat)
+            
+            # While loop on omega
+            state=params,main_state,grad,info
             def condition(state):
-                _,_,grad,_,_=state
-                return jnp.linalg.norm(grad[0])> omega
+                _,_,grad,_=state
+                return jnp.linalg.norm(grad[0])> omega_min
 
             def minimization_loop(state):
-                params,main_state,grad,value,info=state
+                params,main_state,grad,info=state
                 main_params,lagrange_params=params
-                #jax.debug.print('Loop omega: {omega}', omega=omega)   
-                #jax.debug.print('Loop grad: {grad}', grad=jnp.linalg.norm(grad[0]))                                                             
-                main_updates, main_state = optimizer.update(grad[0], main_state,params=main_params,value=value,grad=grad[0],value_fn=lagrangian_lbfgs,lagrange_params=lagrange_params) 
+                main_updates, main_state = optimizer.update(grad[0], main_state) 
                 main_params = optax.apply_updates(main_params, main_updates)
                 params=main_params,lagrange_params                        
-                value,grad = jax.value_and_grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)
-                #Here info is in value[1]  
-                state=params,main_state,grad,value[0],value[1]
+                grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+                state=params,main_state,grad,info
                 return state
 
-            params,main_state,grad,value,info=jax.lax.while_loop(condition,minimization_loop,state)
+            params,main_state,grad,info=jax.lax.while_loop(condition,minimization_loop,state)
             main_params,lagrange_params=params
-            true_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-            false_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
-            lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
-            lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
+            
+            # Apply Mu updates: use cross-constraint function for Mu_Tolerance,
+            # keep per-constraint updater for Mu_Adaptative_1
+            if model_mu == 'Mu_Tolerance':
+                lag_updates = apply_mu_tolerance_all_constraints(
+                    lagrange_params, grad_dicts_map=grad[1], constraint_infos_map=info[2],
+                    model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max,
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol
+                )
+            else:
+                lag_updates = jax.tree_util.tree_map(
+                    lambda lag_p, grad_c, c_info: apply_mu_tolerance_per_constraint(
+                        lag_p, grad_c, c_info, constraint_info_prev=None,
+                        model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                        alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                    ),
+                    lagrange_params, grad[1], info[2],
+                    is_leaf=lambda x: isinstance(x, dict)
+                )
+            
+            lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
             params=main_params,lagrange_params
-            value,grad = jax.value_and_grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
             opt_state=main_state,lag_state
-            eta=lag_updates[1]
-            omega=lag_updates[2]
-            #jax.debug.print('eta {omega}:', omega=eta)   
-            #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))   
-            return params,opt_state,grad,value[0],value[1],eta,omega                                           
+            return params,opt_state,grad,info
+
     else:       
-        # Do the optimization step
-        @partial(jit, static_argnums=(6,7,8,9,10,11,12,13))
-        def update_fn(params, opt_state,grad,info,eta,omega,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+        # Do the optimization step (Constant or other models)
+        @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+        def update_fn(params, opt_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
             main_state,lag_state=opt_state
             main_params,lagrange_params=params
             main_updates, main_state = optimizer.update(grad[0], main_state) 
             main_params = optax.apply_updates(main_params, main_updates)
             params=main_params,lagrange_params                        
             grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)           
-            lag_updates, lag_state = lagrange_update(model_lagrangian=model_lagrangian).update(lagrange_params,grad[1], lag_state,eta,omega,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+            lag_updates, lag_state = lagrange_update(model_lagrangian=model_lagrangian).update(lagrange_params,grad[1], lag_state,0.0,0.0,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
             lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
             params=main_params,lagrange_params
             opt_state=main_state,lag_state
-            return params,opt_state, grad,info,eta,omega      
+            return params,opt_state, grad,info
 
-
-    return ALM(init_fn,partial(update_fn,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
+    return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
  
 
 
@@ -466,9 +1124,10 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
 #Using explicit jaxopt optimizer and not scipy wrapper, Note: JAXOPT is the only jax library with bounded lbfgs-B at the moment
 
 #Using LBFGSB (bounded) 
-def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
+def ALM_model_jaxopt_lbfgsb(constraints: BaseConstraint,#List of constraints
     loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
     model_lagrangian='Standard',
+    model_mu='Mu_Tolerance',
     beta=2.0,
     mu_max=1.e4,
     alpha=0.99,
@@ -485,7 +1144,8 @@ def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
     def init_fn(params,**kargs):
         main_params,lagrange_params=params
         grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        lag_state=lagrange_update(model_lagrangian=model_lagrangian).init(lagrange_params)                       
+        #lag_state=lagrange_update(model_lagrangian=model_lagrangian).init(lagrange_params)  
+        lag_state=optax.EmptyState()                     
         return lag_state,grad,info        
 
     if model_lagrangian=='Standard':
@@ -501,26 +1161,48 @@ def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
             mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
             return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
 
-    @partial(jit, static_argnums=(6,7,8,9,10,11,12))
-    def update_fn(params, lag_state,grad,info,eta,omega,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+ 
+    @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+    def update_fn(params, lag_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
         main_params,lagrange_params=params
-        minimization_loop=jaxopt.LBFGSB(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega)
+        # Extract omega values from lagrange_params to calculate omega_min
+        pred = lambda x: isinstance(x, LagrangeMultiplier)
+        omega_vals = jax.tree_util.tree_map(lambda x: x.omega, lagrange_params, is_leaf=pred)
+        omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
+        omega_min = jnp.min(omega_flat)
+        old_info=info[2]
+        minimization_loop=jaxopt.LBFGSB(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega_min)
         state=minimization_loop.run(main_params,bounds=(-100.*jnp.ones_like(main_params),jnp.ones_like(main_params)*100.),lagrange_params=lagrange_params,**kargs)
         main_params=state.params
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        true_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-        false_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
-        lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
-        lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
+        
+        # Choose cross-constraint Mu_Tolerance updater or per-constraint updater
+        if model_mu == 'Mu_Tolerance':
+            lag_updates = apply_mu_tolerance_all_constraints(
+                lagrange_params, grad_dicts_map=grad[1], constraint_infos_map=info[2],
+                model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max,
+                alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol
+            )
+        else:
+            lag_updates = jax.tree_util.tree_map(
+                lambda lag_p, grad_c, c_info, c_old_info: apply_mu_tolerance_per_constraint(
+                    lag_p, grad_c, c_info, constraint_info_prev=c_old_info,
+                    model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                ),
+                lagrange_params, grad[1], info[2], old_info,
+                is_leaf=lambda x: isinstance(x, dict)
+            )
+        
+        lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
         params=main_params,lagrange_params
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
-        eta=lag_updates[1]
-        omega=lag_updates[2]
         #jax.debug.print('omega {omega}:', omega=omega)   
         #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
         #jax.debug.print('eta {omega}:', omega=eta)
         #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
-        return params,lag_state,grad,info,eta,omega                                  
+        return params,lag_state,grad,info           
+     
 
 
     return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
@@ -533,8 +1215,10 @@ def ALM_model_jaxopt_lbfgsb(constraints: Constraint,#List of constraints
 
 
 #This uses jaxopt LevenbergMarquardt least squares (not working on jax==0.6.0 in GPU due to cuda versions conflict. Works on jax==0.5.0)
-def ALM_model_jaxopt_LevenbergMarquardt(constraints: Constraint,#List of constraints
+def ALM_model_jaxopt_LevenbergMarquardt(constraints: BaseConstraint,#List of constraints
     loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
+    model_lagrangian='Squared',            #Model to use for updating lagrange multipliers
+    model_mu='Mu_Tolerance',               #Model to use for updating lagrange multipliers    
     beta=2.0,
     mu_max=1.e4,
     alpha=0.99,
@@ -545,50 +1229,74 @@ def ALM_model_jaxopt_LevenbergMarquardt(constraints: Constraint,#List of constra
     **kargs,                   #Extra key arguments for loss
 ):
 
-    model_lagrangian='Squared'
-
-
     @jax.jit
     def init_fn(params,**kargs):
         main_params,lagrange_params=params
         grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        lag_state=lagrange_update(model_lagrangian=model_lagrangian).init(lagrange_params)                       
+        lag_state=None                       
         return lag_state,grad,info        
 
+    if model_lagrangian=='Standard':
+        def lagrangian(main_params,lagrange_params,**kargs):
+            main_loss = jnp.linalg.norm(loss(main_params,**kargs))
+            mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+            return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
 
-    def lagrangian(main_params,lagrange_params,**kargs):
-        main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
-        mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
-        #This uses ||f(x)||^2 in the lagrangian
-        return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
+        def lagrangian_least_residual(main_params,lagrange_params,**kargs):
+            main_loss = jnp.linalg.norm(loss(main_params,**kargs))
+            mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+            return  jnp.sqrt(2.*(main_loss+mdmm_loss)), (main_loss,main_loss+mdmm_loss, inf)    
 
-    #Definition to get the reisdual which for optax and optimistix least squares is going to be defined as 0.5*sum_i f_i(x)
-    def lagrangian_least_residual(main_params,lagrange_params,**kargs):
-        main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
-        mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
-        return  jnp.sqrt(2.*(main_loss+mdmm_loss)), (main_loss,main_loss+mdmm_loss, inf)    
+    elif model_lagrangian=='Squared':
+        def lagrangian(main_params,lagrange_params,**kargs):
+            main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
+            mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+            return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
 
-    @partial(jit, static_argnums=(6,7,8,9,10,11,12))
-    def update_fn(params, lag_state,grad,info,eta,omega,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
-        main_params,lagrange_params=params
-        minimization_loop=jaxopt.LevenbergMarquardt(residual_fun=lagrangian_least_residual,has_aux=True,implicit_diff=False,xtol=1.e-14,gtol=omega)
-        state=minimization_loop.run(main_params,lagrange_params=lagrange_params,**kargs)
-        main_params=state.params
-        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        true_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-        false_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
-        lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
-        lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
-        params=main_params,lagrange_params
-        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
-        eta=lag_updates[1]
-        omega=lag_updates[2]
-        #jax.debug.print('omega {omega}:', omega=omega)   
-        #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
-        #jax.debug.print('eta {omega}:', omega=eta)
-        #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
-        return params,lag_state,grad,info,eta,omega                                  
+        def lagrangian_least_residual(main_params,lagrange_params,**kargs):
+            main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
+            mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+            return  jnp.sqrt(2.*(main_loss+mdmm_loss)), (main_loss,main_loss+mdmm_loss, inf)
 
+    if model_mu=='Mu_Adaptative_2':
+        jax.debug.print('omega {omega}:', omega=model_mu)   
+        @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+        def update_fn(params, lag_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+            main_params,lagrange_params=params
+            # Extract omega values from lagrange_params to calculate omega_min
+            pred = lambda x: isinstance(x, LagrangeMultiplier)
+            omega_vals = jax.tree_util.tree_map(lambda x: x.omega, lagrange_params, is_leaf=pred)
+            omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
+            omega_min = jnp.min(omega_flat)
+            old_info=info[2]
+            minimization_loop=jaxopt.LevenbergMarquardt(residual_fun=lagrangian_least_residual,has_aux=True,implicit_diff=False,xtol=1.e-14,gtol=omega_min)
+            state=minimization_loop.run(main_params,lagrange_params=lagrange_params,**kargs)
+            main_params=state.params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+            
+            if model_mu == 'Mu_Tolerance':
+                lag_updates = apply_mu_tolerance_all_constraints(
+                    lagrange_params, grad_dicts_map=grad[1], constraint_infos_map=info[2],
+                    model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max,
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol
+                )
+            else:
+                lag_updates = jax.tree_util.tree_map(
+                    lambda lag_p, grad_c, c_info, c_old_info: apply_mu_tolerance_per_constraint(
+                        lag_p, grad_c, c_info, constraint_info_prev=c_old_info,
+                        model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                        alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                    ),
+                    lagrange_params, grad[1], info[2], old_info,
+                    is_leaf=lambda x: isinstance(x, dict)
+                )
+            
+            lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
+            params=main_params,lagrange_params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
+            return params,lag_state,grad,info           
+
+                             
 
     return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
     #return optax.GradientTransformationExtraArgs(init_fn, update_fn)
@@ -598,9 +1306,10 @@ def ALM_model_jaxopt_LevenbergMarquardt(constraints: Constraint,#List of constra
 
     
 #This case uses JAXOPT LBFGS (unbounded version)
-def ALM_model_jaxopt_lbfgs(constraints: Constraint,#List of constraints
+def ALM_model_jaxopt_lbfgs(constraints: BaseConstraint,#List of constraints
     loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
     model_lagrangian='Standard',
+    model_mu='Mu_Tolerance',
     beta=2.0,
     mu_max=1.e4,
     alpha=0.99,
@@ -632,38 +1341,89 @@ def ALM_model_jaxopt_lbfgs(constraints: Constraint,#List of constraints
             mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
             return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
 
-
-    @partial(jit, static_argnums=(6,7,8,9,10,11,12))
-    def update_fn(params, lag_state,grad,info,eta,omega,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
-        main_params,lagrange_params=params
-        minimization_loop=jaxopt.LBFGS(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega)
-        state=minimization_loop.run(main_params,lagrange_params=lagrange_params,**kargs)
-        main_params=state.params
-        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        true_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-        false_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
-        lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
-        lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
-        params=main_params,lagrange_params
-        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
-        eta=lag_updates[1]
-        omega=lag_updates[2]
-        #jax.debug.print('omega {omega}:', omega=omega)   
-        #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
-        #jax.debug.print('eta {omega}:', omega=eta)
-        #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
-        return params,lag_state,grad,info,eta,omega                                  
-
+    if model_mu=='Mu_Adaptative_2':
+        @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+        def update_fn(params, lag_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+            main_params,lagrange_params=params
+            # Extract omega values from lagrange_params to calculate omega_min
+            pred = lambda x: isinstance(x, LagrangeMultiplier)
+            omega_vals = jax.tree_util.tree_map(lambda x: x.omega, lagrange_params, is_leaf=pred)
+            omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
+            omega_min = jnp.min(omega_flat)
+            old_info=info[2]
+            minimization_loop=jaxopt.LBFGS(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega_min)
+            state=minimization_loop.run(main_params,lagrange_params=lagrange_params,**kargs)
+            main_params=state.params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+            
+            # Apply per-constraint Mu_Tolerance updates using jax.tree_map for efficiency
+            # Each constraint dict is treated as a leaf and passed to the function
+            # The function now updates eta and omega within the LagrangeMultiplier structure
+            lag_updates = jax.tree_util.tree_map(
+                lambda lag_p, grad_c, c_info, c_old_info: apply_mu_tolerance_per_constraint(
+                    lag_p, grad_c, c_info, constraint_info_prev=c_old_info,
+                    model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                ),
+                lagrange_params, grad[1], info[2],old_info,
+                is_leaf=lambda x: isinstance(x, dict)
+            )
+            
+            lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
+            params=main_params,lagrange_params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
+            #jax.debug.print('omega {omega}:', omega=omega)   
+            #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
+            #jax.debug.print('eta {omega}:', omega=eta)
+            #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
+            return params,lag_state,grad,info
+    else:
+        @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+        def update_fn(params, lag_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+            main_params,lagrange_params=params
+            # Extract omega values from lagrange_params to calculate omega_min
+            pred = lambda x: isinstance(x, LagrangeMultiplier)
+            omega_vals = jax.tree_util.tree_map(lambda x: x.omega, lagrange_params, is_leaf=pred)
+            omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
+            omega_min = jnp.min(omega_flat)
+            
+            minimization_loop=jaxopt.LBFGS(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega_min)
+            state=minimization_loop.run(main_params,lagrange_params=lagrange_params,**kargs)
+            main_params=state.params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+            
+            # Apply per-constraint Mu_Tolerance updates using jax.tree_map for efficiency
+            # Each constraint dict is treated as a leaf and passed to the function
+            # The function now updates eta and omega within the LagrangeMultiplier structure
+            lag_updates = jax.tree_util.tree_map(
+                lambda lag_p, grad_c, c_info: apply_mu_tolerance_per_constraint(
+                    lag_p, grad_c, c_info, constraint_info_prev=None,
+                    model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                ),
+                lagrange_params, grad[1], info[2],
+                is_leaf=lambda x: isinstance(x, dict)
+            )
+            
+            lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
+            params=main_params,lagrange_params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
+            #jax.debug.print('omega {omega}:', omega=omega)   
+            #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
+            #jax.debug.print('eta {omega}:', omega=eta)
+            #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
+            return params,lag_state,grad,info
 
     return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
-    #return optax.GradientTransformationExtraArgs(init_fn, update_fn)
 
 
 
 
 #####This case uses LevenbergMarquardt from optimisitix ##########
-def ALM_model_optimistix_LevenbergMarquardt(constraints: Constraint,#List of constraints
+def ALM_model_optimistix_LevenbergMarquardt(constraints: BaseConstraint,#List of constraints
     loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
+    model_lagrangian='Squared',            #Model to use for updating lagrange multipliers
+    model_mu='Mu_Tolerance',               #Model to use for updating lagrange multipliers    
     beta=2.0,
     mu_max=1.e4,
     alpha=0.99,
@@ -674,48 +1434,98 @@ def ALM_model_optimistix_LevenbergMarquardt(constraints: Constraint,#List of con
     **kargs,                   #Extra key arguments for loss
 ):
 
-    model_lagrangian='Squared'
-
     @jax.jit
     def init_fn(params,**kargs):
         main_params,lagrange_params=params
         grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        lag_state=lagrange_update(model_lagrangian=model_lagrangian).init(lagrange_params)                
+        lag_state=None                
         return lag_state,grad,info        
 
-    def lagrangian(main_params,lagrange_params,**kargs):
-        main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
-        mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
-        #This uses ||f(x)||^2 in the lagrangian
-        return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
+    if model_lagrangian=='Standard':
+        def lagrangian(main_params,lagrange_params,**kargs):
+            main_loss = jnp.linalg.norm(loss(main_params,**kargs))
+            mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+            return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
 
-    #Definition to get the reisdual which for optax and optimistix least squares is going to be defined as 0.5*sum_i f_i(x)
-    def lagrangian_least_residual(main_params,lagrange_params,**kargs):
-        main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
-        mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
-        return  jnp.sqrt(2.*(main_loss+mdmm_loss)), (main_loss,main_loss+mdmm_loss, inf)     
+        def lagrangian_least_residual(main_params,lagrange_params,**kargs):
+            main_loss = jnp.linalg.norm(loss(main_params,**kargs))
+            mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+            return  jnp.sqrt(2.*(main_loss+mdmm_loss)), (main_loss,main_loss+mdmm_loss, inf)
 
-    @partial(jit, static_argnums=(6,7,8,9,10,11,12))
-    def update_fn(params, lag_state,grad,info,eta,omega,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
-        main_params,lagrange_params=params
-        optimizer=optimistix.LevenbergMarquardt(rtol=omega,atol=omega)
-        state=optimistix.least_squares(fn=lagrangian_least_residual,solver=optimizer,y0=main_params,args=lagrange_params,has_aux=True,options={'jac':'bwd'},max_steps=100000)
-        main_params=state.value
-        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        true_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_True',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-        false_func=partial(lagrange_update(model_lagrangian=model_lagrangian).update,model_mu='Mu_Tolerance_False',beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)            
-        lag_updates, lag_state = jax.lax.cond(norm_constraints(info[2])<eta,true_func,false_func,lagrange_params,grad[1], lag_state,eta,omega)
-        lagrange_params = optax.apply_updates(lagrange_params, lag_updates[0]) 
-        params=main_params,lagrange_params
-        grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
-        eta=lag_updates[1]
-        omega=lag_updates[2]
-        #jax.debug.print('omega {omega}:', omega=omega)   
-        #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
-        #jax.debug.print('eta {omega}:', omega=eta)
-        #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
-        return params,lag_state,grad,info,eta,omega                                  
+    elif model_lagrangian=='Squared':
+        def lagrangian(main_params,lagrange_params,**kargs):
+            main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
+            mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+            return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
 
+        def lagrangian_least_residual(main_params,lagrange_params,**kargs):
+            main_loss = jnp.square(jnp.linalg.norm(loss(main_params,**kargs)))
+            mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
+            return  jnp.sqrt(2.*(main_loss+mdmm_loss)), (main_loss,main_loss+mdmm_loss, inf)
+
+    if model_mu=='Mu_Adaptative_2':
+        jax.debug.print('omega {omega}:', omega=model_mu)   
+        @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+        def update_fn(params, lag_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+            main_params,lagrange_params=params
+            # Extract omega values from lagrange_params to calculate omega_min
+            pred = lambda x: isinstance(x, LagrangeMultiplier)
+            omega_vals = jax.tree_util.tree_map(lambda x: x.omega, lagrange_params, is_leaf=pred)
+            omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
+            omega_min = jnp.min(omega_flat)
+            old_info=info[2]
+            
+            optimizer=optimistix.LevenbergMarquardt(rtol=omega_min,atol=omega_min)
+            state=optimistix.least_squares(fn=lagrangian_least_residual,solver=optimizer,y0=main_params,args=lagrange_params,has_aux=True,options={'jac':'bwd'},max_steps=100000)
+            main_params=state.value
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+            
+            # Apply per-constraint Mu_Tolerance updates using jax.tree_map for efficiency
+            lag_updates = jax.tree_util.tree_map(
+                lambda lag_p, grad_c, c_info, c_old_info: apply_mu_tolerance_per_constraint(
+                    lag_p, grad_c, c_info, constraint_info_prev=c_old_info,
+                    model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                ),
+                lagrange_params, grad[1], info[2], old_info,
+                is_leaf=lambda x: isinstance(x, dict)
+            )
+            
+            lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
+            params=main_params,lagrange_params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
+            return params,lag_state,grad,info           
+
+    elif model_mu=='Mu_Tolerance' or model_mu=='Mu_Adaptative_1':
+        jax.debug.print('omega {omega}:', omega=model_mu)   
+        @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+        def update_fn(params, lag_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+            main_params,lagrange_params=params
+            # Extract omega values from lagrange_params to calculate omega_min
+            pred = lambda x: isinstance(x, LagrangeMultiplier)
+            omega_vals = jax.tree_util.tree_map(lambda x: x.omega, lagrange_params, is_leaf=pred)
+            omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
+            omega_min = jnp.min(omega_flat)
+            
+            optimizer=optimistix.LevenbergMarquardt(rtol=omega_min,atol=omega_min)
+            state=optimistix.least_squares(fn=lagrangian_least_residual,solver=optimizer,y0=main_params,args=lagrange_params,has_aux=True,options={'jac':'bwd'},max_steps=100000)
+            main_params=state.value
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+            
+            # Apply per-constraint Mu_Tolerance updates using jax.tree_map for efficiency
+            lag_updates = jax.tree_util.tree_map(
+                lambda lag_p, grad_c, c_info: apply_mu_tolerance_per_constraint(
+                    lag_p, grad_c, c_info, constraint_info_prev=None,
+                    model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                ),
+                lagrange_params, grad[1], info[2],
+                is_leaf=lambda x: isinstance(x, dict)
+            )
+            
+            lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
+            params=main_params,lagrange_params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
+            return params,lag_state,grad,info                                   
 
     return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
-
