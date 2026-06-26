@@ -1,75 +1,61 @@
 import os
-from functools import partial
-number_of_processors_to_use = 2 # Parallelization: must divide ntheta*nphi (50 here)
-os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
-from time import time
-from jax import jit, grad, block_until_ready
 import jax.numpy as jnp
+from jax import block_until_ready
+from time import perf_counter as timer
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
+
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import Vmec
-from essos.objective_functions import loss_BdotN
+from essos.fields import BiotSavart
+from essos.surfaces import BdotN
+from essos.losses import custom_loss
 
 output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
-    
-# Optimization parameters
-max_coil_length = 40
-max_coil_curvature = 0.5
-order_Fourier_series_coils = 6
-number_coil_points = order_Fourier_series_coils*10
-maximum_function_evaluations = 300
-number_coils_per_half_field_period = 4
-tolerance_optimization = 1e-5
-ntheta=32
-nphi=32
 
 # Initialize VMEC field
-vmec = Vmec(os.path.join(os.path.dirname(__file__), '../input_files',
-            'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'),
-            ntheta=ntheta, nphi=nphi, range_torus='half period')
+input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
+vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
+vmec = Vmec(vmec_input, ntheta=32, nphi=32, range_torus='half period')
 
 # Initialize coils
-current_on_each_coil = 1
-number_of_field_periods = vmec.nfp
-major_radius_coils = vmec.r_axis
-minor_radius_coils = vmec.r_axis/1.5
-curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
-                                   order=order_Fourier_series_coils,
-                                   R=major_radius_coils, r=minor_radius_coils,
-                                   n_segments=number_coil_points,
-                                   nfp=number_of_field_periods, stellsym=True)
+FOURIER_ORDER = 6
+N_SEGMENTS = FOURIER_ORDER*10
+N_COILS = 4
+COIL_CURRENT = 1.
+NFP = vmec.nfp
+STELLSYM = True
+LARGE_R = vmec.r_axis
+SMALL_R = vmec.r_axis/1.5
 
-coils = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
+curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
+coils = Coils(curves=curves, currents=[COIL_CURRENT]*N_COILS)
+field = BiotSavart(coils)
 
+""" Creating the loss functions """
+def loss(field, surface):
+    return jnp.sum(jnp.abs(BdotN(surface, field)))
 
-loss_partial = partial(loss_BdotN, dofs_curves=coils.dofs_curves, currents_scale=coils.currents_scale, 
-                       nfp=coils.nfp, n_segments=coils.n_segments, stellsym=coils.stellsym,
-                       vmec=vmec, max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature)
-print(loss_partial(coils.x))
-grad_loss_partial = jit(grad(loss_partial))
+Loss = custom_loss(loss, "field", surface=vmec.surface)
+Loss.dependencies = {"field": field}
+dofs = Loss.starting_dofs
 
-time0 = time()
-loss = loss_partial(coils.x)
-block_until_ready(loss)
-print(f"Loss took {time()-time0:.4f} seconds. Gradient would take {(time()-time0)*(coils.x.size +1):.4f} seconds")
+loss_value = Loss(dofs)
+grad_loss = Loss.grad(dofs)
+print("Loss value:", loss_value)
+print("Gradient:", grad_loss)
 
-time0 = time()
-loss_comp = loss_partial(coils.x)
-block_until_ready(loss_comp)
-print(f"Compiled loss took {time()-time0:.4f} seconds. Gradient would take {(time()-time0)*(coils.x.size +1):.4f} seconds")
+t_start = timer()
+block_until_ready(Loss(dofs))
+t_end = timer()
+print(f"Loss took {t_end - t_start:.4f} seconds. Gradient would take {(t_end - t_start)*(coils.x.size +1):.4f} seconds")
 
-time0 = time()
-grad_loss = grad_loss_partial(coils.x)
-block_until_ready(grad_loss)
-print(f"Gradient took {time()-time0:.4f} seconds")
-
-time0 = time()
-grad_loss_comp = grad_loss_partial(coils.x)
-block_until_ready(grad_loss_comp)
-print(f"Compiled gradient took {time()-time0:.4f} seconds")
+t_start = timer()
+block_until_ready(Loss.grad(dofs))
+t_end = timer()
+print(f"Gradient took {t_end - t_start:.4f} seconds")
 
 # Parameter to perturb
 param = 42
@@ -86,17 +72,17 @@ fd_diff = jnp.zeros((fd_loss.size, h_list.size))
 
 # Compute finite differences
 for index, h in enumerate(h_list):
-    delta = jnp.zeros(coils.x.shape)
+    delta = jnp.zeros_like(dofs)
     delta = delta.at[param].set(h)
 
     # 1st order finite differences
-    fd_loss = fd_loss.at[0].set((loss_partial(coils.x+delta)-loss_partial(coils.x))/h)
+    fd_loss = fd_loss.at[0].set((Loss(dofs+delta)-Loss(dofs))/h)
     # 2nd order finite differences
-    fd_loss = fd_loss.at[1].set((loss_partial(coils.x+delta)-loss_partial(coils.x-delta))/(2*h))
+    fd_loss = fd_loss.at[1].set((Loss(dofs+delta)-Loss(dofs-delta))/(2*h))
     # 4th order finite differences
-    fd_loss = fd_loss.at[2].set((loss_partial(coils.x-2*delta)-8*loss_partial(coils.x-delta)+8*loss_partial(coils.x+delta)-loss_partial(coils.x+2*delta))/(12*h))
+    fd_loss = fd_loss.at[2].set((Loss(dofs-2*delta)-8*Loss(dofs-delta)+8*Loss(dofs+delta)-Loss(dofs+2*delta))/(12*h))
     # 6th order finite differences
-    fd_loss = fd_loss.at[3].set((loss_partial(coils.x+3*delta)-9*loss_partial(coils.x+2*delta)+45*loss_partial(coils.x+delta)-45*loss_partial(coils.x-delta)+9*loss_partial(coils.x-2*delta)-loss_partial(coils.x-3*delta))/(60*h))
+    fd_loss = fd_loss.at[3].set((Loss(dofs+3*delta)-9*Loss(dofs+2*delta)+45*Loss(dofs+delta)-45*Loss(dofs-delta)+9*Loss(dofs-2*delta)-Loss(dofs-3*delta))/(60*h))
     
     fd_diff_h = jnp.abs((grad_loss[param]-fd_loss)/grad_loss[param])
     fd_diff = fd_diff.at[:, index].set(fd_diff_h)
