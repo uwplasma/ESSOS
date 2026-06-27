@@ -109,9 +109,9 @@ def nested_lists_to_array(ll):
 class SurfaceRZFourier:
     def __init__(self, rc, zs, nfp, mpol, ntor, ntheta=30, nphi=30, close=True, range_torus='full torus',
                  scaling_type=2, scaling_factor=0):
-        """ rc, zs: dynamic arrays 
+        """ rc, zs: dynamic arrays
             nfp, mpol, ntor: static """
-        
+
         assert isinstance(nfp, int) and nfp > 0, "nfp must be a positive integer."
         assert isinstance(mpol, int) and mpol >= 0, "mpol must be a non-negative integer."
         assert isinstance(ntor, int) and ntor >= 0, "ntor must be a non-negative integer."
