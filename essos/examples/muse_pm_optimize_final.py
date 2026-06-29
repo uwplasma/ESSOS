@@ -1,5 +1,25 @@
 #!/usr/bin/env python3
+"""
+PM dipole optimizer — fB minimization with discreteness annealing.
 
+Starts at a known/loaded pho solution, relaxes it
+continuously to minimize fB (Stage 1), then anneals a discreteness
+penalty back up with a power-law schedule to recover a
++,-1/0 solution (Stage 2).
+
+- nfp/stellsym are read from the SURFACE file so the
+  optimizer can never accidentally run with the wrong symmetry.
+- TF coil field uses essos Coils_from_simsopt + essos.fields.BiotSavart.
+  simsopt is used only to parse the FOCUS coil-file format; all field math
+  is essos's own. Verified against simsopt's BiotSavart
+  when passing ALL physical coils with nfp=1, stellsym=False — MUSE's 16 TF
+  coils are not copies of a smaller set, so do
+  not pass a reduced set with nfp>1 here (it gives wrong results).
+- PM dipole-grid G matrix uses DipoleField.compute_interaction_matrix,
+  which correctly exploits the grid's real nfp/stellsym symmetry
+- Swap the four INPUT FILES paths below to switch problems (MUSE, the
+  rotating-ellipse example is included, commented out).
+"""
 from __future__ import annotations
 
 import gc
@@ -10,16 +30,19 @@ from pathlib import Path
 
 import numpy as np
 
+
+# INPUT FILES — swap these four paths to switch problems
+
 ESSOS_ROOT  = Path(__file__).resolve().parents[2]
 SIMSOPT_SRC = ESSOS_ROOT.parent / "simsopt" / "src"
 
-# MUSE
+# MUSE (active) 
 SURF_FILE     = ESSOS_ROOT / "essos" / "input.muse"
 COIL_FILE     = SIMSOPT_SRC.parent / "tests" / "test_files" / "muse_tf_coils.focus"
 MAG_FILE      = SIMSOPT_SRC.parent / "tests" / "test_files" / "zot80.focus"
 SURFACE_RANGE = "half period"
 
-# Rotating ellipse
+# Rotating ellipse (uncomment these four lines, comment the four above) 
 # SURF_FILE     = ESSOS_ROOT / "essos" / "examples" / "input_rot_ellipse_nfp8_e_1p98"
 # COIL_FILE     = ESSOS_ROOT / "essos" / "examples" / "rot_ellipse_nfp8_e_198.focus"
 # MAG_FILE      = ESSOS_ROOT / "essos" / "examples" / "dipole_grid_nfp8.focus"
@@ -30,6 +53,8 @@ SURFACE_NTHETA = 64
 
 OUTPUT_DIR = Path("pm_opt_output")
 
+
+# OPTIMIZER CONFIG
 
 JAX_PLATFORM = "cpu"
 CPU_THREADS  = 4
@@ -44,14 +69,16 @@ FD_ANNEAL_LR_MAX      = 0.001
 FD_ANNEAL_LR_MIN_FRAC = 0.001
 
 MAX_WD        = 0.2
-WD_RAMP_POWER = 4      #  wD = (progress)^WD_RAMP_POWER * MAX_WD
+WD_RAMP_POWER = 4      # power-law annealing: wD = (progress)^WD_RAMP_POWER * MAX_WD
 LOG_INTERVAL  = 500
 
+# Volume targeting: ONE-SIDED penalty, fires only above target (never pulls volume up)
 VOLUME_TARGET_CM3 = 0.0   # 0 disables
 W_VOLUME_TARGET   = 1.0
 
 B_MAX_T = 1.465
 MU0     = 4 * np.pi * 1e-7
+
 
 if "jax" in sys.modules:
     print("WARNING: JAX already imported — device selection may not take effect.")
@@ -83,6 +110,9 @@ from essos.fields import DipoleField
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+
+# LOAD SURFACE — nfp/stellsym read from the surface itself
+
 def load_surface(surf_file, surface_range, nphi, ntheta):
     from simsopt.geo import SurfaceRZFourier
     try:
@@ -91,6 +121,9 @@ def load_surface(surf_file, surface_range, nphi, ntheta):
         surface = SurfaceRZFourier.from_focus(str(surf_file), range=surface_range, nphi=nphi, ntheta=ntheta)
     return surface
 
+
+
+# LOAD COILS — essos native field evaluation
 
 def load_coils_essos(coil_file):
 
@@ -107,7 +140,11 @@ def load_coils_essos(coil_file):
 
 
 def compute_Bn_fixed_essos(coils, surf_pts, surf_n):
+    """Evaluate the essos-native BiotSavart field at each surface point and
+    project onto the local normal. essos's BiotSavart.B() takes a single
+    point, so we vmap over the surface points."""
     from essos.fields import BiotSavart
+
     field = BiotSavart(coils)
     surf_pts_jax = jnp.asarray(surf_pts, jnp.float64)
     B_at_pts = jax.vmap(field.B)(surf_pts_jax)
@@ -115,25 +152,30 @@ def compute_Bn_fixed_essos(coils, surf_pts, surf_n):
     return np.asarray(Bn, np.float64)
 
 
+# LOAD MAGNET GRID
+
 def load_magnet_grid(mag_file):
-    """Read FOCUS-format magnet grid: positions, moments, and pho (column 8)."""
-    pos_list, mom_list, pho_list = [], [], []
+    
+    pos_list, mom_list, pho_list, ic_list = [], [], [], []
     with open(str(mag_file), encoding="utf-8") as f:
         for line in f.readlines()[3:]:
             tokens = line.replace(",", " ").split()
             if len(tokens) < 12:
                 continue
             x, y, z = float(tokens[3]), float(tokens[4]), float(tokens[5])
+            ic      = float(tokens[6])
             m0      = float(tokens[7])
             pho     = float(tokens[8])
             az, pol = float(tokens[10]), float(tokens[11])
             pos_list.append((x, y, z))
             mom_list.append((m0*np.cos(az)*np.sin(pol), m0*np.sin(az)*np.sin(pol), m0*np.cos(pol)))
             pho_list.append(pho)
+            ic_list.append(ic)
     return (
         np.asarray(pos_list, np.float64),
         np.asarray(mom_list, np.float64),
         np.asarray(pho_list, np.float64),
+        np.asarray(ic_list,  np.float64),
     )
 
 
@@ -160,6 +202,10 @@ def write_focus_file(path, positions, moments, pho, header="generated by muse_pm
 
 print(f"\n--- Loading surface: {SURF_FILE.name} ---")
 surface = load_surface(SURF_FILE, SURFACE_RANGE, SURFACE_NPHI, SURFACE_NTHETA)
+
+# nfp/stellsym read from the surface — not hardcoded. Hardcoding 
+# previously caused the optimizer to silently run with the wrong symmetry
+# when switching between problems (MUSE nfp=2 vs ellipse nfp=8/nfp=4).
 nfp      = int(surface.nfp)
 stellsym = bool(surface.stellsym)
 print(f"Surface nfp={nfp}  stellsym={stellsym}  (read from surface file)")
@@ -175,7 +221,17 @@ essos_coils = load_coils_essos(COIL_FILE)
 Bn_fixed = compute_Bn_fixed_essos(essos_coils, surf_pts, surf_n)
 
 print(f"\n--- Loading magnet grid: {MAG_FILE.name} ---")
-magnet_positions, magnet_moments_raw, pho_loaded = load_magnet_grid(MAG_FILE)
+magnet_positions, magnet_moments_raw, pho_loaded, ic_flags = load_magnet_grid(MAG_FILE)
+
+
+PORT_MASK = ic_flags < 0.5
+n_excluded = int(np.sum(PORT_MASK))
+if n_excluded > 0:
+    print(f"Ic flag: {n_excluded} excluded sites found (Ic=0) — these magnet "
+          f"sites will be excluded (forced pho=0) for the whole run")
+    pho_loaded = np.where(PORT_MASK, 0.0, pho_loaded)
+else:
+    print("Ic flag: no excluded sites found (Ic=1 everywhere) — all magnet sites available")
 n_magnets = len(magnet_positions)
 
 native_norms = np.linalg.norm(magnet_moments_raw, axis=1)
@@ -186,7 +242,11 @@ magnet_moments = magnet_orientations * M0_SCALE
 M_MAX = B_MAX_T / MU0
 volume_per_cell = (M0_SCALE / M_MAX) * 1e6
 
-print(f"Magnets loaded: {n_magnets}  |  M0={M0_SCALE:.6f} A\u00b7m\u00b2  |  V_cell={volume_per_cell:.4f} cm\u00b3")
+
+print(f"Magnets loaded: {n_magnets}  |  mean M0 (from file) = {M0_SCALE:.6f} A\u00b7m\u00b2  |  "
+      f"V_cell={volume_per_cell:.4f} cm\u00b3")
+print(f"  (V_cell assumes N52 NdFeB magnets, remnant field Br={B_MAX_T} T; "
+      f"M0 is the MEAN |moment| across all loaded magnets, not a fixed nominal value)")
 print(f"Loaded pho: {int(np.sum(np.abs(pho_loaded) > 0.5))} active magnets "
       f"({100*np.sum(np.abs(pho_loaded) > 0.5)/n_magnets:.1f}%)")
 
@@ -196,7 +256,7 @@ print(f"Backend: {backend_name}")
 print("=" * 70)
 
 
-# BUILD G MATRIX 
+# BUILD G MATRIX via verified DipoleField.compute_interaction_matrix
 
 print("\n--- Build G matrix ---")
 JAX_DTYPE        = jnp.float32
@@ -240,9 +300,9 @@ def compute_metrics(pho):
 
 
 @jax.jit
-def adam_step(pho, m, v, lr, w_fD):
-    """
-    One Adam step: L = fB/fB_ref + w_fD * fD + wVT * max(fV-Vt, 0).
+@jax.jit
+def adam_step(pho, m, v, lr, w_fD, port_mask):
+    """One Adam step: L = fB/fB_ref + w_fD * fD + wVT * max(fV-Vt, 0).
     """
     def loss(x):
         bn    = x @ G_jax.T + Bn_jax
@@ -258,6 +318,7 @@ def adam_step(pho, m, v, lr, w_fD):
     m    = b1*m + (1-b1)*g
     v    = b2*v + (1-b2)*g*g
     pho  = jnp.clip(pho - lr * m / (jnp.sqrt(v) + eps), -1, 1)
+    pho  = jnp.where(port_mask, f32(0), pho)
     return pho, m, v
 
 
@@ -298,21 +359,21 @@ def fB64_of(p):
 
 t_start = time.time()
 
-# No parallel-starts batch dimension — single trajectory starting AT the
-# loaded solution (e.g. zot80's existing optimized pho), not zero/random.
+
 pho = jnp.asarray(np.clip(pho_loaded, -1, 1), jnp.float32)
+port_mask_jax = jnp.asarray(PORT_MASK)
 mom = jnp.zeros_like(pho)
 var = jnp.zeros_like(pho)
 
 lr0, wd0 = get_lr_and_wd(1)
-pho, mom, var = adam_step(pho, mom, var, f32(lr0), f32(wd0))
+pho, mom, var = adam_step(pho, mom, var, f32(lr0), f32(wd0), port_mask_jax)
 _ = pho.block_until_ready()
 print("JIT compiled.")
 
 fB_s1 = None
 for step in range(2, TOTAL_STEPS + 1):
     lr, wD = get_lr_and_wd(step)
-    pho, mom, var = adam_step(pho, mom, var, f32(lr), f32(wD))
+    pho, mom, var = adam_step(pho, mom, var, f32(lr), f32(wD), port_mask_jax)
 
     if step <= FB_ONLY_STEPS and (step % LOG_INTERVAL == 0 or step == FB_ONLY_STEPS):
         fB_t, fV_t, _ = compute_metrics(pho)
@@ -339,6 +400,7 @@ for step in range(2, TOTAL_STEPS + 1):
 
 p   = np.asarray(pho, np.float64)
 p_d = np.sign(p) * (np.abs(p) > 0.5)
+p_d = np.where(PORT_MASK, 0.0, p_d) 
 fB_fin, fB_rnd = fB64_of(p), fB64_of(p_d)
 
 print(f"\n{'='*70}")
@@ -353,13 +415,15 @@ print(f"  Active magnets: {n_active} / {n_magnets} ({100*n_active/n_magnets:.1f}
 print(f"    North (+1): {int(np.sum(p_d > 0.5))}   South (-1): {int(np.sum(p_d < -0.5))}   Off: {n_magnets - n_active}")
 print(f"{'='*70}")
 
-# SAVE OUTPUTS — .npy 
+
+# SAVE OUTPUTS — .npy for quick reload, .focus for reuse elsewhere
+
 np.save(OUTPUT_DIR / "pho_optimized.npy",  p_d)
 np.save(OUTPUT_DIR / "pho_continuous.npy", p)
 np.save(OUTPUT_DIR / "grid_positions.npy", magnet_positions)
 np.save(OUTPUT_DIR / "grid_moments.npy",   magnet_moments)
 
-
+# Final moments: full strength in the magnet's native orientation where
 # pho is +1, flipped where pho is -1, zero where pho is 0.
 final_moments = np.where(p_d[:, None] != 0, magnet_orientations * M0_SCALE, 0.0) * np.sign(p_d)[:, None]
 write_focus_file(OUTPUT_DIR / "pm_optimized.focus", magnet_positions, final_moments, p_d)
@@ -369,7 +433,6 @@ print(f"\nSaved outputs to {OUTPUT_DIR}/")
 del G_jax, Bn_jax
 gc.collect()
 jax.clear_caches()
-
 
 # PLOTTING
 
@@ -383,21 +446,29 @@ Bn_before = Bn_fixed.reshape(nphi_s, ntheta_s)
 Bn_pm     = (G64 @ p_d).reshape(nphi_s, ntheta_s)
 Bn_after  = Bn_before + Bn_pm
 
-abs_max = max(np.abs(Bn_before).max(), np.abs(Bn_after).max())
-levels  = np.linspace(-abs_max, abs_max, 21)
+abs_max_before = np.abs(Bn_before).max()
+abs_max_after  = np.abs(Bn_after).max()
+levels_before  = np.linspace(-abs_max_before, abs_max_before, 21)
+levels_after   = np.linspace(-abs_max_after, abs_max_after, 21)
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-im1 = axes[0].contourf(phi_coords, theta_coords, Bn_before.T, levels=levels, cmap="RdBu_r", extend="both")
+fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+im1 = axes[0].contourf(phi_coords, theta_coords, Bn_before.T, levels=levels_before, cmap="RdBu_r", extend="both")
 axes[0].set_title("Coils only (before)", fontsize=12)
 axes[0].set_xlabel("phi"); axes[0].set_ylabel("theta")
+axes[0].set_xlim(phi_coords.min(), phi_coords.max())
+axes[0].set_ylim(theta_coords.min(), theta_coords.max())
+axes[0].set_aspect("auto")
 plt.colorbar(im1, ax=axes[0], label="B\u00b7n [T]")
 rms_before = float(np.sqrt(np.mean(Bn_before**2)))
 axes[0].text(0.02, 0.97, f"RMS = {rms_before:.3e} T", transform=axes[0].transAxes,
              va="top", fontsize=10, bbox=dict(boxstyle="round", facecolor="white", alpha=0.8))
 
-im2 = axes[1].contourf(phi_coords, theta_coords, Bn_after.T, levels=levels, cmap="RdBu_r", extend="both")
+im2 = axes[1].contourf(phi_coords, theta_coords, Bn_after.T, levels=levels_after, cmap="RdBu_r", extend="both")
 axes[1].set_title("Coils + optimized PMs (after)", fontsize=12)
 axes[1].set_xlabel("phi")
+axes[1].set_xlim(phi_coords.min(), phi_coords.max())
+axes[1].set_ylim(theta_coords.min(), theta_coords.max())
+axes[1].set_aspect("auto")
 plt.colorbar(im2, ax=axes[1], label="B\u00b7n [T]")
 rms_after = float(np.sqrt(np.mean(Bn_after**2)))
 axes[1].text(0.02, 0.97, f"RMS = {rms_after:.3e} T", transform=axes[1].transAxes,
