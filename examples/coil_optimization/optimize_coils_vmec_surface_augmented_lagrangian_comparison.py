@@ -1,6 +1,4 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide ntheta*nphi
-os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax
 import jax.numpy as jnp
@@ -27,19 +25,33 @@ surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=32, nphi=32, r
 
 
 """ Creating starting coils and surface """
-N_COILS = 4; FOURIER_ORDER = 3; LARGE_R = 10.; SMALL_R = 5.7; NFP = 2; N_SEGMENTS = 30; STELLSYM = True  # Curve parameters
+N_COILS = 4
+FOURIER_ORDER = 3
+LARGE_R = 10.
+SMALL_R = 5.7
+NFP = 2
+N_SEGMENTS = 30
+STELLSYM = True  # Curve parameters
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
+
+
+""" Setting the losses weights and targets """
+LENGTH_WEIGHT = 1.
+LENGTH_TARGET = 40.
+CURVATURE_WEIGHT = 1.
+CURVATURE_TARGET = 0.5
+NORMAL_FIELD_WEIGHT = 1.
+BdotN_Target_tol=1.e-6
+
+EXPORT = False
+
 
 init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
 init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
 init_field = BiotSavart(init_coils)
 init_surface=surface
 
-""" Setting the losses weights and targets """
-LENGTH_WEIGHT = 1.; LENGTH_TARGET = 40.
-CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.5
-NORMAL_FIELD_WEIGHT = 1.
-BdotN_Target_tol=1.e-6
+
 
 """ Creating the loss functions """
 def loss(field, surface):
@@ -157,12 +169,6 @@ params = init_field.dofs, lagrange_params
 lag_state,grad,info=ALM.init(params)
 
 
-
-
-
-
-
-
 """ Optimizing  with alm"""
 t_start = time()
 
@@ -181,8 +187,6 @@ t_end = time()
 
 opt_field_alm = C_normal_field_constraint.dofs_to_pytree(params[0])[0]
 opt_coils_alm = opt_field_alm.coils
-
-
 
 
 """ Defining total loss for nornmal optimization"""
@@ -233,7 +237,6 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-EXPORT = False
 if EXPORT:
     output_filepath = os.path.join(os.path.dirname(__file__), "output")
 
