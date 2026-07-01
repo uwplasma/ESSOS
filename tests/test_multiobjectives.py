@@ -48,11 +48,24 @@ def test_custom_loss_named_unraveler():
 
     dofs = loss.starting_dofs
     named_args = loss.dofs_to_pytree(dofs)
+    tuple_args = tuple(named_args[name] for name in loss.args_names)
 
     assert set(named_args) == {"curve_dofs", "current"}
     assert jnp.array_equal(named_args["curve_dofs"], loss.dependencies["curve_dofs"])
     assert jnp.array_equal(named_args["current"], loss.dependencies["current"])
     assert loss(dofs) == loss_fn(named_args["curve_dofs"], named_args["current"])
+    assert loss.call_pytree(named_args) == loss_fn(named_args["curve_dofs"], named_args["current"])
+    assert loss.call_pytree(tuple_args) == loss_fn(named_args["curve_dofs"], named_args["current"])
+
+    gradient = loss.grad_pytree(named_args)
+    gradient_tuple = loss.grad_pytree(tuple_args)
+    assert set(gradient) == {"curve_dofs", "current", "unused"}
+    assert jnp.array_equal(gradient["curve_dofs"], 2 * named_args["curve_dofs"])
+    assert jnp.array_equal(gradient["current"], jnp.ones_like(named_args["current"]))
+    assert jnp.array_equal(gradient["unused"], jnp.zeros_like(loss.dependencies["unused"]))
+    assert jnp.array_equal(gradient_tuple["curve_dofs"], gradient["curve_dofs"])
+    assert jnp.array_equal(gradient_tuple["current"], gradient["current"])
+    assert jnp.array_equal(gradient_tuple["unused"], gradient["unused"])
 
 
 def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn()):

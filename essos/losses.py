@@ -109,7 +109,11 @@ class custom_loss(base_loss):
     
     @partial(jit, static_argnames=['self'])
     def call_pytree(self, dofs_pytree) -> float:
-        return self.fun(*dofs_pytree, **self.kwargs)
+        if isinstance(dofs_pytree, dict):
+            args = tuple(dofs_pytree[name] for name in self.args_names)
+        else:
+            args = tuple(dofs_pytree)
+        return self.fun(*args, **self.kwargs)
 
     @partial(jit, static_argnames=['self'])
     def grad(self, dofs: jnp.ndarray) -> jnp.ndarray:
@@ -130,7 +134,11 @@ class custom_loss(base_loss):
     
     @partial(jit, static_argnames=['self'])
     def grad_pytree(self, dofs_pytree) -> dict:
-        gradient = jax_grad(self.fun, argnums=tuple(range(len(dofs_pytree))))(*dofs_pytree, **self.kwargs)
+        if isinstance(dofs_pytree, dict):
+            args = tuple(dofs_pytree[name] for name in self.args_names)
+        else:
+            args = tuple(dofs_pytree)
+        gradient = jax_grad(self.fun, argnums=tuple(range(len(args))))(*args, **self.kwargs)
         buffer = self.dependencies_buffer.copy()
         for dep, g in zip(self.args_names, gradient):
             buffer[dep] = g
