@@ -27,7 +27,7 @@ class Curves:
                  nfp:         int = 1,
                  stellsym:    bool = True,
                  scaling_type: int = 2,
-                 scaling_factor: float = 0,
+                 scaling_factor: float = 0.0,
                  scale_fixed: float = 1.0):
         """Initialize Curves.
         
@@ -410,7 +410,8 @@ class Curves:
                     "nfp": self._nfp,
                     "stellsym": self._stellsym,
                     "scaling_type": self._scaling_type,
-                    "scaling_factor": self._scaling_factor}  # static values
+                    "scaling_factor": self._scaling_factor,
+                    "scale_fixed": self._scale_fixed}  # static values
         return (children, aux_data)
 
     @classmethod
