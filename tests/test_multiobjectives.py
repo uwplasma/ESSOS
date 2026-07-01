@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
+from essos.losses import custom_loss
 from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 from essos.coils import Coils,Curves
 from essos.fields import BiotSavart
@@ -32,6 +33,26 @@ def dummy_loss_fn():
     def loss_fn(field=None, coils=None, vmec=None, surface=None, x=None):
         return jnp.sum(x)
     return loss_fn
+
+
+def test_custom_loss_named_unraveler():
+    def loss_fn(curve_dofs, current):
+        return jnp.sum(curve_dofs**2) + jnp.sum(current)
+
+    loss = custom_loss(loss_fn, "curve_dofs", "current")
+    loss.dependencies = {
+        "curve_dofs": jnp.array([[1.0, 2.0], [3.0, 4.0]]),
+        "current": jnp.array([5.0]),
+        "unused": jnp.array([99.0]),
+    }
+
+    dofs = loss.starting_dofs
+    named_args = loss.dofs_to_pytree(dofs)
+
+    assert set(named_args) == {"curve_dofs", "current"}
+    assert jnp.array_equal(named_args["curve_dofs"], loss.dependencies["curve_dofs"])
+    assert jnp.array_equal(named_args["current"], loss.dependencies["current"])
+    assert loss(dofs) == loss_fn(named_args["curve_dofs"], named_args["current"])
 
 
 def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn()):
