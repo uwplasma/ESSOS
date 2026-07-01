@@ -20,6 +20,17 @@ class LagrangeMultiplier(NamedTuple):
     sq_grad: Any  #For updating squared gradient in case of adaptative penalty and multiplier evolution
 
 
+def _multiplier_like(out, multiplier, penalty, omega, eta, sq_grad):
+    z = jnp.zeros_like(out)
+    return LagrangeMultiplier(
+        value=multiplier + z,
+        penalty=penalty + z,
+        omega=omega + z,
+        eta=eta + z,
+        sq_grad=sq_grad + z,
+    )
+
+
 
 
 class BaseConstraint:
@@ -323,10 +334,8 @@ def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,omega=1.0,eta=
     """
 
     def init_fn(*args, **kwargs):
-        return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),
-                                             eta+jnp.zeros_like(fun(*args, **kwargs)),
-                                             omega+jnp.zeros_like(fun(*args, **kwargs)),
-                                             sq_grad+jnp.zeros_like(fun(*args, **kwargs)))}
+        out = fun(*args, **kwargs)
+        return {'lambda': _multiplier_like(out, multiplier, penalty, omega, eta, sq_grad)}
         #return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),sq_grad+jnp.maximum(jnp.square(fun(*args, **kwargs)),1.e-4))}
 
     if model_lagrangian=='Standard':
@@ -362,10 +371,7 @@ def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1.,omega=1.0,et
 
     def init_fn(*args, **kwargs):
         out = fun(*args, **kwargs)
-        return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),
-                                             eta+jnp.zeros_like(fun(*args, **kwargs)),
-                                             omega+jnp.zeros_like(fun(*args, **kwargs)),
-                                             sq_grad+jnp.zeros_like(fun(*args, **kwargs))),
+        return {'lambda': _multiplier_like(out, multiplier, penalty, omega, eta, sq_grad),
                                             'slack': jax.nn.relu(out) ** 0.5}
 
     if model_lagrangian=='Standard':

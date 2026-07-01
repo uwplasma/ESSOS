@@ -29,14 +29,16 @@ from essos.augmented_lagrangian import (
 class TestAugmentedLagrangian(unittest.TestCase):
 
     def test_lagrange_multiplier(self):
-        lm = LagrangeMultiplier(value=1.0, penalty=2.0, sq_grad=3.0)
+        lm = LagrangeMultiplier(value=1.0, penalty=2.0, omega=4.0, eta=5.0, sq_grad=3.0)
         self.assertEqual(lm.value, 1.0)
         self.assertEqual(lm.penalty, 2.0)
+        self.assertEqual(lm.omega, 4.0)
+        self.assertEqual(lm.eta, 5.0)
         self.assertEqual(lm.sq_grad, 3.0)
 
     def test_update_method_all_modes(self):
-        params = LagrangeMultiplier(jnp.array([1.]), jnp.array([2.]), jnp.array([0.]))
-        updates = LagrangeMultiplier(jnp.array([0.5]), jnp.array([0.]), jnp.array([0.]))
+        params = LagrangeMultiplier(value=jnp.array([1.]), penalty=jnp.array([2.]), omega=jnp.array([0.]), eta=jnp.array([0.]), sq_grad=jnp.array([0.]))
+        updates = LagrangeMultiplier(value=jnp.array([0.5]), penalty=jnp.array([0.]), omega=jnp.array([0.]), eta=jnp.array([0.]), sq_grad=jnp.array([0.]))
         for mode in [
             'Constant', 'Mu_Monotonic', 'Mu_Conditional_True', 'Mu_Conditional_False',
             'Mu_Tolerance_True', 'Mu_Tolerance_False', 'Mu_Adaptative'
@@ -51,8 +53,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
                 self.assertIsInstance(result, LagrangeMultiplier)
 
     def test_update_method_squared_all_modes(self):
-        params = LagrangeMultiplier(jnp.array([1.]), jnp.array([2.]), jnp.array([0.]))
-        updates = LagrangeMultiplier(jnp.array([0.5]), jnp.array([0.]), jnp.array([0.]))
+        params = LagrangeMultiplier(value=jnp.array([1.]), penalty=jnp.array([2.]), omega=jnp.array([0.]), eta=jnp.array([0.]), sq_grad=jnp.array([0.]))
+        updates = LagrangeMultiplier(value=jnp.array([0.5]), penalty=jnp.array([0.]), omega=jnp.array([0.]), eta=jnp.array([0.]), sq_grad=jnp.array([0.]))
         for mode in [
             'Constant', 'Mu_Monotonic', 'Mu_Conditional_True', 'Mu_Conditional_False',
             'Mu_Tolerance_True', 'Mu_Tolerance_False', 'Mu_Adaptative'
@@ -165,7 +167,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertAlmostEqual(float(result), 3.0)
 
     def test_penalty_average(self):
-        tree = {'a': LagrangeMultiplier(jnp.array([1.0]), jnp.array([2.0]), jnp.array([0.0]))}
+        tree = {'a': LagrangeMultiplier(value=jnp.array([1.0]), penalty=jnp.array([2.0]), omega=jnp.array([0.0]), eta=jnp.array([0.0]), sq_grad=jnp.array([0.0]))}
         result = penalty_average(tree)
         self.assertAlmostEqual(float(result), 2.0)
 
@@ -190,8 +192,8 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertTrue(hasattr(gt, 'update'))
         # Call init and update with dummy data
         params = {'x': jnp.array([1.0])}
-        lagrange_params = LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))
-        updates = LagrangeMultiplier(jnp.array([-0.5]), jnp.array([1.0]), jnp.array([1.0]))
+        lagrange_params = LagrangeMultiplier(value=jnp.array([0.0]), penalty=jnp.array([1.0]), omega=jnp.array([0.0]), eta=jnp.array([0.0]), sq_grad=jnp.array([0.0]))
+        updates = LagrangeMultiplier(value=jnp.array([-0.5]), penalty=jnp.array([1.0]), omega=jnp.array([1.0]), eta=jnp.array([1.0]), sq_grad=jnp.array([1.0]))
         state = gt.init(params)
         # eta, omega, etc. are required by update_fn signature
         eta = {'x': jnp.array([0.0])}
