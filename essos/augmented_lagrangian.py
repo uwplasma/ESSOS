@@ -51,6 +51,10 @@ class CompositeConstraint:
         self._starting_dofs = None
         self._dofs_to_pytree = None
 
+    def clear_cache(self):
+        self._starting_dofs = None
+        self._dofs_to_pytree = None
+
     @property
     def dependencies(self):
         return self._dependencies
@@ -59,6 +63,7 @@ class CompositeConstraint:
     def dependencies(self, value):
         if not isinstance(value, dict):
             raise TypeError("dependencies must be a dictionary mapping names to arrays")
+        self.clear_cache()
         self._dependencies = value
         for selective in self.selective_map.values():
             selective.dependencies = value
@@ -133,6 +138,10 @@ class SelectiveConstraint:
         self._dependencies = {}
         self._starting_dofs = None
         self._dofs_to_pytree = None
+
+    def clear_cache(self):
+        self._starting_dofs = None
+        self._dofs_to_pytree = None
     
     @property
     def dependencies(self):
@@ -144,6 +153,7 @@ class SelectiveConstraint:
         """Set dependencies (mapping of arg_names to their values)."""
         if not isinstance(value, dict):
             raise TypeError("dependencies must be a dictionary mapping names to arrays")
+        self.clear_cache()
         self._dependencies = value
     
     def _get_filtered_args(self):
@@ -522,22 +532,9 @@ def combine(*args):
 
     combined = CompositeConstraint(init_fn, loss_fn, selective_map=selective_map, arg_names=all_arg_names)
 
-
-    # keep legacy-style attributes for compatibility
-    combined._dependencies = {}
-    combined.selective_map = selective_map
-
     # Precompute mapping from composite arg_names -> indices for each selective
     for sel in selective_map.values():
         sel._composite_index_map = tuple(combined.arg_names.index(n) for n in sel.arg_names)
-
-    # Add property for dependency management (keeps previous API)
-    def set_dependencies(deps):
-        combined._dependencies = deps
-        for selective in selective_map.values():
-            selective.dependencies = deps
-
-    combined.set_dependencies = set_dependencies
 
     return combined
 

@@ -11,6 +11,7 @@ from essos.augmented_lagrangian import (
     eq,
     ineq,
     combine,
+    SelectiveConstraint,
     total_infeasibility,
     norm_constraints,
     infty_norm_constraints,
@@ -102,6 +103,51 @@ class TestAugmentedLagrangian(unittest.TestCase):
         combined = combine(c1, c2, c3)
         params = combined.init(jnp.array([2.]))
         combined.loss(params, jnp.array([2.]))
+
+    def test_selective_constraint_dependencies_reset_cached_dofs(self):
+        selective = SelectiveConstraint(eq(lambda field: field - 1), 'field')
+        selective.dependencies = {'field': jnp.array([1.0, 2.0])}
+        first = selective.starting_dofs
+
+        selective.dependencies = {'field': jnp.array([3.0, 4.0, 5.0])}
+        second = selective.starting_dofs
+
+        self.assertEqual(first.shape[0], 2)
+        self.assertEqual(second.shape[0], 3)
+        self.assertTrue(jnp.allclose(second, jnp.array([3.0, 4.0, 5.0])))
+
+    def test_composite_constraint_dependencies_reset_cached_dofs(self):
+        c1 = SelectiveConstraint(eq(lambda field: field - 1), 'field')
+        c2 = SelectiveConstraint(eq(lambda surface: surface + 1), 'surface')
+        combined = combine(c1, c2)
+        combined.dependencies = {
+            'field': jnp.array([1.0, 2.0]),
+            'surface': jnp.array([10.0]),
+        }
+        first = combined.starting_dofs
+
+        combined.dependencies = {
+            'field': jnp.array([3.0]),
+            'surface': jnp.array([20.0, 30.0]),
+        }
+        second = combined.starting_dofs
+
+        self.assertEqual(first.shape[0], 3)
+        self.assertEqual(second.shape[0], 3)
+        self.assertTrue(jnp.allclose(second, jnp.array([3.0, 20.0, 30.0])))
+
+    def test_composite_constraint_set_dependencies_resets_cached_dofs(self):
+        c1 = SelectiveConstraint(eq(lambda field: field - 1), 'field')
+        combined = combine(c1)
+        combined.set_dependencies({'field': jnp.array([1.0, 2.0])})
+        first = combined.starting_dofs
+
+        combined.set_dependencies({'field': jnp.array([7.0])})
+        second = combined.starting_dofs
+
+        self.assertEqual(first.shape[0], 2)
+        self.assertEqual(second.shape[0], 1)
+        self.assertTrue(jnp.allclose(second, jnp.array([7.0])))
 
     def test_total_infeasibility(self):
         tree = {'a': jnp.array([1.0, -2.0]), 'b': jnp.array([3.0])}
