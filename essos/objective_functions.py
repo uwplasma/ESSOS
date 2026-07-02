@@ -323,14 +323,13 @@ def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
     n_coils = coils.gamma.shape[0]
     n_points_coil = coils.gamma.shape[1]
     surface_points = surface.gamma.reshape(-1, 3)
-    surface_normals = surface.unitnormal.reshape(-1, 3)
     n_points_surface = surface_points.shape[0]
 
     # Only check unique coils for symmetry
-    if surface.stellsym:
-        n_unique_coils = n_coils // (2 * surface.nfp)
+    if coils.stellsym:
+        n_unique_coils = n_coils // (2 * coils.nfp)
     else:
-        n_unique_coils = n_coils // surface.nfp
+        n_unique_coils = n_coils // coils.nfp
     n_unique_coils = max(1, n_unique_coils)
     unique_coil_indices = jnp.arange(n_unique_coils)
 
@@ -368,7 +367,7 @@ def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
 def loss_linkingnumber(coils, candidates=None, block_size=None):
     if candidates is None:
         candidates = jnp.triu_indices(len(coils), k=1)
-    dphi = coils.quadpoints[1] - coils.quadpoints[0]
+    dphi = coils.curves.quadpoints[1] - coils.curves.quadpoints[0]
 
     def pair_linking(i, j):
         gamma_i = coils.gamma[i]
@@ -432,7 +431,7 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
         gamma_dash_i = coils.gamma_dash[idx]
         gamma_dashdash_i = coils.gamma_dashdash[idx]
         current_i = coils.currents[idx]
-        quadpoints = coils.quadpoints
+        quadpoints = coils.curves.quadpoints
         curvature = Curves.compute_curvature(gamma_dash_i, gamma_dashdash_i)
         regularization = regularization_circ(1. / jnp.mean(curvature))
         other_idx = other_indices[idx]
