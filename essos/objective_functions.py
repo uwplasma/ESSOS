@@ -3,36 +3,18 @@ import jax
 # from build.lib.essos import coils
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-from jax import jit, vmap,lax
-from jax.lax import fori_loop
+from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart,BiotSavart_from_gamma
 from essos.surfaces import BdotN_over_B
 from essos.coils import Curves, Coils
-from essos.optimization import new_nearaxis_from_x_and_old_nearaxis
 from essos.constants import mu_0
 from essos.coil_perturbation import perturb_curves_systematic, perturb_curves_statistic
 
 
 
-def pertubred_field_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
-    coils = perturbed_coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp=nfp,n_segments=n_segments, stellsym=stellsym)
-    field = BiotSavart(coils)
-    return field
 
-def perturbed_coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
-    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
-    dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves.shape)
-    dofs_currents = x[len_dofs_curves_ravelled:]
-    curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-    coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
-    #Split once the key/seed given for one pertubred stellarator
-    split_keys = jax.random.split(jax.random.key(key), 2)
-    #Internally the following functions will then further split the two keys avoiding repeating keys
-    perturb_curves_systematic(coils.curves, sampler, key=split_keys[0])
-    perturb_curves_statistic(coils.curves, sampler, key=split_keys[1])
-    return coils
 
 ########################## NEAR-AXIS FIELD LOSSES ##########################
 def near_axis_field_quantities(field_nearaxis):
@@ -189,91 +171,61 @@ def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps
 
 
 ###################  B ON SURAFCE LOSSES ##########################
+@partial(jit, static_argnames=['npoints'])
 def normB_axis(field, npoints=15):
     R_axis=field.r_axis
     phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
     return B_axis
 
+@partial(jit, static_argnames=['npoints', 'target_B'])
 def loss_normB_axis_average(field,npoints=15, target_B=5.7):
     B_axis = normB_axis(field, npoints)
     return jnp.abs(jnp.average(B_axis)-target_B)
 
 
-@partial(jit, static_argnums=(1, 4, 5, 6))
-def loss_bdotn_over_b(x, vmec, dofs_curves, currents_scale, nfp, n_segments=60, stellsym=True):
-    dofs_len = len(jnp.ravel(dofs_curves))
-    dofs_curves = jnp.reshape(x[:dofs_len], dofs_curves.shape)
-    dofs_currents = x[dofs_len:]
-    curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-    coils = Coils(curves=curves, currents=dofs_currents * currents_scale)
-    field = BiotSavart(coils)
-    return jnp.sum(jnp.abs(BdotN_over_B(vmec.surface, field)))
+def BdotN_constraint(field,surface):
+    return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
 
-
-@partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
-def loss_BdotN(x, vmec=None, dofs_curves=None, currents_scale=None, nfp=None, max_coil_length=42,
-               n_segments=60, stellsym=True, max_coil_curvature=0.1, surface=None):
-    # Normal-field penalty against a target boundary. Provide the boundary as
-    # either a Vmec (vmec=, uses vmec.surface) or a SurfaceRZFourier (surface=).
-    assert (vmec is not None) ^ (surface is not None), "Provide exactly one of vmec= or surface=."
-    target_surface = surface if surface is not None else vmec.surface
-
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-
-    bdotn_over_b = BdotN_over_B(target_surface, field)
-    bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
-
-    coil_length_loss    = jnp.maximum(0, jnp.max(field.coils.length-max_coil_length))
-    coil_curvature_loss = jnp.maximum(0, jnp.max(jnp.mean(field.coils.curvature, axis=1)-max_coil_curvature))
-
-    return bdotn_over_b_loss+coil_length_loss+coil_curvature_loss
-
-@partial(jit, static_argnums=(1, 4, 5, 6))
-def loss_BdotN_only(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    
-    bdotn_over_b = BdotN_over_B(vmec.surface, field)
-    bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
-
-    return bdotn_over_b_loss
-
-@partial(jit, static_argnums=(1, 4, 5, 6,7))
-def loss_BdotN_only_constraint(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True,target_tol=1.e-6):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    
-    bdotn_over_b = BdotN_over_B(vmec.surface, field)
-
+@partial(jit, static_argnames=['target_tol'])
+def BdotN_constraint(field,surface,target_tol=1.e-6):
+    bdotn_over_b = BdotN_over_B(surface, field)
     bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
-    #bdotn_over_b_loss = jnp.sqrt(0.5*jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0))
     return bdotn_over_b_loss
 
 
-@partial(jit, static_argnums=(1,2,3, 6, 7, 8))
-def loss_BdotN_only_stochastic(x,sampler,N_samples, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True):
-    keys= jnp.arange(N_samples)  
-    def perturbed_bdotn_over_b(x,key,sampler,dofs_curves, currents_scale, nfp, n_segments, stellsym):
-        perturbed_field = pertubred_field_from_dofs(x,key,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym)
-        bdotn_over_b = BdotN_over_B(vmec.surface, perturbed_field)
+###########################  B ON SURAFCE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
+def copy_coils_from_field(field):
+    return field.coils.copy()
+
+@partial(jit, static_argnames=['key', 'sampler'])
+def perturbed_field_from_field(field, key, sampler):
+    coils = copy_coils_from_field(field)
+    base_key = jax.random.key(key)
+    split_keys = jax.random.split(base_key, 2)
+    perturb_curves_systematic(coils, sampler, key=split_keys[0])
+    coils = perturb_curves_statistic(coils, sampler, key=split_keys[1])
+    return BiotSavart(coils)
+
+
+@partial(jit, static_argnames=['keys', 'sampler'])
+def loss_bdotn_stochastic(field, surface, sampler, keys):
+    def perturbed_loss(key):
+        perturbed_field = perturbed_field_from_field(field, key, sampler)
+        bdotn_over_b = BdotN_over_B(surface, perturbed_field)
         return jnp.sum(jnp.abs(bdotn_over_b))
-    #Average over the N_samples
-    expected_loss=jnp.average(jax.vmap(perturbed_bdotn_over_b, in_axes=(None,0,None,None,None,None,None,None))(x, keys,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym),axis=0)
-    return expected_loss
+
+    return jnp.mean(jax.vmap(perturbed_loss)(keys))
 
 
-@partial(jit, static_argnums=(1,2,3, 6, 7, 8,9))
-def loss_BdotN_only_constraint_stochastic(x,sampler,N_samples, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True,target_tol=1.e-6):
-    keys= jnp.arange(N_samples)  
-    def perturbed_bdotn_over_b(x,key,sampler,dofs_curves, currents_scale, nfp, n_segments, stellsym):
-        perturbed_field = pertubred_field_from_dofs(x,key,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym)
-        bdotn_over_b = BdotN_over_B(vmec.surface, perturbed_field)
-        return jnp.square(bdotn_over_b)
-    #Average over the N_samples
-    expected_loss=jnp.average(jax.vmap(perturbed_bdotn_over_b, in_axes=(None,0,None,None,None,None,None,None))(x, keys,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym),axis=0)
+@partial(jit, static_argnames=['keys', 'sampler', 'target_tol'])
+def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6):
+    def perturbed_square(key):
+        perturbed_field = perturbed_field_from_field(field, key, sampler)
+        return jnp.square(BdotN_over_B(surface, perturbed_field))
 
-    constrained_expected_loss = jnp.sqrt(jnp.sum(jnp.maximum(expected_loss-target_tol,0.0)))
-    #bdotn_over_b_loss = jnp.sqrt(0.5*jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0))
-    return constrained_expected_loss
+    expected_square = jnp.mean(jax.vmap(perturbed_square)(keys), axis=0)
+    return jnp.sqrt(jnp.sum(jnp.maximum(expected_square - target_tol, 0.0)))
 
 
 
