@@ -1120,7 +1120,7 @@ class Tracing():
                 vxvyvz = trajectory[:, 3:]
                 B = vmap(self.field.B)(xyz)
                 vperp_squared = jnp.sum(jnp.square(vxvyvz), axis=1) - jnp.square(jnp.sum(vxvyvz * B, axis=1) / jnp.linalg.norm(B, axis=1))
-                return jnp.sqrt(vperp_squared)
+                return jnp.sqrt(jnp.maximum(vperp_squared, 0.0))
             v_perp = vmap(compute_vperp)(self.trajectories)
 
         elif self.model == 'FieldLine' or self.model == 'FieldLineAdaptative':
@@ -1259,8 +1259,15 @@ class Tracing():
         lost_indices = jnp.argmax(lost_mask, axis=1)
         lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
         lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
-        lost_energies=vmap(lambda x: jnp.where(lost_indices[x-1] != -1, self.energy()[x-1,lost_indices[x-1]-1], 0.))(jnp.arange(self.particles.nparticles))
-        lost_positions=vmap(lambda x: jnp.where(lost_indices[x-1] != -1, trajectories_rtz[x-1,lost_indices[x-1]-1,:], 0.))(jnp.arange(self.particles.nparticles))            
+        has_lost = lost_indices != -1
+        safe_indices = jnp.clip(lost_indices, 0, len(self.times) - 1)
+        particle_indices = jnp.arange(self.particles.nparticles)
+        lost_energies = jnp.where(has_lost, self.energy()[particle_indices, safe_indices], 0.)
+        lost_positions = jnp.where(
+            has_lost[:, None],
+            trajectories_rtz[particle_indices, safe_indices],
+            0.
+        )
         safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
         loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
         loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
