@@ -428,7 +428,6 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
     ], dtype=jnp.int32)
 
     def single_coil_loss(idx):
-        n_points = coils.gamma.shape[1]
         gamma_i = coils.gamma[idx]
         gamma_dash_i = coils.gamma_dash[idx]
         gamma_dashdash_i = coils.gamma_dashdash[idx]
@@ -442,7 +441,20 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
         gamma_dashdash_others = coils.gamma_dashdash[other_idx]
         currents_others = coils.currents[other_idx]
         biot_savart = BiotSavart_from_gamma(gamma_others, gamma_dash_others, gamma_dashdash_others, currents_others)
-        block_B_mutual = jax.vmap(biot_savart.B)(gamma_i)
+        n_points = gamma_i.shape[0]
+        use_block_size = min(n_points, n_points if block_size is None else block_size)
+        n_blocks = (n_points + use_block_size - 1) // use_block_size
+        padded_points = n_blocks * use_block_size
+        pad_width = padded_points - n_points
+
+        gamma_i_blocks = jnp.pad(gamma_i, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        valid_blocks = (jnp.arange(padded_points) < n_points).reshape(n_blocks, use_block_size)
+
+        def block_field(block_gamma_i, block_valid):
+            block_B = jax.vmap(biot_savart.B)(block_gamma_i)
+            return block_B * block_valid[:, None]
+
+        block_B_mutual = jax.vmap(block_field)(gamma_i_blocks, valid_blocks).reshape(padded_points, 3)[:n_points]
         block_gammadash_norm = jnp.linalg.norm(gamma_dash_i, axis=1)
         block_tangent = gamma_dash_i / block_gammadash_norm[:, None]
         block_B_self = B_regularized_pure(
