@@ -12,7 +12,7 @@ from essos.losses import custom_loss
 #  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
 
-input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
+input_filepath = os.path.join(os.path.dirname(__name__), "input_files")
 vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
 
 """ Creating starting coils and surface """
