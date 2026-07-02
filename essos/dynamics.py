@@ -18,19 +18,15 @@ from essos.plot import fix_matplotlib_3d
 from essos.util import roots
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu_D_ab
 
-# mesh = Mesh(jax.devices(), ("dev",))
-# spec=PartitionSpec("dev", None)
-# spec_index=PartitionSpec("dev")
-# sharding = NamedSharding(mesh, spec)
-# sharding_index = NamedSharding(mesh, spec_index)
+
 
 # If multiple devices are available, set up sharding for parallelization. Otherwise, set sharding to None.
 if len(jax.devices()) > 1:
-        mesh = Mesh(jax.devices(), ("dev",))
-        spec = PartitionSpec("dev", None)
-        spec_index = PartitionSpec("dev")
-        sharding = NamedSharding(mesh, spec)
-        sharding_index = NamedSharding(mesh, spec_index)
+    mesh = Mesh(jax.devices(), ("dev",))
+    spec = PartitionSpec("dev", None)
+    spec_index = PartitionSpec("dev")
+    sharding = NamedSharding(mesh, spec)
+    sharding_index = NamedSharding(mesh, spec_index)
 else:
     mesh = None
     sharding = None
