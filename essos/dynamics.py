@@ -202,7 +202,6 @@ class Particles():
         rc_axis = surface.rc[m0_mask]
         zs_axis = surface.zs[m0_mask]
         xn_axis = surface.xn[m0_mask]
-        xm_axis = surface.xm[m0_mask]  # Extract m values for axis modes
         
         # Helper function: compute axis curve at given phi
         def compute_axis_point(phi):
@@ -225,11 +224,10 @@ class Particles():
         
         # Generate random arc-length positions
         key = jax.random.key(random_seed)
-        keys = jax.random.split(key, 3)
+        key_arcs, key_thetas, key_vparallel = jax.random.split(key, 3)
         
-        random_arcs = jax.random.uniform(keys[0], (n_particles,)) * total_arc
-        random_thetas = jax.random.uniform(keys[1], (n_particles,)) * 2 * jnp.pi  # Poloidal angle
-        random_phis_offset = jax.random.uniform(keys[2], (n_particles,)) * 0.1  # Small phase offset
+        random_arcs = jax.random.uniform(key_arcs, (n_particles,)) * total_arc
+        random_thetas = jax.random.uniform(key_thetas, (n_particles,)) * 2 * jnp.pi  # Poloidal angle
         
         # Map arc-length positions back to phi coordinates
         particle_phis = jnp.interp(random_arcs, cumulative_arc, phi_arc)
@@ -281,7 +279,7 @@ class Particles():
                                  for phi, theta in zip(particle_phis, random_thetas)])
         
         # Generate random parallel velocity fractions
-        initial_vparallel_over_v = jax.random.uniform(key, (n_particles,), 
+        initial_vparallel_over_v = jax.random.uniform(key_vparallel, (n_particles,), 
                                                        minval=min_vparallel_over_v, 
                                                        maxval=max_vparallel_over_v)
         
