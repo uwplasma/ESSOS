@@ -1070,29 +1070,50 @@ def ALM_model_jaxopt_LevenbergMarquardt(constraints: BaseConstraint,#List of con
             main_params=state.params
             grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
             
-            if model_mu == 'Mu_Tolerance':
-                lag_updates = apply_mu_tolerance_all_constraints(
-                    lagrange_params, grad_dicts_map=grad[1], constraint_infos_map=info[2],
-                    model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max,
-                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol
-                )
-            else:
-                lag_updates = jax.tree_util.tree_map(
-                    lambda lag_p, grad_c, c_info, c_old_info: apply_mu_tolerance_per_constraint(
-                        lag_p, grad_c, c_info, constraint_info_prev=c_old_info,
-                        model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
-                        alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
-                    ),
-                    lagrange_params, grad[1], info[2], old_info,
-                    is_leaf=lambda x: isinstance(x, dict)
-                )
+            lag_updates = jax.tree_util.tree_map(
+                lambda lag_p, grad_c, c_info, c_old_info: apply_mu_tolerance_per_constraint(
+                    lag_p, grad_c, c_info, constraint_info_prev=c_old_info,
+                    model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                ),
+                lagrange_params, grad[1], info[2], old_info,
+                is_leaf=lambda x: isinstance(x, dict)
+            )
             
             lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
             params=main_params,lagrange_params
             grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
             return params,lag_state,grad,info           
 
-                             
+    elif model_mu=='Mu_Tolerance' or model_mu=='Mu_Adaptative_1':
+        jax.debug.print('omega {omega}:', omega=model_mu)   
+        @partial(jit, static_argnums=(4,5,6,7,8,9,10))
+        def update_fn(params, lag_state,grad,info,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,**kargs):
+            main_params,lagrange_params=params
+            pred = lambda x: isinstance(x, LagrangeMultiplier)
+            omega_vals = jax.tree_util.tree_map(lambda x: x.omega, lagrange_params, is_leaf=pred)
+            omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
+            omega_min = jnp.min(omega_flat)
+
+            minimization_loop=jaxopt.LevenbergMarquardt(residual_fun=lagrangian_least_residual,has_aux=True,implicit_diff=False,xtol=1.e-14,gtol=omega_min)
+            state=minimization_loop.run(main_params,lagrange_params=lagrange_params,**kargs)
+            main_params=state.params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
+            
+            lag_updates = jax.tree_util.tree_map(
+                lambda lag_p, grad_c, c_info: apply_mu_tolerance_per_constraint(
+                    lag_p, grad_c, c_info, constraint_info_prev=None,
+                    model_lagrangian=model_lagrangian, model_mu=model_mu, beta=beta, mu_max=mu_max, 
+                    alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol, decrease_tol=0.75
+                ),
+                lagrange_params, grad[1], info[2],
+                is_leaf=lambda x: isinstance(x, dict)
+            )
+            
+            lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
+            params=main_params,lagrange_params
+            grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
+            return params,lag_state,grad,info           
 
     return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
     #return optax.GradientTransformationExtraArgs(init_fn, update_fn)
