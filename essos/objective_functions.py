@@ -11,7 +11,7 @@ from essos.surfaces import BdotN_over_B, BdotN
 from essos.coils import Curves, Coils
 from essos.optimization import new_nearaxis_from_x_and_old_nearaxis
 from essos.constants import mu_0
-from essos.coil_perturbation import perturb_curves_systematic, perturb_curves_statistic
+from essos.coil_perturbation import perturb_curves
 
 
 
@@ -29,8 +29,8 @@ def perturbed_coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_seg
     #Split once the key/seed given for one pertubred stellarator
     split_keys = jax.random.split(jax.random.key(key), 2)
     #Internally the following functions will then further split the two keys avoiding repeating keys
-    perturb_curves_systematic(coils.curves, sampler, key=split_keys[0])
-    perturb_curves_statistic(coils.curves, sampler, key=split_keys[1])
+    coils = perturb_curves(coils, sampler, key=split_keys[0], perturbation_type='systematic')
+    coils = perturb_curves(coils, sampler, key=split_keys[1], perturbation_type='statistical')
     return coils
 
 def field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
