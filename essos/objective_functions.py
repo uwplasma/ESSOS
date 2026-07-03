@@ -184,11 +184,11 @@ def loss_normB_axis_average(field,npoints=15, target_B=5.7):
     return jnp.abs(jnp.average(B_axis)-target_B)
 
 
-def BdotN_constraint(field,surface):
+def loss_BdotN(field,surface):
     return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
 
 @partial(jit, static_argnames=['target_tol'])
-def BdotN_constraint(field,surface,target_tol=1.e-6):
+def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
     bdotn_over_b = BdotN_over_B(surface, field)
     bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
     return bdotn_over_b_loss
@@ -198,7 +198,7 @@ def BdotN_constraint(field,surface,target_tol=1.e-6):
 def copy_coils_from_field(field):
     return field.coils.copy()
 
-@partial(jit, static_argnames=['key', 'sampler'])
+@partial(jit, static_argnames=['sampler'])
 def perturbed_field_from_field(field, key, sampler):
     coils = copy_coils_from_field(field)
     base_key = jax.random.key(key)
@@ -208,7 +208,7 @@ def perturbed_field_from_field(field, key, sampler):
     return BiotSavart(coils)
 
 
-@partial(jit, static_argnames=['keys', 'sampler'])
+@partial(jit, static_argnames=['sampler'])
 def loss_bdotn_stochastic(field, surface, sampler, keys):
     def perturbed_loss(key):
         perturbed_field = perturbed_field_from_field(field, key, sampler)
@@ -218,7 +218,7 @@ def loss_bdotn_stochastic(field, surface, sampler, keys):
     return jnp.mean(jax.vmap(perturbed_loss)(keys))
 
 
-@partial(jit, static_argnames=['keys', 'sampler', 'target_tol'])
+@partial(jit, static_argnames=['sampler', 'target_tol'])
 def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6):
     def perturbed_square(key):
         perturbed_field = perturbed_field_from_field(field, key, sampler)
