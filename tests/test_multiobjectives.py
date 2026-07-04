@@ -56,6 +56,8 @@ def test_custom_loss_named_unraveler():
     assert loss(dofs) == loss_fn(named_args["curve_dofs"], named_args["current"])
     assert loss.call_pytree(named_args) == loss_fn(named_args["curve_dofs"], named_args["current"])
     assert loss.call_pytree(tuple_args) == loss_fn(named_args["curve_dofs"], named_args["current"])
+    value, grad = loss.value_and_grad(dofs)
+    assert value == loss_fn(named_args["curve_dofs"], named_args["current"]) and jnp.array_equal(grad, loss.grad(dofs))
 
     gradient = loss.grad_pytree(named_args)
     gradient_tuple = loss.grad_pytree(tuple_args)
