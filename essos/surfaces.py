@@ -109,8 +109,27 @@ def nested_lists_to_array(ll):
 class SurfaceRZFourier:
     def __init__(self, rc, zs, nfp, mpol, ntor, ntheta=30, nphi=30, close=True, range_torus='full torus',
                  scaling_type=2, scaling_factor=0):
-        """ rc, zs: dynamic arrays
-            nfp, mpol, ntor: static """
+        """Initialize a Fourier surface.
+
+        Args:
+            rc: cosine Fourier coefficients for R.
+            zs: sine Fourier coefficients for Z.
+            nfp: number of field periods.
+            mpol: maximum poloidal mode number.
+            ntor: maximum toroidal mode number.
+            ntheta: number of theta grid points.
+            nphi: number of phi grid points.
+            close: whether the surface mesh includes the endpoint.
+            range_torus: either ``'full torus'`` or ``'half period'``.
+            scaling_type: norm used in the mode scaling. Accepted values are
+                ``'L1'`` or ``1``, ``'L2'`` or ``2``, and ``'Linfty'`` or ``-1``.
+            scaling_factor: exponential weight used in the scaling
+                ``exp(scaling_factor * ||(xm, xn)||)``.
+
+        Note:
+            The optimized dofs are stored as ``[rc * scaling, zs * scaling]``,
+            with the scaling computed mode-by-mode from ``xm`` and ``xn``.
+        """
 
         assert isinstance(nfp, int) and nfp > 0, "nfp must be a positive integer."
         assert isinstance(mpol, int) and mpol >= 0, "mpol must be a non-negative integer."
@@ -152,6 +171,7 @@ class SurfaceRZFourier:
 
     @staticmethod
     def _normalize_scaling_type(scaling_type):
+        """Map public scaling_type inputs to norm orders used internally."""
         if scaling_type == "L1" or scaling_type == 1:
             return 1
         if scaling_type == "L2" or scaling_type == 2:
@@ -382,6 +402,7 @@ class SurfaceRZFourier:
     # scaling property
     @property
     def scaling(self):
+        """Mode-by-mode scaling ``exp(scaling_factor * ||(xm, xn)||)``."""
         if self._scaling is None:
             self._scaling = jnp.exp(self.scaling_factor * jnp.linalg.norm(jnp.vstack([self.xm, self.xn]), ord=self.scaling_type, axis=0))
         return self._scaling
@@ -668,7 +689,7 @@ class SurfaceRZFourier:
         return mean_cross_sectional_area
     
     def _tree_flatten(self):
-        children = (self._rc, self._zs)  # arrays / dynamic values
+        children = (self.dofs,)  # arrays / dynamic values
         aux_data = {"nfp": self._nfp,
                     "mpol": self._mpol,
                     "ntor": self._ntor,
@@ -682,7 +703,24 @@ class SurfaceRZFourier:
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        return cls(*children, **aux_data)
+        dofs, = children
+        half = dofs.size // 2
+        rc_scaled = dofs[:half]
+        zs_scaled = dofs[half:]
+
+        mpol = aux_data["mpol"]
+        ntor = aux_data["ntor"]
+        nfp = aux_data["nfp"]
+        scaling_type = cls._normalize_scaling_type(aux_data["scaling_type"])
+        scaling_factor = aux_data["scaling_factor"]
+
+        xm = jnp.repeat(jnp.arange(mpol + 1), 2 * ntor + 1)[ntor:]
+        xn = nfp * jnp.tile(jnp.arange(-ntor, ntor + 1), mpol + 1)[ntor:]
+        scaling = jnp.exp(scaling_factor * jnp.linalg.norm(jnp.vstack([xm, xn]), ord=scaling_type, axis=0))
+
+        rc = rc_scaled / scaling
+        zs = zs_scaled / scaling
+        return cls(rc, zs, **aux_data)
 
 tree_util.register_pytree_node(SurfaceRZFourier,
                                SurfaceRZFourier._tree_flatten,
@@ -818,5 +856,3 @@ def plot_scalar_on_flux_surface(surface, scalar_map):
         surface: the surface object in which to plot the scalar_map
         scalar_map: a scalar_map as function of theta and phi
     ''' 
-
-
