@@ -486,6 +486,13 @@ def _initialize_currents_scale(currents, currents_scale):
     return currents_scale
 
 
+def _initialize_scale_fixed(gamma, scale_fixed):
+    """Return a fixed geometry scale for normalized gamma dofs."""
+    if scale_fixed is None:
+        return jnp.maximum(jnp.max(jnp.abs(gamma)), 1.0)
+    return scale_fixed
+
+
 # TODO: change currents logic: save dofs_currents as dynamic -> alter main
 class Coils:
     """ Class to store the coils
@@ -716,6 +723,12 @@ class Coils:
             file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
             file.write(f"Degrees of freedom\n")
             file.write(f"{repr(self.dofs.tolist())}\n")
+            file.write(f"Curves scaling type\n")
+            file.write(f"{self.curves.scaling_type}\n")
+            file.write(f"Curves scaling factor\n")
+            file.write(f"{self.curves.scaling_factor}\n")
+            file.write(f"Curves fixed scaling\n")
+            file.write(f"{self.curves.scale_fixed}\n")
             file.write(f"Currents degrees of freedom\n")
             file.write(f"{repr(self._dofs_currents.tolist())}\n")
             file.write(f"Currents scaling factor\n")
@@ -1046,7 +1059,7 @@ class DiscretizedCoils:
         currents_scale (float): Normalization factor for the currents
         dofs_currents (jnp.ndarray - shape (n_base_curves,)): Normalized base currents
     """
-    def __init__(self, gamma: jnp.ndarray, currents: jnp.ndarray, nfp: int = 1, stellsym: bool = False, currents_scale=None):
+    def __init__(self, gamma: jnp.ndarray, currents: jnp.ndarray, nfp: int = 1, stellsym: bool = False, currents_scale=None, scale_fixed=None):
         """
         Initialize DiscretizedCoils with discretized curve coordinates and currents, applying symmetries if possible.
         Args:
@@ -1056,6 +1069,8 @@ class DiscretizedCoils:
             stellsym: Stellarator symmetry (default: False)
             currents_scale: fixed normalization used for ``dofs_currents``.
                 If ``None``, it is computed once from ``currents`` and then kept fixed.
+            scale_fixed: fixed normalization used for ``dofs_gamma``.
+                If ``None``, it is computed once from ``max(abs(gamma))`` and then kept fixed.
         """
         gamma = jnp.asarray(gamma)
         currents = jnp.asarray(currents)
@@ -1098,6 +1113,7 @@ class DiscretizedCoils:
         self._n_segments = gamma.shape[1]
         self._nfp = nfp
         self._stellsym = stellsym
+        self._scale_fixed = _initialize_scale_fixed(gamma, scale_fixed)
         
         self._gamma_dash = None
         self._gamma_dashdash = None
@@ -1119,7 +1135,7 @@ class DiscretizedCoils:
     # dofs_gamma property and setter
     @property
     def dofs_gamma(self):
-        return jnp.array(self._gamma)
+        return jnp.array(self._gamma) / self.scale_fixed
 
     @dofs_gamma.setter
     def dofs_gamma(self, new_dofs_gamma):
@@ -1127,13 +1143,13 @@ class DiscretizedCoils:
         assert new_dofs_gamma.ndim == 3, "dofs_gamma must have shape (n_base_curves, n_segments, 3)"
         assert new_dofs_gamma.shape[2] == 3, "dofs_gamma must have shape (n_base_curves, n_segments, 3)"
         self.reset_cache()
-        self._gamma = new_dofs_gamma
+        self._gamma = new_dofs_gamma * self.scale_fixed
         self._n_segments = new_dofs_gamma.shape[1]
 
     # gamma property and setter (symmetry-expanded)
     @property
     def gamma(self):
-        return apply_symmetries_to_gammas(self.dofs_gamma, self.nfp, self.stellsym)
+        return apply_symmetries_to_gammas(self._gamma, self.nfp, self.stellsym)
     
     @gamma.setter
     def gamma(self, new_gamma):
@@ -1145,14 +1161,18 @@ class DiscretizedCoils:
         n_base = self.n_base_curves
 
         if new_gamma.shape[0] == n_base:
-            self.dofs_gamma = new_gamma
+            self.reset_cache()
+            self._gamma = new_gamma
+            self._n_segments = new_gamma.shape[1]
             return
         assert new_gamma.shape[0] == n_base * n_sym, (
             f"Expected gamma with {n_base} (base) or {n_base*n_sym} (expanded) curves, "
             f"got {new_gamma.shape[0]}"
         )
         # Ordering in apply_symmetries_to_gammas ensures the first n_base curves are k=0, flip=False (base)
-        self.dofs_gamma = new_gamma[:n_base]
+        self.reset_cache()
+        self._gamma = new_gamma[:n_base]
+        self._n_segments = new_gamma.shape[1]
     
     # n_segments property
     @property
@@ -1172,6 +1192,17 @@ class DiscretizedCoils:
     @property
     def stellsym(self):
         return self._stellsym
+
+    # scale_fixed property and setter
+    @property
+    def scale_fixed(self):
+        return self._scale_fixed
+    
+    @scale_fixed.setter
+    def scale_fixed(self, new_scale_fixed):
+        self._gamma = self.dofs_gamma * new_scale_fixed
+        self._scale_fixed = new_scale_fixed
+        self.reset_cache()
     
     # dofs_currents_raw property and setter
     @property
@@ -1240,7 +1271,7 @@ class DiscretizedCoils:
     # Compute derivatives using finite differences (circular)
     def _compute_gamma_dash(self):
         """Compute first derivative using finite differences on periodic curve"""
-        base_gamma = self.dofs_gamma
+        base_gamma = self._gamma
         gamma_shift_forward = jnp.roll(base_gamma, -1, axis=1)
         gamma_shift_backward = jnp.roll(base_gamma, 1, axis=1)
         base_gamma_dash = (gamma_shift_forward - gamma_shift_backward) / 2.0 * self._n_segments
@@ -1248,7 +1279,7 @@ class DiscretizedCoils:
     
     def _compute_gamma_dashdash(self):
         """Compute second derivative using finite differences on periodic curve"""
-        base_gamma = self.dofs_gamma
+        base_gamma = self._gamma
         gamma_shift_forward = jnp.roll(base_gamma, -1, axis=1)
         gamma_shift_backward = jnp.roll(base_gamma, 1, axis=1)
         base_gamma_dashdash = (gamma_shift_forward - 2.0 * base_gamma + gamma_shift_backward) * (self._n_segments ** 2)
@@ -1290,7 +1321,8 @@ class DiscretizedCoils:
     # copy method
     def copy(self):
         coils = DiscretizedCoils(self.dofs_gamma.copy(), self.dofs_currents_raw.copy(),
-                                   nfp=self.nfp, stellsym=self.stellsym, currents_scale=self.currents_scale)
+                                   nfp=self.nfp, stellsym=self.stellsym,
+                                   currents_scale=self.currents_scale, scale_fixed=self.scale_fixed)
         
         # Initialize caches
         coils._gamma_dash = self._gamma_dash
@@ -1322,10 +1354,12 @@ class DiscretizedCoils:
     
     def __getitem__(self, key):
         if isinstance(key, int):
-            return DiscretizedCoils(jnp.expand_dims(self.gamma[key], 0), jnp.expand_dims(self.currents[key], 0), 
-                                     nfp=1, stellsym=False)
+            return DiscretizedCoils(jnp.expand_dims(self.gamma[key], 0), jnp.expand_dims(self.currents[key], 0),
+                                     nfp=1, stellsym=False,
+                                     currents_scale=self.currents_scale, scale_fixed=self.scale_fixed)
         elif isinstance(key, (slice, jnp.ndarray)):
-            return DiscretizedCoils(self.gamma[key], self.currents[key], nfp=1, stellsym=False)
+            return DiscretizedCoils(self.gamma[key], self.currents[key], nfp=1, stellsym=False,
+                                     currents_scale=self.currents_scale, scale_fixed=self.scale_fixed)
         else:
             raise TypeError(f"Invalid argument type. Got {type(key)}, expected int, slice or jnp.ndarray.")
     
@@ -1376,6 +1410,8 @@ class DiscretizedCoils:
             file.write(f"nfp: {self.nfp}, stellsym: {self.stellsym}\n")
             file.write(f"Base gamma dofs\n")
             file.write(f"{repr(self.dofs_gamma.tolist())}\n")
+            file.write(f"Gamma fixed scaling\n")
+            file.write(f"{self.scale_fixed}\n")
             file.write(f"Currents degrees of freedom\n")
             file.write(f"{repr(self.dofs_currents.tolist())}\n")
             file.write(f"Currents scaling factor\n")
@@ -1388,9 +1424,10 @@ class DiscretizedCoils:
             "n_segments": self.n_segments,
             "nfp": self.nfp,
             "stellsym": self.stellsym,
-            "dofs_gamma": self.dofs_gamma.tolist(),
+            "dofs_gamma_raw": self._gamma.tolist(),
             "dofs_currents": self.dofs_currents.tolist(),
             "currents_scale": float(self.currents_scale),
+            "scale_fixed": float(self.scale_fixed),
         }
         import json
         with open(filename, 'w') as file:
@@ -1402,19 +1439,22 @@ class DiscretizedCoils:
         import json
         with open(filename, "r") as file:
             data = json.load(file)
-        gamma_data = data.get("dofs_gamma", data.get("gamma"))
+        gamma_data = data.get("dofs_gamma_raw", data.get("dofs_gamma", data.get("gamma")))
         gamma = jnp.array(gamma_data)
         currents_scale = data.get("currents_scale", None)
         currents = jnp.array(data["dofs_currents"])
         if currents_scale is not None:
             currents = currents * currents_scale
+        scale_fixed = data.get("scale_fixed", data.get("fixed_scale", None))
+        if "dofs_gamma_raw" not in data and scale_fixed is not None:
+            gamma = gamma * scale_fixed
         nfp = data.get("nfp", 1)
         stellsym = data.get("stellsym", False)
         if "dofs_gamma" not in data and gamma.shape[0] % (nfp * (1 + int(stellsym))) == 0:
             n_base = gamma.shape[0] // (nfp * (1 + int(stellsym)))
             gamma = gamma[:n_base]
             currents = currents[:n_base]
-        return cls(gamma, currents, nfp=nfp, stellsym=stellsym, currents_scale=currents_scale)
+        return cls(gamma, currents, nfp=nfp, stellsym=stellsym, currents_scale=currents_scale, scale_fixed=scale_fixed)
     
     def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True, 
              color="brown", linewidth=3, label=None, **kwargs):
@@ -1491,7 +1531,7 @@ class DiscretizedCoils:
         currents_simsopt = []
         
         # Fit Fourier coefficients from base gammas
-        for g, current in zip(self.dofs_gamma, self.dofs_currents_raw):
+        for g, current in zip(self._gamma, self.dofs_currents_raw):
             # Fit Fourier coefficients
             order = (self.n_segments // 2) - 1
             dofs, _ = fit_dofs_from_coils(jnp.expand_dims(g, 0), order, self.n_segments)
@@ -1552,29 +1592,31 @@ class DiscretizedCoils:
         if order is None:
             order = (self.n_segments // 2) - 1
         
-        dofs, _ = fit_dofs_from_coils(self.dofs_gamma, order, self.n_segments)
+        dofs, _ = fit_dofs_from_coils(self._gamma, order, self.n_segments)
         curves = Curves(dofs, self.n_segments, nfp=self.nfp, stellsym=self.stellsym)
         return Coils(curves, self.dofs_currents_raw)
     
     def _tree_flatten(self):
-        children = (self._gamma, self.dofs_currents)
+        children = (self.dofs_gamma, self.dofs_currents)
         aux_data = {
             "n_segments": self._n_segments,
             "nfp": self._nfp,
             "stellsym": self._stellsym,
             "currents_scale": self.currents_scale,
+            "scale_fixed": self.scale_fixed,
         }
         return (children, aux_data)
     
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        gamma, dofs_currents = children
+        dofs_gamma, dofs_currents = children
         return cls(
-            gamma,
+            dofs_gamma * aux_data["scale_fixed"],
             dofs_currents * aux_data["currents_scale"],
             nfp=aux_data["nfp"],
             stellsym=aux_data["stellsym"],
             currents_scale=aux_data["currents_scale"],
+            scale_fixed=aux_data["scale_fixed"],
         )
 
 tree_util.register_pytree_node(DiscretizedCoils,
