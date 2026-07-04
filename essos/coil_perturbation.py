@@ -3,7 +3,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import jit, vmap
 from jaxtyping import Array, Float  # https://github.com/google/jaxtyping
-from essos.coils import Curves, Coils, CoilsFromGamma, fit_dofs_from_coils
+from essos.coils import Curves, Coils, DiscretizedCoils, fit_dofs_from_coils
 from functools import partial
 
 
@@ -231,7 +231,7 @@ def perturb_curves(curves, sampler:GaussianSampler, key=None, perturbation_type=
     Apply a perturbation to curves or coils and return the perturbed object.
 
     Args:
-        curves: Curves, Coils, or CoilsFromGamma to be perturbed.
+        curves: Curves, Coils, or DiscretizedCoils to be perturbed.
         sampler: the gaussian sampler used to get the perturbations
         key: the seed which will be split to generate random but reproducible perturbations
         perturbation_type: "systematic" to perturb only unique/base coils and preserve symmetry,
@@ -241,9 +241,9 @@ def perturb_curves(curves, sampler:GaussianSampler, key=None, perturbation_type=
         A new perturbed object of the same family as the input.
     """
     if perturbation_type == "systematic":
-        if isinstance(curves, CoilsFromGamma):
+        if isinstance(curves, DiscretizedCoils):
             perturbation = _draw_curve_perturbation(sampler, key, curves.n_base_curves)
-            return CoilsFromGamma(
+            return DiscretizedCoils(
                 curves.dofs_gamma + perturbation,
                 currents=curves.dofs_currents_raw,
                 nfp=curves.nfp,
@@ -269,8 +269,8 @@ def perturb_curves(curves, sampler:GaussianSampler, key=None, perturbation_type=
         perturbation = _draw_curve_perturbation(sampler, key, curves.gamma.shape[0])
         gamma_perturbed = curves.gamma + perturbation
 
-        if isinstance(curves, CoilsFromGamma):
-            return CoilsFromGamma(gamma_perturbed, currents=curves.currents, nfp=1, stellsym=False)
+        if isinstance(curves, DiscretizedCoils):
+            return DiscretizedCoils(gamma_perturbed, currents=curves.currents, nfp=1, stellsym=False)
 
         if isinstance(curves, Coils):
             dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments, assume_uniform=True)
@@ -287,7 +287,7 @@ def perturb_curves(curves, sampler:GaussianSampler, key=None, perturbation_type=
             "Expected 'systematic' or 'statistical'."
         )
 
-    raise TypeError(f"Unsupported type {type(curves)}. Expected Curves, Coils, or CoilsFromGamma.")
+    raise TypeError(f"Unsupported type {type(curves)}. Expected Curves, Coils, or DiscretizedCoils.")
 
 
 def perturb_curves_systematic(curves, sampler:GaussianSampler, key=None):

@@ -199,7 +199,9 @@ class Curves:
     # gamma property
     @property
     def gamma(self):
-        return self._compute_gamma()
+        if self._gamma is None:
+            self._gamma = self._compute_gamma()
+        return self._gamma
 
     # _compute_gamma_dash method
     @jit
@@ -213,7 +215,9 @@ class Curves:
     # gamma_dash property
     @property
     def gamma_dash(self):
-        return self._compute_gamma_dash()
+        if self._gamma_dash is None:
+            self._gamma_dash = self._compute_gamma_dash()
+        return self._gamma_dash
 
     # _compute_gamma_dashdash method
     @jit
@@ -227,7 +231,9 @@ class Curves:
     # gamma_dashdash property
     @property
     def gamma_dashdash(self):
-        return self._compute_gamma_dashdash()
+        if self._gamma_dashdash is None:
+            self._gamma_dashdash = self._compute_gamma_dashdash()
+        return self._gamma_dashdash
 
     # length property
     @property
@@ -802,287 +808,8 @@ def CreateEquallySpacedCurves(n_curves:   int,
     curves = curves.at[:, 2, 1].set(-r)                   # z[1] (constant for all)
     return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym, scaling_type=scaling_type, scaling_factor=scaling_factor, scale_fixed=scale_fixed)
 
-def extract_axis_from_surface(surface, n_samples: int = 200):
-    """Extract the magnetic axis from a SurfaceRZFourier object.
-    
-    The axis corresponds to the m=0 (theta=0) modes in the surface Fourier representation.
-    
-    Args:
-        surface: SurfaceRZFourier object
-        n_samples: Number of toroidal samples to use for evaluating the axis
-        
-    Returns:
-        axis_gamma: (n_samples, 3) array of axis positions in Cartesian coordinates
-    """
-    # Get the m=0 modes (axis modes)
-    m0_mask = surface.xm == 0
-    rc_axis = surface.rc[m0_mask]  # R coefficients for m=0
-    zs_axis = surface.zs[m0_mask]  # Z coefficients for m=0
-    xn_axis = surface.xn[m0_mask]  # toroidal mode numbers
-    
-    # Sample toroidal angle
-    phi = jnp.linspace(0, 2 * jnp.pi, n_samples, endpoint=False)
-    
-    # Compute R(phi) and Z(phi) for the axis
-    # Surface uses: angles = m*theta - n*phi
-    # At theta=0 (axis): R = sum rc*cos(-n*phi) = sum rc*cos(n*phi)
-    #                    Z = sum zs*sin(-n*phi) = -sum zs*sin(n*phi)
-    angles_axis = jnp.outer(phi, xn_axis)  # (n_samples, n_modes)
-    R_axis = jnp.sum(rc_axis * jnp.cos(angles_axis), axis=1)  # (n_samples,)
-    Z_axis = -jnp.sum(zs_axis * jnp.sin(angles_axis), axis=1)  # (n_samples,) - note the minus sign!
-    
-    # Convert to Cartesian coordinates
-    X_axis = R_axis * jnp.cos(phi)
-    Y_axis = R_axis * jnp.sin(phi)
-    
-    axis_gamma = jnp.stack([X_axis, Y_axis, Z_axis], axis=1)  # (n_samples, 3)
-    
-    return axis_gamma
 
-def CreateCoilsAroundAxis(n_coils: int,
-                          order: int,
-                          coil_radius: float,
-                          n_samples: int = 200,
-                          axis_major_radius: float = 1.0,
-                          axis_shape: str = 'circle',
-                          axis_pitch: float = 0.0,
-                          axis_twist_rate: float = 0.0,
-                          axis_function = None,
-                          surface = None,
-                          n_segments: int = 100,
-                          nfp: int = 1,
-                          stellsym: bool = False,
-                          scaling_type: int = 2,
-                          scaling_factor: float = 0,
-                          scale_fixed: float = 1.0) -> Curves:
-    """Creates n_coils equally spaced around a custom axis, using Fourier representation.
 
-    Each coil is a circle of radius coil_radius, positioned in the Frenet frame perpendicular
-    to the axis. This generalizes CreateEquallySpacedCurves to support various axis types.
-    
-    Args:
-        n_coils: Number of coils to create
-        order: Fourier order of the coil representation
-        coil_radius: Radius of each circular coil
-        n_samples: Number of samples for coil discretization
-        axis_major_radius: Major radius (for circle/ellipse/helical axes)
-        axis_shape: Shape of the axis ('circle', 'ellipse', 'helical', 'custom', or 'surface')
-        axis_pitch: Pitch (for helical axis)
-        axis_twist_rate: Twist rate for Frenet frame rotation
-        axis_function: Custom axis function (for axis_shape='custom')
-        surface: SurfaceRZFourier object (if provided, extracts axis from m=0 modes and overrides axis_shape)
-        n_segments: Number of segments for curve discretization
-        nfp: Number of field periods
-        stellsym: Stellarator symmetry
-        scaling_type: Scaling type for DOF equilibration
-        scaling_factor: Scaling factor for DOF equilibration
-        scale_fixed: Fixed multiplier for all modes
-        
-    Returns:
-        Curves object with coils around the specified axis
-    """
-    # Override axis_shape if surface is provided
-    if surface is not None:
-        axis_shape = 'surface'
-        # Use surface properties if not already set
-        if nfp == 1 and stellsym == False:  # Check if defaults were used
-            nfp = surface.nfp
-    
-    # Helper function: compute axis curve
-    def compute_axis_curve(phi, axis_shape_local, R, pitch, twist, axis_func, surf=None):
-        if axis_shape_local == 'circle':
-            x = R * jnp.cos(phi)
-            y = R * jnp.sin(phi)
-            z = jnp.zeros_like(phi)
-        elif axis_shape_local == 'ellipse':
-            aspect_ratio = 1.0
-            x = R * jnp.cos(phi)
-            y = R * aspect_ratio * jnp.sin(phi)
-            z = jnp.zeros_like(phi)
-        elif axis_shape_local == 'helical':
-            x = R * jnp.cos(phi)
-            y = R * jnp.sin(phi)
-            z = pitch * phi / (2 * jnp.pi)
-        elif axis_shape_local == 'surface':
-            # Extract axis from surface m=0 modes
-            # Surface convention: angles = m*theta - n*phi, at theta=0: sin(-n*phi) = -sin(n*phi)
-            m0_mask = surf.xm == 0
-            rc_axis = surf.rc[m0_mask]
-            zs_axis = surf.zs[m0_mask]
-            xn_axis = surf.xn[m0_mask]
-            
-            angles = xn_axis * phi
-            R_val = jnp.sum(rc_axis * jnp.cos(angles))
-            Z = -jnp.sum(zs_axis * jnp.sin(angles))  # Note the minus sign!
-            x = R_val * jnp.cos(phi)
-            y = R_val * jnp.sin(phi)
-            z = Z
-        elif axis_shape_local == 'custom':
-            return axis_func(phi)
-        else:
-            x = R * jnp.cos(phi)
-            y = R * jnp.sin(phi)
-            z = jnp.zeros_like(phi)
-        return jnp.stack([x, y, z], axis=-1)
-
-    # Helper function: compute Frenet frame
-    def compute_frenet_frame(phi, axis_shape_local, R, pitch, twist, axis_func, surf=None):
-        # Compute tangent vector using automatic differentiation for custom/surface axes
-        if (axis_shape_local == 'custom' and axis_func is not None) or axis_shape_local == 'surface':
-            from jax import jacfwd
-            if axis_shape_local == 'surface':
-                axis_fn = lambda p: compute_axis_curve(p, 'surface', R, pitch, twist, None, surf)
-            else:
-                axis_fn = axis_func
-            tangent = jacfwd(axis_fn)(phi)
-            tangent_norm = jnp.linalg.norm(tangent)
-            tangent = tangent / jnp.maximum(tangent_norm, 1e-12)
-        else:
-            # Numerical derivative for standard axes
-            eps = 1e-8
-            axis_plus = compute_axis_curve(phi + eps, axis_shape_local, R, pitch, twist, axis_func, surf)
-            axis_minus = compute_axis_curve(phi - eps, axis_shape_local, R, pitch, twist, axis_func, surf)
-            tangent = (axis_plus - axis_minus) / (2 * eps)
-            tangent_norm = jnp.linalg.norm(tangent)
-            tangent = tangent / jnp.maximum(tangent_norm, 1e-12)
-
-        # For surface-based axes, use the surface's radial direction (∂/∂θ at θ=0)
-        if axis_shape_local == 'surface':
-            # Extract surface Fourier coefficients
-            rc = surf.rc
-            zs = surf.zs
-            xm = surf.xm
-            xn = surf.xn
-            
-            # Compute ∂R/∂θ and ∂Z/∂θ at θ=0 (radial direction from axis)
-            # Surface: R = Σ rc*cos(m*θ - n*φ), Z = Σ zs*sin(m*θ - n*φ)
-            # ∂R/∂θ = -Σ m*rc*sin(m*θ - n*φ), at θ=0: = -Σ m*rc*sin(-n*φ) = Σ m*rc*sin(n*φ)
-            # ∂Z/∂θ =  Σ m*zs*cos(m*θ - n*φ), at θ=0: =  Σ m*zs*cos(-n*φ) = Σ m*zs*cos(n*φ)
-            angles_for_derivative = xn * phi  # n*phi (not -n*phi)
-            dR_dtheta = jnp.sum(xm * rc * jnp.sin(angles_for_derivative))
-            dZ_dtheta = jnp.sum(xm * zs * jnp.cos(angles_for_derivative))
-            
-            # Convert to Cartesian: radial direction in (R, phi, Z) cylindrical coordinates
-            cos_phi = jnp.cos(phi)
-            sin_phi = jnp.sin(phi)
-            
-            # At the axis, R is given by m=0 modes
-            m0_mask = xm == 0
-            R_axis = jnp.sum(rc[m0_mask] * jnp.cos(-xn[m0_mask] * phi))
-            
-            # Radial direction: ∂(X,Y,Z)/∂θ at θ=0
-            dX_dtheta = dR_dtheta * cos_phi
-            dY_dtheta = dR_dtheta * sin_phi
-            # dZ_dtheta already computed
-            
-            radial_dir = jnp.array([dX_dtheta, dY_dtheta, dZ_dtheta])
-            
-            # Orthogonalize radial direction w.r.t. tangent
-            dot_rt = jnp.dot(radial_dir, tangent)
-            n1 = radial_dir - dot_rt * tangent
-            n1_norm = jnp.linalg.norm(n1)
-            
-            # If radial direction is parallel to tangent (shouldn't happen), fall back to Gram-Schmidt
-            if n1_norm < 1e-6:
-                ref_z = jnp.array([0.0, 0.0, 1.0])
-                dot_z = jnp.dot(ref_z, tangent)
-                n1 = ref_z - dot_z * tangent
-                n1_norm = jnp.linalg.norm(n1)
-                if n1_norm < 1e-6:
-                    ref_x = jnp.array([1.0, 0.0, 0.0])
-                    dot_x = jnp.dot(ref_x, tangent)
-                    n1 = ref_x - dot_x * tangent
-                    n1_norm = jnp.linalg.norm(n1)
-            
-            n1 = n1 / jnp.maximum(n1_norm, 1e-12)
-        else:
-            # Compute n1 perpendicular to tangent using Gram-Schmidt
-            # Try z-direction first
-            ref_z = jnp.array([0.0, 0.0, 1.0])
-            dot_z = jnp.dot(ref_z, tangent)
-            n1 = ref_z - dot_z * tangent
-            n1_norm = jnp.linalg.norm(n1)
-            
-            # If n1 is too small (tangent nearly parallel to z), use x-direction
-            if n1_norm < 1e-6:
-                ref_x = jnp.array([1.0, 0.0, 0.0])
-                dot_x = jnp.dot(ref_x, tangent)
-                n1 = ref_x - dot_x * tangent
-                n1_norm = jnp.linalg.norm(n1)
-            
-            n1 = n1 / jnp.maximum(n1_norm, 1e-12)
-
-        # Compute n2 = tangent × n1 to complete the orthonormal frame
-        n2 = jnp.cross(tangent, n1)
-        n2_norm = jnp.linalg.norm(n2)
-        n2 = n2 / jnp.maximum(n2_norm, 1e-12)
-
-        # Apply twist rotation
-        if jnp.abs(twist) > 1e-12:
-            twist_angle = twist * phi
-            cos_t = jnp.cos(twist_angle)
-            sin_t = jnp.sin(twist_angle)
-            n1_rot = cos_t * n1 + sin_t * n2
-            n2_rot = -sin_t * n1 + cos_t * n2
-            n1 = n1_rot
-            n2 = n2_rot
-
-        return n1, n2
-
-    # Generate coil positions using arc-length parametrization
-    # This ensures equal spacing along the actual axis geometry for any axis type
-    n_arc_samples = 1000  # Fine sampling for accurate arc-length computation
-    phi_arc = jnp.linspace(0, 2 * jnp.pi, n_arc_samples, endpoint=True)
-    
-    # Compute axis points along the full toroidal path
-    axis_arc_pts = jnp.array([compute_axis_curve(p, axis_shape, axis_major_radius, axis_pitch, 
-                                                   axis_twist_rate, axis_function, surface) 
-                              for p in phi_arc])
-    
-    # Compute arc-length increments and cumulative arc-length
-    deltas = jnp.linalg.norm(jnp.diff(axis_arc_pts, axis=0), axis=1)
-    cumulative_arc = jnp.concatenate([jnp.array([0.0]), jnp.cumsum(deltas)])
-    
-    # Total arc-length of one full 2π rotation
-    total_arc = cumulative_arc[-1]
-    
-    # Define target arc-lengths for equally-spaced coils
-    # Divide total arc-length by the number of base coils (accounting for symmetries)
-    coil_segment_arc = total_arc / ((1 + int(stellsym)) * nfp * n_coils)
-    
-    # Offset by half a segment to avoid positioning coils on symmetry planes when stellsym=True
-    offset_arc = coil_segment_arc / 2.0 if stellsym else 0.0
-    target_arcs = offset_arc + jnp.arange(n_coils) * coil_segment_arc
-    
-    # Find phi values corresponding to target arc-lengths via linear interpolation
-    coil_phi_positions = jnp.interp(target_arcs, cumulative_arc, phi_arc)
-
-    # Sample each coil
-    coil_theta_samples = jnp.linspace(0, 2 * jnp.pi, n_samples, endpoint=False)
-    coils_gamma = []
-
-    for coil_idx in range(n_coils):
-        phi_coil = coil_phi_positions[coil_idx]
-
-        # Compute axis position and Frenet frame at this phi
-        axis_pos = compute_axis_curve(phi_coil, axis_shape, axis_major_radius, axis_pitch, axis_twist_rate, axis_function, surface)
-        n1, n2 = compute_frenet_frame(phi_coil, axis_shape, axis_major_radius, axis_pitch, axis_twist_rate, axis_function, surface)
-
-        # Create circular coil in the Frenet frame plane
-        coil_points = jnp.zeros((n_samples, 3))
-        for sample_idx, theta in enumerate(coil_theta_samples):
-            point = axis_pos + coil_radius * (jnp.cos(theta) * n1 + jnp.sin(theta) * n2)
-            coil_points = coil_points.at[sample_idx].set(point)
-
-        coils_gamma.append(coil_points)
-
-    coils_gamma = jnp.array(coils_gamma)  # (n_coils, n_samples, 3)
-
-    # Fit Fourier coefficients from the discretized coils
-    dofs, _ = fit_dofs_from_coils(coils_gamma, order, n_segments, assume_uniform=False)
-
-    return Curves(dofs, n_segments=n_segments, nfp=nfp, stellsym=stellsym,
-                  scaling_type=scaling_type, scaling_factor=scaling_factor, scale_fixed=scale_fixed)
 
 @partial(jit, static_argnames=["flip"])
 def RotatedCurve(curve, phi, flip):
@@ -1228,7 +955,7 @@ def fit_dofs_from_coils(
     dofs = _fit_real_fourier_batch(gamma_uni, order)  # rFFT-based fit
     return dofs, gamma_uni
 
-class CoilsFromGamma:
+class DiscretizedCoils:
     """ Class to store coils from gamma (discretized curve coordinates) instead of Fourier coefficients
     
     This class is compatible with the Coils class but stores dofs as the actual gamma values
@@ -1247,7 +974,7 @@ class CoilsFromGamma:
     """
     def __init__(self, gamma: jnp.ndarray, currents: jnp.ndarray, nfp: int = 1, stellsym: bool = False):
         """
-        Initialize CoilsFromGamma with discretized curve coordinates and currents, applying symmetries if possible.
+        Initialize DiscretizedCoils with discretized curve coordinates and currents, applying symmetries if possible.
         Args:
             gamma: shape (n_base_curves, n_segments, 3) - base discretized curve coordinates
             currents: shape (n_base_curves,) - base currents for each unique curve
@@ -1489,7 +1216,7 @@ class CoilsFromGamma:
     
     # copy method
     def copy(self):
-        coils = CoilsFromGamma(self.dofs_gamma.copy(), self.dofs_currents_raw.copy(), 
+        coils = DiscretizedCoils(self.dofs_gamma.copy(), self.dofs_currents_raw.copy(), 
                                    nfp=self.nfp, stellsym=self.stellsym)
         
         # Initialize caches
@@ -1505,14 +1232,14 @@ class CoilsFromGamma:
     
     # magic methods
     def __str__(self):
-        return f"CoilsFromGamma with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
+        return f"DiscretizedCoils with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
              + f"n_segments: {self.n_segments}\n" \
              + f"nfp: {self.nfp}, stellsym: {self.stellsym}\n" \
              + f"Degrees of freedom shape: {self.dofs.shape}\n" \
              + f"Currents scaling factor: {self.currents_scale}\n"
     
     def __repr__(self):
-        return f"CoilsFromGamma with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
+        return f"DiscretizedCoils with {self.n_base_curves} base curves ({self.gamma.shape[0]} total)\n" \
              + f"n_segments: {self.n_segments}\n" \
              + f"nfp: {self.nfp}, stellsym: {self.stellsym}\n" \
              + f"Degrees of freedom shape: {self.dofs.shape}\n" \
@@ -1523,36 +1250,36 @@ class CoilsFromGamma:
     
     def __getitem__(self, key):
         if isinstance(key, int):
-            return CoilsFromGamma(jnp.expand_dims(self.gamma[key], 0), jnp.expand_dims(self.currents[key], 0), 
+            return DiscretizedCoils(jnp.expand_dims(self.gamma[key], 0), jnp.expand_dims(self.currents[key], 0), 
                                      nfp=1, stellsym=False)
         elif isinstance(key, (slice, jnp.ndarray)):
-            return CoilsFromGamma(self.gamma[key], self.currents[key], nfp=1, stellsym=False)
+            return DiscretizedCoils(self.gamma[key], self.currents[key], nfp=1, stellsym=False)
         else:
             raise TypeError(f"Invalid argument type. Got {type(key)}, expected int, slice or jnp.ndarray.")
     
     def __add__(self, other):
-        if isinstance(other, CoilsFromGamma):
-            return CoilsFromGamma(
+        if isinstance(other, DiscretizedCoils):
+            return DiscretizedCoils(
                 jnp.concatenate((self.gamma, other.gamma), axis=0),
                 jnp.concatenate((self.currents, other.currents), axis=0),
                 nfp=1, stellsym=False  # Combined coils lose symmetry structure
             )
         else:
-            raise TypeError(f"Invalid argument type. Got {type(other)}, expected CoilsFromGamma.")
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected DiscretizedCoils.")
     
     def __contains__(self, other):
-        if isinstance(other, CoilsFromGamma):
+        if isinstance(other, DiscretizedCoils):
             return jnp.all(jnp.isin(other.dofs, self.dofs))
         else:
-            raise TypeError(f"Invalid argument type. Got {type(other)}, expected CoilsFromGamma.")
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected DiscretizedCoils.")
     
     def __eq__(self, other):
-        if isinstance(other, CoilsFromGamma):
+        if isinstance(other, DiscretizedCoils):
             if self.dofs.shape != other.dofs.shape:
                 return False
             return jnp.all(self.gamma == other.gamma) and jnp.all(self.dofs_currents == other.dofs_currents)
         else:
-            raise TypeError(f"Invalid argument type. Got {type(other)}, expected CoilsFromGamma.")
+            raise TypeError(f"Invalid argument type. Got {type(other)}, expected DiscretizedCoils.")
     
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -1598,7 +1325,7 @@ class CoilsFromGamma:
     
     @classmethod
     def from_json(cls, filename: str):
-        """Create CoilsFromGamma from JSON file"""
+        """Create DiscretizedCoils from JSON file"""
         import json
         with open(filename, "r") as file:
             data = json.load(file)
@@ -1767,6 +1494,6 @@ class CoilsFromGamma:
         gamma, currents = children
         return cls(gamma, currents, nfp=aux_data["nfp"], stellsym=aux_data["stellsym"])
 
-tree_util.register_pytree_node(CoilsFromGamma,
-                               CoilsFromGamma._tree_flatten,
-                               CoilsFromGamma._tree_unflatten)
+tree_util.register_pytree_node(DiscretizedCoils,
+                               DiscretizedCoils._tree_flatten,
+                               DiscretizedCoils._tree_unflatten)
