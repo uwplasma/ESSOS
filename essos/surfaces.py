@@ -146,9 +146,22 @@ class SurfaceRZFourier:
         self._phi2d = None
         self._angles = None
 
-        self._scaling_type = scaling_type # 1 for L-1 norm, 2 for L-2 norm, jnp.inf for L-infinity norm
+        self._scaling_type = self._normalize_scaling_type(scaling_type)
         self._scaling_factor = scaling_factor
         self._scaling = None
+
+    @staticmethod
+    def _normalize_scaling_type(scaling_type):
+        if scaling_type == "L1" or scaling_type == 1:
+            return 1
+        if scaling_type == "L2" or scaling_type == 2:
+            return 2
+        if scaling_type == "Linfty" or scaling_type == -1 or scaling_type == jnp.inf:
+            return jnp.inf
+        raise ValueError(
+            f"Unknown scaling_type: {scaling_type}. "
+            "Expected 'L1', 1, 'L2', 2, 'Linfty', -1, or jnp.inf."
+        )
 
 
     @classmethod
@@ -353,7 +366,7 @@ class SurfaceRZFourier:
     
     @scaling_type.setter
     def scaling_type(self, new_type):
-        self._scaling_type = new_type
+        self._scaling_type = self._normalize_scaling_type(new_type)
         self._scaling = None
 
     # scaling_factor property and setter
@@ -805,6 +818,5 @@ def plot_scalar_on_flux_surface(surface, scalar_map):
         surface: the surface object in which to plot the scalar_map
         scalar_map: a scalar_map as function of theta and phi
     ''' 
-
 
 
