@@ -29,10 +29,8 @@ def mock_vmec():
 
 
 
-def dummy_loss_fn():
-    def loss_fn(field=None, coils=None, vmec=None, surface=None, x=None):
-        return jnp.sum(x)
-    return loss_fn
+def dummy_loss_fn(field=None, coils=None, vmec=None, surface=None, x=None):
+    return jnp.sum(x)
 
 
 def test_custom_loss_named_unraveler():
@@ -70,7 +68,7 @@ def test_custom_loss_named_unraveler():
     assert jnp.array_equal(gradient_tuple["unused"], gradient["unused"])
 
 
-def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn()):
+def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn):
     optimizer = MultiObjectiveOptimizer(
         loss_functions=[dummy_loss_fn],
         vmec=vmec,
