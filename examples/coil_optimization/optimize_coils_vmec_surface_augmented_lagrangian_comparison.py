@@ -95,11 +95,6 @@ L_length.dependencies = {"field": init_field}
 L_curvature.dependencies = {"field": init_field}
 
 
-
-
-
-
-
 # Create the constraints
 penalty = 1.0 #Intial penalty values
 multiplier=0. #Initial lagrange multiplier values
@@ -110,8 +105,6 @@ sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
 model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers 
 #Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
 model_mu='Tolerance'
-
-
 
 
 beta=2.                                     #penalty update parameter
@@ -130,11 +123,6 @@ length_constraint=alm.eq(loss_length_constraint,model_lagrangian=model_lagrangia
 field_constraint=alm.eq(BdotN_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad)
 
 
-
-
-
-
-
 C_normal_field_constraint = alm.SelectiveConstraint(field_constraint, "field", surface=surface, target_tol=BdotN_Target_tol)
 C_length_constraint = alm.SelectiveConstraint(length_constraint, "field")
 C_curvature_constraint = alm.SelectiveConstraint(curvature_constraint, "field")
@@ -144,17 +132,10 @@ C_curvature_constraint = alm.SelectiveConstraint(curvature_constraint, "field")
 C_Total_constraint = alm.combine(C_normal_field_constraint, C_length_constraint, C_curvature_constraint)
 
 
-
-
-
-
 C_normal_field_constraint.dependencies = {"field": init_field}
 C_length_constraint.dependencies = {"field": init_field}
 C_curvature_constraint.dependencies = {"field": init_field}
 C_Total_constraint.dependencies = {"field": init_field} 
-
-
-
 
 
 #If loss=cost_function(x) is not prescribed, f(x)=0 is considered, uncomment second line to use B dot N as a loss and not a constraint
@@ -217,7 +198,6 @@ print("Initial length :", init_field.coils.length)
 print("Length after optimization:",opt_field.coils.length)
 print("Length after optimization alm:",opt_field_alm.coils.length)
 print("Length target:",LENGTH_TARGET)
-
 
 
 
