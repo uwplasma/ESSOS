@@ -60,12 +60,10 @@ def loss(field, surface):
 def BdotN_constraint(field,surface,target_tol=1.e-6):
     bdotn_over_b = BdotN_over_B(surface, field)
     bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
-    #bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum((jnp.square(bdotn_over_b)-target_tol)/target_tol,0.0)))
     return bdotn_over_b_loss
 
 def loss_length_constraint(field):
     return jnp.maximum(0, field.coils.length - LENGTH_TARGET)
-    #return jnp.maximum(0, (field.coils.length - LENGTH_TARGET)/LENGTH_TARGET)
 
 def loss_curvature_contraint(field):
     return jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET)
