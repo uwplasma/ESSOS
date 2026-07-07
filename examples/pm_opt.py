@@ -31,27 +31,20 @@ from pathlib import Path
 import numpy as np
 
 
-# INPUT FILES — swap these four paths to switch problems
+# INPUT FILES — passed as command-line arguments
+if len(sys.argv) != 4:
+    sys.exit("Usage: python plot.py <surf_file> <mag_file> <coil_file>")
 
-ESSOS_ROOT  = Path(__file__).resolve().parents[2]
-SIMSOPT_SRC = ESSOS_ROOT.parent / "simsopt" / "src"
+SURF_FILE = Path(sys.argv[1])
+MAG_FILE  = Path(sys.argv[2])
+COIL_FILE = Path(sys.argv[3])
 
-# MUSE (active) 
-SURF_FILE     = ESSOS_ROOT / "essos" / "input.muse"
-COIL_FILE     = SIMSOPT_SRC.parent / "tests" / "test_files" / "muse_tf_coils.focus"
-MAG_FILE      = SIMSOPT_SRC.parent / "tests" / "test_files" / "zot80.focus"
+
 SURFACE_RANGE = "half period"
-
-# Rotating ellipse (uncomment these four lines, comment the four above) 
-# SURF_FILE     = ESSOS_ROOT / "essos" / "examples" / "input_rot_ellipse_nfp8_e_1p98"
-# COIL_FILE     = ESSOS_ROOT / "essos" / "examples" / "rot_ellipse_nfp8_e_198.focus"
-# MAG_FILE      = ESSOS_ROOT / "essos" / "examples" / "dipole_grid_nfp8.focus"
-# SURFACE_RANGE = "half period"
-
 SURFACE_NPHI   = 64
 SURFACE_NTHETA = 64
 
-OUTPUT_DIR = Path("pm_opt_output")
+OUTPUT_DIR = Path(__file__).resolve().parent / "pm_opt_output"
 
 
 # OPTIMIZER CONFIG
@@ -60,11 +53,11 @@ JAX_PLATFORM = "cpu"
 CPU_THREADS  = 4
 ENABLE_X64   = True
 
-FB_ONLY_STEPS       = 8000
+FB_ONLY_STEPS       = 1000
 FB_ONLY_LR_MAX      = 0.01
 FB_ONLY_LR_MIN_FRAC = 0.1
 
-FD_ANNEAL_STEPS       = 6000
+FD_ANNEAL_STEPS       = 1000
 FD_ANNEAL_LR_MAX      = 0.001
 FD_ANNEAL_LR_MIN_FRAC = 0.001
 
@@ -101,17 +94,13 @@ jax.config.update("jax_enable_x64", ENABLE_X64)
 backend_name = str(jax.default_backend()).lower()
 print(f"JAX backend: {backend_name}  |  devices: {[str(d) for d in jax.devices()]}")
 
-for p in [str(ESSOS_ROOT), str(SIMSOPT_SRC)]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
+# for p in [str(ESSOS_ROOT), str(SIMSOPT_SRC)]:
+#     if p not in sys.path:
+#         sys.path.insert(0, p)
 
 from essos.fields import DipoleField
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-
-# LOAD SURFACE — nfp/stellsym read from the surface itself
 
 def load_surface(surf_file, surface_range, nphi, ntheta):
     from simsopt.geo import SurfaceRZFourier
@@ -121,21 +110,24 @@ def load_surface(surf_file, surface_range, nphi, ntheta):
         surface = SurfaceRZFourier.from_focus(str(surf_file), range=surface_range, nphi=nphi, ntheta=ntheta)
     return surface
 
-
-
-# LOAD COILS — essos native field evaluation
-
 def load_coils_essos(coil_file):
 
     from simsopt.field import Coil, Current
-    from simsopt.util.permanent_magnet_helper_functions import read_focus_coils
     from essos.coils import Coils_from_simsopt
 
-    base_curves, base_currents0, ncoils = read_focus_coils(str(coil_file))
-    total_current = float(np.sum([c.get_value() for c in base_currents0]))
-    all_coils = [Coil(base_curves[i], Current(total_current / ncoils)) for i in range(ncoils)]
+    try:
+        from simsopt.field.coil import load_coils_from_makegrid_file
+        coils = load_coils_from_makegrid_file(str(DEFAULT_COIL_FILE), order = 10)
+        
+    except:
+        from simsopt.util.permanent_magnet_helper_functions import read_focus_coils
 
-    coils = Coils_from_simsopt(all_coils, nfp=1, stellsym=False)
+
+        base_curves, base_currents0, ncoils = read_focus_coils(str(coil_file))
+        total_current = float(np.sum([c.get_value() for c in base_currents0]))
+        all_coils = [Coil(base_curves[i], Current(total_current / ncoils)) for i in range(ncoils)]
+        coils = Coils_from_simsopt(all_coils, nfp=1, stellsym=False)
+        
     return coils
 
 
@@ -152,21 +144,22 @@ def compute_Bn_fixed_essos(coils, surf_pts, surf_n):
     return np.asarray(Bn, np.float64)
 
 
-# LOAD MAGNET GRID
-
 def load_magnet_grid(mag_file):
     
     pos_list, mom_list, pho_list, ic_list = [], [], [], []
     with open(str(mag_file), encoding="utf-8") as f:
-        for line in f.readlines()[3:]:
+        for line in f.readlines():
             tokens = line.replace(",", " ").split()
             if len(tokens) < 12:
                 continue
-            x, y, z = float(tokens[3]), float(tokens[4]), float(tokens[5])
-            ic      = float(tokens[6])
-            m0      = float(tokens[7])
-            pho     = float(tokens[8])
-            az, pol = float(tokens[10]), float(tokens[11])
+            try:
+                x, y, z = float(tokens[3]), float(tokens[4]), float(tokens[5])
+                ic      = float(tokens[6])
+                m0      = float(tokens[7])
+                pho     = float(tokens[8])
+                az, pol = float(tokens[10]), float(tokens[11])
+            except ValueError:
+                continue
             pos_list.append((x, y, z))
             mom_list.append((m0*np.cos(az)*np.sin(pol), m0*np.sin(az)*np.sin(pol), m0*np.cos(pol)))
             pho_list.append(pho)
@@ -179,33 +172,52 @@ def load_magnet_grid(mag_file):
     )
 
 
-def write_focus_file(path, positions, moments, pho, header="generated by muse_pm_optimize"):
-    """Write a FOCUS-format magnet grid file: positions, moments, pho."""
+def write_focus_file(path, positions, moments, pho, Ic_passed=None, momentq=1):
+    """Write a FAMUS/FOCUS magnet file matching the source format exactly."""
+    def fmt(x):
+        return str(round(float(x), 6))
+ 
     n = len(positions)
     m0 = np.linalg.norm(moments, axis=1)
     m0_safe = np.where(m0 > 0, m0, 1.0)
     mhat = moments / m0_safe[:, None]
     pol = np.arccos(np.clip(mhat[:, 2], -1, 1))
-    az  = np.arctan2(mhat[:, 1], mhat[:, 0])
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(f"# {header}\n")
-        f.write("# Total number of dipoles\n")
-        f.write(f"{n}\n")
-        f.write("#coiltype, symmetry,  ox,  oy,  oz,  Ic,  M0,  pho,  Lc,  mp,  mt\n")
+    az = np.arctan2(mhat[:, 1], mhat[:, 0])
+ 
+    # None -> all on; scalar -> same for all; array -> per-site
+    if Ic_passed is None:
+        Ic_arr = np.ones(n)
+    else:
+        Ic_arr = np.broadcast_to(np.asarray(Ic_passed, dtype=float), (n,))
+ 
+    with open(path, "w") as f:
+        f.write("# Total number of coils,  momentq \n")
+        f.write(f"{n:>10}{momentq:>6}\n")
+        f.write("# coiltype, symmetry,  coilname,  ox,  oy,  oz,  Ic,  M_0,  pho,  Lc,  mp,  mt \n")
         for i in range(n):
-            f.write(
-                f"2, 2, {positions[i,0]:.8e}, {positions[i,1]:.8e}, {positions[i,2]:.8e}, "
-                f"0, {m0[i]:.8e}, {pho[i]:.8e}, 0, {az[i]:.8e}, {pol[i]:.8e}\n"
-            )
+            name = f"pm{i:08d}"
+            fields = [
+                "2",
+                f"{2:>11}",
+                f"{name:>17}   ",
+                f" {fmt(positions[i, 0])}",
+                f" {fmt(positions[i, 1])}",
+                f" {fmt(positions[i, 2])}",
+                f" {fmt(Ic_arr[i])}",
+                f" {fmt(m0[i])}",
+                f" {fmt(pho[i])}",
+                f" {fmt(0.0)}",
+                f" {fmt(az[i])}",
+                f" {fmt(pol[i])} ",
+            ]
+            f.write(",".join(fields) + "\n")
     print(f"Wrote {n} magnets to {path}")
-
+    
 
 print(f"\n--- Loading surface: {SURF_FILE.name} ---")
 surface = load_surface(SURF_FILE, SURFACE_RANGE, SURFACE_NPHI, SURFACE_NTHETA)
 
-# nfp/stellsym read from the surface — not hardcoded. Hardcoding 
-# previously caused the optimizer to silently run with the wrong symmetry
-# when switching between problems (MUSE nfp=2 vs ellipse nfp=8/nfp=4).
+
 nfp      = int(surface.nfp)
 stellsym = bool(surface.stellsym)
 print(f"Surface nfp={nfp}  stellsym={stellsym}  (read from surface file)")
@@ -235,12 +247,23 @@ else:
 n_magnets = len(magnet_positions)
 
 native_norms = np.linalg.norm(magnet_moments_raw, axis=1)
-M0_SCALE = float(np.mean(native_norms))
-magnet_orientations = magnet_moments_raw / native_norms[:, None]
+n_zero_moment = int(np.sum(native_norms == 0))
+if n_zero_moment > 0:
+    print(f"WARNING: {n_zero_moment} zero-moment magnets - excluded like Ic=0 sites")
+native_norms_safe = np.where(native_norms > 0, native_norms, 1.0)
+M0_SCALE = float(np.mean(native_norms[native_norms > 0])) if np.any(native_norms > 0) else 0.0
+magnet_orientations = magnet_moments_raw / native_norms_safe[:, None]
+magnet_orientations = np.where(native_norms[:, None] > 0, magnet_orientations, 0.0)
 magnet_moments = magnet_orientations * M0_SCALE
+ZERO_MOMENT_MASK = native_norms == 0
+EXCLUDE_MASK = PORT_MASK | ZERO_MOMENT_MASK
+if n_zero_moment > 0:
+    pho_loaded = np.where(ZERO_MOMENT_MASK, 0.0, pho_loaded)
 
 M_MAX = B_MAX_T / MU0
 volume_per_cell = (M0_SCALE / M_MAX) * 1e6
+SYMMETRY_MULTIPLIER = nfp * (2 if stellsym else 1)
+print(f"Symmetry: nfp={nfp}, stellsym={stellsym} -> x{SYMMETRY_MULTIPLIER} for full-device volume (fV prints are per-unique-domain)")
 
 
 print(f"Magnets loaded: {n_magnets}  |  mean M0 (from file) = {M0_SCALE:.6f} A\u00b7m\u00b2  |  "
@@ -256,8 +279,7 @@ print(f"Backend: {backend_name}")
 print("=" * 70)
 
 
-# BUILD G MATRIX via verified DipoleField.compute_interaction_matrix
-
+# BUILD G MATRIX via DipoleField.compute_interaction_matrix
 print("\n--- Build G matrix ---")
 JAX_DTYPE        = jnp.float32
 surface_pts_flat = jnp.asarray(surf_pts, JAX_DTYPE)
@@ -271,6 +293,9 @@ dipole_field = DipoleField(
     nfp=nfp, stellsym=stellsym, scale_factor=1.0,
 )
 G = np.asarray(dipole_field.compute_interaction_matrix(surface_pts_flat, surface_nrm_flat), np.float32)
+n_nan, n_inf = int(np.sum(np.isnan(G))), int(np.sum(np.isinf(G)))
+if n_nan > 0 or n_inf > 0:
+    raise RuntimeError(f"G has {n_nan} NaN / {n_inf} Inf values - check for zero-moment or malformed rows in {MAG_FILE.name}")
 gc.collect()
 print(f"G: {G.shape}  {G.nbytes/1e9:.2f} GB  {time.time()-t0:.1f}s")
 
@@ -289,6 +314,7 @@ Vt_jax  = jnp.float32(VOLUME_TARGET_CM3)
 wVT_jax = jnp.float32(W_VOLUME_TARGET)
 
 
+# Define loss functions
 @jax.jit
 def compute_metrics(pho):
     bn    = pho @ G_jax.T + Bn_jax
@@ -299,7 +325,6 @@ def compute_metrics(pho):
     return fB, fV, fD
 
 
-@jax.jit
 @jax.jit
 def adam_step(pho, m, v, lr, w_fD, port_mask):
     """One Adam step: L = fB/fB_ref + w_fD * fD + wVT * max(fV-Vt, 0).
@@ -312,14 +337,14 @@ def adam_step(pho, m, v, lr, w_fD, port_mask):
         fD    = jnp.sum(abs_p * (f32(1) - abs_p))
         fVT_raw = jnp.maximum(fV - Vt_jax, f32(0))
         fVT     = jnp.where(Vt_jax > f32(0), fVT_raw, f32(0))
-        return fB / fB_ref + w_fD * fD + fVT * wVT_jax
+        return fB / fB_ref + w_fD * fD + fVT * wVT_jax, (fB, fV, fD)
     b1, b2, eps = f32(0.9), f32(0.999), f32(1e-8)
-    g    = jax.grad(loss)(pho)
+    (_, aux), g = jax.value_and_grad(loss, has_aux=True)(pho)
     m    = b1*m + (1-b1)*g
     v    = b2*v + (1-b2)*g*g
     pho  = jnp.clip(pho - lr * m / (jnp.sqrt(v) + eps), -1, 1)
     pho  = jnp.where(port_mask, f32(0), pho)
-    return pho, m, v
+    return pho, m, v, aux
 
 
 def cosine_lr(step, total, lr_max, lr_min):
@@ -336,6 +361,9 @@ def get_lr_and_wd(step):
     wD     = ((s-1) / max(FD_ANNEAL_STEPS-1, 1)) ** WD_RAMP_POWER * MAX_WD
     return lr, wD
 
+
+
+# Optimization
 
 TOTAL_STEPS = FB_ONLY_STEPS + FD_ANNEAL_STEPS
 
@@ -359,21 +387,23 @@ def fB64_of(p):
 
 t_start = time.time()
 
-
 pho = jnp.asarray(np.clip(pho_loaded, -1, 1), jnp.float32)
-port_mask_jax = jnp.asarray(PORT_MASK)
+port_mask_jax = jnp.asarray(EXCLUDE_MASK)
 mom = jnp.zeros_like(pho)
 var = jnp.zeros_like(pho)
 
 lr0, wd0 = get_lr_and_wd(1)
-pho, mom, var = adam_step(pho, mom, var, f32(lr0), f32(wd0), port_mask_jax)
+hist_fB, hist_fV, hist_fD = [], [], []
+pho, mom, var, aux0 = adam_step(pho, mom, var, f32(lr0), f32(wd0), port_mask_jax)
+hist_fB.append(aux0[0]); hist_fV.append(aux0[1]); hist_fD.append(aux0[2])
 _ = pho.block_until_ready()
 print("JIT compiled.")
 
 fB_s1 = None
 for step in range(2, TOTAL_STEPS + 1):
     lr, wD = get_lr_and_wd(step)
-    pho, mom, var = adam_step(pho, mom, var, f32(lr), f32(wD), port_mask_jax)
+    pho, mom, var, aux = adam_step(pho, mom, var, f32(lr), f32(wD), port_mask_jax)
+    hist_fB.append(aux[0]); hist_fV.append(aux[1]); hist_fD.append(aux[2])
 
     if step <= FB_ONLY_STEPS and (step % LOG_INTERVAL == 0 or step == FB_ONLY_STEPS):
         fB_t, fV_t, _ = compute_metrics(pho)
@@ -400,7 +430,7 @@ for step in range(2, TOTAL_STEPS + 1):
 
 p   = np.asarray(pho, np.float64)
 p_d = np.sign(p) * (np.abs(p) > 0.5)
-p_d = np.where(PORT_MASK, 0.0, p_d) 
+p_d = np.where(EXCLUDE_MASK, 0.0, p_d) 
 fB_fin, fB_rnd = fB64_of(p), fB64_of(p_d)
 
 print(f"\n{'='*70}")
@@ -416,67 +446,44 @@ print(f"    North (+1): {int(np.sum(p_d > 0.5))}   South (-1): {int(np.sum(p_d <
 print(f"{'='*70}")
 
 
-# SAVE OUTPUTS — .npy for quick reload, .focus for reuse elsewhere
 
-np.save(OUTPUT_DIR / "pho_optimized.npy",  p_d)
-np.save(OUTPUT_DIR / "pho_continuous.npy", p)
-np.save(OUTPUT_DIR / "grid_positions.npy", magnet_positions)
-np.save(OUTPUT_DIR / "grid_moments.npy",   magnet_moments)
+write_focus_file(OUTPUT_DIR / "pm_optimized_test.focus", magnet_positions, magnet_moments, p_d,Ic_passed = ic_flags)
 
-# Final moments: full strength in the magnet's native orientation where
-# pho is +1, flipped where pho is -1, zero where pho is 0.
-final_moments = np.where(p_d[:, None] != 0, magnet_orientations * M0_SCALE, 0.0) * np.sign(p_d)[:, None]
-write_focus_file(OUTPUT_DIR / "pm_optimized.focus", magnet_positions, final_moments, p_d)
-
-print(f"\nSaved outputs to {OUTPUT_DIR}/")
-
-del G_jax, Bn_jax
-gc.collect()
-jax.clear_caches()
-
-# PLOTTING
-
+# ============================================================
+# CONVERGENCE HISTORY PLOT — fB, fV, fD per iteration
+# ============================================================
 import matplotlib.pyplot as plt
+hist_fB_np = np.array([float(x) for x in hist_fB])
+hist_fV_np = np.array([float(x) for x in hist_fV])
+hist_fD_np = np.array([float(x) for x in hist_fD])
+steps_axis = np.arange(1, len(hist_fB_np) + 1)
+np.savez(OUTPUT_DIR / "convergence_history.npz",
+         fB=hist_fB_np, fV=hist_fV_np, fD=hist_fD_np)
 
-nphi_s, ntheta_s = surf_xyz.shape[0], surf_xyz.shape[1]
-phi_coords   = np.linspace(0, 1, nphi_s)
-theta_coords = np.linspace(0, 1, ntheta_s)
+fig_h, axes_h = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
 
-Bn_before = Bn_fixed.reshape(nphi_s, ntheta_s)
-Bn_pm     = (G64 @ p_d).reshape(nphi_s, ntheta_s)
-Bn_after  = Bn_before + Bn_pm
+axes_h[0].plot(steps_axis, hist_fB_np, color="steelblue", linewidth=1)
+axes_h[0].set_yscale("log")
+axes_h[0].set_ylabel("fB")
+axes_h[0].set_title("Convergence history")
+axes_h[0].grid(alpha=0.3)
 
-abs_max_before = np.abs(Bn_before).max()
-abs_max_after  = np.abs(Bn_after).max()
-levels_before  = np.linspace(-abs_max_before, abs_max_before, 21)
-levels_after   = np.linspace(-abs_max_after, abs_max_after, 21)
+axes_h[1].plot(steps_axis, hist_fV_np, color="seagreen", linewidth=1)
+axes_h[1].set_ylabel("fV [cm$^3$] (unique domain)")
+axes_h[1].grid(alpha=0.3)
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 7))
-im1 = axes[0].contourf(phi_coords, theta_coords, Bn_before.T, levels=levels_before, cmap="RdBu_r", extend="both")
-axes[0].set_title("Coils only (before)", fontsize=12)
-axes[0].set_xlabel("phi"); axes[0].set_ylabel("theta")
-axes[0].set_xlim(phi_coords.min(), phi_coords.max())
-axes[0].set_ylim(theta_coords.min(), theta_coords.max())
-axes[0].set_aspect("auto")
-plt.colorbar(im1, ax=axes[0], label="B\u00b7n [T]")
-rms_before = float(np.sqrt(np.mean(Bn_before**2)))
-axes[0].text(0.02, 0.97, f"RMS = {rms_before:.3e} T", transform=axes[0].transAxes,
-             va="top", fontsize=10, bbox=dict(boxstyle="round", facecolor="white", alpha=0.8))
+axes_h[2].plot(steps_axis, hist_fD_np, color="purple", linewidth=1)
+axes_h[2].set_yscale("log")
+axes_h[2].set_ylabel("fD")
+axes_h[2].set_xlabel("iteration")
+axes_h[2].grid(alpha=0.3)
 
-im2 = axes[1].contourf(phi_coords, theta_coords, Bn_after.T, levels=levels_after, cmap="RdBu_r", extend="both")
-axes[1].set_title("Coils + optimized PMs (after)", fontsize=12)
-axes[1].set_xlabel("phi")
-axes[1].set_xlim(phi_coords.min(), phi_coords.max())
-axes[1].set_ylim(theta_coords.min(), theta_coords.max())
-axes[1].set_aspect("auto")
-plt.colorbar(im2, ax=axes[1], label="B\u00b7n [T]")
-rms_after = float(np.sqrt(np.mean(Bn_after**2)))
-axes[1].text(0.02, 0.97, f"RMS = {rms_after:.3e} T", transform=axes[1].transAxes,
-             va="top", fontsize=10, bbox=dict(boxstyle="round", facecolor="white", alpha=0.8))
+for ax in axes_h:
+    ax.axvline(FB_ONLY_STEPS, color="gray", linestyle="--", alpha=0.7)
+axes_h[0].text(FB_ONLY_STEPS, axes_h[0].get_ylim()[1], "  Stage 2 (fD anneal) starts",
+               va="top", fontsize=9, color="gray")
 
-plt.suptitle(f"fB={fB_rnd:.2e}  fV={volume_per_cell*np.abs(p_d).sum():.0f} cm\u00b3  "
-             f"RMS: {rms_before:.3e} \u2192 {rms_after:.3e} T  ({rms_before/rms_after:.1f}\u00d7)", fontsize=12)
 plt.tight_layout()
-plt.savefig(OUTPUT_DIR / "Bn_before_after.png", dpi=200, bbox_inches="tight")
+plt.savefig(OUTPUT_DIR / "convergence_history.png", dpi=200, bbox_inches="tight")
 plt.show()
-print(f"Saved {OUTPUT_DIR}/Bn_before_after.png")
+print(f"Saved {OUTPUT_DIR}/convergence_history.png and convergence_history.npz")

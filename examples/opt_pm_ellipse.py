@@ -48,7 +48,7 @@ LOG_INTERVAL = 500
 
 
 
-ESSOS_ROOT  = Path('').resolve().parents[2]
+ESSOS_ROOT  = Path(__file__).resolve().parents[1]
 SIMSOPT_SRC = ESSOS_ROOT.parent / "simsopt" / "src"
 
 #DEFAULT_SURF_FILE = ESSOS_ROOT / "ESSOS" / "input.muse"
