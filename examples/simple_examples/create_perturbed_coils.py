@@ -10,8 +10,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.coils import Coils, CreateEquallySpacedCurves,Curves
 from functools import partial
-from essos.coil_perturbation import GaussianSampler
-from essos.coil_perturbation import perturb_curves_statistic,perturb_curves_systematic
+from essos.coil_perturbation import GaussianSampler, perturb_curves
 
 
 
@@ -42,14 +41,14 @@ key=0
 split_keys=jax.random.split(jax.random.key(key), num=2)
 #Add systematic error
 coils_sys = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
-perturb_curves_systematic(coils_sys.curves, g, key=split_keys[0])
+coils_sys = perturb_curves(coils_sys, g, key=split_keys[0], perturbation_type='systematic')
 # Add statistical error
 coils_stat = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
-perturb_curves_statistic(coils_stat.curves, g, key=split_keys[1])
+coils_stat = perturb_curves(coils_stat, g, key=split_keys[1], perturbation_type='statistical')
 # Add both systematic and statistical errors
 coils_perturbed = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
-perturb_curves_systematic(coils_perturbed.curves, g, key=split_keys[0])
-perturb_curves_statistic(coils_perturbed.curves, g, key=split_keys[1])
+coils_perturbed = perturb_curves(coils_perturbed, g, key=split_keys[0], perturbation_type='systematic')
+coils_perturbed = perturb_curves(coils_perturbed, g, key=split_keys[1], perturbation_type='statistical')
 
 
 fig = plt.figure(figsize=(9, 8))

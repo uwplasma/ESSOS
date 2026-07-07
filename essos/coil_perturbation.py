@@ -3,7 +3,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import jit, vmap
 from jaxtyping import Array, Float  # https://github.com/google/jaxtyping
-from essos.coils import Curves,apply_symmetries_to_gammas
+from essos.coils import Curves, Coils, DiscretizedCoils, fit_dofs_from_coils
 from functools import partial
 
 
@@ -205,70 +205,94 @@ class PerturbationSample():
 
 
 
-def perturb_curves_systematic(curves: Curves,sampler:GaussianSampler, key=None):
+#Util functions for perturbing curves and coils.
+def _draw_curve_perturbation(sampler: GaussianSampler, key, n_curves: int):
+    new_seeds = jax.random.split(key, num=n_curves)
+    perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
+    return perturbation[:, 0, :, :]
+
+
+def _make_curves_like(curves: Curves, dofs_new, nfp: int, stellsym: bool):
+    return Curves(
+        dofs_new,
+        curves.n_segments,
+        nfp=nfp,
+        stellsym=stellsym,
+        scaling_type=curves.scaling_type,
+        scaling_factor=curves.scaling_factor,
+        scale_fixed=curves.scale_fixed,
+    )
+
+
+
+#Perturb coisl fucntion
+def perturb_curves(curves, sampler:GaussianSampler, key=None, perturbation_type="systematic"):
     """
-    Apply a systematic perturbation to all the coils. 
-    This means taht an independent perturbation is applied to the each unique coil
-    Then, the required symmetries are applied to the perturbed unique set of coils
-    
+    Apply a perturbation to curves or coils and return the perturbed object.
+
     Args:
-        curves: curves to be perturbed.
+        curves: Curves, Coils, or DiscretizedCoils to be perturbed.
         sampler: the gaussian sampler used to get the perturbations
-        key: the seed which will be splited to geenerate random 
-        but reproducible pertubations
-        
+        key: the seed which will be split to generate random but reproducible perturbations
+        perturbation_type: "systematic" to perturb only unique/base coils and preserve symmetry,
+            or "statistical"/"statistic" to perturb every expanded coil independently.
+
     Returns:
-        The curves given as an input are modified and thus no return is done
+        A new perturbed object of the same family as the input.
     """
-    new_seeds=jax.random.split(key, num=curves.n_base_curves)
-    if sampler.n_derivs == 0:
-        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
-        gamma_perturbations = apply_symmetries_to_gammas(perturbation[:,0,:,:], curves.nfp, curves.stellsym)
-        curves.gamma=curves.gamma + gamma_perturbations    
-    elif sampler.n_derivs == 1:
-        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
-        gamma_perturbations = apply_symmetries_to_gammas(perturbation[:,0,:,:], curves.nfp, curves.stellsym)
-        gamma_perturbations_dash = apply_symmetries_to_gammas(perturbation[:,1,:,:], curves.nfp, curves.stellsym)
-        curves.gamma=curves.gamma + gamma_perturbations    
-        curves.gamma_dash=curves.gamma_dash + gamma_perturbations_dash                   
-    elif sampler.n_derivs == 2:
-        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
-        gamma_perturbations = apply_symmetries_to_gammas(perturbation[:,0,:,:], curves.nfp, curves.stellsym)
-        gamma_perturbations_dash = apply_symmetries_to_gammas(perturbation[:,1,:,:], curves.nfp, curves.stellsym)
-        gamma_perturbations_dashdash = apply_symmetries_to_gammas(perturbation[:,2,:,:], curves.nfp, curves.stellsym)        
-        curves.gamma=curves.gamma + gamma_perturbations    
-        curves.gamma_dash=curves.gamma_dash + gamma_perturbations_dash        
-        curves.gamma_dashdash=curves.gamma_dashdash + gamma_perturbations_dashdash
-    #return curves  
+    if perturbation_type == "systematic":
+        if isinstance(curves, DiscretizedCoils):
+            perturbation = _draw_curve_perturbation(sampler, key, curves.n_base_curves)
+            return DiscretizedCoils(
+                curves.dofs_gamma + perturbation,
+                currents=curves.dofs_currents_raw,
+                nfp=curves.nfp,
+                stellsym=curves.stellsym,
+            )
+
+        if isinstance(curves, Coils):
+            perturbation = _draw_curve_perturbation(sampler, key, curves.curves.n_base_curves)
+            base_curves = _make_curves_like(curves.curves, curves.dofs_curves, nfp=1, stellsym=False)
+            perturbed_base_gamma = base_curves.gamma + perturbation
+            dofs_new, _ = fit_dofs_from_coils(perturbed_base_gamma, curves.order, curves.n_segments, assume_uniform=True)
+            new_curves = _make_curves_like(curves.curves, dofs_new, nfp=curves.nfp, stellsym=curves.stellsym)
+            return Coils(curves=new_curves, currents=curves.dofs_currents_raw)
+
+        if isinstance(curves, Curves):
+            perturbation = _draw_curve_perturbation(sampler, key, curves.n_base_curves)
+            base_curves = _make_curves_like(curves, curves.dofs, nfp=1, stellsym=False)
+            perturbed_base_gamma = base_curves.gamma + perturbation
+            dofs_new, _ = fit_dofs_from_coils(perturbed_base_gamma, curves.order, curves.n_segments, assume_uniform=True)
+            return _make_curves_like(curves, dofs_new, nfp=curves.nfp, stellsym=curves.stellsym)
+
+    elif perturbation_type in {"statistical"}:
+        perturbation = _draw_curve_perturbation(sampler, key, curves.gamma.shape[0])
+        gamma_perturbed = curves.gamma + perturbation
+
+        if isinstance(curves, DiscretizedCoils):
+            return DiscretizedCoils(gamma_perturbed, currents=curves.currents, nfp=1, stellsym=False)
+
+        if isinstance(curves, Coils):
+            dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments, assume_uniform=True)
+            new_curves = _make_curves_like(curves.curves, dofs_new, nfp=1, stellsym=False)
+            return Coils(curves=new_curves, currents=curves.currents)
+
+        if isinstance(curves, Curves):
+            dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments, assume_uniform=True)
+            return _make_curves_like(curves, dofs_new, nfp=1, stellsym=False)
+
+    else:
+        raise ValueError(
+            f"Unsupported perturbation_type {perturbation_type}. "
+            "Expected 'systematic' or 'statistical'."
+        )
+
+    raise TypeError(f"Unsupported type {type(curves)}. Expected Curves, Coils, or DiscretizedCoils.")
 
 
-def perturb_curves_statistic(curves: Curves,sampler:GaussianSampler, key=None):
-    """
-    Apply a statistic perturbation to all the coils. 
-    This means taht an independent perturbation is applied every coil
-    including repeated coils 
-    
-    Args:
-        curves: curves to be perturbed.
-        sampler: the gaussian sampler used to get the perturbations
-        key: the seed which will be splited to geenerate random 
-        but reproducible pertubations
-                
-    Returns:
-        The curves given as an input are modified and thus no return is done
-    """
-    new_seeds=jax.random.split(key, num=curves.gamma.shape[0])
-    if sampler.n_derivs == 0:
-        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
-        curves.gamma=curves.gamma + perturbation[:,0,:,:]
-    elif sampler.n_derivs == 1:
-        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
-        curves.gamma=curves.gamma + perturbation[:,0,:,:]               
-        curves.gamma_dash=curves.gamma_dash + perturbation[:,1,:,:]  
-    elif sampler.n_derivs == 2:
-        perturbation = jax.vmap(sampler.draw_sample, in_axes=(0))(new_seeds)
-        curves.gamma=curves.gamma + perturbation[:,0,:,:]               
-        curves.gamma_dash=curves.gamma_dash + perturbation[:,1,:,:]  
-        curves.gamma_dashdash=curves.gamma_dashdash + perturbation[:,2,:,:]
-    #return curves  
+def perturb_curves_systematic(curves, sampler:GaussianSampler, key=None):
+    return perturb_curves(curves, sampler, key=key, perturbation_type="systematic")
 
+
+def perturb_curves_statistic(curves, sampler:GaussianSampler, key=None):
+    return perturb_curves(curves, sampler, key=key, perturbation_type="statistical")
