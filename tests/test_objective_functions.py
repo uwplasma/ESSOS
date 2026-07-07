@@ -92,9 +92,8 @@ class TestObjectiveFunctions(unittest.TestCase):
     @patch('essos.objective_functions.Curves', return_value=DummyCurves())
     @patch('essos.objective_functions.Coils', return_value=DummyCoils())
     @patch('essos.objective_functions.BiotSavart', return_value=DummyField())
-    @patch('essos.objective_functions.perturb_curves_systematic')
-    @patch('essos.objective_functions.perturb_curves_statistic')
-    def test_perturbed_field_and_coils_from_dofs(self, pcs, pcss, bs, coils, curves):
+    @patch('essos.objective_functions.perturb_curves', side_effect=lambda curves, sampler, key=None, perturbation_type=None: curves)
+    def test_perturbed_field_and_coils_from_dofs(self, pc, bs, coils, curves):
         objf.pertubred_field_from_dofs(self.x, self.key, self.sampler, self.dofs_curves, self.currents_scale, self.nfp)
         objf.perturbed_coils_from_dofs(self.x, self.key, self.sampler, self.dofs_curves, self.currents_scale, self.nfp)
 
