@@ -12,7 +12,7 @@ import numpy as np
 # Input parameters
 tmax = 1e-4
 timestep = 1.e-8
-times_to_trace=5000
+times_to_trace=1000
 nparticles_per_core=6
 nparticles = number_of_processors_to_use*nparticles_per_core
 n_particles_to_plot = 4

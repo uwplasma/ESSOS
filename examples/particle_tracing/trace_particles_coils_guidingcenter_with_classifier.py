@@ -1,6 +1,8 @@
 import os
 number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
+import jax
+print(jax.devices())
 from time import time
 from jax import block_until_ready
 import jax.numpy as jnp
@@ -10,6 +12,7 @@ from essos.surfaces import SurfaceClassifier
 from essos.coils import Coils
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ONE_EV
 from essos.dynamics import Tracing, Particles
+from essos.objective_functions import normB_axis
 
 # Input parameters
 tmax = 1.e-4
@@ -29,7 +32,14 @@ json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'QH_sim
 coils = Coils.from_simsopt(json_file)
 field = BiotSavart(coils)
 
-
+#renormalize coisl to have B_target=5.7 on axis
+B_axis_old=normB_axis(field,npoints=200)
+#print(jnp.average(B_axis_old))
+B_target=5.7
+coils.dofs_currents=coils.dofs_currents*B_target/jnp.average(B_axis_old)
+field=BiotSavart(coils)
+#B_axis_new=normB_axis(field,npoints=200)
+#print(jnp.average(B_axis_new))
 # Load coils and field
 wout_file = os.path.join(os.path.dirname(__file__), '..', 'input_files','wout_QH_simple_scaled.nc')
 vmec = Vmec(wout_file)
@@ -46,8 +56,8 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,charge=A
 print(f"Initialization performed")
 # Trace in ESSOS
 time0 = time()
-tracing = block_until_ready(Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
-                  maxtime=tmax, timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol,boundary=boundary))
+tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
+                  maxtime=tmax, timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol,boundary=boundary)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
 trajectories = tracing.trajectories
@@ -64,7 +74,7 @@ coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 
 for i, trajectory in enumerate(trajectories):
-    ax2.plot(tracing.times, jnp.abs(tracing.energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
+    ax2.plot(tracing.times, jnp.abs(tracing.energy()[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
     ax3.plot(tracing.times, trajectory[:, 3]/particles.total_speed, label=f'Particle {i+1}')
     #ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
@@ -80,7 +90,6 @@ ax4.set_ylabel('Z (m)')
 ax4.legend()
 plt.tight_layout()
 plt.show()
-
 
 ## Save results in vtk format to analyze in Paraview
 # tracing.to_vtk('trajectories')

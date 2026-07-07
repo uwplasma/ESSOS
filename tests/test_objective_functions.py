@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
+import jax
 import jax.numpy as jnp
 
 import essos.objective_functions as objf
@@ -55,6 +56,49 @@ class DummySurface:
     def __init__(self):
         self.gamma = jnp.zeros((10, 3))
         self.unitnormal = jnp.ones((10, 3))
+        self.stellsym = False
+        self.nfp = 1
+
+
+@jax.tree_util.register_pytree_node_class
+class PytreeCoils:
+    def __init__(self, gamma, gamma_dash, gamma_dashdash, currents, quadpoints):
+        self.gamma = gamma
+        self.gamma_dash = gamma_dash
+        self.gamma_dashdash = gamma_dashdash
+        self.currents = currents
+        self.quadpoints = quadpoints
+
+    def __len__(self):
+        return self.gamma.shape[0]
+
+    def tree_flatten(self):
+        children = (self.gamma, self.gamma_dash, self.gamma_dashdash, self.currents, self.quadpoints)
+        return children, None
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
+
+
+@jax.tree_util.register_pytree_node_class
+class PytreeSurface:
+    def __init__(self, gamma, unitnormal, stellsym=False, nfp=1):
+        self.gamma = gamma
+        self.unitnormal = unitnormal
+        self.stellsym = stellsym
+        self.nfp = nfp
+
+    def tree_flatten(self):
+        children = (self.gamma, self.unitnormal)
+        aux_data = (self.stellsym, self.nfp)
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        gamma, unitnormal = children
+        stellsym, nfp = aux_data
+        return cls(gamma, unitnormal, stellsym=stellsym, nfp=nfp)
 
 def dummy_sampler(*args, **kwargs):
     return 0
@@ -92,8 +136,9 @@ class TestObjectiveFunctions(unittest.TestCase):
     @patch('essos.objective_functions.Curves', return_value=DummyCurves())
     @patch('essos.objective_functions.Coils', return_value=DummyCoils())
     @patch('essos.objective_functions.BiotSavart', return_value=DummyField())
-    @patch('essos.objective_functions.perturb_curves', side_effect=lambda curves, sampler, key=None, perturbation_type=None: curves)
-    def test_perturbed_field_and_coils_from_dofs(self, pc, bs, coils, curves):
+    @patch('essos.objective_functions.perturb_curves_systematic')
+    @patch('essos.objective_functions.perturb_curves_statistic')
+    def test_perturbed_field_and_coils_from_dofs(self, pcs, pcss, bs, coils, curves):
         objf.pertubred_field_from_dofs(self.x, self.key, self.sampler, self.dofs_curves, self.currents_scale, self.nfp)
         objf.perturbed_coils_from_dofs(self.x, self.key, self.sampler, self.dofs_curves, self.currents_scale, self.nfp)
 
@@ -205,6 +250,53 @@ class TestObjectiveFunctions(unittest.TestCase):
         gammas = jnp.ones((10, 3))*9.
         ns = jnp.ones((10, 3))*10.
         objf.cs_distance_pure(gammac, lc, gammas, ns, 1.0)
+
+    def test_blockwise_losses_with_non_divisible_blocks(self):
+        coils = PytreeCoils(
+            gamma=jnp.arange(2 * 5 * 3, dtype=jnp.float64).reshape(2, 5, 3) / 10.0,
+            gamma_dash=jnp.ones((2, 5, 3), dtype=jnp.float64),
+            gamma_dashdash=jnp.ones((2, 5, 3), dtype=jnp.float64) * 0.1,
+            currents=jnp.ones(2, dtype=jnp.float64),
+            quadpoints=jnp.linspace(0.0, 1.0, 5),
+        )
+        surface = PytreeSurface(
+            gamma=jnp.arange(2 * 3 * 3, dtype=jnp.float64).reshape(2, 3, 3) / 20.0,
+            unitnormal=jnp.ones((2, 3, 3), dtype=jnp.float64),
+        )
+
+        separation = objf.loss_coil_separation(coils, 0.5, block_size=3)
+        surface_distance = objf.loss_coil_surface_distance(coils, surface, 0.5, block_size=4)
+        linking = objf.loss_linkingnumber(coils, block_size=4)
+
+        self.assertTrue(jnp.isfinite(separation))
+        self.assertTrue(jnp.isfinite(surface_distance))
+        self.assertTrue(jnp.isfinite(linking))
+        self.assertAlmostEqual(float(separation), float(objf.loss_coil_separation.__wrapped__(coils, 0.5, block_size=3)))
+        self.assertAlmostEqual(float(surface_distance), float(objf.loss_coil_surface_distance.__wrapped__(coils, surface, 0.5, block_size=4)))
+        self.assertAlmostEqual(float(linking), float(objf.loss_linkingnumber.__wrapped__(coils, block_size=4)))
+
+    @patch('essos.objective_functions.Curves.compute_curvature', return_value=jnp.ones(5))
+    @patch('essos.objective_functions.BiotSavart_from_gamma')
+    def test_loss_lorentz_force_coils_preserves_fullcoil_result(self, biot_savart_from_gamma, compute_curvature):
+        class DummyBS:
+            def B(self, point):
+                return jnp.zeros(3)
+
+        biot_savart_from_gamma.return_value = DummyBS()
+        coils = PytreeCoils(
+            gamma=jnp.arange(2 * 5 * 3, dtype=jnp.float64).reshape(2, 5, 3) / 10.0,
+            gamma_dash=jnp.ones((2, 5, 3), dtype=jnp.float64),
+            gamma_dashdash=jnp.ones((2, 5, 3), dtype=jnp.float64) * 0.1,
+            currents=jnp.ones(2, dtype=jnp.float64),
+            quadpoints=jnp.linspace(0.0, 1.0, 5),
+        )
+
+        force_loss = objf.loss_lorentz_force_coils(coils, threshold=1e6, block_size=2)
+        self.assertTrue(jnp.isfinite(force_loss))
+        self.assertAlmostEqual(
+            float(force_loss),
+            float(objf.loss_lorentz_force_coils.__wrapped__(coils, threshold=1e6, block_size=2)),
+        )
 
     @patch('essos.objective_functions.coils_from_dofs', return_value=DummyCoils())
     def test_loss_lorentz_force_coils(self, cfd):
