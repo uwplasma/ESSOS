@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
+from essos.losses import custom_loss
 from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 from essos.coils import Coils,Curves
 from essos.fields import BiotSavart
@@ -28,13 +29,46 @@ def mock_vmec():
 
 
 
-def dummy_loss_fn():
-    def loss_fn(field=None, coils=None, vmec=None, surface=None, x=None):
-        return jnp.sum(x)
-    return loss_fn
+def dummy_loss_fn(field=None, coils=None, vmec=None, surface=None, x=None):
+    return jnp.sum(x)
 
 
-def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn()):
+def test_custom_loss_named_unraveler():
+    def loss_fn(curve_dofs, current):
+        return jnp.sum(curve_dofs**2) + jnp.sum(current)
+
+    loss = custom_loss(loss_fn, "curve_dofs", "current")
+    loss.dependencies = {
+        "curve_dofs": jnp.array([[1.0, 2.0], [3.0, 4.0]]),
+        "current": jnp.array([5.0]),
+        "unused": jnp.array([99.0]),
+    }
+
+    dofs = loss.starting_dofs
+    named_args = loss.dofs_to_pytree(dofs)
+    tuple_args = tuple(named_args[name] for name in loss.args_names)
+
+    assert set(named_args) == {"curve_dofs", "current"}
+    assert jnp.array_equal(named_args["curve_dofs"], loss.dependencies["curve_dofs"])
+    assert jnp.array_equal(named_args["current"], loss.dependencies["current"])
+    assert loss(dofs) == loss_fn(named_args["curve_dofs"], named_args["current"])
+    assert loss.call_pytree(named_args) == loss_fn(named_args["curve_dofs"], named_args["current"])
+    assert loss.call_pytree(tuple_args) == loss_fn(named_args["curve_dofs"], named_args["current"])
+    value, grad = loss.value_and_grad(dofs)
+    assert value == loss_fn(named_args["curve_dofs"], named_args["current"]) and jnp.array_equal(grad, loss.grad(dofs))
+
+    gradient = loss.grad_pytree(named_args)
+    gradient_tuple = loss.grad_pytree(tuple_args)
+    assert set(gradient) == {"curve_dofs", "current", "unused"}
+    assert jnp.array_equal(gradient["curve_dofs"], 2 * named_args["curve_dofs"])
+    assert jnp.array_equal(gradient["current"], jnp.ones_like(named_args["current"]))
+    assert jnp.array_equal(gradient["unused"], jnp.zeros_like(loss.dependencies["unused"]))
+    assert jnp.array_equal(gradient_tuple["curve_dofs"], gradient["curve_dofs"])
+    assert jnp.array_equal(gradient_tuple["current"], gradient["current"])
+    assert jnp.array_equal(gradient_tuple["unused"], gradient["unused"])
+
+
+def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn):
     optimizer = MultiObjectiveOptimizer(
         loss_functions=[dummy_loss_fn],
         vmec=vmec,

@@ -1,6 +1,6 @@
 from functools import partial
 import jax.numpy as jnp
-from jax import tree_util, jit, grad as jax_grad
+from jax import tree_util, jit, grad as jax_grad, value_and_grad as jax_value_and_grad
 from jax.flatten_util import ravel_pytree
         
 class base_loss:
@@ -71,38 +71,74 @@ class custom_loss(base_loss):
         self.fun = fun
         self.args_names = args_names
         self.kwargs = kwargs
+        self._dofs_to_args = None
+
+    def clear_cache(self):
+        super().clear_cache()
+        self._dofs_to_args = None
+
+    def _ensure_unravelers(self):
+        if self._starting_dofs is None or self._dofs_to_args is None or self._dofs_to_pytree is None:
+            self._starting_dofs, tuple_unraveler = ravel_pytree(
+                tuple(self.dependencies[arg] for arg in self.args_names)
+            )
+            self._dofs_to_args = tuple_unraveler
+
+            def _named_unraveler(dofs):
+                args = tuple_unraveler(dofs)
+                return {name: value for name, value in zip(self.args_names, args)}
+
+            self._dofs_to_pytree = _named_unraveler
 
     # The dofs of a custom loss are the dofs of its arguments
     @property
     def starting_dofs(self):
-        if self._starting_dofs is None:
-            self._starting_dofs, self._dofs_to_pytree = ravel_pytree(tuple(self.dependencies[arg] for arg in self.args_names))
+        self._ensure_unravelers()
         return self._starting_dofs
     
     @property
     def dofs_to_pytree(self):
-        if self._dofs_to_pytree is None:
-            self._starting_dofs, self._dofs_to_pytree = ravel_pytree(tuple(self.dependencies[arg] for arg in self.args_names))
+        self._ensure_unravelers()
         return self._dofs_to_pytree
     
     @partial(jit, static_argnames=['self'])
     def __call__(self, dofs: jnp.ndarray) -> float:
-        args = self.dofs_to_pytree(dofs)
+        self._ensure_unravelers()
+        args = self._dofs_to_args(dofs)
         return self.fun(*args, **self.kwargs)
     
     @partial(jit, static_argnames=['self'])
     def call_pytree(self, dofs_pytree) -> float:
-        return self.fun(*dofs_pytree, **self.kwargs)
+        if isinstance(dofs_pytree, dict):
+            args = tuple(dofs_pytree[name] for name in self.args_names)
+        else:
+            args = tuple(dofs_pytree)
+        return self.fun(*args, **self.kwargs)
 
     @partial(jit, static_argnames=['self'])
     def grad(self, dofs: jnp.ndarray) -> jnp.ndarray:
-        args = self.dofs_to_pytree(dofs)
+        self._ensure_unravelers()
+        args = self._dofs_to_args(dofs)
         gradient = jax_grad(self.fun, argnums=tuple(range(len(args))))(*args, **self.kwargs)
         return ravel_pytree(gradient)[0]
+
+    @partial(jit, static_argnames=['self'])
+    def value_and_grad(self, dofs: jnp.ndarray):
+        self._ensure_unravelers()
+        args = self._dofs_to_args(dofs)
+        value, gradient = jax_value_and_grad(
+            self.fun,
+            argnums=tuple(range(len(args))),
+        )(*args, **self.kwargs)
+        return value, ravel_pytree(gradient)[0]
     
     @partial(jit, static_argnames=['self'])
     def grad_pytree(self, dofs_pytree) -> dict:
-        gradient = jax_grad(self.fun, argnums=tuple(range(len(dofs_pytree))))(*dofs_pytree, **self.kwargs)
+        if isinstance(dofs_pytree, dict):
+            args = tuple(dofs_pytree[name] for name in self.args_names)
+        else:
+            args = tuple(dofs_pytree)
+        gradient = jax_grad(self.fun, argnums=tuple(range(len(args))))(*args, **self.kwargs)
         buffer = self.dependencies_buffer.copy()
         for dep, g in zip(self.args_names, gradient):
             buffer[dep] = g
