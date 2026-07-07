@@ -1,66 +1,23 @@
 import jax
+
 # from build.lib.essos import coils
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import jit, vmap
-from jax.lax import fori_loop
 from functools import partial
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart,BiotSavart_from_gamma
-from essos.surfaces import BdotN_over_B, BdotN
+from essos.surfaces import BdotN_over_B
 from essos.coils import Curves, Coils
-from essos.optimization import new_nearaxis_from_x_and_old_nearaxis
 from essos.constants import mu_0
 from essos.coil_perturbation import perturb_curves
 
 
 
-def pertubred_field_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
-    coils = perturbed_coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp=nfp,n_segments=n_segments, stellsym=stellsym)
-    field = BiotSavart(coils)
-    return field
-
-def perturbed_coils_from_dofs(x,key,sampler,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
-    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
-    dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves.shape)
-    dofs_currents = x[len_dofs_curves_ravelled:]
-    curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-    coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
-    #Split once the key/seed given for one pertubred stellarator
-    split_keys = jax.random.split(jax.random.key(key), 2)
-    #Internally the following functions will then further split the two keys avoiding repeating keys
-    coils = perturb_curves(coils, sampler, key=split_keys[0], perturbation_type='systematic')
-    coils = perturb_curves(coils, sampler, key=split_keys[1], perturbation_type='statistical')
-    return coils
-
-def field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
-    coils = coils_from_dofs(x,dofs_curves,currents_scale,nfp=nfp,n_segments=n_segments, stellsym=stellsym)
-    field = BiotSavart(coils)
-    return field
-
-def coils_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments=60, stellsym=True):
-    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
-    dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves.shape)
-    dofs_currents = x[len_dofs_curves_ravelled:]
-    curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-    coils = Coils(curves=curves, currents=dofs_currents*currents_scale)
-    return coils
-
-def curves_from_dofs(x,dofs_curves,nfp,n_segments=60, stellsym=True):
-    len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
-    dofs_curves = jnp.reshape(x[:len_dofs_curves_ravelled], dofs_curves.shape)
-    dofs_currents = x[len_dofs_curves_ravelled:]
-    
-    curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-    return curves
 
 
-
-@partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
-def loss_coils_for_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
-               n_segments=60, stellsym=True, max_coil_curvature=0.1):
-    field=field_from_dofs(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym)               
-
+########################## NEAR-AXIS FIELD LOSSES ##########################
+def near_axis_field_quantities(field_nearaxis):
     Raxis = field_nearaxis.R0
     Zaxis = field_nearaxis.Z0
     phi = field_nearaxis.phi
@@ -68,79 +25,61 @@ def loss_coils_for_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp,
     Yaxis = Raxis*jnp.sin(phi)
     points = jnp.array([Xaxis, Yaxis, Zaxis])
     B_nearaxis = field_nearaxis.B_axis.T
-    B_coils = vmap(field.B)(points.T)
-    
     gradB_nearaxis = field_nearaxis.grad_B_axis.T
-    gradB_coils = vmap(field.dB_by_dX)(points.T)
+    return points, B_nearaxis, gradB_nearaxis
 
-    
+
+
+def loss_B_difference_coils_near_axis(field, field_nearaxis):
+    points, B_nearaxis, _ = near_axis_field_quantities(field_nearaxis)
+    B_coils = vmap(field.B)(points.T)
     B_difference_loss = jnp.sum(jnp.abs(jnp.array(B_coils)-jnp.array(B_nearaxis)))
+    return B_difference_loss
+
+def loss_gradB_difference_coils_near_axis(field, field_nearaxis):
+    points, _, gradB_nearaxis = near_axis_field_quantities(field_nearaxis)
+    gradB_coils = vmap(field.dB_by_dX)(points.T)
     gradB_difference_loss = jnp.sum(jnp.abs(jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)))
-    coil_length_loss    = jnp.maximum(0, jnp.max(field.coils.length-max_coil_length))
-    coil_curvature_loss = jnp.maximum(0, jnp.mean(field.coils.curvature, axis=1)-max_coil_curvature)
+    return gradB_difference_loss
 
-    return B_difference_loss+gradB_difference_loss+coil_length_loss+coil_curvature_loss
+def loss_iota_near_axis(field_nearaxis,iota_target=0.41):
+    return jnp.abs((field_nearaxis.iota - iota_target))
 
-# @partial(jit, static_argnums=(0, 1))
-def difference_B_gradB_onaxis(nearaxis_field, coils_field):
-    Raxis = nearaxis_field.R0
-    Zaxis = nearaxis_field.Z0
-    phi = nearaxis_field.phi
-    Xaxis = Raxis*jnp.cos(phi)
-    Yaxis = Raxis*jnp.sin(phi)
-    points = jnp.array([Xaxis, Yaxis, Zaxis])
-    B_nearaxis = nearaxis_field.B_axis.T
-    B_coils = vmap(coils_field.B)(points.T)
-    
-    gradB_nearaxis = nearaxis_field.grad_B_axis.T
-    gradB_coils = vmap(coils_field.dB_by_dX)(points.T)
-    
-    return jnp.array(B_coils)-jnp.array(B_nearaxis), jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)
-    
-@partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
-def loss_coils_and_nearaxis(x, field_nearaxis, dofs_curves, currents_scale, nfp, max_coil_length=42,
-               n_segments=60, stellsym=True, max_coil_curvature=0.1):
-    #len_dofs_curves_ravelled = len(jnp.ravel(dofs_curves))
-    len_dofs_nearaxis = len(field_nearaxis.x)          
-    field=field_from_dofs(x[:-len_dofs_nearaxis],dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym)               
-    new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(x[-len_dofs_nearaxis:], field_nearaxis)
+def loss_r0_near_axis(field_nearaxis, r0_target=1.0):
+    return jnp.abs((field_nearaxis.R0[0] - r0_target))
 
-    elongation = new_field_nearaxis.elongation
-    iota = new_field_nearaxis.iota
-    
-    B_difference, gradB_difference = difference_B_gradB_onaxis(new_field_nearaxis, field)
-    B_difference_loss = 3*jnp.sum(jnp.abs(B_difference))
-    gradB_difference_loss = jnp.sum(jnp.abs(gradB_difference))
-    
-    coil_length_loss    = jnp.maximum(0, jnp.max(field.coils.length-max_coil_length))
-    coil_curvature_loss = jnp.maximum(0, jnp.mean(field.coils.curvature, axis=1)-max_coil_curvature)
-    elongation_loss = jnp.sum(jnp.abs(elongation))
-    iota_loss = 30/jnp.abs(iota)
-    
-    return B_difference_loss+gradB_difference_loss+coil_length_loss+coil_curvature_loss+elongation_loss+iota_loss
 
-def loss_particle_radial_drift(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
+##############################Particle confinement losses ##############################
+def loss_particle_radial_drift_fullorbit(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
     particles.to_full_orbit(field)
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=1.e-8,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
-    R_axis=tracing.field.r_axis
-    Z_axis=tracing.field.z_axis
+    R_axis=field.r_axis
+    Z_axis=field.z_axis
     #Ideally here one would differentiate in time through diffrax !TODO
-    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,0])+jnp.square(xyz[:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,2]-Z_axis+1.e-12))
+    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
     v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime     
-    return jnp.ravel((jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1)))))
+    return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
 
-
-def loss_particle_alpha_drift(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',target=-1000.,boundary=None):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    particles.to_full_orbit(field)
+def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=1.e-8,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
-    R_axis=tracing.field.r_axis
-    Z_axis=tracing.field.z_axis
+    R_axis=field.r_axis
+    Z_axis=field.z_axis
+    #Ideally here one would differentiate in time through diffrax !TODO
+    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
+    v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime     
+    return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
+
+
+def loss_particle_alpha_drift(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
+                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+    xyz = tracing.trajectories[:,:, :3]
+    R_axis=field.r_axis
+    Z_axis=field.z_axis
     #def theta(x,R_axis=R_axis,Z_axis=Z_axis):
     #    return jnp.arctan2(x[2]-Z_axis+1.e-12, jnp.sqrt(x[0]**2+x[1]**2)-R_axis+1.e-12)
     #def phi(x):
@@ -152,18 +91,16 @@ def loss_particle_alpha_drift(x,particles,dofs_curves, currents_scale, nfp,n_seg
     #grad_phi=vmap(jax.jacfwd(phi,argnums=0),in_axes=0)(xyz)
     #v_theta=jnp.tensordot(v_xyz,grad_theta,axes=(1,1))
     #v_alpha=v_theta-jnp.tensordot(B_contravariant,grad_theta,axes=(1,1))/jnp.tensordot(B_contravariant,grad_phi,axes=(1,1))*jnp.tensordot(v_xyz,grad_phi,axes=(1,1))                
-    theta=jnp.arctan2(xyz[:,2]-Z_axis+1.e-12, jnp.sqrt(xyz[:,0]**2+xyz[:,1]**2)-R_axis+1.e-12)
+    theta=jnp.arctan2(xyz[:,:,2]-Z_axis+1.e-12, jnp.sqrt(xyz[:,:,0]**2+xyz[:,:,1]**2)-R_axis+1.e-12)
     v_theta=jnp.diff(theta,axis=1)#/tracing.times_to_trace*tracing.maxtime                               
     return jnp.sum(jnp.square(jnp.average(v_theta,axis=1)))  
 
-def loss_particle_gamma_c(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym) 
-    particles.to_full_orbit(field)
+def loss_particle_gammac(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=1.e-8,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
-    R_axis=tracing.field.r_axis
-    Z_axis=tracing.field.z_axis
+    R_axis=field.r_axis
+    Z_axis=field.z_axis
     #def theta(x,R_axis=R_axis,Z_axis=Z_axis):
     #    return jnp.arctan2(x[2]-Z_axis+1.e-12, jnp.sqrt(x[0]**2+x[1]**2)-R_axis+1.e-12)
     #def phi(x):
@@ -175,41 +112,27 @@ def loss_particle_gamma_c(x,particles,dofs_curves, currents_scale, nfp,n_segment
     #grad_phi=vmap(jax.jacfwd(phi,argnums=0),in_axes=0)(xyz)
     #v_theta=jnp.tensordot(v_xyz,grad_theta,axes=(1,1))
     #v_alpha=v_theta-jnp.tensordot(B_contravariant,grad_theta,axes=(1,1))/jnp.tensordot(B_contravariant,grad_phi,axes=(1,1))*jnp.tensordot(v_xyz,grad_phi,axes=(1,1)) 
-    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,0])+jnp.square(xyz[:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,2]-Z_axis+1.e-12))
+    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
     v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime                        
-    theta=jnp.arctan2(xyz[:,2]-Z_axis+1.e-12, jnp.sqrt(xyz[:,0]**2+xyz[:,1]**2)-R_axis+1.e-12)
+    theta=jnp.arctan2(xyz[:,:,2]-Z_axis+1.e-12, jnp.sqrt(xyz[:,:,0]**2+xyz[:,:,1]**2)-R_axis+1.e-12)
     v_theta=jnp.diff(theta,axis=1)#/tracing.times_to_trace*tracing.maxtime                          
     #return jnp.sum(jnp.square((2./jnp.pi*jnp.absolute(jnp.arctan2(jnp.average(v_r_cross,axis=1),jnp.average(v_theta,axis=1))))))
     return jnp.max(2./jnp.pi*jnp.absolute(jnp.arctan2(jnp.average(v_r_cross,axis=1),jnp.average(v_theta,axis=1))))
     
-def loss_particle_r_cross_final(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True,maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    particles.to_full_orbit(field)
+def loss_particle_rcross_final(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=1.e-8,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
-    R_axis=tracing.field.r_axis
-    Z_axis=tracing.field.z_axis
+    R_axis=field.r_axis
+    Z_axis=field.z_axis
     r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
     return jnp.linalg.norm((jnp.average(r_cross,axis=1)))
 
-def loss_particle_r_cross_max(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True,target_r=0.4,maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    #particles.to_full_orbit(field)
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=1.e-8,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    xyz = tracing.trajectories[:,:, :3]
-    R_axis=tracing.field.r_axis
-    Z_axis=tracing.field.z_axis
-    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
-    return jnp.maximum(r_cross-target_r,0.0)
 
 
-def loss_Br(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True,maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    #particles.to_full_orbit(field)
+def loss_particle_Br(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=1.e-8,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
     R_axis=tracing.field.r_axis
     Z_axis=tracing.field.z_axis
@@ -222,12 +145,9 @@ def loss_Br(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym
     B_r=jnp.multiply(B_particle[:,:,0],dr_cross_dx)+jnp.multiply(B_particle[:,:,1],dr_cross_dy)+jnp.multiply(B_particle[:,:,2],dr_cross_dz)
     return jnp.sum(jnp.abs(B_r))
 
-
-def loss_iota(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True,target_iota=0.5,maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    #particles.to_full_orbit(field)
+def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None,target_iota=0.41):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=1.e-8,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
     R_axis=tracing.field.r_axis
     Z_axis=tracing.field.z_axis
@@ -243,44 +163,74 @@ def loss_iota(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stells
     B_phi=jnp.multiply(B_particle[:,:,0],dphi_dx)+jnp.multiply(B_particle[:,:,1],dphi_dy)
     return jnp.sum(jnp.maximum(target_iota-B_theta/B_phi,0.0))
 
-#final lost fraction
-def loss_lost_fraction(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5,timestep=1.e-7, model='GuidingCenterAdaptative',boundary=None):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym) 
-    particles.to_full_orbit(field)
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    lost_fraction = tracing.loss_fractions[-1]
-    return lost_fraction
 
-#lost fraction at every saved time snapshot (which is given by num_steps)
-def loss_lost_fraction_times(x,particles,dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5,timestep=1.e-7, model='GuidingCenterAdaptative',boundary=None):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym) 
-    particles.to_full_orbit(field)
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    lost_fraction = tracing.loss_fractions
-    return lost_fraction
 
-# @partial(jit, static_argnums=(0, 1))
-def normB_axis(field, npoints=15,target_B_on_axis=5.7):
+
+
+
+
+
+###################  B ON SURAFCE LOSSES ##########################
+@partial(jit, static_argnames=['npoints'])
+def normB_axis(field, npoints=15):
     R_axis=field.r_axis
     phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
     return B_axis
 
-# @partial(jit, static_argnums=(0, 1))
-def loss_normB_axis(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True, npoints=15,target_B_on_axis=5.7):
-    field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)
-    R_axis=field.r_axis
-    phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
-    B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
-    return jnp.ravel(jnp.absolute(B_axis-target_B_on_axis))
+@partial(jit, static_argnames=['npoints', 'target_B'])
+def loss_normB_axis_average(field,npoints=15, target_B=5.7):
+    B_axis = normB_axis(field, npoints)
+    return jnp.abs(jnp.average(B_axis)-target_B)
 
-# @partial(jit, static_argnums=(0, 1))
-def loss_normB_axis_average(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True, npoints=15,target_B_on_axis=5.7):
-    field=field_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments,stellsym)
-    R_axis=field.r_axis
-    phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
-    B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
-    return jnp.array([jnp.absolute(jnp.average(B_axis)-target_B_on_axis)])
+
+def loss_BdotN(field,surface):
+    return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+
+@partial(jit, static_argnames=['target_tol'])
+def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
+    bdotn_over_b = BdotN_over_B(surface, field)
+    bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
+    return bdotn_over_b_loss
+
+
+###########################  B ON SURAFCE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
+def copy_coils_from_field(field):
+    return field.coils.copy()
+
+@partial(jit, static_argnames=['sampler'])
+def perturbed_field_from_field(field, key, sampler):
+    coils = copy_coils_from_field(field)
+    base_key = jax.random.key(key)
+    split_keys = jax.random.split(base_key, 2)
+    perturb_curves_systematic(coils, sampler, key=split_keys[0])
+    coils = perturb_curves_statistic(coils, sampler, key=split_keys[1])
+    return BiotSavart(coils)
+
+
+@partial(jit, static_argnames=['sampler'])
+def loss_bdotn_stochastic(field, surface, sampler, keys):
+    def perturbed_loss(key):
+        perturbed_field = perturbed_field_from_field(field, key, sampler)
+        bdotn_over_b = BdotN_over_B(surface, perturbed_field)
+        return jnp.sum(jnp.abs(bdotn_over_b))
+
+    return jnp.mean(jax.vmap(perturbed_loss)(keys))
+
+
+@partial(jit, static_argnames=['sampler', 'target_tol'])
+def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6):
+    def perturbed_square(key):
+        perturbed_field = perturbed_field_from_field(field, key, sampler)
+        return jnp.square(BdotN_over_B(surface, perturbed_field))
+
+    expected_square = jnp.mean(jax.vmap(perturbed_square)(keys), axis=0)
+    return jnp.sqrt(jnp.sum(jnp.maximum(expected_square - target_tol, 0.0)))
+
+
+
+
+######################### COIL GEOMETRY LOSSES #################################
 
 @partial(jit, static_argnames=['max_coil_length'])
 def loss_coil_length(coils, max_coil_length=0):
@@ -303,8 +253,20 @@ def compute_candidates(coils, min_separation):
 
     return i_vals[mask], j_vals[mask]
 
-@partial(jit, static_argnames=['min_separation'])
-def loss_coil_separation(coils, min_separation, candidates=None):
+
+# Blockwise, memory-efficient coil separation loss
+@partial(jit, static_argnames=["min_separation", "block_size"])
+def loss_coil_separation(coils, min_separation, candidates=None, block_size=None):
+    """
+    Memory-efficient coil separation loss using blockwise vmap.
+    Args:
+        coils: Coils object
+        min_separation: Minimum allowed separation
+        candidates: Optional tuple of (i, j) coil index arrays
+        block_size: Block size for memory efficiency. If None, uses full vmap (no chunking)
+    Returns:
+        Scalar loss (sum over all coil pairs)
+    """
     if candidates is None:
         candidates = jnp.triu_indices(len(coils), k=1)
 
@@ -313,279 +275,201 @@ def loss_coil_separation(coils, min_separation, candidates=None):
         gamma_dash_i = jnp.linalg.norm(coils.gamma_dash[i], axis=-1)
         gamma_j = coils.gamma[j]
         gamma_dash_j = jnp.linalg.norm(coils.gamma_dash[j], axis=-1)
-        dists = jnp.linalg.norm(gamma_i[:, None, :] - gamma_j[None, :, :], axis=2)
-        penalty = jnp.maximum(0, min_separation - dists)
-        return jnp.mean(jnp.square(penalty)*gamma_dash_i*gamma_dash_j)
+        n_points = gamma_i.shape[0]
+
+        # If block_size is None, use full vmap (no chunking)
+        use_block_size = min(n_points, n_points if block_size is None else block_size)
+        n_blocks = (n_points + use_block_size - 1) // use_block_size
+        padded_points = n_blocks * use_block_size
+        pad_width = padded_points - n_points
+
+        gamma_j_blocks = jnp.pad(gamma_j, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        gamma_dash_j_blocks = jnp.pad(gamma_dash_j, (0, pad_width)).reshape(n_blocks, use_block_size)
+        valid_blocks = (jnp.arange(padded_points) < n_points).reshape(n_blocks, use_block_size)
+
+        def block_sum(block_gamma_j, block_gamma_dash_j, block_valid):
+            dists_block = jnp.linalg.norm(gamma_i[:, None, :] - block_gamma_j[None, :, :], axis=2)
+            penalty_block = jnp.maximum(0, min_separation - dists_block)
+            weighted_penalty = (
+                jnp.square(penalty_block)
+                * gamma_dash_i[:, None]
+                * block_gamma_dash_j[None, :]
+                * block_valid[None, :]
+            )
+            return jnp.sum(weighted_penalty)
+
+        total = jnp.sum(jax.vmap(block_sum)(gamma_j_blocks, gamma_dash_j_blocks, valid_blocks))
+        norm = gamma_i.shape[0] * gamma_j.shape[0]
+        return total / norm
 
     losses = jax.vmap(pair_loss)(*candidates)
+    return jnp.sum(losses)
+
+# Blockwise, memory-efficient coil-surface distance loss
+@partial(jit, static_argnames=["min_distance", "block_size"])
+def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
+    """
+    Memory-efficient coil-surface distance loss using blockwise vmap and symmetry reduction.
+    Args:
+        coils: Coils object
+        surface: Surface object (with gamma, unitnormal)
+        min_distance: Minimum allowed coil-surface distance
+        block_size: Block size for memory efficiency. If None, uses full vmap (no chunking)
+        nfp: Number of field periods
+        stellsym: Whether stellarator symmetry is present
+    Returns:
+        Scalar loss (sum over all relevant coil-surface pairs)
+    """
+    n_coils = coils.gamma.shape[0]
+    n_points_coil = coils.gamma.shape[1]
+    surface_points = surface.gamma.reshape(-1, 3)
+    n_points_surface = surface_points.shape[0]
+
+    # Only check unique coils for symmetry
+    if coils.stellsym:
+        n_unique_coils = n_coils // (2 * coils.nfp)
+    else:
+        n_unique_coils = n_coils // coils.nfp
+    n_unique_coils = max(1, n_unique_coils)
+    unique_coil_indices = jnp.arange(n_unique_coils)
+
+    def single_coil_loss(idx):
+        gamma_i = coils.gamma[idx]
+        gamma_dash_i = coils.gamma_dash[idx]
+        gamma_dash_norm = jnp.linalg.norm(gamma_dash_i, axis=1)
+        n_points = gamma_i.shape[0]
+
+        # If block_size is None, use full vmap (no chunking)
+        use_block_size = min(n_points_surface, n_points_surface if block_size is None else block_size)
+        n_blocks = (n_points_surface + use_block_size - 1) // use_block_size
+        padded_points = n_blocks * use_block_size
+        pad_width = padded_points - n_points_surface
+
+        surface_point_blocks = jnp.pad(surface_points, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        valid_blocks = (jnp.arange(padded_points) < n_points_surface).reshape(n_blocks, use_block_size)
+
+        def block_sum(block_surface_points, block_valid):
+            dists_block = jnp.linalg.norm(gamma_i[:, None, :] - block_surface_points[None, :, :], axis=2)
+            penalty_block = jnp.maximum(0, min_distance - dists_block)
+            weighted_penalty = jnp.square(penalty_block) * gamma_dash_norm[:, None] * block_valid[None, :]
+            return jnp.sum(weighted_penalty)
+
+        total = jnp.sum(jax.vmap(block_sum)(surface_point_blocks, valid_blocks))
+        norm = gamma_i.shape[0] * n_points_surface
+        return total / norm
+
+    losses = jax.vmap(single_coil_loss)(unique_coil_indices)
+    return jnp.sum(losses)
+
+
+# Blockwise vmap linking number loss (memory efficient, fully differentiable)
+@partial(jit, static_argnames=["block_size"])
+def loss_linkingnumber(coils, candidates=None, block_size=None):
+    if candidates is None:
+        candidates = jnp.triu_indices(len(coils), k=1)
+    dphi = coils.curves.quadpoints[1] - coils.curves.quadpoints[0]
+
+    def pair_linking(i, j):
+        gamma_i = coils.gamma[i]
+        gamma_dash_i = coils.gamma_dash[i]
+        gamma_j = coils.gamma[j]
+        gamma_dash_j = coils.gamma_dash[j]
+        n_points = gamma_j.shape[0]
+
+        # If block_size is None, use full vmap (no chunking)
+        use_block_size = min(n_points, n_points if block_size is None else block_size)
+        n_blocks = (n_points + use_block_size - 1) // use_block_size
+        padded_points = n_blocks * use_block_size
+        pad_width = padded_points - n_points
+
+        gamma_j_blocks = jnp.pad(gamma_j, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        gamma_dash_j_blocks = jnp.pad(gamma_dash_j, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        valid_blocks = (jnp.arange(padded_points) < n_points).reshape(n_blocks, use_block_size)
+
+        def block_sum(block_gamma_j, block_gamma_dash_j, block_valid):
+            def integrand(r2, dr2):
+                diff = gamma_i - r2
+                cross = jnp.cross(gamma_dash_i, dr2)
+                norm = jnp.linalg.norm(diff, axis=1)
+                return jnp.sum(diff * cross, axis=1) / (norm**3 + 1e-12)
+
+            block_vals = jax.vmap(integrand, in_axes=(0, 0))(block_gamma_j, block_gamma_dash_j)
+            return jnp.sum(block_vals * block_valid[:, None])
+
+        total = jnp.sum(jax.vmap(block_sum)(gamma_j_blocks, gamma_dash_j_blocks, valid_blocks))
+        linking = total * (dphi ** 2) / (4 * jnp.pi)
+        return jnp.abs(linking)
+
+    losses = jax.vmap(pair_linking)(*candidates)
     return jnp.sum(losses)
 
 
 
 
-@partial(jit, static_argnums=(1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,14))
-def loss_optimize_coils_for_particle_confinement(x, particles, dofs_curves, currents_scale, nfp, max_coil_curvature=0.5,
-                                                 n_segments=60, stellsym=True, target_B_on_axis=5.7, maxtime=1e-5,
-                                                 max_coil_length=22, num_steps=30, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    field=field_from_dofs(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym)
-
-    particles_drift_loss = loss_particle_radial_drift(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp,n_segments=n_segments, stellsym=stellsym, particles=particles, maxtime=maxtime, num_steps=num_steps, trace_tolerance=trace_tolerance, model=model,boundary=boundary)
-    normB_axis_loss = loss_normB_axis(x,dofs_curves=dofs_curves,currents_scale=currents_scale,nfp=nfp,n_segments=n_segments,stellsym=stellsym,npoints=15,target_B_on_axis=target_B_on_axis)
-    coil_length_loss    = jnp.maximum(0, field.coils.length-max_coil_length)
-    coil_curvature_loss = jnp.maximum(0, jnp.mean(field.coils.curvature, axis=1)-max_coil_curvature)
-
-    loss = jnp.concatenate((normB_axis_loss, coil_length_loss, coil_curvature_loss,particles_drift_loss))
-    return jnp.sum(loss)
-
-
-@partial(jit, static_argnums=(1, 4, 5, 6))
-def loss_bdotn_over_b(x, vmec, dofs_curves, currents_scale, nfp, n_segments=60, stellsym=True):
-    dofs_len = len(jnp.ravel(dofs_curves))
-    dofs_curves = jnp.reshape(x[:dofs_len], dofs_curves.shape)
-    dofs_currents = x[dofs_len:]
-    curves = Curves(dofs_curves, n_segments, nfp, stellsym)
-    coils = Coils(curves=curves, currents=dofs_currents * currents_scale)
-    field = BiotSavart(coils)
-    return jnp.sum(jnp.abs(BdotN_over_B(vmec.surface, field)))
-
-
-@partial(jit, static_argnums=(1, 4, 5, 6, 7, 8))
-def loss_BdotN(x, vmec=None, dofs_curves=None, currents_scale=None, nfp=None, max_coil_length=42,
-               n_segments=60, stellsym=True, max_coil_curvature=0.1, surface=None):
-    # Normal-field penalty against a target boundary. Provide the boundary as
-    # either a Vmec (vmec=, uses vmec.surface) or a SurfaceRZFourier (surface=).
-    assert (vmec is not None) ^ (surface is not None), "Provide exactly one of vmec= or surface=."
-    target_surface = surface if surface is not None else vmec.surface
-
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-
-    bdotn_over_b = BdotN_over_B(target_surface, field)
-    bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
-
-    coil_length_loss    = jnp.maximum(0, jnp.max(field.coils.length-max_coil_length))
-    coil_curvature_loss = jnp.maximum(0, jnp.max(jnp.mean(field.coils.curvature, axis=1)-max_coil_curvature))
-
-    return bdotn_over_b_loss+coil_length_loss+coil_curvature_loss
-
-@partial(jit, static_argnums=(1, 4, 5, 6))
-def loss_BdotN_only(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    
-    bdotn_over_b = BdotN_over_B(vmec.surface, field)
-    bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))
-
-    return bdotn_over_b_loss
-
-@partial(jit, static_argnums=(1, 4, 5, 6,7))
-def loss_BdotN_only_constraint(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True,target_tol=1.e-6):
-    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
-    
-    bdotn_over_b = BdotN_over_B(vmec.surface, field)
-
-    bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
-    #bdotn_over_b_loss = jnp.sqrt(0.5*jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0))
-    return bdotn_over_b_loss
-
-
-@partial(jit, static_argnums=(1,2,3, 6, 7, 8))
-def loss_BdotN_only_stochastic(x,sampler,N_samples, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True):
-    keys= jnp.arange(N_samples)  
-    def perturbed_bdotn_over_b(x,key,sampler,dofs_curves, currents_scale, nfp, n_segments, stellsym):
-        perturbed_field = pertubred_field_from_dofs(x,key,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym)
-        bdotn_over_b = BdotN_over_B(vmec.surface, perturbed_field)
-        return jnp.sum(jnp.abs(bdotn_over_b))
-    #Average over the N_samples
-    expected_loss=jnp.average(jax.vmap(perturbed_bdotn_over_b, in_axes=(None,0,None,None,None,None,None,None))(x, keys,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym),axis=0)
-    return expected_loss
-
-
-@partial(jit, static_argnums=(1,2,3, 6, 7, 8,9))
-def loss_BdotN_only_constraint_stochastic(x,sampler,N_samples, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True,target_tol=1.e-6):
-    keys= jnp.arange(N_samples)  
-    def perturbed_bdotn_over_b(x,key,sampler,dofs_curves, currents_scale, nfp, n_segments, stellsym):
-        perturbed_field = pertubred_field_from_dofs(x,key,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym)
-        bdotn_over_b = BdotN_over_B(vmec.surface, perturbed_field)
-        return jnp.square(bdotn_over_b)
-    #Average over the N_samples
-    expected_loss=jnp.average(jax.vmap(perturbed_bdotn_over_b, in_axes=(None,0,None,None,None,None,None,None))(x, keys,sampler, dofs_curves, currents_scale, nfp, n_segments, stellsym),axis=0)
-
-    constrained_expected_loss = jnp.sqrt(jnp.sum(jnp.maximum(expected_loss-target_tol,0.0)))
-    #bdotn_over_b_loss = jnp.sqrt(0.5*jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0))
-    return constrained_expected_loss
-
-
-
-#This is thr quickest way to get coil-surface distance (but I guess not the most efficient way for large sizes). 
-# In that case we would do the candidates method from simsopt entirely
-def loss_cs_distance(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.sum(jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,min_distance_cs))
-    return result
-
-#Same as above but for individual constraints (useful in case one wants to target the several pairs individually)
-def loss_cs_distance_array(x,surface,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cs=1.3):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jax.vmap(cs_distance_pure,in_axes=(0,0,None,None,None))(coils.gamma,coils.gamma_dash,surface.gamma,surface.unitnormal,min_distance_cs)
-    return result.flatten()
-
-#This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
-# In that case we would do the candidates method from simsopt entirely
-def loss_cc_distance(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cc=0.7,downsample=1):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.sum(jnp.triu(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,coils.gamma,coils.gamma_dash,min_distance_cc,downsample),k=1))
-    return result
-
-#Same as above but for individual constraints (useful in case one wants to target the several pairs individually)
-def loss_cc_distance_array(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,min_distance_cc=0.7,downsample=1):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    result=jnp.triu(jax.vmap(jax.vmap(cc_distance_pure,in_axes=(0,0,None,None,None,None)),in_axes=(None,None,0,0,None,None))(coils.gamma,coils.gamma_dash,coils.gamma,coils.gamma_dash,min_distance_cc,downsample),k=1)
-    return result[result != 0.0].flatten()
-
-
-
-#One curve to curve distance (
-#reused from Simsopt, no changes were necessary)
-def cc_distance_pure(gamma1, l1, gamma2, l2, minimum_distance, downsample=1):
+#  Lorentz force loss: accepts Coils object, keyword args, JAX-friendly
+@partial(jit, static_argnames=["p", "threshold", "block_size"])
+def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
     """
-    Compute the curve-curve distance penalty between two curves.
-
+    Loss function penalizing Lorentz force on coils using Landreman-Hurwitz method.
     Args:
-        gamma1 (array-like): Points along the first curve.
-        l1 (array-like): Tangent vectors along the first curve.
-        gamma2 (array-like): Points along the second curve.
-        l2 (array-like): Tangent vectors along the second curve.
-        minimum_distance (float): The minimum allowed distance between curves.
-        downsample (int, default=1): 
-            Factor by which to downsample the quadrature points 
-            by skipping through the array by a factor of ``downsample``,
-            e.g. curve.gamma()[::downsample, :]. 
-            Setting this parameter to a value larger than 1 will speed up the calculation,
-            which may be useful if the set of coils is large, though it may introduce
-            inaccuracy if ``downsample`` is set too large, or not a multiple of the 
-            total number of quadrature points (since this will produce a nonuniform set of points). 
-            This parameter is used to speed up expensive calculations during optimization, 
-            while retaining higher accuracy for the other objectives. 
-
+        coils: Coils object (with gamma, gamma_dash, gamma_dashdash, currents, quadpoints)
+        p: Power for penalty (default 1)
+        threshold: Force threshold (default 0.5e6)
+        block_size: Block size for memory efficiency. If None, uses full vmap (no chunking)
     Returns:
-        float: The curve-curve distance penalty value.
+        Scalar loss (sum over all coils)
     """
-    gamma1 = gamma1[::downsample, :]
-    gamma2 = gamma2[::downsample, :]
-    l1 = l1[::downsample, :]
-    l2 = l2[::downsample, :]
-    dists = jnp.sqrt(jnp.sum((gamma1[:, None, :] - gamma2[None, :, :])**2, axis=2))
-    alen = jnp.linalg.norm(l1, axis=1)[:, None] * jnp.linalg.norm(l2, axis=1)[None, :]
-    return jnp.sum(alen * jnp.maximum(minimum_distance-dists, 0)**2)/(gamma1.shape[0]*gamma2.shape[0])
+    n_coils = coils.gamma.shape[0]
+    indices = jnp.arange(n_coils)
+    other_indices = jnp.array([
+        [j for j in range(n_coils) if j != i]
+        for i in range(n_coils)
+    ], dtype=jnp.int32)
+
+    def single_coil_loss(idx):
+        gamma_i = coils.gamma[idx]
+        gamma_dash_i = coils.gamma_dash[idx]
+        gamma_dashdash_i = coils.gamma_dashdash[idx]
+        current_i = coils.currents[idx]
+        quadpoints = coils.curves.quadpoints
+        curvature = Curves.compute_curvature(gamma_dash_i, gamma_dashdash_i)
+        regularization = regularization_circ(1. / jnp.mean(curvature))
+        other_idx = other_indices[idx]
+        gamma_others = coils.gamma[other_idx]
+        gamma_dash_others = coils.gamma_dash[other_idx]
+        gamma_dashdash_others = coils.gamma_dashdash[other_idx]
+        currents_others = coils.currents[other_idx]
+        biot_savart = BiotSavart_from_gamma(gamma_others, gamma_dash_others, gamma_dashdash_others, currents_others)
+        n_points = gamma_i.shape[0]
+        use_block_size = min(n_points, n_points if block_size is None else block_size)
+        n_blocks = (n_points + use_block_size - 1) // use_block_size
+        padded_points = n_blocks * use_block_size
+        pad_width = padded_points - n_points
+
+        gamma_i_blocks = jnp.pad(gamma_i, ((0, pad_width), (0, 0))).reshape(n_blocks, use_block_size, 3)
+        valid_blocks = (jnp.arange(padded_points) < n_points).reshape(n_blocks, use_block_size)
+
+        def block_field(block_gamma_i, block_valid):
+            block_B = jax.vmap(biot_savart.B)(block_gamma_i)
+            return block_B * block_valid[:, None]
+
+        block_B_mutual = jax.vmap(block_field)(gamma_i_blocks, valid_blocks).reshape(padded_points, 3)[:n_points]
+        block_gammadash_norm = jnp.linalg.norm(gamma_dash_i, axis=1)
+        block_tangent = gamma_dash_i / block_gammadash_norm[:, None]
+        block_B_self = B_regularized_pure(
+            gamma_i, gamma_dash_i, gamma_dashdash_i,
+            quadpoints, current_i, regularization
+        )
+        block_force = jnp.cross(current_i * block_tangent, block_B_self + block_B_mutual)
+        block_force_norm = jnp.linalg.norm(block_force, axis=1)
+        total_penalty = jnp.sum(jnp.maximum(block_force_norm - threshold, 0) ** p * block_gammadash_norm)
+        return total_penalty * (1. / p)
+
+    penalties = jax.vmap(single_coil_loss)(indices)
+    return jnp.sum(penalties)
 
 
 
-#One coil to surface distance (reused from Simsopt, no changes were necessary)
-def cs_distance_pure(gammac, lc, gammas, ns, minimum_distance):
-    """
-    Compute the curve-surface distance penalty between a curve and a surface.
-
-    Args:
-        gammac (array-like): Points along the curve.
-        lc (array-like): Tangent vectors along the curve.
-        gammas (array-like): Points on the surface.
-        ns (array-like): Surface normal vectors.
-        minimum_distance (float): The minimum allowed distance between curve and surface.
-
-    Returns:
-        float: The curve-surface distance penalty value.
-    """
-    dists = jnp.sqrt(jnp.sum(
-        (gammac[:, None, :] - gammas[None, :, :])**2, axis=2))
-    integralweight = jnp.linalg.norm(lc, axis=1)[:, None] \
-        * jnp.linalg.norm(ns, axis=1)[None, :]
-    return jnp.mean(integralweight * jnp.maximum(minimum_distance-dists, 0)**2)
-
-
-
-#This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
-# In that case we would do the candidates method from simsopt entirely
-def loss_linking_mnumber(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,downsample=1):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
-    # (needs change if quadpoints are allowed to be different)
-    dphi=coils.quadpoints[1]-coils.quadpoints[0]
-    result=jnp.sum(jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
-                                        in_axes=(None,None,0,0,None))(coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    dphi),k=1))
-    return result
-
-
-#This is thr quickest way to get coil-coil distance (but I guess not the most efficient way for large sizes). 
-# In that case we would do the candidates method from simsopt entirely
-def loss_linking_mnumber_constarint(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,downsample=1):
-    coils=coils_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)    
-    #Since the quadpoints are the same for every curve then we can calculate the increment is constant for every curve 
-    # (needs change if quadpoints are allowed to be different)
-    dphi=coils.quadpoints[1]-coils.quadpoints[0]
-    result=jnp.triu(jax.vmap(jax.vmap(linking_number_pure,in_axes=(0,0,None,None,None)),
-                                        in_axes=(None,None,0,0,None))(coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    coils.gamma[:,0:-1:downsample,:],
-                                                                    coils.gamma_dash[:,0:-1:downsample,:],
-                                                                    dphi)+1.e-18,k=1)  
-    #The 1.e-18 above is just to get all the correct values in the following mask
-    return result[result != 0.0].flatten()
-
-def linking_number_pure(gamma1, lc1, gamma2, lc2,dphi):
-    linking_number_ij=jnp.sum(jnp.abs(jax.vmap(integrand_linking_number, in_axes=(0, 0, 0, 0,None,None))(gamma1, lc1, gamma2, lc2,dphi,dphi)/ (4*jnp.pi)))
-    return linking_number_ij
-
-def integrand_linking_number(r1,dr1,r2,dr2,dphi1,dphi2):
-    """
-    Compute the integrand for the linking number between two curves.
-
-    Args:
-        r1 (array-like): Points along the first curve.
-        dr1 (array-like): Tangent vectors along the first curve.
-        r2 (array-like): Points along the second curve.
-        dr2 (array-like): Tangent vectors along the second curve.
-        dphi1 (array-like): increments of quadpoints 1  
-        dphi2 (array-like): increments of quadpoints 2               
-
-    Returns:
-        float: The integrand value for the linking number.
-    """
-    return jnp.dot((r1-r2), jnp.cross(dr1, dr2)) / jnp.linalg.norm(r1-r2)**3*dphi1*dphi2
-
-
-
-#Loss function penalizing force on coils using Landremann-Hurwitz method
-def loss_lorentz_force_coils(x,dofs_curves,currents_scale,nfp,n_segments=60,stellsym=True,p=1,threshold=0.5e+6):
-    coils=coils_from_dofs(x,dofs_curves,currents_scale,nfp,n_segments, stellsym) 
-    curves_indeces=jnp.arange(coils.gamma.shape[0])
-    #We want to calculate tangeng cross [B_self + B_mutual] for each coil
-    #B_self is the self-field of the coil, B_mutual is the field from the other coils
-    force_penalty=jax.vmap(lp_force_pure,in_axes=(0,None,None,None,None,None,None,None))(curves_indeces,coils.gamma,
-                                                                                 coils.gamma_dash,coils.gamma_dashdash,coils.currents,coils.quadpoints,p, threshold)
-    return force_penalty
-
-
-
-
-
-
-def lp_force_pure(index,gamma, gamma_dash,gamma_dashdash,currents,quadpoints,p, threshold):
-    """Pure function for minimizing the Lorentz force on a coil.
-    """
-    regularization = regularization_circ(1./jnp.average(Curves.compute_curvature( gamma_dash.at[index].get(), gamma_dashdash.at[index].get())))
-    B_mutual=jax.vmap(BiotSavart_from_gamma(jnp.roll(gamma, -index, axis=0)[1:],
-                                 jnp.roll(gamma_dash, -index, axis=0)[1:],
-                                 jnp.roll(gamma_dashdash, -index, axis=0)[1:],
-                                 jnp.roll(currents, -index, axis=0)[1:]).B,in_axes=0)(gamma[index])
-    B_self = B_regularized_pure(gamma.at[index].get(),gamma_dash.at[index].get(), gamma_dashdash.at[index].get(), quadpoints, currents[index], regularization)
-    gammadash_norm = jnp.linalg.norm(gamma_dash.at[index].get(), axis=1)[:, None]
-    tangent = gamma_dash.at[index].get() / gammadash_norm
-    force = jnp.cross(currents.at[index].get() * tangent, B_self + B_mutual)
-    force_norm = jnp.linalg.norm(force, axis=1)[:, None]
-    return (jnp.sum(jnp.maximum(force_norm - threshold, 0)**p * gammadash_norm))*(1./p)
 
 
 
@@ -659,42 +543,6 @@ def rectangular_xsection_delta(a, b):
 
 #    return bdotn_over_b_loss
 
-def loss_coil_curvature_new(x, dofs_curves, currents_scale, nfp,
-                            n_segments=60, stellsym=True,
-                            max_coil_curvature=0.4):
-    """Curvature penalty as a function of the optimization vector x.
-
-    Unlike loss_coil_curvature, which takes a Coils object, this version takes
-    the flat degrees-of-freedom vector x used by the optimizers. It rebuilds the
-    Coils from x (via coils_from_dofs) and then evaluates loss_coil_curvature.
-
-    x : flat array of curve Fourier coefficients followed by currents.
-    dofs_curves, currents_scale, nfp, n_segments, stellsym : geometry metadata
-        needed to reconstruct the Coils from x.
-    max_coil_curvature : curvature above this value is penalized.
-    """
-    coils = coils_from_dofs(x, dofs_curves, currents_scale, nfp, n_segments, stellsym)
-    return loss_coil_curvature(coils, max_coil_curvature)
 
 
-def loss_coil_length_new(x, dofs_curves, currents_scale, nfp,
-                         n_segments=60, stellsym=True,
-                         max_coil_length=42):
-    """Coil-length penalty as a function of the optimization vector x.
-
-    Flat-vector counterpart of loss_coil_length: it rebuilds the Coils from the
-    optimization vector x (via coils_from_dofs) and evaluates loss_coil_length.
-
-    x : flat array of curve Fourier coefficients followed by currents.
-    dofs_curves, currents_scale, nfp, n_segments, stellsym : geometry metadata
-        needed to reconstruct the Coils from x.
-    max_coil_length : length above this value is penalized.
-    """
-    coils = coils_from_dofs(x, dofs_curves, currents_scale, nfp, n_segments, stellsym)
-    return loss_coil_length(coils, max_coil_length)
-
-
-# loss_particle_r_cross_max already returns the per-particle constraint
-# violation, which is exactly what the augmented-Lagrangian examples expect from
-# a "_constraint" loss, so this name is an alias for it.
-loss_particle_r_cross_max_constraint = loss_particle_r_cross_max
+#######################  SURFACE GEOMETRY LOSSES ##########################

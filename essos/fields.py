@@ -390,8 +390,8 @@ class Vmec():
         return jnp.array([X, Y, Z])
 
 class near_axis():
-    def __init__(self, rc=jnp.array([1, 0.1]), zs=jnp.array([0, 0.1]), etabar=1.0,
-                    B0=1, sigma0=0, I2=0, nphi=31, spsi=1, sG=1, nfp=2, order='r1', B2c=0, p2=0):
+    def __init__(self, rc=jnp.array([1., 0.1]), zs=jnp.array([0., 0.1]), etabar=1.0,
+                    B0=1., sigma0=0., I2=0., nphi=31, spsi=1., sG=1., nfp=2, order='r1', B2c=0., p2=0.):
         assert nphi % 2 == 1, 'nphi must be odd'
         self.rc = jnp.array(rc)
         self.zs = jnp.array(zs)
@@ -424,7 +424,8 @@ class near_axis():
     
     @dofs.setter
     def dofs(self, new_dofs):
-        self._dofs = jnp.array(new_dofs)
+        # Ensure dofs are always float for JAX autodiff compatibility
+        self._dofs = jnp.array(new_dofs, dtype=float)
         self.rc = self._dofs[:self.nfourier]
         self.zs = self._dofs[self.nfourier:2*self.nfourier]
         self.etabar = self._dofs[-1]
