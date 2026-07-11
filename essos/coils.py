@@ -473,8 +473,9 @@ class Curves:
             simsopt_coils = bs.coils
             simsopt_curves = [c.curve for c in simsopt_coils]
         simsopt_curves = simsopt_curves[0:int(len(simsopt_curves)/nfp/(1+stellsym))]
-        dofs = jnp.reshape(jnp.array(
-            [curve.x for curve in simsopt_curves]
+        dofs = jnp.reshape(jnp.asarray(
+            [jnp.asarray(curve.x, dtype=float) for curve in simsopt_curves],
+            dtype=float,
         ), (len(simsopt_curves), 3, 2*simsopt_curves[0].order+1))
         n_segments = len(simsopt_curves[0].quadpoints)
         return cls(dofs, n_segments, nfp, stellsym, scaling_type, scaling_factor, scale_fixed)
@@ -860,18 +861,11 @@ class Coils:
             bs = load(simsopt_coils)
             simsopt_coils = bs.coils
         curves = [c.curve for c in simsopt_coils]
-        currents = jnp.array([c.current.get_value() for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]])
-        coils = cls(Curves.from_simsopt(curves, nfp, stellsym, scaling_type, scaling_factor, scale_fixed), currents)
-        curves = Curves(
-            coils.curves._dofs,
-            coils.curves.n_segments,
-            coils.curves.nfp,
-            coils.curves.stellsym,
-            coils.curves.scaling_type,
-            coils.curves.scaling_factor,
-            coils.curves.scale_fixed,
+        currents = jnp.asarray(
+            [float(c.current.get_value()) for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]],
+            dtype=float,
         )
-        return cls(curves, coils.dofs_currents_raw, currents_scale=coils.currents_scale)
+        return cls(Curves.from_simsopt(curves, nfp, stellsym, scaling_type, scaling_factor, scale_fixed), currents)
     
     @classmethod
     def from_json(cls, filename: str):
