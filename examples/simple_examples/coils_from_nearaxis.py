@@ -4,7 +4,9 @@ os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_pr
 import jax.numpy as jnp
 from jax import block_until_ready, vmap
 import matplotlib.pyplot as plt
-from essos.fields import near_axis, BiotSavart_from_gamma, BiotSavart
+from essos.fields import BiotSavart_from_gamma, BiotSavart
+from pyqsc_jax.near_axis import near_axis
+
 import plotly.graph_objects as go
 from essos.dynamics import Tracing
 from essos.coils import fit_dofs_from_coils, Curves, Coils

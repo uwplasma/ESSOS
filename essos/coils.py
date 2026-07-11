@@ -861,11 +861,21 @@ class Coils:
             bs = load(simsopt_coils)
             simsopt_coils = bs.coils
         curves = [c.curve for c in simsopt_coils]
+        curves_obj = Curves.from_simsopt(curves, nfp, stellsym, scaling_type, scaling_factor, scale_fixed)
+        curves = Curves(
+            jnp.asarray(curves_obj._dofs, dtype=float),
+            curves_obj.n_segments,
+            curves_obj.nfp,
+            curves_obj.stellsym,
+            curves_obj.scaling_type,
+            curves_obj.scaling_factor,
+            curves_obj.scale_fixed,
+        )
         currents = jnp.asarray(
             [float(c.current.get_value()) for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]],
             dtype=float,
         )
-        return cls(Curves.from_simsopt(curves, nfp, stellsym, scaling_type, scaling_factor, scale_fixed), currents)
+        return cls(curves, currents)
     
     @classmethod
     def from_json(cls, filename: str):
