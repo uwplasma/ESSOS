@@ -203,7 +203,7 @@ def perturbed_field_from_field(field, key, sampler):
     coils = copy_coils_from_field(field)
     base_key = jax.random.key(key)
     split_keys = jax.random.split(base_key, 2)
-    perturb_curves_systematic(coils, sampler, key=split_keys[0])
+    coils = perturb_curves_systematic(coils, sampler, key=split_keys[0])
     coils = perturb_curves_statistic(coils, sampler, key=split_keys[1])
     return BiotSavart(coils)
 

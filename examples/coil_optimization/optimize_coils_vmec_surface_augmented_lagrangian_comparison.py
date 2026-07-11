@@ -11,7 +11,7 @@ from essos.losses import custom_loss, base_loss
 
 import essos.augmented_lagrangian as alm
 from functools import partial
-#  In this exmple, `scipy.optimize.least_squares` is used for the normal optimization, but any other optimizer, e.g. from 
+#  In this exmple, `scipy.optimize.least_squares` is used for the normal optimization, but any other optimizer, e.g. from
 #  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
 
@@ -100,7 +100,7 @@ multiplier=0. #Initial lagrange multiplier values
 omega=1./penalty
 eta=1./penalty**0.1
 sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
-model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers 
+model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers
 #Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
 model_mu='Tolerance'
 
@@ -133,7 +133,7 @@ C_Total_constraint = alm.combine(C_normal_field_constraint, C_length_constraint,
 C_normal_field_constraint.dependencies = {"field": init_field}
 C_length_constraint.dependencies = {"field": init_field}
 C_curvature_constraint.dependencies = {"field": init_field}
-C_Total_constraint.dependencies = {"field": init_field} 
+C_Total_constraint.dependencies = {"field": init_field}
 
 
 #If loss=cost_function(x) is not prescribed, f(x)=0 is considered, uncomment second line to use B dot N as a loss and not a constraint
@@ -153,7 +153,7 @@ t_start = time()
 i=0
 while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
     #One step of ALM optimization
-    params, lag_state,grad,info = ALM.update(params,lag_state,grad,info)    
+    params, lag_state,grad,info = ALM.update(params,lag_state,grad,info)
     #if i % 5 == 0:
     #print(f'i: {i}, loss f: {info[0]:g}, infeasibility: {alm.total_infeasibility(info[1]):g}')
     print(f'i: {i}, loss f: {info[0]:g},loss L: {info[1]:g}, infeasibility: {alm.total_infeasibility(info[2]):g}')
@@ -177,7 +177,7 @@ res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, fto
 t_end = time()
 
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")
-print("Initial loss:", L_total(L_total.starting_dofs))    
+print("Initial loss:", L_total(L_total.starting_dofs))
 print("Loss after optimization:", L_total(res.x))
 
 opt_field = L_total.dofs_to_pytree(res.x)["field"]
@@ -185,14 +185,14 @@ opt_coils = opt_field.coils
 
 
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")
-print("Initial B dot N:", jnp.max(BdotN_over_B(surface, init_field)))    
+print("Initial B dot N:", jnp.max(BdotN_over_B(surface, init_field)))
 print("B dot N after optimization:", jnp.max(BdotN_over_B(surface, opt_field)))
 print("B dot N after optimization alm:", jnp.max(BdotN_over_B(surface, opt_field_alm)))
-print("Initial curvature :", jnp.average(init_field.coils.curvature,axis=0))    
+print("Initial curvature :", jnp.average(init_field.coils.curvature,axis=0))
 print("Curvature after optimization:",jnp.average(opt_field.coils.curvature,axis=0))
 print("Curvature after optimization alm:",jnp.average(opt_field_alm.coils.curvature,axis=0))
 print("Curvature target:",CURVATURE_TARGET)
-print("Initial length :", init_field.coils.length)    
+print("Initial length :", init_field.coils.length)
 print("Length after optimization:",opt_field.coils.length)
 print("Length after optimization alm:",opt_field_alm.coils.length)
 print("Length target:",LENGTH_TARGET)
@@ -226,4 +226,4 @@ if EXPORT:
     surface.to_vtk(os.path.join(output_filepath, "final_surface_vmec_surface.json"), field=opt_field)
     init_coils.to_vtk(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
     opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
-    opt_coils_alm.to_vtk(os.path.join(output_filepath, "opt_coils_alm_vmec_surface.json"))    
+    opt_coils_alm.to_vtk(os.path.join(output_filepath, "opt_coils_alm_vmec_surface.json"))

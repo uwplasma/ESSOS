@@ -21,6 +21,11 @@ class LagrangeMultiplier(NamedTuple):
 
 
 def _multiplier_like(out, multiplier, penalty, omega, eta, sq_grad):
+    if out is None:
+        raise ValueError(
+            "Constraint function returned None during initialization. "
+            "Constraints used with eq()/ineq() must return a scalar or array."
+        )
     z = jnp.zeros_like(out)
     return LagrangeMultiplier(
         value=multiplier + z,

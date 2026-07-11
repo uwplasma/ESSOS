@@ -58,17 +58,26 @@ class Curves:
         assert isinstance(nfp, int), "nfp must be a positive integer"
         assert nfp > 0, "nfp must be a positive integer"
         assert isinstance(stellsym, bool), "stellsym must be a boolean"
-    
+        self._initialize_state(
+            dofs,
+            n_segments,
+            nfp,
+            stellsym,
+            self._normalize_scaling_type(scaling_type),
+            scaling_factor,
+            scale_fixed,
+        )
+
+    def _initialize_state(self, dofs, n_segments, nfp, stellsym, scaling_type, scaling_factor, scale_fixed, order=None):
         self._dofs = dofs
         self._n_segments = n_segments
         self._nfp = nfp
         self._stellsym = stellsym
-
-        self._scaling_type = self._normalize_scaling_type(scaling_type)
+        self._scaling_type = scaling_type
         self._scaling_factor = scaling_factor
         self._scale_fixed = scale_fixed
         self._scaling = None
-
+        self._order = dofs.shape[2] // 2 if hasattr(dofs, "shape") else order
         self.quadpoints = jnp.linspace(0, 1, self._n_segments, endpoint=False)
         self._curves = None
         self._gamma = None
@@ -119,6 +128,7 @@ class Curves:
     def dofs(self, new_dofs):
         self.reset_cache()
         self._dofs = new_dofs / self.scaling[None, None, :]
+        self._order = self._dofs.shape[2] // 2
     
     # n_segments property and setter
     @property
@@ -186,29 +196,34 @@ class Curves:
     def scaling(self):
         """Mode-by-mode scaling ``scale_fixed * exp(scaling_factor * ||mode_orders||)``."""
         if self._scaling is None:
-            self._scaling = self._compute_mode_scaling(
+            scaling = self._compute_mode_scaling(
                 self.order, self.scaling_type, self.scaling_factor, self.scale_fixed
             )
+            if not isinstance(scaling, jax.core.Tracer):
+                self._scaling = scaling
+            return scaling
         return self._scaling
     
     # order property and setter
     @property
     def order(self):
-        return self._dofs.shape[2]//2
+        if hasattr(self._dofs, "shape"):
+            return self._dofs.shape[2] // 2
+        return self._order
     
     @order.setter
     def order(self, new_order):
         self.reset_cache()
         # Get unscaled dofs, resize, then store unscaled
-        old_scaling = self.scaling
         unscaled_dofs = self._dofs
         self._dofs = jnp.pad(unscaled_dofs, ((0,0), (0,0), (0, max(0, 2*(new_order-self.order)))))[:, :, :2*(new_order)+1]
         self._scaling = None  # Force recalculation for new order
+        self._order = new_order
     
     # n_base_curves property
     @property
     def n_base_curves(self):
-        return self.dofs.shape[0]
+        return self._dofs.shape[0]
 
     # curves property
     @property
@@ -288,8 +303,18 @@ class Curves:
     
     # copy method
     def copy(self):
-        deep_copy = tree_util.tree_map(lambda x: x.copy(), self)
-        return deep_copy
+        curves = object.__new__(Curves)
+        curves._initialize_state(
+            self._dofs.copy(),
+            self._n_segments,
+            self._nfp,
+            self._stellsym,
+            self._scaling_type,
+            self._scaling_factor,
+            self._scale_fixed,
+            order=self.order,
+        )
+        return curves
 
     # magic methods
     def __str__(self):
@@ -455,24 +480,40 @@ class Curves:
         return cls(dofs, n_segments, nfp, stellsym, scaling_type, scaling_factor, scale_fixed)
     
     def _tree_flatten(self):
-        children = (self.dofs,)  # arrays / dynamic values
+        dofs = self.dofs if hasattr(self._dofs, "shape") else self._dofs
+        children = (dofs,)  # arrays / dynamic values
         aux_data = {"n_segments": self._n_segments,
                     "nfp": self._nfp,
                     "stellsym": self._stellsym,
                     "scaling_type": self._scaling_type,
                     "scaling_factor": self._scaling_factor,
-                    "scale_fixed": self._scale_fixed}  # static values
+                    "scale_fixed": self._scale_fixed,
+                    "order": self.order}  # static values
         return (children, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         dofs, = children
-        order = dofs.shape[2] // 2
-        scaling_type = cls._normalize_scaling_type(aux_data["scaling_type"])
-        scaling = cls._compute_mode_scaling(
-            order, scaling_type, aux_data["scaling_factor"], aux_data["scale_fixed"]
+        if hasattr(dofs, "shape"):
+            scaling = cls._compute_mode_scaling(
+                aux_data["order"],
+                aux_data["scaling_type"],
+                aux_data["scaling_factor"],
+                aux_data["scale_fixed"],
+            )
+            dofs = dofs / scaling[None, None, :]
+        obj = object.__new__(cls)
+        obj._initialize_state(
+            dofs,
+            aux_data["n_segments"],
+            aux_data["nfp"],
+            aux_data["stellsym"],
+            aux_data["scaling_type"],
+            aux_data["scaling_factor"],
+            aux_data["scale_fixed"],
+            order=aux_data["order"],
         )
-        return cls(dofs / scaling[None, None, :], **aux_data)
+        return obj
 
 tree_util.register_pytree_node(Curves,
                                Curves._tree_flatten,
@@ -481,9 +522,27 @@ tree_util.register_pytree_node(Curves,
 
 def _initialize_currents_scale(currents, currents_scale):
     """Return a fixed current scale for normalized current dofs."""
+    currents = jnp.atleast_1d(jnp.asarray(currents))
     if currents_scale is None:
         return jnp.mean(jnp.abs(currents))
     return currents_scale
+
+def _normalize_base_currents(currents, curves):
+    """Return base currents as a 1D array matching the number of base curves."""
+    currents = jnp.atleast_1d(jnp.asarray(currents))
+    if hasattr(curves._dofs, "shape"):
+        n_base_curves = curves._dofs.shape[0]
+        if currents.shape[0] == 1 and n_base_curves != 1:
+            currents = jnp.full((n_base_curves,), currents[0])
+    return currents
+
+
+def _currents_as_array(currents):
+    if isinstance(currents, bool):
+        return None
+    if isinstance(currents, (list, tuple)) or hasattr(currents, "shape") or jnp.isscalar(currents):
+        return jnp.atleast_1d(jnp.asarray(currents))
+    return None
 
 
 def _initialize_scale_fixed(gamma, scale_fixed):
@@ -519,11 +578,20 @@ class Coils:
         # if hasattr(curves, 'n_base_curves') and hasattr(currents, 'size'):
         #     assert curves.n_base_curves == currents.size, "Number of base curves and number of currents must be the same"
 
-        self.curves = curves
-        self._dofs_currents_raw = currents  # Non-normalized base currents
+        currents_array = _currents_as_array(currents)
+        if currents_array is not None:
+            currents_scale = _initialize_currents_scale(currents_array, currents_scale)
+        self._initialize_state(curves, currents, currents_scale)
 
-        self._currents_scale = _initialize_currents_scale(currents, currents_scale)
-        self._dofs_currents = None
+    def _initialize_state(self, curves, currents_raw, currents_scale):
+        self.curves = curves
+        currents_array = _currents_as_array(currents_raw)
+        if currents_array is not None:
+            currents_raw = currents_array
+            currents_raw = _normalize_base_currents(currents_raw, curves)
+        self._dofs_currents_raw = currents_raw
+        self._currents_scale = currents_scale
+        self._dofs_currents = None if hasattr(currents_raw, "shape") else currents_raw
         self._currents = None
 
     # reset_cache method
@@ -548,7 +616,7 @@ class Coils:
     @dofs_currents_raw.setter
     def dofs_currents_raw(self, new_dofs_currents_raw):
         self.reset_cache()
-        self._dofs_currents_raw = new_dofs_currents_raw
+        self._dofs_currents_raw = jnp.atleast_1d(jnp.asarray(new_dofs_currents_raw))
 
     # currents_scale property and setter
     @property
@@ -565,19 +633,15 @@ class Coils:
     @property
     def dofs_currents(self):
         if self._dofs_currents is None:
-            self._dofs_currents = self.dofs_currents_raw / self.currents_scale
+            dofs_currents = self.dofs_currents_raw / self.currents_scale
+            if not isinstance(dofs_currents, jax.core.Tracer):
+                self._dofs_currents = dofs_currents
+            return dofs_currents
         return self._dofs_currents
     
     @dofs_currents.setter
     def dofs_currents(self, new_dofs_currents):
         self.dofs_currents_raw = new_dofs_currents * self.currents_scale
-
-    # currents property
-    @property
-    def currents(self):
-        if self._currents is None:
-            self._currents = apply_symmetries_to_currents(self.dofs_currents_raw, self.nfp, self.stellsym)
-        return self._currents
 
     # dofs property and setter
     @property
@@ -604,7 +668,7 @@ class Coils:
     @property
     def currents(self):
         if self._currents is None:
-            self._currents = apply_symmetries_to_currents(self.dofs_currents*self.currents_scale, self.nfp, self.stellsym)
+            self._currents = apply_symmetries_to_currents(self.dofs_currents_raw, self.nfp, self.stellsym)
         return self._currents
 
     # gamma property
@@ -658,10 +722,10 @@ class Coils:
 
     # copy method
     def copy(self):
-        coils = Coils(self.curves.copy(), self.dofs_currents_raw.copy(), currents_scale=self.currents_scale)
+        coils = Coils(self.curves.copy(), self._dofs_currents_raw.copy(), currents_scale=self.currents_scale)
 
         # Initialize caches
-        coils._dofs_currents = self.dofs_currents
+        coils._dofs_currents = self._dofs_currents
         coils._currents = self._currents
 
         return coils
@@ -797,7 +861,17 @@ class Coils:
             simsopt_coils = bs.coils
         curves = [c.curve for c in simsopt_coils]
         currents = jnp.array([c.current.get_value() for c in simsopt_coils[0:int(len(simsopt_coils)/nfp/(1+stellsym))]])
-        return cls(Curves.from_simsopt(curves, nfp, stellsym, scaling_type, scaling_factor, scale_fixed), currents)
+        coils = cls(Curves.from_simsopt(curves, nfp, stellsym, scaling_type, scaling_factor, scale_fixed), currents)
+        curves = Curves(
+            coils.curves._dofs,
+            coils.curves.n_segments,
+            coils.curves.nfp,
+            coils.curves.stellsym,
+            coils.curves.scaling_type,
+            coils.curves.scaling_factor,
+            coils.curves.scale_fixed,
+        )
+        return cls(curves, coils.dofs_currents_raw, currents_scale=coils.currents_scale)
     
     @classmethod
     def from_json(cls, filename: str):
@@ -855,7 +929,11 @@ class Coils:
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         curves, dofs_currents = children
-        return cls(curves, dofs_currents * aux_data["currents_scale"], currents_scale=aux_data["currents_scale"])
+        if hasattr(dofs_currents, "shape"):
+            dofs_currents = dofs_currents * aux_data["currents_scale"]
+        obj = object.__new__(cls)
+        obj._initialize_state(curves, dofs_currents, aux_data["currents_scale"])
+        return obj
 
 tree_util.register_pytree_node(Coils,
                                Coils._tree_flatten,
@@ -935,11 +1013,12 @@ def apply_symmetries_to_gammas(base_gammas, nfp, stellsym):
 
 @partial(jit, static_argnames=['nfp', 'stellsym'])
 def apply_symmetries_to_currents(base_currents, nfp, stellsym): 
+    base_currents = jnp.atleast_1d(jnp.asarray(base_currents))
     flip_list = [False, True] if stellsym else [False]
     currents = []
     for k in range(0, nfp):
         for flip in flip_list:
-            for i in range(len(base_currents)):
+            for i in range(base_currents.shape[0]):
                 current = -base_currents[i] if flip else base_currents[i]
                 currents.append(current)
     return jnp.array(currents)

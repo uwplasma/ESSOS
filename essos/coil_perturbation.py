@@ -238,7 +238,7 @@ def perturb_curves(curves, sampler:GaussianSampler, key=None, perturbation_type=
             or "statistical"/"statistic" to perturb every expanded coil independently.
 
     Returns:
-        A new perturbed object of the same family as the input.
+        A new perturbed object of the same type as the input.
     """
     if perturbation_type == "systematic":
         if isinstance(curves, DiscretizedCoils):
@@ -248,19 +248,21 @@ def perturb_curves(curves, sampler:GaussianSampler, key=None, perturbation_type=
                 currents=curves.dofs_currents_raw,
                 nfp=curves.nfp,
                 stellsym=curves.stellsym,
+                currents_scale=curves.currents_scale,
+                scale_fixed=curves.scale_fixed,
             )
 
         if isinstance(curves, Coils):
             perturbation = _draw_curve_perturbation(sampler, key, curves.curves.n_base_curves)
-            base_curves = _make_curves_like(curves.curves, curves.dofs_curves, nfp=1, stellsym=False)
+            base_curves = _make_curves_like(curves.curves, curves.curves._dofs, nfp=1, stellsym=False)
             perturbed_base_gamma = base_curves.gamma + perturbation
             dofs_new, _ = fit_dofs_from_coils(perturbed_base_gamma, curves.order, curves.n_segments, assume_uniform=True)
             new_curves = _make_curves_like(curves.curves, dofs_new, nfp=curves.nfp, stellsym=curves.stellsym)
-            return Coils(curves=new_curves, currents=curves.dofs_currents_raw)
+            return Coils(curves=new_curves, currents=curves.dofs_currents_raw, currents_scale=curves.currents_scale)
 
         if isinstance(curves, Curves):
             perturbation = _draw_curve_perturbation(sampler, key, curves.n_base_curves)
-            base_curves = _make_curves_like(curves, curves.dofs, nfp=1, stellsym=False)
+            base_curves = _make_curves_like(curves, curves._dofs, nfp=1, stellsym=False)
             perturbed_base_gamma = base_curves.gamma + perturbation
             dofs_new, _ = fit_dofs_from_coils(perturbed_base_gamma, curves.order, curves.n_segments, assume_uniform=True)
             return _make_curves_like(curves, dofs_new, nfp=curves.nfp, stellsym=curves.stellsym)
@@ -270,12 +272,19 @@ def perturb_curves(curves, sampler:GaussianSampler, key=None, perturbation_type=
         gamma_perturbed = curves.gamma + perturbation
 
         if isinstance(curves, DiscretizedCoils):
-            return DiscretizedCoils(gamma_perturbed, currents=curves.currents, nfp=1, stellsym=False)
+            return DiscretizedCoils(
+                gamma_perturbed,
+                currents=curves.currents,
+                nfp=1,
+                stellsym=False,
+                currents_scale=curves.currents_scale,
+                scale_fixed=curves.scale_fixed,
+            )
 
         if isinstance(curves, Coils):
             dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments, assume_uniform=True)
             new_curves = _make_curves_like(curves.curves, dofs_new, nfp=1, stellsym=False)
-            return Coils(curves=new_curves, currents=curves.currents)
+            return Coils(curves=new_curves, currents=curves.currents, currents_scale=curves.currents_scale)
 
         if isinstance(curves, Curves):
             dofs_new, _ = fit_dofs_from_coils(gamma_perturbed, curves.order, curves.n_segments, assume_uniform=True)

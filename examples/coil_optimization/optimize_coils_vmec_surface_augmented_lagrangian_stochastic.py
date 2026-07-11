@@ -28,7 +28,7 @@ def perturbed_field_from_field(field, key, sampler):
     coils = copy_coils_from_field(field)
     base_key = jax.random.key(key)
     split_keys = jax.random.split(base_key, 2)
-    perturb_curves_systematic(coils, sampler, key=split_keys[0])
+    coils = perturb_curves_systematic(coils, sampler, key=split_keys[0])
     coils = perturb_curves_statistic(coils, sampler, key=split_keys[1])
     return BiotSavart(coils)
 
@@ -38,7 +38,6 @@ def loss_bdotn_stochastic(field, surface, sampler, keys):
         perturbed_field = perturbed_field_from_field(field, key, sampler)
         bdotn_over_b = BdotN_over_B(surface, perturbed_field)
         return jnp.sum(jnp.abs(bdotn_over_b))
-
     return jnp.mean(jax.vmap(perturbed_loss)(keys))
 
 
@@ -46,7 +45,6 @@ def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6
     def perturbed_square(key):
         perturbed_field = perturbed_field_from_field(field, key, sampler)
         return jnp.square(BdotN_over_B(surface, perturbed_field))
-
     expected_square = jnp.mean(jax.vmap(perturbed_square)(keys), axis=0)
     return jnp.sqrt(jnp.sum(jnp.maximum(expected_square - target_tol, 0.0)))
 
@@ -182,4 +180,3 @@ coils_optimized.plot(ax=ax2, show=False)
 surface.plot(ax=ax2, show=False)
 plt.tight_layout()
 plt.show()
-
