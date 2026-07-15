@@ -773,7 +773,7 @@ class Tracing():
             B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
             mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*particles.mass)          
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,self.particles.initial_vparallel[:, None]/SPEED_OF_LIGHT,mu[:, None]],axis=1)        
-        elif model == 'FullOrbit' or model == 'FullOrbit_Boris':
+        elif model == 'FullOrbit' or model == 'FullOrbit_Boris' or model == 'FullOrbitAdaptative':
             self.ODE_term = ODETerm(Lorentz)
             self.args = (self.field, self.particles)
             if self.particles.initial_xyz_fullorbit is None:
@@ -986,6 +986,24 @@ class Tracing():
                     max_steps=10000000000,
                     event = Event(self.condition)
                 ).ys
+            elif self.model == 'FullOrbitAdaptative' :
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning)
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=self.timestep,
+                    y0=initial_condition,
+                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    progress_meter=self.progress_meter,
+                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
+                    max_steps=10000000000,
+                    event = Event(self.condition)
+                ).ys
             elif self.model == 'FieldLineAdaptative' :  
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
@@ -1072,7 +1090,7 @@ class Tracing():
                 return 0.5 * mass * trajectory[:, 3]**2
             energy = vmap(compute_energy)(self.trajectories)
 
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris':
+        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris' or self.model == 'FullOrbitAdaptative':
             def compute_energy(trajectory):
                 vxvyvz = trajectory[:, 3:]
                 v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)
@@ -1114,7 +1132,7 @@ class Tracing():
                 return jnp.sqrt(v**2-vpar**2)
             v_perp = vmap(compute_vperp)(self.trajectories)
 
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris':
+        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris' or self.model == 'FullOrbitAdaptative':
             def compute_vperp(trajectory):
                 xyz = trajectory[:, :3]
                 vxvyvz = trajectory[:, 3:]
