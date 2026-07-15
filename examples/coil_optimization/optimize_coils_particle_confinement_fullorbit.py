@@ -15,7 +15,6 @@ from essos.losses import custom_loss
 from essos.fields import BiotSavart
 
 
-
 # Particle optimization parameters
 # Optimization parameters
 NPARTICLES = number_of_processors_to_use*10
@@ -30,10 +29,6 @@ NUM_STEPS=1000
 
 NPARTICLES_PLOT = number_of_processors_to_use*10
 MAXTIME_TRACING_PLOT = 1e-4
-
-
-
-
 
 """ Creating starting coils and surface """
 N_COILS = 3
@@ -89,18 +84,10 @@ def loss_length(field,length_target=LENGTH_TARGET):
 def loss_curvature(field,curvature_target=CURVATURE_TARGET):
     return jnp.mean(jnp.maximum(0, field.coils.curvature - curvature_target))
 
-
-
 # Initialize particles
 phi_array = jnp.linspace(0, 2*jnp.pi, NPARTICLES)
 initial_xyz=jnp.array([LARGE_R*jnp.cos(phi_array), LARGE_R*jnp.sin(phi_array), 0*phi_array]).T
 particles = Particles(initial_xyz=initial_xyz)
-
-
-
-
-
-
 
 
 """ Defining custom losses """

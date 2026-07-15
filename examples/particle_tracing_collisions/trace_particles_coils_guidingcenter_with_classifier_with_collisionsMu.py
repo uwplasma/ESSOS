@@ -12,7 +12,6 @@ from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_A
 from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies
 
-
 # Input parameters
 tmax = 1e-4
 timestep=1.e-8
@@ -23,7 +22,6 @@ R0 = 17.0
 atol= 1e-5
 rtol=1.e-5
 energy=FUSION_ALPHA_PARTICLE_ENERGY
-
 
 #Initialize background species
 #number_species=2  #(electrons,deuterium)

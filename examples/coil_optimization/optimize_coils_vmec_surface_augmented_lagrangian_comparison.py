@@ -18,8 +18,7 @@ from scipy.optimize import least_squares
 # Optimization parameters
 maximum_function_evaluations=100
 
-
-input_filepath = os.path.join(os.path.dirname(__name__), "input_files")
+input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
 surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=32, nphi=32, range_torus='half period')
 
@@ -45,12 +44,10 @@ BdotN_Target_tol=1.e-6
 
 EXPORT = False
 
-
 init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
 init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
 init_field = BiotSavart(init_coils)
 init_surface=surface
-
 
 
 """ Creating the loss functions """

@@ -24,11 +24,11 @@ rtol = 1e-8
 energy=FUSION_ALPHA_PARTICLE_ENERGY
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__name__), "input_files", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+wout_file = os.path.join(os.path.dirname(__file__), "..", "input_files", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 vmec = Vmec(wout_file)
 
 #Load electric field
-Er_file=os.path.join(os.path.dirname(__name__), 'input_files','Er.h5')
+Er_file = os.path.join(os.path.dirname(__file__), "..", "input_files", "Er.h5")
 Electric_field=Electric_field_flux(Er_filename=Er_file,vmec=vmec)
 
 # Initialize particles

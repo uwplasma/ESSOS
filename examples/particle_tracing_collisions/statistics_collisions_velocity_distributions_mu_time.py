@@ -12,7 +12,6 @@ from essos.background_species import BackgroundSpecies,gamma_ab
 import numpy as np
 import jax 
 
-
 # Input parameters
 light_speed=SPEED_OF_LIGHT
 tmax = 1.e-4
@@ -42,7 +41,7 @@ vth_c_a2=energy*2./mass_a/light_speed**2
 
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__name__), 'input_files',"wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+wout_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 vmec = Vmec(wout_file, ntheta=60, nphi=60, range_torus='half period', close=True)
 
 theta = jnp.zeros(nparticles)
@@ -107,8 +106,6 @@ for i in subset_indices:
     ax2.plot(tracing.times, (tracing.energy()[i]-tracing.energy()[i,0])/tracing.energy()[i,0], label=f'Particle {i+1}')     
     ax3.plot(tracing.times, 299792458*trajectory[:, 3]/jnp.sqrt(tracing.energy()[i]/mass*2.), label=f'Particle {i+1}')    
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
-
-
 
 
 ax2.set_xlabel(r'$t~[\mathrm{s}]$')
@@ -178,7 +175,6 @@ ax83.set_xlabel('time')
 ax83.set_ylabel('vperp')
 plt.tight_layout()
 plt.savefig('statistics.pdf')
-
 
 
 # Plot distribution in velocities initial t and final 

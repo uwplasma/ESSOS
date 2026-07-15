@@ -17,10 +17,6 @@ from scipy.optimize import least_squares
 from essos.losses import custom_loss
 
 
-
-
-
-
 """ Creating starting coils and surface """
 N_COILS = 3; FOURIER_ORDER = 6; LARGE_R = 10; SMALL_R = 5.6; NFP = 3; N_SEGMENTS = 60; STELLSYM = True  # Curve parameters
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
@@ -70,7 +66,6 @@ def near_axis_field_quantities(field_nearaxis):
     return points, B_nearaxis, gradB_nearaxis
 
 
-
 def loss_B_difference_coils_near_axis(field, field_nearaxis):
     points, B_nearaxis, _ = near_axis_field_quantities(field_nearaxis)
     B_coils = vmap(field.B)(points.T)
@@ -82,7 +77,6 @@ def loss_gradB_difference_coils_near_axis(field, field_nearaxis):
     gradB_coils = vmap(field.dB_by_dX)(points.T)
     gradB_difference_loss = jnp.sum(jnp.abs(jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)))
     return gradB_difference_loss
-
 
 def loss_length(field,length_target=LENGTH_TARGET):
     return jnp.mean(jnp.maximum(0, field.coils.length - length_target))
@@ -113,9 +107,6 @@ print("Loss after optimization:", L_total(res.x))
 
 opt_field = L_total.dofs_to_pytree(res.x)["field"]
 opt_coils = opt_field.coils
-
-
-
 
 
 B_difference_initial = loss_B_difference_coils_near_axis(init_field, field_nearaxis_initial)

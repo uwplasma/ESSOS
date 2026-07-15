@@ -10,7 +10,6 @@ from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies
 import numpy as np
 
-
 # Input parameters
 tmax = 1.e-4
 timestep=1.e-8

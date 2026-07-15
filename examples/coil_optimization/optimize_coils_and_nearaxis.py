@@ -16,11 +16,6 @@ from scipy.optimize import least_squares
 from essos.losses import custom_loss
 
 
-
-
-
-
-
 """ Creating starting coils and surface """
 N_COILS = 3; FOURIER_ORDER = 6; LARGE_R = 10; SMALL_R = 5.6; NFP = 3; N_SEGMENTS = 60; STELLSYM = True  # Curve parameters
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
@@ -128,8 +123,6 @@ opt_field = L_total.dofs_to_pytree(res.x)["field"]
 opt_coils = opt_field.coils
 
 opt_field_nearaxis = L_total.dofs_to_pytree(res.x)["field_nearaxis"]
-
-
 
 
 B_difference_initial = loss_B_difference_coils_near_axis(init_field, field_nearaxis_initial)

@@ -31,7 +31,7 @@ energy=T_test*ONE_EV
 
 
 # # Load coils and field
-# json_file = os.path.join(os.path.dirname(__name__), '../input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
+# json_file = os.path.join(os.path.dirname(__file__), '../input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 # coils = Coils_from_json(json_file)
 plt.rcParams.update({'font.size': 16})
 # field = BiotSavart(coils)
@@ -44,7 +44,7 @@ plt.rcParams.update({'font.size': 16})
 
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__name__), 'input_files',"wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+wout_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 vmec = Vmec(wout_file, ntheta=60, nphi=60, range_torus='half period', close=True)
 
 theta = jnp.zeros(nparticles)
@@ -120,9 +120,6 @@ ax4.set_xlabel(r'$R~[\mathrm{m}]$', fontweight='bold')
 ax4.set_ylabel(r'$Z~[\mathrm{m}]$', fontweight='bold')
 plt.tight_layout()
 plt.savefig('traj.pdf')
-
-
-
 
 v=jnp.sqrt(tracing.energy()*2./particles.mass)
 vpar=trajectories[:,:,3]*SPEED_OF_LIGHT
@@ -236,9 +233,6 @@ vpar0=vpar[:,0]/SPEED_OF_LIGHT
 vparfinal=vpar[:,-1]/SPEED_OF_LIGHT
 pitch0=vpar0/v0
 pitch_final=vparfinal/vfinal
-
-
-
 
 
 bad_indices_v0 = jnp.isnan(v0) 

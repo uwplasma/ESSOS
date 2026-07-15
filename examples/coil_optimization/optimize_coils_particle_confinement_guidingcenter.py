@@ -14,8 +14,6 @@ from scipy.optimize import least_squares
 from essos.losses import custom_loss
 from essos.fields import BiotSavart
 
-
-
 # Particle optimization parameters
 # Optimization parameters
 NPARTICLES = number_of_processors_to_use*10
@@ -27,11 +25,8 @@ TIMESTEP=1.e-14
 TRACE_TOLERANCE=1e-8
 NUM_STEPS=1000
 
-
 NPARTICLES_PLOT = number_of_processors_to_use*10
 MAXTIME_TRACING_PLOT = 1e-4
-
-
 
 
 
@@ -97,12 +92,6 @@ initial_xyz=jnp.array([LARGE_R*jnp.cos(phi_array), LARGE_R*jnp.sin(phi_array), 0
 particles = Particles(initial_xyz=initial_xyz)
 
 
-
-
-
-
-
-
 """ Defining custom losses """
 L_radial_drift= custom_loss(loss_particle_radial_drift, "field", particles=particles, timestep=TIMESTEP, maxtime=MAXTIME_TRACING, num_steps=NUM_STEPS, trace_tolerance=TRACE_TOLERANCE, model=MODEL) 
 L_B_axis= custom_loss(loss_normB_axis_average, "field")
@@ -110,7 +99,6 @@ L_length = custom_loss(loss_length, "field")
 L_curvature = custom_loss(loss_curvature, "field")
 """ Defining total loss + setting dependencies """
 L_total = RADIAL_DRIFT_WEIGHT*L_radial_drift + L_B_axis + LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature
-
 
 L_total.dependencies = {"field": init_field}
 
