@@ -633,6 +633,9 @@ class Coils:
     # dofs_currents property and setter
     @property
     def dofs_currents(self):
+        # Sentinel leaf during PyTree traversal: pass through, don't scale.
+        if self._dofs_currents_raw is None or isinstance(self._dofs_currents_raw, bool):
+            return self._dofs_currents_raw
         if self._dofs_currents is None:
             dofs_currents = self.dofs_currents_raw / self.currents_scale
             if not isinstance(dofs_currents, jax.core.Tracer):
