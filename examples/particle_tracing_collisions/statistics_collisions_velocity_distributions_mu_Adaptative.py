@@ -82,7 +82,7 @@ trajectories = tracing.trajectories
 
 # Plot trajectories, velocity parallel to the magnetic field, and energy error
 fig = plt.figure(figsize=(9, 8))
-ax1 = fig.add_subplot(221)#, projection='3d')
+ax1 = fig.add_subplot(221, projection='3d')
 ax2 = fig.add_subplot(222)
 ax3 = fig.add_subplot(223)
 ax4 = fig.add_subplot(224)

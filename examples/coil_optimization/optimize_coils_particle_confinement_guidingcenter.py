@@ -64,7 +64,7 @@ def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-5, n
     R_axis=field.r_axis
     Z_axis=field.z_axis
     #Ideally here one would differentiate in time through diffrax !TODO
-    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,0])+jnp.square(xyz[:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,2]-Z_axis+1.e-12))
+    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
     v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime     
     return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
 

@@ -196,8 +196,8 @@ class TestObjectiveFunctions(unittest.TestCase):
         self.assertIsInstance(copied, DummyCoils)
 
     @patch("essos.objective_functions.BiotSavart", return_value=DummyField())
-    @patch("essos.objective_functions.perturb_curves_systematic", create=True)
-    @patch("essos.objective_functions.perturb_curves_statistic", create=True)
+    @patch("essos.objective_functions.perturb_curves_systematic")
+    @patch("essos.objective_functions.perturb_curves_statistic")
     def test_perturbed_field_from_field(self, statistical, systematic, biot_savart):
         systematic.side_effect = lambda coils, sampler, key=None: coils
         statistical.side_effect = lambda coils, sampler, key=None: coils

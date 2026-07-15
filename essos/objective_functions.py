@@ -10,7 +10,7 @@ from essos.fields import BiotSavart,BiotSavart_from_gamma
 from essos.surfaces import BdotN_over_B
 from essos.coils import Curves, Coils
 from essos.constants import mu_0
-from essos.coil_perturbation import perturb_curves
+from essos.coil_perturbation import perturb_curves, perturb_curves_systematic, perturb_curves_statistic
 
 
 
