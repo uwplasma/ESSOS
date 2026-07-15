@@ -81,11 +81,12 @@ relative_energy_error_ESSOS_array = []
 
 # Creating a tracing object for compilation
 if method == 'Dopri5':
-    compile_tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=100, method='Dopri5',
-                      stepsize='adaptive', tol_step_size=trace_tolerance_array[0], particles=particles)
+    compile_tracing = Tracing(field=field_essos, model='FullOrbit', particles=particles,
+                      maxtime=tmax, timestep=tmax/100, times_to_trace=100,
+                      atol=trace_tolerance_array[0], rtol=trace_tolerance_array[0])
 else:
-    compile_tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=100, method='Boris',
-                      stepsize='constant', particles=particles)
+    compile_tracing = Tracing(field=field_essos, model='FullOrbit_Boris', particles=particles,
+                      maxtime=tmax, timestep=tmax/100, times_to_trace=100)
 
 block_until_ready(compile_tracing.trajectories)
 
@@ -94,12 +95,13 @@ for tolerance_idx, trace_tolerance_ESSOS in enumerate(trace_tolerance_array):
     start_time = time()
     if method == 'Dopri5':
         num_steps_essos = 10000
-        tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=num_steps_essos, method='Dopri5',
-                          stepsize='adaptive', tol_step_size=trace_tolerance_ESSOS, particles=particles)
+        tracing = Tracing(field=field_essos, model='FullOrbit', particles=particles,
+                          maxtime=tmax, timestep=tmax/num_steps_essos, times_to_trace=num_steps_essos,
+                          atol=trace_tolerance_ESSOS, rtol=trace_tolerance_ESSOS)
     else:
-        num_steps_essos = avg_steps_SIMSOPT_array[tolerance_idx]*3
-        tracing = Tracing('FullOrbit', field_essos, tmax, timesteps=num_steps_essos, method='Boris',
-                           stepsize='constant', particles=particles)
+        num_steps_essos = int(avg_steps_SIMSOPT_array[tolerance_idx]*3)
+        tracing = Tracing(field=field_essos, model='FullOrbit_Boris', particles=particles,
+                           maxtime=tmax, timestep=tmax/num_steps_essos, times_to_trace=num_steps_essos)
         
     block_until_ready(tracing.trajectories)
     runtime_ESSOS = time() - start_time

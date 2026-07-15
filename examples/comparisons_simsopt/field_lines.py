@@ -70,16 +70,20 @@ trajectories_ESSOS_array = []
 relative_energy_error_ESSOS_array = []
 
 # Creating a tracing object for compilation
-compile_tracing = Tracing('FieldLine', field_essos, tmax_fl, initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
-                          timesteps=100, method='Dopri5', stepsize='adaptive', tol_step_size=trace_tolerance_array[0])
+compile_tracing = Tracing(field=field_essos, model='FieldLine',
+                          initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
+                          maxtime=tmax_fl, timestep=tmax_fl/100, times_to_trace=100,
+                          atol=trace_tolerance_array[0], rtol=trace_tolerance_array[0])
 block_until_ready(compile_tracing.trajectories)
 
 for index, trace_tolerance_ESSOS in enumerate(trace_tolerance_array):
-    num_steps_essos = avg_steps_SIMSOPT_array[index]
+    num_steps_essos = int(avg_steps_SIMSOPT_array[index])
     print(f'Tracing ESSOS field lines with tolerance={trace_tolerance_ESSOS}')
     start_time = time()
-    tracing = Tracing('FieldLine', field_essos, tmax_fl, initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
-                      timesteps=num_steps_essos, method='Dopri5', stepsize='adaptive', tol_step_size=trace_tolerance_ESSOS)
+    tracing = Tracing(field=field_essos, model='FieldLine',
+                      initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
+                      maxtime=tmax_fl, timestep=tmax_fl/num_steps_essos, times_to_trace=num_steps_essos,
+                      atol=trace_tolerance_ESSOS, rtol=trace_tolerance_ESSOS)
     block_until_ready(tracing.trajectories)
     runtime_ESSOS = time() - start_time
     runtime_ESSOS_array.append(runtime_ESSOS)
