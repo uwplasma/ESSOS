@@ -88,7 +88,7 @@ tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuFixed', particles=
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 fig = plt.figure(figsize=(9, 8))
-ax1 = fig.add_subplot(221)#, projection='3d')
+ax1 = fig.add_subplot(221, projection='3d')
 ax2 = fig.add_subplot(222)
 ax3 = fig.add_subplot(223)
 ax4 = fig.add_subplot(224)
