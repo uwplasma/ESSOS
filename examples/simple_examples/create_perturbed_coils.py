@@ -12,9 +12,6 @@ from essos.coils import Coils, CreateEquallySpacedCurves,Curves
 from functools import partial
 from essos.coil_perturbation import GaussianSampler, perturb_curves
 
-
-
-
 # Coils parameters
 order_Fourier_series_coils = 4
 number_coil_points = 80
@@ -59,8 +56,6 @@ coils_stat.plot(ax=ax1, show=False,color='green',linewidth=1,label='Statistical 
 coils_perturbed.plot(ax=ax1, show=False,color='magenta',linewidth=1,label='Perturbed coils')
 plt.legend()
 plt.show()
-
-
 
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")

@@ -10,7 +10,7 @@ from essos.fields import BiotSavart,BiotSavart_from_gamma
 from essos.surfaces import BdotN_over_B
 from essos.coils import Curves, Coils
 from essos.constants import mu_0
-from essos.coil_perturbation import perturb_curves
+from essos.coil_perturbation import perturb_curves, perturb_curves_systematic, perturb_curves_statistic
 
 
 
@@ -203,7 +203,7 @@ def perturbed_field_from_field(field, key, sampler):
     coils = copy_coils_from_field(field)
     base_key = jax.random.key(key)
     split_keys = jax.random.split(base_key, 2)
-    perturb_curves_systematic(coils, sampler, key=split_keys[0])
+    coils = perturb_curves_systematic(coils, sampler, key=split_keys[0])
     coils = perturb_curves_statistic(coils, sampler, key=split_keys[1])
     return BiotSavart(coils)
 

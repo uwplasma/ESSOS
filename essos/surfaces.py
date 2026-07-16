@@ -138,7 +138,21 @@ class SurfaceRZFourier:
         assert isinstance(nphi, int) and nphi > 0, "nphi must be a positive integer."
         assert isinstance(close, bool), "close must be a boolean."
         assert range_torus in ['full torus', 'half period'], f"Unknown range_torus: {range_torus}. Choose 'full torus' or 'half period'."
+        self._initialize_state(
+            rc,
+            zs,
+            nfp,
+            mpol,
+            ntor,
+            ntheta,
+            nphi,
+            close,
+            range_torus,
+            self._normalize_scaling_type(scaling_type),
+            scaling_factor,
+        )
 
+    def _initialize_state(self, rc, zs, nfp, mpol, ntor, ntheta, nphi, close, range_torus, scaling_type, scaling_factor):
         self._rc = rc
         self._zs = zs
         self._nfp = nfp
@@ -164,8 +178,7 @@ class SurfaceRZFourier:
         self._theta2d = None
         self._phi2d = None
         self._angles = None
-
-        self._scaling_type = self._normalize_scaling_type(scaling_type)
+        self._scaling_type = scaling_type
         self._scaling_factor = scaling_factor
         self._scaling = None
 
@@ -182,6 +195,10 @@ class SurfaceRZFourier:
             f"Unknown scaling_type: {scaling_type}. "
             "Expected 'L1', 1, 'L2', 2, 'Linfty', -1, or jnp.inf."
         )
+
+    @staticmethod
+    def _compute_scaling(xm, xn, scaling_type, scaling_factor):
+        return jnp.exp(scaling_factor * jnp.linalg.norm(jnp.vstack([xm, xn]), ord=scaling_type, axis=0))
 
 
     @classmethod
@@ -404,7 +421,10 @@ class SurfaceRZFourier:
     def scaling(self):
         """Mode-by-mode scaling ``exp(scaling_factor * ||(xm, xn)||)``."""
         if self._scaling is None:
-            self._scaling = jnp.exp(self.scaling_factor * jnp.linalg.norm(jnp.vstack([self.xm, self.xn]), ord=self.scaling_type, axis=0))
+            scaling = self._compute_scaling(self.xm, self.xn, self.scaling_type, self.scaling_factor)
+            if not isinstance(scaling, jax.core.Tracer):
+                self._scaling = scaling
+            return scaling
         return self._scaling
     
     # dofs property and setter
@@ -689,7 +709,10 @@ class SurfaceRZFourier:
         return mean_cross_sectional_area
     
     def _tree_flatten(self):
-        children = (self.dofs,)  # arrays / dynamic values
+        if hasattr(self._rc, "shape") and hasattr(self._zs, "shape"):
+            children = (self.rc * self.scaling, self.zs * self.scaling)  # arrays / dynamic values
+        else:
+            children = (self._rc, self._zs)
         aux_data = {"nfp": self._nfp,
                     "mpol": self._mpol,
                     "ntor": self._ntor,
@@ -703,24 +726,40 @@ class SurfaceRZFourier:
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        dofs, = children
-        half = dofs.size // 2
-        rc_scaled = dofs[:half]
-        zs_scaled = dofs[half:]
+        rc_scaled, zs_scaled = children
 
-        mpol = aux_data["mpol"]
-        ntor = aux_data["ntor"]
-        nfp = aux_data["nfp"]
-        scaling_type = cls._normalize_scaling_type(aux_data["scaling_type"])
-        scaling_factor = aux_data["scaling_factor"]
+        if hasattr(rc_scaled, "shape") and hasattr(zs_scaled, "shape"):
+            mpol = aux_data["mpol"]
+            ntor = aux_data["ntor"]
+            nfp = aux_data["nfp"]
+            scaling_type = cls._normalize_scaling_type(aux_data["scaling_type"])
+            scaling_factor = aux_data["scaling_factor"]
 
-        xm = jnp.repeat(jnp.arange(mpol + 1), 2 * ntor + 1)[ntor:]
-        xn = nfp * jnp.tile(jnp.arange(-ntor, ntor + 1), mpol + 1)[ntor:]
-        scaling = jnp.exp(scaling_factor * jnp.linalg.norm(jnp.vstack([xm, xn]), ord=scaling_type, axis=0))
+            xm = jnp.repeat(jnp.arange(mpol + 1), 2 * ntor + 1)[ntor:]
+            xn = nfp * jnp.tile(jnp.arange(-ntor, ntor + 1), mpol + 1)[ntor:]
+            scaling = cls._compute_scaling(xm, xn, scaling_type, scaling_factor)
 
-        rc = rc_scaled / scaling
-        zs = zs_scaled / scaling
-        return cls(rc, zs, **aux_data)
+            rc = rc_scaled / scaling
+            zs = zs_scaled / scaling
+        else:
+            rc = rc_scaled
+            zs = zs_scaled
+
+        obj = object.__new__(cls)
+        obj._initialize_state(
+            rc,
+            zs,
+            aux_data["nfp"],
+            aux_data["mpol"],
+            aux_data["ntor"],
+            aux_data["ntheta"],
+            aux_data["nphi"],
+            aux_data["close"],
+            aux_data["range_torus"],
+            aux_data["scaling_type"],
+            aux_data["scaling_factor"],
+        )
+        return obj
 
 tree_util.register_pytree_node(SurfaceRZFourier,
                                SurfaceRZFourier._tree_flatten,

@@ -14,21 +14,21 @@ from scipy.optimize import least_squares
 from essos.losses import custom_loss
 from essos.fields import BiotSavart
 
-
 # Particle optimization parameters
 # Optimization parameters
 NPARTICLES = number_of_processors_to_use*10
 MAXTIME_TRACING = 1e-4
 NUMBER_COILS_PER_HALF_FIELD_PERIOD = 3
 NUMBER_OF_FIELD_PERIODS = 2
-MODEL = 'FullOrbit_Boris'
+MODEL = 'GuidingCenterAdaptative' 
 TIMESTEP=1.e-14
 TRACE_TOLERANCE=1e-8
 NUM_STEPS=1000
 
-
 NPARTICLES_PLOT = number_of_processors_to_use*10
 MAXTIME_TRACING_PLOT = 1e-4
+
+
 
 """ Creating starting coils and surface """
 N_COILS = 3
@@ -64,7 +64,7 @@ def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-5, n
     R_axis=field.r_axis
     Z_axis=field.z_axis
     #Ideally here one would differentiate in time through diffrax !TODO
-    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,0])+jnp.square(xyz[:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,2]-Z_axis+1.e-12))
+    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
     v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime     
     return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
 
@@ -84,6 +84,8 @@ def loss_length(field,length_target=LENGTH_TARGET):
 def loss_curvature(field,curvature_target=CURVATURE_TARGET):
     return jnp.mean(jnp.maximum(0, field.coils.curvature - curvature_target))
 
+
+
 # Initialize particles
 phi_array = jnp.linspace(0, 2*jnp.pi, NPARTICLES)
 initial_xyz=jnp.array([LARGE_R*jnp.cos(phi_array), LARGE_R*jnp.sin(phi_array), 0*phi_array]).T
@@ -97,7 +99,6 @@ L_length = custom_loss(loss_length, "field")
 L_curvature = custom_loss(loss_curvature, "field")
 """ Defining total loss + setting dependencies """
 L_total = RADIAL_DRIFT_WEIGHT*L_radial_drift + L_B_axis + LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature
-
 
 L_total.dependencies = {"field": init_field}
 
@@ -146,8 +147,8 @@ plt.show()
 # # Save the coils to a json file
 # coils_optimized.to_json("stellarator_coils.json")
 # # Load the coils from a json file
-# from essos.coils import Coils
-# coils = Coils.from_json("stellarator_coils.json")
+# from essos.coils import Coils_from_json
+# coils = Coils_from_json("stellarator_coils.json")
 
 # # Save results in vtk format to analyze in Paraview
 # tracing_initial.to_vtk('trajectories_initial')

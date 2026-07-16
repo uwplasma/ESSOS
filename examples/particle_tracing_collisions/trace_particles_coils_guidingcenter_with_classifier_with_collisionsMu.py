@@ -12,7 +12,6 @@ from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_A
 from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies
 
-
 # Input parameters
 tmax = 1e-4
 timestep=1.e-8
@@ -23,7 +22,6 @@ R0 = 17.0
 atol= 1e-5
 rtol=1.e-5
 energy=FUSION_ALPHA_PARTICLE_ENERGY
-
 
 #Initialize background species
 #number_species=2  #(electrons,deuterium)
@@ -89,8 +87,8 @@ tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 
 for i, trajectory in enumerate(trajectories):
     #ax2.plot(tracing.times, jnp.abs(tracing.energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
-    ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i][0])/particles.energy, label=f'Particle {i+1}')    
-    ax3.plot(tracing.times, trajectory[:, 3]*SPEED_OF_LIGHT/particles.total_speed, label=f'Particle {i+1}')
+    ax2.plot(tracing.times, (tracing.energy()[i]-tracing.energy()[i][0])/tracing.energy()[i][0], label=f'Particle {i+1}')    
+    ax3.plot(tracing.times, trajectory[:, 3]*SPEED_OF_LIGHT/tracing.energy()[i], label=f'Particle {i+1}')
     #ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
 ax2.set_xlabel('Time (s)')

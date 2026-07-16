@@ -25,8 +25,6 @@ atol=1.e-7
 rtol=1.e-7
 energy=FUSION_ALPHA_PARTICLE_ENERGY
 
-
-
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'QH_simple_scaled.json')
 coils = Coils.from_simsopt(json_file,nfp=4)
