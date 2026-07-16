@@ -46,7 +46,10 @@ init_curves = CreateEquallySpacedCurves(n_curves=N_COILS,
                                    order=FOURIER_ORDER,
                                    R=LARGE_R, r=SMALL_R,
                                    n_segments=N_SEGMENTS,
-                                   nfp=NFP, stellsym=STELLSYM)
+                                   nfp=NFP, stellsym=STELLSYM,
+                                   scaling_type="L2",
+                                   scaling_factor=1.2,
+                                   scale_fixed=1.0)
 init_coils = Coils(curves=init_curves, currents=jnp.array([COIL_CURRENT]*N_COILS))
 init_field = BiotSavart(init_coils)
 
@@ -56,7 +59,7 @@ CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.4
 BAXIS_WEIGHT = 1.; BAXIS_TARGET = 5.7
 RADIAL_DRIFT_WEIGHT = 1.
 
-def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-4, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
     particles.to_full_orbit(field)
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
                       timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
@@ -65,8 +68,7 @@ def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-5, n
     Z_axis=field.z_axis
     #Ideally here one would differentiate in time through diffrax !TODO
     r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
-    v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime     
-    return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
+    return jnp.average(r_cross[:,-1])  # Average radial end position of all particles at the end of the tracing, ideally this should be zero for perfect confinement
 
 def normB_axis(field, npoints=15):
     R_axis=field.r_axis
