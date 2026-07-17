@@ -139,7 +139,10 @@ class custom_loss(base_loss):
         else:
             args = tuple(dofs_pytree)
         gradient = jax_grad(self.fun, argnums=tuple(range(len(args))))(*args, **self.kwargs)
-        buffer = self.dependencies_buffer.copy()
+        # Build a fresh zeros structure locally instead of using the cached
+        # dependencies_buffer property, which would cache a traced value and
+        # leak it out of this jit scope (UnexpectedTracerError).
+        buffer = tree_util.tree_map(jnp.zeros_like, self.dependencies)
         for dep, g in zip(self.args_names, gradient):
             buffer[dep] = g
         return buffer
