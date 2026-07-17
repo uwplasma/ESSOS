@@ -8,18 +8,30 @@ import jax.numpy as jnp
 import essos.objective_functions as objf
 
 
-class DummyField:
+class DummyCoils:
     def __init__(self):
-        self.R0 = jnp.array([1.0, 1.0])
-        self.Z0 = jnp.array([0.0, 0.0])
-        self.phi = jnp.array([0.0, jnp.pi / 2])
-        self.B_axis = jnp.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-        self.grad_B_axis = jnp.ones((2, 3, 3))
-        self.iota = 0.4
-        self.elongation = jnp.array([1.0, 1.2])
-        self.r_axis = 1.0
-        self.z_axis = 0.0
-        self.coils = DummyCoils()
+        self.length = jnp.array([3.0, 4.0])
+        self.curvature = jnp.ones((2, 5))
+
+    def copy(self):
+        return DummyCoils()
+
+
+@jax.tree_util.register_pytree_node_class
+class DummyField:
+    def __init__(self, R0=None, Z0=None, phi=None, B_axis=None, grad_B_axis=None,
+                 iota=0.4, elongation=None, r_axis=1.0, z_axis=0.0, coils=None):
+        self.R0 = jnp.array([1.0, 1.0]) if R0 is None else R0
+        self.Z0 = jnp.array([0.0, 0.0]) if Z0 is None else Z0
+        self.phi = jnp.array([0.0, jnp.pi / 2]) if phi is None else phi
+        # B_axis matches pyqsc_jax external module shape (3, n); function applies .T
+        self.B_axis = jnp.array([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]]) if B_axis is None else B_axis
+        self.grad_B_axis = jnp.ones((3, 3, 2)) if grad_B_axis is None else grad_B_axis
+        self.iota = iota
+        self.elongation = jnp.array([1.0, 1.2]) if elongation is None else elongation
+        self.r_axis = r_axis
+        self.z_axis = z_axis
+        self.coils = DummyCoils() if coils is None else coils
 
     def AbsB(self, points):
         return 5.7 + 0.1 * jnp.sum(points)
@@ -35,6 +47,17 @@ class DummyField:
 
     def copy(self):
         return DummyField()
+
+    def tree_flatten(self):
+        children = (self.R0, self.Z0, self.phi, self.B_axis, self.grad_B_axis,
+                    self.iota, self.elongation, self.r_axis, self.z_axis)
+        return children, {}
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        (R0, Z0, phi, B_axis, grad_B_axis, iota, elongation, r_axis, z_axis) = children
+        return cls(R0=R0, Z0=Z0, phi=phi, B_axis=B_axis, grad_B_axis=grad_B_axis,
+                   iota=iota, elongation=elongation, r_axis=r_axis, z_axis=z_axis)
 
 
 class DummyParticles:
@@ -64,12 +87,22 @@ class DummyTracing:
         self.maxtime = 1e-5
 
 
+@jax.tree_util.register_pytree_node_class
 class DummySurface:
-    def __init__(self):
-        self.gamma = jnp.zeros((2, 3, 3), dtype=jnp.float64)
-        self.unitnormal = jnp.ones((2, 3, 3), dtype=jnp.float64)
-        self.stellsym = False
-        self.nfp = 1
+    def __init__(self, gamma=None, unitnormal=None, stellsym=False, nfp=1):
+        self.gamma = jnp.zeros((2, 3, 3), dtype=jnp.float64) if gamma is None else gamma
+        self.unitnormal = jnp.ones((2, 3, 3), dtype=jnp.float64) if unitnormal is None else unitnormal
+        self.stellsym = stellsym
+        self.nfp = nfp
+
+    def tree_flatten(self):
+        return (self.gamma, self.unitnormal), (self.stellsym, self.nfp)
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        gamma, unitnormal = children
+        stellsym, nfp = aux
+        return cls(gamma=gamma, unitnormal=unitnormal, stellsym=stellsym, nfp=nfp)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -168,7 +201,7 @@ class TestObjectiveFunctions(unittest.TestCase):
         points, B_nearaxis, gradB_nearaxis = objf.near_axis_field_quantities(self.field_nearaxis)
         self.assertEqual(points.shape, (3, 2))
         self.assertEqual(B_nearaxis.shape, (2, 3))
-        self.assertEqual(gradB_nearaxis.shape, (3, 3, 2))
+        self.assertEqual(gradB_nearaxis.shape, (2, 3, 3))
         self.assertTrue(jnp.isfinite(objf.loss_B_difference_coils_near_axis(self.field, self.field_nearaxis)))
         self.assertTrue(jnp.isfinite(objf.loss_gradB_difference_coils_near_axis(self.field, self.field_nearaxis)))
         self.assertTrue(jnp.isfinite(objf.loss_iota_near_axis(self.field_nearaxis)))
@@ -260,15 +293,6 @@ class TestObjectiveFunctions(unittest.TestCase):
         self.assertTrue(jnp.isfinite(objf.regularization_rect(2.0, 1.0)))
         self.assertTrue(jnp.isfinite(objf.rectangular_xsection_k(2.0, 1.0)))
         self.assertTrue(jnp.isfinite(objf.rectangular_xsection_delta(2.0, 1.0)))
-
-
-class DummyCoils:
-    def __init__(self):
-        self.length = jnp.array([3.0, 4.0])
-        self.curvature = jnp.ones((2, 5))
-
-    def copy(self):
-        return DummyCoils()
 
 
 if __name__ == "__main__":
