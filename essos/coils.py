@@ -612,6 +612,10 @@ class Coils:
     # dofs_currents_raw property and setter
     @property
     def dofs_currents_raw(self):
+        # None-safe: equinox partition/combine builds placeholder coils whose
+        # currents leaf is None; flattening those must not raise.
+        if self._dofs_currents_raw is None:
+            return None
         return jnp.array(self._dofs_currents_raw)
 
     @dofs_currents_raw.setter
@@ -637,7 +641,11 @@ class Coils:
         if self._dofs_currents_raw is None or isinstance(self._dofs_currents_raw, bool):
             return self._dofs_currents_raw
         if self._dofs_currents is None:
-            dofs_currents = self.dofs_currents_raw / self.currents_scale
+            raw = self.dofs_currents_raw
+            # None-safe: preserve the equinox partition placeholder unchanged.
+            if raw is None or self.currents_scale is None:
+                return raw
+            dofs_currents = raw / self.currents_scale
             if not isinstance(dofs_currents, jax.core.Tracer):
                 self._dofs_currents = dofs_currents
             return dofs_currents
@@ -929,17 +937,21 @@ class Coils:
         return cls(curves, currents_raw, currents_scale=data.get("currents_scale", None))
     
     def _tree_flatten(self):
-        children = (self.curves, self.dofs_currents)  # arrays / dynamic values
-        aux_data = {"currents_scale": self.currents_scale}  # static values
+        # currents_scale is a dynamic child, not aux metadata: a concrete jax
+        # array in aux_data breaks JAX pytree-structure equality checks (arrays
+        # are not hashable). Keeping it a leaf preserves the normalized-currents
+        # differentiable leaf and is None/tracer-safe under equinox partition.
+        children = (self.curves, self.dofs_currents, self._currents_scale)
+        aux_data = {}
         return (children, aux_data)
-    
+
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        curves, dofs_currents = children
-        if hasattr(dofs_currents, "shape"):
-            dofs_currents = dofs_currents * aux_data["currents_scale"]
+        curves, dofs_currents, currents_scale = children
+        if hasattr(dofs_currents, "shape") and currents_scale is not None:
+            dofs_currents = dofs_currents * currents_scale
         obj = object.__new__(cls)
-        obj._initialize_state(curves, dofs_currents, aux_data["currents_scale"])
+        obj._initialize_state(curves, dofs_currents, currents_scale)
         return obj
 
 tree_util.register_pytree_node(Coils,
@@ -1293,6 +1305,10 @@ class DiscretizedCoils:
     # dofs_currents_raw property and setter
     @property
     def dofs_currents_raw(self):
+        # None-safe: equinox partition/combine builds placeholder coils whose
+        # currents leaf is None; flattening those must not raise.
+        if self._dofs_currents_raw is None:
+            return None
         return jnp.array(self._dofs_currents_raw)
     
     @dofs_currents_raw.setter
