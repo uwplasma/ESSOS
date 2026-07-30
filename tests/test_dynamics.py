@@ -1,5 +1,6 @@
 import pytest
 import jax.numpy as jnp
+from diffrax import NoProgressMeter
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELECTRON_MASS,PROTON_MASS
 from essos.dynamics import Particles, GuidingCenter, Lorentz, FieldLine, Tracing
 from essos.background_species import BackgroundSpecies
@@ -131,15 +132,22 @@ def test_field_line(field):
     assert result.shape == (3,)
 
 def test_tracing_initialization(field, particles,electric_field):
+    def condition(t, y, args, **kwargs):
+        return False
+
     x = jnp.linspace(1, 2, particles.nparticles)
     y = jnp.zeros(particles.nparticles)
     z = jnp.zeros(particles.nparticles)
     initial_conditions =jnp.array([x, y, z]).T
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, times_to_trace=200)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, times_to_trace=200, condition=condition, rejected_steps=7, max_steps=123)
     assert tracing.field == field
     assert tracing.model == 'GuidingCenter'
     assert tracing.initial_conditions.shape == (particles.nparticles, 4)
     assert tracing.times.shape == (200,)
+    assert tracing.condition is condition
+    assert tracing.rejected_steps == 7
+    assert tracing.max_steps == 123
+    assert isinstance(tracing.progress_meter, NoProgressMeter)
 
 def test_tracing_trace(field, particles,electric_field):
     x = jnp.linspace(1, 2, particles.nparticles)
