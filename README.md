@@ -133,6 +133,27 @@ ESSOS can be run directly in the command line as `essos`, or by following one of
 python examples/trace_particles_coils_guidingcenter.py
 ```
 
+### Surface-free near-axis field jets
+
+For vacuum or finite-pressure/current near-axis coil design, ESSOS consumes
+the normalized 3+5+7 target provided by pyQSC_JAX:
+
+```python
+from essos.field_jet import (
+    loss_field_jet_coils_near_axis,
+    near_axis_field_jet_target,
+)
+
+target = near_axis_field_jet_target(solution, formal_radius=0.05)
+loss = loss_field_jet_coils_near_axis(coil_field, target)
+```
+
+Supplying `formal_radius` subtracts the plasma-generated field, gradient, and
+Hessian, so the coils match only the external vacuum target. Omitting it uses
+the total field and is intended for vacuum near-axis solutions. The residual
+blocks are smooth, dimensionally normalized least squares with 3 field, 5
+gradient, and 7 Hessian components.
+
 ## Testing
 To run the tests, use `pytest`:
 ```sh
@@ -203,4 +224,3 @@ This project is protected under the MIT License. For more details, refer to the 
 - We acknowledge the help of the whole [UWPlasma](https://rogerio.physics.wisc.edu/) plasma group.
 
 ---
-
