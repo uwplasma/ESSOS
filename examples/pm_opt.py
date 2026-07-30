@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 """
-PM dipole optimizer — fB minimization with discreteness annealing.
-
-Starts at a known/loaded pho solution, relaxes it
-continuously to minimize fB (Stage 1), then anneals a discreteness
-penalty back up with a power-law schedule to recover a
-+,-1/0 solution (Stage 2).
-
-- nfp/stellsym are read from the SURFACE file so the
-  optimizer can never accidentally run with the wrong symmetry.
-- TF coil field uses essos Coils_from_simsopt + essos.fields.BiotSavart.
-  simsopt is used only to parse the FOCUS coil-file format; all field math
-  is essos's own. Verified against simsopt's BiotSavart
-  when passing ALL physical coils with nfp=1, stellsym=False — MUSE's 16 TF
-  coils are not copies of a smaller set, so do
-  not pass a reduced set with nfp>1 here (it gives wrong results).
-- PM dipole-grid G matrix uses DipoleField.compute_interaction_matrix,
-  which correctly exploits the grid's real nfp/stellsym symmetry
-- Swap the four INPUT FILES paths below to switch problems (MUSE, the
-  rotating-ellipse example is included, commented out).
+PM optimizer — fB minimization with discreteness annealing.
 """
 from __future__ import annotations
 
@@ -31,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 
-# INPUT FILES — passed as command-line arguments
+# INPUT FILES 
 if len(sys.argv) != 4:
     sys.exit("Usage: python plot.py <surf_file> <mag_file> <coil_file>")
 
@@ -47,17 +29,16 @@ SURFACE_NTHETA = 64
 OUTPUT_DIR = Path(__file__).resolve().parent / "pm_opt_output"
 
 
-# OPTIMIZER CONFIG
 
 JAX_PLATFORM = "cpu"
 CPU_THREADS  = 4
 ENABLE_X64   = True
 
-FB_ONLY_STEPS       = 1000
+FB_ONLY_STEPS       = 8000
 FB_ONLY_LR_MAX      = 0.01
 FB_ONLY_LR_MIN_FRAC = 0.1
 
-FD_ANNEAL_STEPS       = 1000
+FD_ANNEAL_STEPS       = 6000
 FD_ANNEAL_LR_MAX      = 0.001
 FD_ANNEAL_LR_MIN_FRAC = 0.001
 
@@ -65,7 +46,7 @@ MAX_WD        = 0.2
 WD_RAMP_POWER = 4      # power-law annealing: wD = (progress)^WD_RAMP_POWER * MAX_WD
 LOG_INTERVAL  = 500
 
-# Volume targeting: ONE-SIDED penalty, fires only above target (never pulls volume up)
+# Volume targeting: penalty, fires only above target 
 VOLUME_TARGET_CM3 = 0.0   # 0 disables
 W_VOLUME_TARGET   = 1.0
 
@@ -94,9 +75,6 @@ jax.config.update("jax_enable_x64", ENABLE_X64)
 backend_name = str(jax.default_backend()).lower()
 print(f"JAX backend: {backend_name}  |  devices: {[str(d) for d in jax.devices()]}")
 
-# for p in [str(ESSOS_ROOT), str(SIMSOPT_SRC)]:
-#     if p not in sys.path:
-#         sys.path.insert(0, p)
 
 from essos.fields import DipoleField
 
@@ -184,7 +162,6 @@ def write_focus_file(path, positions, moments, pho, Ic_passed=None, momentq=1):
     pol = np.arccos(np.clip(mhat[:, 2], -1, 1))
     az = np.arctan2(mhat[:, 1], mhat[:, 0])
  
-    # None -> all on; scalar -> same for all; array -> per-site
     if Ic_passed is None:
         Ic_arr = np.ones(n)
     else:
@@ -226,7 +203,11 @@ surf_xyz = np.asarray(surface.gamma(), np.float64)
 surf_nrm = np.asarray(surface.unitnormal(), np.float64)
 surf_pts = surf_xyz.reshape(-1, 3)
 surf_n   = surf_nrm.reshape(-1, 3)
-area_weight = float(surface.area() / len(surf_pts))
+surf_n_raw = np.asarray(surface.normal(), np.float64).reshape(-1, 3)
+Nnorms = np.linalg.norm(surf_n_raw, axis=1)
+n_pts_surf = len(surf_pts)
+area_weight_vec = Nnorms / n_pts_surf  
+area_weight = float(surface.area() / len(surf_pts))  
 
 print(f"\n--- Loading coils (essos-native): {COIL_FILE.name} ---")
 essos_coils = load_coils_essos(COIL_FILE)
@@ -279,7 +260,7 @@ print(f"Backend: {backend_name}")
 print("=" * 70)
 
 
-# BUILD G MATRIX via DipoleField.compute_interaction_matrix
+
 print("\n--- Build G matrix ---")
 JAX_DTYPE        = jnp.float32
 surface_pts_flat = jnp.asarray(surf_pts, JAX_DTYPE)
@@ -301,12 +282,12 @@ print(f"G: {G.shape}  {G.nbytes/1e9:.2f} GB  {time.time()-t0:.1f}s")
 
 G_jax  = jnp.asarray(G)
 Bn_jax = jnp.asarray(Bn_fixed, jnp.float32)
-aw_jax = jnp.float32(area_weight)
+aw_jax = jnp.asarray(area_weight_vec, jnp.float32)  
 vc_jax = jnp.float32(volume_per_cell)
 f32    = jnp.float32
 
-fB_gen0 = float(0.5 * np.dot(pho_loaded @ G.T.astype(np.float64) + Bn_fixed,
-                             pho_loaded @ G.T.astype(np.float64) + Bn_fixed) * area_weight)
+bn_loaded_ref = pho_loaded @ G.T.astype(np.float64) + Bn_fixed
+fB_gen0 = float(0.5 * np.sum(area_weight_vec * bn_loaded_ref * bn_loaded_ref))
 print(f"fB (loaded solution) = {fB_gen0:.4e}")
 
 fB_ref  = jnp.float32(max(fB_gen0, 1e-20))
@@ -318,7 +299,7 @@ wVT_jax = jnp.float32(W_VOLUME_TARGET)
 @jax.jit
 def compute_metrics(pho):
     bn    = pho @ G_jax.T + Bn_jax
-    fB    = f32(0.5) * jnp.sum(bn * bn) * aw_jax
+    fB    = f32(0.5) * jnp.sum(aw_jax * bn * bn)
     abs_p = jnp.sqrt(pho * pho + f32(1e-7))
     fV    = vc_jax * jnp.sum(abs_p)
     fD    = jnp.sum(abs_p * (f32(1) - abs_p))
@@ -331,7 +312,7 @@ def adam_step(pho, m, v, lr, w_fD, port_mask):
     """
     def loss(x):
         bn    = x @ G_jax.T + Bn_jax
-        fB    = f32(0.5) * jnp.sum(bn * bn) * aw_jax
+        fB    = f32(0.5) * jnp.sum(aw_jax * bn * bn)
         abs_p = jnp.sqrt(x * x + f32(1e-7))
         fV    = vc_jax * jnp.sum(abs_p)
         fD    = jnp.sum(abs_p * (f32(1) - abs_p))
@@ -375,14 +356,14 @@ print(f"{'='*70}")
 
 G64  = G.astype(np.float64)
 Bn64 = Bn_fixed.astype(np.float64)
-fB_coils = float(0.5 * np.dot(Bn64, Bn64) * area_weight)
+fB_coils = float(0.5 * np.sum(area_weight_vec * Bn64 * Bn64))
 print(f"[ref] fB coils-only:   {fB_coils:.4e}")
 print(f"[ref] fB loaded:       {fB_gen0:.4e}   fV: {volume_per_cell*np.abs(pho_loaded).sum():.1f} cm\u00b3")
 
 
 def fB64_of(p):
     r = p @ G64.T + Bn64
-    return 0.5 * np.sum(r*r) * area_weight
+    return 0.5 * np.sum(area_weight_vec * r * r)
 
 
 t_start = time.time()
@@ -449,9 +430,7 @@ print(f"{'='*70}")
 
 write_focus_file(OUTPUT_DIR / "pm_optimized_test.focus", magnet_positions, magnet_moments, p_d,Ic_passed = ic_flags)
 
-# ============================================================
-# CONVERGENCE HISTORY PLOT — fB, fV, fD per iteration
-# ============================================================
+
 import matplotlib.pyplot as plt
 hist_fB_np = np.array([float(x) for x in hist_fB])
 hist_fV_np = np.array([float(x) for x in hist_fV])
