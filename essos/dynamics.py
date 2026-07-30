@@ -464,6 +464,20 @@ def FieldLine(t,
     # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 
+@jit
+def _fill_terminated_trajectories(trajectories):
+    """Replace Diffrax's post-event ``inf`` saves with the last valid state."""
+
+    def fill_trajectory(trajectory):
+        def fill_state(previous, current):
+            state = jnp.where(jnp.isfinite(current).all(), current, previous)
+            return state, state
+
+        _, tail = lax.scan(fill_state, trajectory[0], trajectory[1:])
+        return jnp.vstack((trajectory[0], tail))
+
+    return vmap(fill_trajectory)(trajectories)
+
 
 ## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
 ## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
@@ -514,10 +528,17 @@ class Tracing():
                         s, _, _ = y
                         return s-1	 
                 else:
+                    def condition_axis(t, y, args, **kwargs):
+                        s, _, _, _ = y
+                        # VMEC flux coordinates are singular on the magnetic axis.
+                        return s-1.e-6
+
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _, _ = y
                         return s-1	        
-                self.condition = condition_Vmec
+                    self.condition = (condition_axis, condition_Vmec)
+                if not (model == 'GuidingCenter' or model == 'GuidingCenterAdaptative'):
+                    self.condition = condition_Vmec
             elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
                 if model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative' or model=='GuidingCenterCollisions':
                     def condition_BioSavart(t, y, args, **kwargs):
@@ -582,7 +603,19 @@ class Tracing():
             self.times = jnp.linspace(0, self.maxtime, self.times_to_trace,endpoint=True)
 
             
-        self._trajectories = self.trace()
+        trace_result = self.trace()
+        if isinstance(self.condition, tuple):
+            trajectories, self.event_mask = trace_result
+            self.axis_hits, self.boundary_hits = self.event_mask
+            filled = _fill_terminated_trajectories(trajectories)
+            self._trajectories = jnp.where(
+                self.axis_hits[:, None, None], filled, trajectories
+            )
+        else:
+            self._trajectories = trace_result
+            self.axis_hits = jnp.zeros(len(self._trajectories), dtype=bool)
+            self.boundary_hits = jnp.zeros(len(self._trajectories), dtype=bool)
+        self.total_particles_unresolved = jnp.sum(self.axis_hits)
         
         if self.particles is not None:
             self.energy = jnp.zeros((self.particles.nparticles, self.times_to_trace))
@@ -800,7 +833,7 @@ class Tracing():
             elif self.model == 'GuidingCenterAdaptative' :  
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -815,7 +848,9 @@ class Tracing():
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
                     max_steps=10000000000,
                     event = Event(self.condition)
-                ).ys
+                )
+                trajectory = solution.ys
+                event_mask = solution.event_mask
             elif self.model == 'FieldLineAdaptative' :  
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
@@ -839,7 +874,7 @@ class Tracing():
             else:
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -853,11 +888,21 @@ class Tracing():
                     progress_meter=self.progress_meter,
                     max_steps=10000000000,
                     event = Event(self.condition)
-                ).ys
+                )
+                trajectory = solution.ys
+                event_mask = solution.event_mask
+            if isinstance(self.condition, tuple):
+                return trajectory, event_mask
             return trajectory
         
-        return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
+        output_sharding = sharding
+        if isinstance(self.condition, tuple):
+            output_sharding = (
+                sharding, (sharding_index, sharding_index)
+            )
+        result = jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
                     device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
+        return result
         #x=jax.device_put(self.initial_conditions, sharding)
         #y=jax.device_put(self.particles.random_keys, sharding_index)        
         #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
@@ -919,7 +964,6 @@ class Tracing():
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times
 
-    @partial(jit, static_argnums=(0))
     def loss_fraction(self,r_max=0.99):
         trajectories_r = self.trajectories[:,:, 0]
         lost_mask = trajectories_r >= r_max

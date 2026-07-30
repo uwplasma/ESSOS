@@ -1,7 +1,7 @@
 import pytest
 import jax.numpy as jnp
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELECTRON_MASS,PROTON_MASS
-from essos.dynamics import Particles, GuidingCenter, Lorentz, FieldLine, Tracing
+from essos.dynamics import Particles, GuidingCenter, Lorentz, FieldLine, Tracing, _fill_terminated_trajectories
 from essos.background_species import BackgroundSpecies
 
 def test_particles_initialization_all_params():
@@ -129,6 +129,19 @@ def test_field_line(field):
     t = 0.0
     result = FieldLine(t, initial_condition, field)
     assert result.shape == (3,)
+
+
+def test_fill_terminated_trajectories():
+    trajectories = jnp.array(
+        [
+            [[0.2, 1.0], [0.3, 2.0], [jnp.inf, jnp.inf]],
+            [[0.4, 3.0], [0.5, 4.0], [0.6, 5.0]],
+        ]
+    )
+    filled = _fill_terminated_trajectories(trajectories)
+    assert jnp.allclose(filled[0, 2], trajectories[0, 1])
+    assert jnp.allclose(filled[1], trajectories[1])
+
 
 def test_tracing_initialization(field, particles,electric_field):
     x = jnp.linspace(1, 2, particles.nparticles)
