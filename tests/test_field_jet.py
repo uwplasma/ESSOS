@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import pyqsc_jax as qsc
+from jax.flatten_util import ravel_pytree
 from essos.coils import Coils, Curves
 from essos.field_jet import (
     FieldJetResiduals,
@@ -300,6 +301,35 @@ def test_finite_current_objective_has_axis_and_near_axis_gradients():
         rtol=1.0e-6,
         atol=1.0e-7,
     )
+
+
+def test_vacuum_coil_optimization_step_reduces_objective():
+    target = near_axis_field_jet_target(_vacuum_solution(nphi=15))
+    dofs = jnp.zeros((1, 3, 3))
+    dofs = dofs.at[0, 0, 0].set(1.0)
+    dofs = dofs.at[0, 0, 2].set(0.45)
+    dofs = dofs.at[0, 2, 1].set(-0.45)
+    initial_coils = Coils(
+        Curves(dofs, n_segments=24, nfp=2, stellsym=True),
+        jnp.asarray([1.0e6]),
+    )
+    initial_vector, unravel = ravel_pytree(initial_coils)
+
+    def objective(vector):
+        return loss_field_jet_coils_near_axis(
+            BiotSavart(unravel(vector)),
+            target,
+        )
+
+    initial_value, gradient = jax.value_and_grad(objective)(initial_vector)
+    direction = -gradient / jnp.linalg.norm(gradient)
+    candidate_values = jnp.stack(
+        tuple(
+            objective(initial_vector + step * direction) for step in (0.05, 0.01, 0.002)
+        )
+    )
+
+    assert jnp.min(candidate_values) < initial_value
 
 
 def test_target_and_weight_guards():

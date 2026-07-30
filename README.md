@@ -154,6 +154,13 @@ the total field and is intended for vacuum near-axis solutions. The residual
 blocks are smooth, dimensionally normalized least squares with 3 field, 5
 gradient, and 7 Hessian components.
 
+The direct-script examples
+`examples/coil_optimization/optimize_coils_for_external_nearaxis.py` and
+`examples/coil_optimization/optimize_coils_and_external_nearaxis.py` show
+finite-beta stage-two and single-stage optimization, respectively. Parameters
+and output controls are defined at the top of each script; both report the
+three residual blocks and save coils, parameters, and a comparison figure.
+
 ## Testing
 To run the tests, use `pytest`:
 ```sh
