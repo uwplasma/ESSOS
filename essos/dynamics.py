@@ -473,7 +473,8 @@ def FieldLine(t,
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
-                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None):
+                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
+                 max_steps=1_000_000, progress_meter=None):
         
         if electric_field==None:
             self.electric_field = Electric_field_zero()
@@ -485,10 +486,7 @@ class Tracing():
         else:
             self.field = field
 
-        if rejected_steps==None:
-            self.rejected_steps=100
-        else:
-            self.rejected_steps=100
+        self.rejected_steps = 100 if rejected_steps is None else rejected_steps
 
         self.model = model
         self.initial_conditions = initial_conditions
@@ -501,7 +499,8 @@ class Tracing():
         self.particles = particles
         self.species=species
         self.tag_gc=tag_gc
-        self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
+        self.max_steps = max_steps
+        self.progress_meter = NoProgressMeter() if progress_meter is None else progress_meter
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
@@ -528,6 +527,8 @@ class Tracing():
                         xx, yy, zz, _ = y
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
                 self.condition = condition_BioSavart                
+        else:
+            self.condition = condition
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles,self.electric_field)
@@ -693,7 +694,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 ).ys
@@ -719,7 +720,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     stepsize_controller=ClipStepSizeController(controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,dtmin=dt0,dtmax=1.e-4,force_dtmin=True),step_ts=self.times,store_rejected_steps=self.rejected_steps),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 ).ys     
@@ -743,7 +744,7 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 ).ys       
@@ -767,7 +768,7 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 ).ys                                       
@@ -793,7 +794,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),                   
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 ).ys          
@@ -813,7 +814,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition)
                 ).ys
             elif self.model == 'FieldLineAdaptative' :  
@@ -832,7 +833,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition)
                 ).ys                
             #Fixed guiding center
@@ -851,7 +852,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition)
                 ).ys
             return trajectory
