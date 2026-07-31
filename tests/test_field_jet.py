@@ -3,10 +3,10 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
-
 import pyqsc_jax as qsc
+import pytest
 from jax.flatten_util import ravel_pytree
+
 from essos.coils import Coils, Curves
 from essos.field_jet import (
     FieldJetResiduals,
@@ -104,6 +104,10 @@ def _finite_current_solution(nphi=31):
     )
 
 
+def _pressure_only_stellarator_solution(nphi=31):
+    return qsc.solve_configuration("plasma_stellarator", nphi=nphi, order="r2")
+
+
 def test_magnetic_field_hessian_matches_polynomial_coefficients():
     field = PolynomialField(jnp.asarray([0.2, -0.1, 0.4]))
     point = jnp.asarray([0.8, 0.1, -0.2])
@@ -191,6 +195,29 @@ def test_finite_current_target_uses_external_not_total_field_jet():
     assert external.hessian_independent.shape == (61, 7)
     assert np.max(np.abs(np.asarray(external.field - total.field))) > 1.0e-6
     assert np.max(np.abs(np.asarray(external.gradient - total.gradient))) > 1.0e-3
+    assert np.max(np.abs(np.asarray(external.hessian - total.hessian))) > 1.0e-3
+
+
+def test_pressure_only_target_is_nonplanar_and_angle_dependent():
+    solution = _pressure_only_stellarator_solution(nphi=61)
+    total = near_axis_field_jet_target(solution)
+    external = near_axis_field_jet_target(
+        solution,
+        formal_radius=0.15,
+    )
+    plasma_field = np.asarray(total.field - external.field)
+    plasma_norm = np.linalg.norm(plasma_field, axis=1)
+    torsion_rms = np.sqrt(
+        np.sum(np.asarray(solution.torsion**2 * solution.geometry.d_l_d_phi))
+        / np.sum(np.asarray(solution.geometry.d_l_d_phi))
+    )
+
+    assert solution.inputs.I2 == 0
+    assert solution.inputs.p2 != 0
+    assert abs(float(solution.iota)) > 0.4
+    assert torsion_rms > 0.5
+    assert np.ptp(plasma_norm) / np.mean(plasma_norm) > 0.1
+    assert np.max(np.abs(np.asarray(external.field - total.field))) > 1.0e-4
     assert np.max(np.abs(np.asarray(external.hessian - total.hessian))) > 1.0e-3
 
 

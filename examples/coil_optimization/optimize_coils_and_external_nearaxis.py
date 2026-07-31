@@ -20,15 +20,21 @@ from essos.field_jet import (
 from essos.fields import BiotSavart
 
 # Near-axis parameters and bounded single-stage variables:
-# (rc[1], zs[1], etabar, B2c, I2)
-INITIAL_NEAR_AXIS_VARIABLES = jnp.asarray([0.09, -0.09, 0.95, -0.7, 0.9])
-LOWER_NEAR_AXIS_BOUNDS = jnp.asarray([0.06, -0.12, 0.75, -1.0, 0.5])
-UPPER_NEAR_AXIS_BOUNDS = jnp.asarray([0.12, -0.06, 1.15, -0.3, 1.2])
-NFP = 2
-P2 = -600000.0
+# (rc[1], zs[1], etabar, B2c). I2 remains exactly zero.
+CONFIGURATION = "plasma_stellarator"
+BASE_RC = jnp.asarray([1.0, -0.5415884, 0.029195854, 0.0048646266])
+BASE_ZS = jnp.asarray([0.0, -0.57113713, 0.029922731, 0.0041398546])
+INITIAL_NEAR_AXIS_VARIABLES = jnp.asarray(
+    [-0.5415884, -0.57113713, 1.1396117, -0.050057083]
+)
+LOWER_NEAR_AXIS_BOUNDS = jnp.asarray([-0.57, -0.60, 0.95, -0.20])
+UPPER_NEAR_AXIS_BOUNDS = jnp.asarray([-0.51, -0.54, 1.30, 0.10])
+NFP = 4
+I2 = 0.0
+P2 = -28248.188
 NPHI = 15
-FORMAL_RADIUS = 0.05
-IOTA_TARGET = 0.8
+FORMAL_RADIUS = 0.15
+IOTA_TARGET = -2.8
 
 # Coil and objective parameters
 N_BASE_COILS = 2
@@ -68,13 +74,17 @@ initial_coils = Coils(
 initial_coil_vector, unravel_coils = ravel_pytree(initial_coils)
 number_coil_variables = initial_coil_vector.size
 initial_vector = jnp.concatenate((initial_coil_vector, INITIAL_NEAR_AXIS_VARIABLES))
+reference_configuration = qsc.get_configuration(CONFIGURATION)
+print("source:", reference_configuration.source_url)
 
 
 def solve_near_axis(variables):
-    rc1, zs1, etabar, B2c, I2 = variables
+    rc1, zs1, etabar, B2c = variables
+    rc = BASE_RC.at[1].set(rc1)
+    zs = BASE_ZS.at[1].set(zs1)
     return qsc.Qsc(
-        rc=jnp.stack((jnp.asarray(1.0), rc1)),
-        zs=jnp.stack((jnp.asarray(0.0), zs1)),
+        rc=rc,
+        zs=zs,
         nfp=NFP,
         etabar=etabar,
         I2=I2,
@@ -129,6 +139,8 @@ initial_target = near_axis_field_jet_target(
 print("initial objective:", initial_loss)
 print("initial iota:", float(initial_solution.iota))
 print("initial B20 residual:", float(initial_solution.B20_residual))
+assert initial_solution.inputs.I2 == 0
+assert initial_solution.inputs.p2 != 0
 
 start_time = perf_counter()
 for iteration in range(OPTIMIZATION_STEPS):
@@ -182,11 +194,24 @@ final_terms = np.asarray(field_jet_loss_terms(optimized_field, optimized_target)
 print("optimization seconds:", perf_counter() - start_time)
 print("final objective:", final_loss)
 print(
-    "final near-axis variables (rc1, zs1, etabar, B2c, I2):",
+    "final near-axis variables (rc1, zs1, etabar, B2c):",
     np.asarray(optimized_near_axis_variables),
 )
 print("final iota:", float(optimized_solution.iota))
 print("final B20 residual:", float(optimized_solution.B20_residual))
+optimized_torsion_rms = jnp.sqrt(
+    jnp.sum(optimized_solution.torsion**2 * optimized_solution.geometry.d_l_d_phi)
+    / jnp.sum(optimized_solution.geometry.d_l_d_phi)
+)
+assert optimized_solution.inputs.I2 == 0
+assert jnp.abs(optimized_solution.iota) > 0.4
+assert optimized_torsion_rms > 0.5
+print(
+    "final I2, p2:",
+    float(optimized_solution.inputs.I2),
+    float(optimized_solution.inputs.p2),
+)
+print("final RMS axis torsion:", float(optimized_torsion_rms))
 print("initial (B, grad-B, Hessian) terms:", initial_terms)
 print("final (B, grad-B, Hessian) terms:", final_terms)
 
@@ -232,15 +257,20 @@ figure.tight_layout()
 if SAVE_OUTPUT:
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     optimized_coils.to_json(OUTPUT_DIRECTORY / "optimized_coils.json")
+    optimized_rc = BASE_RC.at[1].set(optimized_near_axis_variables[0])
+    optimized_zs = BASE_ZS.at[1].set(optimized_near_axis_variables[1])
     near_axis_output = {
-        "rc": [1.0, float(optimized_near_axis_variables[0])],
-        "zs": [0.0, float(optimized_near_axis_variables[1])],
+        "rc": np.asarray(optimized_rc).tolist(),
+        "zs": np.asarray(optimized_zs).tolist(),
         "etabar": float(optimized_near_axis_variables[2]),
         "B2c": float(optimized_near_axis_variables[3]),
-        "I2": float(optimized_near_axis_variables[4]),
+        "I2": I2,
         "p2": P2,
         "iota": float(optimized_solution.iota),
+        "torsion_rms": float(optimized_torsion_rms),
         "formal_radius": FORMAL_RADIUS,
+        "source_database_id": reference_configuration.source_database_id,
+        "source_url": reference_configuration.source_url,
     }
     (OUTPUT_DIRECTORY / "optimized_near_axis.json").write_text(
         json.dumps(near_axis_output, indent=2) + "\n"

@@ -26,13 +26,18 @@ A vacuum target uses the total near-axis field:
    target = near_axis_field_jet_target(solution)
 
 For finite plasma pressure or current, provide the formal minor radius. ESSOS
-then matches coils to the external vacuum field, not to the total MHD field:
+then matches coils to the external vacuum field, not to the total MHD field.
+The user-facing finite-beta example is a pressure-only stellarator with
+nonzero torsion, not a finite-current tokamak-like channel:
 
 .. code-block:: python
 
+   solution = qsc.solve_configuration("plasma_stellarator", nphi=61)
+   assert solution.inputs.I2 == 0
+   assert solution.inputs.p2 != 0
    target = near_axis_field_jet_target(
        solution,
-       formal_radius=0.05,
+       formal_radius=0.15,
    )
 
 The radius fixes the asymptotic current/flux normalization; no finite-radius
@@ -74,3 +79,9 @@ The initial integration was developed against:
 
 These identifiers document the tested state and are not runtime dependency
 pins.
+
+The focused integration suite additionally checks that the pressure-only
+database case has ``|iota| > 0.4``, RMS torsion above
+``0.5 m^-1``, angle-dependent plasma field, zero enclosed current, and
+nonzero field/Hessian subtraction. Both direct optimization scripts are run
+from a clean working directory.

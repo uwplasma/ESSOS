@@ -157,9 +157,12 @@ gradient, and 7 Hessian components.
 The direct-script examples
 `examples/coil_optimization/optimize_coils_for_external_nearaxis.py` and
 `examples/coil_optimization/optimize_coils_and_external_nearaxis.py` show
-finite-beta stage-two and single-stage optimization, respectively. Parameters
-and output controls are defined at the top of each script; both report the
-three residual blocks and save coils, parameters, and a comparison figure.
+finite-beta stage-two and single-stage optimization, respectively. Both use
+the public database-backed `plasma_stellarator` case with finite pressure,
+exactly zero `I2`, `|iota| > 0.4`, and a nonplanar axis with nonzero torsion.
+Parameters and output controls are defined at the top of each script; both
+report the three residual blocks and save coils, parameters, and a comparison
+figure.
 
 ## Testing
 To run the tests, use `pytest`:

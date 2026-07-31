@@ -19,15 +19,9 @@ from essos.field_jet import (
 from essos.fields import BiotSavart
 
 # Near-axis parameters
-RC = [1.0, 0.09]
-ZS = [0.0, -0.09]
-NFP = 2
-ETABAR = 0.95
-I2 = 0.9
-P2 = -600000.0
-B2C = -0.7
+CONFIGURATION = "plasma_stellarator"
 NPHI = 15
-FORMAL_RADIUS = 0.05
+FORMAL_RADIUS = 0.15
 
 # Coil and optimization parameters
 N_BASE_COILS = 2
@@ -51,24 +45,27 @@ SAVE_OUTPUT = True
 SHOW_FIGURE = False
 OUTPUT_DIRECTORY = Path("examples/output_files/external_nearaxis_stage_two")
 
-print("Solving the fixed finite-pressure/current near-axis target...")
-solution = qsc.Qsc(
-    rc=RC,
-    zs=ZS,
-    nfp=NFP,
-    etabar=ETABAR,
-    I2=I2,
-    p2=P2,
-    B2c=B2C,
-    nphi=NPHI,
-    order="r2",
-)
+print("Solving the fixed pressure-only stellarator target...")
+configuration = qsc.get_configuration(CONFIGURATION)
+solution = configuration.solve(nphi=NPHI, order="r2")
+NFP = configuration.nfp
 target = near_axis_field_jet_target(
     solution,
     formal_radius=FORMAL_RADIUS,
     angular_resolution=64,
 )
+torsion_rms = jnp.sqrt(
+    jnp.sum(solution.torsion**2 * solution.geometry.d_l_d_phi)
+    / jnp.sum(solution.geometry.d_l_d_phi)
+)
+assert solution.inputs.I2 == 0
+assert solution.inputs.p2 != 0
+assert jnp.abs(solution.iota) > 0.4
+assert torsion_rms > 0.5
+print("source:", configuration.source_url)
 print("iota:", float(solution.iota))
+print("I2, p2:", float(solution.inputs.I2), float(solution.inputs.p2))
+print("RMS axis torsion:", float(torsion_rms))
 print(
     "external target shapes:",
     target.field.shape,
