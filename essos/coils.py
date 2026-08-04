@@ -1,10 +1,14 @@
-import jax
-jax.config.update("jax_enable_x64", True)
-import jax.numpy as jnp
-from jax.lax import fori_loop
-from jax import tree_util, jit, vmap
 from functools import partial
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax import jit, tree_util, vmap
+from jax.lax import fori_loop
+
 from .plot import fix_matplotlib_3d
+
+jax.config.update("jax_enable_x64", True)
 
 def compute_curvature(gammadash, gammadashdash):
     return jnp.linalg.norm(jnp.cross(gammadash, gammadashdash, axis=1), axis=1) / jnp.linalg.norm(gammadash, axis=1)**3
@@ -234,9 +238,9 @@ class Curves:
         Save the curves to a file
         """
         with open(filename, "a") as file:
-            file.write(f"nfp stellsym order\n")
+            file.write("nfp stellsym order\n")
             file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
-            file.write(f"Degrees of freedom\n")
+            file.write("Degrees of freedom\n")
             file.write(f"{repr(self.dofs.tolist())}\n")
             
     def to_simsopt(self):
@@ -285,10 +289,20 @@ class Curves:
             plt.show()
     
     def to_vtk(self, filename: str, close: bool = True, extra_data=None):
-        try: import numpy as np
-        except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
-        try: from pyevtk.hl import polyLinesToVTK
-        except ImportError: raise ImportError("The 'pyevtk' library is required. Please install it using 'pip install pyevtk'.")
+        try:
+            import numpy as np
+        except ImportError:
+            raise ImportError(
+                "The 'numpy' library is required. Please install it using "
+                "'pip install numpy'."
+            )
+        try:
+            from pyevtk.hl import polyLinesToVTK
+        except ImportError:
+            raise ImportError(
+                "The 'pyevtk' library is required. Please install it using "
+                "'pip install pyevtk'."
+            )
         def wrap(data):
             return jnp.concatenate([data, jnp.array([data[0]])])
         gammas = self.gamma
@@ -333,7 +347,12 @@ class Coils(Curves):
         currents = jnp.array(currents)
         assert jnp.size(currents) == jnp.size(curves.dofs, 0)
         super().__init__(curves.dofs, curves.n_segments, curves.nfp, curves.stellsym)
-        self._currents_scale = jnp.mean(jnp.abs(currents))
+        mean_absolute_current = jnp.mean(jnp.abs(currents))
+        self._currents_scale = jnp.where(
+            mean_absolute_current > 0,
+            mean_absolute_current,
+            jnp.asarray(1, dtype=currents.dtype),
+        )
         self._dofs_currents = currents/self._currents_scale
         self._currents = apply_symmetries_to_currents(self._dofs_currents*self._currents_scale, self.nfp, self.stellsym)
 
@@ -384,7 +403,6 @@ class Coils(Curves):
     @x.setter
     def x(self, new_dofs):
         old_dofs_curves = jnp.ravel(self.dofs)
-        old_dofs_currents = jnp.ravel(self.dofs_currents)
         new_dofs_curves = new_dofs[:old_dofs_curves.shape[0]]
         new_dofs_currents = new_dofs[old_dofs_curves.shape[0]:]
         self.dofs_curves = jnp.reshape(new_dofs_curves, (self.dofs_curves.shape))
@@ -393,6 +411,12 @@ class Coils(Curves):
     @property
     def currents(self):
         return self._currents
+
+    @property
+    def base_currents(self):
+        """Physical currents of the independent coils before symmetry expansion."""
+
+        return self._dofs_currents * self._currents_scale
 
     def __getitem__(self, key):
         if isinstance(key, int):
@@ -431,7 +455,10 @@ class Coils(Curves):
 
     
     def _tree_flatten(self):
-        children = (Curves(self.dofs, self.n_segments, self.nfp, self.stellsym), self._dofs_currents)  # arrays / dynamic values
+        children = (
+            Curves(self.dofs, self.n_segments, self.nfp, self.stellsym),
+            self.base_currents,
+        )  # arrays / dynamic values
         aux_data = {}  # static values
         return (children, aux_data)
 
@@ -440,13 +467,13 @@ class Coils(Curves):
         Save the coils to a file
         """
         with open(filename, "a") as file:
-            file.write(f"nfp stellsym order\n")
+            file.write("nfp stellsym order\n")
             file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
-            file.write(f"Degrees of freedom\n")
+            file.write("Degrees of freedom\n")
             file.write(f"{repr(self.dofs.tolist())}\n")
-            file.write(f"Currents degrees of freedom\n")
+            file.write("Currents degrees of freedom\n")
             file.write(f"{repr(self._dofs_currents.tolist())}\n")
-            file.write(f"Currents scaling factor\n")
+            file.write("Currents scaling factor\n")
             file.write(f"{self.currents_scale}\n")
             file.write(f"{text}\n")
     
@@ -470,6 +497,8 @@ class Coils(Curves):
             "n_segments": self.n_segments,
             "dofs_curves": self.dofs_curves.tolist(),
             "dofs_currents": self.dofs_currents.tolist(),
+            "currents_scale": float(self.currents_scale),
+            "base_currents": self.base_currents.tolist(),
         }
         import json
         with open(filename, "w") as file:
@@ -480,7 +509,40 @@ class Coils_from_json(Coils):
         import json
         with open(filename , "r") as file:
             data = json.load(file)
-        super().__init__(Curves(jnp.array(data["dofs_curves"]), data["n_segments"], data["nfp"], data["stellsym"]), data["dofs_currents"])
+        if "base_currents" in data:
+            base_currents = np.asarray(data["base_currents"])
+            if "currents_scale" in data and "dofs_currents" in data:
+                reconstructed = (
+                    np.asarray(data["dofs_currents"])
+                    * float(data["currents_scale"])
+                )
+                if reconstructed.shape != base_currents.shape or not np.allclose(
+                    reconstructed,
+                    base_currents,
+                    rtol=1.0e-12,
+                    atol=1.0e-12,
+                ):
+                    raise ValueError(
+                        "inconsistent current representations in coil JSON: "
+                        "base_currents != dofs_currents * currents_scale"
+                    )
+        elif "currents_scale" in data:
+            base_currents = jnp.asarray(data["dofs_currents"]) * float(
+                data["currents_scale"]
+            )
+        else:
+            # Legacy ESSOS assets stored physical currents directly in the
+            # field named ``dofs_currents``.
+            base_currents = data["dofs_currents"]
+        super().__init__(
+            Curves(
+                jnp.array(data["dofs_curves"]),
+                data["n_segments"],
+                data["nfp"],
+                data["stellsym"],
+            ),
+            base_currents,
+        )
 
 class Coils_from_simsopt(Coils):
     # This assumes coils have all nfp and stellsym symmetries
