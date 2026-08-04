@@ -1,26 +1,213 @@
-import jax
-jax.config.update("jax_enable_x64", True)
-from jax import vmap
-from essos.coils import compute_curvature
-import jax.numpy as jnp
+from dataclasses import dataclass
 from functools import partial
-from jax import jit, jacfwd, grad, vmap, tree_util, lax
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B,SurfaceClassifier
+from typing import Any
+
+import jax
+import jax.numpy as jnp
+from jax import grad, jacfwd, jit, lax, tree_util, vmap
+
+from essos.coils import compute_curvature
 from essos.plot import fix_matplotlib_3d
+from essos.surfaces import (
+    BdotN_over_B as BdotN_over_B,
+    SurfaceClassifier as SurfaceClassifier,
+    SurfaceRZFourier,
+)
 from essos.util import newton
 
-class BiotSavart():
+jax.config.update("jax_enable_x64", True)
+
+
+@jax.custom_jvp
+def _regularized_filament_terms(
+    gamma_dash: Any,
+    displacement: Any,
+    weights: Any,
+) -> Any:
+    """Return weighted filament terms with a finite numerical core."""
+
+    radius_squared = jnp.sum(displacement * displacement, axis=-1)
+    radius_floor = jnp.asarray(1.0e-30, dtype=radius_squared.dtype)
+    outside_core = radius_squared > radius_floor
+    safe_radius_squared = jnp.where(
+        outside_core,
+        radius_squared,
+        jnp.ones_like(radius_squared),
+    )
+    inverse_radius = jax.lax.rsqrt(safe_radius_squared)
+    unit_displacement = displacement * inverse_radius[..., None]
+    weighted_cross = jnp.cross(gamma_dash, unit_displacement) * weights
+    terms = weighted_cross * inverse_radius[..., None] * inverse_radius[..., None]
+    return jnp.where(outside_core[..., None], terms, jnp.zeros_like(terms))
+
+
+@_regularized_filament_terms.defjvp
+def _regularized_filament_terms_jvp(primals, tangents):
+    gamma_dash, displacement, weights = primals
+    gamma_dash_tangent, displacement_tangent, weights_tangent = tangents
+
+    radius_squared = jnp.sum(displacement * displacement, axis=-1)
+    radius_floor = jnp.asarray(1.0e-30, dtype=radius_squared.dtype)
+    outside_core = radius_squared > radius_floor
+    safe_radius_squared = jnp.where(
+        outside_core,
+        radius_squared,
+        jnp.ones_like(radius_squared),
+    )
+    inverse_radius = jax.lax.rsqrt(safe_radius_squared)
+    unit_displacement = displacement * inverse_radius[..., None]
+    radial_velocity = jnp.sum(
+        unit_displacement * displacement_tangent,
+        axis=-1,
+    )
+    unit_displacement_tangent = (
+        displacement_tangent - unit_displacement * radial_velocity[..., None]
+    ) * inverse_radius[..., None]
+    inverse_radius_tangent = -inverse_radius * inverse_radius * radial_velocity
+
+    cross = jnp.cross(gamma_dash, unit_displacement)
+    cross_tangent = jnp.cross(
+        gamma_dash_tangent,
+        unit_displacement,
+    ) + jnp.cross(gamma_dash, unit_displacement_tangent)
+    weighted_cross = cross * weights
+    weighted_cross_tangent = cross_tangent * weights + cross * weights_tangent
+    inverse_radius_squared = inverse_radius * inverse_radius
+    terms = weighted_cross * inverse_radius_squared[..., None]
+    radial_term = (
+        weighted_cross * (2 * inverse_radius)[..., None]
+    ) * inverse_radius_tangent[..., None]
+    terms_tangent = (
+        weighted_cross_tangent * inverse_radius_squared[..., None]
+        + radial_term
+    )
+    zero = jnp.zeros_like(terms)
+    return (
+        jnp.where(outside_core[..., None], terms, zero),
+        jnp.where(
+            outside_core[..., None],
+            terms_tangent,
+            jnp.zeros_like(terms_tangent),
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class FilamentaryBiotSavart:
+    """Differentiable filamentary magnetic field.
+
+    ``gamma`` and ``gamma_dash`` contain the points and periodic-parameter
+    derivatives of every physical filament. ``currents`` contains the matching
+    symmetry-expanded currents in amperes. All three arrays are JAX pytree
+    leaves, so both current and coil-shape derivatives remain visible when the
+    field crosses another JAX transformation boundary.
+    """
+
+    gamma: Any
+    gamma_dash: Any
+    currents: Any
+
+    @classmethod
+    def from_coils(cls, coils: Any) -> "FilamentaryBiotSavart":
+        """Create a field from an ESSOS coil collection."""
+
+        return cls(
+            gamma=jnp.asarray(coils.gamma),
+            gamma_dash=jnp.asarray(coils.gamma_dash),
+            currents=jnp.asarray(coils.currents),
+        )
+
+    def B(self, points: Any) -> Any:
+        """Return Cartesian ``(B_x, B_y, B_z)`` at points of shape ``(..., 3)``.
+
+        Samples with squared distance at or below ``1e-30 m^2`` contribute
+        zero. This numerical convention keeps transformed evaluations finite;
+        values inside that core should not be interpreted as the singular
+        physical filament field.
+        """
+
+        xyz = jnp.asarray(points)
+        gamma = jnp.asarray(self.gamma)
+        gamma_dash = jnp.asarray(self.gamma_dash)
+        currents = jnp.asarray(self.currents)
+        if xyz.ndim < 1 or xyz.shape[-1] != 3:
+            raise ValueError(f"points must have shape (..., 3), got {xyz.shape}")
+        if gamma.ndim != 3 or gamma.shape[-1] != 3:
+            raise ValueError(
+                f"gamma must have shape (n_coils, n_segments, 3), got {gamma.shape}"
+            )
+        if gamma_dash.shape != gamma.shape:
+            raise ValueError(
+                "gamma_dash must have the same shape as gamma, got "
+                f"{gamma_dash.shape} and {gamma.shape}"
+            )
+        if currents.shape != (gamma.shape[0],):
+            raise ValueError(
+                "currents must have one entry per physical coil, got "
+                f"{currents.shape} for {gamma.shape[0]} coils"
+            )
+
+        displacement = xyz[..., None, None, :] - gamma
+        point_ndim = xyz.ndim - 1
+        current_shape = (1,) * point_ndim + (-1, 1, 1)
+        weights = jnp.reshape(currents, current_shape) * (1.0e-7 / gamma.shape[-2])
+        terms = _regularized_filament_terms(
+            gamma_dash,
+            displacement,
+            weights,
+        )
+        return jnp.sum(terms, axis=(-3, -2))
+
+    def __call__(self, points: Any) -> Any:
+        """Alias for :meth:`B`."""
+
+        return self.B(points)
+
+    def b_cyl(self, r: Any, phi: Any, z: Any) -> tuple[Any, Any, Any]:
+        """Return cylindrical ``(B_R, B_phi, B_Z)`` at broadcastable points."""
+
+        rr, pp, zz = jnp.broadcast_arrays(
+            jnp.asarray(r),
+            jnp.asarray(phi),
+            jnp.asarray(z),
+        )
+        cos_phi = jnp.cos(pp)
+        sin_phi = jnp.sin(pp)
+        xyz = jnp.stack((rr * cos_phi, rr * sin_phi, zz), axis=-1)
+        bxyz = self.B(xyz)
+        br = cos_phi * bxyz[..., 0] + sin_phi * bxyz[..., 1]
+        bphi = -sin_phi * bxyz[..., 0] + cos_phi * bxyz[..., 1]
+        return br, bphi, bxyz[..., 2]
+
+
+tree_util.register_dataclass(
+    FilamentaryBiotSavart,
+    data_fields=["gamma", "gamma_dash", "currents"],
+    meta_fields=[],
+)
+
+
+class BiotSavart:
     def __init__(self, coils):
         self.coils = coils
         self.currents = coils.currents
         self.gamma = coils.gamma
         self.gamma_dash = coils.gamma_dash
         self.gamma_dashdash = coils.gamma_dashdash
-        self.coils_length=jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in self.gamma_dash])
-        self.coils_curvature= vmap(compute_curvature)(self.gamma_dash, coils.gamma_dashdash)        
-        self.r_axis=jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(self.coils.dofs_curves)))
-        self.z_axis=jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
-
+        self.coils_length = jnp.array(
+            [jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in self.gamma_dash]
+        )
+        self.coils_curvature = vmap(compute_curvature)(
+            self.gamma_dash, coils.gamma_dashdash
+        )
+        self.r_axis = jnp.mean(
+            jnp.sqrt(
+                vmap(lambda dofs: dofs[0, 0] ** 2 + dofs[1, 0] ** 2)(
+                    self.coils.dofs_curves
+                )
+            )
+        )
+        self.z_axis = jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
 
     @partial(jit, static_argnames=['self'])
     def sqrtg(self, points):
@@ -904,10 +1091,20 @@ class near_axis():
             plt.show()
             
     def to_vtk(self, filename, r=0.1, ntheta=40, nphi=120, ntheta_fourier=20, extra_data=None, field=None):
-        try: import numpy as np
-        except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
-        try: from pyevtk.hl import gridToVTK
-        except ImportError: raise ImportError("The 'pyevtk' library is required. Please install it using 'pip install pyevtk'.")
+        try:
+            import numpy as np
+        except ImportError:
+            raise ImportError(
+                "The 'numpy' library is required. Please install it using "
+                "'pip install numpy'."
+            )
+        try:
+            from pyevtk.hl import gridToVTK
+        except ImportError:
+            raise ImportError(
+                "The 'pyevtk' library is required. Please install it using "
+                "'pip install pyevtk'."
+            )
         x, y, z, _ = self.get_boundary(r=r, ntheta=ntheta, nphi=nphi, ntheta_fourier=ntheta_fourier)
         x = np.array(x.T.reshape((1, nphi, ntheta)).copy())
         y = np.array(y.T.reshape((1, nphi, ntheta)).copy())
