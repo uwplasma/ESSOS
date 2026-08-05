@@ -198,12 +198,15 @@ print(f"fB (loaded FAMUS solution, reference only -- we start from empty) = {fB_
 def combined_loss_fn(pho, wD, G, Bn_fix, area_w, fB_ref, vc, Vt, wVT):
     f32 = jnp.float32
     bn = pho @ G.T + Bn_fix
-    fB = (f32(0.5) * jnp.sum(area_w * bn * bn)) / fB_ref
+    fB_raw = f32(0.5) * jnp.sum(area_w * bn * bn)
+    fB = fB_raw / fB_ref
     abs_p = jnp.sqrt(pho * pho + f32(1e-7))
     fD = jnp.sum(abs_p * (f32(1.0) - abs_p))
     fV = vc * jnp.sum(abs_p)
     fVT = jnp.where(Vt > f32(0), jnp.maximum(fV - Vt, f32(0)), f32(0))
-    return fB + wD * fD + wVT * fVT
+    loss = fB + wD * fD + wVT * fVT
+
+    return loss, (fB_raw, fV, fD)
 
 
 total_loss = custom_loss(
@@ -211,6 +214,21 @@ total_loss = custom_loss(
     G=G_jax, Bn_fix=Bn_jax, area_w=aw_jax, fB_ref=fB_ref,
     vc=vc_jax, Vt=Vt_jax, wVT=wVT_jax,
 )
+
+# combined_loss_fn returns (loss, aux) -- use total_loss.value_and_grad_pytree with has_aux=True 
+
+def loss_and_metrics(pho, wD):
+    (loss_val, aux), grad_dict = total_loss.value_and_grad_pytree(
+        {"pho": pho, "wD": wD}, has_aux=True
+    )
+    return loss_val, grad_dict["pho"], aux
+
+
+def loss_and_metrics(pho, wD):
+    (loss_val, aux), grad_dict = total_loss.value_and_grad_pytree(
+        {"pho": pho, "wD": wD}, has_aux=True
+    )
+    return loss_val, grad_dict["pho"], aux
 
 # pho = 0
 pho = jnp.zeros(n_magnets, f32)
@@ -254,10 +272,7 @@ def compute_metrics(pho):
 
 print("Compiling first step...")
 lr0, wd0 = get_lr_and_wd(1)
-total_loss.dependencies = {"pho": pho, "wD": f32(wd0)}
-dofs = total_loss.starting_dofs
-val, grad_flat = total_loss.value_and_grad(dofs)
-grad_pho = grad_flat[:n_magnets]
+val, grad_pho, aux0 = loss_and_metrics(pho, f32(wd0))
 mom = b1*mom + (1-b1)*grad_pho
 var = b2*var + (1-b2)*grad_pho*grad_pho
 pho = jnp.clip(pho - f32(lr0) * mom / (jnp.sqrt(var) + eps), -1, 1)
@@ -267,16 +282,13 @@ print("JIT compiled.")
 
 for step in range(2, TOTAL_STEPS + 1):
     lr, wD = get_lr_and_wd(step)
-    total_loss.dependencies = {"pho": pho, "wD": f32(wD)}
-    dofs = total_loss.starting_dofs
-    val, grad_flat = total_loss.value_and_grad(dofs)
-    grad_pho = grad_flat[:n_magnets]
+    val, grad_pho, aux = loss_and_metrics(pho, f32(wD))
     mom = b1*mom + (1-b1)*grad_pho
     var = b2*var + (1-b2)*grad_pho*grad_pho
     pho = jnp.clip(pho - f32(lr) * mom / (jnp.sqrt(var) + eps), -1, 1)
     pho = jnp.where(exclude_mask_jax, f32(0.0), pho)
 
-    fB_now, fV_now, fD_now = compute_metrics(pho)
+    fB_now, fV_now, fD_now = float(aux[0]), float(aux[1]), float(aux[2])
     hist_fB.append(fB_now); hist_fV.append(fV_now); hist_fD.append(fD_now)
 
     if step % LOG_INTERVAL == 0 or step == TOTAL_STEPS:

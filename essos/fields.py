@@ -876,12 +876,30 @@ class DipoleField_old:
 
     @partial(jit, static_argnames=['self'])
     def B(self, eval_points, chunk_size=512):
-        """Magnetic field at eval_points (with caching)."""
-        if not hasattr(self, '_last_field') or self._last_field is None or eval_points.shape[0] != self._last_eval_points.shape[0]:
+        """Magnetic field at eval_points (with caching).
+
+        BUG FIX: a single point has shape (3,), where shape[0]==3 was
+        being misread as "3 points" by the caching/shape-comparison
+        logic below (which assumes eval_points is always a batch of
+        shape (n_points, 3)). This both computed the WRONG field (the
+        3 components got treated as 3 separate 1D points, producing a
+        (3,3) output instead of a (3,) field vector) and could return
+        a STALE cached result whenever two different calls happened to
+        share the same shape[0]. Single points are now explicitly
+        reshaped to (1,3), computed, and squeezed back to (3,)."""
+        is_single_point = eval_points.ndim == 1 and eval_points.shape[0] == 3
+        query_points = eval_points.reshape(1, 3) if is_single_point else eval_points
+
+        if (not hasattr(self, '_last_field') or self._last_field is None
+                or self._last_eval_points is None
+                or query_points.shape[0] != self._last_eval_points.shape[0]
+                or not jnp.array_equal(query_points, self._last_eval_points)):
             with jax.ensure_compile_time_eval():
-                self._last_field = self._compute_field(eval_points)
-                self._last_eval_points = eval_points
-        return self._last_field
+                self._last_field = self._compute_field(query_points)
+                self._last_eval_points = query_points
+
+        result = self._last_field
+        return result[0] if is_single_point else result
     
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, eval_points):
@@ -1119,12 +1137,30 @@ class DipoleField:
 
     @partial(jit, static_argnames=['self'])
     def B(self, eval_points, chunk_size=512):
-        """Magnetic field at eval_points (with caching)."""
-        if not hasattr(self, '_last_field') or self._last_field is None or eval_points.shape[0] != self._last_eval_points.shape[0]:
+        """Magnetic field at eval_points (with caching).
+
+        BUG FIX: a single point has shape (3,), where shape[0]==3 was
+        being misread as "3 points" by the caching/shape-comparison
+        logic below (which assumes eval_points is always a batch of
+        shape (n_points, 3)). This both computed the WRONG field (the
+        3 components got treated as 3 separate 1D points, producing a
+        (3,3) output instead of a (3,) field vector) and could return
+        a STALE cached result whenever two different calls happened to
+        share the same shape[0]. Single points are now explicitly
+        reshaped to (1,3), computed, and squeezed back to (3,)."""
+        is_single_point = eval_points.ndim == 1 and eval_points.shape[0] == 3
+        query_points = eval_points.reshape(1, 3) if is_single_point else eval_points
+
+        if (not hasattr(self, '_last_field') or self._last_field is None
+                or self._last_eval_points is None
+                or query_points.shape[0] != self._last_eval_points.shape[0]
+                or not jnp.array_equal(query_points, self._last_eval_points)):
             with jax.ensure_compile_time_eval():
-                self._last_field = self._compute_field(eval_points)
-                self._last_eval_points = eval_points
-        return self._last_field
+                self._last_field = self._compute_field(query_points)
+                self._last_eval_points = query_points
+
+        result = self._last_field
+        return result[0] if is_single_point else result
     
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, eval_points):

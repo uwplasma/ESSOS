@@ -131,7 +131,55 @@ class custom_loss(base_loss):
             argnums=tuple(range(len(args))),
         )(*args, **self.kwargs)
         return value, ravel_pytree(gradient)[0]
-    
+
+    @partial(jit, static_argnames=['self', 'has_aux'])
+    def value_and_grad_direct(self, *dynamic_args, has_aux: bool = False):
+        """Fast path for repeated calls in a hot loop (e.g. a custom
+        optimizer step), bypassing the dependencies dict / starting_dofs
+        flatten-unflatten machinery entirely.
+
+        Set has_aux=True if `fun` returns (loss_value, aux_data) -- e.g.
+        auxiliary metrics that share expensive intermediate computation
+        (like a matmul) with the loss itself, so a caller can recover
+        those metrics from the SAME forward pass already computing the
+        gradient, instead of a separate, redundant call.
+
+        Example:
+            loss = custom_loss(my_fun, "pho", "wD", G=G, ...)
+            val, grad_pho = loss.value_and_grad_direct(pho, wD)
+            # with has_aux=True, my_fun returns (loss, aux):
+            (val, aux), grad_pho = loss.value_and_grad_direct(pho, wD, has_aux=True)
+        """
+        value_and_aux, gradient = jax_value_and_grad(
+            self.fun,
+            argnums=tuple(range(len(dynamic_args))),
+            has_aux=has_aux,
+        )(*dynamic_args, **self.kwargs)
+        return value_and_aux, gradient
+
+    @partial(jit, static_argnames=['self', 'has_aux'])
+    def value_and_grad_pytree(self, dynamic_args_dict: dict, has_aux: bool = False):
+        """Fast path taking dynamic arguments as a single pytree (dict)
+        keyed by name, matching args_names, instead of separate positional
+        arguments (see value_and_grad_direct) or a flattened dofs vector
+        (see value_and_grad). Returns the gradient as a matching dict.
+
+        Set has_aux=True if `fun` returns (loss_value, aux_data) -- see
+        value_and_grad_direct's docstring for why this matters for
+        avoiding redundant computation when also logging metrics that
+        share intermediate work with the loss.
+
+        Example:
+            val, grad_dict = loss.value_and_grad_pytree({"pho": pho, "wD": wD})
+            grad_pho = grad_dict["pho"]
+            # with has_aux=True:
+            (val, aux), grad_dict = loss.value_and_grad_pytree({...}, has_aux=True)
+        """
+        def fun_from_dict(d):
+            args = tuple(d[name] for name in self.args_names)
+            return self.fun(*args, **self.kwargs)
+        return jax_value_and_grad(fun_from_dict, has_aux=has_aux)(dynamic_args_dict)
+
     @partial(jit, static_argnames=['self'])
     def grad_pytree(self, dofs_pytree) -> dict:
         if isinstance(dofs_pytree, dict):

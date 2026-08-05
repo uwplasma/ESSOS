@@ -576,7 +576,13 @@ class Tracing():
             self.args = self.field
         
         if self.times_to_trace is None:
-            self.times = jnp.linspace(0, self.maxtime, 100,endpoint=True)
+            # BUG FIX: self.times_to_trace was never updated to match the
+            # hardcoded default of 100 used to build self.times -- it
+            # stayed None, causing a crash later wherever code (correctly)
+            # assumes self.times_to_trace holds the actual number of trace
+            # points (e.g. jnp.ones((n_particles, self.times_to_trace))).
+            self.times_to_trace = 100
+            self.times = jnp.linspace(0, self.maxtime, self.times_to_trace, endpoint=True)
         else:
             self.times = jnp.linspace(0, self.maxtime, self.times_to_trace,endpoint=True)
 
