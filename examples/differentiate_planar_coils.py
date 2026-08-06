@@ -72,6 +72,7 @@ def main() -> None:
     )
 
     curves = builder.rebuild_curves(parameters)
+    rebuilt_planar_coils = builder.rebuild_planar_coils(parameters)
     centers_at_parameters = builder.centers_at(parameters)
     normals = builder.normals_at(parameters)
     base_gamma = curves.gamma[: planar_curves.n_base_curves]
@@ -83,6 +84,8 @@ def main() -> None:
     max_planarity_residual = float(jnp.max(jnp.abs(planarity_residual)))
     if max_planarity_residual > 1.0e-12:
         raise ValueError("planarity invariant was not preserved")
+    if not np.allclose(rebuilt_planar_coils.gamma, curves.gamma, atol=5.0e-15):
+        raise ValueError("native planar rebuild changed the physical geometry")
     if not np.all(np.isfinite(np.asarray(tangent))):
         raise ValueError("planar field JVP is non-finite")
 

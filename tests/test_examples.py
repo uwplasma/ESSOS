@@ -86,6 +86,7 @@ def test_differentiate_planar_coils_example_covers_the_public_api():
     for method in (
         "from_polar_radius",
         "rebuild_curves",
+        "rebuild_planar_coils",
         "centers_at",
         "normals_at",
     ):
@@ -115,3 +116,34 @@ def test_differentiate_planar_coils_example(tmp_path):
     assert "planar field JVP [T]:" in result.stdout
     assert "max planarity residual [m]:" in result.stdout
     assert "polar compatibility XY order: 1" in result.stdout
+
+
+def test_optimize_planar_coils_example_covers_the_public_api():
+    source = (REPO / "examples" / "optimize_planar_coils_bdotn.py").read_text()
+    for symbol in (
+        "PlanarCoils",
+        "PlanarXYCurves",
+        "make_planar_coil_design_field_builder",
+        "optimize_planar_residual",
+    ):
+        assert symbol in source
+    assert "optimized_coils" in source
+
+
+def test_optimize_planar_coils_example(tmp_path):
+    environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run(
+        [sys.executable, str(REPO / "examples" / "optimize_planar_coils_bdotn.py")],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "optimizer success: True" in result.stdout
+    assert "initial objective:" in result.stdout
+    assert "final objective:" in result.stdout
+    assert "optimized parameters: [0.12 0.03]" in result.stdout
+    assert "max planarity residual [m]: 0.000000e+00" in result.stdout

@@ -184,6 +184,10 @@ The public coil-design entry points are:
   center, and orientation charts; and
 - `make_shape_field_builder`, for shape-only charts.
 
+`optimize_planar_residual` is the corresponding JAX-Jacobian/SciPy bridge for
+least-squares optimization on a `PlanarCoilDesignFieldBuilder`. It returns both
+native `PlanarCoils` and SciPy's complete convergence result.
+
 Each `current_groups` entry is an independent base-coil index and controls its
 complete symmetry-expanded physical coil group. A `shape_dofs` entry is
 `(base_coil, xyz_component, Fourier_index)` and its additive parameter is in
@@ -253,7 +257,7 @@ A trusted SIMSOPT JSON file can initialize either planar or ordinary XYZ
 ESSOS coils through one lazy optional-dependency entry point:
 
 ```python
-from essos.planar_coils import load_simsopt_coils_json
+from essos.io import load_simsopt_coils_json
 
 coils = load_simsopt_coils_json(
     "simsopt_biot_savart.json",
@@ -271,19 +275,47 @@ loader returns `PlanarCoils` only when every base curve is planar; exact XYZ
 Fourier input returns ordinary `Coils`. SIMSOPT is imported only when this
 loader is called, and its decoder should be used only with trusted JSON files.
 
-`PlanarCoils.to_json` writes a versioned `planar_xy_fourier` representation;
-`load_coils_json` loads it while continuing to accept existing untagged XYZ
-coil JSON. Run the artifact-free end-to-end example with:
+`PlanarCoils.to_json` writes a versioned `planar_xy_fourier` representation.
+The canonical `essos.io.load_coils_json` entry point loads it while continuing
+to accept existing untagged XYZ coil JSON. `Coils_from_json` remains available
+for legacy XYZ-only workflows. Run the artifact-free differentiation example
+with:
 
 ```sh
 python examples/differentiate_planar_coils.py
 ```
+
+Run a complete normal-field least-squares optimization, including native
+planar reconstruction and a falling-objective check, with:
+
+```sh
+python examples/optimize_planar_coils_bdotn.py
+```
+
+The optimization pattern is deliberately explicit:
+
+```python
+from essos.optimization import optimize_planar_residual
+
+def residual(parameters):
+    field = builder(parameters)
+    return field.B(probe_points) @ probe_normal - target_BdotN
+
+optimized_coils, result = optimize_planar_residual(residual, builder)
+```
+
+Use `builder.rebuild_coils(parameters)` when an older API requires ordinary
+XYZ `Coils`, and `builder.rebuild_planar_coils(parameters)` when the optimized
+plane coordinates and planar JSON representation must be preserved.
 
 `FilamentaryBiotSavart` stores filament points, tangents, and physical currents
 as JAX pytree leaves. This keeps current and shape derivatives visible across
 JIT, JVP/VJP, and external implicit-differentiation boundaries. Its filament
 singularity is numerically regularized only to keep transformed evaluations
 finite; points on a filament do not represent a physical finite field.
+It also implements the Cartesian field methods used by ESSOS field-line,
+guiding-center, full-orbit, and field-derivative consumers, including `AbsB`,
+spatial derivatives, curls, curvature, and `to_xyz`.
 
 Coil JSON written by current ESSOS versions stores physical `base_currents`
 alongside normalized `dofs_currents` and `currents_scale`, and the loader rejects
