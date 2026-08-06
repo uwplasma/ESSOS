@@ -237,6 +237,56 @@ def _rotation_matrix_from_vector(rotation_vector: Any) -> Any:
     )
 
 
+def _quaternion_from_rotation_vector(rotation_vector: Any) -> Any:
+    """Return a scalar-first rotation quaternion with a regular zero limit."""
+
+    omega = jnp.asarray(rotation_vector)
+    squared_angle = jnp.dot(omega, omega)
+    safe_squared_angle = jnp.where(squared_angle > 0, squared_angle, 1)
+    safe_angle = jnp.sqrt(safe_squared_angle)
+    exact_vector_scale = jnp.sin(0.5 * safe_angle) / safe_angle
+    s = squared_angle
+    series_vector_scale = 0.5 - s / 48 + s**2 / 3840 - s**3 / 645120
+    use_series = squared_angle < jnp.asarray(1.0e-8, dtype=omega.dtype)
+    vector_scale = jnp.where(use_series, series_vector_scale, exact_vector_scale)
+    scalar = jnp.where(
+        use_series,
+        1 - s / 8 + s**2 / 384 - s**3 / 46080,
+        jnp.cos(0.5 * safe_angle),
+    )
+    return jnp.concatenate((jnp.reshape(scalar, (1,)), vector_scale * omega))
+
+
+def _multiply_quaternions(left: Any, right: Any) -> Any:
+    """Compose scalar-first active rotation quaternions as ``left @ right``."""
+
+    left = jnp.asarray(left)
+    right = jnp.asarray(right)
+    left_scalar, left_vector = left[0], left[1:]
+    right_scalar, right_vector = right[0], right[1:]
+    scalar = left_scalar * right_scalar - jnp.dot(left_vector, right_vector)
+    vector = (
+        left_scalar * right_vector
+        + right_scalar * left_vector
+        + jnp.cross(left_vector, right_vector)
+    )
+    return jnp.concatenate((jnp.reshape(scalar, (1,)), vector))
+
+
+def _quaternions_from_frames(frames: np.ndarray) -> np.ndarray:
+    """Convert host-side orthonormal XY frames to scalar-first quaternions."""
+
+    from scipy.spatial.transform import Rotation
+
+    normals = np.cross(frames[..., 0], frames[..., 1])
+    rotation_matrices = np.stack(
+        (frames[..., 0], frames[..., 1], normals),
+        axis=-1,
+    )
+    xyzw = Rotation.from_matrix(rotation_matrices).as_quat()
+    return np.concatenate((xyzw[..., 3:4], xyzw[..., :3]), axis=-1)
+
+
 def _static_coil_metadata(coils: Any, n_segments: Any) -> tuple[int, int, bool]:
     segments_raw = coils.n_segments if n_segments is None else n_segments
     if isinstance(segments_raw, (bool, np.bool_)):
@@ -409,6 +459,7 @@ class PlanarCoilDesignFieldBuilder:
 
     nominal_centers: Any
     nominal_frames: Any
+    nominal_quaternions: Any
     nominal_local_dofs: Any
     nominal_base_currents: Any
     nominal_expanded_currents: Any
@@ -516,6 +567,17 @@ class PlanarCoilDesignFieldBuilder:
         )
         return jnp.einsum("nij,nja->nia", rotation_matrices, self.nominal_frames)
 
+    def quaternions_at(self, parameters: Any) -> Any:
+        """Return scalar-first local-to-global orientation quaternions."""
+
+        increments = jax.vmap(_quaternion_from_rotation_vector)(
+            self.orientation_vectors_at(parameters)
+        )
+        return jax.vmap(_multiply_quaternions)(
+            increments,
+            self.nominal_quaternions,
+        )
+
     def normals_at(self, parameters: Any) -> Any:
         """Return unit plane normals of the independent coils."""
 
@@ -564,6 +626,21 @@ class PlanarCoilDesignFieldBuilder:
         """Rebuild ordinary ESSOS coils at ``parameters``."""
 
         return Coils(self.rebuild_curves(parameters), self.base_currents_at(parameters))
+
+    def rebuild_planar_coils(self, parameters: Any):
+        """Rebuild native planar coils without lowering to unrestricted XYZ DOFs."""
+
+        from essos.planar_coils import PlanarCoils, PlanarXYCurves
+
+        curves = PlanarXYCurves(
+            centers=self.centers_at(parameters),
+            quaternions=self.quaternions_at(parameters),
+            xy_dofs=self.local_dofs_at(parameters)[..., 1:],
+            n_segments=self.n_segments,
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+        )
+        return PlanarCoils(curves, self.base_currents_at(parameters))
 
     def __call__(self, parameters: Any) -> FilamentaryBiotSavart:
         """Return the filamentary field while retaining all design derivatives."""
@@ -839,6 +916,7 @@ def make_planar_coil_design_field_builder(
     ``orientation_dofs`` use ``(base_coil, xyz_component)``.
     """
 
+    nominal_quaternions = None
     if not isinstance(coils, Coils):
         from essos.planar_coils import PlanarCoils
 
@@ -848,6 +926,7 @@ def make_planar_coil_design_field_builder(
             )
         if plane_frames is None:
             plane_frames = coils.frames
+            nominal_quaternions = np.asarray(coils.quaternions)
         coils = coils.as_coils()
     elif plane_frames is None:
         raise ValueError("plane_frames is required for an ordinary Coils input")
@@ -894,6 +973,8 @@ def make_planar_coil_design_field_builder(
             "plane_frames must be orthonormal; maximum Gram-matrix error is "
             f"{frame_error:.6e}, tolerance {checked_frame_atol:.6e}"
         )
+    if nominal_quaternions is None:
+        nominal_quaternions = _quaternions_from_frames(frames)
 
     centers = dofs[:, :, 0].copy()
     relative_dofs = dofs.copy()
@@ -973,6 +1054,7 @@ def make_planar_coil_design_field_builder(
     return PlanarCoilDesignFieldBuilder(
         nominal_centers=jnp.asarray(centers),
         nominal_frames=jnp.asarray(frames),
+        nominal_quaternions=jnp.asarray(nominal_quaternions),
         nominal_local_dofs=jnp.asarray(local_dofs),
         nominal_base_currents=jnp.asarray(base_currents),
         nominal_expanded_currents=nominal_expanded,

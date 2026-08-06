@@ -302,12 +302,24 @@ def test_planar_builder_zero_matches_nominal_and_exposes_parameter_blocks():
     zero = jnp.zeros(builder.parameter_shape)
     rebuilt_curves = builder.rebuild_curves(zero)
     rebuilt_coils = builder.rebuild_coils(zero)
+    rebuilt_planar_coils = builder.rebuild_planar_coils(zero)
     field = builder(zero)
     assert isinstance(rebuilt_curves, Curves)
     assert isinstance(rebuilt_coils, Coils)
+    assert isinstance(rebuilt_planar_coils, PlanarCoils)
     assert isinstance(field, FilamentaryBiotSavart)
     np.testing.assert_allclose(rebuilt_curves.dofs, coils.dofs_curves, atol=2.0e-15)
     np.testing.assert_allclose(rebuilt_coils.base_currents, coils.base_currents)
+    np.testing.assert_allclose(rebuilt_planar_coils.centers, planar.centers)
+    np.testing.assert_allclose(
+        rebuilt_planar_coils.quaternions,
+        planar.quaternions,
+    )
+    np.testing.assert_allclose(rebuilt_planar_coils.xy_dofs, planar.xy_dofs)
+    np.testing.assert_allclose(
+        rebuilt_planar_coils.base_currents,
+        coils.base_currents,
+    )
     np.testing.assert_allclose(field.gamma, coils.gamma, atol=5.0e-15)
     np.testing.assert_allclose(field.currents, coils.currents)
 
@@ -347,12 +359,23 @@ def test_planar_builder_preserves_the_moving_plane_for_finite_steps_and_jvps():
     )
     parameters = jnp.asarray([0.018, -0.012, 0.04, -0.03, 0.21, -0.17])
     curves = builder.rebuild_curves(parameters)
+    planar_coils = builder.rebuild_planar_coils(parameters)
     frames = builder.frames_at(parameters)
     centers = builder.centers_at(parameters)
     normals = jnp.cross(frames[..., 0], frames[..., 1])
     base_gamma = curves.gamma[: planar.n_base_curves]
     residual = jnp.einsum("nc,nsc->ns", normals, base_gamma - centers[:, None, :])
     np.testing.assert_allclose(residual, 0.0, atol=2.0e-15)
+    np.testing.assert_allclose(planar_coils.gamma, curves.gamma, atol=3.0e-15)
+    np.testing.assert_allclose(
+        planar_coils.base_currents,
+        builder.base_currents_at(parameters),
+    )
+
+    compiled_gamma = jax.jit(
+        lambda values: builder.rebuild_planar_coils(values).gamma
+    )(parameters)
+    np.testing.assert_allclose(compiled_gamma, curves.gamma, atol=3.0e-15)
 
     for physical_gamma in np.asarray(curves.gamma):
         centered = physical_gamma - np.mean(physical_gamma, axis=0, keepdims=True)
@@ -430,6 +453,20 @@ def test_planar_builder_uses_native_xy_coefficient_indices():
     ):
         expected[base_coil, local_axis, xy_index + 1] += float(value)
     np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+
+
+def test_planar_native_rebuild_respects_an_explicit_in_plane_frame():
+    planar, coils = _planar_coils(stellsym=False)
+    frames = np.asarray(planar.rotation_matrices[..., :2]).copy()
+    rotated_frames = np.stack((frames[..., 1], -frames[..., 0]), axis=-1)
+    builder = make_planar_coil_design_field_builder(
+        PlanarCoils(planar, coils.base_currents),
+        plane_frames=rotated_frames,
+    )
+
+    rebuilt = builder.rebuild_planar_coils(jnp.zeros(builder.parameter_shape))
+    np.testing.assert_allclose(rebuilt.gamma, coils.gamma, atol=4.0e-15)
+    np.testing.assert_allclose(rebuilt.frames, rotated_frames, atol=3.0e-15)
 
 
 def test_planar_builder_rejects_invalid_frames_planarity_and_coordinates():
