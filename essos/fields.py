@@ -92,8 +92,105 @@ def _regularized_filament_terms_jvp(primals, tangents):
     )
 
 
-@dataclass(frozen=True)
-class FilamentaryBiotSavart:
+class _CartesianFieldOperators:
+    """Cartesian field operations derived from a differentiable ``B`` method.
+
+    ESSOS tracing and objective functions use this small method contract for
+    fields expressed in Cartesian coordinates.  Concrete fields only need to
+    provide ``B(points)``; JAX supplies the spatial derivatives below.
+    """
+
+    def sqrtg(self, points: Any) -> Any:
+        """Return the Cartesian-coordinate Jacobian determinant."""
+
+        del points
+        return jnp.asarray(1.0)
+
+    def B_covariant(self, points: Any) -> Any:
+        """Return Cartesian covariant components of the magnetic field."""
+
+        return self.B(points)
+
+    def B_contravariant(self, points: Any) -> Any:
+        """Return Cartesian contravariant components of the magnetic field."""
+
+        return self.B(points)
+
+    def AbsB(self, points: Any) -> Any:
+        """Return the magnetic-field magnitude."""
+
+        return jnp.linalg.norm(self.B(points), axis=-1)
+
+    def dB_by_dX(self, points: Any) -> Any:
+        """Return the Cartesian field Jacobian at one point."""
+
+        xyz = jnp.asarray(points)
+        if xyz.shape != (3,):
+            raise ValueError(
+                "spatial field derivatives require one point with shape (3,), "
+                f"got {xyz.shape}"
+            )
+        return jacfwd(self.B)(xyz)
+
+    def dAbsB_by_dX(self, points: Any) -> Any:
+        """Return the Cartesian gradient of the field magnitude."""
+
+        xyz = jnp.asarray(points)
+        if xyz.shape != (3,):
+            raise ValueError(
+                "spatial field derivatives require one point with shape (3,), "
+                f"got {xyz.shape}"
+            )
+        return grad(self.AbsB)(xyz)
+
+    def grad_B_covariant(self, points: Any) -> Any:
+        """Return the Cartesian covariant-field Jacobian at one point."""
+
+        xyz = jnp.asarray(points)
+        if xyz.shape != (3,):
+            raise ValueError(
+                "spatial field derivatives require one point with shape (3,), "
+                f"got {xyz.shape}"
+            )
+        return jacfwd(self.B_covariant)(xyz)
+
+    def curl_B(self, points: Any) -> Any:
+        """Return the Cartesian curl of the magnetic field."""
+
+        gradient = self.grad_B_covariant(points)
+        return jnp.stack(
+            (
+                gradient[2, 1] - gradient[1, 2],
+                gradient[0, 2] - gradient[2, 0],
+                gradient[1, 0] - gradient[0, 1],
+            )
+        ) / self.sqrtg(points)
+
+    def curl_b(self, points: Any) -> Any:
+        """Return the Cartesian curl of the unit field vector."""
+
+        magnitude = self.AbsB(points)
+        return self.curl_B(points) / magnitude + jnp.cross(
+            self.B_covariant(points), self.dAbsB_by_dX(points)
+        ) / (magnitude * magnitude * self.sqrtg(points))
+
+    def kappa(self, points: Any) -> Any:
+        """Return magnetic-field-line curvature in Cartesian coordinates."""
+
+        return (
+            -jnp.cross(self.B_contravariant(points), self.curl_b(points))
+            * self.sqrtg(points)
+            / self.AbsB(points)
+        )
+
+    def to_xyz(self, points: Any) -> Any:
+        """Return Cartesian coordinates unchanged."""
+
+        return points
+
+
+@dataclass(frozen=True, eq=False)
+class FilamentaryBiotSavart(_CartesianFieldOperators):
     """Differentiable filamentary magnetic field.
 
     ``gamma`` and ``gamma_dash`` contain the points and periodic-parameter

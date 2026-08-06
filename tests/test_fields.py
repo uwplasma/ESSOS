@@ -55,6 +55,60 @@ def test_filamentary_biot_savart_matches_legacy_cartesian_field():
     np.testing.assert_allclose(field(points), expected, rtol=2.0e-15, atol=2.0e-15)
 
 
+def test_filamentary_biot_savart_implements_the_cartesian_field_contract():
+    coils = _coils()
+    legacy = BiotSavart(coils)
+    field = FilamentaryBiotSavart.from_coils(coils)
+    point = jnp.asarray([0.82, 0.11, -0.06])
+
+    for method_name in (
+        "B_covariant",
+        "B_contravariant",
+        "AbsB",
+        "dB_by_dX",
+        "dAbsB_by_dX",
+        "grad_B_covariant",
+        "curl_B",
+        "curl_b",
+        "kappa",
+    ):
+        actual = getattr(field, method_name)(point)
+        expected = getattr(legacy, method_name)(point)
+        np.testing.assert_allclose(actual, expected, rtol=2.0e-11, atol=2.0e-12)
+
+    np.testing.assert_allclose(field.sqrtg(point), legacy.sqrtg(point))
+    np.testing.assert_array_equal(field.to_xyz(point), point)
+    compiled = jax.jit(lambda candidate, xyz: candidate.kappa(xyz))(field, point)
+    np.testing.assert_allclose(compiled, field.kappa(point), rtol=2.0e-13)
+
+
+def test_filamentary_biot_savart_runs_existing_fieldline_and_guidingcenter_rhs():
+    from essos.dynamics import FieldLine, GuidingCenter
+
+    class ParticleParameters:
+        charge = 1.0
+        mass = 1.0
+        energy = 1.0
+
+    class ZeroElectricField:
+        def E_covariant(self, points):
+            return jnp.zeros_like(points)
+
+    field = FilamentaryBiotSavart.from_coils(_coils())
+    point = jnp.asarray([0.82, 0.11, -0.06])
+    fieldline_rhs = FieldLine(0.0, point, field)
+    guidingcenter_rhs = GuidingCenter(
+        0.0,
+        jnp.concatenate((point, jnp.asarray([0.1]))),
+        (field, ParticleParameters(), ZeroElectricField()),
+    )
+
+    assert fieldline_rhs.shape == (3,)
+    assert guidingcenter_rhs.shape == (4,)
+    assert np.all(np.isfinite(np.asarray(fieldline_rhs)))
+    assert np.all(np.isfinite(np.asarray(guidingcenter_rhs)))
+
+
 def test_filamentary_biot_savart_broadcast_cylindrical_roundtrip():
     field = FilamentaryBiotSavart.from_coils(_coils())
     r = jnp.asarray([[0.75], [0.95]])
