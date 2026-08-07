@@ -170,9 +170,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         alm = ALM_model_jaxopt_lbfgsb(constraint)
         self.assertIsInstance(alm, ALM)
         state,grad,info = alm.init(params)
-        eta = 1.0
-        omega = 1.0
-        alm.update(params, state,grad,info,eta,omega)
+        alm.update(params, state,grad,info)
 
 
 if __name__ == "__main__":
