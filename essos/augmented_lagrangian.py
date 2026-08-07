@@ -772,6 +772,7 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
     omega_tol=1.e-6,
     **kargs,                   #Extra key arguments for loss
 ):
+    lagrange_transform = lagrange_update(model_lagrangian=model_lagrangian)
 
     @jax.jit
     def init_fn(params,**kargs):
@@ -909,7 +910,7 @@ def ALM_model_optax(optimizer: optax.GradientTransformation,  #an optimizer from
             main_params = optax.apply_updates(main_params, main_updates)
             params=main_params,lagrange_params                        
             grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)           
-            lag_updates, lag_state = lagrange_update(model_lagrangian=model_lagrangian).update(lagrange_params,grad[1], lag_state,0.0,0.0,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+            lag_updates, lag_state = lagrange_transform.update(lagrange_params,grad[1], lag_state,0.0,0.0,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
             lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
             params=main_params,lagrange_params
             opt_state=main_state,lag_state
@@ -1141,6 +1142,7 @@ def ALM_model_jaxopt_lbfgs(constraints: BaseConstraint,#List of constraints
     omega_tol=1.e-6,
     **kargs,                   #Extra key arguments for loss
 ):
+    lagrange_transform = lagrange_update(model_lagrangian=model_lagrangian)
 
 
 
@@ -1148,7 +1150,7 @@ def ALM_model_jaxopt_lbfgs(constraints: BaseConstraint,#List of constraints
     def init_fn(params,**kargs):
         main_params,lagrange_params=params
         grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        lag_state=lagrange_update(model_lagrangian=model_lagrangian).init(lagrange_params)                
+        lag_state=lagrange_transform.init(lagrange_params)                
         return lag_state,grad,info        
 
     if model_lagrangian=='Standard':
