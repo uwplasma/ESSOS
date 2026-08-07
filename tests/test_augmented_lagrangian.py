@@ -16,7 +16,7 @@ from essos.augmented_lagrangian import (
     norm_constraints,
     infty_norm_constraints,
     penalty_average,
-    Constraint,
+    BaseConstraint,
     ALM,
     lagrange_update,
     ALM_model_optax,
@@ -174,7 +174,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
     def test_constraint_namedtuple(self):
         def fun(x): return x - 1
         c = eq(fun)
-        self.assertIsInstance(c, Constraint)
+        self.assertIsInstance(c, BaseConstraint)
         params = c.init(jnp.array([2.]))
         c.loss(params, jnp.array([2.]))
 
