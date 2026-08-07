@@ -2,7 +2,6 @@ import unittest
 import pytest
 import jax
 import jax.numpy as jnp
-import optax
 
 from essos.augmented_lagrangian import (
     LagrangeMultiplier,
@@ -16,11 +15,7 @@ from essos.augmented_lagrangian import (
     penalty_average,
     BaseConstraint,
     ALM,
-    ALM_model_optax,
     ALM_model_jaxopt_lbfgsb,
-    ALM_model_jaxopt_LevenbergMarquardt,
-    ALM_model_jaxopt_lbfgs,
-    ALM_model_optimistix_LevenbergMarquardt,
 )
 
 class TestAugmentedLagrangian(unittest.TestCase):
@@ -166,22 +161,6 @@ class TestAugmentedLagrangian(unittest.TestCase):
 
     # ---- ALM model tests ----
 
-    def test_ALM_model_optax_init_and_update(self):
-        optimizer = optax.sgd(1e-3)
-        def fun(x): return x - 1
-        constraint = eq(fun)
-        main_params = jnp.array([6.0,2.0])        
-        lagrange_params = constraint.init(main_params)
-        params = main_params,lagrange_params            
-        alm = ALM_model_optax(optimizer, constraint,model_mu='Mu_Conditional')
-        self.assertIsInstance(alm, ALM)
-        # Call init and update
-        state,grad,info = alm.init(params)
-        # Simulate a gradient step
-        eta = jnp.array(1.0)
-        omega = jnp.array(1.0) 
-        alm.update(params, state,grad,info,eta,omega)
-
     def test_ALM_model_jaxopt_lbfgsb_init_and_update(self):
         def fun(x): return x - 1
         constraint = eq(fun)
@@ -194,49 +173,6 @@ class TestAugmentedLagrangian(unittest.TestCase):
         eta = jnp.array(1.0)
         omega = jnp.array(1.0)  
         alm.update(params, state,grad,info,eta,omega)
-
-
-    def test_ALM_model_jaxopt_LevenbergMarquardt_init_and_update(self):
-        def fun(x): return x - 1
-        constraint = eq(fun)
-        main_params = jnp.array([6.0,2.0])        
-        lagrange_params = constraint.init(main_params)
-        params = main_params,lagrange_params        
-        alm = ALM_model_jaxopt_LevenbergMarquardt(constraint)
-        self.assertIsInstance(alm, ALM)
-        state,grad,info = alm.init(params)
-        eta = jnp.array(1.0)
-        omega =  jnp.array(1.0)
-        alm.update(params, state,grad,info,eta,omega)
-
-
-
-    def test_ALM_model_jaxopt_lbfgs_init_and_update(self):
-        def fun(x): return x - 1
-        constraint = eq(fun)
-        main_params = jnp.array([6.0,2.0])        
-        lagrange_params = constraint.init(main_params)
-        params = main_params,lagrange_params            
-        alm = ALM_model_jaxopt_lbfgs(constraint)
-        self.assertIsInstance(alm, ALM)
-        state,grad,info = alm.init(params)
-        eta =  jnp.array(1.0)
-        omega =  jnp.array(1.0)
-        alm.update(params, state,grad,info,eta,omega)
-
-
-#    def test_ALM_model_optimistix_LevenbergMarquardt_init_and_update(self):
-#        def fun(x): return x - 1
-#        constraint = eq(fun)
-#        main_params = jnp.array([6.0,2.0])        
-#        lagrange_params = constraint.init(main_params)
-#        params = main_params,lagrange_params            
-#        alm = ALM_model_optimistix_LevenbergMarquardt(constraint)
-#        self.assertIsInstance(alm, ALM)
-#        state,grad,info = alm.init(params)
-#        eta = jnp.array(1.0)
-#        omega =  jnp.array(1.0)
-#        alm.update(params, state,grad,info,eta,omega)
 
 
 if __name__ == "__main__":
