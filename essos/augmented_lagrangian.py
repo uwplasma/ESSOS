@@ -38,6 +38,99 @@ def _multiplier_like(out, multiplier, penalty, omega, eta, sq_grad):
 
 
 
+#This is used for the usual augmented lagrangian form 
+def update_method(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
+    """Different methods for updating multipliers and penalties
+    """
+
+
+    pred = lambda x: isinstance(x, LagrangeMultiplier)
+    if model_mu=='Constant':
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+    elif model_mu=='Mu_Monotonic':     
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+    elif model_mu=='Mu_Conditional_True':
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+    elif model_mu=='Mu_Conditional_False':
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+    elif model_mu=='Mu_Tolerance_True':
+        mu_average=penalty_average(params)
+        eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
+        omega=jnp.maximum(omega/mu_average,omega_tol)
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*y.value,0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+    elif model_mu=='Mu_Tolerance_False':
+        mu_average=penalty_average(params)        
+        eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
+        omega=jnp.maximum(1./mu_average,omega_tol)        
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+    elif model_mu=='Mu_Adaptative':
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*y.value,-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*y.penalty*2.),params,updates,is_leaf=pred)
+
+
+
+#This is used for the squared form of the augmented Lagrangioan
+def update_method_squared(params,updates,eta,omega,model_mu='Constant',beta=2.0,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
+    """Different methods for updating multipliers and penalties)
+    """
+
+
+    pred = lambda x: isinstance(x, LagrangeMultiplier)
+    if model_mu=='Constant':
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier((y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+    elif model_mu=='Mu_Monotonic':     
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+    elif model_mu=='Mu_Conditional_True':
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred)          
+    elif model_mu=='Mu_Conditional_False':
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred)  
+    elif model_mu=='Mu_Tolerance_True':
+        mu_average=penalty_average(params)
+        eta=jnp.maximum(eta/mu_average**(0.1),eta_tol)
+        omega=jnp.maximum(omega/mu_average,omega_tol)
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(x.penalty*(y.value-x.value/x.penalty),0.0*x.value,0.0*x.value),params,updates,is_leaf=pred),eta,omega          
+    elif model_mu=='Mu_Tolerance_False':
+        mu_average=penalty_average(params)         
+        eta=jnp.maximum(1./mu_average**(0.1),eta_tol)
+        omega=jnp.maximum(1./mu_average,omega_tol)        
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+        #return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(0.0*x.value,-x.penalty+jnp.minimum(beta*x.penalty,mu_max),0.0*x.value),params,updates,is_leaf=pred),eta,omega                            
+    elif model_mu=='Mu_Adaptative':         
+        return jax.tree_util.tree_map(lambda x,y: LagrangeMultiplier(gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon)*(y.value-x.value/x.penalty),-x.penalty+gamma/(jnp.sqrt(alpha*x.sq_grad+(1.-alpha)*y.penalty*2.)+epsilon),-x.sq_grad+alpha*x.sq_grad+(1.-alpha)*(y.penalty*2.+(x.value/x.penalty)**2)),params,updates,is_leaf=pred)
+
+
+
+
+def lagrange_update(model_lagrangian='Standard'):
+    """A gradient transformation for Optax that prepares an MDMM gradient
+    descent ascent update from a normal gradient descent update.
+
+    It should be used like this with a base optimizer:
+        optimizer = optax.chain(
+            optax.sgd(1e-3),
+            mdmm_jax.optax_prepare_update(),
+        )
+
+    Returns:
+        An Optax gradient transformation that converts a gradient descent update
+        into a gradient descent ascent update.
+    """
+    def init_fn(params):
+        del params
+        return optax.EmptyState()
+
+    def update_fn(lagrange_params,updates, state,eta,omega, params=None,model_mu='Constant',beta=2.,mu_max=1.e4,alpha=0.99,gamma=1.e-2,epsilon=1.e-8,eta_tol=1.e-4,omega_tol=1.e-6):
+        del params
+        if model_lagrangian=='Standard' :
+            return update_method(lagrange_params,updates,eta,omega,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol), state
+        elif model_lagrangian=='Squared' :
+            return update_method_squared(lagrange_params,updates,eta,omega,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol), state
+        else:
+            print('Lagrangian model not available please select Standard or Squared ')
+            os._exit(0)              
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 class BaseConstraint:
     """A minimal mutable container holding `init` and `loss` callables for a constraint.
 
