@@ -1032,20 +1032,55 @@ class DipoleField:
         self.n_dipoles = self.dipole_positions.shape[0]
         self._last_field = None
         self._last_eval_points = None
-        self._compute_field = jit(vmap(
-            lambda x: jnp.sum(vmap(
-                lambda pos, mom: self._compute_single_dipole_field(x, pos, mom),
-                in_axes=(0, 0))(self.dipole_positions_full, self.dipole_moments_full), axis=0),
-            in_axes=0))
+        # PERFORMANCE FIX: the original implementation double-vmapped 
+        DIPOLE_CHUNK_SIZE = 5000
 
-        # Precompute interaction matrix G if surface points are provided.
-        #
-        # G[i, j] = Bn contribution of magnet j at surface point i at pho=1.
-        #
-        # During optimization only pho changes — magnet positions and orientations
+        def _field_kernel(eval_pts, dip_pos, dip_mom):
+            """Vectorized B at eval_pts from a batch of dipoles (dip_pos,
+            dip_mom), broadcasting over both -- no per-pair function calls."""
+            P = eval_pts[:, None, :]           # (n_pts, 1, 3)
+            Pos = dip_pos[None, :, :]          # (1, n_chunk, 3)
+            Mom = dip_mom[None, :, :]          # (1, n_chunk, 3)
+            R = P - Pos                        # (n_pts, n_chunk, 3)
+            R_mag = jnp.linalg.norm(R, axis=-1, keepdims=True) + 1e-12
+            dot_mr = jnp.sum(Mom * R, axis=-1, keepdims=True)
+            term1 = 3.0 * dot_mr * R / (R_mag ** 5)
+            term2 = Mom / (R_mag ** 3)
+            B_per_dipole = (term1 - term2) * 1e-7   # mu0_over_4pi
+            return jnp.sum(B_per_dipole, axis=1)     # (n_pts, 3)
+
+        def _compute_field_chunked(eval_pts):
+            n_dip_full = self.dipole_positions_full.shape[0]
+            n_chunks = (n_dip_full + DIPOLE_CHUNK_SIZE - 1) // DIPOLE_CHUNK_SIZE
+            pad = n_chunks * DIPOLE_CHUNK_SIZE - n_dip_full
+            if pad > 0:
+                pos_padded = jnp.concatenate([
+                    self.dipole_positions_full,
+                    jnp.zeros((pad, 3), self.dipole_positions_full.dtype)], axis=0)
+                mom_padded = jnp.concatenate([
+                    self.dipole_moments_full,
+                    jnp.zeros((pad, 3), self.dipole_moments_full.dtype)], axis=0)
+            else:
+                pos_padded = self.dipole_positions_full
+                mom_padded = self.dipole_moments_full
+            pos_chunks = pos_padded.reshape(n_chunks, DIPOLE_CHUNK_SIZE, 3)
+            mom_chunks = mom_padded.reshape(n_chunks, DIPOLE_CHUNK_SIZE, 3)
+
+            def scan_body(carry, chunk):
+                dip_pos_c, dip_mom_c = chunk
+                contribution = _field_kernel(eval_pts, dip_pos_c, dip_mom_c)
+                return carry + contribution, None
+
+            n_pts = eval_pts.shape[0]
+            init = jnp.zeros((n_pts, 3), eval_pts.dtype)
+            total, _ = lax.scan(scan_body, init, (pos_chunks, mom_chunks))
+            return total
+
+        self._compute_field = jit(_compute_field_chunked)
+
+        # During optimization only pho changes. magnet positions and orientations
         # are fixed. So we compute G once here (~8s for 99k magnets) and each
         # Adam step is just: Bn_total = G @ pho + Bn_fixed  (~0.15s).
-        #
         # Using DipoleField.B() directly in the loop recomputes all distances
         # and angles every step, making it ~1000x slower.
         if surf_pts is not None and surf_n is not None:

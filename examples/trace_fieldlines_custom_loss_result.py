@@ -103,10 +103,25 @@ pho_optimized = np.load(RESULTS_DIR / "pho_optimized.npy")
 print(f"{n_magnets} magnet sites, {int(np.sum(np.abs(pho_optimized) > 0.5))} active")
 
 scaled_moments = orientations * float(np.mean(native_norms[native_norms > 0])) * pho_optimized[:, None]
+
+# PERFORMANCE: filter to only ACTIVE magnets (|pho|>0.5) before building
+# DipoleField. B() has no G-matrix shortcut for tracing (each integration
+# step needs a fresh field evaluation at a new, moving point) -- so every
+# step sums over every dipole in the grid. ~88% of the 99,252 sites are
+# inactive (pho~=0, contribute ~zero field either way), so building from
+# only the active subset removes that wasted computation from every
+# single tracing step without changing the physics at all.
+active_filter = np.abs(pho_optimized) > 0.5
+positions_active_only = positions[active_filter]
+scaled_moments_active_only = scaled_moments[active_filter]
+n_magnets_active = int(active_filter.sum())
+print(f"Filtered DipoleField to {n_magnets_active} active magnets "
+      f"(was {n_magnets} total) for tracing")
+
 dipole_field = DipoleField(
-    jnp.asarray(positions, jnp.float32),
-    jnp.asarray(scaled_moments, jnp.float32),
-    jnp.zeros(n_magnets, jnp.float32),
+    jnp.asarray(positions_active_only, jnp.float32),
+    jnp.asarray(scaled_moments_active_only, jnp.float32),
+    jnp.zeros(n_magnets_active, jnp.float32),
     nfp=nfp, stellsym=stellsym, scale_factor=1.0,
 )
 
@@ -120,7 +135,7 @@ print(f"B at test point: {B_test}  shape={jnp.shape(B_test)}")
 print(f"|B| at test point: {jnp.asarray(absB_test).ravel()}  shape={jnp.shape(absB_test)}")
 
 print("\n Setting up field-line tracing ")
-R0 = jnp.linspace(0, 10.0, 5) 
+R0 = jnp.linspace(0.315, 0.315, 1) 
 Z0 = jnp.zeros(len(R0))
 phi0 = jnp.zeros(len(R0))
 initial_xyz = jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
@@ -129,10 +144,10 @@ tracing = Tracing(
     field=combined_field,
     initial_conditions=initial_xyz,
     model='FieldLine',
-    maxtime=1e-6,
-    timestep=1e-9,
+    maxtime=100,
+    timestep=1e-3,
 )
-
+#add coil, add axis, add half period of pms
 print("Tracing field lines")
 tracing.trace()
 trajectories = tracing.trajectories
@@ -142,15 +157,62 @@ print(f"trajectories shape/type: {type(trajectories)}"
 print("\n--- Poincare plot---")
 fig_p, ax_p = plt.subplots(figsize=(8, 8))
 tracing.poincare_plot(ax=ax_p, show=False)
+ax_p.set_xlabel(r"$R$ [m]")
+ax_p.set_ylabel(r"$Z$ [m]")
 ax_p.set_title("Poincare plot: TF coils + optimized PMs (custom_loss result)")
+ax_p.set_aspect("equal")
 plt.tight_layout()
 plt.savefig(RESULTS_DIR / "poincare_plot.png", dpi=200, bbox_inches="tight")
 print(f"Saved {RESULTS_DIR}/poincare_plot.png")
 
-print("\n--- 3D trajectory plot (essos built-in) ---")
+print("\n--- 3D trajectory plot: field lines + coils + PM half-period ---")
 fig_3d, ax_3d = plt.subplots(subplot_kw={"projection": "3d"}, figsize=(10, 8))
+
+# 1. Field lines (already traced above)
 tracing.plot(ax=ax_3d, show=False)
-ax_3d.set_title("Field lines: TF coils + optimized PMs (custom_loss result)")
+
+# 2. TF coils -- essos_coils is the full coil set already loaded earlier
+essos_coils.plot(ax=ax_3d, show=False, color="brown", linewidth=1.5, label="TF coils")
+
+# 3. Half-period PM grid -- the loaded magnet grid (positions/pho_optimized)
+#    already IS the unique/half-period domain for MUSE (nfp=2), no symmetry
+#    expansion needed. Only plot ACTIVE magnets (|pho|>0.5), colored by sign.
+active_mask = np.abs(pho_optimized) > 0.5
+pos_active = positions[active_mask]
+pho_active = pho_optimized[active_mask]
+sc = ax_3d.scatter(
+    pos_active[:, 0], pos_active[:, 1], pos_active[:, 2],
+    c=pho_active, cmap="RdBu_r", s=6, vmin=-1, vmax=1,
+    label=f"PM magnets (half-period, {int(active_mask.sum())} active)",
+)
+fig_3d.colorbar(sc, ax=ax_3d, shrink=0.6, pad=0.1, label=r"$\rho$")
+
+ax_3d.set_xlabel(r"$x$ [m]")
+ax_3d.set_ylabel(r"$y$ [m]")
+ax_3d.set_zlabel(r"$z$ [m]")
+ax_3d.set_title("Field lines + TF coils + optimized PMs (custom_loss result)")
+ax_3d.legend(loc="upper left", fontsize=8)
 plt.tight_layout()
 plt.savefig(RESULTS_DIR / "fieldlines_3d.png", dpi=200, bbox_inches="tight")
 print(f"Saved {RESULTS_DIR}/fieldlines_3d.png")
+
+print("\n--- Separate hardware-layout plot: coils + magnets, no field lines ---")
+fig_hw, ax_hw = plt.subplots(subplot_kw={"projection": "3d"}, figsize=(10, 8))
+
+essos_coils.plot(ax=ax_hw, show=False, color="black", linewidth=2, label="TF coils")
+
+sc_hw = ax_hw.scatter(
+    pos_active[:, 0], pos_active[:, 1], pos_active[:, 2],
+    c=pho_active, cmap="RdBu_r", s=20, vmin=-1, vmax=1,
+    label=f"PM magnets (half-period, {int(active_mask.sum())} active)",
+)
+fig_hw.colorbar(sc_hw, ax=ax_hw, shrink=0.6, pad=0.1, label=r"$\rho$")
+
+ax_hw.set_xlabel(r"$x$ [m]")
+ax_hw.set_ylabel(r"$y$ [m]")
+ax_hw.set_zlabel(r"$z$ [m]")
+ax_hw.set_title("TF coils + optimized PM half-period (no field lines)")
+ax_hw.legend(loc="upper left", fontsize=9)
+plt.tight_layout()
+plt.savefig(RESULTS_DIR / "hardware_layout_3d.png", dpi=200, bbox_inches="tight")
+print(f"Saved {RESULTS_DIR}/hardware_layout_3d.png")
