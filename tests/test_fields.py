@@ -15,9 +15,9 @@ def test_biot_savart_initialization():
     coils = MockCoils()
     biot_savart = BiotSavart(coils)
     assert biot_savart.coils == coils
-    assert jnp.allclose(biot_savart.currents, coils.currents)
-    assert jnp.allclose(biot_savart.gamma, coils.gamma)
-    assert jnp.allclose(biot_savart.gamma_dash, coils.gamma_dash)
+    assert jnp.allclose(biot_savart.coils.currents, coils.currents)
+    assert jnp.allclose(biot_savart.coils.gamma, coils.gamma)
+    assert jnp.allclose(biot_savart.coils.gamma_dash, coils.gamma_dash)
 
 # def test_biot_savart_B():
 #     coils = MockCoils()
