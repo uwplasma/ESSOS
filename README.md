@@ -29,7 +29,6 @@
     - [From PyPI](#from-pypi)
     - [From Source](#from-source)
 - [Usage](#usage)
-  - [VMEC magnetic-axis handling](#vmec-magnetic-axis-handling)
 - [Testing](#testing)
 - [Project Roadmap](#project-roadmap)
 - [Contributing](#contributing)
@@ -134,42 +133,11 @@ ESSOS can be run directly in the command line as `essos`, or by following one of
 python examples/trace_particles_coils_guidingcenter.py
 ```
 
-### VMEC magnetic-axis handling
-
-VMEC guiding-center trajectories use flux coordinates `(s, theta, phi, ...)`,
-where `s` is normalized toroidal flux. The poloidal angle is not defined on the
-magnetic axis, and continuing the VMEC representation to negative `s` can make a
-trace stiff or non-finite. ESSOS therefore stops a VMEC guiding-center trace when
-`s <= axis_threshold` (default `1e-6`) and records that numerical termination
-separately from a loss at `s >= 1`:
-
-```python
-tracing = Tracing(
-    field=vmec,
-    model="GuidingCenterAdaptative",
-    particles=particles,
-    axis_threshold=1e-6,
-)
-
-print(tracing.axis_hits)                  # one boolean per particle
-print(tracing.boundary_hits)              # LCFS termination mask
-print(tracing.total_particles_unresolved) # number of axis terminations
-```
-
-Post-event output slots for axis-terminated trajectories are filled with the
-last finite in-domain saved state so plotting and diagnostics do not receive
-Diffrax's `inf` padding or a saved state beyond the axis threshold. Axis
-terminations are not counted as particle losses. This
-safeguard is applied to fixed- and adaptive-step VMEC guiding-center models,
-including the collision/SDE variants. It is not applied to full-orbit/Boris
-models or coil-field traces, whose positions are Cartesian and can cross the
-physical magnetic axis without this flux-coordinate singularity. Supplying a
-custom `condition` replaces the automatic VMEC axis and boundary events.
-
-This is a numerical safeguard, not a physical continuation through the axis.
-A trajectory that must continue across the axis requires a regular coordinate
-chart (for example, pseudo-Cartesian flux coordinates) or a Cartesian/full-orbit
-handoff.
+VMEC guiding-center traces stop at `axis_threshold=1e-6` by default to avoid the
+flux-coordinate singularity at the magnetic axis. Axis terminations are reported
+by `axis_hits` and `total_particles_unresolved`, and are not counted as particle
+losses. This applies to fixed, adaptive, and collisional guiding-center models,
+but not Cartesian full-orbit or Boris traces.
 
 ## Testing
 To run the tests, use `pytest`:
