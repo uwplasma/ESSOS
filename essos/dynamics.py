@@ -9,6 +9,7 @@ from functools import partial
 from diffrax import diffeqsolve, ODETerm, SaveAt, SubSaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
+import optimistix as optx
 from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
 from essos.surfaces import SurfaceClassifier
@@ -710,6 +711,10 @@ _GUIDING_CENTER_COLLISION_MODELS = frozenset(
     }
 )
 
+_DETERMINISTIC_VMEC_GUIDING_CENTER_MODELS = frozenset(
+    {"GuidingCenter", "GuidingCenterAdaptative"}
+)
+
 
 def _vmec_radial_events(axis_threshold, boundary_threshold=1.0):
     """Return axis and LCFS events for VMEC guiding-center coordinates."""
@@ -723,6 +728,16 @@ def _vmec_radial_events(axis_threshold, boundary_threshold=1.0):
         return y[0] >= boundary_threshold
 
     return reached_axis, reached_boundary
+
+
+def _vmec_root_event(axis_threshold, boundary_threshold):
+    def radial_crossing(t, y, args, **kwargs):
+        del t, args, kwargs
+        return jnp.minimum(
+            y[0] - axis_threshold, boundary_threshold - y[0]
+        )
+
+    return radial_crossing
 
 
 @jit
@@ -781,6 +796,7 @@ class Tracing():
         self.axis_threshold = axis_threshold
         self.boundary_threshold = boundary_threshold
         self._has_vmec_axis_event = False
+        self._has_root_refined_event = False
         self._has_custom_event = condition is not None
         self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
         # Diffrax solver to use for the adaptive integrators. If left as None,
@@ -795,10 +811,25 @@ class Tracing():
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
                 if model in _VMEC_GUIDING_CENTER_MODELS:
-                    self.condition = _vmec_radial_events(
-                        self.axis_threshold, self.boundary_threshold
-                    )
                     self._has_vmec_axis_event = True
+                    if model in _DETERMINISTIC_VMEC_GUIDING_CENTER_MODELS:
+                        initial_s = particles.initial_xyz[:, 0]
+                        if bool(jnp.any(
+                            (initial_s <= self.axis_threshold)
+                            | (initial_s >= self.boundary_threshold)
+                        )):
+                            raise ValueError(
+                                "VMEC guiding-center particles must start "
+                                "between the axis and boundary thresholds"
+                            )
+                        self.condition = _vmec_root_event(
+                            self.axis_threshold, self.boundary_threshold
+                        )
+                        self._has_root_refined_event = True
+                    else:
+                        self.condition = _vmec_radial_events(
+                            self.axis_threshold, self.boundary_threshold
+                        )
                 elif model == 'FieldLine' or model== 'FieldLineAdaptative':
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _ = y
@@ -819,6 +850,13 @@ class Tracing():
         self._has_event_metadata = (
             self._has_vmec_axis_event or self._has_custom_event
         )
+        self.event = Event(self.condition)
+        if self._has_root_refined_event:
+            self.event = Event(
+                self.condition,
+                root_finder=optx.Newton(rtol=1e-8, atol=1e-10),
+                direction=False,
+            )
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles,self.electric_field)
@@ -987,7 +1025,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
                     max_steps=10000000000,
-                    event = Event(self.condition),
+                    event=self.event,
                     progress_meter=self.progress_meter,
                 )
                 trajectory = solution.ys
@@ -1014,7 +1052,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     stepsize_controller=ClipStepSizeController(controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,dtmin=dt0,dtmax=1.e-4,force_dtmin=True),step_ts=self.times,store_rejected_steps=self.rejected_steps),
                     max_steps=10000000000,
-                    event = Event(self.condition),
+                    event=self.event,
                     progress_meter=self.progress_meter,
                 )
                 trajectory = solution.ys
@@ -1039,7 +1077,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     max_steps=10000000000,
-                    event = Event(self.condition),
+                    event=self.event,
                     progress_meter=self.progress_meter,
                 )
                 trajectory = solution.ys
@@ -1064,7 +1102,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     max_steps=10000000000,
-                    event = Event(self.condition),
+                    event=self.event,
                     progress_meter=self.progress_meter,
                 )
                 trajectory = solution.ys
@@ -1091,7 +1129,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),                   
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
                     max_steps=10000000000,
-                    event = Event(self.condition),
+                    event=self.event,
                     progress_meter=self.progress_meter,
                 ).ys          
             elif self.model == 'GuidingCenterAdaptative' :  
@@ -1111,7 +1149,7 @@ class Tracing():
                     progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
                     max_steps=10000000000,
-                    event = Event(self.condition)
+                    event=self.event
                 )
                 trajectory = solution.ys
             elif self.model == 'FullOrbitAdaptative' :
@@ -1130,7 +1168,7 @@ class Tracing():
                     progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
                     max_steps=10000000000,
-                    event = Event(self.condition)
+                    event=self.event
                 )
                 trajectory = solution.ys
             elif self.model == 'FieldLineAdaptative' :  
@@ -1150,7 +1188,7 @@ class Tracing():
                     progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
                     max_steps=10000000000,
-                    event = Event(self.condition)
+                    event=self.event
                 )
                 trajectory = solution.ys
             #Fixed guiding center
@@ -1170,7 +1208,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
                     max_steps=10000000000,
-                    event = Event(self.condition)
+                    event=self.event
                 )
                 trajectory = solution.ys
             if self._has_event_metadata:
@@ -1178,9 +1216,28 @@ class Tracing():
                     (solution.result != diffrax.RESULTS.successful)
                     & (solution.result != diffrax.RESULTS.event_occurred)
                 )
+                event_mask = solution.event_mask
+                if self._has_root_refined_event:
+                    termination_s = solution.ys["termination"][0, 0]
+                    event_mask = (
+                        event_mask
+                        & (
+                            jnp.abs(termination_s - self.axis_threshold)
+                            <= jnp.abs(
+                                termination_s - self.boundary_threshold
+                            )
+                        ),
+                        event_mask
+                        & (
+                            jnp.abs(termination_s - self.axis_threshold)
+                            > jnp.abs(
+                                termination_s - self.boundary_threshold
+                            )
+                        ),
+                    )
                 return (
                     solution.ys["trajectory"],
-                    solution.event_mask,
+                    event_mask,
                     solution.ts["termination"][0],
                     solution.ys["termination"][0],
                     solver_failed,
