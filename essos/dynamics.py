@@ -725,6 +725,17 @@ def _vmec_radial_events(axis_threshold, boundary_threshold=1.0):
     return reached_axis, reached_boundary
 
 
+@jit
+def _loss_fraction_from_events(boundary_hits, termination_times, times):
+    lost_times = jnp.where(boundary_hits, termination_times, -1.0)
+    sorted_lost_times = jnp.sort(
+        jnp.where(boundary_hits, termination_times, jnp.inf)
+    )
+    loss_counts = jnp.searchsorted(sorted_lost_times, times, side="right")
+    loss_fractions = loss_counts / len(boundary_hits)
+    return loss_fractions, jnp.sum(boundary_hits), lost_times
+
+
 ## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
 ## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
 ## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
@@ -770,6 +781,7 @@ class Tracing():
         self.axis_threshold = axis_threshold
         self.boundary_threshold = boundary_threshold
         self._has_vmec_axis_event = False
+        self._has_custom_event = condition is not None
         self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
         # Diffrax solver to use for the adaptive integrators. If left as None,
         # each integrator falls back to its previous default (Dopri8), so
@@ -804,6 +816,9 @@ class Tracing():
                 self.condition = condition_BioSavart                
         else:
             self.condition = condition
+        self._has_event_metadata = (
+            self._has_vmec_axis_event or self._has_custom_event
+        )
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles,self.electric_field)
@@ -858,7 +873,7 @@ class Tracing():
             self.times = jnp.linspace(0, self.maxtime, self.times_to_trace,endpoint=True)
 
         self.saveat = SaveAt(ts=self.times)
-        if self._has_vmec_axis_event:
+        if self._has_event_metadata:
             self.saveat = SaveAt(
                 subs={
                     "trajectory": SubSaveAt(ts=self.times),
@@ -868,13 +883,16 @@ class Tracing():
 
             
         trace_result = self.trace()
-        if self._has_vmec_axis_event:
+        if self._has_event_metadata:
             (
                 trajectories,
                 self.event_mask,
                 self.termination_times,
                 self.termination_states,
+                self.solver_failed,
             ) = trace_result
+
+        if self._has_vmec_axis_event:
             self.axis_hits, self.boundary_hits = self.event_mask
             filled = _fill_terminated_trajectories(
                 trajectories, self.axis_threshold
@@ -882,14 +900,25 @@ class Tracing():
             self._trajectories = jnp.where(
                 self.axis_hits[:, None, None], filled, trajectories
             )
+            self.custom_hits = jnp.zeros(len(trajectories), dtype=bool)
+        elif self._has_custom_event:
+            event_leaves = tree_util.tree_leaves(self.event_mask)
+            self.custom_hits = jnp.any(jnp.stack(event_leaves), axis=0)
+            self._trajectories = trajectories
+            self.axis_hits = jnp.zeros(len(trajectories), dtype=bool)
+            self.boundary_hits = jnp.zeros(len(trajectories), dtype=bool)
         else:
             self._trajectories = trace_result
             self.event_mask = None
             self.termination_times = None
             self.termination_states = None
+            self.solver_failed = jnp.zeros(len(self._trajectories), dtype=bool)
+            self.custom_hits = jnp.zeros(len(self._trajectories), dtype=bool)
             self.axis_hits = jnp.zeros(len(self._trajectories), dtype=bool)
             self.boundary_hits = jnp.zeros(len(self._trajectories), dtype=bool)
         self.total_particles_unresolved = jnp.sum(self.axis_hits)
+        self.total_particles_failed = jnp.sum(self.solver_failed)
+        self.total_particles_custom_terminated = jnp.sum(self.custom_hits)
         
         self.trajectories_xyz = vmap(lambda xyz: vmap(lambda point: self.field.to_xyz(point[:3]))(xyz))(self.trajectories)
         
@@ -1144,22 +1173,28 @@ class Tracing():
                     event = Event(self.condition)
                 )
                 trajectory = solution.ys
-            if self._has_vmec_axis_event:
+            if self._has_event_metadata:
+                solver_failed = (
+                    (solution.result != diffrax.RESULTS.successful)
+                    & (solution.result != diffrax.RESULTS.event_occurred)
+                )
                 return (
                     solution.ys["trajectory"],
                     solution.event_mask,
                     solution.ts["termination"][0],
                     solution.ys["termination"][0],
+                    solver_failed,
                 )
             return trajectory
         
         output_sharding = sharding
-        if self._has_vmec_axis_event:
+        if self._has_event_metadata:
             output_sharding = (
                 sharding,
-                (sharding_index, sharding_index),
+                sharding_index,
                 sharding_index,
                 sharding,
+                sharding_index,
             )
         if sharding is not None:
             return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
@@ -1335,6 +1370,11 @@ class Tracing():
         return loss_fractions, total_particles_lost, lost_times
 
     def loss_fraction(self,r_max=1.0):
+        if self._has_event_metadata:
+            return _loss_fraction_from_events(
+                self.boundary_hits, self.termination_times, self.times
+            )
+
         trajectories_r = self.trajectories[:,:, 0]
         lost_mask = trajectories_r >= r_max
         lost_indices = jnp.argmax(lost_mask, axis=1)
@@ -1386,8 +1426,35 @@ class Tracing():
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times,lost_energies,lost_positions
 
-    @partial(jit, static_argnums=(0))
     def loss_fraction_collisions(self,r_max=1.0):
+        if self._has_event_metadata:
+            loss_fractions, total_particles_lost, lost_times = (
+                _loss_fraction_from_events(
+                    self.boundary_hits, self.termination_times, self.times
+                )
+            )
+            states = self.termination_states
+            if self.model == 'GuidingCenterCollisions':
+                energies = 0.5 * self.particles.mass * states[:, 3] ** 2
+            else:
+                vparallel = states[:, 3] * SPEED_OF_LIGHT
+                mu = states[:, 4] * self.particles.mass * SPEED_OF_LIGHT**2
+                energies = (
+                    0.5 * self.particles.mass * vparallel**2
+                    + mu * vmap(self.field.AbsB)(states[:, :3])
+                )
+            lost_energies = jnp.where(self.boundary_hits, energies, 0.0)
+            lost_positions = jnp.where(
+                self.boundary_hits[:, None], states[:, :3], 0.0
+            )
+            return (
+                loss_fractions,
+                total_particles_lost,
+                lost_times,
+                lost_energies,
+                lost_positions,
+            )
+
         trajectories_rtz = self.trajectories[:,:, :3]
         lost_mask = trajectories_rtz[:,:,0] >= r_max
         lost_indices = jnp.argmax(lost_mask, axis=1)
