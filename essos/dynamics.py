@@ -711,7 +711,7 @@ _GUIDING_CENTER_COLLISION_MODELS = frozenset(
 )
 
 
-def _vmec_radial_events(axis_threshold):
+def _vmec_radial_events(axis_threshold, boundary_threshold=1.0):
     """Return axis and LCFS events for VMEC guiding-center coordinates."""
 
     def reached_axis(t, y, args, **kwargs):
@@ -720,7 +720,7 @@ def _vmec_radial_events(axis_threshold):
 
     def reached_boundary(t, y, args, **kwargs):
         del t, args, kwargs
-        return y[0] >= 1.0
+        return y[0] >= boundary_threshold
 
     return reached_axis, reached_boundary
 
@@ -734,7 +734,7 @@ class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
-                 solver=None, axis_threshold=1.e-6):
+                 solver=None, axis_threshold=1.e-6, boundary_threshold=1.0):
         
         if electric_field==None:
             self.electric_field = Electric_field_zero()
@@ -762,9 +762,13 @@ class Tracing():
         self.particles = particles
         self.species=species
         self.tag_gc=tag_gc
-        if not 0.0 < axis_threshold < 1.0:
-            raise ValueError("axis_threshold must be strictly between 0 and 1")
+        if not 0.0 < axis_threshold < boundary_threshold <= 1.0:
+            raise ValueError(
+                "thresholds must satisfy 0 < axis_threshold < "
+                "boundary_threshold <= 1"
+            )
         self.axis_threshold = axis_threshold
+        self.boundary_threshold = boundary_threshold
         self._has_vmec_axis_event = False
         self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
         # Diffrax solver to use for the adaptive integrators. If left as None,
@@ -779,7 +783,9 @@ class Tracing():
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
                 if model in _VMEC_GUIDING_CENTER_MODELS:
-                    self.condition = _vmec_radial_events(self.axis_threshold)
+                    self.condition = _vmec_radial_events(
+                        self.axis_threshold, self.boundary_threshold
+                    )
                     self._has_vmec_axis_event = True
                 elif model == 'FieldLine' or model== 'FieldLineAdaptative':
                     def condition_Vmec(t, y, args, **kwargs):
@@ -873,9 +879,13 @@ class Tracing():
         
         if isinstance(field, Vmec):
             if self.model in _GUIDING_CENTER_COLLISION_MODELS:
-                self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_collisions()                    
+                self.loss_fractions, self.total_particles_lost, self.lost_times, self.lost_energies, self.lost_positions = self.loss_fraction_collisions(
+                    r_max=self.boundary_threshold
+                )
             else:                
-                self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction()
+                self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction(
+                    r_max=self.boundary_threshold
+                )
         elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
             if self.model in _GUIDING_CENTER_COLLISION_MODELS:
                 self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_BioSavart_collisions(boundary)                    
@@ -1298,7 +1308,7 @@ class Tracing():
         
         return loss_fractions, total_particles_lost, lost_times
 
-    def loss_fraction(self,r_max=0.99):
+    def loss_fraction(self,r_max=1.0):
         trajectories_r = self.trajectories[:,:, 0]
         lost_mask = trajectories_r >= r_max
         lost_indices = jnp.argmax(lost_mask, axis=1)
@@ -1351,7 +1361,7 @@ class Tracing():
         return loss_fractions, total_particles_lost, lost_times,lost_energies,lost_positions
 
     @partial(jit, static_argnums=(0))
-    def loss_fraction_collisions(self,r_max=0.99):
+    def loss_fraction_collisions(self,r_max=1.0):
         trajectories_rtz = self.trajectories[:,:, :3]
         lost_mask = trajectories_rtz[:,:,0] >= r_max
         lost_indices = jnp.argmax(lost_mask, axis=1)
