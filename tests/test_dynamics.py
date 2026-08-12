@@ -1,8 +1,18 @@
 import pytest
 import jax.numpy as jnp
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELECTRON_MASS,PROTON_MASS
-from essos.dynamics import Particles, GuidingCenter, Lorentz, FieldLine, Tracing
+from essos.dynamics import (
+    FieldLine,
+    GuidingCenter,
+    Lorentz,
+    Particles,
+    Tracing,
+    _fill_terminated_trajectories,
+    _vmec_radial_events,
+    _VMEC_GUIDING_CENTER_MODELS,
+)
 from essos.background_species import BackgroundSpecies
+from essos.fields import Vmec
 
 def test_particles_initialization_all_params():
     nparticles = 100
@@ -89,6 +99,17 @@ class MockField:
 class MockElectricField:
     def E_covariant(self, points):
         return jnp.array([0.0, 0.0, 0.0])
+
+
+class MockVmec(MockField, Vmec):
+    def __init__(self):
+        pass
+
+    def B_contravariant(self, points):
+        return jnp.array([-1.0, 0.0, 0.0])
+
+    def dAbsB_by_dX(self, points):
+        return jnp.zeros(3)
     
 
 @pytest.fixture
@@ -129,6 +150,74 @@ def test_field_line(field):
     t = 0.0
     result = FieldLine(t, initial_condition, field)
     assert result.shape == (3,)
+
+
+def test_fill_terminated_trajectories():
+    trajectories = jnp.array(
+        [
+            [[0.2, 1.0], [0.3, 2.0], [jnp.inf, jnp.inf]],
+            [[0.4, 3.0], [0.5, 4.0], [0.6, 5.0]],
+        ]
+    )
+    filled = _fill_terminated_trajectories(trajectories)
+    assert jnp.allclose(filled[0, 2], trajectories[0, 1])
+    assert jnp.allclose(filled[1], trajectories[1])
+
+
+def test_fill_terminated_trajectories_rejects_below_axis_states():
+    trajectories = jnp.array([[[0.2, 1.0], [0.1, 2.0], [-0.1, 3.0]]])
+    filled = _fill_terminated_trajectories(trajectories, axis_threshold=0.0)
+    assert jnp.allclose(filled[0, 2], trajectories[0, 1])
+
+
+def test_vmec_radial_events_support_all_guiding_center_state_sizes():
+    reached_axis, reached_boundary = _vmec_radial_events(1e-6)
+
+    for state_size in (4, 5):
+        state = jnp.zeros(state_size).at[0].set(0.5)
+        assert not reached_axis(0.0, state, None)
+        assert not reached_boundary(0.0, state, None)
+        assert reached_axis(0.0, state.at[0].set(1e-6), None)
+        assert reached_boundary(0.0, state.at[0].set(1.0), None)
+
+
+def test_vmec_axis_events_cover_every_guiding_center_stepper():
+    assert _VMEC_GUIDING_CENTER_MODELS == {
+        "GuidingCenter",
+        "GuidingCenterAdaptative",
+        "GuidingCenterCollisions",
+        "GuidingCenterCollisionsMuIto",
+        "GuidingCenterCollisionsMuFixed",
+        "GuidingCenterCollisionsMuAdaptative",
+    }
+    assert "FullOrbit" not in _VMEC_GUIDING_CENTER_MODELS
+    assert "FullOrbitAdaptative" not in _VMEC_GUIDING_CENTER_MODELS
+    assert "FullOrbit_Boris" not in _VMEC_GUIDING_CENTER_MODELS
+
+
+@pytest.mark.parametrize("model", ["GuidingCenter", "GuidingCenterAdaptative"])
+def test_vmec_axis_event_terminates_deterministic_steppers(model):
+    particles = Particles(
+        initial_xyz=jnp.array([[1e-2, 0.0, 0.0]]),
+        initial_vparallel_over_v=jnp.array([1.0]),
+    )
+    tracing = Tracing(
+        field=MockVmec(),
+        model=model,
+        particles=particles,
+        maxtime=1e-9,
+        timestep=1e-10,
+        times_to_trace=20,
+        axis_threshold=1e-6,
+    )
+
+    assert tracing.axis_hits.tolist() == [True]
+    assert tracing.boundary_hits.tolist() == [False]
+    assert tracing.total_particles_unresolved == 1
+    assert tracing.total_particles_lost == 0
+    assert jnp.isfinite(tracing.trajectories).all()
+    assert jnp.all(tracing.trajectories[:, :, 0] > tracing.axis_threshold)
+
 
 def test_tracing_initialization(field, particles,electric_field):
     x = jnp.linspace(1, 2, particles.nparticles)

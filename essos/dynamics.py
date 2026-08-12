@@ -672,6 +672,58 @@ def FieldLine(t,
     # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 
+@jit
+def _fill_terminated_trajectories(trajectories, axis_threshold=None):
+    """Replace post-event or below-axis saves with the last valid state."""
+
+    def fill_trajectory(trajectory):
+        def fill_state(previous, current):
+            is_valid = jnp.isfinite(current).all()
+            if axis_threshold is not None:
+                is_valid = is_valid & (current[0] > axis_threshold)
+            state = jnp.where(is_valid, current, previous)
+            return state, state
+
+        _, tail = lax.scan(fill_state, trajectory[0], trajectory[1:])
+        return jnp.vstack((trajectory[0], tail))
+
+    return vmap(fill_trajectory)(trajectories)
+
+
+_VMEC_GUIDING_CENTER_MODELS = frozenset(
+    {
+        "GuidingCenter",
+        "GuidingCenterAdaptative",
+        "GuidingCenterCollisions",
+        "GuidingCenterCollisionsMuIto",
+        "GuidingCenterCollisionsMuFixed",
+        "GuidingCenterCollisionsMuAdaptative",
+    }
+)
+
+_GUIDING_CENTER_COLLISION_MODELS = frozenset(
+    {
+        "GuidingCenterCollisions",
+        "GuidingCenterCollisionsMuIto",
+        "GuidingCenterCollisionsMuFixed",
+        "GuidingCenterCollisionsMuAdaptative",
+    }
+)
+
+
+def _vmec_radial_events(axis_threshold):
+    """Return axis and LCFS events for VMEC guiding-center coordinates."""
+
+    def reached_axis(t, y, args, **kwargs):
+        del t, args, kwargs
+        return y[0] <= axis_threshold
+
+    def reached_boundary(t, y, args, **kwargs):
+        del t, args, kwargs
+        return y[0] >= 1.0
+
+    return reached_axis, reached_boundary
+
 
 ## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
 ## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
@@ -682,7 +734,7 @@ class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
-                 solver=None):
+                 solver=None, axis_threshold=1.e-6):
         
         if electric_field==None:
             self.electric_field = Electric_field_zero()
@@ -710,6 +762,10 @@ class Tracing():
         self.particles = particles
         self.species=species
         self.tag_gc=tag_gc
+        if not 0.0 < axis_threshold < 1.0:
+            raise ValueError("axis_threshold must be strictly between 0 and 1")
+        self.axis_threshold = axis_threshold
+        self._has_vmec_axis_event = False
         self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
         # Diffrax solver to use for the adaptive integrators. If left as None,
         # each integrator falls back to its previous default (Dopri8), so
@@ -722,21 +778,16 @@ class Tracing():
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
-                if model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative'  or model=='GuidingCenterCollisions':
-                    def condition_Vmec(t, y, args, **kwargs):
-                        s, _, _, _ ,_= y
-                        return s-1
+                if model in _VMEC_GUIDING_CENTER_MODELS:
+                    self.condition = _vmec_radial_events(self.axis_threshold)
+                    self._has_vmec_axis_event = True
                 elif model == 'FieldLine' or model== 'FieldLineAdaptative':
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _ = y
                         return s-1	 
-                else:
-                    def condition_Vmec(t, y, args, **kwargs):
-                        s, _, _, _ = y
-                        return s-1	        
-                self.condition = condition_Vmec
+                    self.condition = condition_Vmec
             elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
-                if model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative' or model=='GuidingCenterCollisions':
+                if model in _GUIDING_CENTER_COLLISION_MODELS:
                     def condition_BioSavart(t, y, args, **kwargs):
                         xx, yy, zz, _,_ = y
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.                      
@@ -745,6 +796,8 @@ class Tracing():
                         xx, yy, zz, _ = y
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
                 self.condition = condition_BioSavart                
+        else:
+            self.condition = condition
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
             self.ODE_term = ODETerm(GuidingCenter)
             self.args = (self.field, self.particles,self.electric_field)
@@ -799,17 +852,32 @@ class Tracing():
             self.times = jnp.linspace(0, self.maxtime, self.times_to_trace,endpoint=True)
 
             
-        self._trajectories = self.trace()
+        trace_result = self.trace()
+        if self._has_vmec_axis_event:
+            trajectories, self.event_mask = trace_result
+            self.axis_hits, self.boundary_hits = self.event_mask
+            filled = _fill_terminated_trajectories(
+                trajectories, self.axis_threshold
+            )
+            self._trajectories = jnp.where(
+                self.axis_hits[:, None, None], filled, trajectories
+            )
+        else:
+            self._trajectories = trace_result
+            self.event_mask = None
+            self.axis_hits = jnp.zeros(len(self._trajectories), dtype=bool)
+            self.boundary_hits = jnp.zeros(len(self._trajectories), dtype=bool)
+        self.total_particles_unresolved = jnp.sum(self.axis_hits)
         
         self.trajectories_xyz = vmap(lambda xyz: vmap(lambda point: self.field.to_xyz(point[:3]))(xyz))(self.trajectories)
         
         if isinstance(field, Vmec):
-            if self.model == 'GuidingCenterCollisions' or model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsAdaptative':
+            if self.model in _GUIDING_CENTER_COLLISION_MODELS:
                 self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_collisions()                    
             else:                
                 self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction()
         elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
-            if self.model == 'GuidingCenterCollisions' or model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsAdaptative':
+            if self.model in _GUIDING_CENTER_COLLISION_MODELS:
                 self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_BioSavart_collisions(boundary)                    
             else:                
                 self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction_BioSavart(boundary)
@@ -850,7 +918,7 @@ class Tracing():
                 tol=dt0*0.5
                 bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)            
                 self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -866,7 +934,8 @@ class Tracing():
                     max_steps=10000000000,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
-                ).ys
+                )
+                trajectory = solution.ys
             elif self.model == 'GuidingCenterCollisionsMuAdaptative':
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
@@ -876,7 +945,7 @@ class Tracing():
                 tol=dt0*0.5
                 bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
                 self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMuStratonovich),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -892,7 +961,8 @@ class Tracing():
                     max_steps=10000000000,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
-                ).ys     
+                )
+                trajectory = solution.ys
             elif self.model == 'GuidingCenterCollisionsMuFixed':
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
@@ -902,7 +972,7 @@ class Tracing():
                 tol=dt0*0.5
                 bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
                 self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMuStratonovich),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -916,7 +986,8 @@ class Tracing():
                     max_steps=10000000000,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
-                ).ys       
+                )
+                trajectory = solution.ys
             elif self.model == 'GuidingCenterCollisionsMuIto':
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
@@ -926,7 +997,7 @@ class Tracing():
                 tol=dt0*0.5
                 bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
                 self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMuIto),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -940,7 +1011,8 @@ class Tracing():
                     max_steps=10000000000,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
-                ).ys                                       
+                )
+                trajectory = solution.ys
             elif self.model == 'FullOrbitCollisions':
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
@@ -970,7 +1042,7 @@ class Tracing():
             elif self.model == 'GuidingCenterAdaptative' :  
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -985,11 +1057,12 @@ class Tracing():
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
                     max_steps=10000000000,
                     event = Event(self.condition)
-                ).ys
+                )
+                trajectory = solution.ys
             elif self.model == 'FullOrbitAdaptative' :
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning)
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -1003,11 +1076,12 @@ class Tracing():
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
                     max_steps=10000000000,
                     event = Event(self.condition)
-                ).ys
+                )
+                trajectory = solution.ys
             elif self.model == 'FieldLineAdaptative' :  
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -1022,12 +1096,13 @@ class Tracing():
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
                     max_steps=10000000000,
                     event = Event(self.condition)
-                ).ys                
+                )
+                trajectory = solution.ys
             #Fixed guiding center
             else:
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                trajectory = diffeqsolve(
+                solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
                     t1=self.maxtime,
@@ -1041,11 +1116,17 @@ class Tracing():
                     progress_meter=self.progress_meter,
                     max_steps=10000000000,
                     event = Event(self.condition)
-                ).ys
+                )
+                trajectory = solution.ys
+            if self._has_vmec_axis_event:
+                return trajectory, solution.event_mask
             return trajectory
         
+        output_sharding = sharding
+        if self._has_vmec_axis_event:
+            output_sharding = (sharding, (sharding_index, sharding_index))
         if sharding is not None:
-            return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
+            return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
                         device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
         else:
             return jit(vmap(compute_trajectory,in_axes=(0,0)))(self.initial_conditions, self.particles.random_keys if self.particles else None)
@@ -1217,7 +1298,6 @@ class Tracing():
         
         return loss_fractions, total_particles_lost, lost_times
 
-    @partial(jit, static_argnums=(0))
     def loss_fraction(self,r_max=0.99):
         trajectories_r = self.trajectories[:,:, 0]
         lost_mask = trajectories_r >= r_max
