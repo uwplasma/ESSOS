@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
-from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
+from diffrax import diffeqsolve, ODETerm, SaveAt, SubSaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
 from essos.coils import Coils
@@ -857,10 +857,24 @@ class Tracing():
         else:
             self.times = jnp.linspace(0, self.maxtime, self.times_to_trace,endpoint=True)
 
+        self.saveat = SaveAt(ts=self.times)
+        if self._has_vmec_axis_event:
+            self.saveat = SaveAt(
+                subs={
+                    "trajectory": SubSaveAt(ts=self.times),
+                    "termination": SubSaveAt(t1=True),
+                }
+            )
+
             
         trace_result = self.trace()
         if self._has_vmec_axis_event:
-            trajectories, self.event_mask = trace_result
+            (
+                trajectories,
+                self.event_mask,
+                self.termination_times,
+                self.termination_states,
+            ) = trace_result
             self.axis_hits, self.boundary_hits = self.event_mask
             filled = _fill_terminated_trajectories(
                 trajectories, self.axis_threshold
@@ -871,6 +885,8 @@ class Tracing():
         else:
             self._trajectories = trace_result
             self.event_mask = None
+            self.termination_times = None
+            self.termination_states = None
             self.axis_hits = jnp.zeros(len(self._trajectories), dtype=bool)
             self.boundary_hits = jnp.zeros(len(self._trajectories), dtype=bool)
         self.total_particles_unresolved = jnp.sum(self.axis_hits)
@@ -937,7 +953,7 @@ class Tracing():
                     #solver=diffrax.SlowRK(),
                     solver=diffrax.StratonovichMilstein(),
                     args=self.args,
-                    saveat=SaveAt(ts=self.times),
+                    saveat=self.saveat,
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
@@ -964,7 +980,7 @@ class Tracing():
                     solver=diffrax.SPaRK(),
                     #solver=diffrax.HalfSolver(diffrax.GeneralShARK()),
                     args=self.args,
-                    saveat=SaveAt(ts=self.times),
+                    saveat=self.saveat,
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     stepsize_controller=ClipStepSizeController(controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,dtmin=dt0,dtmax=1.e-4,force_dtmin=True),step_ts=self.times,store_rejected_steps=self.rejected_steps),
@@ -990,7 +1006,7 @@ class Tracing():
                     y0=initial_condition,
                     solver=diffrax.StratonovichMilstein(),                    
                     args=self.args,
-                    saveat=SaveAt(ts=self.times),
+                    saveat=self.saveat,
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     max_steps=10000000000,
@@ -1015,7 +1031,7 @@ class Tracing():
                     y0=initial_condition,
                     solver=diffrax.ItoMilstein(),                    
                     args=self.args,
-                    saveat=SaveAt(ts=self.times),
+                    saveat=self.saveat,
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     max_steps=10000000000,
@@ -1041,7 +1057,7 @@ class Tracing():
                     solver=diffrax.SPaRK(),
                     #solver=diffrax.ItoMilstein(),
                     args=self.args,
-                    saveat=SaveAt(ts=self.times),
+                    saveat=self.saveat,
                     throw=False,
                     # adjoint=DirectAdjoint(),                   
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
@@ -1060,7 +1076,7 @@ class Tracing():
                     y0=initial_condition,
                     solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
-                    saveat=SaveAt(ts=self.times),
+                    saveat=self.saveat,
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
@@ -1080,7 +1096,7 @@ class Tracing():
                     y0=initial_condition,
                     solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
-                    saveat=SaveAt(ts=self.times),
+                    saveat=self.saveat,
                     throw=False,
                     progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
@@ -1099,7 +1115,7 @@ class Tracing():
                     y0=initial_condition,
                     solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
-                    saveat=SaveAt(ts=self.times),
+                    saveat=self.saveat,
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
@@ -1120,7 +1136,7 @@ class Tracing():
                     y0=initial_condition,
                     solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
                     args=self.args,
-                    saveat=SaveAt(ts=self.times),
+                    saveat=self.saveat,
                     throw=True,
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
@@ -1129,12 +1145,22 @@ class Tracing():
                 )
                 trajectory = solution.ys
             if self._has_vmec_axis_event:
-                return trajectory, solution.event_mask
+                return (
+                    solution.ys["trajectory"],
+                    solution.event_mask,
+                    solution.ts["termination"][0],
+                    solution.ys["termination"][0],
+                )
             return trajectory
         
         output_sharding = sharding
         if self._has_vmec_axis_event:
-            output_sharding = (sharding, (sharding_index, sharding_index))
+            output_sharding = (
+                sharding,
+                (sharding_index, sharding_index),
+                sharding_index,
+                sharding,
+            )
         if sharding is not None:
             return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
                         device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
