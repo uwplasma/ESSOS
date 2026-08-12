@@ -674,7 +674,9 @@ def FieldLine(t,
 
 
 @jit
-def _fill_terminated_trajectories(trajectories, axis_threshold=None):
+def _fill_terminated_trajectories(
+    trajectories, axis_threshold=None, boundary_threshold=None
+):
     """Replace post-event or below-axis saves with the last valid state."""
 
     def fill_trajectory(trajectory):
@@ -682,6 +684,8 @@ def _fill_terminated_trajectories(trajectories, axis_threshold=None):
             is_valid = jnp.isfinite(current).all()
             if axis_threshold is not None:
                 is_valid = is_valid & (current[0] > axis_threshold)
+            if boundary_threshold is not None:
+                is_valid = is_valid & (current[0] < boundary_threshold)
             state = jnp.where(is_valid, current, previous)
             return state, state
 
@@ -933,10 +937,14 @@ class Tracing():
         if self._has_vmec_axis_event:
             self.axis_hits, self.boundary_hits = self.event_mask
             filled = _fill_terminated_trajectories(
-                trajectories, self.axis_threshold
+                trajectories,
+                self.axis_threshold,
+                self.boundary_threshold,
             )
             self._trajectories = jnp.where(
-                self.axis_hits[:, None, None], filled, trajectories
+                (self.axis_hits | self.boundary_hits)[:, None, None],
+                filled,
+                trajectories,
             )
             self.custom_hits = jnp.zeros(len(trajectories), dtype=bool)
         elif self._has_custom_event:
