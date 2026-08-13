@@ -5,14 +5,17 @@
 
 # JAX library ------------------------------------------------ 
 # Library for high-performance numerical computing and automatic differentiation.
+import jax
+
+jax.config.update("jax_enable_x64", True)
 from jax import grad
 import jax.numpy as jnp
 
+
 # ESSOS libraries --------------------------------------------
-from essos.fields import Vmec
+from essos.fields import BiotSavart, Vmec
 from essos.plot import fix_matplotlib_3d
 from essos.coils import Curves, Coils
-from essos.fields import BiotSavart
 from essos.surfaces import SurfaceRZFourier
 
 # Plotting libraries ----------------------------------------
@@ -22,6 +25,7 @@ import matplotlib.pyplot as plt
 
 # Other libraries ------------------------------------------
 import os
+import time
 
 # ============================================================================================
 # We create the class for storing magnetic field data.
@@ -40,6 +44,7 @@ class MagneticFieldData:
 # ============================================================================================
 # flags: vmec, torus_simple
 flag_surface_case = "vmec"
+# flag_surface_case = "torus_simple"
 
 # ============================================================================================
 # The surface is defined by the Fourier coefficients of R and Z as functions of theta and phi.
@@ -51,27 +56,21 @@ flag_surface_case = "vmec"
 
 if flag_surface_case == "torus_simple":
 
-    Rmajor = 13.0
+    Rmajor = 10.0
     rminor = 2.0
     epsilon = 0.03
 
 
-    rc = jnp.array([
-        [0.0, Rmajor, 0.0],
-        [0.0, rminor, epsilon],
-        [0.0, 0.0, 0.5 * epsilon],
-    ])
+    rc = jnp.array([Rmajor, rminor])
+    zs = jnp.array([0.0, rminor])
 
-    zs = jnp.array([
-        [0.0, 0.0, 0.0],
-        [0.0, rminor, epsilon],
-        [0.0, 0.0, 0.5 * epsilon],
-    ])
 
     surface = SurfaceRZFourier(
         rc=rc,
         zs=zs,
         nfp=3,
+        mpol=1,
+        ntor=0,
         ntheta=50,
         nphi=60,
         close=True,
@@ -80,12 +79,13 @@ if flag_surface_case == "torus_simple":
 
 elif flag_surface_case == "vmec":
 
-    Rmajor = 13.0
-    rminor = 2.0
+    Rmajor = 12.0
+    rminor = 3.0
     epsilon = 0.03
 
+
     wout_file = os.path.join(
-        os.path.dirname(__file__),
+        os.path.dirname(__file__),"..",
         "input_files",
         "wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
     )
@@ -168,11 +168,34 @@ print("surf_xyz_sampled.shape =", surf_xyz_sampled.shape)
 number_of_coils = 4
 order = 1  # (2*order + 1) = Fourier coefficients for each of the x, y, z coordinates
 
-Rmajor_coils = 1.0 * Rmajor
-rminor_coils = 2.0 * rminor
+if flag_surface_case == "torus_simple":
+    # Coils in the x-z plane: coil 0 and coil 1
+    Rmajor01_coils = 1.0 * Rmajor
+    rminor01_coils = 2.0 * rminor
 
-Ifactor = 2.
-Icoils_direction = jnp.array([-1.0, 1.0, -1.0, 1.0])
+    # Coils in the y-z plane: coil 2 and coil 3
+    Rmajor02_coils = 1.0 * Rmajor
+    rminor02_coils = 2.0 * rminor
+
+    Ifactor = 1.e7
+    Icoils_direction = jnp.array([-1.0, 1.0, -1.0, 1.0])
+
+elif flag_surface_case == "vmec":
+    # Coils in the x-z plane: coil 0 and coil 1
+    Rmajor01_coils = 1.0 * Rmajor
+    rminor01_coils = 2.3 * rminor
+
+    # Coils in the y-z plane: coil 2 and coil 3
+    Rmajor02_coils = 0.7 * Rmajor
+    rminor02_coils = 2.3 * rminor
+
+    Ifactor = 1.e7
+    Icoils_direction = jnp.array([-1.0, 1.0, -1.0, 1.0])
+
+else:
+    raise ValueError(f"Unknown flag_surface_case: {flag_surface_case}")
+
+
 Icoils = Ifactor * Icoils_direction
 
 """
@@ -201,30 +224,30 @@ coil_dofs = jnp.zeros(( number_of_coils, 3 , 2*order+1 ))
 # -----------------------------------------------------------------------------
 # Coil 0: centered at (Rmajor, 0, 0), in the x-z plane
 # -----------------------------------------------------------------------------
-coil_dofs = coil_dofs.at[0, 0, 0].set(Rmajor_coils)    # x constant
-coil_dofs = coil_dofs.at[0, 0, 2].set(rminor_coils)    # x cosine term
-coil_dofs = coil_dofs.at[0, 2, 1].set(-rminor_coils)   # z sine term
+coil_dofs = coil_dofs.at[0, 0, 0].set(Rmajor01_coils)    # x constant
+coil_dofs = coil_dofs.at[0, 0, 2].set(rminor01_coils)    # x cosine term
+coil_dofs = coil_dofs.at[0, 2, 1].set(-rminor01_coils)   # z sine term
 
 # -----------------------------------------------------------------------------
 # Coil 1: centered at (-Rmajor, 0, 0), in the x-z plane
 # -----------------------------------------------------------------------------
-coil_dofs = coil_dofs.at[1, 0, 0].set(-Rmajor_coils)   # x constant
-coil_dofs = coil_dofs.at[1, 0, 2].set(rminor_coils)    # x cosine term
-coil_dofs = coil_dofs.at[1, 2, 1].set(-rminor_coils)   # z sine term
+coil_dofs = coil_dofs.at[1, 0, 0].set(-Rmajor01_coils)   # x constant
+coil_dofs = coil_dofs.at[1, 0, 2].set(rminor01_coils)    # x cosine term
+coil_dofs = coil_dofs.at[1, 2, 1].set(-rminor01_coils)   # z sine term
 
 # -----------------------------------------------------------------------------
 # Coil 2: centered at (0, Rmajor, 0), in the y-z plane
 # -----------------------------------------------------------------------------
-coil_dofs = coil_dofs.at[2, 1, 0].set(Rmajor_coils)    # y constant
-coil_dofs = coil_dofs.at[2, 1, 2].set(rminor_coils)    # y cosine term
-coil_dofs = coil_dofs.at[2, 2, 1].set(-rminor_coils)   # z sine term
+coil_dofs = coil_dofs.at[2, 1, 0].set(Rmajor02_coils)    # y constant
+coil_dofs = coil_dofs.at[2, 1, 2].set(rminor02_coils)    # y cosine term
+coil_dofs = coil_dofs.at[2, 2, 1].set(-rminor02_coils)   # z sine term
 
 # -----------------------------------------------------------------------------
 # Coil 3: centered at (0, -Rmajor, 0), in the y-z plane
 # -----------------------------------------------------------------------------
-coil_dofs = coil_dofs.at[3, 1, 0].set(-Rmajor_coils)   # y constant
-coil_dofs = coil_dofs.at[3, 1, 2].set(rminor_coils)    # y cosine term
-coil_dofs = coil_dofs.at[3, 2, 1].set(-rminor_coils)   # z sine term
+coil_dofs = coil_dofs.at[3, 1, 0].set(-Rmajor02_coils)   # y constant
+coil_dofs = coil_dofs.at[3, 1, 2].set(rminor02_coils)    # y cosine term
+coil_dofs = coil_dofs.at[3, 2, 1].set(-rminor02_coils)   # z sine term
 
 
 coil_curves = Curves(
@@ -239,11 +262,9 @@ coils = Coils(
     currents=Icoils,
 )
 
-def QS_residual(vmec, dofs_curves, currents_scale, nfp, n_segments=60, stellsym=True):
 
 
 
-    return QS_res
 # ============================================================================================
 # Magnetic field from the coils from Biot-Savart law
 # ============================================================================================
@@ -349,8 +370,6 @@ print("QS_condition_xyz_sampled max =", jnp.max(QS_condition_xyz_sampled))
 
 
 
-
-
 # ============================================================================================
 # ============================================================================================
 # PLOTTING SECTION ===========================================================================
@@ -393,9 +412,9 @@ for coil_index, (gamma_curve, gamma_dash_curve) in enumerate(zip(coils.gamma, co
     ax.quiver(
         point[0], point[1], point[2],
         tangent[0], tangent[1], tangent[2],
-        length=0.18,
+        length=4.,
         normalize=True,
-        color="red",
+        color="blue",
         arrow_length_ratio=0.25,
         linewidth=2,
     )
@@ -440,9 +459,9 @@ y = surf_pt_sampled[..., 1]
 z = surf_pt_sampled[..., 2]
 
 # Unit-normal vectors at the sampled points
-u = unitnormal_pt_sampled[..., 0]
-v = unitnormal_pt_sampled[..., 1]
-w = unitnormal_pt_sampled[..., 2]
+u = (-unitnormal_pt_sampled)[..., 0]
+v = (-unitnormal_pt_sampled)[..., 1]
+w = (-unitnormal_pt_sampled)[..., 2]
 
 # Magnetic-field vectors at the sampled points
 B_vectors_pt_sampled = B_vector_xyz_sampled.reshape(surf_pt_sampled.shape)
@@ -453,7 +472,7 @@ bz = B_vectors_pt_sampled[..., 2]
 ax2.quiver(
     x, y, z,
     u, v, w,
-    length=0.08,
+    length=1.,
     normalize=True,
     color="darkgreen",
     label="unit normal",
@@ -462,7 +481,7 @@ ax2.quiver(
 ax2.quiver(
     x, y, z,
     bx, by, bz,
-    length=0.08,
+    length=1.,
     normalize=True,
     color="royalblue",
     label="B",
@@ -472,9 +491,6 @@ ax2.set_title("Surface with unit-normal vectors and B vectors")
 ax2.legend()
 
 plt.show()
-
-
-
 
 
 # ========================================
@@ -583,3 +599,89 @@ ax4.set_xlabel("x")
 ax4.set_ylabel("y")
 ax4.set_zlabel("z")
 plt.show()
+
+
+
+
+
+
+# ============================================================================================
+# ============================================================================================
+# FINAL WRAPPERS THAT WILL GO TO THE CODE ====================================================
+# ============================================================================================
+# ============================================================================================
+
+
+
+
+########################### QUASI-SYMMETRY LOSS ###########################
+
+
+# def QS_check_on_surface_original(BBfield, surface):
+#     """
+#     Return the quasi-symmetry residual on the surface, point by point.
+#     The output is a 1D array with one value per surface point.
+#     """
+#     # Surface points and unit normals, reshaped to (npoints, 3)
+#     surf_xyz = surface.gamma.reshape(-1, 3)
+#     unitnormal_xyz = surface.unitnormal.reshape(-1, 3)
+
+#     # grad |B| at each surface point
+#     grad_Bmod = jnp.array([BBfield.dAbsB_by_dX(point) for point in surf_xyz])
+
+#     # B · grad(|B|) at each point
+#     def B_dot_gradB_of_xyz(point):
+#         return jnp.dot(BBfield.B(point), BBfield.dAbsB_by_dX(point))
+
+#     # grad( ( B · grad(|B|) )
+#     grad_B_dot_gradB = jnp.array([grad(B_dot_gradB_of_xyz)(point) for point in surf_xyz])
+
+#     # QS condition: (n x grad|B|) · grad(B · grad|B|)
+#     QS_residual_xyz = jnp.sum( jnp.cross( unitnormal_xyz, grad_Bmod ) * grad_B_dot_gradB , axis=1)
+
+#     return QS_residual_xyz
+
+
+
+# print("Computed QS_check_on_surface by the original version")
+# QS_check_xyz_full = QS_check_on_surface_original(BB_coils, surface)
+# print("QS_check_xyz_full.shape =", QS_check_xyz_full.shape)
+# print("QS_check_xyz_full min =", jnp.min(QS_check_xyz_full))
+# print("QS_check_xyz_full max =", jnp.max(QS_check_xyz_full))
+
+# def QS_check_on_surface_wrapped(BBfield, surface):
+#     """
+#     Return a pointwise quasi-symmetry residual on the surface.
+#     Shape is usually (nphi, ntheta) or flattened to (npoints,).
+#     """
+#     # 1. get surface points
+#     surf_xyz = surface.gamma.reshape(-1, 3)
+
+#     # 2. field and gradient of |B|
+#     BBvec_xyx = jax.vmap(BBfield.B)(surf_xyz)
+#     gradB = jax.vmap(BBfield.dAbsB_by_dX)(surf_xyz)
+
+#     # 3. surface normal
+#     unitnormal_xyz = surface.unitnormal.reshape(-1, 3)
+
+#     # 4. quasi-symmetry condition
+#     #    (n x grad|B|) · grad(B · grad|B|)
+#     B_dot_gradB = jnp.sum(BBvec_xyx * gradB, axis=1)
+#     grad_B_dot_gradB = jax.vmap(jax.grad(lambda x: jnp.dot(BBfield.B(x), BBfield.dAbsB_by_dX(x))))(surf_xyz)
+#     QS_residual_xyz = jnp.sum(jnp.cross(unitnormal_xyz, gradB) * grad_B_dot_gradB, axis=1)
+
+#     return QS_residual_xyz
+
+# print("Computed QS_check_on_surface by the wrapped version")
+# QS_check_xyz_full = QS_check_on_surface_wrapped(BB_coils, surface)
+# print("QS_check_xyz_full.shape =", QS_check_xyz_full.shape)
+# print("QS_check_xyz_full min =", jnp.min(QS_check_xyz_full))
+# print("QS_check_xyz_full max =", jnp.max(QS_check_xyz_full))
+
+# def loss_QS(field, surface):
+#     """
+#     Scalar objective: smaller means closer to quasi-symmetry.
+#     """
+#     QS_residual_xyz = QS_check_on_surface(field, surface)
+#     QS_residual_sqr = jnp.mean(jnp.square(QS_residual_xyz))
+#     return QS_residual_sqr

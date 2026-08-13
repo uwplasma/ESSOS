@@ -194,6 +194,42 @@ def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
     return bdotn_over_b_loss
 
 
+########################### QUASI-SYMMETRY LOSS ########################### gftd13@gmail.com
+
+def QS_check_on_surface(BBfield, surface):
+    """
+    Return a pointwise quasi-symmetry residual on the surface.
+    Shape is usually (nphi, ntheta) or flattened to (npoints,).
+    """
+    # 1. get surface points
+    surf_xyz = surface.gamma.reshape(-1, 3)
+
+    # 2. field and gradient of |B|
+    BBvec_xyx = jax.vmap(BBfield.B)(surf_xyz)
+    gradB = jax.vmap(BBfield.dAbsB_by_dX)(surf_xyz)
+
+    # 3. surface normal
+    unitnormal_xyz = surface.unitnormal.reshape(-1, 3)
+
+    # 4. quasi-symmetry condition
+    #    (n x grad|B|) · grad(B · grad|B|)
+    B_dot_gradB = jnp.sum(BBvec_xyx * gradB, axis=1)
+    grad_B_dot_gradB = jax.vmap(jax.grad(lambda x: jnp.dot(BBfield.B(x), BBfield.dAbsB_by_dX(x))))(surf_xyz)
+    QS_residual_xyz = jnp.sum(jnp.cross(unitnormal_xyz, gradB) * grad_B_dot_gradB, axis=1)
+
+    return QS_residual_xyz
+
+
+def loss_QS(field, surface):
+    """
+    Scalar objective: smaller means closer to quasi-symmetry.
+    """
+    QS_residual_xyz = QS_check_on_surface(field, surface)
+    QS_residual_sqr = jnp.mean(jnp.square(QS_residual_xyz))
+    return QS_residual_sqr
+
+
+
 ###########################  B ON SURAFCE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
 def copy_coils_from_field(field):
     return field.coils.copy()
