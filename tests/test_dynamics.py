@@ -1,18 +1,23 @@
 import pytest
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELECTRON_MASS,PROTON_MASS
 from essos.dynamics import (
     FieldLine,
+    FieldLineArclength,
+    FieldLineToroidal,
     GuidingCenter,
     Lorentz,
     Particles,
     Tracing,
+    LevelsetStoppingCriterion,
     _fill_terminated_trajectories,
     _vmec_radial_events,
     _VMEC_GUIDING_CENTER_MODELS,
 )
 from essos.background_species import BackgroundSpecies
 from essos.fields import Vmec
+from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 
 def test_particles_initialization_all_params():
     nparticles = 100
@@ -99,6 +104,41 @@ class MockField:
 class MockElectricField:
     def E_covariant(self, points):
         return jnp.array([0.0, 0.0, 0.0])
+
+
+def test_arclength_fieldline_has_unit_speed_without_changing_direction():
+    class ScaledField(MockField):
+        def B_contravariant(self, points):
+            return jnp.array([3.0, 4.0, 0.0])
+
+    derivative = FieldLineArclength(0.0, jnp.zeros(3), ScaledField())
+    assert jnp.allclose(derivative, jnp.array([0.6, 0.8, 0.0]))
+
+    tracing = Tracing(
+        field=ScaledField(), model="FieldLineArclength",
+        initial_conditions=jnp.zeros((1, 3)), maxtime=2.0,
+        timestep=0.1, times_to_trace=11)
+    assert jnp.allclose(
+        tracing.trajectories[0, -1], jnp.array([1.2, 1.6, 0.0]))
+
+
+def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
+    class FluxField(MockField):
+        def B_contravariant(self, points):
+            return jnp.array([0.0, 2.0, 4.0])
+
+        def toroidal_angle_batch(self, points):
+            return points[:, 2]
+
+    derivative = FieldLineToroidal(0.0, jnp.zeros(3), FluxField())
+    assert jnp.allclose(derivative, jnp.array([0.0, 0.5, 1.0]))
+
+    tracing = Tracing(
+        field=FluxField(), model="FieldLineToroidal",
+        initial_conditions=jnp.zeros((1, 3)), maxtime=2.0,
+        timestep=0.1, times_to_trace=11)
+    assert jnp.allclose(tracing.trajectories[0, -1], jnp.array([0.0, 1.0, 2.0]))
+    assert jnp.allclose(tracing.toroidal_angles[0], tracing.trajectories[0, :, 2])
 
 
 class MockVmec(MockField, Vmec):
@@ -193,6 +233,78 @@ def test_vmec_axis_events_cover_every_guiding_center_stepper():
     assert "FullOrbit" not in _VMEC_GUIDING_CENTER_MODELS
     assert "FullOrbitAdaptative" not in _VMEC_GUIDING_CENTER_MODELS
     assert "FullOrbit_Boris" not in _VMEC_GUIDING_CENTER_MODELS
+
+
+def test_levelset_stopping_criterion_stops_and_fills_field_line():
+    class PlaneClassifier:
+        def evaluate_xyz(self, xyz):
+            return 1.5 - xyz[0]
+
+    criterion = LevelsetStoppingCriterion(PlaneClassifier(), maximum_distance=0.2)
+    tracing = Tracing(
+        field=MockField(), model="FieldLineAdaptative",
+        initial_conditions=jnp.array([[1.0, 0.0, 0.0]]),
+        maxtime=1.0, timestep=0.01, times_to_trace=21,
+        stopping_criteria=criterion,
+    )
+
+    assert tracing.boundary_hits.tolist() == [True]
+    assert tracing.progress is False
+    assert jnp.isfinite(tracing.trajectories).all()
+    assert jnp.max(tracing.trajectories[0, :, 0]) <= 1.7 + 1e-8
+    assert jnp.allclose(tracing.trajectories[0, -1], tracing.trajectories[0, -2])
+
+
+def test_poincare_plot_unwraps_toroidal_crossings_and_accepts_line_colors():
+    phase = jnp.linspace(0.0, 4.0 * jnp.pi, 101)
+    first = jnp.stack((jnp.cos(phase), jnp.sin(phase), 0.1 * jnp.sin(phase)), axis=1)
+    second = first.at[:, :2].multiply(1.1)
+    tracing = Tracing.__new__(Tracing)
+    tracing.times = phase
+    tracing.trajectories_xyz = jnp.stack((first, second))
+
+    figure, axis = plt.subplots()
+    sections = tracing.poincare_plot(
+        shifts=[0.0], ax=axis, show=False, color=["tab:blue", "tab:orange"])
+    plt.close(figure)
+
+    assert len(sections) == 2
+    assert all(len(section[0]) == 2 for section in sections)
+    assert all(jnp.allclose(section[1], 0.0, atol=1e-12) for section in sections)
+
+
+def test_poincare_plot_prefers_continuous_native_toroidal_angle():
+    phase = jnp.linspace(0.0, 4.0 * jnp.pi, 101)
+    # Deliberately give Cartesian points an unrelated azimuth: native flux
+    # coordinates must define the section for a VMEC tracing adapter.
+    trace = jnp.stack((1.0 + 0.001 * phase, jnp.zeros_like(phase),
+                       0.001 * phase + 0.1 * jnp.sin(phase)), axis=1)
+    tracing = Tracing.__new__(Tracing)
+    tracing.times = phase
+    tracing.trajectories_xyz = trace[None]
+    tracing.toroidal_angles = phase[None]
+
+    figure, axis = plt.subplots()
+    sections = tracing.poincare_plot(shifts=[0.0], ax=axis, show=False)
+    plt.close(figure)
+    assert len(sections[0][0]) == 2
+
+
+def test_levelset_stopping_criterion_validates_inputs():
+    with pytest.raises(ValueError, match="non-negative"):
+        LevelsetStoppingCriterion(MockField(), maximum_distance=-0.1)
+    with pytest.raises(ValueError, match="condition or stopping_criteria"):
+        Tracing(field=MockField(), model="FieldLine", initial_conditions=jnp.ones((1, 3)),
+                condition=lambda *args: False, stopping_criteria=lambda *args: False)
+
+
+def test_surface_classifier_signed_distance_for_circular_torus():
+    surface = SurfaceRZFourier(
+        rc=jnp.array([1.0, 0.2]), zs=jnp.array([0.0, 0.2]),
+        nfp=1, mpol=1, ntor=0, ntheta=16, nphi=16, close=False)
+    classifier = SurfaceClassifier(surface, h=0.1, padding=0.4)
+    assert classifier.evaluate_xyz(jnp.array([1.0, 0.0, 0.0])) > 0.0
+    assert classifier.evaluate_xyz(jnp.array([1.5, 0.0, 0.0])) < 0.0
 
 
 @pytest.mark.parametrize("model", ["GuidingCenter", "GuidingCenterAdaptative"])

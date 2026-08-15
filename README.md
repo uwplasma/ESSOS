@@ -171,6 +171,37 @@ A trajectory that must continue across the axis requires a regular coordinate
 chart (for example, pseudo-Cartesian flux coordinates) or a Cartesian/full-orbit
 handoff.
 
+### Stopping coil-field traces
+
+For Cartesian coil fields, stop trajectories after they leave a prescribed
+distance from a reference surface. This keeps lost or chaotic lines from
+dominating Poincare axes while retaining a per-line termination mask:
+
+```python
+surface_distance = SurfaceClassifier(surface, padding=0.2)
+escape = LevelsetStoppingCriterion(surface_distance, maximum_distance=0.1)
+tracing = Tracing(field=coils, model="FieldLineAdaptative",
+                  initial_conditions=seeds, stopping_criteria=escape)
+print(tracing.boundary_hits)
+```
+
+Progress bars are off by default because Diffrax updates can overwhelm batch
+logs; pass ``progress=True`` when interactive per-solve progress is useful.
+Toroidal Poincare sections unwrap the Cartesian azimuth before extracting
+crossings, including the branch at ``phi=0``.
+
+Use ``model="FieldLineArclength"`` for Cartesian magnetic fields when fields
+with different strengths should be traced for the same physical length. It
+has the same field-line topology as ``FieldLineAdaptative`` but avoids runtime
+changes caused only by rescaling ``B``.
+For flux-coordinate fields with nonzero toroidal field, use
+``model="FieldLineToroidal"`` to set the coverage directly in toroidal angle.
+
+The finite-beta coil example
+[`optimize_coils_finite_beta_vmex.py`](examples/coil_optimization/optimize_coils_finite_beta_vmex.py)
+uses a VMEX equilibrium and virtual casing to optimize the external ESSOS coil
+field directly, with exact reverse-mode gradients.
+
 ## Testing
 To run the tests, use `pytest`:
 ```sh

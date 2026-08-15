@@ -831,19 +831,22 @@ class SurfaceClassifier():
     (approximately) zero on the surface, and negative outisde the volume contained by the surface.
     """
 
-    def __init__(self, surface,h=0.05):
+    def __init__(self, surface, h=0.05, padding=0.1):
         """
         Args:
             surface: the surface to contruct the distance from.
             h: grid resolution of the interpolant
+            padding: distance represented outside the surface
         """
+        if padding <= 0.0:
+            raise ValueError("padding must be positive")
         gammas = surface.gamma
         r = jnp.linalg.norm(gammas[:, :, :2], axis=2)
         z = gammas[:, :, 2]
-        rmin = max(jnp.min(r) - 0.1, 0.)
-        rmax = jnp.max(r) + 0.1
-        zmin = jnp.min(z) - 0.1
-        zmax = jnp.max(z) + 0.1
+        rmin = max(jnp.min(r) - padding, 0.)
+        rmax = jnp.max(r) + padding
+        zmin = jnp.min(z) - padding
+        zmax = jnp.max(z) + padding
 
         self.zrange = (zmin, zmax)
         self.rrange = (rmin, rmax)
@@ -852,12 +855,22 @@ class SurfaceClassifier():
         nphi = int(2*jnp.pi/h)
         nz = int((self.zrange[1]-self.zrange[0])/h)
 
+        gammas_flat = surface.gamma.reshape((-1, 3))
+        normals_flat = surface.unitnormal.reshape((-1, 3))
+        tree = jaxkd.build_tree(gammas_flat)
+        interior = jnp.mean(surface.gamma[0, :, :], axis=0)
+        sign_of_interior = jnp.sign(jnp.sum(
+            (interior - gammas_flat[0]) * normals_flat[0]))
+
         def fbatch(rs, phis, zs):
             xyz = jnp.zeros(( 3))
             xyz=xyz.at[0].set( rs * jnp.cos(phis))
             xyz=xyz.at[1].set(rs * jnp.sin(phis))
             xyz=xyz.at[2].set(zs)
-            return signed_distance_from_surface_jax(xyz, surface)   
+            nearest, _ = jaxkd.query_neighbors(tree, xyz, k=1)
+            distance = jnp.sum(
+                (xyz - gammas_flat[nearest]) * normals_flat[nearest], axis=1)
+            return distance * sign_of_interior
             #return signed_distance_from_surface_extras(xyz, surface) ####memory bounded
 
         #rule = sopp.UniformInterpolationRule(p) 
