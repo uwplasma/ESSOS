@@ -779,7 +779,7 @@ class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
-                 solver=None, axis_threshold=1.e-6, stopping_criteria=None, progress=False):
+                 solver=None, axis_threshold=1.e-6, stopping_criteria=None, progress=False, devices=None):
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")
@@ -792,6 +792,9 @@ class Tracing():
                 raise ValueError("stopping_criteria must contain callable criteria")
             condition = stopping_criteria[0] if len(stopping_criteria) == 1 else stopping_criteria
         self.stopping_criteria = stopping_criteria
+        self.devices = tuple(jax.devices() if devices is None else devices)
+        if not self.devices:
+            raise ValueError("devices must contain at least one JAX device")
         
         if electric_field==None:
             self.electric_field = Electric_field_zero()
@@ -1203,7 +1206,7 @@ class Tracing():
                 return trajectory, solution.event_mask
             return trajectory
         
-        devices = tuple(jax.devices())
+        devices = self.devices
         device_count = min(len(devices), len(self.initial_conditions))
         while device_count > 1 and len(self.initial_conditions) % device_count:
             device_count -= 1
@@ -1566,7 +1569,7 @@ class Tracing():
         aux_data = {'field': self.field, 'electric_field': self.electric_field, 'model': self.model, 'maxtime': self.maxtime, 'timestep': self.timestep,
                     'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc,
                     'solver': self.solver, 'stopping_criteria': self.stopping_criteria,
-                    'progress': self.progress}  # static values
+                    'progress': self.progress, 'devices': self.devices}  # static values
         return (children, aux_data)
 
     @classmethod

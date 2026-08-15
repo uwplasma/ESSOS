@@ -189,6 +189,8 @@ Progress bars are off by default because Diffrax updates can overwhelm batch
 logs; pass ``progress=True`` when interactive per-solve progress is useful.
 Toroidal Poincare sections unwrap the Cartesian azimuth before extracting
 crossings, including the branch at ``phi=0``.
+Tracing uses the largest compatible subset of visible devices; pass
+``devices=jax.devices("gpu")[:1]`` (or another explicit list) to select them.
 
 Use ``model="FieldLineArclength"`` for Cartesian magnetic fields when fields
 with different strengths should be traced for the same physical length. It

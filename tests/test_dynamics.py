@@ -296,6 +296,9 @@ def test_levelset_stopping_criterion_validates_inputs():
     with pytest.raises(ValueError, match="condition or stopping_criteria"):
         Tracing(field=MockField(), model="FieldLine", initial_conditions=jnp.ones((1, 3)),
                 condition=lambda *args: False, stopping_criteria=lambda *args: False)
+    with pytest.raises(ValueError, match="at least one"):
+        Tracing(field=MockField(), model="FieldLine", initial_conditions=jnp.ones((1, 3)),
+                devices=[])
 
 
 def test_surface_classifier_signed_distance_for_circular_torus():
