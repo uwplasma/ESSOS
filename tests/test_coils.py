@@ -26,6 +26,11 @@ def test_curve_and_coil_dof_names_follow_flattened_dofs():
     coils = Coils(curves, jnp.array([1.0, 2.0]))
     assert coils.dof_names[-2:] == ("coil[0].current", "coil[1].current")
     assert len(coils.dof_names) == coils.dofs.size
+    updated = coils.with_dofs(coils.dofs + 1.0)
+    assert jnp.allclose(updated.dofs, coils.dofs + 1.0)
+    assert not jnp.allclose(coils.dofs, updated.dofs)
+    gradient = jax.grad(lambda dofs: jnp.sum(coils.with_dofs(dofs).gamma))(coils.dofs)
+    assert gradient.shape == coils.dofs.shape and jnp.all(jnp.isfinite(gradient))
 
 def test_surface_from_vmec_boundary_preserves_modes_and_is_differentiable():
     rbc = jnp.arange(15.0).reshape(5, 3); zbs = -rbc

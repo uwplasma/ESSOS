@@ -138,6 +138,12 @@ class Curves:
         self.reset_cache()
         self._dofs = new_dofs / self.scaling[None, None, :]
         self._order = self._dofs.shape[2] // 2
+
+    def with_dofs(self, dofs):
+        """Return a differentiable copy with new public curve ``dofs``."""
+        curves = self.copy()
+        curves.dofs = dofs
+        return curves
     
     # n_segments property and setter
     @property
@@ -672,6 +678,12 @@ class Coils:
         n_curve_dofs = jnp.size(self.dofs_curves)
         self.dofs_curves = jnp.reshape(new_dofs[:n_curve_dofs], self.dofs_curves.shape)
         self.dofs_currents = new_dofs[n_curve_dofs:]
+
+    def with_dofs(self, dofs):
+        """Return a differentiable copy with new curve and current ``dofs``."""
+        coils = self.copy()
+        coils.dofs = dofs
+        return coils
 
     # TODO: remove x property. This is a placeholder for compatibility with the examples that need to be updated.
     # x property and setter 

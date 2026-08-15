@@ -30,7 +30,8 @@ Optimization geometry
 ---------------------
 
 ``coils.dof_names`` labels the flattened Fourier and current variables in the
-same order as ``coils.dofs``. A live VMEC boundary can be converted without
+same order as ``coils.dofs``; ``coils.with_dofs(x)`` returns a differentiable
+updated copy without mutating an optimization template. A live VMEC boundary can be converted without
 copying mode-ordering code into a driver:
 
 .. code-block:: python
