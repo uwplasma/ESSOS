@@ -123,6 +123,15 @@ class Curves:
     def dofs(self):
         # Apply scaling to each coordinate (X, Y, Z) independently
         return self._dofs * self.scaling[None, None, :]
+
+    @property
+    def dof_names(self):
+        """Names ordered exactly like :attr:`dofs` flattened in C order."""
+        coefficients = ["0"] + [f"{kind}({mode})" for mode in range(1, self.order + 1)
+                                  for kind in ("s", "c")]
+        return tuple(f"coil[{coil}].{axis}{coefficient}"
+                     for coil in range(self.n_base_curves) for axis in "xyz"
+                     for coefficient in coefficients)
     
     @dofs.setter
     def dofs(self, new_dofs):
@@ -651,6 +660,12 @@ class Coils:
     @property
     def dofs(self):
         return jnp.hstack([self.dofs_curves.ravel(), self.dofs_currents])
+
+    @property
+    def dof_names(self):
+        """Names ordered exactly like the combined curve/current :attr:`dofs`."""
+        return self.curves.dof_names + tuple(
+            f"coil[{coil}].current" for coil in range(self.curves.n_base_curves))
     
     @dofs.setter
     def dofs(self, new_dofs):

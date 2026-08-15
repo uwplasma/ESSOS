@@ -104,6 +104,24 @@ def nested_lists_to_array(ll):
         arr = arr.at[jm, :len(l)].set(jnp.array([x if x is not None else 0 for x in l]))
     return arr
 
+
+def surfacerzfourier_from_boundary(rbc, zbs, nfp, ntheta=30, nphi=30,
+                                   close=False, range_torus="full torus"):
+    """Create a differentiable surface from VMEC ``rbc`` and ``zbs`` arrays.
+
+    VMEC stores arrays as ``[n + ntor, m]`` and omits negative-``n`` modes
+    when ``m=0``. ESSOS stores the same independent coefficients as flat mode
+    vectors; this function performs only that ordering conversion.
+    """
+    rbc, zbs = jnp.asarray(rbc), jnp.asarray(zbs)
+    if rbc.ndim != 2 or rbc.shape != zbs.shape or rbc.shape[0] % 2 != 1:
+        raise ValueError("rbc and zbs must have equal shape (2*ntor+1, mpol+1)")
+    ntor, mpol = (rbc.shape[0] - 1) // 2, rbc.shape[1] - 1
+    rc = jnp.concatenate((rbc[ntor:, 0], rbc[:, 1:].T.ravel()))
+    zs = jnp.concatenate((zbs[ntor:, 0], zbs[:, 1:].T.ravel()))
+    return SurfaceRZFourier(rc, zs, int(nfp), mpol, ntor, ntheta=ntheta, nphi=nphi,
+                            close=close, range_torus=range_torus)
+
     
 
 class SurfaceRZFourier:
