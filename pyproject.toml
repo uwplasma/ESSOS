@@ -39,6 +39,8 @@ dependencies = [
     "scipy", 
     "jaxkd", 
     "netcdf4",
+    # Used internally by SurfaceRZFourier.to_vtk() and Coils.to_vtk().
+    "pyevtk",
     "pyqsc_jax @ git+https://github.com/uwplasma/pyQSC_JAX.git"
 ] 
 requires-python = ">=3.10"
@@ -48,4 +50,3 @@ Homepage = "https://github.com/uwplasma/ESSOS"
 
 [project.scripts]
 essos = "essos.__main__:main"
- 
