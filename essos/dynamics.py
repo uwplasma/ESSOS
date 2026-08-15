@@ -1234,7 +1234,15 @@ class Tracing():
             return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
                         initial_conditions, random_keys)
         else:
-            return jit(vmap(compute_trajectory,in_axes=(0,0)))(self.initial_conditions, self.particles.random_keys if self.particles else None)
+            device = devices[0]
+            initial_conditions = device_put(
+                np.asarray(jax.device_get(self.initial_conditions)), device)
+            random_keys = self.particles.random_keys if self.particles else None
+            if random_keys is not None:
+                random_keys = device_put(jax.device_get(random_keys), device)
+            with jax.default_device(device):
+                return jit(vmap(compute_trajectory,in_axes=(0,0)))(
+                    initial_conditions, random_keys)
         #x=jax.device_put(self.initial_conditions, sharding)
         #y=jax.device_put(self.particles.random_keys, sharding_index)        
         #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
