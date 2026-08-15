@@ -21,20 +21,6 @@ from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu
 
 
 
-# If multiple devices are available, set up sharding for parallelization. Otherwise, set sharding to None.
-if len(jax.devices()) > 1:
-    mesh = Mesh(jax.devices(), ("dev",))
-    spec = PartitionSpec("dev", None)
-    spec_index = PartitionSpec("dev")
-    sharding = NamedSharding(mesh, spec)
-    sharding_index = NamedSharding(mesh, spec_index)
-else:
-    mesh = None
-    sharding = None
-    sharding_index = None
-
-
-
 def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
     """
     Computes full orbit positions for given guiding center positions,
@@ -1217,6 +1203,17 @@ class Tracing():
                 return trajectory, solution.event_mask
             return trajectory
         
+        devices = tuple(jax.devices())
+        device_count = min(len(devices), len(self.initial_conditions))
+        while device_count > 1 and len(self.initial_conditions) % device_count:
+            device_count -= 1
+        if device_count > 1:
+            mesh = Mesh(np.asarray(devices[:device_count], dtype=object), ("dev",))
+            sharding = NamedSharding(mesh, PartitionSpec("dev", None))
+            sharding_index = NamedSharding(mesh, PartitionSpec("dev"))
+        else:
+            sharding = sharding_index = None
+
         output_sharding = sharding
         if self._has_vmec_axis_event:
             output_sharding = (sharding, (sharding_index, sharding_index))
@@ -1226,8 +1223,13 @@ class Tracing():
                 event_sharding = tuple(sharding_index for _ in self.stopping_criteria)
             output_sharding = (sharding, event_sharding)
         if sharding is not None:
+            initial_conditions = device_put(
+                np.asarray(jax.device_get(self.initial_conditions)), sharding)
+            random_keys = self.particles.random_keys if self.particles else None
+            if random_keys is not None:
+                random_keys = device_put(jax.device_get(random_keys), sharding_index)
             return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
-                        device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
+                        initial_conditions, random_keys)
         else:
             return jit(vmap(compute_trajectory,in_axes=(0,0)))(self.initial_conditions, self.particles.random_keys if self.particles else None)
         #x=jax.device_put(self.initial_conditions, sharding)
