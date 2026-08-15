@@ -4,7 +4,6 @@ import jax.numpy as jnp
 from jax.scipy.interpolate import RegularGridInterpolator
 from jax import tree_util, jit, vmap, devices, device_put
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
-from jax.experimental.pjit import pjit
 from essos.plot import fix_matplotlib_3d
 import jaxkd
 
@@ -47,7 +46,7 @@ def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
     return tf
 
 # @jit
-@partial(pjit, in_shardings=(sharding, None), out_shardings=sharding)
+@partial(jit, in_shardings=(sharding, None), out_shardings=sharding)
 def B_on_surface(surface, field):
     ntheta = surface.ntheta
     nphi = surface.nphi

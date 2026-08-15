@@ -31,6 +31,9 @@ def test_curve_and_coil_dof_names_follow_flattened_dofs():
     assert not jnp.allclose(coils.dofs, updated.dofs)
     gradient = jax.grad(lambda dofs: jnp.sum(coils.with_dofs(dofs).gamma))(coils.dofs)
     assert gradient.shape == coils.dofs.shape and jnp.all(jnp.isfinite(gradient))
+    updated_curves = curves.with_dofs(curves.dofs + 2.0)
+    assert jnp.allclose(updated_curves.dofs, curves.dofs + 2.0)
+    assert not jnp.allclose(curves.dofs, updated_curves.dofs)
 
 def test_surface_from_vmec_boundary_preserves_modes_and_is_differentiable():
     rbc = jnp.arange(15.0).reshape(5, 3); zbs = -rbc
@@ -48,16 +51,32 @@ def test_surface_from_vmec_boundary_preserves_modes_and_is_differentiable():
     with pytest.raises(ValueError, match="equal shape"):
         surfacerzfourier_from_boundary(jnp.zeros((4, 3)), jnp.zeros((4, 3)), 2)
 
-def test_surface_cache_does_not_retain_outer_jit_tracers():
+def _small_surface():
     rbc = jnp.zeros((5, 3)); zbs = jnp.zeros((5, 3))
-    rbc = rbc.at[2, 0].set(1.0).at[3, 0].set(0.2)
-    zbs = zbs.at[3, 0].set(0.2)
-    surface = surfacerzfourier_from_boundary(rbc, zbs, 2, nphi=8, ntheta=10)
-    value = jax.jit(lambda scale: scale * jnp.sum(surface.gamma))(1.0)
+    rbc = rbc.at[2, 0].set(1.0).at[2, 1].set(0.2)
+    zbs = zbs.at[2, 1].set(0.2)
+    return surfacerzfourier_from_boundary(rbc, zbs, 2, nphi=8, ntheta=10)
+
+@pytest.mark.parametrize("name, caches", (
+    ("theta2d", ("_theta2d", "_phi2d")),
+    ("phi2d", ("_theta2d", "_phi2d")),
+    ("angles", ("_angles",)),
+    ("gamma", ("_gamma", "_gammadash_theta", "_gammadash_phi")),
+    ("gammadash_theta", ("_gamma", "_gammadash_theta", "_gammadash_phi")),
+    ("gammadash_phi", ("_gamma", "_gammadash_theta", "_gammadash_phi")),
+    ("normal", ("_normal", "_unitnormal", "_area_element")),
+    ("unitnormal", ("_normal", "_unitnormal", "_area_element")),
+    ("area_element", ("_normal", "_unitnormal", "_area_element")),
+))
+def test_surface_cache_is_concrete_and_does_not_retain_tracers(name, caches):
+    surface = _small_surface()
+    value = jax.jit(lambda scale: scale * jnp.sum(getattr(surface, name)))(1.0)
     assert jnp.isfinite(value)
     # Access after the transform must recompute concrete values, not retrieve a
     # DynamicJaxprTracer that escaped from the compiled objective.
-    assert jnp.all(jnp.isfinite(surface.gamma))
+    assert jnp.all(jnp.isfinite(getattr(surface, name)))
+    cached = [getattr(surface, cache) for cache in caches]
+    assert all(item is not None and not isinstance(item, jax.core.Tracer) for item in cached)
 
 def test_curves_initialization_with_params():
     dofs = jnp.zeros((2, 3, 5))
