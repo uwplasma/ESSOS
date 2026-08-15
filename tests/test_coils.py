@@ -48,6 +48,17 @@ def test_surface_from_vmec_boundary_preserves_modes_and_is_differentiable():
     with pytest.raises(ValueError, match="equal shape"):
         surfacerzfourier_from_boundary(jnp.zeros((4, 3)), jnp.zeros((4, 3)), 2)
 
+def test_surface_cache_does_not_retain_outer_jit_tracers():
+    rbc = jnp.zeros((5, 3)); zbs = jnp.zeros((5, 3))
+    rbc = rbc.at[2, 0].set(1.0).at[3, 0].set(0.2)
+    zbs = zbs.at[3, 0].set(0.2)
+    surface = surfacerzfourier_from_boundary(rbc, zbs, 2, nphi=8, ntheta=10)
+    value = jax.jit(lambda scale: scale * jnp.sum(surface.gamma))(1.0)
+    assert jnp.isfinite(value)
+    # Access after the transform must recompute concrete values, not retrieve a
+    # DynamicJaxprTracer that escaped from the compiled objective.
+    assert jnp.all(jnp.isfinite(surface.gamma))
+
 def test_curves_initialization_with_params():
     dofs = jnp.zeros((2, 3, 5))
     curves = Curves(dofs, n_segments=50, nfp=2, stellsym=False)

@@ -12,6 +12,12 @@ mesh = Mesh(devices(), ("dev",))
 sharding = NamedSharding(mesh, PartitionSpec("dev"))
 
 
+def _cacheable(*values):
+    """Return false for values created while an outer JAX transform is tracing."""
+    return not any(isinstance(leaf, jax.core.Tracer)
+                   for leaf in tree_util.tree_leaves(values))
+
+
 @jit
 def toroidal_flux(surface, field, idx=0) -> jnp.ndarray:
     curve = surface.gamma[idx]    
@@ -331,14 +337,21 @@ class SurfaceRZFourier:
     @property
     def xm(self):
         if self._xm is None:
-            self._xm = jnp.repeat(jnp.arange(self.mpol + 1), 2 * self.ntor + 1)[self.ntor:]
+            value = jnp.repeat(jnp.arange(self.mpol + 1), 2 * self.ntor + 1)[self.ntor:]
+            if _cacheable(value):
+                self._xm = value
+            return value
         return self._xm
 
     # xn property
     @property
     def xn(self):
         if self._xn is None:
-            self._xn = self.nfp * jnp.tile(jnp.arange(-self.ntor, self.ntor + 1), self.mpol + 1)[self.ntor:]
+            value = self.nfp * jnp.tile(
+                jnp.arange(-self.ntor, self.ntor + 1), self.mpol + 1)[self.ntor:]
+            if _cacheable(value):
+                self._xn = value
+            return value
         return self._xn
 
     # _ntheta property and setter
@@ -397,21 +410,31 @@ class SurfaceRZFourier:
     @property
     def theta2d(self):
         if self._theta2d is None:
-            self._quadpoints_theta, self._quadpoints_phi, self._theta2d, self._phi2d = self._compute_meshgrid()
+            values = self._compute_meshgrid()
+            if _cacheable(*values):
+                self._quadpoints_theta, self._quadpoints_phi, self._theta2d, self._phi2d = values
+            return values[2]
         return self._theta2d
 
     # phi2d property
     @property
     def phi2d(self):
         if self._phi2d is None:
-            self._quadpoints_theta, self._quadpoints_phi, self._theta2d, self._phi2d = self._compute_meshgrid()
+            values = self._compute_meshgrid()
+            if _cacheable(*values):
+                self._quadpoints_theta, self._quadpoints_phi, self._theta2d, self._phi2d = values
+            return values[3]
         return self._phi2d
 
     # angles property
     @property
     def angles(self):
         if self._angles is None:
-            self._angles =  jnp.einsum('i,jk->ijk', self.xm, self.theta2d) - jnp.einsum('i,jk->ijk', self.xn, self.phi2d)
+            value = (jnp.einsum('i,jk->ijk', self.xm, self.theta2d)
+                     - jnp.einsum('i,jk->ijk', self.xn, self.phi2d))
+            if _cacheable(value):
+                self._angles = value
+            return value
         return self._angles
     
     # scaling_type property and setter
@@ -491,19 +514,28 @@ class SurfaceRZFourier:
     @property
     def gamma(self):
         if self._gamma is None:
-            self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
+            values = self._compute_gamma()
+            if _cacheable(*values):
+                self._gamma, self._gammadash_theta, self._gammadash_phi = values
+            return values[0]
         return self._gamma
     
     @property
     def gammadash_theta(self):
         if self._gammadash_theta is None:
-            self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
+            values = self._compute_gamma()
+            if _cacheable(*values):
+                self._gamma, self._gammadash_theta, self._gammadash_phi = values
+            return values[1]
         return self._gammadash_theta
     
     @property
     def gammadash_phi(self):
         if self._gammadash_phi is None:
-            self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
+            values = self._compute_gamma()
+            if _cacheable(*values):
+                self._gamma, self._gammadash_theta, self._gammadash_phi = values
+            return values[2]
         return self._gammadash_phi
 
     # _compute_properties method
@@ -518,19 +550,28 @@ class SurfaceRZFourier:
     @property
     def normal(self):
         if self._normal is None:
-            self._normal, self._unitnormal, self._area_element = self._compute_properties()
+            values = self._compute_properties()
+            if _cacheable(*values):
+                self._normal, self._unitnormal, self._area_element = values
+            return values[0]
         return self._normal
     
     @property
     def unitnormal(self):
         if self._unitnormal is None:
-            self._normal, self._unitnormal, self._area_element = self._compute_properties()
+            values = self._compute_properties()
+            if _cacheable(*values):
+                self._normal, self._unitnormal, self._area_element = values
+            return values[1]
         return self._unitnormal
     
     @property
     def area_element(self):
         if self._area_element is None:
-            self._normal, self._unitnormal, self._area_element = self._compute_properties()
+            values = self._compute_properties()
+            if _cacheable(*values):
+                self._normal, self._unitnormal, self._area_element = values
+            return values[2]
         return self._area_element
 
     # TODO: remove x property. This is a placeholder for compatibility with the examples that need to be updated.
