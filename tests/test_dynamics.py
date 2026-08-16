@@ -164,9 +164,36 @@ def test_trace_field_lines_selects_clear_physical_parameterizations(capsys):
     assert "Tracing Cartesian test" in capsys.readouterr().out
 
 
+def test_trace_field_lines_reports_stops_and_uses_batched_coordinates(capsys):
+    class BatchedField(MockField):
+        def to_xyz_batch(self, points):
+            return points
+
+    class PlaneClassifier:
+        def evaluate_xyz(self, xyz):
+            return 0.2 - xyz[0]
+
+    result = trace_field_lines(
+        BatchedField(), jnp.zeros((1, 3)), length=1.0, samples=11,
+        stopping_criteria=LevelsetStoppingCriterion(PlaneClassifier()),
+        progress=False, label="bounded test")
+    assert result.boundary_hits.tolist() == [True]
+    assert "1/1 lines reached a stopping event" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("kwargs", ({}, {"length": 1.0, "toroidal_turns": 1.0}))
 def test_trace_field_lines_requires_one_extent(kwargs):
     with pytest.raises(ValueError, match="exactly one"):
+        trace_field_lines(MockField(), jnp.zeros((1, 3)), progress=False, **kwargs)
+
+
+@pytest.mark.parametrize("kwargs, message", (
+    ({"length": 1.0, "samples": 1}, "samples"),
+    ({"length": 0.0}, "length"),
+    ({"toroidal_turns": 0.0}, "toroidal_turns"),
+))
+def test_trace_field_lines_validates_positive_extent_and_samples(kwargs, message):
+    with pytest.raises(ValueError, match=message):
         trace_field_lines(MockField(), jnp.zeros((1, 3)), progress=False, **kwargs)
 
 
@@ -301,6 +328,15 @@ def test_poincare_plot_unwraps_toroidal_crossings_and_accepts_line_colors():
     assert all(len(section[0]) == 2 for section in sections)
     assert all(jnp.allclose(section[1], 0.0, atol=1e-12) for section in sections)
 
+    figure, axis = plt.subplots()
+    z_sections = tracing.poincare_plot(
+        shifts=[0.0], orientation="z", ax=axis, show=False, color="time")
+    plt.close(figure)
+    assert any(len(section[0]) > 0 for section in z_sections)
+
+    with pytest.raises(ValueError, match="orientation"):
+        tracing.poincare_plot(shifts=[0.0], orientation="x", show=False)
+
 
 def test_poincare_plot_prefers_continuous_native_toroidal_angle():
     phase = jnp.linspace(0.0, 4.0 * jnp.pi, 101)
@@ -322,9 +358,14 @@ def test_poincare_plot_prefers_continuous_native_toroidal_angle():
 def test_levelset_stopping_criterion_validates_inputs():
     with pytest.raises(ValueError, match="non-negative"):
         LevelsetStoppingCriterion(MockField(), maximum_distance=-0.1)
+    with pytest.raises(TypeError, match="evaluate_xyz"):
+        LevelsetStoppingCriterion(object())
     with pytest.raises(ValueError, match="condition or stopping_criteria"):
         Tracing(field=MockField(), model="FieldLine", initial_conditions=jnp.ones((1, 3)),
                 condition=lambda *args: False, stopping_criteria=lambda *args: False)
+    with pytest.raises(ValueError, match="callable criteria"):
+        Tracing(field=MockField(), model="FieldLine", initial_conditions=jnp.ones((1, 3)),
+                stopping_criteria=[])
     with pytest.raises(ValueError, match="at least one"):
         Tracing(field=MockField(), model="FieldLine", initial_conditions=jnp.ones((1, 3)),
                 devices=[])
@@ -337,6 +378,16 @@ def test_surface_classifier_signed_distance_for_circular_torus():
     classifier = SurfaceClassifier(surface, h=0.1, padding=0.4)
     assert classifier.evaluate_xyz(jnp.array([1.0, 0.0, 0.0])) > 0.0
     assert classifier.evaluate_xyz(jnp.array([1.5, 0.0, 0.0])) < 0.0
+    with pytest.raises(ValueError, match="padding"):
+        SurfaceClassifier(surface, h=0.1, padding=0.0)
+
+
+def test_vmec_fieldline_uses_the_lcfs_event():
+    tracing = Tracing(
+        field=MockVmec(), model="FieldLineArclength",
+        initial_conditions=jnp.array([[0.5, 0.0, 0.0]]),
+        maxtime=0.01, timestep=0.001, times_to_trace=3)
+    assert callable(tracing.condition)
 
 
 @pytest.mark.parametrize("model", ["GuidingCenter", "GuidingCenterAdaptative"])

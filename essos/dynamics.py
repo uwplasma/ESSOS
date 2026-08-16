@@ -1292,9 +1292,6 @@ class Tracing():
                 return 0.5 * mass * v_squared
             energy = vmap(compute_energy)(self.trajectories)
 
-        elif self.model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
-            energy = jnp.ones((len(self.initial_conditions), self.times_to_trace))
-            
         return energy
     
     
@@ -1336,9 +1333,6 @@ class Tracing():
                 return jnp.sqrt(jnp.maximum(vperp_squared, 0.0))
             v_perp = vmap(compute_vperp)(self.trajectories)
 
-        elif self.model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
-            v_perp = jnp.ones((len(self.initial_conditions), self.times_to_trace))
-            
         return v_perp
 
     def to_vtk(self, filename):
