@@ -16,7 +16,7 @@ class MagneticField():
     @jit
     def sqrtg(self, points):
         raise NotImplementedError("sqrtg method not implemented")
-    
+
     @jit
     def B(self, points):
         raise NotImplementedError("B method not implemented")
@@ -88,6 +88,22 @@ class BiotSavart(MagneticField):
         dB = jnp.cross(self.coils.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif_R, axis=0)**3
         dB_sum = jnp.einsum("i,bai", self.coils.currents*1e-7, dB, optimize="greedy")
         return jnp.mean(dB_sum, axis=0)
+
+    @jit
+    def b_cyl(self, R, phi, Z):
+        """Return ``(B_R, B_phi, B_Z)`` on broadcast cylindrical arrays.
+
+        This field-provider interface lets VMEC/NESTOR evaluate ESSOS coils
+        directly on a changing plasma boundary without writing an mgrid file.
+        It uses the same traceable Biot--Savart graph as :meth:`B`, so coil
+        shape and current derivatives are retained.
+        """
+        R, phi, Z = jnp.broadcast_arrays(R, phi, Z)
+        xyz = jnp.stack((R * jnp.cos(phi), R * jnp.sin(phi), Z), axis=-1)
+        B = vmap(self.B)(xyz.reshape((-1, 3))).reshape(xyz.shape)
+        br = B[..., 0] * jnp.cos(phi) + B[..., 1] * jnp.sin(phi)
+        bp = -B[..., 0] * jnp.sin(phi) + B[..., 1] * jnp.cos(phi)
+        return br, bp, B[..., 2]
 
     @property
     def r_axis(self):
@@ -396,4 +412,3 @@ class near_axis:
             "Please run 'pip install git+https://github.com/uwplasma/pyQSC_JAX.git' "
             "and import it via 'from pyqsc_jax.near_axis import near_axis'."
         )
-    

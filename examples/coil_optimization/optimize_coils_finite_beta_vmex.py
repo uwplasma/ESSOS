@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Optimize ESSOS coils for a prescribed finite-beta VMEX equilibrium."""
+"""Optimize ESSOS coils for a prescribed low-beta VMEX equilibrium."""
 
 import os
 from pathlib import Path
@@ -11,7 +11,7 @@ from scipy.optimize import minimize
 
 import vmex as vj
 from vmex import optimize as opt
-from vmex.core import freeboundary_diff as fbd
+from vmex.core import virtual_casing as vc
 
 from essos.coils import Coils
 from essos.fields import BiotSavart
@@ -26,8 +26,8 @@ CURVATURE_LIMIT, CURVATURE_WEIGHT = 5.0, 1.0
 COIL_DISTANCE_LIMIT, COIL_DISTANCE_WEIGHT = 0.08, 1.0e3
 COIL_SURFACE_DISTANCE_LIMIT, COIL_SURFACE_DISTANCE_WEIGHT = 0.20, 1.0e3
 SHAPE_SCALE, CURRENT_SCALE = 0.02, 0.5
-# The matched coil set needs more than one scaled shape step; [-1, 1] leaves
-# B.n/B above 1%, while this bound reaches the sub-percent interface target.
+# This independent vacuum seed needs more than one scaled shape step to reach
+# sub-percent peak B.n/B; [-1, 1] stalls at 1.7% for the same objective.
 PARAMETER_BOUND = 3.0
 
 ci_smoke = os.environ.get("ESSOS_EXAMPLES_CI") == "1"
@@ -35,14 +35,14 @@ if ci_smoke:
     NPHI, NTHETA, VC_DIGITS, MAXITER = 8, 8, 3, 1
 
 DATA = Path(__file__).resolve().parents[1] / "input_files"
-inp = vj.VmecInput.from_file(DATA / "input.LandremanPaul2021_QA_beta2p5_bootstrap")
+inp = vj.VmecInput.from_file(DATA / "input.LandremanPaul2021_QA_beta0p5_bootstrap")
 
-print("Solving the fixed-boundary beta=2.5% QA target with bootstrap current...")
+print("Solving the fixed-boundary beta=0.5% QA target with bootstrap current...")
 equilibrium = opt.solve_equilibrium(inp)
-surface_data = fbd.surface_field_data_from_state(
+surface_data = vc.surface_field_data_from_state(
     inp, equilibrium.state, runtime=equilibrium.runtime, nphi=NPHI, ntheta=NTHETA)
-precision = fbd.plan_vc_precision(surface_data, digits=VC_DIGITS)
-interface = fbd.FreeBoundaryDiffProblem.from_surface_data(
+precision = vc.plan_vc_precision(surface_data, digits=VC_DIGITS)
+interface = vc.PlasmaVacuumInterface.from_surface_data(
     surface_data, digits=VC_DIGITS, precision=precision)
 surface = surfacerzfourier_from_boundary(
     inp.rbc, inp.zbs, inp.nfp, nphi=NPHI, ntheta=NTHETA)
@@ -60,6 +60,10 @@ def coil_field(coils):
 B_reference = jnp.sqrt(jnp.sum(interface.weights * jnp.sum(surface_data.B_total**2, axis=0)))
 B_coils0 = interface.external_B(coil_field(coils0))
 current_factor = B_reference / jnp.sqrt(jnp.sum(interface.weights * jnp.sum(B_coils0**2, axis=0)))
+# Squared interface residuals can admit a globally reversed near-solution.
+# Select the current orientation aligned with the VMEX total field.
+alignment = jnp.sum(interface.weights * jnp.sum(B_coils0 * surface_data.B_total, axis=0))
+current_factor *= jnp.where(alignment < 0.0, -1.0, 1.0)
 x0[-n_current:] *= float(current_factor)
 scales = np.r_[np.full(n_shape, SHAPE_SCALE), np.full(n_current, CURRENT_SCALE)]
 
@@ -84,13 +88,20 @@ def objective(u):
     ])
     return jnp.sum(costs), costs
 
-monitor = opt.OptimizationMonitor()
-scipy_objective = monitor.wrap_value_and_grad(
-    jax.jit(jax.value_and_grad(objective, has_aux=True)),
-    ("normal field", "pressure balance", "length", "curvature",
-     "coil separation", "coil-surface separation"))
+term_names = ("normal field", "pressure balance", "length", "curvature",
+              "coil separation", "coil-surface separation")
+monitor = opt.OptimizationMonitor(); value_and_grad_jax = jax.jit(
+    jax.value_and_grad(objective, has_aux=True))
+
+# This explicit adapter is all SciPy needs: a scalar, its exact JAX gradient,
+# and optional per-term values for the progress table/plot.
+def value_and_grad(u):
+    (value, costs), gradient = value_and_grad_jax(jnp.asarray(u))
+    return monitor.cache_evaluation(
+        u, value, gradient, dict(zip(term_names, map(float, np.asarray(costs)))))
+
 problem = vj.FunctionProblem.from_functions(
-    np.zeros_like(x0), value_and_grad=scipy_objective, names=coils0.dof_names)
+    np.zeros_like(x0), value_and_grad=value_and_grad, names=coils0.dof_names)
 
 print(f"Optimizing {x0.size} ESSOS shape/current variables with exact reverse-mode gradients")
 print(f"dof_names = {problem.dof_names}")
@@ -112,11 +123,11 @@ print(f"Coil lengths = {np.asarray(coils.length[:n_current])}")
 print(f"Maximum curvature = {float(jnp.max(coils.curvature)):.3f} 1/m")
 
 # Save and plot results
-coils.to_json("ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json")
-surface.to_vtk("surface_LandremanPaulQA_beta2p5_bootstrap", extra_data={
+coils.to_json("ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json")
+surface.to_vtk("surface_LandremanPaulQA_beta0p5_bootstrap", extra_data={
     "B_dot_n_over_B": np.asarray(Bn_over_B)[None], "B": np.asarray(Bmag)[None],
     "pressure_balance_error": np.asarray(pressure_error)[None]})
-coils.to_vtk("coils_LandremanPaulQA_beta2p5_bootstrap")
+coils.to_vtk("coils_LandremanPaulQA_beta0p5_bootstrap")
 monitor.save("finite_beta_coil_objectives.csv")
 monitor.plot("finite_beta_coil_objectives.png", title="Finite-beta coil objective terms")
 print("Wrote finite-beta coil JSON, VTK, CSV, and objective plot")

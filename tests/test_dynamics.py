@@ -11,6 +11,7 @@ from essos.dynamics import (
     Particles,
     Tracing,
     LevelsetStoppingCriterion,
+    trace_field_lines,
     _fill_terminated_trajectories,
     _vmec_radial_events,
     _VMEC_GUIDING_CENTER_MODELS,
@@ -139,6 +140,34 @@ def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
         timestep=0.1, times_to_trace=11)
     assert jnp.allclose(tracing.trajectories[0, -1], jnp.array([0.0, 1.0, 2.0]))
     assert jnp.allclose(tracing.toroidal_angles[0], tracing.trajectories[0, :, 2])
+
+
+def test_trace_field_lines_selects_clear_physical_parameterizations(capsys):
+    class FluxField(MockField):
+        def B_contravariant(self, points):
+            return jnp.array([0.0, 2.0, 4.0])
+
+        def toroidal_angle_batch(self, points):
+            return points[:, 2]
+
+    arclength = trace_field_lines(
+        MockField(), jnp.zeros((1, 3)), length=2.0, samples=11,
+        tolerance=1.0e-8, progress=False, label="Cartesian test")
+    toroidal = trace_field_lines(
+        FluxField(), jnp.zeros((1, 3)), toroidal_turns=0.5, samples=11,
+        tolerance=1.0e-8, progress=False, label=None)
+
+    assert arclength.model == "FieldLineArclength"
+    assert toroidal.model == "FieldLineToroidal"
+    assert float(arclength.maxtime) == pytest.approx(2.0)
+    assert float(toroidal.maxtime) == pytest.approx(float(jnp.pi))
+    assert "Tracing Cartesian test" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("kwargs", ({}, {"length": 1.0, "toroidal_turns": 1.0}))
+def test_trace_field_lines_requires_one_extent(kwargs):
+    with pytest.raises(ValueError, match="exactly one"):
+        trace_field_lines(MockField(), jnp.zeros((1, 3)), progress=False, **kwargs)
 
 
 class MockVmec(MockField, Vmec):

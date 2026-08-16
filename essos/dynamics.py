@@ -8,6 +8,7 @@ import numpy as np
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
+from time import perf_counter
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
@@ -1588,3 +1589,76 @@ class Tracing():
 tree_util.register_pytree_node(Tracing,
                                Tracing._tree_flatten,
                                Tracing._tree_unflatten)
+
+
+def trace_field_lines(
+    field,
+    initial_conditions,
+    *,
+    toroidal_turns=None,
+    length=None,
+    samples=1000,
+    tolerance=1.0e-7,
+    stopping_criteria=None,
+    progress=True,
+    label="field lines",
+    devices=None,
+):
+    """Trace field lines by toroidal angle or physical arclength.
+
+    Specify exactly one of ``toroidal_turns`` or ``length``. Toroidal tracing
+    is intended for fields represented in flux coordinates; Cartesian coil
+    fields use arclength, so multiplying the magnetic field does not change
+    the traced distance. ``samples`` includes both endpoints. The returned
+    :class:`Tracing` object provides trajectories, event flags, plotting, and
+    Poincare sections.
+
+    Args:
+        field: ESSOS-compatible magnetic field.
+        initial_conditions: One seed per row, in the field's coordinates.
+        toroidal_turns: Number of full toroidal turns to follow.
+        length: Physical arclength to follow for a Cartesian field.
+        samples: Number of saved points along each line.
+        tolerance: Relative and absolute adaptive-integration tolerance.
+        stopping_criteria: Optional event callable or sequence of callables.
+        progress: Show Diffrax's terminal progress bar.
+        label: Text printed before compilation and after completion; set to
+            ``None`` to suppress these two messages.
+        devices: Optional explicit sequence of JAX devices.
+    """
+    if (toroidal_turns is None) == (length is None):
+        raise ValueError("specify exactly one of toroidal_turns or length")
+    if int(samples) < 2:
+        raise ValueError("samples must be at least 2")
+    if toroidal_turns is not None and float(toroidal_turns) <= 0.0:
+        raise ValueError("toroidal_turns must be positive")
+    if length is not None and float(length) <= 0.0:
+        raise ValueError("length must be positive")
+
+    extent = (2.0 * jnp.pi * float(toroidal_turns)
+              if toroidal_turns is not None else float(length))
+    model = "FieldLineToroidal" if toroidal_turns is not None else "FieldLineArclength"
+    if label is not None:
+        print(f"Tracing {label} (the first call compiles ESSOS)...", flush=True)
+    started = perf_counter()
+    result = Tracing(
+        field=field,
+        model=model,
+        initial_conditions=initial_conditions,
+        maxtime=extent,
+        timestep=extent / (int(samples) - 1),
+        times_to_trace=int(samples),
+        atol=float(tolerance),
+        rtol=float(tolerance),
+        stopping_criteria=stopping_criteria,
+        progress=bool(progress),
+        devices=devices,
+    )
+    jax.block_until_ready(result.trajectories_xyz)
+    if label is not None:
+        message = f"{label} ready in {perf_counter() - started:.1f} s"
+        if stopping_criteria is not None:
+            hits = int(jnp.sum(result.boundary_hits))
+            message += f"; {hits}/{len(initial_conditions)} lines reached a stopping event"
+        print(message, flush=True)
+    return result
