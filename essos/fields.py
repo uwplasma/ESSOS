@@ -306,8 +306,11 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
     return (powers @ (k == np.arange(-1, 4)[:, None])) * ((1 - t) * scaled[i] + t * scaled[i + 1])
 
+VMEC_WOUT_ARRAYS = ('bmnc', 'xm', 'xn', 'rmnc', 'zmns', 'bsubsmns', 'bsubumnc', 'bsubvmnc',
+                    'bsupumnc', 'bsupvmnc', 'gmnc', 'xm_nyq', 'xn_nyq', 'Aminor_p')
+
 class Vmec():
-    """VMEC equilibrium from a wout file.
+    """VMEC equilibrium from a wout file, or from its arrays with ``Vmec.from_arrays``.
 
     ``mode_tolerance`` drops a Fourier mode when, in every table of its set,
     its largest amplitude over the radial grid is below that fraction of the
@@ -319,24 +322,54 @@ class Vmec():
         self.wout_filename = wout_filename
         from netCDF4 import Dataset
         self.nc = Dataset(self.wout_filename)
-        self.nfp = int(self.nc.variables["nfp"][0])
-        self.bmnc = jnp.array(self.nc.variables["bmnc"][:])
-        self.xm = jnp.array(self.nc.variables["xm"][:])
-        self.xn = jnp.array(self.nc.variables["xn"][:])
-        self.rmnc = jnp.array(self.nc.variables["rmnc"][:])
-        self.zmns = jnp.array(self.nc.variables["zmns"][:])
-        self.bsubsmns = jnp.array(self.nc.variables["bsubsmns"][:])
-        self.bsubumnc = jnp.array(self.nc.variables["bsubumnc"][:])
-        self.bsubvmnc = jnp.array(self.nc.variables["bsubvmnc"][:])
-        self.bsupumnc = jnp.array(self.nc.variables["bsupumnc"][:])
-        self.bsupvmnc = jnp.array(self.nc.variables["bsupvmnc"][:])
-        self.gmnc = jnp.array(self.nc.variables["gmnc"][:])
-        self.xm_nyq = jnp.array(self.nc.variables["xm_nyq"][:])
-        self.xn_nyq = jnp.array(self.nc.variables["xn_nyq"][:])
+        self._set_state(nfp=int(self.nc.variables["nfp"][0]), ns=int(self.nc.variables["ns"][0]),
+                        ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,
+                        mode_tolerance=mode_tolerance,
+                        **{name: jnp.array(self.nc.variables[name][:]) for name in VMEC_WOUT_ARRAYS})
+
+    @classmethod
+    def from_arrays(cls, nfp, ns, bmnc, xm, xn, rmnc, zmns, bsubsmns, bsubumnc, bsubvmnc,
+                    bsupumnc, bsupvmnc, gmnc, xm_nyq, xn_nyq, Aminor_p,
+                    ntheta=50, nphi=50, close=True, range_torus='full torus', mode_tolerance=0.0):
+        """Build a Vmec field from wout quantities held in memory.
+
+        The arguments carry the wout variable names and are stored as given, so JAX
+        tracers reach B, AbsB and the traced trajectories and the field stays
+        differentiable with respect to its spectral coefficients. ``nfp``, ``ns`` and
+        the mode numbers set array shapes and must be concrete, and so must the
+        tables when ``mode_tolerance`` is positive, since it selects modes by amplitude.
+        """
+        self = cls.__new__(cls)
+        self.wout_filename = None
+        self.nc = None
+        self._set_state(nfp=nfp, ns=ns, bmnc=bmnc, xm=xm, xn=xn, rmnc=rmnc, zmns=zmns,
+                        bsubsmns=bsubsmns, bsubumnc=bsubumnc, bsubvmnc=bsubvmnc,
+                        bsupumnc=bsupumnc, bsupvmnc=bsupvmnc, gmnc=gmnc, xm_nyq=xm_nyq,
+                        xn_nyq=xn_nyq, Aminor_p=Aminor_p, ntheta=ntheta, nphi=nphi,
+                        close=close, range_torus=range_torus, mode_tolerance=mode_tolerance)
+        return self
+
+    def _set_state(self, nfp, ns, bmnc, xm, xn, rmnc, zmns, bsubsmns, bsubumnc, bsubvmnc,
+                   bsupumnc, bsupvmnc, gmnc, xm_nyq, xn_nyq, Aminor_p,
+                   ntheta, nphi, close, range_torus, mode_tolerance=0.0):
+        self.nfp = nfp
+        self.bmnc = bmnc
+        self.xm = xm
+        self.xn = xn
+        self.rmnc = rmnc
+        self.zmns = zmns
+        self.bsubsmns = bsubsmns
+        self.bsubumnc = bsubumnc
+        self.bsubvmnc = bsubvmnc
+        self.bsupumnc = bsupumnc
+        self.bsupvmnc = bsupvmnc
+        self.gmnc = gmnc
+        self.xm_nyq = xm_nyq
+        self.xn_nyq = xn_nyq
         if mode_tolerance > 0:
             self._drop_small_modes(mode_tolerance)
         self.len_xm_nyq = len(self.xm_nyq)
-        self.ns = self.nc.variables["ns"][0]
+        self.ns = ns
         self.s_full_grid = jnp.linspace(0, 1, self.ns)
         self.ds = self.s_full_grid[1] - self.s_full_grid[0]
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
@@ -346,9 +379,9 @@ class Vmec():
         self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier.from_vmec(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
-        self.Aminor_p = jnp.array(self.nc.variables["Aminor_p"][:])
+        self.Aminor_p = Aminor_p
         #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
-        
+
     def _drop_small_modes(self, tolerance):
         for tables, numbers in ((('rmnc', 'zmns'), ('xm', 'xn')),
                                 (('bmnc', 'gmnc', 'bsubsmns', 'bsubumnc', 'bsubvmnc', 'bsupumnc', 'bsupvmnc'),
