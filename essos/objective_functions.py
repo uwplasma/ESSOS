@@ -163,6 +163,16 @@ def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps
     B_phi=jnp.multiply(B_particle[:,:,0],dphi_dx)+jnp.multiply(B_particle[:,:,1],dphi_dy)
     return jnp.sum(jnp.maximum(target_iota-B_theta/B_phi,0.0))
 
+def loss_soft_lost_fraction(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None,r_max=0.99,width=0.02):
+    """Smooth surrogate of the fraction of particles lost past ``r_max``.
+
+    Differentiable with respect to the field, so alpha confinement can drive
+    gradient-based optimization. Report `Tracing.loss_fraction` for the exact value.
+    """
+    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
+                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+    return tracing.soft_loss_fraction(r_max=r_max, width=width)
+
 
 
 

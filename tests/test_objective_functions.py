@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 
 import essos.objective_functions as objf
+from essos.dynamics import Tracing
 
 
 class DummyCoils:
@@ -85,6 +86,9 @@ class DummyTracing:
         self.loss_fractions = jnp.array([0.1, 0.2, 1.0])
         self.times_to_trace = 4
         self.maxtime = 1e-5
+
+    def soft_loss_fraction(self, r_max=0.99, width=0.02):
+        return Tracing.soft_loss_fraction(self, r_max=r_max, width=width)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -216,6 +220,8 @@ class TestObjectiveFunctions(unittest.TestCase):
         self.assertTrue(jnp.isfinite(objf.loss_particle_rcross_final(self.field, self.particles)))
         self.assertTrue(jnp.isfinite(objf.loss_particle_Br(self.field, self.particles)))
         self.assertTrue(jnp.isfinite(objf.loss_particle_iota(self.field, self.particles)))
+        soft_lost_fraction = objf.loss_soft_lost_fraction(self.field, self.particles, r_max=1.2, width=0.05)
+        self.assertTrue(0.0 <= soft_lost_fraction <= 1.0)
 
     @patch("essos.objective_functions.BdotN_over_B", return_value=jnp.ones((2, 3), dtype=jnp.float64))
     def test_surface_losses(self, bdotn):

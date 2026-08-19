@@ -1310,6 +1310,23 @@ class Tracing():
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times
 
+    def soft_loss_fraction(self, r_max=0.99, width=0.02):
+        """Differentiable surrogate for the final value of `loss_fraction`.
+
+        Each particle contributes ``sigmoid((r_soft - r_max) / width)``, where ``r_soft``
+        is the softmax-weighted mean of its radial coordinate over time, a soft maximum
+        that spreads the gradient over every sample near the radial excursion peak;
+        `jnp.max` would route the gradient through the single peak sample and leave the
+        objective almost flat. It is preferred over a plain ``width * logsumexp(r/width)``,
+        which carries a ``width * log(n_times)`` offset set by the save grid rather than
+        by the orbit. The surrogate converges to `loss_fraction` as `width` goes to zero.
+        Saves past a terminating event count as reaching the boundary.
+        """
+        trajectories_r = self.trajectories[:, :, 0]
+        trajectories_r = jnp.where(jnp.isfinite(trajectories_r), trajectories_r, 1.0)
+        r_soft = jnp.sum(trajectories_r * jax.nn.softmax(trajectories_r / width, axis=1), axis=1)
+        return jnp.mean(jax.nn.sigmoid((r_soft - r_max) / width))
+
 
 
     @partial(jit, static_argnums=(0,1))

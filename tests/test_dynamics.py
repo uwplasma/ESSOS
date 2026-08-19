@@ -1,4 +1,6 @@
+import os
 import pytest
+import jax
 import jax.numpy as jnp
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELECTRON_MASS,PROTON_MASS
 from essos.dynamics import (
@@ -12,7 +14,10 @@ from essos.dynamics import (
     _VMEC_GUIDING_CENTER_MODELS,
 )
 from essos.background_species import BackgroundSpecies
-from essos.fields import Vmec
+from essos.fields import Vmec, VMEC_WOUT_ARRAYS
+
+WOUT_FILE = os.path.join(os.path.dirname(__file__), "..", "examples", "input_files",
+                         "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 
 def test_particles_initialization_all_params():
     nparticles = 100
@@ -217,6 +222,58 @@ def test_vmec_axis_event_terminates_deterministic_steppers(model):
     assert tracing.total_particles_lost == 0
     assert jnp.isfinite(tracing.trajectories).all()
     assert jnp.all(tracing.trajectories[:, :, 0] > tracing.axis_threshold)
+
+
+def radial_tracing(peaks, times=jnp.linspace(0.0, 1.0, 40)):
+    """Tracing holding prescribed radial excursions, bypassing the ODE solve."""
+    trajectories_r = 0.5 + (peaks[:, None] - 0.5) * jnp.sin(jnp.pi * times)[None, :]
+    tracing = Tracing.__new__(Tracing)
+    tracing.trajectories = jnp.stack([trajectories_r, jnp.zeros_like(trajectories_r), jnp.zeros_like(trajectories_r)], axis=-1)
+    tracing.times = times
+    return tracing
+
+def test_soft_loss_fraction_converges_to_loss_fraction():
+    tracing = radial_tracing(jnp.array([0.70, 0.93, 0.86, 0.99]))
+    exact = tracing.loss_fraction(r_max=0.9)[0][-1]
+    assert exact == 0.5
+
+    errors = [abs(float(tracing.soft_loss_fraction(r_max=0.9, width=width) - exact)) for width in (0.02, 0.01, 0.005, 0.002)]
+    assert errors == sorted(errors, reverse=True)
+    assert errors[-1] < 1e-3
+
+def test_soft_loss_fraction_gradient_is_nonzero_where_loss_fraction_is_flat():
+    peaks = jnp.array([0.70, 0.93, 0.86, 0.99])
+    exact_gradient = jax.grad(lambda p: radial_tracing(p).loss_fraction(r_max=0.9)[0][-1])(peaks)
+    soft_gradient = jax.grad(lambda p: radial_tracing(p).soft_loss_fraction(r_max=0.9, width=0.01))(peaks)
+
+    assert jnp.all(exact_gradient == 0.0)
+    assert jnp.all(soft_gradient[1:] > 0.0)
+
+def vmec_alpha_tracing(field, nparticles=4, maxtime=4e-6, times_to_trace=10):
+    theta = jnp.linspace(0, 2*jnp.pi, nparticles)
+    phi = jnp.linspace(0, 2*jnp.pi/field.nfp, nparticles)
+    particles = Particles(initial_xyz=jnp.array([0.85*jnp.ones(nparticles), theta, phi]).T, mass=ALPHA_PARTICLE_MASS,
+                          charge=ALPHA_PARTICLE_CHARGE, energy=FUSION_ALPHA_PARTICLE_ENERGY, field=field)
+    return Tracing(field=field, model='GuidingCenterAdaptative', particles=particles, maxtime=maxtime,
+                   timestep=1e-8, times_to_trace=times_to_trace, atol=1e-5, rtol=1e-5)
+
+def test_vmec_from_arrays_traces_identically():
+    vmec = Vmec(WOUT_FILE)
+    rebuilt = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **{name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS})
+
+    assert jnp.array_equal(vmec_alpha_tracing(rebuilt).trajectories, vmec_alpha_tracing(vmec).trajectories)
+
+def test_soft_loss_fraction_differentiates_vmec_coefficients():
+    vmec = Vmec(WOUT_FILE)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    scaled = ('bmnc', 'bsubsmns', 'bsubumnc', 'bsubvmnc', 'bsupumnc', 'bsupvmnc')
+
+    def soft_loss_of_field_scale(scale):
+        field = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns,
+                                 **{**arrays, **{name: arrays[name]*scale for name in scaled}})
+        return vmec_alpha_tracing(field).soft_loss_fraction(r_max=0.88, width=0.01)
+
+    assert jax.grad(soft_loss_of_field_scale)(1.0) != 0.0
 
 
 def test_tracing_initialization(field, particles,electric_field):
