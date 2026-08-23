@@ -30,6 +30,7 @@
     - [From Source](#from-source)
 - [Usage](#usage)
   - [VMEC magnetic-axis handling](#vmec-magnetic-axis-handling)
+  - [VMEC equilibria with VMEX](#vmec-equilibria-with-vmex)
 - [Testing](#testing)
 - [Project Roadmap](#project-roadmap)
 - [Contributing](#contributing)
@@ -170,6 +171,23 @@ This is a numerical safeguard, not a physical continuation through the axis.
 A trajectory that must continue across the axis requires a regular coordinate
 chart (for example, pseudo-Cartesian flux coordinates) or a Cartesian/full-orbit
 handoff.
+
+### VMEC equilibria with VMEX
+
+[VMEX](https://github.com/uwplasma/VMEX) (`pip install vmex`) is a JAX
+implementation of VMEC, and the two packages meet without either importing the
+other. Coils leave ESSOS as a Biot-Savart field tabulated onto a cylindrical
+grid, which is what VMEX's free-boundary solver consumes; the equilibrium comes
+back as a wout file, which is what `essos.fields.Vmec` reads.
+
+```sh
+python examples/simple_examples/equilibrium_from_coils_vmex.py
+```
+
+That example holds a QA plasma with the bundled `Coils`, solves the free
+boundary in VMEX, reads the result back as a `Vmec` field and traces field
+lines through it. The rotational transform it measures agrees with the one VMEX
+computed from force balance to one part in 1e4.
 
 ## Testing
 To run the tests, use `pytest`:
