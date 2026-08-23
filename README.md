@@ -108,6 +108,19 @@ The cylindrical grid covers one field period in phi. The field repeats across
 periods, and R and Z queries are clamped to the grid bounds, so set the bounds
 to cover the region you intend to evaluate.
 
+## VMEC equilibria with VMEX
+
+[VMEX](https://github.com/uwplasma/VMEX) (`pip install vmex`) is a JAX
+implementation of VMEC, and the two packages meet without either importing the
+other. Coils leave ESSOS as a Biot-Savart field tabulated onto a cylindrical
+grid, which is what VMEX's free-boundary solver consumes; the equilibrium comes
+back as a wout file, which is what `essos.fields.Vmec` reads.
+[`examples/simple_examples/equilibrium_from_coils_vmex.py`](examples/simple_examples/equilibrium_from_coils_vmex.py)
+holds a QA plasma with the bundled `Coils`, solves the free boundary in VMEX,
+reads the result back as a `Vmec` field and traces field lines through it. The
+rotational transform it measures agrees with the one VMEX computed from force
+balance to one part in 1e4.
+
 ## Particle tracing
 
 ![Guiding-centre alpha orbits](docs/readme_particles.png)
