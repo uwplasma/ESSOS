@@ -8,13 +8,14 @@ from pathlib import Path
 import numpy as np
 
 if len(sys.argv) != 4:
-    sys.exit("Usage: python trace_fieldlines_custom_loss_result.py <surf_file> <mag_file> <coil_file>")
+    sys.exit("Usage: python trace_fieldlines_zot80.py <surf_file> <mag_file> <coil_file>")
 
 SURF_FILE = Path(sys.argv[1])
 MAG_FILE  = Path(sys.argv[2])
 COIL_FILE = Path(sys.argv[3])
 
-RESULTS_DIR = Path(__file__).resolve().parent / "pm_opt_custom_loss_output"
+RESULTS_DIR = Path(__file__).resolve().parent / "trace_zot80_output"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 import jax
 import jax.numpy as jnp
@@ -27,23 +28,29 @@ import matplotlib.pyplot as plt
 
 
 class CombinedField:
-
-    def __init__(self, coil_field, dipole_field):
-        self.coil_field = coil_field
-        self.dipole_field = dipole_field
+    """Sums any number of Cartesian-native essos field objects into one
+    field, implementing the interface essos.dynamics.Tracing expects."""
+    def __init__(self, *fields):
+        if len(fields) < 1:
+            raise ValueError("CombinedField needs at least one field")
+        self.fields = fields
 
     def B(self, points):
-        return self.coil_field.B(points) + self.dipole_field.B(points)
+        return sum(f.B(points) for f in self.fields)
 
     def AbsB(self, points):
         return jnp.linalg.norm(self.B(points), axis=-1)
 
     def B_contravariant(self, points):
-        return self.coil_field.B_contravariant(points) + self.dipole_field.B_contravariant(points)
+        return sum(f.B_contravariant(points) for f in self.fields)
 
     def to_xyz(self, points):
-    
-        return self.coil_field.to_xyz(points)
+        for f in self.fields:
+            try:
+                return f.to_xyz(points)
+            except (NotImplementedError, AttributeError):
+                continue
+        raise NotImplementedError("no field implements to_xyz")
 
 
 def load_surface(surf_file):
@@ -65,8 +72,9 @@ def load_coils_essos(coil_file):
     return Coils_from_simsopt(all_coils, nfp=1, stellsym=False)
 
 
-def load_magnet_grid(mag_file):
-    pos_list, mom_list = [], []
+def load_magnet_grid_native_pho(mag_file):
+
+    pos_list, mom_list, pho_list = [], [], []
     with open(str(mag_file), encoding="utf-8") as f:
         for line in f.readlines():
             tokens = line.replace(",", " ").split()
@@ -75,12 +83,22 @@ def load_magnet_grid(mag_file):
             try:
                 x, y, z = float(tokens[3]), float(tokens[4]), float(tokens[5])
                 m0      = float(tokens[7])
+                pho     = float(tokens[8])
                 az, pol = float(tokens[10]), float(tokens[11])
             except ValueError:
                 continue
             pos_list.append((x, y, z))
             mom_list.append((m0*np.cos(az)*np.sin(pol), m0*np.sin(az)*np.sin(pol), m0*np.cos(pol)))
-    return np.asarray(pos_list, np.float64), np.asarray(mom_list, np.float64)
+            pho_list.append(pho)
+    return (
+        np.asarray(pos_list, np.float64),
+        np.asarray(mom_list, np.float64),
+        np.asarray(pho_list, np.float64),
+    )
+
+
+def cyl_to_xyz(r, phi, z):
+    return jnp.array([r*jnp.cos(phi), r*jnp.sin(phi), z]).T
 
 
 print("--- Loading surface (for nfp/stellsym) ---")
@@ -92,26 +110,23 @@ print(f"--- Loading coils: {COIL_FILE.name} ---")
 essos_coils = load_coils_essos(COIL_FILE)
 coil_field = BiotSavart(essos_coils)
 
-print(f"--- Loading magnet grid + optimized pho ---")
-positions, moments_raw = load_magnet_grid(MAG_FILE)
+print(f"--- Loading magnet grid (zot80 NATIVE pho): {MAG_FILE.name} ---")
+positions, moments_raw, pho_native = load_magnet_grid_native_pho(MAG_FILE)
 n_magnets = len(positions)
 native_norms = np.linalg.norm(moments_raw, axis=1)
 norms_safe = np.where(native_norms > 0, native_norms, 1.0)
 orientations = np.where(native_norms[:, None] > 0, moments_raw / norms_safe[:, None], 0.0)
 
-pho_optimized = np.load(RESULTS_DIR / "pho_optimized.npy")
-print(f"{n_magnets} magnet sites, {int(np.sum(np.abs(pho_optimized) > 0.5))} active")
+n_active = int(np.sum(np.abs(pho_native) > 0.5))
+print(f"{n_magnets} magnet sites, {n_active} active (zot80's own FAMUS solution)")
 
-scaled_moments = orientations * float(np.mean(native_norms[native_norms > 0])) * pho_optimized[:, None]
 
-# filter to only ACTIVE magnets (|pho|>0.5) before building
-
-active_filter = np.abs(pho_optimized) > 0.5
+active_filter = np.abs(pho_native) > 0.5
 positions_active_only = positions[active_filter]
+scaled_moments = orientations * float(np.mean(native_norms[native_norms > 0])) * pho_native[:, None]
 scaled_moments_active_only = scaled_moments[active_filter]
 n_magnets_active = int(active_filter.sum())
-print(f"Filtered DipoleField to {n_magnets_active} active magnets "
-      f"(was {n_magnets} total) for tracing")
+print(f"Filtered DipoleField to {n_magnets_active} active magnets for tracing")
 
 dipole_field = DipoleField(
     jnp.asarray(positions_active_only, jnp.float32),
@@ -122,102 +137,76 @@ dipole_field = DipoleField(
 
 combined_field = CombinedField(coil_field, dipole_field)
 
-print("Sanity check: evaluate combined field at a test point ")
-test_pt = jnp.asarray(positions[0] * 1, jnp.float64)  
+print("--- Sanity check: evaluate combined field at a test point ---")
+test_pt = jnp.array([0.30, 0.0, 0.0], jnp.float64)
 B_test = combined_field.B(test_pt)
-absB_test = combined_field.AbsB(test_pt)
-print(f"B at test point: {B_test}  shape={jnp.shape(B_test)}")
-print(f"|B| at test point: {jnp.asarray(absB_test).ravel()}  shape={jnp.shape(absB_test)}")
+print(f"B at (0.30,0,0): {B_test}")
 
-print("\n Setting up field-line tracing ")
-R0   = jnp.linspace(0.34, 0.375, 8)  # validated confined range for MUSE's optimized custom_loss result
-Z0 = jnp.zeros(len(R0))
+print("\n--- Setting up field-line tracing (SAME parameters as optimized-result trace) ---")
+
+R0   = jnp.linspace(0.34, 0.375, 3) 
 phi0 = jnp.zeros(len(R0))
-initial_xyz = jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
+Z0   = jnp.zeros(len(R0))
+initial_xyz = cyl_to_xyz(R0, phi0, Z0)
+print(f"Starting positions (r,phi,z): {[(float(r),float(p),float(z)) for r,p,z in zip(R0,phi0,Z0)]}")
 
 tracing = Tracing(
     field=combined_field,
     initial_conditions=initial_xyz,
     model='FieldLine',
-    maxtime=1290,   # ~150 toroidal transits
-    timestep=0.258,  # maxtime/5000
-    times_to_trace=30000,  # matched to zot80 
+    maxtime=1290,
+    timestep=0.258,
+    times_to_trace=30000,  
     rtol=1e-10,
     atol=1e-10,
 )
 
-print("Tracing field lines")
+print("Tracing field lines (zot80 native solution)...")
 tracing.trace()
 trajectories = tracing.trajectories
-print(f"trajectories shape/type: {type(trajectories)}"
-      f"{', shape=' + str(trajectories.shape) if hasattr(trajectories, 'shape') else ''}")
+print(f"trajectories shape: {trajectories.shape}")
 
 np.save(RESULTS_DIR / "trajectories.npy", np.asarray(trajectories))
 np.save(RESULTS_DIR / "trace_times.npy", np.asarray(tracing.times))
 np.save(RESULTS_DIR / "trace_R0.npy", np.asarray(R0))
 print(f"Saved raw trajectories to {RESULTS_DIR}/trajectories.npy")
 
-print("\n--- Poincare plot---")
+print("\n--- Poincare plot (zot80 native) ---")
 fig_p, ax_p = plt.subplots(figsize=(8, 8))
 tracing.poincare_plot(ax=ax_p, show=False)
 ax_p.set_xlabel(r"$R$ [m]")
 ax_p.set_ylabel(r"$Z$ [m]")
-ax_p.set_title("Poincare plot: TF coils + optimized PMs (custom_loss result)")
-ax_p.set_xlim(0.20, 0.40)
+ax_p.set_title("Poincare plot: TF coils + zot80 NATIVE (FAMUS) solution")
+ax_p.set_xlim(0.20, 0.45)
 ax_p.set_ylim(-0.10, 0.10)
 ax_p.set_aspect("equal")
 plt.tight_layout()
-plt.savefig(RESULTS_DIR / "poincare_plot.png", dpi=200, bbox_inches="tight")
-print(f"Saved {RESULTS_DIR}/poincare_plot.png")
+plt.savefig(RESULTS_DIR / "poincare_plot_zot80.png", dpi=200, bbox_inches="tight")
+print(f"Saved {RESULTS_DIR}/poincare_plot_zot80.png")
 
-ax_p.set_xlim(0.20, 0.40)
-ax_p.set_ylim(-0.10, 0.10)
-print("\n--- 3D trajectory plot: field lines + coils + PM half-period ---")
+print("\n--- 3D trajectory plot (zot80 native) ---")
 fig_3d, ax_3d = plt.subplots(subplot_kw={"projection": "3d"}, figsize=(10, 8))
-
-# 1. Field lines 
 tracing.plot(ax=ax_3d, show=False)
-
-# 2. TF coils
-essos_coils.plot(ax=ax_3d, show=False, color="brown", linewidth=1.5, label="TF coils")
-
-# 3. Half period PM grid 
-active_mask = np.abs(pho_optimized) > 0.5
+essos_coils.plot(ax=ax_3d, show=False, color="brown", linewidth=1.5, alpha=0.4, label="TF coils")
+active_mask = np.abs(pho_native) > 0.5
 pos_active = positions[active_mask]
-pho_active = pho_optimized[active_mask]
+pho_active = pho_native[active_mask]
 sc = ax_3d.scatter(
     pos_active[:, 0], pos_active[:, 1], pos_active[:, 2],
     c=pho_active, cmap="RdBu_r", s=6, vmin=-1, vmax=1,
-    label=f"PM magnets (half-period, {int(active_mask.sum())} active)",
+    label=f"PM magnets (zot80 native, {int(active_mask.sum())} active)",
 )
 fig_3d.colorbar(sc, ax=ax_3d, shrink=0.6, pad=0.1, label=r"$\rho$")
-
+ax_3d.set_xlim(-0.45, 0.45)
+ax_3d.set_ylim(-0.45, 0.45)
+ax_3d.set_zlim(-0.2, 0.2)
 ax_3d.set_xlabel(r"$x$ [m]")
 ax_3d.set_ylabel(r"$y$ [m]")
 ax_3d.set_zlabel(r"$z$ [m]")
-ax_3d.set_title("Field lines + TF coils + optimized PMs (custom_loss result)")
+ax_3d.set_title("Field lines + TF coils + zot80 NATIVE (FAMUS) solution")
 ax_3d.legend(loc="upper left", fontsize=8)
 plt.tight_layout()
-plt.savefig(RESULTS_DIR / "fieldlines_3d.png", dpi=200, bbox_inches="tight")
-print(f"Saved {RESULTS_DIR}/fieldlines_3d.png")
+plt.savefig(RESULTS_DIR / "fieldlines_3d_zot80.png", dpi=200, bbox_inches="tight")
+print(f"Saved {RESULTS_DIR}/fieldlines_3d_zot80.png")
 
-print("\n--- Separate hardware-layout plot: coils + magnets, no field lines ---")
-fig_hw, ax_hw = plt.subplots(subplot_kw={"projection": "3d"}, figsize=(10, 8))
-
-essos_coils.plot(ax=ax_hw, show=False, color="black", linewidth=2, label="TF coils")
-
-sc_hw = ax_hw.scatter(
-    pos_active[:, 0], pos_active[:, 1], pos_active[:, 2],
-    c=pho_active, cmap="RdBu_r", s=20, vmin=-1, vmax=1,
-    label=f"PM magnets (half-period, {int(active_mask.sum())} active)",
-)
-fig_hw.colorbar(sc_hw, ax=ax_hw, shrink=0.6, pad=0.1, label=r"$\rho$")
-
-ax_hw.set_xlabel(r"$x$ [m]")
-ax_hw.set_ylabel(r"$y$ [m]")
-ax_hw.set_zlabel(r"$z$ [m]")
-ax_hw.set_title("TF coils + optimized PM half-period (no field lines)")
-ax_hw.legend(loc="upper left", fontsize=9)
-plt.tight_layout()
-plt.savefig(RESULTS_DIR / "hardware_layout_3d.png", dpi=200, bbox_inches="tight")
-print(f"Saved {RESULTS_DIR}/hardware_layout_3d.png")
+print(f"\nAll outputs saved to {RESULTS_DIR}/")
