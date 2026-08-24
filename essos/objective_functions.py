@@ -363,16 +363,8 @@ def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
 
 
 # Blockwise vmap linking number diagnostic (memory efficient)
-@partial(jit, static_argnames=["block_size"])
-def loss_linkingnumber(coils, candidates=None, block_size=None):
-    """Return the total integer Gauss linking number over pairs of coils.
-
-    Linking number is a topological invariant, so it is integer-valued for
-    disjoint closed curves and has no useful continuous derivative.  Round
-    each pair separately (as SIMSOPT does) to remove quadrature noise, and
-    explicitly stop gradients so that this diagnostic cannot introduce a
-    spurious optimization force.
-    """
+def _gauss_linking_integrals_per_pair(coils, candidates=None, block_size=None):
+    """Return the signed quadrature approximation for each candidate pair."""
     if candidates is None:
         candidates = jnp.triu_indices(len(coils), k=1)
     dphi = coils.curves.quadpoints[1] - coils.curves.quadpoints[0]
@@ -395,21 +387,42 @@ def loss_linkingnumber(coils, candidates=None, block_size=None):
         valid_blocks = (jnp.arange(padded_points) < n_points).reshape(n_blocks, use_block_size)
 
         def block_sum(block_gamma_j, block_gamma_dash_j, block_valid):
-            def integrand(r2, dr2):
+            def integrand(r2, dr2, valid):
                 diff = gamma_i - r2
                 cross = jnp.cross(gamma_dash_i, dr2)
                 norm = jnp.linalg.norm(diff, axis=1)
-                return jnp.sum(diff * cross, axis=1) / (norm**3 + 1e-12)
+                # Padded points must not introduce 0 / 0. A zero distance for
+                # a real point remains singular, as the Gauss integral is not
+                # defined for intersecting curves.
+                denominator = jnp.where(valid, norm**3, 1.0)
+                return jnp.where(valid, jnp.sum(diff * cross, axis=1) / denominator, 0.0)
 
-            block_vals = jax.vmap(integrand, in_axes=(0, 0))(block_gamma_j, block_gamma_dash_j)
-            return jnp.sum(block_vals * block_valid[:, None])
+            block_vals = jax.vmap(integrand, in_axes=(0, 0, 0))(block_gamma_j, block_gamma_dash_j, block_valid)
+            return jnp.sum(block_vals)
 
         total = jnp.sum(jax.vmap(block_sum)(gamma_j_blocks, gamma_dash_j_blocks, valid_blocks))
-        linking = total * (dphi ** 2) / (4 * jnp.pi)
-        integer_linking = jnp.round(jnp.abs(linking))
-        return jax.lax.stop_gradient(integer_linking)
+        return total * (dphi ** 2) / (4 * jnp.pi)
 
-    losses = jax.vmap(pair_linking)(*candidates)
+    return jax.vmap(pair_linking)(*candidates)
+
+
+def _linking_numbers_per_pair(coils, candidates=None, block_size=None):
+    """Classify each pair's absolute Gauss integral as an integer."""
+    linking = _gauss_linking_integrals_per_pair(coils, candidates, block_size)
+    return jax.lax.stop_gradient(jnp.round(jnp.abs(linking)))
+
+
+@partial(jit, static_argnames=["block_size"])
+def loss_linkingnumber(coils, candidates=None, block_size=None):
+    """Return the total integer Gauss linking number over pairs of coils.
+
+    Linking number is a topological invariant, so it is integer-valued for
+    disjoint closed curves and has no useful continuous derivative.  Round
+    each pair separately (as SIMSOPT does) to remove quadrature noise, and
+    explicitly stop gradients so that this diagnostic cannot introduce a
+    spurious optimization force.
+    """
+    losses = _linking_numbers_per_pair(coils, candidates, block_size)
     return jnp.sum(losses)
 
 
