@@ -175,6 +175,21 @@ class PytreeSurface:
 
 
 class TestObjectiveFunctions(unittest.TestCase):
+    @staticmethod
+    def _coils_from_parametric_curves(gamma, gamma_dash):
+        """Build the minimal coil pytree needed by ``loss_linkingnumber``."""
+        n_coils, n_points, _ = gamma.shape
+        return PytreeCoils(
+            gamma=gamma,
+            gamma_dash=gamma_dash,
+            gamma_dashdash=jnp.zeros_like(gamma),
+            currents=jnp.ones(n_coils, dtype=jnp.float64),
+            quadpoints=jnp.arange(n_points, dtype=jnp.float64) / n_points,
+            length=jnp.ones(n_coils, dtype=jnp.float64),
+            curvature=jnp.zeros((n_coils, n_points), dtype=jnp.float64),
+            base_curves=jnp.zeros((n_coils, 3, 3), dtype=jnp.float64),
+        )
+
     def setUp(self):
         self.field = DummyField()
         self.field_nearaxis = DummyField()
@@ -264,6 +279,69 @@ class TestObjectiveFunctions(unittest.TestCase):
         self.assertAlmostEqual(float(separation), float(objf.loss_coil_separation.__wrapped__(self.coils, 0.5, block_size=3)))
         self.assertAlmostEqual(float(surface_distance), float(objf.loss_coil_surface_distance.__wrapped__(self.coils, self.pytree_surface, 0.5, block_size=4)))
         self.assertAlmostEqual(float(linking), float(objf.loss_linkingnumber.__wrapped__(self.coils, block_size=4)))
+
+    def test_linking_number_unlinked_circles_is_zero(self):
+        n_points = 128
+        theta = 2 * jnp.pi * jnp.arange(n_points) / n_points
+        circles = jnp.stack(
+            [
+                jnp.stack([jnp.cos(theta), jnp.sin(theta), jnp.zeros_like(theta)], axis=1),
+                jnp.stack([jnp.cos(theta), jnp.sin(theta), jnp.full_like(theta, 3.0)], axis=1),
+            ]
+        )
+        circles_dash = jnp.stack(
+            [
+                jnp.stack([-2 * jnp.pi * jnp.sin(theta), 2 * jnp.pi * jnp.cos(theta), jnp.zeros_like(theta)], axis=1),
+                jnp.stack([-2 * jnp.pi * jnp.sin(theta), 2 * jnp.pi * jnp.cos(theta), jnp.zeros_like(theta)], axis=1),
+            ]
+        )
+        coils = self._coils_from_parametric_curves(circles, circles_dash)
+
+        self.assertEqual(float(objf.loss_linkingnumber(coils)), 0.0)
+        self.assertEqual(float(objf.loss_linkingnumber(coils, block_size=17)), 0.0)
+
+    def test_linking_number_hopf_link_is_one(self):
+        n_points = 128
+        theta = 2 * jnp.pi * jnp.arange(n_points) / n_points
+        hopf_link = jnp.stack(
+            [
+                jnp.stack([jnp.cos(theta), jnp.sin(theta), jnp.zeros_like(theta)], axis=1),
+                jnp.stack([1 + jnp.cos(theta), jnp.zeros_like(theta), jnp.sin(theta)], axis=1),
+            ]
+        )
+        hopf_link_dash = jnp.stack(
+            [
+                jnp.stack([-2 * jnp.pi * jnp.sin(theta), 2 * jnp.pi * jnp.cos(theta), jnp.zeros_like(theta)], axis=1),
+                jnp.stack([-2 * jnp.pi * jnp.sin(theta), jnp.zeros_like(theta), 2 * jnp.pi * jnp.cos(theta)], axis=1),
+            ]
+        )
+        coils = self._coils_from_parametric_curves(hopf_link, hopf_link_dash)
+
+        self.assertEqual(float(objf.loss_linkingnumber(coils)), 1.0)
+        self.assertEqual(float(objf.loss_linkingnumber(coils, block_size=17)), 1.0)
+
+    def test_linking_number_has_zero_gradient(self):
+        n_points = 64
+        theta = 2 * jnp.pi * jnp.arange(n_points) / n_points
+        gamma = jnp.stack(
+            [
+                jnp.stack([jnp.cos(theta), jnp.sin(theta), jnp.zeros_like(theta)], axis=1),
+                jnp.stack([jnp.cos(theta), jnp.sin(theta), jnp.full_like(theta, 3.0)], axis=1),
+            ]
+        )
+        gamma_dash = jnp.stack(
+            [
+                jnp.stack([-2 * jnp.pi * jnp.sin(theta), 2 * jnp.pi * jnp.cos(theta), jnp.zeros_like(theta)], axis=1),
+                jnp.stack([-2 * jnp.pi * jnp.sin(theta), 2 * jnp.pi * jnp.cos(theta), jnp.zeros_like(theta)], axis=1),
+            ]
+        )
+
+        def linking_from_gamma(curve_points):
+            coils = self._coils_from_parametric_curves(curve_points, gamma_dash)
+            return objf.loss_linkingnumber(coils, block_size=17)
+
+        gradient = jax.grad(linking_from_gamma)(gamma)
+        self.assertTrue(jnp.array_equal(gradient, jnp.zeros_like(gradient)))
 
     @patch("essos.objective_functions.Curves.compute_curvature", return_value=jnp.ones(5))
     @patch("essos.objective_functions.BiotSavart_from_gamma")
