@@ -362,9 +362,17 @@ def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
     return jnp.sum(losses)
 
 
-# Blockwise vmap linking number loss (memory efficient, fully differentiable)
+# Blockwise vmap linking number diagnostic (memory efficient)
 @partial(jit, static_argnames=["block_size"])
 def loss_linkingnumber(coils, candidates=None, block_size=None):
+    """Return the total integer Gauss linking number over pairs of coils.
+
+    Linking number is a topological invariant, so it is integer-valued for
+    disjoint closed curves and has no useful continuous derivative.  Round
+    each pair separately (as SIMSOPT does) to remove quadrature noise, and
+    explicitly stop gradients so that this diagnostic cannot introduce a
+    spurious optimization force.
+    """
     if candidates is None:
         candidates = jnp.triu_indices(len(coils), k=1)
     dphi = coils.curves.quadpoints[1] - coils.curves.quadpoints[0]
@@ -398,7 +406,8 @@ def loss_linkingnumber(coils, candidates=None, block_size=None):
 
         total = jnp.sum(jax.vmap(block_sum)(gamma_j_blocks, gamma_dash_j_blocks, valid_blocks))
         linking = total * (dphi ** 2) / (4 * jnp.pi)
-        return jnp.abs(linking)
+        integer_linking = jnp.round(jnp.abs(linking))
+        return jax.lax.stop_gradient(integer_linking)
 
     losses = jax.vmap(pair_linking)(*candidates)
     return jnp.sum(losses)
