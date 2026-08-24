@@ -24,7 +24,12 @@ def _hopf_link_dofs():
     return dofs
 
 
-def _simsopt_cpp_reference(gamma, gamma_dash, dphi, candidates):
+def _simsopt_cpp_reference(
+    gamma, gamma_dash, dphi, candidates, downsample=1
+):
+    gamma = gamma[:, ::downsample]
+    gamma_dash = gamma_dash[:, ::downsample]
+    dphi *= downsample
     integrals = []
     for i, j in zip(*candidates):
         difference = gamma[i, :, None, :] - gamma[j, None, :, :]
@@ -40,7 +45,7 @@ def _simsopt_cpp_reference(gamma, gamma_dash, dphi, candidates):
     return np.asarray(integrals)
 
 
-def _compare_essos_and_simsopt(curves, block_size):
+def _compare_essos_and_simsopt(curves, block_size, downsample=1):
     simsopt_curves = curves.to_simsopt()
     essos_gamma = np.asarray(curves.gamma)
     essos_gamma_dash = np.asarray(curves.gamma_dash)
@@ -58,55 +63,86 @@ def _compare_essos_and_simsopt(curves, block_size):
     candidates = np.triu_indices(len(coils), k=1)
     dphi = float(curves.quadpoints[1] - curves.quadpoints[0])
     reference_raw = _simsopt_cpp_reference(
-        simsopt_gamma, simsopt_gamma_dash, dphi, candidates
+        simsopt_gamma, simsopt_gamma_dash, dphi, candidates, downsample
     )
     essos_raw = np.asarray(
-        _gauss_linking_integrals_per_pair(coils, candidates, block_size)
+        _gauss_linking_integrals_per_pair(
+            coils, candidates, block_size, downsample
+        )
     )
     essos_integer = np.asarray(
-        _linking_numbers_per_pair(coils, candidates, block_size)
+        _linking_numbers_per_pair(coils, candidates, block_size, downsample)
     )
 
     np.testing.assert_allclose(essos_raw, reference_raw, rtol=2e-13, atol=2e-14)
 
     simsopt_integer = np.asarray(
-        [LinkingNumber([simsopt_curves[i], simsopt_curves[j]]).J() for i, j in zip(*candidates)]
+        [
+            LinkingNumber(
+                [simsopt_curves[i], simsopt_curves[j]], downsample
+            ).J()
+            for i, j in zip(*candidates)
+        ]
     )
     np.testing.assert_array_equal(essos_integer, simsopt_integer)
-    assert float(loss_linkingnumber(coils, candidates, block_size)) == float(
-        LinkingNumber(simsopt_curves).J()
+    assert float(
+        loss_linkingnumber(coils, candidates, block_size, downsample)
+    ) == float(
+        LinkingNumber(simsopt_curves, downsample).J()
     )
     assert float(np.sum(essos_integer)) == float(np.sum(simsopt_integer))
     return coils, simsopt_curves
 
 
-@pytest.mark.parametrize("block_size", [None, 16])
-def test_initial_circular_coils_match_simsopt_pointwise_and_per_pair(block_size):
+@pytest.mark.parametrize(
+    "block_size,downsample",
+    [(None, 1), (16, 1), (None, 3), (16, 3), (16, 5)],
+)
+def test_initial_circular_coils_match_simsopt_pointwise_and_per_pair(
+    block_size, downsample
+):
     curves = CreateEquallySpacedCurves(
         n_curves=2,
         order=2,
         R=1.5,
         r=0.25,
-        n_segments=65,
+        n_segments=60,
         nfp=3,
         stellsym=True,
     )
-    coils, simsopt_curves = _compare_essos_and_simsopt(curves, block_size)
-    assert float(loss_linkingnumber(coils, block_size=block_size)) == 0.0
-    assert LinkingNumber(simsopt_curves).J() == 0
+    coils, simsopt_curves = _compare_essos_and_simsopt(
+        curves, block_size, downsample
+    )
+    assert float(
+        loss_linkingnumber(
+            coils, block_size=block_size, downsample=downsample
+        )
+    ) == 0.0
+    assert LinkingNumber(simsopt_curves, downsample).J() == 0
 
 
-@pytest.mark.parametrize("block_size", [None, 16])
-def test_hopf_link_matches_simsopt_pointwise_and_per_pair(block_size):
+@pytest.mark.parametrize(
+    "block_size,downsample",
+    [(None, 1), (16, 1), (None, 3), (16, 3), (16, 6)],
+)
+def test_hopf_link_matches_simsopt_pointwise_and_per_pair(
+    block_size, downsample
+):
     curves = Curves(
         jnp.asarray(_hopf_link_dofs(), dtype=jnp.float64),
-        n_segments=97,
+        n_segments=96,
         nfp=1,
         stellsym=False,
     )
-    coils, simsopt_curves = _compare_essos_and_simsopt(curves, block_size)
-    assert float(loss_linkingnumber(coils, block_size=block_size)) == 1.0
-    assert LinkingNumber(simsopt_curves).J() == 1
+    coils, simsopt_curves = _compare_essos_and_simsopt(
+        curves, block_size, downsample
+    )
+    assert float(
+        loss_linkingnumber(
+            coils, block_size=block_size, downsample=downsample
+        )
+    ) == 1.0
+    assert LinkingNumber(simsopt_curves, downsample).J() == 1
 
 
 def test_essos_and_simsopt_both_report_zero_derivative():
