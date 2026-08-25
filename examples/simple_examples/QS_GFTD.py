@@ -43,8 +43,8 @@ class MagneticFieldData:
 # Flags for plotting and debugging
 # ============================================================================================
 # flags: vmec, torus_simple
-flag_surface_case = "vmec"
-# flag_surface_case = "torus_simple"
+# flag_surface_case = "vmec"
+flag_surface_case = "torus_simple"
 
 # ============================================================================================
 # The surface is defined by the Fourier coefficients of R and Z as functions of theta and phi.
@@ -93,8 +93,13 @@ elif flag_surface_case == "vmec":
     vmec = Vmec(wout_file, ntheta=50, nphi=60, range_torus="full torus")
     surface = vmec.surface
 
+    
 else:
     raise ValueError(f"Unknown flag_surface_case: {flag_surface_case}") 
+
+# ============================================================================================
+# Calculus of the approximated minor radius of the surface.
+
 
 
 
@@ -117,16 +122,24 @@ normal_pt_full = surface.normal
 normal_xyz_full = normal_pt_full.reshape(-1, 3)
 
 
-# print("\nOne sample surface point gamma[0, 0, :]:")
-# print(gamma[0, 0, :])
 
-# print("\nFirst few points along the first phi row:")
-# for k in range(5):
-#     print(f" (nphi,ntheta) = { (0, k) } --> (x,y,z) = {surf_pt_full[0, k, :]}")
 
-# print("\nFirst few points along the first theta column:")
-# for k in range(5):
-#     print(f"(nphi,ntheta) = { (k, 0) } --> (x,y,z) =  {surf_pt_full[k, 0, :]}")
+# ============================================================================================
+# Printing some information about the surface 
+print("Volume of surf_pt_full:", surface.volume)
+print("Area of surf_pt_full:", surface.area)
+
+rminor_test = 2. * surface.volume / surface.area
+print("rminor = 2*volume/surface:", rminor_test)
+
+
+print("\nFirst few points along the first phi row:")
+for k in range(5):
+    print(f" (nphi,ntheta) = { (0, k) } --> (x,y,z) = {surf_pt_full[0, k, :]}")
+
+print("\nFirst few points along the first theta column:")
+for k in range(5):
+    print(f"(nphi,ntheta) = { (k, 0) } --> (x,y,z) =  {surf_pt_full[k, 0, :]}")
 
 # print("unitnormal_full.shape =", unitnormal_full.shape)
 # for k in range(5):
@@ -143,7 +156,7 @@ normal_xyz_full = normal_pt_full.reshape(-1, 3)
 
 # step chooses how many surface points you skip when sampling.
 # step = 4 means: take one point every 4 points in both directions.
-step_sample = 4
+step_sample = 5
 
 # These are the same surface points where the arrows are sampled.
 # ::step means “take every step-th value”.
@@ -294,6 +307,8 @@ BB_xyz_full = MagneticFieldData(
 B_dot_n_xyz_full = jnp.sum(BB_xyz_full.Bvec * unitnormal_xyz_full, axis=1)
 
 
+
+
 # ==============================================================================
 # Sampled surface grid
 
@@ -343,7 +358,9 @@ n_cross_gradB_xyz_full = jnp.cross(unitnormal_xyz_full, Bmod_grad_xyz_full)
 print("n_cross_gradB_xyz_full.shape =", n_cross_gradB_xyz_full.shape)
 
 # ( \mathbf{n} \times \nabla B ) \cdot \nabla ( \mathbf{B} \cdot \nabla B ) -----------------------------
-QS_condition_xyz_full = jnp.sum( n_cross_gradB_xyz_full * grad_B_dot_gradB_xyz_full, axis=1 )
+Norm_factor = rminor**2 / B_modulus_xyz_full**4
+QS_condition_xyz_full = Norm_factor * jnp.sum( n_cross_gradB_xyz_full * grad_B_dot_gradB_xyz_full, axis=1 )
+
 
 
 print("QS_condition_xyz_full.shape =", QS_condition_xyz_full.shape)
@@ -367,7 +384,6 @@ QS_condition_xyz_sampled = jnp.sum( n_cross_gradB_xyz_sampled * grad_B_dot_gradB
 print("QS_condition_xyz_sampled.shape =", QS_condition_xyz_sampled.shape)
 print("QS_condition_xyz_sampled min =", jnp.min(QS_condition_xyz_sampled))
 print("QS_condition_xyz_sampled max =", jnp.max(QS_condition_xyz_sampled))
-
 
 
 # ============================================================================================
@@ -501,7 +517,8 @@ fig3 = plt.figure(figsize=(7, 6))
 ax3 = fig3.add_subplot(111, projection="3d")
 
 # Reshape back to surface grid shape
-B_dot_n_pt_full = B_dot_n_xyz_full.reshape(surf_pt_full.shape[:2])
+Norm_factor = B_modulus_xyz_full**(-1)
+B_dot_n_pt_full = (Norm_factor * B_dot_n_xyz_full).reshape(surf_pt_full.shape[:2])
 
 # Coordinates of the full surface
 x = surf_pt_full[..., 0]

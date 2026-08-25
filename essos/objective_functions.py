@@ -205,17 +205,23 @@ def QS_check_on_surface(BBfield, surface):
     surf_xyz = surface.gamma.reshape(-1, 3)
 
     # 2. field and gradient of |B|
-    BBvec_xyx = jax.vmap(BBfield.B)(surf_xyz)
-    gradB = jax.vmap(BBfield.dAbsB_by_dX)(surf_xyz)
+    # BBvec_xyz = jax.vmap(BBfield.B)(surf_xyz)
+    BBmod_xyz = jax.vmap(BBfield.AbsB)(surf_xyz)
+    gradB_xyz = jax.vmap(BBfield.dAbsB_by_dX)(surf_xyz)
 
     # 3. surface normal
     unitnormal_xyz = surface.unitnormal.reshape(-1, 3)
 
     # 4. quasi-symmetry condition
-    #    (n x grad|B|) · grad(B · grad|B|)
-    B_dot_gradB = jnp.sum(BBvec_xyx * gradB, axis=1)
-    grad_B_dot_gradB = jax.vmap(jax.grad(lambda x: jnp.dot(BBfield.B(x), BBfield.dAbsB_by_dX(x))))(surf_xyz)
-    QS_residual_xyz = jnp.sum(jnp.cross(unitnormal_xyz, gradB) * grad_B_dot_gradB, axis=1)
+    # 4.1. Compute grad(B · grad|B|) = grad(B · grad|B|)
+    #    
+    # B_dot_gradB = jnp.sum(BBvec_xyx * gradB_xyz, axis=1)
+    grad_B_dot_gradB_xyz = jax.vmap(jax.grad(lambda x: jnp.dot(BBfield.B(x), BBfield.dAbsB_by_dX(x))))(surf_xyz)
+
+    # 4.2. Compute (n x grad|B|) · grad(B · grad|B|) and normalized quasi-symmetry residual
+    rminor = 3.0
+    norm_factor = rminor**3 / BBmod_xyz**3
+    QS_residual_xyz = norm_factor * jnp.sum(jnp.cross(unitnormal_xyz, gradB_xyz) * grad_B_dot_gradB_xyz, axis=1)
 
     return QS_residual_xyz
 
@@ -225,8 +231,8 @@ def loss_QS(field, surface):
     Scalar objective: smaller means closer to quasi-symmetry.
     """
     QS_residual_xyz = QS_check_on_surface(field, surface)
-    QS_residual_sqr = jnp.mean(jnp.square(QS_residual_xyz))
-    return QS_residual_sqr
+    QS_residual = jnp.mean(jnp.abs(QS_residual_xyz))
+    return QS_residual
 
 
 
