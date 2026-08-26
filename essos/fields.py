@@ -396,4 +396,36 @@ class near_axis:
             "Please run 'pip install git+https://github.com/uwplasma/pyQSC_JAX.git' "
             "and import it via 'from pyqsc_jax.near_axis import near_axis'."
         )
-    
+
+
+class CombinedField(MagneticField):
+    def __init__(self, *fields):
+        if len(fields) < 1:
+            raise ValueError("CombinedField needs at least one field")
+        self.fields = fields
+
+    @jit
+    def B(self, points):
+        return sum(f.B(points) for f in self.fields)
+
+    @jit
+    def B_contravariant(self, points):
+        return sum(f.B_contravariant(points) for f in self.fields)
+
+    @jit
+    def to_xyz(self, points):
+        return self.fields[0].to_xyz(points)
+
+    def _tree_flatten(self):
+        children = (self.fields,)
+        aux_data = {}
+        return (children, aux_data)
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(*children[0], **aux_data)
+
+tree_util.register_pytree_node(CombinedField,
+                               CombinedField._tree_flatten,
+                               CombinedField._tree_unflatten)
+
