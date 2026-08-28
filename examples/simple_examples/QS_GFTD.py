@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 
 # Other libraries ------------------------------------------
 import os
+import sys
 import time
 
 # ============================================================================================
@@ -43,8 +44,8 @@ class MagneticFieldData:
 # Flags for plotting and debugging
 # ============================================================================================
 # flags: vmec, torus_simple
-# flag_surface_case = "vmec"
-flag_surface_case = "torus_simple"
+flag_surface_case = "vmec"
+# flag_surface_case = "torus_simple"
 
 # ============================================================================================
 # The surface is defined by the Fourier coefficients of R and Z as functions of theta and phi.
@@ -98,9 +99,56 @@ else:
     raise ValueError(f"Unknown flag_surface_case: {flag_surface_case}") 
 
 # ============================================================================================
-# Calculus of the approximated minor radius of the surface.
+# Calculus of the magnetic axis
+
+# This creates the toroidal-angle grid where we will evaluate the magnetic axis.
+phi_R1 = jnp.linspace(0, 2 * jnp.pi / vmec.nfp, surface.nphi, endpoint=False)
 
 
+if flag_surface_case == "torus_simple":
+
+    RR_axis = jnp.full_like(phi_R1, Rmajor)
+    ZZ_axis = jnp.zeros_like(phi_R1)
+
+
+elif flag_surface_case == "vmec":
+
+    # print("rmnc at s=0:", vmec.rmnc[0, :])
+    # print("zmns at s=0:", vmec.zmns[0, :])
+
+    # vmec.xm contains the poloidal mode number m for every Fourier mode.
+    # If m=0, the theta dependence dissapears.
+    # \[ R_{\text{axis}}(\phi) =  \sum_n R_{0n}\cos(n\phi),\]
+    # \[ Z_{\text{axis}}(\phi) = -\sum_n Z_{0n}\sin(n\phi).\]
+    # Creating a mask that is True for modes with \(m=0\).
+    m_eq_0_bool = (vmec.xm == 0)
+    # Now we take the n's associated to a m=0
+    xn_axis = vmec.xn[m_eq_0_bool]
+    
+    # Now we take the R_{mn} and Z_{mn} that multiplies cos/sin where m=0
+    rmnc_axis = vmec.rmnc[0, m_eq_0_bool]
+    zmns_axis = vmec.zmns[0, m_eq_0_bool]
+
+
+
+    # This is a matrix formed by (xn_phi_R2)_{i,j} = xn_axis[i] * phi_R1[j]
+    xn_phi_R2 = jnp.outer(xn_axis, phi_R1)
+
+    # Finnally, we evaluate the Fourier series for R and Z at each phi_R1[j].
+    RR_axis = jnp.sum(rmnc_axis[:, None] * jnp.cos(xn_phi_R2), axis=0)
+    ZZ_axis = -jnp.sum(zmns_axis[:, None] * jnp.sin(xn_phi_R2), axis=0)
+    
+else:
+    raise ValueError(f"Unknown flag_surface_case: {flag_surface_case}") 
+
+axis_xyz = jnp.stack([
+    RR_axis * jnp.cos(phi_R1),
+    RR_axis * jnp.sin(phi_R1),
+    ZZ_axis,
+    ], axis=1)
+
+
+print("axis_xyz.shape =", axis_xyz.shape)
 
 
 # ============================================================================================
@@ -401,7 +449,16 @@ print("QS_condition_xyz_sampled max =", jnp.max(QS_condition_xyz_sampled))
 fig = plt.figure(figsize=(7, 6))
 ax = fig.add_subplot(111, projection="3d")
 
+# Plot the magnetic axis
+ax.plot( axis_xyz[:, 0], axis_xyz[:, 1], axis_xyz[:, 2],
+    color="black", linewidth=2.5,
+    label="magnetic axis",
+)
+
+# Plotting the surface
 surface.plot(ax=ax, show=False, axis_equal=True, alpha=0.25)
+
+# Plotting the coils
 coils.plot(ax=ax, show=False, close=False, color="brown", linewidth=2)
 
 
