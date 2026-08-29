@@ -1,6 +1,7 @@
 import pytest
 import jax
-from essos.coils import Curves
+from essos.coils import Coils, Curves
+from essos.surfaces import surfacerzfourier_from_boundary
 import jax.numpy as jnp
 import random
 
@@ -15,6 +16,67 @@ def test_curves_initialization():
     assert curves.curves.shape == (4, 3, 5)
     assert curves.gamma.shape == (4, 100, 3)
     assert curves.gamma_dash.shape == (4, 100, 3)
+
+def test_curve_and_coil_dof_names_follow_flattened_dofs():
+    curves = Curves(jnp.zeros((2, 3, 5)), stellsym=False)
+    assert curves.dof_names[:7] == (
+        "coil[0].x0", "coil[0].xs(1)", "coil[0].xc(1)",
+        "coil[0].xs(2)", "coil[0].xc(2)", "coil[0].y0", "coil[0].ys(1)")
+    assert len(curves.dof_names) == curves.dofs.size
+    coils = Coils(curves, jnp.array([1.0, 2.0]))
+    assert coils.dof_names[-2:] == ("coil[0].current", "coil[1].current")
+    assert len(coils.dof_names) == coils.dofs.size
+    updated = coils.with_dofs(coils.dofs + 1.0)
+    assert jnp.allclose(updated.dofs, coils.dofs + 1.0)
+    assert not jnp.allclose(coils.dofs, updated.dofs)
+    gradient = jax.grad(lambda dofs: jnp.sum(coils.with_dofs(dofs).gamma))(coils.dofs)
+    assert gradient.shape == coils.dofs.shape and jnp.all(jnp.isfinite(gradient))
+    updated_curves = curves.with_dofs(curves.dofs + 2.0)
+    assert jnp.allclose(updated_curves.dofs, curves.dofs + 2.0)
+    assert not jnp.allclose(curves.dofs, updated_curves.dofs)
+
+def test_surface_from_vmec_boundary_preserves_modes_and_is_differentiable():
+    rbc = jnp.arange(15.0).reshape(5, 3); zbs = -rbc
+    surface = surfacerzfourier_from_boundary(
+        rbc, zbs, nfp=2, nphi=8, ntheta=10)
+    expected_r = jnp.concatenate((rbc[2:, 0], rbc[:, 1:].T.ravel()))
+    expected_z = jnp.concatenate((zbs[2:, 0], zbs[:, 1:].T.ravel()))
+    assert surface.mpol == 2 and surface.ntor == 2
+    assert jnp.array_equal(surface.rc, expected_r)
+    assert jnp.array_equal(surface.zs, expected_z)
+    gradient = jax.grad(lambda values: jnp.sum(
+        surfacerzfourier_from_boundary(values, zbs, 2, nphi=8, ntheta=10).gamma))(rbc)
+    assert jnp.all(jnp.isfinite(gradient))
+
+    with pytest.raises(ValueError, match="equal shape"):
+        surfacerzfourier_from_boundary(jnp.zeros((4, 3)), jnp.zeros((4, 3)), 2)
+
+def _small_surface():
+    rbc = jnp.zeros((5, 3)); zbs = jnp.zeros((5, 3))
+    rbc = rbc.at[2, 0].set(1.0).at[2, 1].set(0.2)
+    zbs = zbs.at[2, 1].set(0.2)
+    return surfacerzfourier_from_boundary(rbc, zbs, 2, nphi=8, ntheta=10)
+
+@pytest.mark.parametrize("name, caches", (
+    ("theta2d", ("_theta2d", "_phi2d")),
+    ("phi2d", ("_theta2d", "_phi2d")),
+    ("angles", ("_angles",)),
+    ("gamma", ("_gamma", "_gammadash_theta", "_gammadash_phi")),
+    ("gammadash_theta", ("_gamma", "_gammadash_theta", "_gammadash_phi")),
+    ("gammadash_phi", ("_gamma", "_gammadash_theta", "_gammadash_phi")),
+    ("normal", ("_normal", "_unitnormal", "_area_element")),
+    ("unitnormal", ("_normal", "_unitnormal", "_area_element")),
+    ("area_element", ("_normal", "_unitnormal", "_area_element")),
+))
+def test_surface_cache_is_concrete_and_does_not_retain_tracers(name, caches):
+    surface = _small_surface()
+    value = jax.jit(lambda scale: scale * jnp.sum(getattr(surface, name)))(1.0)
+    assert jnp.isfinite(value)
+    # Access after the transform must recompute concrete values, not retrieve a
+    # DynamicJaxprTracer that escaped from the compiled objective.
+    assert jnp.all(jnp.isfinite(getattr(surface, name)))
+    cached = [getattr(surface, cache) for cache in caches]
+    assert all(item is not None and not isinstance(item, jax.core.Tracer) for item in cached)
 
 def test_curves_initialization_with_params():
     dofs = jnp.zeros((2, 3, 5))

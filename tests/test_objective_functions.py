@@ -265,6 +265,29 @@ class TestObjectiveFunctions(unittest.TestCase):
         self.assertAlmostEqual(float(surface_distance), float(objf.loss_coil_surface_distance.__wrapped__(self.coils, self.pytree_surface, 0.5, block_size=4)))
         self.assertAlmostEqual(float(linking), float(objf.loss_linkingnumber.__wrapped__(self.coils, block_size=4)))
 
+    def test_clearance_loss_gradients_match_finite_difference(self):
+        def displaced_coils(displacement):
+            gamma = self.coils.gamma.at[0, :, 0].add(displacement)
+            return PytreeCoils(
+                gamma, self.coils.gamma_dash, self.coils.gamma_dashdash,
+                self.coils.currents, self.coils.curves.quadpoints,
+                self.coils.length, self.coils.curvature,
+                self.coils.curves.curves)
+
+        losses = (
+            lambda displacement: objf.loss_coil_separation(
+                displaced_coils(displacement), 3.0, block_size=3),
+            lambda displacement: objf.loss_coil_surface_distance(
+                displaced_coils(displacement), self.pytree_surface, 3.0,
+                block_size=4),
+        )
+        step = 1.0e-5
+        for loss in losses:
+            exact = jax.grad(loss)(0.0)
+            finite_difference = (loss(step) - loss(-step)) / (2 * step)
+            self.assertTrue(jnp.isfinite(exact))
+            self.assertAlmostEqual(float(exact), float(finite_difference), places=6)
+
     @patch("essos.objective_functions.Curves.compute_curvature", return_value=jnp.ones(5))
     @patch("essos.objective_functions.BiotSavart_from_gamma")
     def test_loss_lorentz_force_coils(self, biot_savart_from_gamma, compute_curvature):

@@ -3,9 +3,12 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from matplotlib.colors import is_color_like
+import numpy as np
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
+from time import perf_counter
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
@@ -15,22 +18,7 @@ from essos.surfaces import SurfaceClassifier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
 from essos.plot import fix_matplotlib_3d
-from essos.util import roots
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu_D_ab
-
-
-
-# If multiple devices are available, set up sharding for parallelization. Otherwise, set sharding to None.
-if len(jax.devices()) > 1:
-    mesh = Mesh(jax.devices(), ("dev",))
-    spec = PartitionSpec("dev", None)
-    spec_index = PartitionSpec("dev")
-    sharding = NamedSharding(mesh, spec)
-    sharding_index = NamedSharding(mesh, spec_index)
-else:
-    mesh = None
-    sharding = None
-    sharding_index = None
 
 
 
@@ -672,6 +660,22 @@ def FieldLine(t,
     # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 
+@partial(jit, static_argnums=(2))
+def FieldLineArclength(t, initial_condition, field) -> jnp.ndarray:
+    """Trace the same field line with physical arclength as the parameter."""
+    del t
+    B = field.B_contravariant(initial_condition)
+    return B / jnp.maximum(jnp.linalg.norm(B), jnp.finfo(B.dtype).tiny)
+
+
+@partial(jit, static_argnums=(2))
+def FieldLineToroidal(t, initial_condition, field) -> jnp.ndarray:
+    """Trace a flux-coordinate field with toroidal angle as the parameter."""
+    del t
+    B = field.B_contravariant(initial_condition)
+    return B / B[2]
+
+
 @jit
 def _fill_terminated_trajectories(trajectories, axis_threshold=None):
     """Replace post-event or below-axis saves with the last valid state."""
@@ -685,6 +689,27 @@ def _fill_terminated_trajectories(trajectories, axis_threshold=None):
             return state, state
 
         _, tail = lax.scan(fill_state, trajectory[0], trajectory[1:])
+        return jnp.vstack((trajectory[0], tail))
+
+    return vmap(fill_trajectory)(trajectories)
+
+
+def _fill_stopped_trajectories(trajectories, criteria, args):
+    """Hold each trajectory at its last point inside all level sets."""
+
+    def fill_trajectory(trajectory):
+        def remains_inside(state):
+            values = [criterion(0.0, state, args) for criterion in criteria]
+            return jnp.all(jnp.stack(values) > 0.0) & jnp.isfinite(state).all()
+
+        def fill_state(carry, current):
+            previous, active = carry
+            active = active & remains_inside(current)
+            state = jnp.where(active, current, previous)
+            return (state, active), state
+
+        initial_active = remains_inside(trajectory[0])
+        _, tail = lax.scan(fill_state, (trajectory[0], initial_active), trajectory[1:])
         return jnp.vstack((trajectory[0], tail))
 
     return vmap(fill_trajectory)(trajectories)
@@ -725,6 +750,27 @@ def _vmec_radial_events(axis_threshold):
     return reached_axis, reached_boundary
 
 
+class LevelsetStoppingCriterion:
+    """Stop tracing when a signed-distance level set is crossed.
+
+    ``classifier`` must be positive inside its reference surface. A positive
+    ``maximum_distance`` permits tracing that far outside the surface before
+    stopping.
+    """
+
+    def __init__(self, classifier, maximum_distance=0.0):
+        if maximum_distance < 0.0:
+            raise ValueError("maximum_distance must be non-negative")
+        if not hasattr(classifier, "evaluate_xyz"):
+            raise TypeError("classifier must provide evaluate_xyz(xyz)")
+        self.classifier = classifier
+        self.maximum_distance = float(maximum_distance)
+
+    def __call__(self, t, y, args, **kwargs):
+        del t, args, kwargs
+        return self.classifier.evaluate_xyz(y[:3]) + self.maximum_distance
+
+
 ## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
 ## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
 ## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
@@ -734,7 +780,22 @@ class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
-                 solver=None, axis_threshold=1.e-6):
+                 solver=None, axis_threshold=1.e-6, stopping_criteria=None, progress=False, devices=None):
+
+        if condition is not None and stopping_criteria is not None:
+            raise ValueError("Pass condition or stopping_criteria, not both")
+        if stopping_criteria is not None:
+            if callable(stopping_criteria):
+                stopping_criteria = (stopping_criteria,)
+            else:
+                stopping_criteria = tuple(stopping_criteria)
+            if not stopping_criteria or not all(callable(item) for item in stopping_criteria):
+                raise ValueError("stopping_criteria must contain callable criteria")
+            condition = stopping_criteria[0] if len(stopping_criteria) == 1 else stopping_criteria
+        self.stopping_criteria = stopping_criteria
+        self.devices = tuple(jax.devices() if devices is None else devices)
+        if not self.devices:
+            raise ValueError("devices must contain at least one JAX device")
         
         if electric_field==None:
             self.electric_field = Electric_field_zero()
@@ -766,7 +827,8 @@ class Tracing():
             raise ValueError("axis_threshold must be strictly between 0 and 1")
         self.axis_threshold = axis_threshold
         self._has_vmec_axis_event = False
-        self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
+        self.progress = bool(progress)
+        self.progress_meter = TqdmProgressMeter() if self.progress else NoProgressMeter()
         # Diffrax solver to use for the adaptive integrators. If left as None,
         # each integrator falls back to its previous default (Dopri8), so
         # existing call sites are unaffected. Selecting the solver here (rather
@@ -781,7 +843,7 @@ class Tracing():
                 if model in _VMEC_GUIDING_CENTER_MODELS:
                     self.condition = _vmec_radial_events(self.axis_threshold)
                     self._has_vmec_axis_event = True
-                elif model == 'FieldLine' or model== 'FieldLineAdaptative':
+                elif model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _ = y
                         return s-1	 
@@ -842,8 +904,12 @@ class Tracing():
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
-        elif model == 'FieldLine' or model== 'FieldLineAdaptative':
-            self.ODE_term = ODETerm(FieldLine)
+        elif model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
+            field_line_rhs = {
+                'FieldLineArclength': FieldLineArclength,
+                'FieldLineToroidal': FieldLineToroidal,
+            }.get(model, FieldLine)
+            self.ODE_term = ODETerm(field_line_rhs)
             self.args = self.field
         
         if self.times_to_trace is None:
@@ -862,6 +928,14 @@ class Tracing():
             self._trajectories = jnp.where(
                 self.axis_hits[:, None, None], filled, trajectories
             )
+        elif self.stopping_criteria is not None:
+            trajectories, self.event_mask = trace_result
+            event_leaves = tree_util.tree_leaves(self.event_mask)
+            self.boundary_hits = jnp.any(jnp.stack(event_leaves), axis=0)
+            self.axis_hits = jnp.zeros_like(self.boundary_hits)
+            self._trajectories = _fill_stopped_trajectories(
+                trajectories, self.stopping_criteria, self.args
+            )
         else:
             self._trajectories = trace_result
             self.event_mask = None
@@ -869,7 +943,20 @@ class Tracing():
             self.boundary_hits = jnp.zeros(len(self._trajectories), dtype=bool)
         self.total_particles_unresolved = jnp.sum(self.axis_hits)
         
-        self.trajectories_xyz = vmap(lambda xyz: vmap(lambda point: self.field.to_xyz(point[:3]))(xyz))(self.trajectories)
+        trajectory_points = self.trajectories[:, :, :3]
+        if hasattr(self.field, "toroidal_angle_batch"):
+            self.toroidal_angles = self.field.toroidal_angle_batch(
+                trajectory_points.reshape((-1, 3))).reshape(trajectory_points.shape[:2])
+        else:
+            self.toroidal_angles = None
+        if hasattr(self.field, "to_xyz_batch"):
+            flat_points = trajectory_points.reshape((-1, 3))
+            self.trajectories_xyz = self.field.to_xyz_batch(flat_points).reshape(
+                trajectory_points.shape)
+        else:
+            self.trajectories_xyz = vmap(
+                lambda xyz: vmap(lambda point: self.field.to_xyz(point))(xyz)
+            )(trajectory_points)
         
         if isinstance(field, Vmec):
             if self.model in _GUIDING_CENTER_COLLISION_MODELS:
@@ -881,8 +968,6 @@ class Tracing():
                 self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_BioSavart_collisions(boundary)                    
             else:                
                 self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction_BioSavart(boundary)
-        else:
-            self.trajectories_xyz = self.trajectories
 
     def trace(self):
         @jit
@@ -1078,7 +1163,7 @@ class Tracing():
                     event = Event(self.condition)
                 )
                 trajectory = solution.ys
-            elif self.model == 'FieldLineAdaptative' :  
+            elif self.model in ('FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
                 solution = diffeqsolve(
@@ -1118,18 +1203,47 @@ class Tracing():
                     event = Event(self.condition)
                 )
                 trajectory = solution.ys
-            if self._has_vmec_axis_event:
+            if self._has_vmec_axis_event or self.stopping_criteria is not None:
                 return trajectory, solution.event_mask
             return trajectory
         
+        devices = self.devices
+        device_count = min(len(devices), len(self.initial_conditions))
+        while device_count > 1 and len(self.initial_conditions) % device_count:
+            device_count -= 1
+        if device_count > 1:
+            mesh = Mesh(np.asarray(devices[:device_count], dtype=object), ("dev",))
+            sharding = NamedSharding(mesh, PartitionSpec("dev", None))
+            sharding_index = NamedSharding(mesh, PartitionSpec("dev"))
+        else:
+            sharding = sharding_index = None
+
         output_sharding = sharding
         if self._has_vmec_axis_event:
             output_sharding = (sharding, (sharding_index, sharding_index))
+        elif self.stopping_criteria is not None:
+            event_sharding = sharding_index
+            if len(self.stopping_criteria) > 1:
+                event_sharding = tuple(sharding_index for _ in self.stopping_criteria)
+            output_sharding = (sharding, event_sharding)
         if sharding is not None:
+            initial_conditions = device_put(
+                np.asarray(jax.device_get(self.initial_conditions)), sharding)
+            random_keys = self.particles.random_keys if self.particles else None
+            if random_keys is not None:
+                random_keys = device_put(jax.device_get(random_keys), sharding_index)
             return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
-                        device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
+                        initial_conditions, random_keys)
         else:
-            return jit(vmap(compute_trajectory,in_axes=(0,0)))(self.initial_conditions, self.particles.random_keys if self.particles else None)
+            device = devices[0]
+            initial_conditions = device_put(
+                np.asarray(jax.device_get(self.initial_conditions)), device)
+            random_keys = self.particles.random_keys if self.particles else None
+            if random_keys is not None:
+                random_keys = device_put(jax.device_get(random_keys), device)
+            with jax.default_device(device):
+                return jit(vmap(compute_trajectory,in_axes=(0,0)))(
+                    initial_conditions, random_keys)
         #x=jax.device_put(self.initial_conditions, sharding)
         #y=jax.device_put(self.particles.random_keys, sharding_index)        
         #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
@@ -1178,9 +1292,6 @@ class Tracing():
                 return 0.5 * mass * v_squared
             energy = vmap(compute_energy)(self.trajectories)
 
-        elif self.model == 'FieldLine' or self.model == 'FieldLineAdaptative':
-            energy = jnp.ones((len(self.initial_conditions), self.times_to_trace))
-            
         return energy
     
     
@@ -1222,9 +1333,6 @@ class Tracing():
                 return jnp.sqrt(jnp.maximum(vperp_squared, 0.0))
             v_perp = vmap(compute_vperp)(self.trajectories)
 
-        elif self.model == 'FieldLine' or self.model == 'FieldLineAdaptative':
-            v_perp = jnp.ones((len(self.initial_conditions), self.times_to_trace))
-            
         return v_perp
 
     def to_vtk(self, filename):
@@ -1376,7 +1484,7 @@ class Tracing():
     
     def poincare_plot(self, shifts = [jnp.pi/2], orientation = 'toroidal', length = 1, ax=None, show=True, color=None, **kwargs):
         """
-        Plot Poincare plots using scipy to find the roots of an interpolation. Can take particle trace or field lines.
+        Plot Poincare sections from Cartesian trajectories.
         Args:
             shifts (list, optional): Apply a linear shift to dependent data. Default is [pi/2].
             orientation (str, optional): 
@@ -1385,76 +1493,63 @@ class Tracing():
             length (float, optional): A way to shorten data. 1 - plot full length, 0.1 - plot 1/10 of data length. Default is 1.
             ax (matplotlib.axes._subplots.AxesSubplot, optional): Matplotlib axis to plot on. Default is None.
             show (bool, optional): Whether to display the plot. Default is True.
-            color: Can be time, None or a color to plot Poincaré points
+            color: ``"time"``, one Matplotlib color, or one color per trajectory.
             **kwargs: Additional keyword arguments for plotting.
-        Notes:
-            - If the data seem ill-behaved, there may not be enough steps in the trace for a good interpolation.
-            - This will break if there are any NaNs.
-            - Issues with toroidal interpolation: jnp.arctan2(Y, X) % (2 * jnp.pi) causes distortion in interpolation near phi = 0.
-            - Maybe determine a lower limit on resolution needed per toroidal turn for "good" results.
-        To-Do:
-            - Format colorbars.
+        Toroidal crossings are found from the unwrapped Cartesian azimuth, so
+        the branch cut at ``phi=0`` does not create or discard intersections.
         """
         kwargs.setdefault('s', 0.5)
         if ax is None:
             fig = plt.figure()
             ax = fig.add_subplot()
-        shifts = jnp.array(shifts)
+        shifts = np.asarray(shifts, dtype=float)
+        trajectories = np.asarray(self.trajectories_xyz)
+        times = np.asarray(self.times)
         plotting_data = []
-        # from essos.util import roots_scipy
         for shift in shifts:
-            @jit
-            def compute_trajectory_toroidal(trace):
-                X,Y,Z = trace[:,:3].T
-                R = jnp.sqrt(X**2 + Y**2)
-                phi = jnp.arctan2(Y,X)
-                phi = jnp.where(shift==0, phi, jnp.abs(phi))
-                T_slice = roots(self.times, phi, shift = shift)
-                T_slice = jnp.where(shift==0, jnp.concatenate((T_slice[1::2],T_slice[1::2])), T_slice)
-                # T_slice = roots_scipy(self.times, phi, shift = shift)
-                R_slice = jnp.interp(T_slice, self.times, R)
-                Z_slice = jnp.interp(T_slice, self.times, Z)
-                return R_slice, Z_slice, T_slice
-            @jit
-            def compute_trajectory_z(trace):
-                X,Y,Z = trace[:,:3].T
-                T_slice = roots(self.times, Z, shift = shift)
-                # T_slice = roots_scipy(self.times, Z, shift = shift)
-                X_slice = jnp.interp(T_slice, self.times, X)
-                Y_slice = jnp.interp(T_slice, self.times, Y)
-                return X_slice, Y_slice, T_slice
-            if orientation == 'toroidal':
-                # X_slice, Y_slice, T_slice = vmap(compute_trajectory_toroidal)(self.trajectories)
-                if sharding is not None:
-                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_toroidal), in_shardings=sharding, out_shardings=sharding)(
-                        device_put(self.trajectories, sharding))
+            sections = []
+            native_angles = getattr(self, "toroidal_angles", None)
+            for trace_index, trace in enumerate(trajectories):
+                x, y, z = trace[:, :3].T
+                if orientation == 'toroidal':
+                    phase = (np.asarray(native_angles[trace_index]) if native_angles is not None
+                             else np.unwrap(np.arctan2(y, x)))
+                    delta = np.diff(phase)
+                    turns = np.floor((phase - shift) / (2.0 * np.pi))
+                    indices = np.flatnonzero(np.diff(turns) != 0)
+                    levels = shift + 2.0 * np.pi * np.where(
+                        delta[indices] > 0.0, turns[indices] + 1.0, turns[indices])
+                    fraction = (levels - phase[indices]) / delta[indices]
+                    first, second = np.hypot(x, y), z
+                elif orientation == 'z':
+                    values = z - shift
+                    indices = np.flatnonzero(values[:-1] * values[1:] <= 0.0)
+                    denominator = values[indices] - values[indices + 1]
+                    valid = denominator != 0.0; indices = indices[valid]
+                    fraction = values[indices] / denominator[valid]
+                    first, second = x, y
                 else:
-                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_toroidal))(self.trajectories)
-            elif orientation == 'z':
-                # X_slice, Y_slice, T_slice = vmap(compute_trajectory_z)(self.trajectories)
-                if sharding is not None:
-                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_z), in_shardings=sharding, out_shardings=sharding)(
-                        device_put(self.trajectories, sharding))
-                else:
-                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_z))(self.trajectories)
-            @partial(jax.vmap, in_axes=(0, 0, 0))
-            def process_trajectory(X_i, Y_i, T_i):
-                mask = (T_i[1:] != T_i[:-1])
-                valid_idx = jnp.nonzero(mask, size=T_i.size - 1)[0] + 1
-                return X_i[valid_idx], Y_i[valid_idx], T_i[valid_idx]
-            X_s, Y_s, T_s = process_trajectory(X_slice, Y_slice, T_slice)
-            length_ = (vmap(len)(X_s) * length).astype(int)
-            colors = plt.cm.ocean(jnp.linspace(0, 0.8, len(X_s)))
-            for i in range(len(X_s)):
-                X_plot, Y_plot = X_s[i][:length_[i]], Y_s[i][:length_[i]]
-                T_plot = T_s[i][:length_[i]]
+                    raise ValueError("orientation must be 'toroidal' or 'z'")
+                fraction = np.clip(fraction, 0.0, 1.0)
+                section_time = times[indices] + fraction * np.diff(times)[indices]
+                first_section = first[indices] + fraction * np.diff(first)[indices]
+                second_section = second[indices] + fraction * np.diff(second)[indices]
+                count = int(len(indices) * length)
+                sections.append((first_section[:count], second_section[:count], section_time[:count]))
+
+            colors = plt.cm.ocean(np.linspace(0, 0.8, len(sections)))
+            color_is_time = isinstance(color, str) and color == "time"
+            per_trajectory_color = (color is not None and not color_is_time
+                                    and not is_color_like(color) and len(color) == len(sections))
+            for i, (X_plot, Y_plot, T_plot) in enumerate(sections):
                 plotting_data.append((X_plot, Y_plot, T_plot))
-                if color == 'time':
-                    hits = ax.scatter(X_plot, Y_plot, c=T_s[i][:length_[i]], **kwargs)
+                if color_is_time:
+                    ax.scatter(X_plot, Y_plot, c=T_plot, **kwargs)
                 else:
                     if color is None: c=[colors[i]]
+                    elif per_trajectory_color: c=color[i]
                     else: c=color
-                    hits = ax.scatter(X_plot, Y_plot, c=c, **kwargs)
+                    ax.scatter(X_plot, Y_plot, c=c, **kwargs)
                     
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 18)
@@ -1476,7 +1571,8 @@ class Tracing():
         children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
         aux_data = {'field': self.field, 'electric_field': self.electric_field, 'model': self.model, 'maxtime': self.maxtime, 'timestep': self.timestep,
                     'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc,
-                    'solver': self.solver}  # static values
+                    'solver': self.solver, 'stopping_criteria': self.stopping_criteria,
+                    'progress': self.progress, 'devices': self.devices}  # static values
         return (children, aux_data)
 
     @classmethod
@@ -1487,3 +1583,76 @@ class Tracing():
 tree_util.register_pytree_node(Tracing,
                                Tracing._tree_flatten,
                                Tracing._tree_unflatten)
+
+
+def trace_field_lines(
+    field,
+    initial_conditions,
+    *,
+    toroidal_turns=None,
+    length=None,
+    samples=1000,
+    tolerance=1.0e-7,
+    stopping_criteria=None,
+    progress=True,
+    label="field lines",
+    devices=None,
+):
+    """Trace field lines by toroidal angle or physical arclength.
+
+    Specify exactly one of ``toroidal_turns`` or ``length``. Toroidal tracing
+    is intended for fields represented in flux coordinates; Cartesian coil
+    fields use arclength, so multiplying the magnetic field does not change
+    the traced distance. ``samples`` includes both endpoints. The returned
+    :class:`Tracing` object provides trajectories, event flags, plotting, and
+    Poincare sections.
+
+    Args:
+        field: ESSOS-compatible magnetic field.
+        initial_conditions: One seed per row, in the field's coordinates.
+        toroidal_turns: Number of full toroidal turns to follow.
+        length: Physical arclength to follow for a Cartesian field.
+        samples: Number of saved points along each line.
+        tolerance: Relative and absolute adaptive-integration tolerance.
+        stopping_criteria: Optional event callable or sequence of callables.
+        progress: Show Diffrax's terminal progress bar.
+        label: Text printed before compilation and after completion; set to
+            ``None`` to suppress these two messages.
+        devices: Optional explicit sequence of JAX devices.
+    """
+    if (toroidal_turns is None) == (length is None):
+        raise ValueError("specify exactly one of toroidal_turns or length")
+    if int(samples) < 2:
+        raise ValueError("samples must be at least 2")
+    if toroidal_turns is not None and float(toroidal_turns) <= 0.0:
+        raise ValueError("toroidal_turns must be positive")
+    if length is not None and float(length) <= 0.0:
+        raise ValueError("length must be positive")
+
+    extent = (2.0 * jnp.pi * float(toroidal_turns)
+              if toroidal_turns is not None else float(length))
+    model = "FieldLineToroidal" if toroidal_turns is not None else "FieldLineArclength"
+    if label is not None:
+        print(f"Tracing {label} (the first call compiles ESSOS)...", flush=True)
+    started = perf_counter()
+    result = Tracing(
+        field=field,
+        model=model,
+        initial_conditions=initial_conditions,
+        maxtime=extent,
+        timestep=extent / (int(samples) - 1),
+        times_to_trace=int(samples),
+        atol=float(tolerance),
+        rtol=float(tolerance),
+        stopping_criteria=stopping_criteria,
+        progress=bool(progress),
+        devices=devices,
+    )
+    jax.block_until_ready(result.trajectories_xyz)
+    if label is not None:
+        message = f"{label} ready in {perf_counter() - started:.1f} s"
+        if stopping_criteria is not None:
+            hits = int(jnp.sum(result.boundary_hits))
+            message += f"; {hits}/{len(initial_conditions)} lines reached a stopping event"
+        print(message, flush=True)
+    return result

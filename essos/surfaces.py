@@ -4,12 +4,17 @@ import jax.numpy as jnp
 from jax.scipy.interpolate import RegularGridInterpolator
 from jax import tree_util, jit, vmap, devices, device_put
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
-from jax.experimental.pjit import pjit
 from essos.plot import fix_matplotlib_3d
 import jaxkd
 
 mesh = Mesh(devices(), ("dev",))
 sharding = NamedSharding(mesh, PartitionSpec("dev"))
+
+
+def _cacheable(*values):
+    """Return false for values created while an outer JAX transform is tracing."""
+    return not any(isinstance(leaf, jax.core.Tracer)
+                   for leaf in tree_util.tree_leaves(values))
 
 
 @jit
@@ -41,7 +46,7 @@ def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
     return tf
 
 # @jit
-@partial(pjit, in_shardings=(sharding, None), out_shardings=sharding)
+@partial(jit, in_shardings=(sharding, None), out_shardings=sharding)
 def B_on_surface(surface, field):
     ntheta = surface.ntheta
     nphi = surface.nphi
@@ -103,6 +108,24 @@ def nested_lists_to_array(ll):
     for jm, l in enumerate(ll):
         arr = arr.at[jm, :len(l)].set(jnp.array([x if x is not None else 0 for x in l]))
     return arr
+
+
+def surfacerzfourier_from_boundary(rbc, zbs, nfp, ntheta=30, nphi=30,
+                                   close=False, range_torus="full torus"):
+    """Create a differentiable surface from VMEC ``rbc`` and ``zbs`` arrays.
+
+    VMEC stores arrays as ``[n + ntor, m]`` and omits negative-``n`` modes
+    when ``m=0``. ESSOS stores the same independent coefficients as flat mode
+    vectors; this function performs only that ordering conversion.
+    """
+    rbc, zbs = jnp.asarray(rbc), jnp.asarray(zbs)
+    if rbc.ndim != 2 or rbc.shape != zbs.shape or rbc.shape[0] % 2 != 1:
+        raise ValueError("rbc and zbs must have equal shape (2*ntor+1, mpol+1)")
+    ntor, mpol = (rbc.shape[0] - 1) // 2, rbc.shape[1] - 1
+    rc = jnp.concatenate((rbc[ntor:, 0], rbc[:, 1:].T.ravel()))
+    zs = jnp.concatenate((zbs[ntor:, 0], zbs[:, 1:].T.ravel()))
+    return SurfaceRZFourier(rc, zs, int(nfp), mpol, ntor, ntheta=ntheta, nphi=nphi,
+                            close=close, range_torus=range_torus)
 
     
 
@@ -313,14 +336,21 @@ class SurfaceRZFourier:
     @property
     def xm(self):
         if self._xm is None:
-            self._xm = jnp.repeat(jnp.arange(self.mpol + 1), 2 * self.ntor + 1)[self.ntor:]
+            value = jnp.repeat(jnp.arange(self.mpol + 1), 2 * self.ntor + 1)[self.ntor:]
+            if _cacheable(value):
+                self._xm = value
+            return value
         return self._xm
 
     # xn property
     @property
     def xn(self):
         if self._xn is None:
-            self._xn = self.nfp * jnp.tile(jnp.arange(-self.ntor, self.ntor + 1), self.mpol + 1)[self.ntor:]
+            value = self.nfp * jnp.tile(
+                jnp.arange(-self.ntor, self.ntor + 1), self.mpol + 1)[self.ntor:]
+            if _cacheable(value):
+                self._xn = value
+            return value
         return self._xn
 
     # _ntheta property and setter
@@ -379,21 +409,31 @@ class SurfaceRZFourier:
     @property
     def theta2d(self):
         if self._theta2d is None:
-            self._quadpoints_theta, self._quadpoints_phi, self._theta2d, self._phi2d = self._compute_meshgrid()
+            values = self._compute_meshgrid()
+            if _cacheable(*values):
+                self._quadpoints_theta, self._quadpoints_phi, self._theta2d, self._phi2d = values
+            return values[2]
         return self._theta2d
 
     # phi2d property
     @property
     def phi2d(self):
         if self._phi2d is None:
-            self._quadpoints_theta, self._quadpoints_phi, self._theta2d, self._phi2d = self._compute_meshgrid()
+            values = self._compute_meshgrid()
+            if _cacheable(*values):
+                self._quadpoints_theta, self._quadpoints_phi, self._theta2d, self._phi2d = values
+            return values[3]
         return self._phi2d
 
     # angles property
     @property
     def angles(self):
         if self._angles is None:
-            self._angles =  jnp.einsum('i,jk->ijk', self.xm, self.theta2d) - jnp.einsum('i,jk->ijk', self.xn, self.phi2d)
+            value = (jnp.einsum('i,jk->ijk', self.xm, self.theta2d)
+                     - jnp.einsum('i,jk->ijk', self.xn, self.phi2d))
+            if _cacheable(value):
+                self._angles = value
+            return value
         return self._angles
     
     # scaling_type property and setter
@@ -473,19 +513,28 @@ class SurfaceRZFourier:
     @property
     def gamma(self):
         if self._gamma is None:
-            self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
+            values = self._compute_gamma()
+            if _cacheable(*values):
+                self._gamma, self._gammadash_theta, self._gammadash_phi = values
+            return values[0]
         return self._gamma
     
     @property
     def gammadash_theta(self):
         if self._gammadash_theta is None:
-            self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
+            values = self._compute_gamma()
+            if _cacheable(*values):
+                self._gamma, self._gammadash_theta, self._gammadash_phi = values
+            return values[1]
         return self._gammadash_theta
     
     @property
     def gammadash_phi(self):
         if self._gammadash_phi is None:
-            self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
+            values = self._compute_gamma()
+            if _cacheable(*values):
+                self._gamma, self._gammadash_theta, self._gammadash_phi = values
+            return values[2]
         return self._gammadash_phi
 
     # _compute_properties method
@@ -500,19 +549,28 @@ class SurfaceRZFourier:
     @property
     def normal(self):
         if self._normal is None:
-            self._normal, self._unitnormal, self._area_element = self._compute_properties()
+            values = self._compute_properties()
+            if _cacheable(*values):
+                self._normal, self._unitnormal, self._area_element = values
+            return values[0]
         return self._normal
     
     @property
     def unitnormal(self):
         if self._unitnormal is None:
-            self._normal, self._unitnormal, self._area_element = self._compute_properties()
+            values = self._compute_properties()
+            if _cacheable(*values):
+                self._normal, self._unitnormal, self._area_element = values
+            return values[1]
         return self._unitnormal
     
     @property
     def area_element(self):
         if self._area_element is None:
-            self._normal, self._unitnormal, self._area_element = self._compute_properties()
+            values = self._compute_properties()
+            if _cacheable(*values):
+                self._normal, self._unitnormal, self._area_element = values
+            return values[2]
         return self._area_element
 
     # TODO: remove x property. This is a placeholder for compatibility with the examples that need to be updated.
@@ -773,19 +831,22 @@ class SurfaceClassifier():
     (approximately) zero on the surface, and negative outisde the volume contained by the surface.
     """
 
-    def __init__(self, surface,h=0.05):
+    def __init__(self, surface, h=0.05, padding=0.1):
         """
         Args:
             surface: the surface to contruct the distance from.
             h: grid resolution of the interpolant
+            padding: distance represented outside the surface
         """
+        if padding <= 0.0:
+            raise ValueError("padding must be positive")
         gammas = surface.gamma
         r = jnp.linalg.norm(gammas[:, :, :2], axis=2)
         z = gammas[:, :, 2]
-        rmin = max(jnp.min(r) - 0.1, 0.)
-        rmax = jnp.max(r) + 0.1
-        zmin = jnp.min(z) - 0.1
-        zmax = jnp.max(z) + 0.1
+        rmin = max(jnp.min(r) - padding, 0.)
+        rmax = jnp.max(r) + padding
+        zmin = jnp.min(z) - padding
+        zmax = jnp.max(z) + padding
 
         self.zrange = (zmin, zmax)
         self.rrange = (rmin, rmax)
@@ -794,12 +855,22 @@ class SurfaceClassifier():
         nphi = int(2*jnp.pi/h)
         nz = int((self.zrange[1]-self.zrange[0])/h)
 
+        gammas_flat = surface.gamma.reshape((-1, 3))
+        normals_flat = surface.unitnormal.reshape((-1, 3))
+        tree = jaxkd.build_tree(gammas_flat)
+        interior = jnp.mean(surface.gamma[0, :, :], axis=0)
+        sign_of_interior = jnp.sign(jnp.sum(
+            (interior - gammas_flat[0]) * normals_flat[0]))
+
         def fbatch(rs, phis, zs):
             xyz = jnp.zeros(( 3))
             xyz=xyz.at[0].set( rs * jnp.cos(phis))
             xyz=xyz.at[1].set(rs * jnp.sin(phis))
             xyz=xyz.at[2].set(zs)
-            return signed_distance_from_surface_jax(xyz, surface)   
+            nearest, _ = jaxkd.query_neighbors(tree, xyz, k=1)
+            distance = jnp.sum(
+                (xyz - gammas_flat[nearest]) * normals_flat[nearest], axis=1)
+            return distance * sign_of_interior
             #return signed_distance_from_surface_extras(xyz, surface) ####memory bounded
 
         #rule = sopp.UniformInterpolationRule(p) 

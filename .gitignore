@@ -170,6 +170,7 @@ tests/comparisons_SIMSOPT/output/*
 essos/version.py
 *.json
 *.png
+*.csv
 *.vtu
 *.vts
 *.xml
