@@ -207,11 +207,13 @@ class SurfaceRZFourier:
         nml = Parser().read(file)['indata']
 
         nfp = nml["nfp"] if "nfp" in nml else 1
-        mpol = nml['mpol']            
-        ntor = nml['ntor']
-        
-        rc = jnp.ravel(nested_lists_to_array(nml['rbc']))[2:]
-        zs = jnp.ravel(nested_lists_to_array(nml['zbs']))[2:]
+        rbc = nested_lists_to_array(nml['rbc'])
+        zbs = nested_lists_to_array(nml['zbs'])
+        mpol = rbc.shape[0] - 1
+        ntor = (rbc.shape[1] - 1) // 2
+
+        rc = jnp.ravel(rbc)[ntor:]
+        zs = jnp.ravel(zbs)[ntor:]
 
         surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
         return surface
