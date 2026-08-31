@@ -91,7 +91,13 @@ elif flag_surface_case == "vmec":
         "wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
     )
 
+    # Equilibrium is loaded from a VMEC output file.
+    # `Vmec` class reads the file and constructs the surface representation based on the Fourier coefficients.
+    # Parameters `ntheta` and `nphi` specify the number of grid points
+    # `range_torus` indicates that we want to consider the full torus for our calculations.
     vmec = Vmec(wout_file, ntheta=50, nphi=60, range_torus="full torus")
+
+    # We extract the outermost surface from the VMEC equilibrium
     surface = vmec.surface
 
     
@@ -102,7 +108,8 @@ else:
 # Calculus of the magnetic axis
 
 # This creates the toroidal-angle grid where we will evaluate the magnetic axis.
-phi_R1 = jnp.linspace(0, 2 * jnp.pi / vmec.nfp, surface.nphi, endpoint=False)
+# phi_R1 = jnp.linspace(0, 2 * jnp.pi / vmec.nfp, surface.nphi, endpoint=False)
+phi_R1 = jnp.linspace(0, 2 * jnp.pi , surface.nphi, endpoint=False)
 
 
 if flag_surface_case == "torus_simple":
@@ -149,6 +156,8 @@ axis_xyz = jnp.stack([
 
 
 print("axis_xyz.shape =", axis_xyz.shape)
+
+
 
 
 # ============================================================================================
@@ -379,6 +388,24 @@ B_dot_n_xyz_sampled = jnp.sum(BB_xyz_sampled.Bvec * unitnormal_xyz_sampled, axis
 
 
 # ============================================================================================
+# Calculus of the scale length for the magnetic axis
+
+
+# L_B = |B| / ||grad(|B|)||. =============================================
+
+norm_gradient_Bmod_xyz_full = jnp.linalg.norm( Bmod_grad_xyz_full, axis=1 )
+
+epsilon = 1e-14
+L_B_xyz_full = ( B_modulus_xyz_full / (norm_gradient_Bmod_xyz_full + epsilon) )
+
+print("L_B_xyz_full.shape =", L_B_xyz_full.shape)
+print("L_B minimum =", jnp.min(L_B_xyz_full))
+print("L_B maximum =", jnp.max(L_B_xyz_full))
+print("L_B average =", jnp.mean(L_B_xyz_full))
+
+sys.exit()
+
+# ============================================================================================
 # Residual of the Quasi-Symmetry condition: ( \nabla \psi \times \nabla |B| ) \cdot \nabla ( \mathbf{B} \cdot \nabla |B| )
 # For the optimization purposes, \nabla \psi is replaced by the unit normal vector to the surface. 
 # (n × grad(B)) · grad(B · grad(B)) = 0?
@@ -408,7 +435,6 @@ print("n_cross_gradB_xyz_full.shape =", n_cross_gradB_xyz_full.shape)
 # ( \mathbf{n} \times \nabla B ) \cdot \nabla ( \mathbf{B} \cdot \nabla B ) -----------------------------
 Norm_factor = rminor**2 / B_modulus_xyz_full**4
 QS_condition_xyz_full = Norm_factor * jnp.sum( n_cross_gradB_xyz_full * grad_B_dot_gradB_xyz_full, axis=1 )
-
 
 
 print("QS_condition_xyz_full.shape =", QS_condition_xyz_full.shape)
@@ -441,9 +467,8 @@ print("QS_condition_xyz_sampled max =", jnp.max(QS_condition_xyz_sampled))
 # ============================================================================================
 
 
-
 # ========================================
-# Plotting surface + coils
+# Plotting surface + coils + magnetic axis
 # ========================================
 
 fig = plt.figure(figsize=(7, 6))

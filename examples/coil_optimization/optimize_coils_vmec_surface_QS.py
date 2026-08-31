@@ -50,7 +50,7 @@ surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=30, nphi=30, r
 LENGTH_WEIGHT = 1.; LENGTH_TARGET = 32.
 CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.1
 NORMAL_FIELD_WEIGHT = 1.
-QS_WEIGHT = 30.
+QS_WEIGHT = 1.
 
 # ====================================================================================
 # ====================================================================================
