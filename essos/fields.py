@@ -64,6 +64,14 @@ class MagneticField():
     def to_xyz(self, points):
         raise NotImplementedError("to_xyz method not implemented")
 
+    @jit
+    def L_B(self, points):
+        B_modulus = self.AbsB(points)
+        grad_B_modulus = self.dAbsB_by_dX(points)
+        norm_gradient_Bmod = jnp.linalg.norm(grad_B_modulus)
+        epsilon=1e-14
+        return B_modulus / (norm_gradient_Bmod + epsilon)
+
 class BiotSavart(MagneticField):
     def __init__(self, coils):
         self.coils = coils

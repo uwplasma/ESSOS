@@ -393,17 +393,15 @@ B_dot_n_xyz_sampled = jnp.sum(BB_xyz_sampled.Bvec * unitnormal_xyz_sampled, axis
 
 # L_B = |B| / ||grad(|B|)||. =============================================
 
-norm_gradient_Bmod_xyz_full = jnp.linalg.norm( Bmod_grad_xyz_full, axis=1 )
-
-epsilon = 1e-14
-L_B_xyz_full = ( B_modulus_xyz_full / (norm_gradient_Bmod_xyz_full + epsilon) )
+L_B_xyz_full = jax.vmap(BB_coils.L_B)(surf_xyz_full)
+L_B_pt_full = L_B_xyz_full.reshape(surf_pt_full.shape[:2])
 
 print("L_B_xyz_full.shape =", L_B_xyz_full.shape)
+print("L_B_pt_full.shape =", L_B_pt_full.shape)
 print("L_B minimum =", jnp.min(L_B_xyz_full))
 print("L_B maximum =", jnp.max(L_B_xyz_full))
 print("L_B average =", jnp.mean(L_B_xyz_full))
 
-sys.exit()
 
 # ============================================================================================
 # Residual of the Quasi-Symmetry condition: ( \nabla \psi \times \nabla |B| ) \cdot \nabla ( \mathbf{B} \cdot \nabla |B| )
@@ -645,6 +643,58 @@ ax3.set_xlabel("x")
 ax3.set_ylabel("y")
 ax3.set_zlabel("z")
 plt.show()
+
+# ========================================
+# Plotting the magnetic-gradient scale length L_B
+# ========================================
+
+x = surf_pt_full[..., 0]
+y = surf_pt_full[..., 1]
+z = surf_pt_full[..., 2]
+
+fig_LB = plt.figure(figsize=(7, 6))
+ax_LB = fig_LB.add_subplot(111, projection="3d")
+
+# Color normalization based on the range of L_B
+L_B_min = float(jnp.min(L_B_pt_full))
+L_B_max = float(jnp.max(L_B_pt_full))
+color_norm = plt.Normalize(vmin=L_B_min, vmax=L_B_max)
+
+surface_colors = plt.cm.viridis(
+    color_norm(L_B_pt_full)
+)
+
+ax_LB.plot_surface(
+    x,
+    y,
+    z,
+    facecolors=surface_colors,
+    linewidth=0,
+    antialiased=True,
+    alpha=0.9,
+)
+
+fix_matplotlib_3d(ax_LB)
+
+# Colorbar
+colorbar_map = plt.cm.ScalarMappable(norm=color_norm, cmap="viridis")
+colorbar_map.set_array(L_B_pt_full)
+
+fig_LB.colorbar(
+    colorbar_map,
+    ax=ax_LB,
+    shrink=0.7,
+    label=r"$L_B = |B| / ||\nabla |B|||$",
+)
+
+ax_LB.set_xlabel("x")
+ax_LB.set_ylabel("y")
+ax_LB.set_zlabel("z")
+ax_LB.set_title("Magnetic-gradient scale length on the surface")
+
+plt.show()
+
+
 
 # ========================================
 # Plotting the surface colored by QS_condition_xyz_full

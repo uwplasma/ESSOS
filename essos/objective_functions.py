@@ -166,10 +166,6 @@ def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps
 
 
 
-
-
-
-
 ###################  B ON SURAFCE LOSSES ##########################
 @partial(jit, static_argnames=['npoints'])
 def normB_axis(field, npoints=15):
@@ -212,15 +208,17 @@ def QS_check_on_surface(BBfield, surface):
     # 3. surface normal
     unitnormal_xyz = surface.unitnormal.reshape(-1, 3)
 
-    # 4. quasi-symmetry condition
-    # 4.1. Compute grad(B · grad|B|) = grad(B · grad|B|)
+    # 4. compute L_B = |B| / ||grad(|B|)|| and normalize the quasi-symmetry residual   
+    LB_xyz = jax.vmap(BBfield.L_B)(surf_xyz)
+    norm_factor = LB_xyz**3 / BBmod_xyz**3
+
+    # 5. quasi-symmetry condition
+    # 5.1. Compute grad(B · grad|B|) = grad(B · grad|B|)
     #    
     # B_dot_gradB = jnp.sum(BBvec_xyx * gradB_xyz, axis=1)
     grad_B_dot_gradB_xyz = jax.vmap(jax.grad(lambda x: jnp.dot(BBfield.B(x), BBfield.dAbsB_by_dX(x))))(surf_xyz)
 
-    # 4.2. Compute (n x grad|B|) · grad(B · grad|B|) and normalized quasi-symmetry residual
-    rminor = 3.0
-    norm_factor = rminor**3 / BBmod_xyz**3
+    # 5.2. Compute (n x grad|B|) · grad(B · grad|B|) and normalized quasi-symmetry residual
     QS_residual_xyz = norm_factor * jnp.sum(jnp.cross(unitnormal_xyz, gradB_xyz) * grad_B_dot_gradB_xyz, axis=1)
 
     return QS_residual_xyz
