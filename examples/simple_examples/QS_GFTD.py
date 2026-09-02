@@ -44,8 +44,11 @@ class MagneticFieldData:
 # Flags for plotting and debugging
 # ============================================================================================
 # flags: vmec, torus_simple
-flag_surface_case = "vmec"
-# flag_surface_case = "torus_simple"
+flag_surface = "vmec"
+# flag_surface = "torus_simple"
+
+# flag_LB = 1 # L_B = |B| / ||grad(|B|)||
+flag_LB = 2 # L_B = sqrt(2) * |B| / ||grad(B)||_F
 
 # ============================================================================================
 # The surface is defined by the Fourier coefficients of R and Z as functions of theta and phi.
@@ -55,16 +58,14 @@ flag_surface_case = "vmec"
 # Z(theta) = a sin(theta)
 
 
-if flag_surface_case == "torus_simple":
+if flag_surface == "torus_simple":
 
     Rmajor = 10.0
     rminor = 2.0
     epsilon = 0.03
 
-
     rc = jnp.array([Rmajor, rminor])
     zs = jnp.array([0.0, rminor])
-
 
     surface = SurfaceRZFourier(
         rc=rc,
@@ -78,12 +79,11 @@ if flag_surface_case == "torus_simple":
         range_torus="full torus",
     )
 
-elif flag_surface_case == "vmec":
+elif flag_surface == "vmec":
 
     Rmajor = 12.0
     rminor = 3.0
     epsilon = 0.03
-
 
     wout_file = os.path.join(
         os.path.dirname(__file__),"..",
@@ -102,7 +102,7 @@ elif flag_surface_case == "vmec":
 
     
 else:
-    raise ValueError(f"Unknown flag_surface_case: {flag_surface_case}") 
+    raise ValueError(f"Unknown flag_surface: {flag_surface}") 
 
 # ============================================================================================
 # Calculus of the magnetic axis
@@ -112,13 +112,13 @@ else:
 phi_R1 = jnp.linspace(0, 2 * jnp.pi , surface.nphi, endpoint=False)
 
 
-if flag_surface_case == "torus_simple":
+if flag_surface == "torus_simple":
 
     RR_axis = jnp.full_like(phi_R1, Rmajor)
     ZZ_axis = jnp.zeros_like(phi_R1)
 
 
-elif flag_surface_case == "vmec":
+elif flag_surface == "vmec":
 
     # print("rmnc at s=0:", vmec.rmnc[0, :])
     # print("zmns at s=0:", vmec.zmns[0, :])
@@ -146,7 +146,7 @@ elif flag_surface_case == "vmec":
     ZZ_axis = -jnp.sum(zmns_axis[:, None] * jnp.sin(xn_phi_R2), axis=0)
     
 else:
-    raise ValueError(f"Unknown flag_surface_case: {flag_surface_case}") 
+    raise ValueError(f"Unknown flag_surface: {flag_surface}") 
 
 axis_xyz = jnp.stack([
     RR_axis * jnp.cos(phi_R1),
@@ -177,8 +177,6 @@ unitnormal_xyz_full = unitnormal_pt_full.reshape(-1, 3)
 # Normal vectors at the (phi, theta) grid points on the surface.
 normal_pt_full = surface.normal
 normal_xyz_full = normal_pt_full.reshape(-1, 3)
-
-
 
 
 # ============================================================================================
@@ -238,7 +236,7 @@ print("surf_xyz_sampled.shape =", surf_xyz_sampled.shape)
 number_of_coils = 4
 order = 1  # (2*order + 1) = Fourier coefficients for each of the x, y, z coordinates
 
-if flag_surface_case == "torus_simple":
+if flag_surface == "torus_simple":
     # Coils in the x-z plane: coil 0 and coil 1
     Rmajor01_coils = 1.0 * Rmajor
     rminor01_coils = 2.0 * rminor
@@ -250,7 +248,7 @@ if flag_surface_case == "torus_simple":
     Ifactor = 1.e7
     Icoils_direction = jnp.array([-1.0, 1.0, -1.0, 1.0])
 
-elif flag_surface_case == "vmec":
+elif flag_surface == "vmec":
     # Coils in the x-z plane: coil 0 and coil 1
     Rmajor01_coils = 1.0 * Rmajor
     rminor01_coils = 2.3 * rminor
@@ -263,7 +261,7 @@ elif flag_surface_case == "vmec":
     Icoils_direction = jnp.array([-1.0, 1.0, -1.0, 1.0])
 
 else:
-    raise ValueError(f"Unknown flag_surface_case: {flag_surface_case}")
+    raise ValueError(f"Unknown flag_surface: {flag_surface}")
 
 
 Icoils = Ifactor * Icoils_direction
@@ -333,8 +331,6 @@ coils = Coils(
 )
 
 
-
-
 # ============================================================================================
 # Magnetic field from the coils from Biot-Savart law
 # ============================================================================================
@@ -365,7 +361,6 @@ B_dot_n_xyz_full = jnp.sum(BB_xyz_full.Bvec * unitnormal_xyz_full, axis=1)
 
 
 
-
 # ==============================================================================
 # Sampled surface grid
 
@@ -388,16 +383,33 @@ B_dot_n_xyz_sampled = jnp.sum(BB_xyz_sampled.Bvec * unitnormal_xyz_sampled, axis
 
 
 # ============================================================================================
-# Calculus of the scale length for the magnetic axis
+# Calculus of the scale length on the surface points
+
+if flag_LB == 1: # L_B = |B| / ||grad(|B|)|| --------------------------------
+
+    L_B_xyz_full = jax.vmap(BB_coils.L_B)(surf_xyz_full)
+
+elif flag_LB == 2: # L_B = sqrt(2) * |B| / ||grad(B)||_F --------------------
+
+    # Magnetic-field modulus at every surface point
+    Bmod_xyz_full = jax.vmap(BB_coils.AbsB)(surf_xyz_full)
+
+    # Full Cartesian gradient tensor of the magnetic field
+    grad_Bvec_xyz_full = jax.vmap( BB_coils.dB_by_dX )( surf_xyz_full )
+
+    # Frobenius norm of the 3 x 3 tensor at every point
+    norm_grad_Bvec_xyz_full = jnp.linalg.norm( grad_Bvec_xyz_full, axis=(1, 2) )
+
+    epsilon = 1e-14
+    L_B_xyz_full = ( jnp.sqrt(2.0) * Bmod_xyz_full / (norm_grad_Bvec_xyz_full + epsilon) )
 
 
-# L_B = |B| / ||grad(|B|)||. =============================================
 
-L_B_xyz_full = jax.vmap(BB_coils.L_B)(surf_xyz_full)
 L_B_pt_full = L_B_xyz_full.reshape(surf_pt_full.shape[:2])
 
 print("L_B_xyz_full.shape =", L_B_xyz_full.shape)
 print("L_B_pt_full.shape =", L_B_pt_full.shape)
+
 print("L_B minimum =", jnp.min(L_B_xyz_full))
 print("L_B maximum =", jnp.max(L_B_xyz_full))
 print("L_B average =", jnp.mean(L_B_xyz_full))
@@ -612,7 +624,7 @@ norm = plt.Normalize(vmin=-abs_max, vmax=abs_max)
 # Plot the smooth colored surface
 ax3.plot_surface(
     x, y, z,
-    facecolors=plt.cm.viridis(norm(B_dot_n_pt_full)),
+    facecolors=plt.cm.coolwarm(norm(B_dot_n_pt_full)),
     rstride=1,
     cstride=1,
     linewidth=0,
@@ -634,7 +646,7 @@ coils.plot(
 fix_matplotlib_3d(ax3)
 
 # Add colorbar
-sm = plt.cm.ScalarMappable(cmap="viridis", norm=norm)
+sm = plt.cm.ScalarMappable(cmap="coolwarm", norm=norm)
 sm.set_array(B_dot_n_pt_full)
 fig3.colorbar(sm, ax=ax3, shrink=0.7, pad=0.1, label="B · n")
 
@@ -660,9 +672,7 @@ L_B_min = float(jnp.min(L_B_pt_full))
 L_B_max = float(jnp.max(L_B_pt_full))
 color_norm = plt.Normalize(vmin=L_B_min, vmax=L_B_max)
 
-surface_colors = plt.cm.viridis(
-    color_norm(L_B_pt_full)
-)
+surface_colors = plt.cm.coolwarm( color_norm(L_B_pt_full) )
 
 ax_LB.plot_surface(
     x,
@@ -677,7 +687,7 @@ ax_LB.plot_surface(
 fix_matplotlib_3d(ax_LB)
 
 # Colorbar
-colorbar_map = plt.cm.ScalarMappable(norm=color_norm, cmap="viridis")
+colorbar_map = plt.cm.ScalarMappable(norm=color_norm, cmap="coolwarm")
 colorbar_map.set_array(L_B_pt_full)
 
 fig_LB.colorbar(

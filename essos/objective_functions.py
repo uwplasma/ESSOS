@@ -208,8 +208,10 @@ def QS_check_on_surface(BBfield, surface):
     # 3. surface normal
     unitnormal_xyz = surface.unitnormal.reshape(-1, 3)
 
-    # 4. compute L_B = |B| / ||grad(|B|)|| and normalize the quasi-symmetry residual   
-    LB_xyz = jax.vmap(BBfield.L_B)(surf_xyz)
+    # 4. compute L_B and normalize the quasi-symmetry residual
+    # type1 --> L_B = |B| / ||grad(|B|)||
+    # type2 --> L_B = sqrt(2) * |B| / ||grad(B)||_F   
+    LB_xyz = jax.vmap(BBfield.L_gradB_type2)(surf_xyz)
     norm_factor = LB_xyz**3 / BBmod_xyz**3
 
     # 5. quasi-symmetry condition

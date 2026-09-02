@@ -50,7 +50,7 @@ surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=30, nphi=30, r
 LENGTH_WEIGHT = 1.; LENGTH_TARGET = 32.
 CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.1
 NORMAL_FIELD_WEIGHT = 1.
-QS_WEIGHT = 0.
+QS_WEIGHT = 1.
 
 # ====================================================================================
 # ====================================================================================
@@ -84,7 +84,7 @@ L_QS = custom_loss(loss_QS, "field", surface=surface)
 # ====================================================================================
 # ====================================================================================
 
-L_total = NORMAL_FIELD_WEIGHT*L_normal_field + LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature # + QS_WEIGHT*L_QS
+L_total = NORMAL_FIELD_WEIGHT*L_normal_field + LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature# + QS_WEIGHT*L_QS
 # L_total = NORMAL_FIELD_WEIGHT*L_normal_field + QS_WEIGHT*L_QS
 
 L_total.dependencies = {"field": init_field}
