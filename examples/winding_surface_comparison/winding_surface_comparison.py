@@ -1108,6 +1108,8 @@ def validate_surfaces(surface_data, cases, resolution=96):
                                          if feasible else np.nan),
                 filament_f_B_T2_m2=filament_f_b,
                 filament_max_abs_Bn_over_B=filament_max_ratio,
+                sheet_f_K_A2=solution.f_K if feasible else np.nan,
+                sheet_rms_K_A_per_m=solution.rms_K if feasible else np.nan,
                 achieved_or_minimum_Kmax_A_per_m=solution.max_K,
                 surface_runtime_s=float(surface_info["runtime"]),
                 validation_runtime_s=time.perf_counter() - start))
@@ -1153,6 +1155,35 @@ def validate_surfaces(surface_data, cases, resolution=96):
         axis.grid(axis="y", alpha=0.25)
     axes[0, 0].legend(fontsize=8)
     figure.savefig(os.path.join(OUTPUT, "surface_validation_96.png"), dpi=180)
+    plt.close(figure)
+
+    figure, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+    complexity_metrics = (
+        ("sheet_f_K_A2", r"$f_K/f_{K,\mathrm{offset}}$"),
+        ("sheet_rms_K_A_per_m", r"$K_{rms}=\sqrt{f_K/A_c}$ [MA/m]"))
+    for axis, (metric, title) in zip(axes, complexity_metrics):
+        for index, surface_method in enumerate(SURFACE_METHODS):
+            entries = [next(row for row in rows
+                            if row["configuration"] == case
+                            and row["surface_method"] == surface_method)
+                       for case in cases]
+            values = np.asarray([entry[metric] for entry in entries], float)
+            if metric == "sheet_f_K_A2":
+                baselines = np.asarray([
+                    next(row for row in rows
+                         if row["configuration"] == case
+                         and row["surface_method"] == "normal offset")[metric]
+                    for case in cases])
+                values /= baselines
+            else:
+                values /= 1e6
+            axis.bar(x + (index - 1.5) * width, values, width,
+                     label=surface_method, color=colors[surface_method])
+        axis.set_xticks(x, cases)
+        axis.set_title(title)
+        axis.grid(axis="y", alpha=0.25)
+    axes[0].legend(fontsize=8)
+    figure.savefig(os.path.join(OUTPUT, "coil_complexity.png"), dpi=180)
     plt.close(figure)
 
     figure, axes = plt.subplots(len(cases), len(SURFACE_METHODS),

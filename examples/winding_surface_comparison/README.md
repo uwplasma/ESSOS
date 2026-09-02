@@ -60,6 +60,52 @@ The entropy proxy is not competitive in this test. At 96×96 it is worse than
 the normal offset for both configurations. It should remain a diagnostic until
 a physical link to the regularized current solve and cut-coil error is shown.
 
+## ESSOS peak-current Pareto objective
+
+For a trial winding surface, ESSOS first solves the standard regularized
+current-potential problem at three nearby peak-current limits:
+
+$$
+\Phi_i=\underset{\Phi}{\operatorname{argmin}}\left[
+f_B(\Phi)+\lambda_i f_K(\Phi)\right],\qquad
+K_{\max}(\Phi_i)=K_i,
+$$
+
+with
+
+$$
+f_B=\int_{S_p}(\mathbf B\cdot\mathbf n)^2\,dA,
+\qquad
+f_K=\int_{S_c}|\mathbf K|^2\,dA
+=\int_{S_c}|\nabla_s\Phi|^2\,dA,
+$$
+
+and $K_i=(0.95,1.00,1.05)K_{\mathrm{target}}$. The outer surface objective is
+
+$$
+J_{\mathrm{Pareto}}(S_c)=
+\frac{1}{3}\sum_{i=1}^{3}
+\frac{f_B(S_c;K_i)}{f_B(S_{c,0};K_i)}+J_{\mathrm{geometry}}.
+$$
+
+The three samples represent a short section of the $f_B$--$K_{\max}$ trade-off
+curve. Optimizing all three prevents the surface from being tailored to one
+regularization value. $J_{\mathrm{geometry}}$ preserves volume, controls the
+Fourier spectrum, retains at least 90% of the initial plasma clearance, and
+penalizes a small Jacobian or nonlocal self-approach. The peak-current penalty
+is only active if the inner solve misses one of its requested limits.
+
+This is called a three-point Pareto objective because it improves a local
+section of the engineering trade-off curve. It is not a claim that the script
+constructs the complete Pareto front.
+
+The added complexity comparison uses the same $f_K$ as the inner REGCOIL-type
+regularization. At 10 MA/m, ESSOS Pareto changes $f_K$ by +0.24% for QA and
++22.2% for W7-X relative to the normal offset. The corresponding RMS current
+changes from 4.956 to 4.953 MA/m for QA and from 2.208 to 2.432 MA/m for W7-X.
+The large W7-X reduction in $f_B$ therefore comes with about 10% higher RMS
+surface current, even though both surfaces satisfy the same 10 MA/m peak limit.
+
 ## Figures
 
 Resolved surface and filament metrics:
@@ -79,6 +125,10 @@ Grid convergence and current-solver comparison:
 ![Resolution convergence](figures/sheet_resolution_convergence.png)
 
 ![Current solvers](figures/solver_metrics.png)
+
+Current-potential complexity at the resolved 96×96 solutions:
+
+![Current-potential complexity](figures/coil_complexity.png)
 
 Standalone 7 MA/m example:
 
