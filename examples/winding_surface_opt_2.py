@@ -22,7 +22,7 @@ POTENTIAL_NTOR = 6
 
 VOLUME_WEIGHT = 100.0
 SPECTRAL_WEIGHT = 0.02
-DISTANCE_WEIGHT = 1000.0
+DISTANCE_WEIGHT = 1e6
 SELF_INTERSECTION_WEIGHT = 100.0
 MINIMUM_SELF_RADIUS = 0.05
 SHARPNESS = 300.0
@@ -31,10 +31,10 @@ ACTIVE_MPOL = 2
 ACTIVE_NTOR = 2
 COEFFICIENT_STEP_BOUND = 0.04
 
-plasma_ntheta = 24
-plasma_nphi = 48
-winding_ntheta = 24
-winding_nphi = 48
+plasma_ntheta = 32
+plasma_nphi = 64
+winding_ntheta = 32
+winding_nphi = 64
 
 
 def quadrature_weights(surface):
@@ -312,8 +312,9 @@ nonconstant_modes = active_modes[active_modes != 0]
 active_indices = jnp.concatenate((nonconstant_modes,
                                   nonconstant_modes + nmodes))
 x0 = x0_full[active_indices]
-bounds = [(float(x - COEFFICIENT_STEP_BOUND),
-           float(x + COEFFICIENT_STEP_BOUND)) for x in x0]
+step_bound = min(COEFFICIENT_STEP_BOUND,
+                 0.02 * float(mean_minor_radius(plasma_surface)))
+bounds = [(float(x - step_bound), float(x + step_bound)) for x in x0]
 
 
 def objective_function(active_dofs):
@@ -325,7 +326,7 @@ def objective_function(active_dofs):
             + VOLUME_WEIGHT * (values[3] / initial[3] - 1) ** 2
             + SPECTRAL_WEIGHT * values[4] / initial[4]
             + DISTANCE_WEIGHT * jnp.maximum(
-                1 - values[5] / initial[5], 0) ** 2
+                1 - values[5] / (0.9 * initial[5]), 0) ** 2
             + 100 * values[8]
             + SELF_INTERSECTION_WEIGHT * values[9])
 
