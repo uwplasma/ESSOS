@@ -1,17 +1,71 @@
 # Winding surfaces for a small number of coils
 
-[`winding_surface_opt_3.py`](../winding_surface_opt_3.py) keeps the SVD idea but gives it a direct link to the
-coils that will be cut. The current-potential solve is written in
-current-normalized coordinates,
+[`winding_surface_opt_3.py`](../winding_surface_opt_3.py) combines two separate
+steps: an SVD-filtered current-sheet solve and a model of the error made when
+that sheet is replaced by a prescribed number of coils.
+
+The figure label “finite-coil SVD” is only shorthand for these two steps. No
+SVD is taken of the filament coils.
+
+## 1. Current normalization and SVD
+
+For a winding surface $S$, let $x$ be the Fourier coefficients of the
+single-valued current potential. The normal field and current cost have the
+forms
 
 $$
-\widehat A=A C^{-1/2}=U\Sigma V^T,
-\qquad
-y=-V\,\mathrm{diag}\left(\frac{\sigma_i}{\sigma_i^2+\sigma_*^2}\right)U^T b,
+B_n=A(S)x+b,\qquad f_K=(x-x_0)^T C(S)(x-x_0)+f_{K,0}.
 $$
 
-where $C$ is the surface-current quadratic form. The code evaluates this
-filter with a positive-definite solve, so it does not differentiate an SVD.
+$A$ maps a current potential to normal field, $b$ is the field that must be
+cancelled, $C$ measures integrated surface current, and $x_0$ is the
+minimum-current solution associated with the secular current.
+
+Factor $C=LL^T$ and define $y=L^T(x-x_0)$. These are the
+**current-normalized coordinates**: $y^Ty$ is the additional current cost.
+This change of coordinates is not the SVD. It first gives the normalized
+operator
+
+$$
+\widehat A=A L^{-T}.
+$$
+
+The SVD is then applied explicitly to this operator:
+
+$$
+\widehat A=U\,\mathrm{diag}(\sigma_i)V^T.
+$$
+
+Each $\sigma_i$ measures how much normal field one current-normalized mode can
+produce. To cancel $t=A x_0+b$, write $\beta_i=u_i^Tt$. The solution uses
+
+$$
+y_i=-\frac{\sigma_i}{\sigma_i^2+\sigma_*^2}\,\beta_i.
+$$
+
+The fraction of each required field component that is transmitted is
+$\sigma_i^2/(\sigma_i^2+\sigma_*^2)$. Efficient modes
+($\sigma_i\gg\sigma_*$) are used; inefficient modes
+($\sigma_i\ll\sigma_*$) are suppressed because they require excessive
+current. The filtered response is therefore not a singular value. It is the
+coefficient assigned to each singular vector using that singular value. The
+code evaluates the same filter with a positive-definite solve, which is more
+stable than differentiating the SVD.
+
+## 2. Error from replacing the sheet by coils
+
+The continuous potential gives the surface current
+$\mathbf K=\mathbf n\times\nabla_s\Phi$. Filament coils are level curves of
+$\Phi$. Replacing the smooth potential by $M$ equally spaced levels is a
+staircase approximation. Its potential error is
+
+$$
+\delta\Phi_\alpha=Q_{\Delta\Phi,\alpha}(\Phi)-\Phi,
+$$
+
+where $Q$ denotes the staircase and $\alpha$ selects where the first contour
+is placed. This is the **contour error**. Its normal-field error is
+$A\delta\Phi_\alpha$.
 
 For $N$ coils per half field period there are $M=2N$ contour levels per field
 period and
@@ -20,8 +74,13 @@ $$
 \Delta\Phi=\frac{I_{pol}}{N_{fp}M}.
 $$
 
-The leading Fourier components of the error made by replacing the continuous
-current sheet with equally spaced contours are
+Although $I_{pol}$, $N_{fp}$ and $M$ are prescribed, the optimization still
+changes both $A(S)$ and $\Phi(S)$. Therefore the contour shapes, their
+positions and the field $A(S)\delta\Phi_\alpha(S)$ all change with the winding
+surface.
+
+The staircase error is periodic in $\Phi/\Delta\Phi$, so it has a Fourier
+series. Keeping its leading harmonic gives
 
 $$
 \delta\Phi_c=\frac{\Delta\Phi}{\pi}
@@ -30,7 +89,9 @@ $$
 \cos\left(\frac{2\pi\Phi}{\Delta\Phi}\right).
 $$
 
-The surface objective is therefore one field-error measure,
+A different contour offset $\alpha$ phase-shifts that harmonic. Any phase can
+be written as a combination of the sine and cosine above. Averaging the squared
+field error over $\alpha$ gives
 
 $$
 J_N=\|A\Phi+b\|_W^2+
@@ -38,9 +99,11 @@ J_N=\|A\Phi+b\|_W^2+
 \|A\delta\Phi_s\|_W^2\right).
 $$
 
-The second term is phase averaged, so the surface is not fitted to an arbitrary
-choice of the first contour. The existing distance, Jacobian and tangent-point
-terms remain as geometry safeguards.
+Thus the two terms are not unrelated objectives. The first is the field error
+of the continuous sheet; the second estimates the additional field error from
+cutting that same sheet into $N$ coils. The sine/cosine pair removes dependence
+on the arbitrary first-contour phase. Distance, Jacobian and tangent-point
+terms remain geometry safeguards.
 
 ## Comparison
 
