@@ -125,7 +125,7 @@ virtual-casing plasma-current field.
 
 Four coils per half field period:
 
-| Configuration | Surface | filament $f_B$ [$T^2m^2$] | max $|B_n|/B$ | mean $\int\kappa^2dl/L$ [$m^{-2}$] | surface time [s] |
+| Configuration | Surface | filament $f_B$ [T² m²] | max $\lvert B_n\rvert/B$ | mean $\int\kappa^2dl/L$ [m⁻²] | surface time [s] |
 |---|---|---:|---:|---:|---:|
 | QA | normal offset | 145.33 | 0.1834 | 0.1022 | 0 |
 | QA | ESSOS entropy | 146.38 | 0.1746 | 0.1074 | 0.82 |
