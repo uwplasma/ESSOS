@@ -4,8 +4,8 @@
 steps: an SVD-filtered current-sheet solve and a model of the error made when
 that sheet is replaced by a prescribed number of coils.
 
-The figure label “finite-coil SVD” is only shorthand for these two steps. No
-SVD is taken of the filament coils.
+The figure label “finite-coil SVD” refers to this combination. The SVD acts on
+the current-sheet operator.
 
 ## 1. Current normalization and SVD
 
@@ -23,34 +23,45 @@ minimum-current solution associated with the secular current.
 
 Factor $C=LL^T$ and define $y=L^T(x-x_0)$. These are the
 **current-normalized coordinates**: $y^Ty$ is the additional current cost.
-This change of coordinates is not the SVD. It first gives the normalized
-operator
+This coordinate change gives the normalized operator
 
 $$
 \widehat A=A L^{-T}.
 $$
 
-The SVD is then applied explicitly to this operator:
+The following step applies the SVD:
 
 $$
 \widehat A=U\,\mathrm{diag}(\sigma_i)V^T.
 $$
 
 Each $\sigma_i$ measures how much normal field one current-normalized mode can
-produce. To cancel $t=A x_0+b$, write $\beta_i=u_i^Tt$. The solution uses
+produce. The regularized current solve is
 
 $$
-y_i=-\frac{\sigma_i}{\sigma_i^2+\sigma_*^2}\,\beta_i.
+\min_y\left[\|\widehat A y+t\|_W^2+\sigma_{\ast}^2\|y\|^2\right],
+\qquad t=A x_0+b.
 $$
 
-The fraction of each required field component that is transmitted is
-$\sigma_i^2/(\sigma_i^2+\sigma_*^2)$. Efficient modes
-($\sigma_i\gg\sigma_*$) are used; inefficient modes
-($\sigma_i\ll\sigma_*$) are suppressed because they require excessive
-current. The filtered response is therefore not a singular value. It is the
-coefficient assigned to each singular vector using that singular value. The
-code evaluates the same filter with a positive-definite solve, which is more
-stable than differentiating the SVD.
+Writing $\beta_i=u_i^Tt$ separates this minimization into scalar problems,
+
+$$
+\min_{y_i}\left[(\sigma_i y_i+\beta_i)^2+\sigma_{\ast}^2y_i^2\right].
+$$
+
+Setting the derivative to zero gives
+
+$$
+y_i=-\frac{\sigma_i}{\sigma_i^2+\sigma_{\ast}^2}\,\beta_i.
+$$
+
+The factor $\sigma_i/(\sigma_i^2+\sigma_{\ast}^2)$ is the modal filter. The fraction
+of each required field component that is transmitted is
+$\sigma_i^2/(\sigma_i^2+\sigma_{\ast}^2)$. Efficient modes
+($\sigma_i\gg\sigma_{\ast}$) are used; inefficient modes
+($\sigma_i\ll\sigma_{\ast}$) are suppressed because they require excessive
+current. The code evaluates this expression with the equivalent
+positive-definite linear system.
 
 ## 2. Error from replacing the sheet by coils
 
@@ -99,11 +110,10 @@ J_N=\|A\Phi+b\|_W^2+
 \|A\delta\Phi_s\|_W^2\right).
 $$
 
-Thus the two terms are not unrelated objectives. The first is the field error
-of the continuous sheet; the second estimates the additional field error from
-cutting that same sheet into $N$ coils. The sine/cosine pair removes dependence
-on the arbitrary first-contour phase. Distance, Jacobian and tangent-point
-terms remain geometry safeguards.
+Both terms measure normal-field error. The first comes from the continuous
+sheet and the second estimates the additional error from cutting that sheet
+into $N$ coils. The sine/cosine pair averages over the arbitrary first-contour
+phase. Distance, Jacobian and tangent-point terms remain geometry safeguards.
 
 ## Comparison
 
@@ -158,10 +168,11 @@ from the choice of current-potential solver.
 
 ## Limits
 
-This is a leading-harmonic model of equal-current contours. It does not include
-coil-coil clearance, ports, finite build, forces or a full filament optimization.
-The absolute four-coil errors are still 0.11--0.18, so this is a better stage-1
-surface, not a finished coil set. ESSOS filament optimization can refine these
-coils, but it introduces weights, initialization dependence and usually several
-runs. The clean workflow is to use this fast objective in stage 1, scan the one
-free contour phase, and only then apply filament refinement where it is needed.
+This is a leading-harmonic model of equal-current contours. It omits coil-coil
+clearance, ports, finite build, forces and a full filament optimization. The
+absolute four-coil errors are still 0.11--0.18. The result is a better stage-1
+surface; an engineering coil set requires further refinement. ESSOS filament
+optimization can provide that refinement, with the additional cost of weights,
+initialization dependence and usually several runs. A clean workflow uses this
+fast objective in stage 1, scans the one free contour phase, and applies
+filament refinement where needed.
