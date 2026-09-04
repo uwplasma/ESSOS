@@ -13,29 +13,31 @@ from essos.surfaces import SurfaceRZFourier
 MU0 = 4 * jnp.pi * 1e-7
 INTEGRATION_FACTOR = 4 * jnp.pi ** 2
 
-SVD_WEIGHT = 1.0
-SINGULAR_STRENGTH_WEIGHT = 1.0
+SVD_WEIGHT = 10.0
+SINGULAR_STRENGTH_WEIGHT = 0.0
+V_SPACE_WEIGHT = 0.07 #0.05 and 0.01 are the best bounds so far. 0.05 starts moving the inverse entropy objective up a bit
+V_SPACE_COUPLING_WEIGHT = 1.0
 VOLUME_WEIGHT = 0.02
 SPECTRAL_WEIGHT = 0.02
-DISTANCE_WEIGHT = 10.0
+DISTANCE_WEIGHT = 5.0
 SELF_INTERSECTION_WEIGHT = 100.0
 MINIMUM_DISTANCE = 0.06
 MINIMUM_SELF_RADIUS = 0.05
-DISTANCE_WALL_SCALE = 0.01
+DISTANCE_WALL_SCALE = 0.5
 SELF_RADIUS_WALL_SCALE = 0.01
 SELF_NEIGHBOR_RADIUS = 2
 SHARPNESS = 300.0
 MAXITER = 100
 ACTIVE_MPOL = 2
 ACTIVE_NTOR = 2
-COEFFICIENT_STEP_BOUND = 0.04
+COEFFICIENT_STEP_BOUND = 1.0
 
 plasma_ntheta = 24
 plasma_nphi = 24
 winding_ntheta = 24
 winding_nphi = 24
 VARIANT = "final"
-OBJECTIVE_NAMES = ("inverse_singular_entropy", "singular_strength", "volume_m3",
+OBJECTIVE_NAMES = ("inverse_singular_entropy", "v_space_objective", "singular_strength", "volume_m3",
                    "spectral_penalty", "plasma_distance_penalty", "local_area_penalty",
                    "smooth_self_radius_m", "self_intersection_penalty")
 
@@ -125,6 +127,24 @@ def singular_value_objective(singular_values):
     singular_entropy = -jnp.sum(probabilities * jnp.log(jnp.maximum(probabilities, 1e-300)))
     return 1 / jnp.maximum(singular_entropy, 1e-16)
 
+'''
+def v_space_objective(vt_mat):
+    # Ising model like objective to encourage the singular vectors to have elements of the same sign
+    # Nearest neighbor coupling only right now
+    objective = 0.0
+    for i in range(vt_mat.shape[0]):
+        objective += V_SPACE_COUPLING_WEIGHT * jnp.sum(jnp.tanh(SHARPNESS * jnp.roll(vt_mat[i, :], 1)) * jnp.tanh(SHARPNESS * vt_mat[i, :]))
+    return objective
+'''
+def v_space_objective(vt_mat):
+    # Similar, but simpler, objective to encourage the singular vectors to have elements of the same sign
+    # Much faster to compute than the Ising model like objective
+    objective = 0.0
+    for i in range(vt_mat.shape[0]):
+        objective += jnp.abs(jnp.sum(jnp.tanh(SHARPNESS * vt_mat[i])))/vt_mat.shape[1]
+    return objective
+
+
 def spectral_objective(surface):
     rc_obj = jnp.sum(jnp.abs(surface.xm * surface.rc)**2)
     zs_obj = jnp.sum(jnp.abs(surface.xm * surface.zs)**2)
@@ -191,9 +211,10 @@ def individual_objectives(winding_surface):
     induction_matrix = reduced_memory_induction_matrix(
         winding_points, plasma_points, winding_unitnormals, plasma_unitnormals,
         winding_weights, plasma_weights)
-    singular_values = jnp.linalg.svd(induction_matrix, compute_uv=False)
+    _, singular_values, vt_mat = jnp.linalg.svd(induction_matrix, compute_uv=True, full_matrices=False)
 
     svd_objective = singular_value_objective(singular_values)
+    v_objective = v_space_objective(vt_mat)
     singular_strength = jnp.sum(singular_values)
     volume = INTEGRATION_FACTOR * jnp.abs(winding_surface.volume)
     spectral = spectral_objective(winding_surface)
@@ -207,7 +228,7 @@ def individual_objectives(winding_surface):
         (MINIMUM_SELF_RADIUS - self_radius) / SELF_RADIUS_WALL_SCALE)
     minimum_area_element_objective = jnp.square(jnp.maximum(1e-6 - minimum_area_element, 0.0)) * 1e12
 
-    return (svd_objective, singular_strength, volume, spectral,
+    return (svd_objective, v_objective, singular_strength, volume, spectral,
             distance_objective, minimum_area_element_objective,
             self_radius, self_intersection_objective)
 
@@ -229,12 +250,13 @@ def objective_function(active_dofs):
     objectives = individual_objectives(winding_surface)
 
     return (SVD_WEIGHT * objectives[0] / scales[0] # Flatten out singular values
-            + SINGULAR_STRENGTH_WEIGHT * jnp.square(jnp.maximum(1 - objectives[1] / scales[1], 0)) # Prevent global operator weakening
-            - VOLUME_WEIGHT * objectives[2] / scales[2] # Maximize volume
-            + SPECTRAL_WEIGHT * objectives[3] / jnp.maximum(scales[3], 1e-16) # Minimize poloidal spectral modes
-            + DISTANCE_WEIGHT * objectives[4] # Keep winding surface away from plasma surface
-            + 100 * objectives[5] # Prevent local surface collapse
-            + SELF_INTERSECTION_WEIGHT * objectives[7]) # Prevent nonlocal self-intersection
+            + SINGULAR_STRENGTH_WEIGHT * jnp.square(jnp.maximum(1 - objectives[2] / scales[2], 0)) # Prevent global operator weakening
+            - V_SPACE_WEIGHT * objectives[1] / scales[1] # Penalize deviation from v-space
+            - VOLUME_WEIGHT * objectives[3] / scales[3] # Maximize volume
+            + SPECTRAL_WEIGHT * objectives[4] / jnp.maximum(scales[4], 1e-16) # Minimize poloidal spectral modes
+            + DISTANCE_WEIGHT * objectives[5] # Keep winding surface away from plasma surface
+            + 100 * objectives[6] # Prevent local surface collapse
+            + SELF_INTERSECTION_WEIGHT * objectives[8]) # Prevent nonlocal self-intersection
 
 value_and_grad = jax.jit(jax.value_and_grad(objective_function))
 evaluation_count = 0
