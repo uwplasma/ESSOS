@@ -413,6 +413,10 @@ class CombinedField(MagneticField):
         return sum(f.B_contravariant(points) for f in self.fields)
 
     @jit
+    def sqrtg(self, points):
+        return self.fields[0].sqrtg(points)
+
+    @jit
     def to_xyz(self, points):
         return self.fields[0].to_xyz(points)
 

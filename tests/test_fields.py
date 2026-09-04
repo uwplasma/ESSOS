@@ -63,3 +63,26 @@ def test_biot_savart_initialization():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_combined_field_sums_correctly():
+    from essos.fields import CombinedField
+    from essos.coils import Coils, CreateEquallySpacedCurves
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.3,
+                                        n_segments=20, nfp=2, stellsym=True)
+    coils = Coils(curves=curves, currents=[1e5] * 2)
+    field = BiotSavart(coils)
+    points = jnp.array([0.5, 0.5, 0.5])
+
+    combined_two = CombinedField(field, field)
+    assert jnp.allclose(combined_two.B(points), 2 * field.B(points))
+
+    combined_three = CombinedField(field, field, field)
+    assert jnp.allclose(combined_three.B(points), 3 * field.B(points))
+
+
+def test_combined_field_requires_at_least_one_field():
+    from essos.fields import CombinedField
+    with pytest.raises(ValueError):
+        CombinedField()
