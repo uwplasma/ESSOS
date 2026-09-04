@@ -890,15 +890,18 @@ class DipoleField_old:
         is_single_point = eval_points.ndim == 1 and eval_points.shape[0] == 3
         query_points = eval_points.reshape(1, 3) if is_single_point else eval_points
 
-        if (not hasattr(self, '_last_field') or self._last_field is None
-                or self._last_eval_points is None
-                or query_points.shape[0] != self._last_eval_points.shape[0]
-                or not jnp.array_equal(query_points, self._last_eval_points)):
-            with jax.ensure_compile_time_eval():
-                self._last_field = self._compute_field(query_points)
-                self._last_eval_points = query_points
-
-        result = self._last_field
+        # PERFORMANCE NOTE: caching was removed here. The previous
+        # cache-validity check used jnp.array_equal(...) inside a
+        # Python if-statement, which requires a concrete (non-traced)
+        # boolean -- this works in eager calls but raises
+        # TracerBoolConversionError the moment this method is called
+        # under vmap/jit tracing (e.g. essos.dynamics's internal
+        # energy-conservation diagnostics call field.AbsB via vmap).
+        # Since _compute_field itself is now fast (lax.scan-based,
+        # verified ~2.5s for the full 64x64/99k-magnet MUSE case),
+        # simply recomputing every call is both correct under tracing
+        # and not a meaningful performance regression.
+        result = self._compute_field(query_points)
         return result[0] if is_single_point else result
     
     @partial(jit, static_argnames=['self'])
@@ -1186,15 +1189,18 @@ class DipoleField:
         is_single_point = eval_points.ndim == 1 and eval_points.shape[0] == 3
         query_points = eval_points.reshape(1, 3) if is_single_point else eval_points
 
-        if (not hasattr(self, '_last_field') or self._last_field is None
-                or self._last_eval_points is None
-                or query_points.shape[0] != self._last_eval_points.shape[0]
-                or not jnp.array_equal(query_points, self._last_eval_points)):
-            with jax.ensure_compile_time_eval():
-                self._last_field = self._compute_field(query_points)
-                self._last_eval_points = query_points
-
-        result = self._last_field
+        # PERFORMANCE NOTE: caching was removed here. The previous
+        # cache-validity check used jnp.array_equal(...) inside a
+        # Python if-statement, which requires a concrete (non-traced)
+        # boolean -- this works in eager calls but raises
+        # TracerBoolConversionError the moment this method is called
+        # under vmap/jit tracing (e.g. essos.dynamics's internal
+        # energy-conservation diagnostics call field.AbsB via vmap).
+        # Since _compute_field itself is now fast (lax.scan-based,
+        # verified ~2.5s for the full 64x64/99k-magnet MUSE case),
+        # simply recomputing every call is both correct under tracing
+        # and not a meaningful performance regression.
+        result = self._compute_field(query_points)
         return result[0] if is_single_point else result
     
     @partial(jit, static_argnames=['self'])
