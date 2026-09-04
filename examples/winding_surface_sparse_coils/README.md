@@ -1,17 +1,82 @@
 # Winding surfaces for a small number of coils
 
-[`winding_surface_opt_3.py`](../winding_surface_opt_3.py) keeps the SVD idea but gives it a direct link to the
-coils that will be cut. The current-potential solve is written in
-current-normalized coordinates,
+[`winding_surface_opt_3.py`](../winding_surface_opt_3.py) combines two separate
+steps: an SVD-filtered current-sheet solve and a model of the error made when
+that sheet is replaced by a prescribed number of coils.
+
+The figure label “finite-coil SVD” refers to this combination. The SVD acts on
+the current-sheet operator.
+
+## 1. Current normalization and SVD
+
+For a winding surface $S$, let $x$ be the Fourier coefficients of the
+single-valued current potential. The normal field and current cost have the
+forms
 
 $$
-\widehat A=A C^{-1/2}=U\Sigma V^T,
-\qquad
-y=-V\,\mathrm{diag}\left(\frac{\sigma_i}{\sigma_i^2+\sigma_*^2}\right)U^T b,
+B_n=A(S)x+b,\qquad f_K=(x-x_0)^T C(S)(x-x_0)+f_{K,0}.
 $$
 
-where $C$ is the surface-current quadratic form. The code evaluates this
-filter with a positive-definite solve, so it does not differentiate an SVD.
+$A$ maps a current potential to normal field, $b$ is the field that must be
+cancelled, $C$ measures integrated surface current, and $x_0$ is the
+minimum-current solution associated with the secular current.
+
+Factor $C=LL^T$ and define $y=L^T(x-x_0)$. These are the
+**current-normalized coordinates**: $y^Ty$ is the additional current cost.
+This coordinate change gives the normalized operator
+
+$$
+\widehat A=A L^{-T}.
+$$
+
+The following step applies the SVD:
+
+$$
+\widehat A=U\,\mathrm{diag}(\sigma_i)V^T.
+$$
+
+Each $\sigma_i$ measures how much normal field one current-normalized mode can
+produce. The regularized current solve is
+
+$$
+\min_y\left[\|\widehat A y+t\|_W^2+\sigma_{\ast}^2\|y\|^2\right],
+\qquad t=A x_0+b.
+$$
+
+Writing $\beta_i=u_i^Tt$ separates this minimization into scalar problems,
+
+$$
+\min_{y_i}\left[(\sigma_i y_i+\beta_i)^2+\sigma_{\ast}^2y_i^2\right].
+$$
+
+Setting the derivative to zero gives
+
+$$
+y_i=-\frac{\sigma_i}{\sigma_i^2+\sigma_{\ast}^2}\,\beta_i.
+$$
+
+The factor $\sigma_i/(\sigma_i^2+\sigma_{\ast}^2)$ is the modal filter. The fraction
+of each required field component that is transmitted is
+$\sigma_i^2/(\sigma_i^2+\sigma_{\ast}^2)$. Efficient modes
+($\sigma_i\gg\sigma_{\ast}$) are used; inefficient modes
+($\sigma_i\ll\sigma_{\ast}$) are suppressed because they require excessive
+current. The code evaluates this expression with the equivalent
+positive-definite linear system.
+
+## 2. Error from replacing the sheet by coils
+
+The continuous potential gives the surface current
+$\mathbf K=\mathbf n\times\nabla_s\Phi$. Filament coils are level curves of
+$\Phi$. Replacing the smooth potential by $M$ equally spaced levels is a
+staircase approximation. Its potential error is
+
+$$
+\delta\Phi_\alpha=Q_{\Delta\Phi,\alpha}(\Phi)-\Phi,
+$$
+
+where $Q$ denotes the staircase and $\alpha$ selects where the first contour
+is placed. This is the **contour error**. Its normal-field error is
+$A\delta\Phi_\alpha$.
 
 For $N$ coils per half field period there are $M=2N$ contour levels per field
 period and
@@ -20,8 +85,13 @@ $$
 \Delta\Phi=\frac{I_{pol}}{N_{fp}M}.
 $$
 
-The leading Fourier components of the error made by replacing the continuous
-current sheet with equally spaced contours are
+Although $I_{pol}$, $N_{fp}$ and $M$ are prescribed, the optimization still
+changes both $A(S)$ and $\Phi(S)$. Therefore the contour shapes, their
+positions and the field $A(S)\delta\Phi_\alpha(S)$ all change with the winding
+surface.
+
+The staircase error is periodic in $\Phi/\Delta\Phi$, so it has a Fourier
+series. Keeping its leading harmonic gives
 
 $$
 \delta\Phi_c=\frac{\Delta\Phi}{\pi}
@@ -30,7 +100,9 @@ $$
 \cos\left(\frac{2\pi\Phi}{\Delta\Phi}\right).
 $$
 
-The surface objective is therefore one field-error measure,
+A different contour offset $\alpha$ phase-shifts that harmonic. Any phase can
+be written as a combination of the sine and cosine above. Averaging the squared
+field error over $\alpha$ gives
 
 $$
 J_N=\|A\Phi+b\|_W^2+
@@ -38,9 +110,10 @@ J_N=\|A\Phi+b\|_W^2+
 \|A\delta\Phi_s\|_W^2\right).
 $$
 
-The second term is phase averaged, so the surface is not fitted to an arbitrary
-choice of the first contour. The existing distance, Jacobian and tangent-point
-terms remain as geometry safeguards.
+Both terms measure normal-field error. The first comes from the continuous
+sheet and the second estimates the additional error from cutting that sheet
+into $N$ coils. The sine/cosine pair averages over the arbitrary first-contour
+phase. Distance, Jacobian and tangent-point terms remain geometry safeguards.
 
 ## Comparison
 
@@ -52,7 +125,7 @@ virtual-casing plasma-current field.
 
 Four coils per half field period:
 
-| Configuration | Surface | filament $f_B$ [$T^2m^2$] | max $|B_n|/B$ | mean $\int\kappa^2dl/L$ [$m^{-2}$] | surface time [s] |
+| Configuration | Surface | filament $f_B$ [T² m²] | max $\lvert B_n\rvert/B$ | mean $\int\kappa^2dl/L$ [m⁻²] | surface time [s] |
 |---|---|---:|---:|---:|---:|
 | QA | normal offset | 145.33 | 0.1834 | 0.1022 | 0 |
 | QA | ESSOS entropy | 146.38 | 0.1746 | 0.1074 | 0.82 |
@@ -95,10 +168,11 @@ from the choice of current-potential solver.
 
 ## Limits
 
-This is a leading-harmonic model of equal-current contours. It does not include
-coil-coil clearance, ports, finite build, forces or a full filament optimization.
-The absolute four-coil errors are still 0.11--0.18, so this is a better stage-1
-surface, not a finished coil set. ESSOS filament optimization can refine these
-coils, but it introduces weights, initialization dependence and usually several
-runs. The clean workflow is to use this fast objective in stage 1, scan the one
-free contour phase, and only then apply filament refinement where it is needed.
+This is a leading-harmonic model of equal-current contours. It omits coil-coil
+clearance, ports, finite build, forces and a full filament optimization. The
+absolute four-coil errors are still 0.11--0.18. The result is a better stage-1
+surface; an engineering coil set requires further refinement. ESSOS filament
+optimization can provide that refinement, with the additional cost of weights,
+initialization dependence and usually several runs. A clean workflow uses this
+fast objective in stage 1, scans the one free contour phase, and applies
+filament refinement where needed.
