@@ -39,7 +39,13 @@ init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
 init_field = BiotSavart(init_coils)
 
 # Initialize the surface from a VMEC output file.
+ntheta = 30; nphi = 30; Npoints = ntheta * nphi  # Surface parametersrs
 surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=30, nphi=30, range_torus='half period')
+
+
+# Build and cache surface geometry before JAX starts the optimization.
+surface.gamma.block_until_ready()
+surface.unitnormal.block_until_ready()
 
 # ====================================================================================
 # ====================================================================================
@@ -49,7 +55,7 @@ surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=30, nphi=30, r
 
 LENGTH_WEIGHT = 1.; LENGTH_TARGET = 32.
 CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.1
-NORMAL_FIELD_WEIGHT = 1.
+NORMAL_FIELD_WEIGHT = Npoints
 QS_WEIGHT = 1.
 
 # ====================================================================================
@@ -59,7 +65,7 @@ QS_WEIGHT = 1.
 # ====================================================================================
 
 def loss(field, surface):
-    return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+    return jnp.mean(jnp.abs(BdotN_over_B(surface, field)))
 
 def loss_length(field):
     return jnp.mean(jnp.maximum(0, field.coils.length - LENGTH_TARGET))
@@ -84,19 +90,10 @@ L_QS = custom_loss(loss_QS, "field", surface=surface)
 # ====================================================================================
 # ====================================================================================
 
-L_total = NORMAL_FIELD_WEIGHT*L_normal_field + LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature# + QS_WEIGHT*L_QS
+L_total = NORMAL_FIELD_WEIGHT*L_normal_field + LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature + QS_WEIGHT*L_QS
 # L_total = NORMAL_FIELD_WEIGHT*L_normal_field + QS_WEIGHT*L_QS
 
 L_total.dependencies = {"field": init_field}
-
-
-QS_residual_xyz = QS_check_on_surface(init_field, surface)
-print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz)))
-print("max abs residual (initial):", jnp.max(jnp.abs(QS_residual_xyz)))
-
-print("Initial QS loss:", loss_QS(init_field, surface)) # gftd13@gmail.com test
-
-
 
 # ====================================================================================
 # ====================================================================================
@@ -138,14 +135,55 @@ opt_coils = opt_field.coils
 
 # ====================================================================================
 # ====================================================================================
-""" Comparison of the initial QS loss and the optimized Qs loss """
+""" Comparison of the initial loss and the optimized loss """
 # ====================================================================================
 # ====================================================================================
 
-print("Initial QS loss:", loss_QS(init_field, surface))
-print("Optimized QS loss:", loss_QS(opt_field, surface))
+print("\nNormal-field residuals and losses:")
+B_dot_n_over_B_init = BdotN_over_B( surface , init_field )
+B_dot_n_over_B_opt = BdotN_over_B( surface , opt_field )
+print("mean abs residual (initial):", jnp.mean(jnp.abs(B_dot_n_over_B_init)) )
+print("mean abs residual (optimized):",jnp.mean(jnp.abs(B_dot_n_over_B_opt)) )
+print("max abs residual (initial):",jnp.max(jnp.abs(B_dot_n_over_B_init)) )
+print("max abs residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) )
+print("Normal-field loss (initial):",loss(init_field, surface) )
+print("Normal-field loss (optimized):",loss(opt_field, surface) )
 
+print("\nCoil-length residuals and losses:")
+coil_length_residual_init = jnp.maximum(0, init_field.coils.length - LENGTH_TARGET)
+coil_length_residual_opt = jnp.maximum(0, opt_field.coils.length - LENGTH_TARGET)
+print("Coil lengths (initial):", init_field.coils.length)
+print("Coil lengths (optimized):", opt_field.coils.length)
+print("mean excess length (initial):", jnp.mean(coil_length_residual_init))
+print("mean excess length (optimized):", jnp.mean(coil_length_residual_opt))
+print("max excess length (initial):", jnp.max(coil_length_residual_init))
+print("max excess length (optimized):", jnp.max(coil_length_residual_opt))
+print("Length loss (initial):", loss_length(init_field))
+print("Length loss (optimized):", loss_length(opt_field))
 
+print("\nCoil-curvature residuals and losses:")
+coil_curvature_residual_init = jnp.maximum(0, init_field.coils.curvature - CURVATURE_TARGET)
+coil_curvature_residual_opt = jnp.maximum(0, opt_field.coils.curvature - CURVATURE_TARGET)
+print("mean curvature (initial):", jnp.mean(init_field.coils.curvature))
+print("mean curvature (optimized):", jnp.mean(opt_field.coils.curvature))
+print("max curvature (initial):", jnp.max(init_field.coils.curvature))
+print("max curvature (optimized):", jnp.max(opt_field.coils.curvature))
+print("mean excess curvature (initial):", jnp.mean(coil_curvature_residual_init))
+print("mean excess curvature (optimized):", jnp.mean(coil_curvature_residual_opt))
+print("max excess curvature (initial):", jnp.max(coil_curvature_residual_init))
+print("max excess curvature (optimized):", jnp.max(coil_curvature_residual_opt))
+print("Curvature loss (initial):", loss_curvature(init_field))
+print("Curvature loss (optimized):", loss_curvature(opt_field))
+
+print("\nQS residuals and losses:")
+QS_residual_xyz_init = QS_check_on_surface(init_field, surface)
+QS_residual_xyz_opt = QS_check_on_surface(opt_field, surface)
+print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz_init)))
+print("mean abs residual (optimized):", jnp.mean(jnp.abs(QS_residual_xyz_opt)))
+print("max abs residual (initial):", jnp.max(jnp.abs(QS_residual_xyz_init)))
+print("max abs residual (optimized):", jnp.max(jnp.abs(QS_residual_xyz_opt)))
+print("QS loss (initial):", loss_QS(init_field, surface))
+print("QS loss (optimized):", loss_QS(opt_field, surface))
 
 
 # ====================================================================================
