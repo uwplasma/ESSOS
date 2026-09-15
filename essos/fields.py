@@ -65,15 +65,7 @@ class MagneticField():
         raise NotImplementedError("to_xyz method not implemented")
 
     @jit
-    def L_gradB_type1(self, points): # L_B = |B| / ||grad(|B|)||
-        B_modulus = self.AbsB(points)
-        grad_B_modulus = self.dAbsB_by_dX(points)
-        norm_gradient_Bmod = jnp.linalg.norm(grad_B_modulus)
-        epsilon=1e-14
-        return B_modulus / (norm_gradient_Bmod + epsilon)
-
-    @jit
-    def L_gradB_type2(self, points): # L_B = sqrt(2) * |B| / ||grad(B)||_F
+    def L_gradB(self, points): # L_B = sqrt(2) * |B_{coils}| / ||grad( B_{coils} )||_F
         B_modulus = self.AbsB(points)
         grad_B_tensor = self.dB_by_dX(points)
         norm_grad_B_tensor = jnp.linalg.norm(grad_B_tensor)

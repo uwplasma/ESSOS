@@ -193,7 +193,7 @@ def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
 
 ########################### QUASI-SYMMETRY LOSS ########################### gftd13@gmail.com
 
-def QS_check_on_surface(BBfield, surface):
+def quasi_symmetry_residual_on_surface( field , surface ):
     """
     Return a pointwise quasi-symmetry residual on the surface.
     Shape is usually (nphi, ntheta) or flattened to (npoints,).
@@ -202,24 +202,20 @@ def QS_check_on_surface(BBfield, surface):
     surf_xyz = surface.gamma.reshape(-1, 3)
 
     # 2. field and gradient of |B|
-    # BBvec_xyz = jax.vmap(BBfield.B)(surf_xyz)
-    BBmod_xyz = jax.vmap(BBfield.AbsB)(surf_xyz)
-    gradB_xyz = jax.vmap(BBfield.dAbsB_by_dX)(surf_xyz)
+    # BBvec_xyz = jax.vmap(field.B)(surf_xyz)
+    BBmod_xyz = jax.vmap(field.AbsB)(surf_xyz)
+    gradB_xyz = jax.vmap(field.dAbsB_by_dX)(surf_xyz)
 
     # 3. surface normal
     unitnormal_xyz = surface.unitnormal.reshape(-1, 3)
 
-    # 4. compute L_B and normalize the quasi-symmetry residual
-    # type1 --> L_B = |B| / ||grad(|B|)||
-    # type2 --> L_B = sqrt(2) * |B| / ||grad(B)||_F   
-    LB_xyz = jax.vmap(BBfield.L_gradB_type2)(surf_xyz)
+    # 4. compute L_B and normalize the quasi-symmetry residual: L_B = sqrt(2) * |B| / ||grad(B)||_F   
+    LB_xyz = jax.vmap(field.L_gradB)(surf_xyz)
     norm_factor = LB_xyz**3 / BBmod_xyz**3
 
     # 5. quasi-symmetry condition
     # 5.1. Compute grad(B · grad|B|) = grad(B · grad|B|)
-    #    
-    # B_dot_gradB = jnp.sum(BBvec_xyx * gradB_xyz, axis=1)
-    grad_B_dot_gradB_xyz = jax.vmap(jax.grad(lambda x: jnp.dot(BBfield.B(x), BBfield.dAbsB_by_dX(x))))(surf_xyz)
+    grad_B_dot_gradB_xyz = jax.vmap(jax.grad(lambda x: jnp.dot(field.B(x), field.dAbsB_by_dX(x))))(surf_xyz)
 
     # 5.2. Compute (n x grad|B|) · grad(B · grad|B|) and normalized quasi-symmetry residual
     QS_residual_xyz = norm_factor * jnp.sum(jnp.cross(unitnormal_xyz, gradB_xyz) * grad_B_dot_gradB_xyz, axis=1)
@@ -227,11 +223,11 @@ def QS_check_on_surface(BBfield, surface):
     return QS_residual_xyz
 
 
-def loss_QS(field, surface):
+def loss_quasi_symmetry(field, surface):
     """
     Scalar objective: smaller means closer to quasi-symmetry.
     """
-    QS_residual_xyz = QS_check_on_surface(field, surface)
+    QS_residual_xyz = quasi_symmetry_residual_on_surface(field, surface)
     QS_residual = jnp.mean(jnp.abs(QS_residual_xyz))
     return QS_residual
 

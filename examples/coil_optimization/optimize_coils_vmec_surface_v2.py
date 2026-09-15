@@ -8,7 +8,7 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 from essos.surfaces import SurfaceRZFourier, BdotN_over_B
 from essos.losses import custom_loss
-from essos.objective_functions import loss_QS, QS_check_on_surface
+from essos.objective_functions import loss_quasi_symmetry, quasi_symmetry_residual_on_surface
 
 
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
@@ -82,7 +82,7 @@ def loss_curvature(field):
 L_normal_field = custom_loss(loss, "field", surface=surface)
 L_length = custom_loss(loss_length, "field")
 L_curvature = custom_loss(loss_curvature, "field")
-L_QS = custom_loss(loss_QS, "field", surface=surface)
+L_QS = custom_loss(loss_quasi_symmetry, "field", surface=surface)
 
 # ====================================================================================
 # ====================================================================================
@@ -132,10 +132,9 @@ opt_field = L_total.dofs_to_pytree(res.x)["field"]
 opt_coils = opt_field.coils
 
 
-
 # ====================================================================================
 # ====================================================================================
-""" Comparison of the initial loss and the optimized loss """
+""" Printing a comparison of the initial loss and the optimized loss """
 # ====================================================================================
 # ====================================================================================
 
@@ -176,19 +175,19 @@ print("Curvature loss (initial):", loss_curvature(init_field))
 print("Curvature loss (optimized):", loss_curvature(opt_field))
 
 print("\nQS residuals and losses:")
-QS_residual_xyz_init = QS_check_on_surface(init_field, surface)
-QS_residual_xyz_opt = QS_check_on_surface(opt_field, surface)
+QS_residual_xyz_init = quasi_symmetry_residual_on_surface(init_field, surface)
+QS_residual_xyz_opt = quasi_symmetry_residual_on_surface(opt_field, surface)
 print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz_init)))
 print("mean abs residual (optimized):", jnp.mean(jnp.abs(QS_residual_xyz_opt)))
 print("max abs residual (initial):", jnp.max(jnp.abs(QS_residual_xyz_init)))
 print("max abs residual (optimized):", jnp.max(jnp.abs(QS_residual_xyz_opt)))
-print("QS loss (initial):", loss_QS(init_field, surface))
-print("QS loss (optimized):", loss_QS(opt_field, surface))
+print("QS loss (initial):", loss_quasi_symmetry(init_field, surface))
+print("QS loss (optimized):", loss_quasi_symmetry(opt_field, surface))
 
 
 # ====================================================================================
 # ====================================================================================
-""" Printing the initial and optimized coils """
+""" Plotting the initial and optimized coils """
 # ====================================================================================
 # ====================================================================================
 

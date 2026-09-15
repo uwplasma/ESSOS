@@ -14,7 +14,7 @@ import jax.numpy as jnp
 
 # ESSOS libraries --------------------------------------------
 from essos.fields import BiotSavart, Vmec
-from essos.objective_functions import QS_check_on_surface
+from essos.objective_functions import quasi_symmetry_residual_on_surface
 from essos.plot import fix_matplotlib_3d
 from essos.coils import Curves, Coils
 from essos.surfaces import ( SurfaceRZFourier , BdotN_over_B )
@@ -38,18 +38,14 @@ import time
 # -----------------------------------------------------------------------------
 # We have two examples: one with a simple torus surface and another with a VMEC surface.
 # flags: vmec, torus_simple
-# flag_surface = "vmec"
-flag_surface = "torus_simple"
+flag_surface = "vmec"
+# flag_surface = "torus_simple"
 
 # -----------------------------------------------------------------------------
 # General input
 # -----------------------------------------------------------------------------
 # Current running through the coils
 Ifactor = 1.e7 
-
-# flag for the scale length definition
-# flag_LB = 1 # L_B = |B| / ||grad(|B|)||
-flag_LB = 2 # L_B = sqrt(2) * |B| / ||grad(B)||_F
 
 # -----------------------------------------------------------------------------
 # Simple torus input
@@ -296,15 +292,7 @@ B_vector_xyz_sampled = jax.vmap( BB_coils.B )( surf_xyz_sampled ) # Magnetic-fie
 # ============================================================================================
 # Calculus of the scale length
 # ============================================================================================
-
-if flag_LB == 1: # L_B = |B| / ||grad(|B|)|| --------------------------------
-    L_B_xyz_full = jax.vmap(BB_coils.L_gradB_type1)(surf_xyz_full)
-
-elif flag_LB == 2: # L_B = sqrt(2) * |B| / ||grad(B)||_F --------------------
-    L_B_xyz_full = jax.vmap( BB_coils.L_gradB_type2)(surf_xyz_full)
-
-else:
-    raise ValueError(f"Unknown flag_LB: {flag_LB}")
+L_B_xyz_full = jax.vmap(BB_coils.L_gradB)(surf_xyz_full)
 
 # Reshape the scale length back to the surface grid shape for plotting.
 L_B_pt_full = L_B_xyz_full.reshape(surf_pt_full.shape[:2])
@@ -323,7 +311,7 @@ print("L_B average =", jnp.mean(L_B_xyz_full))
 
 # -----------------------------------------------------------------------------
 # Full surface grid
-QS_condition_xyz_full = QS_check_on_surface( BB_coils , surface )
+QS_condition_xyz_full = quasi_symmetry_residual_on_surface( BB_coils , surface )
 
 print("QS_condition_xyz_full.shape =", QS_condition_xyz_full.shape)
 print("QS_condition_xyz_full min =", jnp.min(QS_condition_xyz_full))
