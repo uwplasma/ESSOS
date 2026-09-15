@@ -811,15 +811,15 @@ class Tracing():
                     t1=self.maxtime,
                     dt0=self.timestep,#self.maxtime / self.timesteps,
                     y0=initial_condition,
-                    solver=diffrax.Tsit5(),
+                    solver=diffrax.Dopri8(),  # matches main's fix for adaptive guiding-center step-size collapse
                     args=self.args,
                     saveat=SaveAt(ts=self.times),
-                    throw=False,
                     # adjoint=DirectAdjoint(),
                     progress_meter=TqdmProgressMeter(),
-                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
-                    max_steps=10000000000,
-                    event = Event(self.condition)
+                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol, dtmin=self.timestep, force_dtmin=True),
+                    max_steps=1000000,
+                    event = Event(self.condition),
+                    throw=True,
                 ).ys
             elif self.model == 'FieldLineAdaptative' :  
                 import warnings

@@ -104,7 +104,7 @@ print(f"{n_magnets} magnet sites, {int(np.sum(np.abs(pho_optimized) > 0.5))} act
 
 scaled_moments = orientations * float(np.mean(native_norms[native_norms > 0])) * pho_optimized[:, None]
 
-# filter to only ACTIVE magnets (|pho|>0.5) before building
+
 
 active_filter = np.abs(pho_optimized) > 0.5
 positions_active_only = positions[active_filter]
@@ -130,7 +130,7 @@ print(f"B at test point: {B_test}  shape={jnp.shape(B_test)}")
 print(f"|B| at test point: {jnp.asarray(absB_test).ravel()}  shape={jnp.shape(absB_test)}")
 
 print("\n Setting up field-line tracing ")
-R0   = jnp.linspace(0.34, 0.375, 8)  # validated confined range for MUSE's optimized custom_loss result
+R0   = jnp.linspace(0.33, 0.366, 15)  # lose after .371
 Z0 = jnp.zeros(len(R0))
 phi0 = jnp.zeros(len(R0))
 initial_xyz = jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
@@ -139,15 +139,14 @@ tracing = Tracing(
     field=combined_field,
     initial_conditions=initial_xyz,
     model='FieldLine',
-    maxtime=1290,   # ~150 toroidal transits
+    maxtime=1290*1.2,   
     timestep=0.258,  # maxtime/5000
-    times_to_trace=30000,  # matched to zot80 
+    times_to_trace=30000,  
     rtol=1e-10,
     atol=1e-10,
 )
 
 print("Tracing field lines")
-tracing.trace()
 trajectories = tracing.trajectories
 print(f"trajectories shape/type: {type(trajectories)}"
       f"{', shape=' + str(trajectories.shape) if hasattr(trajectories, 'shape') else ''}")
@@ -157,18 +156,33 @@ np.save(RESULTS_DIR / "trace_times.npy", np.asarray(tracing.times))
 np.save(RESULTS_DIR / "trace_R0.npy", np.asarray(R0))
 print(f"Saved raw trajectories to {RESULTS_DIR}/trajectories.npy")
 
-print("\n--- Poincare plot---")
+print("\n--- Poincare plot (phi=pi/2) ---")
 fig_p, ax_p = plt.subplots(figsize=(8, 8))
 tracing.poincare_plot(ax=ax_p, show=False)
 ax_p.set_xlabel(r"$R$ [m]")
 ax_p.set_ylabel(r"$Z$ [m]")
-ax_p.set_title("Poincare plot: TF coils + optimized PMs (custom_loss result)")
+ax_p.set_title(r"Poincare plot: TF coils + optimized PMs ($\phi=\pi/2$)")
 ax_p.set_xlim(0.20, 0.40)
 ax_p.set_ylim(-0.10, 0.10)
 ax_p.set_aspect("equal")
 plt.tight_layout()
-plt.savefig(RESULTS_DIR / "poincare_plot.png", dpi=200, bbox_inches="tight")
-print(f"Saved {RESULTS_DIR}/poincare_plot.png")
+plt.savefig(RESULTS_DIR / "poincare_plot_pi2.png", dpi=200, bbox_inches="tight")
+print(f"Saved {RESULTS_DIR}/poincare_plot_pi2.png")
+
+
+print("\n--- Poincare plot (phi=0) ---")
+fig_p0, ax_p0 = plt.subplots(figsize=(8, 8))
+tracing.poincare_plot(ax=ax_p0, shifts=[0], show=False)
+ax_p0.set_xlabel(r"$R$ [m]")
+ax_p0.set_ylabel(r"$Z$ [m]")
+ax_p0.set_title(r"Poincare plot: TF coils + optimized PMs ($\phi=0$)")
+ax_p0.set_xlim(0.20, 0.40)
+ax_p0.set_ylim(-0.10, 0.10)
+ax_p0.set_aspect("equal")
+plt.tight_layout()
+plt.savefig(RESULTS_DIR / "poincare_plot_phi0.png", dpi=200, bbox_inches="tight")
+print(f"Saved {RESULTS_DIR}/poincare_plot_phi0.png")
+
 
 ax_p.set_xlim(0.20, 0.40)
 ax_p.set_ylim(-0.10, 0.10)
