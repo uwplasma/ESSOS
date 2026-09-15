@@ -180,9 +180,12 @@ def loss_normB_axis_average(field,npoints=15, target_B=5.7):
     return jnp.abs(jnp.average(B_axis)-target_B)
 
 
-def loss_BdotN(field,surface):
+def loss_BdotN_sum(field,surface):
     return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
     # return jnp.mean(jnp.abs(BdotN_over_B(surface, field)))
+
+def loss_BdotN_mean(field,surface):
+    return jnp.mean(jnp.abs(BdotN_over_B(surface, field)))
 
 @partial(jit, static_argnames=['target_tol'])
 def loss_BdotN_constraint(field,surface,target_tol=1.e-6):

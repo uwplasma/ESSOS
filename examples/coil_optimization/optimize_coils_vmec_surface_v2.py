@@ -8,7 +8,7 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 from essos.surfaces import SurfaceRZFourier, BdotN_over_B
 from essos.losses import custom_loss
-from essos.objective_functions import loss_quasi_symmetry, quasi_symmetry_residual_on_surface
+from essos.objective_functions import loss_BdotN_mean, loss_quasi_symmetry, quasi_symmetry_residual_on_surface
 
 
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
@@ -64,9 +64,6 @@ QS_WEIGHT = 1.
 # ====================================================================================
 # ====================================================================================
 
-def loss(field, surface):
-    return jnp.mean(jnp.abs(BdotN_over_B(surface, field)))
-
 def loss_length(field):
     return jnp.mean(jnp.maximum(0, field.coils.length - LENGTH_TARGET))
 
@@ -79,7 +76,7 @@ def loss_curvature(field):
 # ====================================================================================
 # ====================================================================================
 
-L_normal_field = custom_loss(loss, "field", surface=surface)
+L_normal_field = custom_loss(loss_BdotN_mean, "field", surface=surface)
 L_length = custom_loss(loss_length, "field")
 L_curvature = custom_loss(loss_curvature, "field")
 L_QS = custom_loss(loss_quasi_symmetry, "field", surface=surface)
@@ -145,8 +142,8 @@ print("mean abs residual (initial):", jnp.mean(jnp.abs(B_dot_n_over_B_init)) )
 print("mean abs residual (optimized):",jnp.mean(jnp.abs(B_dot_n_over_B_opt)) )
 print("max abs residual (initial):",jnp.max(jnp.abs(B_dot_n_over_B_init)) )
 print("max abs residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) )
-print("Normal-field loss (initial):",loss(init_field, surface) )
-print("Normal-field loss (optimized):",loss(opt_field, surface) )
+print("Normal-field loss (initial):",loss_BdotN_mean(init_field, surface) )
+print("Normal-field loss (optimized):",loss_BdotN_mean(opt_field, surface) )
 
 print("\nCoil-length residuals and losses:")
 coil_length_residual_init = jnp.maximum(0, init_field.coils.length - LENGTH_TARGET)
