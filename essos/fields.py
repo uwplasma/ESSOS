@@ -412,3 +412,47 @@ class near_axis:
             "Please run 'pip install git+https://github.com/uwplasma/pyQSC_JAX.git' "
             "and import it via 'from pyqsc_jax.near_axis import near_axis'."
         )
+
+
+class CombinedField(MagneticField):
+    """Sum of several magnetic fields, traced as one.
+
+    The usual case is a coil field plus a plasma contribution: ``B`` and
+    ``B_contravariant`` add over the fields, while the geometry helpers
+    ``sqrtg`` and ``to_xyz`` come from the first field, which is the one that
+    carries the coordinate system.
+    """
+
+    def __init__(self, *fields):
+        if len(fields) < 1:
+            raise ValueError("CombinedField needs at least one field")
+        self.fields = fields
+
+    @jit
+    def B(self, points):
+        return sum(field.B(points) for field in self.fields)
+
+    @jit
+    def B_contravariant(self, points):
+        return sum(field.B_contravariant(points) for field in self.fields)
+
+    @jit
+    def sqrtg(self, points):
+        return self.fields[0].sqrtg(points)
+
+    @jit
+    def to_xyz(self, points):
+        return self.fields[0].to_xyz(points)
+
+    def _tree_flatten(self):
+        return (self.fields,), {}
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(*children[0], **aux_data)
+
+
+tree_util.register_pytree_node(CombinedField,
+                               CombinedField._tree_flatten,
+                               CombinedField._tree_unflatten)
+
