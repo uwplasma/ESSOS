@@ -37,6 +37,8 @@ pip install essos
 Fit coils to a VMEC boundary, trading normal-field error against coil length and
 curvature. Losses compose with `+`, and `L.grad` is the exact gradient.
 
+![Coils fitted to a QA boundary](docs/readme_coil_optimization.png)
+
 ```python
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart

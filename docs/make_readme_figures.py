@@ -6,11 +6,6 @@ these same calls, so the pictures and the snippets cannot drift apart.
     python docs/make_readme_figures.py            # every panel
     python docs/make_readme_figures.py fieldlines # just one
 
-The ``coils`` panel is kept here as the reproducible recipe but is not in the
-README: from this start (3 coils of order 3 around a reactor-scale QA) the loss
-falls 204 -> 18.4 in 400 evaluations while the geometry is still visibly
-tangled, so the picture would undersell the optimizer rather than show it
-working. It needs a tuned start and budget before it earns a place.
 """
 
 import os
