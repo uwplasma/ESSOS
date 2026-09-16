@@ -78,7 +78,7 @@ def field_line_tracing() -> None:
     seeds = jnp.array([R0, zeros, zeros]).T
 
     tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=seeds,
-                      maxtime=1000, times_to_trace=6000, atol=1e-8, rtol=1e-8)
+                      maxtime=8000, times_to_trace=40000, atol=1e-8, rtol=1e-8)
 
     fig, ax = plt.subplots(figsize=(4.4, 4.4))
     tracing.poincare_plot(ax=ax, show=False, shifts=[0.0])

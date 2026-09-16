@@ -79,7 +79,7 @@ R0 = jnp.linspace(1.21, 1.40, 8)
 seeds = jnp.array([R0, jnp.zeros_like(R0), jnp.zeros_like(R0)]).T
 
 tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=seeds,
-                  maxtime=1000, times_to_trace=6000, atol=1e-8, rtol=1e-8)
+                  maxtime=8000, times_to_trace=40000, atol=1e-8, rtol=1e-8)
 tracing.poincare_plot(shifts=[0.0])
 ```
 
