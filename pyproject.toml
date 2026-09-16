@@ -41,8 +41,13 @@ dependencies = [
     "netcdf4",
     # Used internally by SurfaceRZFourier.to_vtk() and Coils.to_vtk().
     "pyevtk",
-    "pyqsc_jax @ git+https://github.com/uwplasma/pyQSC_JAX.git"
-] 
+]
+
+# pyQSC_JAX is not on PyPI, and PyPI rejects any distribution that names a
+# direct URL, so it cannot be declared here at all -- not even as an extra.
+# The near-axis entry points import it lazily and raise with the install
+# command; see "Optional: near-axis fields" in the README.
+#   pip install git+https://github.com/uwplasma/pyQSC_JAX.git 
 requires-python = ">=3.10"
 
 [project.urls]

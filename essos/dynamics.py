@@ -780,7 +780,8 @@ class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
-                 solver=None, axis_threshold=1.e-6, stopping_criteria=None, progress=False, devices=None):
+                 solver=None, axis_threshold=1.e-6, stopping_criteria=None, progress=False, devices=None,
+                 max_steps=1_000_000):
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")
@@ -807,10 +808,9 @@ class Tracing():
         else:
             self.field = field
 
-        if rejected_steps==None:
-            self.rejected_steps=100
-        else:
-            self.rejected_steps=100
+        # Both branches used to set 100, so a caller-supplied value was
+        # silently discarded.
+        self.rejected_steps = 100 if rejected_steps is None else rejected_steps
 
         self.model = model
         self.initial_conditions = initial_conditions
@@ -827,6 +827,9 @@ class Tracing():
             raise ValueError("axis_threshold must be strictly between 0 and 1")
         self.axis_threshold = axis_threshold
         self._has_vmec_axis_event = False
+        # Diffrax's ceiling was effectively unbounded, so a trace that could not
+        # finish ran until the process was killed rather than returning.
+        self.max_steps = max_steps
         self.progress = bool(progress)
         self.progress_meter = TqdmProgressMeter() if self.progress else NoProgressMeter()
         # Diffrax solver to use for the adaptive integrators. If left as None,
@@ -1016,7 +1019,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 )
@@ -1043,7 +1046,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),
                     stepsize_controller=ClipStepSizeController(controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,dtmin=dt0,dtmax=1.e-4,force_dtmin=True),step_ts=self.times,store_rejected_steps=self.rejected_steps),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 )
@@ -1068,7 +1071,7 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 )
@@ -1093,7 +1096,7 @@ class Tracing():
                     saveat=SaveAt(ts=self.times),
                     throw=False,
                     # adjoint=DirectAdjoint(),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 )
@@ -1120,7 +1123,7 @@ class Tracing():
                     throw=False,
                     # adjoint=DirectAdjoint(),                   
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition),
                     progress_meter=self.progress_meter,
                 ).ys          
@@ -1140,7 +1143,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition)
                 )
                 trajectory = solution.ys
@@ -1159,7 +1162,7 @@ class Tracing():
                     throw=False,
                     progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition)
                 )
                 trajectory = solution.ys
@@ -1179,7 +1182,7 @@ class Tracing():
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
                     stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition)
                 )
                 trajectory = solution.ys
@@ -1199,7 +1202,7 @@ class Tracing():
                     throw=True,
                     # adjoint=DirectAdjoint(),
                     progress_meter=self.progress_meter,
-                    max_steps=10000000000,
+                    max_steps=self.max_steps,
                     event = Event(self.condition)
                 )
                 trajectory = solution.ys

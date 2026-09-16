@@ -83,3 +83,24 @@ def test_biot_savart_cylindrical_interface_matches_cartesian_and_differentiates(
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_combined_field_sums_correctly():
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import CombinedField
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.3,
+                                       n_segments=20, nfp=2, stellsym=True)
+    field = BiotSavart(Coils(curves=curves, currents=[1e5] * 2))
+    points = jnp.array([0.5, 0.5, 0.5])
+
+    assert jnp.allclose(CombinedField(field, field).B(points), 2 * field.B(points))
+    assert jnp.allclose(CombinedField(field, field, field).B(points), 3 * field.B(points))
+
+
+def test_combined_field_requires_at_least_one_field():
+    from essos.fields import CombinedField
+
+    with pytest.raises(ValueError):
+        CombinedField()
+

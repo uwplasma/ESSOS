@@ -506,3 +506,19 @@ def test_tracing_trace_collisions_adaptative(field, particles,electric_field):
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_tracing_max_steps_is_configurable_and_bounded():
+    """The Diffrax ceiling used to be 1e10, so a trace that could not finish ran
+    until the process was killed rather than returning."""
+    import inspect
+
+    from essos.dynamics import Tracing
+
+    default = inspect.signature(Tracing).parameters["max_steps"].default
+    assert default == 1_000_000
+
+    source = inspect.getsource(Tracing)
+    assert "max_steps=10000000000" not in source
+    assert source.count("max_steps=self.max_steps") == 9
+
