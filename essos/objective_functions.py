@@ -235,8 +235,17 @@ def loss_quasi_symmetry(field, surface):
     return QS_residual
 
 
+####################################### SURAFACE CONSTRAINTS ###########################################
 
-###########################  B ON SURAFCE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
+@partial(jit, static_argnames=["target_area"])
+def loss_mean_cross_sectional_area(surface, target_area):
+    current_area = surface.area_section_by_phi()
+    relative_area_change = ( current_area - target_area ) / target_area
+
+    return jnp.square(relative_area_change)
+
+
+###########################  B ON SURAFACE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
 def copy_coils_from_field(field):
     return field.coils.copy()
 
@@ -270,18 +279,29 @@ def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6
     return jnp.sqrt(jnp.sum(jnp.maximum(expected_square - target_tol, 0.0)))
 
 
-
-
 ######################### COIL GEOMETRY LOSSES #################################
 
+# Penalize if the coil is shorter or larger than the target.
 @partial(jit, static_argnames=['max_coil_length'])
 def loss_coil_length(coils, max_coil_length=0):
     return jnp.square(coils.length/max_coil_length - 1)
+
+# Penalize only if the coil is longer than the target.
+@partial(jit, static_argnames=["max_coil_length"])
+def loss_coil_length_max(field, max_coil_length=0):
+    return jnp.mean(jnp.maximum(0.0, field.coils.length - max_coil_length) )
+
 
 @partial(jit, static_argnames=['max_coil_curvature'])
 def loss_coil_curvature(coils, max_coil_curvature=0):
     pointwise_curvature_loss = jnp.square(jnp.maximum(coils.curvature-max_coil_curvature, 0))
     return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
+
+# Adapter for optimization losses that use "field" as their dependency.
+@partial(jit, static_argnames=["max_coil_curvature"])
+def loss_coil_curvature_from_field(field, max_coil_curvature=0):
+    coil_losses = loss_coil_curvature( field.coils , max_coil_curvature=max_coil_curvature )
+    return jnp.mean(coil_losses)
 
 def compute_candidates(coils, min_separation):
     centers = coils.curves.curves[:, :, 0]

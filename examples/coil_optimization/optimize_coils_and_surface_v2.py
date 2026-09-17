@@ -8,21 +8,48 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 from essos.surfaces import SurfaceRZFourier, BdotN_over_B
 from essos.losses import custom_loss
-from essos.objective_functions import loss_BdotN_mean, loss_coil_curvature_from_field, loss_coil_length_max, loss_quasi_symmetry, quasi_symmetry_residual_on_surface
+from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_from_field,
+                                        loss_coil_length_max, loss_mean_cross_sectional_area, 
+                                        loss_quasi_symmetry, quasi_symmetry_residual_on_surface )
+
 
 
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
 #  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
 
+# There are two different controls:
+# x_scale  → controls how easily variables move
+# weights  → control what results the optimizer considers important
+
 # ====================================================================================
 # ====================================================================================
-""" Paths for the input files """
+""" INPUT DATA """
 # ====================================================================================
 # ====================================================================================
 
+# PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
+
+# SURFACE PARAMETERS -----------------------------------------------------------------
+ntheta = 30; nphi = 30; Npoints = ntheta * nphi
+
+#  CONTROL PARAMETERS FOR THE OPTIMIZATION -------------------------------------------
+# There are two different controls:
+# x_scale  → controls how easily variables move
+SCALE_FIELD = 1.0
+SCALE_SURFACE = 1.0
+
+# Losses weights and targets  → control what results the optimizer considers important
+# Field ~~~~~~~~~~~~~~~~~~~~
+NORMAL_FIELD_WEIGHT = Npoints;
+QS_WEIGHT = 1.
+# Coils ~~~~~~~~~~~~~~~~~~~~
+LENGTH_WEIGHT = 10.; LENGTH_TARGET = 32.;
+CURVATURE_WEIGHT = 100.; CURVATURE_TARGET = 0.1
+# Surface ~~~~~~~~~~~~~~~~~~~~
+CROSS_SECTIONAL_AREA_WEIGHT = 1e4
 
 # ====================================================================================
 # ====================================================================================
@@ -39,33 +66,13 @@ init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
 init_field = BiotSavart(init_coils)
 
 # Initialize the surface from a VMEC output file.
-ntheta = 30; nphi = 30; Npoints = ntheta * nphi  # Surface parametersrs
 surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=30, nphi=30, range_torus='half period')
-
 
 # Build and cache surface geometry before JAX starts the optimization.
 surface.gamma.block_until_ready()
 surface.unitnormal.block_until_ready()
 
-# ====================================================================================
-# ====================================================================================
-""" Setting the losses weights and targets """
-# ====================================================================================
-# ====================================================================================
-
-LENGTH_WEIGHT = 1.; LENGTH_TARGET = 32.
-CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.1
-NORMAL_FIELD_WEIGHT = Npoints
-QS_WEIGHT = 1.
-
-# ====================================================================================
-# ====================================================================================
-""" Creating the loss functions """
-# ====================================================================================
-# ====================================================================================
-
-# def loss_curvature(field):
-#     return jnp.mean(jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET))
+CROSS_SECTIONAL_AREA_TARGET = float( surface.area_section_by_phi() )
 
 # ====================================================================================
 # ====================================================================================
@@ -73,10 +80,12 @@ QS_WEIGHT = 1.
 # ====================================================================================
 # ====================================================================================
 
-L_normal_field = custom_loss( loss_BdotN_mean, "field", surface=surface)
+L_normal_field = custom_loss( loss_BdotN_mean, "field", "surface" )
 L_length_max = custom_loss( loss_coil_length_max , "field", max_coil_length=LENGTH_TARGET )
 L_curvature = custom_loss( loss_coil_curvature_from_field , "field" , max_coil_curvature=CURVATURE_TARGET )
-L_QS = custom_loss(loss_quasi_symmetry, "field", surface=surface)
+L_quasi_symmetry = custom_loss(loss_quasi_symmetry, "field", "surface")
+L_cross_sectional_area = custom_loss( loss_mean_cross_sectional_area, "surface", target_area=CROSS_SECTIONAL_AREA_TARGET )
+
 
 # ====================================================================================
 # ====================================================================================
@@ -84,10 +93,32 @@ L_QS = custom_loss(loss_quasi_symmetry, "field", surface=surface)
 # ====================================================================================
 # ====================================================================================
 
-L_total = NORMAL_FIELD_WEIGHT*L_normal_field + LENGTH_WEIGHT*L_length_max + CURVATURE_WEIGHT*L_curvature + QS_WEIGHT*L_QS
-# L_total = NORMAL_FIELD_WEIGHT*L_normal_field + QS_WEIGHT*L_QS
+# The total loss is a weighted sum of the individual losses.
+L_total = ( NORMAL_FIELD_WEIGHT*L_normal_field + 
+           LENGTH_WEIGHT*L_length_max + 
+           CURVATURE_WEIGHT*L_curvature + 
+           CROSS_SECTIONAL_AREA_WEIGHT*L_cross_sectional_area +
+           QS_WEIGHT*L_quasi_symmetry )
 
-L_total.dependencies = {"field": init_field}
+# The dependencies of the total loss are set to the field and surface. Both will be mdified during the optimization.
+L_total.dependencies = { "field": init_field, "surface": surface }
+
+
+# We assign different scaling factors to the field and surface dofs to balance their characteristic step sizes.
+NN_field_dofs = L_total.dependencies["field"].dofs.size
+NN_surface_dofs = L_total.dependencies["surface"].dofs.size
+x_scale_optimization = jnp.concatenate([
+    SCALE_FIELD   * jnp.ones(NN_field_dofs),
+    SCALE_SURFACE * jnp.ones(NN_surface_dofs),
+])
+
+
+# def grad(x, scale_grad=1e-1):
+#     gradient = L_total.grad(x)
+#     NN_surface_dofs = L_total.dependencies["surface"].dofs.size
+#     NN_field_dofs = L_total.dependencies["field"].dofs.size
+#     total_grad = jnp.concatenate([gradient[:NN_field_dofs], scale_grad*gradient[NN_field_dofs:]])
+#     return total_grad
 
 # ====================================================================================
 # ====================================================================================
@@ -96,8 +127,15 @@ L_total.dependencies = {"field": init_field}
 # ====================================================================================
 
 t_start = time()
-res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=200)
+res = least_squares(L_total, L_total.starting_dofs, L_total.grad, x_scale=x_scale_optimization,
+                     verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=200)
+# res = least_squares(L_total, L_total.starting_dofs, lambda x: grad(x, scale_grad=1e-1), verbose=2, ftol=1e-7, gtol=1e-7, xtol=1e-14, max_nfev=200)
+# res = least_squares(L_total, res.x, lambda x: grad(x, scale_grad=3e-1), verbose=2, ftol=1e-7, gtol=1e-7, xtol=1e-14, max_nfev=300)
+# res = least_squares(L_total, res.x, lambda x: grad(x, scale_grad=6e-1), verbose=2, ftol=1e-7, gtol=1e-7, xtol=1e-14, max_nfev=300)
+# res = least_squares(L_total, res.x, lambda x: grad(x, scale_grad=1), verbose=2, ftol=1e-7, gtol=1e-7, xtol=1e-14, max_nfev=300)
 t_end = time()
+
+# exit()
 
 # ====================================================================================
 # ====================================================================================
@@ -114,16 +152,22 @@ print("Loss after optimization:", L_total(res.x))
 """ Extracting the different fields from the results array res """
 # ====================================================================================
 # ====================================================================================
+# The optimized field and surface are extracted from the results of the optimization.
+opt_dict = L_total.dofs_to_pytree(res.x)
 
-# The optimized field is extracted from the results of the optimization. 
-# The `dofs_to_pytree` method converts the flat array of degrees of freedom back into the structured format (pytree)
-#  that includes the optimized coils and any other relevant parameters.
-opt_field = L_total.dofs_to_pytree(res.x)["field"]
-# opt_dict = L_total.dofs_to_pytree(res.x)
-# opt_field = opt_dict["field"]
+# The optimized field and surface are extracted from the results of the optimization.
+opt_field = opt_dict["field"]
+opt_surface = opt_dict["surface"]
 
 # Coils geometry is extracted from the optimized field.
 opt_coils = opt_field.coils
+
+
+# Surface displacement between corresponding grid points
+surface_displacement_xyz = opt_surface.gamma - surface.gamma
+surface_displacement = jnp.linalg.norm(surface_displacement_xyz, axis=2)# Total displacement magnitude
+surface_normal_displacement = jnp.sum( surface_displacement_xyz * surface.unitnormal, axis=2 ) # Displacement perpendicular to the initial surface
+
 
 
 # ====================================================================================
@@ -132,16 +176,28 @@ opt_coils = opt_field.coils
 # ====================================================================================
 # ====================================================================================
 
+
+print("\n---------------------------------------------------------------------------")
+print("\nSurface displacement:")
+print("Mean total displacement:", jnp.mean(surface_displacement))
+print("RMS total displacement:", jnp.sqrt(jnp.mean(surface_displacement**2)))
+print("Maximum total displacement:", jnp.max(surface_displacement))
+print("Mean absolute normal displacement:", jnp.mean(jnp.abs(surface_normal_displacement)))
+print("RMS normal displacement:", jnp.sqrt(jnp.mean(surface_normal_displacement**2)))
+print("Maximum absolute normal displacement:", jnp.max(jnp.abs(surface_normal_displacement)))
+
+print("\n---------------------------------------------------------------------------")
 print("\nNormal-field residuals and losses:")
 B_dot_n_over_B_init = BdotN_over_B( surface , init_field )
-B_dot_n_over_B_opt = BdotN_over_B( surface , opt_field )
+B_dot_n_over_B_opt = BdotN_over_B( opt_surface , opt_field )
 print("mean abs residual (initial):", jnp.mean(jnp.abs(B_dot_n_over_B_init)) )
 print("mean abs residual (optimized):",jnp.mean(jnp.abs(B_dot_n_over_B_opt)) )
 print("max abs residual (initial):",jnp.max(jnp.abs(B_dot_n_over_B_init)) )
 print("max abs residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) )
 print("Normal-field loss (initial):",loss_BdotN_mean(init_field, surface) )
-print("Normal-field loss (optimized):",loss_BdotN_mean(opt_field, surface) )
+print("Normal-field loss (optimized):",loss_BdotN_mean(opt_field, opt_surface) )
 
+print("\n---------------------------------------------------------------------------")
 print("\nCoil-length residuals and losses:")
 coil_length_residual_init = jnp.maximum(0, init_field.coils.length - LENGTH_TARGET)
 coil_length_residual_opt = jnp.maximum(0, opt_field.coils.length - LENGTH_TARGET)
@@ -154,6 +210,7 @@ print("max excess length (optimized):", jnp.max(coil_length_residual_opt))
 print("Length loss (initial):", loss_coil_length_max(init_field, max_coil_length=LENGTH_TARGET))
 print("Length loss (optimized):", loss_coil_length_max(opt_field, max_coil_length=LENGTH_TARGET))
 
+print("\n---------------------------------------------------------------------------")
 print("\nCoil-curvature residuals and losses:")
 coil_curvature_residual_init = jnp.maximum(0, init_field.coils.curvature - CURVATURE_TARGET)
 coil_curvature_residual_opt = jnp.maximum(0, opt_field.coils.curvature - CURVATURE_TARGET)
@@ -168,15 +225,30 @@ print("max excess curvature (optimized):", jnp.max(coil_curvature_residual_opt))
 print("Curvature loss (initial):", loss_coil_curvature_from_field(init_field, max_coil_curvature=CURVATURE_TARGET))
 print("Curvature loss (optimized):", loss_coil_curvature_from_field(opt_field, max_coil_curvature=CURVATURE_TARGET))
 
-print("\nQS residuals and losses:")
+print("\n---------------------------------------------------------------------------")
+print("\nQuasi-symmetry residuals and losses:")
 QS_residual_xyz_init = quasi_symmetry_residual_on_surface(init_field, surface)
-QS_residual_xyz_opt = quasi_symmetry_residual_on_surface(opt_field, surface)
+QS_residual_xyz_opt = quasi_symmetry_residual_on_surface(opt_field, opt_surface)
 print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz_init)))
 print("mean abs residual (optimized):", jnp.mean(jnp.abs(QS_residual_xyz_opt)))
 print("max abs residual (initial):", jnp.max(jnp.abs(QS_residual_xyz_init)))
 print("max abs residual (optimized):", jnp.max(jnp.abs(QS_residual_xyz_opt)))
 print("QS loss (initial):", loss_quasi_symmetry(init_field, surface))
-print("QS loss (optimized):", loss_quasi_symmetry(opt_field, surface))
+print("QS loss (optimized):", loss_quasi_symmetry(opt_field, opt_surface))
+
+print("\n---------------------------------------------------------------------------")
+print("\nMean cross-sectional area:")
+cross_sectional_area_initial = surface.area_section_by_phi()
+cross_sectional_area_optimized = opt_surface.area_section_by_phi()
+relative_cross_sectional_area_change = ( cross_sectional_area_optimized - cross_sectional_area_initial ) / cross_sectional_area_initial
+
+print("Initial area:", cross_sectional_area_initial)
+print("Optimized area:", cross_sectional_area_optimized)
+print("Absolute area change:", jnp.abs(cross_sectional_area_optimized - cross_sectional_area_initial))
+print("Relative area change:", relative_cross_sectional_area_change)
+print("Relative area change (%):", 100 * relative_cross_sectional_area_change)
+print("Area loss:", loss_mean_cross_sectional_area( opt_surface , target_area=CROSS_SECTIONAL_AREA_TARGET ) )
+print("Weighted area loss:", CROSS_SECTIONAL_AREA_WEIGHT * loss_mean_cross_sectional_area( opt_surface, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
 
 
 # ====================================================================================
@@ -190,9 +262,11 @@ fig = plt.figure(figsize=(8, 4))
 ax1 = fig.add_subplot(121, projection='3d')
 init_coils.plot(ax=ax1, show=False)
 surface.plot(ax=ax1, show=False)
+
 ax2 = fig.add_subplot(122, projection='3d')
 opt_coils.plot(ax=ax2, show=False)
-surface.plot(ax=ax2, show=False)
+opt_surface.plot(ax=ax2, show=False)
+
 plt.tight_layout()
 plt.show()
 
@@ -208,6 +282,6 @@ if EXPORT:
 
     """ Save results in vtk format to analyze in Paraview """
     surface.to_vtk(os.path.join(output_filepath, "init_surface_vmec_surface.json"), field=init_field)
-    surface.to_vtk(os.path.join(output_filepath, "final_surface_vmec_surface.json"), field=opt_field)
+    opt_surface.to_vtk(os.path.join(output_filepath, "final_surface_vmec_surface.json"), field=opt_field)
     init_coils.to_vtk(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
     opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
