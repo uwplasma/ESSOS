@@ -84,26 +84,88 @@ def build_cases():
 
 # ---------------------------------------------------------------------------
 # Fourier induction matrix (production settings: ws.POTENTIAL_MPOL/NTOR = 6).
+#
+# Two wall-time optimizations over the first working version (both verified,
+# in a separate investigation pass, to reproduce the original matrix/entropy/
+# gradient to machine precision -- see the v1-vs-v2 comparison figures and
+# examples/winding_surface_fourier_comparison/README.md):
+#
+# 1. nfp-fold periodicity reduction. The Fourier basis functions
+#    sin(m*theta - n*nfp*phi) are *exactly* periodic with period 2*pi/nfp in
+#    phi (xn is always an integer multiple of nfp -- see potential_modes), so
+#    the field they produce is itself exactly nfp-periodic. Only one field
+#    period of plasma points is needed, and the kernel contribution from all
+#    nfp copies of each winding point can be summed *before* contracting with
+#    the potential basis, rather than after -- an O(nfp^2) -> O(nfp)
+#    reduction in the dominant matrix-construction cost. This is simpler than
+#    the dipole method's induction_singular_values, which needs a complex
+#    per-mode DFT because raw grid DOFs have no built-in periodicity; the
+#    Fourier basis functions already do, so a plain real-valued sum over
+#    rotations suffices. Uses the same one_period/full_integral quadrature
+#    weight convention build_operators already establishes for this exact
+#    kind of reduction.
+# 2. Matmul-restructured dipole kernel. ws.dipole_kernel materializes a
+#    (P,Q,3) pairwise-difference tensor; dipole_kernel_matmul is algebraically
+#    identical but uses the |a-b|^2 = |a|^2 - 2 a.b + |b|^2 identity to
+#    replace it with four (P,3)@(3,Q) matrix multiplications (BLAS GEMM) plus
+#    small vector reductions -- no (P,Q,3) intermediate.
 # ---------------------------------------------------------------------------
+
+def dipole_kernel_matmul(plasma_points, plasma_normals, winding_points, winding_normals):
+    """Algebraically identical to ws.dipole_kernel; avoids materializing a
+    (P,Q,3) difference tensor by using (P,3)@(3,Q) matrix multiplications."""
+    plasma_sq = jnp.sum(plasma_points ** 2, axis=1)
+    winding_sq = jnp.sum(winding_points ** 2, axis=1)
+    distance_squared = (plasma_sq[:, None] - 2 * (plasma_points @ winding_points.T)
+                       + winding_sq[None, :])
+
+    plasma_dot_normal = jnp.sum(plasma_points * plasma_normals, axis=1)
+    winding_dot_normal = jnp.sum(winding_points * winding_normals, axis=1)
+    diff_dot_plasma_normal = (plasma_dot_normal[:, None]
+                              - plasma_normals @ winding_points.T)
+    diff_dot_winding_normal = (plasma_points @ winding_normals.T
+                               - winding_dot_normal[None, :])
+    normals_dot = plasma_normals @ winding_normals.T
+
+    return ws.MU0 / (4 * jnp.pi) * (
+        normals_dot
+        - 3 * diff_dot_plasma_normal * diff_dot_winding_normal / distance_squared
+    ) / distance_squared ** 1.5
+
 
 def fourier_induction_matrix(plasma, winding, xm, xn):
     """Row-weighted map from Phi's Fourier coefficients to B_normal.
 
-    Reuses ws.dipole_kernel (the same kernel winding_surface_comparison's own
-    dipole-based entropy method and build_operators use) and
-    ws.quadrature_weights, so the sign/normalization convention is guaranteed
-    identical to the rest of this study.
+    Exploits the winding/plasma surfaces' exact nfp-fold discrete rotational
+    symmetry (see module-level comment above) and dipole_kernel_matmul's
+    matmul-restructured kernel; uses the same one_period/full_integral
+    quadrature-weight convention build_operators already establishes for
+    this kind of reduction, so the sign/normalization convention is
+    guaranteed identical to the rest of this study.
     """
-    theta = winding.theta2d.reshape(-1, 1)
-    phi = winding.phi2d.reshape(-1, 1)
-    potential_basis = jnp.sin(xm[None, :] * theta - xn[None, :] * phi)
-    kernel = ws.dipole_kernel(
-        plasma.gamma.reshape(-1, 3), plasma.unitnormal.reshape(-1, 3),
-        winding.gamma.reshape(-1, 3), winding.unitnormal.reshape(-1, 3))
-    physical_field = kernel @ (
-        ws.quadrature_weights(winding)[:, None] * potential_basis)
-    plasma_weights = ws.quadrature_weights(plasma)
-    return jnp.sqrt(plasma_weights)[:, None] * physical_field
+    nphi_period_plasma = plasma.nphi // plasma.nfp
+    plasma_points = plasma.gamma[:nphi_period_plasma].reshape(-1, 3)
+    plasma_normals = plasma.unitnormal[:nphi_period_plasma].reshape(-1, 3)
+
+    nphi_period_winding = winding.nphi // winding.nfp
+    theta0 = winding.theta2d[:nphi_period_winding].reshape(-1, 1)
+    phi0 = winding.phi2d[:nphi_period_winding].reshape(-1, 1)
+    potential_basis0 = jnp.sin(xm[None, :] * theta0 - xn[None, :] * phi0)
+
+    winding_weights = ws.quadrature_weights(winding).reshape(winding.nphi, winding.ntheta)
+    winding_weights0 = winding_weights[:nphi_period_winding].reshape(-1)
+
+    summed_kernel = 0.0
+    for period in range(winding.nfp):
+        section = slice(period * nphi_period_winding, (period + 1) * nphi_period_winding)
+        kernel = dipole_kernel_matmul(
+            plasma_points, plasma_normals,
+            winding.gamma[section].reshape(-1, 3), winding.unitnormal[section].reshape(-1, 3))
+        summed_kernel = summed_kernel + kernel
+
+    physical_field0 = summed_kernel @ (winding_weights0[:, None] * potential_basis0)
+    plasma_weights0 = ws.quadrature_weights(plasma, one_period=True, full_integral=True)
+    return jnp.sqrt(plasma_weights0)[:, None] * physical_field0
 
 
 def optimize_fourier_surface(wout):

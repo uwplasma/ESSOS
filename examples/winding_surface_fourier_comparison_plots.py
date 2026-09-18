@@ -123,8 +123,9 @@ def resolution_convergence_plot(rows, filename):
         axis.grid(alpha=0.25)
     axes[0].set_ylabel(r"Sheet $f_B$ [$T^2m^2$]")
     axes[0].legend(fontsize=7)
-    figure.suptitle("Resolution convergence: 48/56/64 (Fourier method missing W7-X@64 -- "
-                    "see PR comment: watchdog aborted at the edge of available memory)")
+    figure.suptitle("Resolution convergence: 48/56/64 (W7-X normal offset missing @64 -- "
+                    "see README: watchdog aborted at the edge of available memory, "
+                    "consistent across repeated retries)")
     figure.savefig(os.path.join(FIGURES_DIR, filename), dpi=180)
     plt.close(figure)
 
