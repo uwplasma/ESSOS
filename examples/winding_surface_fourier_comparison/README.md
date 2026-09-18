@@ -33,20 +33,39 @@ step) so every metric is defined identically to the tracked study.
   `RLIMIT_AS` -- see the script's own comments for why) since this machine
   has a hard 12 GB memory ceiling.
 - `winding_surface_fourier_comparison_plots.py` (in `examples/`): renders
-  the "vs other methods" figures in `figures/` from the CSVs below, styled to
-  match `validate_surfaces()`/`sheet_resolution_study()`'s own bar/line
-  charts.
+  the "vs other methods" figures from the CSVs below, styled to match
+  `validate_surfaces()`/`sheet_resolution_study()`'s own bar/line charts.
+  Its `main()` takes an optional `data_dir`/`figures_dir`/`suffix` so it can
+  render more than one dataset -- see "Two sets of figures" below.
 - `winding_surface_fourier_comparison_v1_vs_v2_plots.py` (in `examples/`):
   renders the two `fourier_v1_vs_v2_*.png` figures below from a snapshot of
   the pre-optimization run (see "Performance" below).
-- `data/*_combined.csv`: this run's output. Rows tagged `"(this machine)"`
-  were optimized and validated fresh, on this machine, this session.
-  `"ESSOS Pareto"` and `"REGCOIL adjoint"` rows are reused from the tracked,
-  cross-machine `winding_surface_comparison_8_coils/data/*.csv` (rerunning
-  those needs the ESSOS 32x32 Pareto current-solve and the legacy REGCOIL
-  adjoint Fortran binary respectively; out of scope for this addition) and
-  are shown hatched in the figures with that caveat.
-- `figures/*.png`: the rendered comparisons.
+- `data/*_combined.csv`: the current (v2, post-optimization) run's output.
+  Rows tagged `"(this machine)"` were optimized and validated fresh, on this
+  machine, this session. `"ESSOS Pareto"` and `"REGCOIL adjoint"` rows are
+  reused from the tracked, cross-machine `winding_surface_comparison_8_coils/data/*.csv`
+  (rerunning those needs the ESSOS 32x32 Pareto current-solve and the legacy
+  REGCOIL adjoint Fortran binary respectively; out of scope for this
+  addition) and are shown hatched in the figures with that caveat.
+- `figures/*.png`: the rendered comparisons -- see "Two sets of figures".
+
+## Two sets of figures
+
+`fourier_comparison_{validation_96,resolution_convergence,optimization_cost}.png`
+(no suffix) are **intentionally frozen** to the pre-optimization (v1) run:
+[the first PR comment](https://github.com/uwplasma/ESSOS/pull/66#issuecomment-5736019555)
+embeds them by a branch-relative URL, so whatever is at that exact path is
+what that comment shows to anyone who opens it -- these must keep showing
+what that comment describes, not the current numbers. They're regenerated
+from `output/winding_surface_fourier_comparison_v1_snapshot/` (a full
+pre-optimization snapshot) and verified byte-identical to what was
+originally committed.
+
+The same three plots using the **current** (v2, post-optimization,
+now-more-complete) data live alongside them with a `_v2` suffix:
+`fourier_comparison_{validation_96,resolution_convergence,optimization_cost}_v2.png`.
+A follow-up PR comment should reference these, plus the two
+`fourier_v1_vs_v2_*.png` performance-comparison figures below.
 
 ## Result (96x96, sheet fB, same machine)
 
@@ -58,9 +77,9 @@ step) so every metric is defined identically to the tracked study.
 
 The Fourier method beats the dipole entropy method it's meant to replace on
 all three cases (26% / 32% / 6% lower sheet fB). See
-`figures/fourier_comparison_validation_96.png` for the full metric set
+`figures/fourier_comparison_validation_96_v2.png` for the full metric set
 (max|Bn|/B, filament metrics, achieved Kmax) and
-`figures/fourier_comparison_resolution_convergence.png` for 48/56/64
+`figures/fourier_comparison_resolution_convergence_v2.png` for 48/56/64
 stability (all three methods are resolution-stable; W7-X's `"normal offset"`
 row is missing its resolution-64 point, watchdog-aborted at the edge of
 available memory consistently across repeated retries -- see "Memory
@@ -160,9 +179,16 @@ a separate, independent fix this addition does not make.
 
 ```bash
 cd examples
-python3 winding_surface_fourier_comparison.py            # ~1-3 min, watchdog-protected
-python3 winding_surface_fourier_comparison_plots.py       # vs-other-methods figures
-python3 winding_surface_fourier_comparison_v1_vs_v2_plots.py  # needs a v1 snapshot at
-                                                                # output/winding_surface_fourier_comparison_v1_snapshot/
-                                                                # (not included; see "Performance")
+python3 winding_surface_fourier_comparison.py    # ~1-3 min, watchdog-protected
+
+# vs-other-methods figures, current (v2) data, "_v2"-suffixed filenames:
+python3 -c "import winding_surface_fourier_comparison_plots as p; p.main(suffix='_v2')"
+
+# The unsuffixed fourier_comparison_*.png are frozen to the v1 snapshot at
+# output/winding_surface_fourier_comparison_v1_snapshot/ (not included in the
+# repo -- output/ is gitignored) and should not be regenerated from current
+# data; see "Two sets of figures" above.
+
+python3 winding_surface_fourier_comparison_v1_vs_v2_plots.py  # needs that same
+                                                                # v1 snapshot
 ```

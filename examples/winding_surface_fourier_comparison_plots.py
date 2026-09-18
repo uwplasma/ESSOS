@@ -8,6 +8,14 @@ writes PNGs to examples/winding_surface_fourier_comparison/figures/.
 
 This script only reads CSVs; it does not rerun any optimization or solve.
 Run after winding_surface_fourier_comparison.py has completed.
+
+main() takes optional data_dir/figures_dir/suffix so the same plotting code
+can render more than one dataset (e.g. a "v1" snapshot alongside the current
+run) without duplicating the plotting logic -- see
+winding_surface_fourier_comparison_v1_vs_v2_plots.py, which renders both a
+v1 set (matching filenames already referenced by an earlier, posted PR
+comment) and reuses this module's DISPLAY_METHODS/read_csv for its own
+figures.
 """
 
 import csv
@@ -41,8 +49,8 @@ DISPLAY_METHODS = (
 )
 
 
-def read_csv(name):
-    path = os.path.join(DATA_DIR, name)
+def read_csv(data_dir, name):
+    path = os.path.join(data_dir, name)
     with open(path, newline="") as stream:
         return list(csv.DictReader(stream))
 
@@ -56,8 +64,8 @@ def find_row(rows, case, surface_method, **extra):
     return None
 
 
-def bar_plot(rows, filename, title_prefix):
-    os.makedirs(FIGURES_DIR, exist_ok=True)
+def bar_plot(rows, figures_dir, filename, title_prefix):
+    os.makedirs(figures_dir, exist_ok=True)
     metrics = (("sheet_f_B_T2_m2", r"Resolved sheet $f_B$ [$T^2m^2$]", True),
                ("sheet_max_abs_Bn_over_B", r"Resolved max $|B_n|/B$", True),
                ("filament_f_B_T2_m2", r"Filament $f_B$ [$T^2m^2$]", True),
@@ -96,12 +104,12 @@ def bar_plot(rows, filename, title_prefix):
         axis.grid(axis="y", alpha=0.25)
     axes[0, 0].legend(fontsize=7, ncol=1)
     figure.suptitle(title_prefix)
-    figure.savefig(os.path.join(FIGURES_DIR, filename), dpi=180)
+    figure.savefig(os.path.join(figures_dir, filename), dpi=180)
     plt.close(figure)
 
 
-def resolution_convergence_plot(rows, filename):
-    os.makedirs(FIGURES_DIR, exist_ok=True)
+def resolution_convergence_plot(rows, figures_dir, filename, caveat):
+    os.makedirs(figures_dir, exist_ok=True)
     figure, axes = plt.subplots(1, len(CASES), figsize=(15, 4), constrained_layout=True,
                                 sharey=False)
     for axis, case in zip(axes, CASES):
@@ -123,18 +131,16 @@ def resolution_convergence_plot(rows, filename):
         axis.grid(alpha=0.25)
     axes[0].set_ylabel(r"Sheet $f_B$ [$T^2m^2$]")
     axes[0].legend(fontsize=7)
-    figure.suptitle("Resolution convergence: 48/56/64 (W7-X normal offset missing @64 -- "
-                    "see README: watchdog aborted at the edge of available memory, "
-                    "consistent across repeated retries)")
-    figure.savefig(os.path.join(FIGURES_DIR, filename), dpi=180)
+    figure.suptitle("Resolution convergence: 48/56/64" + caveat)
+    figure.savefig(os.path.join(figures_dir, filename), dpi=180)
     plt.close(figure)
 
 
-def cost_plot(rows_48, filename):
+def cost_plot(rows_48, figures_dir, filename):
     """Optimization runtime and iteration count per method/case -- new plot,
     not present in the existing PR figures, since the Fourier method's cost
     profile relative to the dipole method is a key part of this comparison."""
-    os.makedirs(FIGURES_DIR, exist_ok=True)
+    os.makedirs(figures_dir, exist_ok=True)
     x = np.arange(len(CASES))
     width = 0.15
     center = (len(DISPLAY_METHODS) - 1) / 2
@@ -160,22 +166,25 @@ def cost_plot(rows_48, filename):
     axes[1].set_xticks(x, CASES)
     axes[1].set_title("L-BFGS-B iterations")
     axes[1].grid(axis="y", alpha=0.25)
-    figure.savefig(os.path.join(FIGURES_DIR, filename), dpi=180)
+    figure.savefig(os.path.join(figures_dir, filename), dpi=180)
     plt.close(figure)
 
 
-def main():
-    validation_96 = read_csv("surface_validation_96_combined.csv")
-    comparison_48 = read_csv("comparison_metrics_combined.csv")
-    resolution_convergence = read_csv("sheet_resolution_convergence_combined.csv")
+def main(data_dir=DATA_DIR, figures_dir=FIGURES_DIR, suffix="", resconv_caveat=""):
+    validation_96 = read_csv(data_dir, "surface_validation_96_combined.csv")
+    comparison_48 = read_csv(data_dir, "comparison_metrics_combined.csv")
+    resolution_convergence = read_csv(data_dir, "sheet_resolution_convergence_combined.csv")
 
-    bar_plot(validation_96, "fourier_comparison_validation_96.png",
+    bar_plot(validation_96, figures_dir, f"fourier_comparison_validation_96{suffix}.png",
             "Resolved 96x96 REGCOIL validation: Fourier vs. dipole entropy vs. established baselines")
     resolution_convergence_plot(
-        resolution_convergence, "fourier_comparison_resolution_convergence.png")
-    cost_plot(comparison_48, "fourier_comparison_optimization_cost.png")
-    print(f"Saved figures to {FIGURES_DIR}")
+        resolution_convergence, figures_dir,
+        f"fourier_comparison_resolution_convergence{suffix}.png", resconv_caveat)
+    cost_plot(comparison_48, figures_dir, f"fourier_comparison_optimization_cost{suffix}.png")
+    print(f"Saved figures to {figures_dir} (suffix={suffix!r})")
 
 
 if __name__ == "__main__":
-    main()
+    main(resconv_caveat=(" (W7-X normal offset missing @64 -- see README: watchdog "
+                        "aborted at the edge of available memory, consistent across "
+                        "repeated retries)"))
