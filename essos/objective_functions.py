@@ -244,6 +244,15 @@ def loss_mean_cross_sectional_area(surface, target_area):
 
     return jnp.square(relative_area_change)
 
+@jit
+def loss_surface_normal_displacement(surface, surface_gamma_reference, unitnormal_reference, length_scale):
+    # Compute the displacement of the surface points from the reference surface along the reference normal direction,
+    #  normalized by the length scale.
+    rr_xyz = surface.gamma - surface_gamma_reference
+    rr_dot_unitnormal = jnp.sum( rr_xyz * unitnormal_reference , axis=2 )
+    rr_dot_unitnormal_normalized = rr_dot_unitnormal / length_scale
+
+    return jnp.mean(jnp.square(rr_dot_unitnormal_normalized))
 
 ###########################  B ON SURAFACE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
 def copy_coils_from_field(field):

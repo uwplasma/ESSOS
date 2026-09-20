@@ -9,9 +9,9 @@ from essos.fields import BiotSavart
 from essos.surfaces import SurfaceRZFourier, BdotN_over_B
 from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_from_field,
-                                        loss_coil_length_max, loss_mean_cross_sectional_area, 
-                                        loss_quasi_symmetry, quasi_symmetry_residual_on_surface )
-
+                                        loss_coil_length_max, loss_mean_cross_sectional_area,
+                                        loss_quasi_symmetry, loss_surface_normal_displacement,
+                                        quasi_symmetry_residual_on_surface )
 
 
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
@@ -50,17 +50,18 @@ LENGTH_WEIGHT = 10.; LENGTH_TARGET = 32.;
 CURVATURE_WEIGHT = 100.; CURVATURE_TARGET = 0.1
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e4
+NORMAL_DISPLACEMENT_WEIGHT = 1e4      # Importance of this constraint in the total loss
 
 # ====================================================================================
 # ====================================================================================
-""" Creating starting coils and surface """
+""" Initializing coils, field and surface """
 # ====================================================================================
 # ====================================================================================
 
 N_COILS = 3; FOURIER_ORDER = 3; LARGE_R = 10; SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 45; STELLSYM = True  # Curve parameters
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
-# Initialize the coils and the field
+# Initialize the coils and their corresponding field
 init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
 init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
 field_init = BiotSavart(init_coils)
@@ -68,11 +69,14 @@ field_init = BiotSavart(init_coils)
 # Initialize the surface from a VMEC output file.
 surface_init = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=ntheta, nphi=nphi, range_torus='half period')
 
-# Build and cache surface geometry before JAX starts the optimization.
-surface_init.gamma.block_until_ready()
-surface_init.unitnormal.block_until_ready()
+# Initialize reference values for the surface geometry. These will be used to compute the surface normal displacement loss. 
+# Compute and cache the initial surface coordinates and unit normals before JAX traces the optimization.
+# Wait for both calculations to finish and store them as fixed reference arrays for the displacement loss.
+surface_gamma_reference = surface_init.gamma.block_until_ready()
+unitnormal_reference = surface_init.unitnormal.block_until_ready()
 
-CROSS_SECTIONAL_AREA_TARGET = float( surface_init.area_section_by_phi() )
+CROSS_SECTIONAL_AREA_TARGET = float(surface_init.area_section_by_phi())
+LENGTH_SCALE_SURFACE = float(jnp.sqrt(CROSS_SECTIONAL_AREA_TARGET / jnp.pi))
 
 # ====================================================================================
 # ====================================================================================
@@ -86,6 +90,10 @@ L_curvature = custom_loss( loss_coil_curvature_from_field , "field" , max_coil_c
 L_quasi_symmetry = custom_loss(loss_quasi_symmetry, "field", "surface")
 L_cross_sectional_area = custom_loss( loss_mean_cross_sectional_area, "surface", target_area=CROSS_SECTIONAL_AREA_TARGET )
 
+L_surface_normal_displacement = custom_loss( loss_surface_normal_displacement , "surface" ,
+                                            surface_gamma_reference=surface_gamma_reference , unitnormal_reference=unitnormal_reference,
+                                            length_scale=LENGTH_SCALE_SURFACE )
+
 
 # ====================================================================================
 # ====================================================================================
@@ -98,6 +106,7 @@ L_total = ( NORMAL_FIELD_WEIGHT*L_normal_field +
            LENGTH_WEIGHT*L_length_max + 
            CURVATURE_WEIGHT*L_curvature + 
            CROSS_SECTIONAL_AREA_WEIGHT*L_cross_sectional_area +
+           NORMAL_DISPLACEMENT_WEIGHT*L_surface_normal_displacement +
            QS_WEIGHT*L_quasi_symmetry )
 
 # The dependencies of the total loss are set to the field and surface. Both will be mdified during the optimization.
