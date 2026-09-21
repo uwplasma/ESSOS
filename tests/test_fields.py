@@ -104,3 +104,119 @@ def test_combined_field_requires_at_least_one_field():
     with pytest.raises(ValueError):
         CombinedField()
 
+
+def _circular_loop(radius=1.3, current=2.5e5, n_segments=64):
+    """One counterclockwise circular filament in the xy plane."""
+    dofs = jnp.zeros((1, 3, 3))
+    dofs = dofs.at[0, 0, 2].set(radius)  # x = R cos(theta)
+    dofs = dofs.at[0, 1, 1].set(radius)  # y = R sin(theta)
+    return Coils(
+        Curves(dofs, n_segments=n_segments, nfp=1, stellsym=False),
+        jnp.array([current]),
+    )
+
+
+def _axis_field_derivatives(radius, current, z):
+    """Bz and its first three z derivatives for an ideal circular loop."""
+    # mu_0 / 2 in SI units; this is independent of ESSOS's quadrature kernel.
+    coefficient = 2.0 * jnp.pi * 1.0e-7 * current * radius**2
+    q = radius**2 + z**2
+    field = coefficient * q**(-1.5)
+    first = -3.0 * coefficient * z * q**(-2.5)
+    second = -3.0 * coefficient * (radius**2 - 4.0 * z**2) * q**(-3.5)
+    third = 15.0 * coefficient * z * (3.0 * radius**2 - 4.0 * z**2) * q**(-4.5)
+    return field, first, second, third
+
+
+def _axis_cartesian_tensors(radius, current, z):
+    """Full Cartesian B derivative tensors through third order on the axis.
+
+    The entries follow from the source-free axisymmetric expansion
+
+      Bz = F - (x**2 + y**2) F'' / 4 + ...
+      (Bx, By) = -(x, y) F' / 2
+                 + (x, y) (x**2 + y**2) F''' / 16 + ... .
+    """
+    field, first, second, third = _axis_field_derivatives(radius, current, z)
+    tensors = [jnp.array([0.0, 0.0, field])]
+
+    d1 = jnp.zeros((3, 3))
+    d1 = d1.at[0, 0].set(-first / 2).at[1, 1].set(-first / 2)
+    d1 = d1.at[2, 2].set(first)
+    tensors.append(d1)
+
+    d2 = jnp.zeros((3, 3, 3))
+    for output, radial in ((0, 0), (1, 1)):
+        d2 = d2.at[output, radial, 2].set(-second / 2)
+        d2 = d2.at[output, 2, radial].set(-second / 2)
+    d2 = d2.at[2, 0, 0].set(-second / 2)
+    d2 = d2.at[2, 1, 1].set(-second / 2)
+    d2 = d2.at[2, 2, 2].set(second)
+    tensors.append(d2)
+
+    d3 = jnp.zeros((3, 3, 3, 3))
+    for output, radial, transverse in ((0, 0, 1), (1, 1, 0)):
+        for indices in ((radial, 2, 2), (2, radial, 2), (2, 2, radial)):
+            d3 = d3.at[(output,) + indices].set(-third / 2)
+        d3 = d3.at[output, radial, radial, radial].set(3 * third / 8)
+        for indices in ((radial, transverse, transverse),
+                        (transverse, radial, transverse),
+                        (transverse, transverse, radial)):
+            d3 = d3.at[(output,) + indices].set(third / 8)
+    d3 = d3.at[2, 2, 2, 2].set(third)
+    for radial in (0, 1):
+        for indices in ((radial, radial, 2), (radial, 2, radial),
+                        (2, radial, radial)):
+            d3 = d3.at[(2,) + indices].set(-third / 2)
+    tensors.append(d3)
+    return tensors
+
+
+def test_biot_savart_circular_loop_axis_derivative_tensors():
+    radius, current, z = 1.3, 2.5e5, 0.4
+    field = BiotSavart(_circular_loop(radius, current))
+    point = jnp.array([0.0, 0.0, z])
+
+    actual = [field.B(point)]
+    derivative = field.B
+    for _ in range(3):
+        derivative = jax.jacfwd(derivative)
+        actual.append(derivative(point))
+
+    expected = _axis_cartesian_tensors(radius, current, z)
+    for order, (result, reference) in enumerate(zip(actual, expected)):
+        assert result.shape == (3,) * (order + 1)
+        atol = 2e-12 * jnp.max(jnp.abs(reference))
+        assert jnp.allclose(result, reference, rtol=2e-11, atol=atol), order
+
+
+def test_biot_savart_circular_loop_current_and_radius_sensitivities():
+    radius, current, z = 1.3, 2.5e5, 0.4
+    coils = _circular_loop(radius, current)
+    point = jnp.array([0.0, 0.0, z])
+
+    def field_from_dofs(dofs):
+        return BiotSavart(coils.with_dofs(dofs)).B(point)
+
+    # The public current DOF is normalized; this tangent represents +1 ampere.
+    current_index = coils.dof_names.index("coil[0].current")
+    current_direction = jnp.zeros_like(coils.dofs).at[current_index].set(
+        1.0 / coils.currents_scale)
+    radius_direction = jnp.zeros_like(coils.dofs)
+    for name in ("coil[0].xc(1)", "coil[0].ys(1)"):
+        radius_direction = radius_direction.at[coils.dof_names.index(name)].set(1.0)
+    _, current_tangent = jax.jvp(field_from_dofs, (coils.dofs,), (current_direction,))
+    _, radius_tangent = jax.jvp(field_from_dofs, (coils.dofs,), (radius_direction,))
+
+    axis_field = _axis_field_derivatives(radius, current, z)[0]
+    expected_current = jnp.array([0.0, 0.0, axis_field / current])
+    q = radius**2 + z**2
+    expected_radius_z = (2.0 * jnp.pi * 1.0e-7 * current * radius
+                         * (2.0 * z**2 - radius**2) * q**(-2.5))
+    expected_radius = jnp.array([0.0, 0.0, expected_radius_z])
+    current_atol = 2e-12 * jnp.max(jnp.abs(expected_current))
+    radius_atol = 2e-12 * jnp.max(jnp.abs(expected_radius))
+    assert jnp.allclose(
+        current_tangent, expected_current, rtol=2e-11, atol=current_atol)
+    assert jnp.allclose(
+        radius_tangent, expected_radius, rtol=2e-11, atol=radius_atol)
