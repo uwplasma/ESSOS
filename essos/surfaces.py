@@ -744,6 +744,29 @@ class SurfaceRZFourier:
         return jnp.mean(area_by_phi)
 
 
+    def curvature_section_by_phi(self):
+        """
+        Calculate the curvature of every poloidal cross section.
+        Returns an array with shape (nphi, ntheta).
+        """
+        # \(\text{angles}_{i,j,k} = m_i\theta_{j,k}-n_i\phi_{j,k},\)
+        # shape: (n_modes, nphi, ntheta)
+        sin_angles = jnp.sin(self.angles)
+        cos_angles = jnp.cos(self.angles)
+
+        # Derivatives of R and Z with respect to theta, using the Fourier representation.
+        dR_dtheta = -jnp.einsum( "i,ijk->jk" , self.xm * self.rc , sin_angles )
+        dZ_dtheta = jnp.einsum( "i,ijk->jk" , self.xm * self.zs , cos_angles )
+
+        d2R_dtheta2 = -jnp.einsum( "i,ijk->jk" , self.xm**2 * self.rc , cos_angles )
+        d2Z_dtheta2 = -jnp.einsum( "i,ijk->jk" , self.xm**2 * self.zs , sin_angles )
+
+        # Curvature formula for a parametric curve in 2D: \(\kappa = \frac{|x'y'' - y'x''|}{(x'^2 + y'^2)^{3/2}}\)
+        curvature_numerator = jnp.abs( dR_dtheta * d2Z_dtheta2 - dZ_dtheta * d2R_dtheta2 )
+        curvature_denominator = ( dR_dtheta**2 + dZ_dtheta**2 + 1e-14 ) ** 1.5
+
+        return curvature_numerator / curvature_denominator
+
     def _tree_flatten(self):
         if hasattr(self._rc, "shape") and hasattr(self._zs, "shape"):
             children = (self.rc * self.scaling, self.zs * self.scaling)  # arrays / dynamic values

@@ -10,7 +10,9 @@ from essos.surfaces import SurfaceRZFourier, BdotN_over_B
 from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_from_field,
                                         loss_coil_length_max, loss_mean_cross_sectional_area,
-                                        loss_quasi_symmetry, loss_surface_normal_displacement,
+                                        loss_quasi_symmetry, loss_surface_curvature_section,
+                                        loss_surface_normal_displacement,
+                                        loss_surface_poloidal_derivative,
                                         quasi_symmetry_residual_on_surface )
 
 
@@ -42,15 +44,24 @@ SCALE_FIELD = 1.0
 SCALE_SURFACE = 1.0
 
 # Losses weights and targets  → control what results the optimizer considers important
+
 # Field ~~~~~~~~~~~~~~~~~~~~
 NORMAL_FIELD_WEIGHT = Npoints;
 QS_WEIGHT = 1.
+
 # Coils ~~~~~~~~~~~~~~~~~~~~
 LENGTH_WEIGHT = 10.; LENGTH_TARGET = 32.;
 CURVATURE_WEIGHT = 100.; CURVATURE_TARGET = 0.1
+
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e4
 NORMAL_DISPLACEMENT_WEIGHT = 1e4      # Importance of this constraint in the total loss
+
+# Surface-parametrization control: prevent qq = ||dc_phi/dtheta|| from approaching zero.
+QQ_WEIGHT = 1e5; ALPHA_QQ = 1.
+
+# Cross-sectional curvature control: limit kappa relative to the initial maximum.
+KAPPA_WEIGHT = 1e5; ALPHA_KAPPA = 1.
 
 # ====================================================================================
 # ====================================================================================
@@ -74,9 +85,13 @@ surface_init = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=ntheta, n
 # Wait for both calculations to finish and store them as fixed reference arrays for the displacement loss.
 surface_gamma_reference = surface_init.gamma.block_until_ready()
 unitnormal_reference = surface_init.unitnormal.block_until_ready()
+qq_reference = float( jnp.min(jnp.linalg.norm(surface_init.gammadash_theta, axis=2)) ) # Initial minimum = qq = ||∂c_phi/∂theta||
+kappa_reference = float(jnp.max(surface_init.curvature_section_by_phi()))
+
 
 CROSS_SECTIONAL_AREA_TARGET = float(surface_init.area_section_by_phi())
 LENGTH_SCALE_SURFACE = float(jnp.sqrt(CROSS_SECTIONAL_AREA_TARGET / jnp.pi))
+kappa_max = ALPHA_KAPPA * kappa_reference
 
 # ====================================================================================
 # ====================================================================================
@@ -94,6 +109,9 @@ L_surface_normal_displacement = custom_loss( loss_surface_normal_displacement , 
                                             surface_gamma_reference=surface_gamma_reference , unitnormal_reference=unitnormal_reference,
                                             length_scale=LENGTH_SCALE_SURFACE )
 
+L_surface_poloidal_derivative = custom_loss( loss_surface_poloidal_derivative, "surface", qq_reference=qq_reference, alpha_qq=ALPHA_QQ )
+L_surface_curvature_section = custom_loss( loss_surface_curvature_section , "surface" , kappa_max=kappa_max )
+
 
 # ====================================================================================
 # ====================================================================================
@@ -107,6 +125,8 @@ L_total = ( NORMAL_FIELD_WEIGHT*L_normal_field +
            CURVATURE_WEIGHT*L_curvature + 
            CROSS_SECTIONAL_AREA_WEIGHT*L_cross_sectional_area +
            NORMAL_DISPLACEMENT_WEIGHT*L_surface_normal_displacement +
+           QQ_WEIGHT*L_surface_poloidal_derivative +
+           KAPPA_WEIGHT*L_surface_curvature_section +
            QS_WEIGHT*L_quasi_symmetry )
 
 # The dependencies of the total loss are set to the field and surface. Both will be mdified during the optimization.
@@ -259,6 +279,56 @@ print("Relative area change (%):", 100 * relative_cross_sectional_area_change)
 print("Area loss:", loss_mean_cross_sectional_area( surface_opt , target_area=CROSS_SECTIONAL_AREA_TARGET ) )
 print("Weighted area loss:", CROSS_SECTIONAL_AREA_WEIGHT * loss_mean_cross_sectional_area( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
 
+print("\n---------------------------------------------------------------------------")
+print("\nCross-sectional curvature:")
+curvature_section_init = surface_init.curvature_section_by_phi()
+curvature_section_opt = surface_opt.curvature_section_by_phi()
+
+loss_kappa_init = loss_surface_curvature_section(surface_init, kappa_max=kappa_max)
+loss_kappa_opt = loss_surface_curvature_section(surface_opt, kappa_max=kappa_max)
+
+print("Reference maximum curvature:", kappa_reference)
+print("Allowed maximum curvature:", kappa_max)
+print("Cross-sectional curvature loss (initial):", loss_kappa_init)
+print("Cross-sectional curvature loss (optimized):", loss_kappa_opt)
+print("Weighted cross-sectional curvature loss (optimized):", KAPPA_WEIGHT * loss_kappa_opt)
+
+
+
+print("Curvature array shape:", curvature_section_init.shape)
+print("Mean curvature (initial):", jnp.mean(curvature_section_init))
+print("Mean curvature (optimized):", jnp.mean(curvature_section_opt))
+print("Maximum curvature (initial):", jnp.max(curvature_section_init))
+print("Maximum curvature (optimized):", jnp.max(curvature_section_opt))
+
+print("95th percentile (initial):", jnp.percentile(curvature_section_init, 95))
+print("95th percentile (optimized):", jnp.percentile(curvature_section_opt, 95))
+print("99th percentile (initial):", jnp.percentile(curvature_section_init, 99))
+print("99th percentile (optimized):", jnp.percentile(curvature_section_opt, 99))
+
+index_curvature_max_opt = jnp.unravel_index(jnp.argmax(curvature_section_opt), curvature_section_opt.shape)
+index_phi_max_opt = int(index_curvature_max_opt[0])
+index_theta_max_opt = int(index_curvature_max_opt[1])
+
+print("Index of optimized maximum (phi, theta):", index_phi_max_opt, index_theta_max_opt)
+print("Phi at optimized maximum:", surface_opt.phi2d[index_phi_max_opt, index_theta_max_opt])
+print("Theta at optimized maximum:", surface_opt.theta2d[index_phi_max_opt, index_theta_max_opt])
+
+qq_init = jnp.linalg.norm(surface_init.gammadash_theta, axis=2)
+qq_opt = jnp.linalg.norm(surface_opt.gammadash_theta, axis=2)
+qq_minimum_allowed = ALPHA_QQ * qq_reference
+
+loss_qq_init = loss_surface_poloidal_derivative(surface_init, qq_reference=qq_reference, alpha_qq=ALPHA_QQ)
+loss_qq_opt = loss_surface_poloidal_derivative(surface_opt, qq_reference=qq_reference, alpha_qq=ALPHA_QQ)
+
+print("Reference minimum ||dc_phi/dtheta||:", qq_reference)
+print("Allowed minimum ||dc_phi/dtheta||:", qq_minimum_allowed)
+print("Minimum ||dc_phi/dtheta|| (initial):", jnp.min(qq_init))
+print("Minimum ||dc_phi/dtheta|| (optimized):", jnp.min(qq_opt))
+print("||dc_phi/dtheta|| at maximum optimized curvature:", qq_opt[index_phi_max_opt, index_theta_max_opt])
+print("Poloidal-derivative loss (initial):", loss_qq_init)
+print("Poloidal-derivative loss (optimized):", loss_qq_opt)
+print("Weighted poloidal-derivative loss (optimized):", QQ_WEIGHT * loss_qq_opt)
 
 # ====================================================================================
 # ====================================================================================

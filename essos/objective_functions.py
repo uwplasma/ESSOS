@@ -254,6 +254,26 @@ def loss_surface_normal_displacement(surface, surface_gamma_reference, unitnorma
 
     return jnp.mean(jnp.square(rr_dot_unitnormal_normalized))
 
+def loss_surface_poloidal_derivative( surface , qq_reference , alpha_qq ):
+    # Compute the norm of the poloidal derivative of the surface (qq)
+    # and penalize if it is below a certain fraction of a reference value (alpha_qq * qq_reference).
+    # \(q_{\mathrm{ref}} = \min_{\phi,\theta} \left\| \frac{\partial\mathbf{c}_{\phi,\mathrm{init}}}{\partial\theta} \right\|.\)
+
+    # Compute the norm of the poloidal derivative of the surface.
+    qq = jnp.linalg.norm( surface.gammadash_theta , axis=2 )
+
+    qq_minimum_allowed = alpha_qq * qq_reference
+    qq_relative_deficit = jnp.maximum( qq_minimum_allowed - qq , 0.0 ) / qq_minimum_allowed
+
+    return jnp.mean(jnp.square(qq_relative_deficit))
+
+def loss_surface_curvature_section(surface, kappa_max):
+    # Compute the curvature of the surface along a poloidal section (kappa_section)
+    # and penalize if it exceeds a maximum value (kappa_max).
+    kappa_section = surface.curvature_section_by_phi()
+    kappa_relative_excess = jnp.maximum( kappa_section - kappa_max, 0.0 ) / kappa_max
+    return jnp.mean(jnp.square(kappa_relative_excess))
+
 ###########################  B ON SURAFACE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
 def copy_coils_from_field(field):
     return field.coils.copy()
