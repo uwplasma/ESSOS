@@ -343,7 +343,7 @@ def plot_optimization(history, matches, path, title):
             ax.legend(loc="upper right")
         ax.set(xlabel="function evaluation", ylabel=r"cost  $\frac{1}{2}\sum r^2$", title="Optimization history")
         ax.grid(True, which="both", alpha=0.6)
-        labels = [r"$|\Delta\mathbf{B}|$ [T]", r"$|\Delta\nabla\mathbf{B}|$ [T/m]", r"$|\Delta\nabla\nabla\mathbf{B}|$ [T/m$^2$]"]
+        labels = ["field\n[T]", "gradient\n[T/m]", "Hessian\n[T/m$^2$]"]
         keys = [("field_rms_T", "plasma_field_rms_T"), ("gradient_rms_T_per_m", "plasma_gradient_rms_T_per_m"),
                 ("hessian_rms_T_per_m2", "plasma_hessian_rms_T_per_m2")]
         position = np.arange(3)
@@ -450,7 +450,7 @@ def plot_cross_sections(states, equilibria, radius, levels, path, title, fractio
                 ax.plot(float(solution.R0[k]), float(solution.Z0[k]), "+", color=COLORS["near"], ms=8, mew=1.6)
                 ax.set_aspect("equal", adjustable="datalim")
                 ax.grid(True, alpha=0.6)
-                ax.set_title(rf"{name}:  $\phi$ = {fraction:g} period")
+                ax.set_title(rf"$\phi$ = {fraction:g} period" if len(states) == 1 else rf"{name}:  $\phi$ = {fraction:g} period")
                 ax.set_xlabel("R [m]")
                 if column == 0:
                     ax.set_ylabel("Z [m]")
