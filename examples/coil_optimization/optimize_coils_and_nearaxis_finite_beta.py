@@ -110,7 +110,9 @@ if not SHOW_PLOTS:
 """ Near-axis equilibrium, initial coils and degrees of freedom """
 def make_near_axis(rc, zs, etabar, nphi=NPHI):
     # B0, p2, I2 and B2c are fixed inputs, so the optimizer cannot lower the pressure.
-    return near_axis(rc=jnp.asarray(rc), zs=jnp.asarray(zs), etabar=etabar, nfp=NFP, nphi=nphi, order="r2",
+    # Third order adds no field-jet terms, so the coil targets are unchanged, but it relabels
+    # the radius so that each surface encloses exactly the flux pi r^2 B0 through O(r^2).
+    return near_axis(rc=jnp.asarray(rc), zs=jnp.asarray(zs), etabar=etabar, nfp=NFP, nphi=nphi, order="r3",
                      B0=B0, I2=case["I2"], p2=case["p2"], B2c=case["B2c"])
 
 near_axis_initial = make_near_axis(RC, ZS, case["etabar"])
@@ -259,7 +261,7 @@ if RUN_VMEX:
     # VMEC labels the poloidal angle with the opposite handedness, so its iota has the opposite
     # sign. The surfaces below coincide, so this is a labeling convention, not a different plasma.
     print(f"{'plasma':8s} {'coils':10s} {'field':7s} {'iters':>6s} {'|iota| axis':>12s} {'(near-axis)':>12s} "
-          f"{'axis shift/a':>13s} {'LCFS dist/a':>12s} {'beta':>9s}")
+          f"{'axis shift/a':>13s} {'LCFS shape/a':>13s} {'beta':>9s}")
     for kind, cases in summary["vmex"].items():
         for name, reports in cases.items():
             for route in VMEX_ROUTES:
@@ -270,7 +272,7 @@ if RUN_VMEX:
                 near = report["near_axis"]
                 print(f"{kind:8s} {name:10s} {route:7s} {report['iterations']:6d} {abs(report['iota_axis']):12.5f} "
                       f"{abs(report['iota_near_axis']):12.5f} {near['axis_shift_over_a']:13.3e} "
-                      f"{near['surfaces'][-1]['rms_over_flux_radius']:12.3e} {report['betatotal']:9.2e}")
+                      f"{near['surfaces'][-1]['shape_rms_over_flux_radius']:13.3e} {report['betatotal']:9.2e}")
 
 """ Field-line tracing: without plasma the coil field is the total field, so its Poincare section is exact """
 poincare = None

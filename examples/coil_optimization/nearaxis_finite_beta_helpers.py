@@ -195,20 +195,30 @@ def flux_indices(wout, levels):
 
 
 def compare_to_near_axis(wout, solution, radius, levels, ntheta=256):
-    """Distance between VMEX and near-axis surfaces of equal toroidal flux, on every axis plane."""
+    """Distance between VMEX and near-axis surfaces of equal toroidal flux, on every axis plane.
+
+    Two errors are reported separately because they have different causes. The axis offset
+    is where the coils put the magnetic axis. The shape error measures each near-axis surface
+    after moving it onto VMEX's own axis, so it tests the expansion itself. Left combined, a
+    small rigid offset dominates the inner surfaces, whose flux radius is small.
+    """
     phi, theta = np.asarray(solution.phi), np.arange(ntheta) * 2 * np.pi / ntheta
+    RA, ZA = surface_rz(wout, s_index=0, theta=np.zeros(1), phi=phi)
+    dR, dZ = RA[0] - np.asarray(solution.R0), ZA[0] - np.asarray(solution.Z0)
     rows = []
     for index, s in flux_indices(wout, levels):
         r = radius * np.sqrt(s)
         near = flux_surface(solution, r, ntheta)
         RV, ZV = surface_rz(wout, s_index=index, theta=theta, phi=phi)
-        pairs = [contour_distance(np.stack((near["R"][:, k], near["Z"][:, k]), -1),
-                                  np.stack((RV[:, k], ZV[:, k]), -1)) for k in range(phi.size)]
-        rows.append(dict(s=s, flux_radius_m=float(r), rms_m=float(np.sqrt(np.mean([p[0]**2 for p in pairs]))),
-                         max_m=float(max(p[1] for p in pairs))))
-        rows[-1]["rms_over_flux_radius"] = rows[-1]["rms_m"] / r
-    RA, ZA = surface_rz(wout, s_index=0, theta=np.zeros(1), phi=phi)
-    shift = np.hypot(RA[0] - np.asarray(solution.R0), ZA[0] - np.asarray(solution.Z0))
+        vmex = [np.stack((RV[:, k], ZV[:, k]), -1) for k in range(phi.size)]
+        raw = [contour_distance(np.stack((near["R"][:, k], near["Z"][:, k]), -1), vmex[k]) for k in range(phi.size)]
+        moved = [contour_distance(np.stack((near["R"][:, k] + dR[k], near["Z"][:, k] + dZ[k]), -1), vmex[k])[0]
+                 for k in range(phi.size)]
+        rms = float(np.sqrt(np.mean([p[0]**2 for p in raw])))
+        rows.append(dict(s=s, flux_radius_m=float(r), rms_m=rms, max_m=float(max(p[1] for p in raw)),
+                         rms_over_flux_radius=rms / r,
+                         shape_rms_over_flux_radius=float(np.sqrt(np.mean(np.square(moved)))) / r))
+    shift = np.hypot(dR, dZ)
     return dict(surfaces=rows, axis_shift_rms_m=float(np.sqrt(np.mean(shift**2))),
                 axis_shift_max_m=float(shift.max()), axis_shift_over_a=float(shift.max() / radius))
 
@@ -497,16 +507,25 @@ def plot_benchmark_summary(summary, path, title):
         shades = plt.get_cmap("Blues")(np.linspace(0.35, 0.95, max(len(r[1]["surfaces"]) for r in rows)))
         width = 0.8 / len(shades)
         for j, shade in enumerate(shades):
-            values = [r[1]["surfaces"][j]["rms_over_flux_radius"] if j < len(r[1]["surfaces"]) else np.nan for r in rows]
+            values = [r[1]["surfaces"][j]["shape_rms_over_flux_radius"] if j < len(r[1]["surfaces"]) else np.nan
+                      for r in rows]
             ax.bar(np.arange(len(rows)) + (j - (len(shades) - 1) / 2) * width, values, width, color=shade,
                    label=f"s = {rows[0][1]['surfaces'][j]['s']:.3g}")
         ax.set_yscale("log")
         ax.set_xticks(np.arange(len(rows)), [r[0] for r in rows], fontsize=8)
-        ax.set(ylabel=r"RMS surface distance / flux radius $a\sqrt{s}$", title="VMEX free boundary vs near-axis surfaces")
+        ax.set(ylabel=r"RMS shape error / flux radius $a\sqrt{s}$",
+               title="Surface shape, with each surface placed on VMEX's axis")
         ax.grid(True, axis="y", which="both", alpha=0.6)
-        ax.legend(ncols=2)
-        bx.bar(np.arange(len(rows)), [r[1]["axis_shift_over_a"] for r in rows], 0.6, color=COLORS["direct"])
-        bx.set_yscale("log")
+        low, high = ax.get_ylim()
+        ax.set_ylim(low, high * 2.2)  # Headroom on the log axis so the legend clears every bar.
+        ax.legend(ncols=4, loc="upper center", handlelength=1.2, columnspacing=1.0)
+        shifts = [r[1]["axis_shift_over_a"] for r in rows]
+        bx.bar(np.arange(len(rows)), shifts, 0.6, color=COLORS["direct"])
+        # One magnitude, so a linear axis from zero; a log axis fitted to near-equal bars exaggerates them.
+        bx.set_ylim(0, 1.25 * max(shifts))
+        for x, value in enumerate(shifts):
+            bx.annotate(f"{100 * value:.2f} %", (x, value), ha="center", va="bottom", xytext=(0, 3),
+                        textcoords="offset points", fontsize=8)
         bx.set_xticks(np.arange(len(rows)), [r[0] for r in rows], fontsize=8)
         bx.set(ylabel="max axis displacement / a", title="Magnetic-axis agreement")
         bx.grid(True, axis="y", which="both", alpha=0.6)
