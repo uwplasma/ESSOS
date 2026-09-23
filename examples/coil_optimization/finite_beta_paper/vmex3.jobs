@@ -1,0 +1,7 @@
+vacuum	'OPTIMIZE = False' 'CASE = "qa_vacuum"' 'VMEX_ROUTES = ("direct",)' 'TRACE_FIELD_LINES = False'
+axisym	'OPTIMIZE = False' 'CASE = "axisymmetric"' 'VMEX_ROUTES = ("direct",)'
+nohess	'OPTIMIZE = False' 'HESSIAN_WEIGHT = 0.0' 'VMEX_ROUTES = ("direct",)'
+vacuum_trace	'OPTIMIZE = False' 'CASE = "qa_vacuum"' 'RUN_VMEX = False'
+vacuum_mgrid	'OPTIMIZE = False' 'CASE = "qa_vacuum"' 'VMEX_ROUTES = ("mgrid",)' 'TRACE_FIELD_LINES = False'
+axisym_mgrid	'OPTIMIZE = False' 'CASE = "axisymmetric"' 'VMEX_ROUTES = ("mgrid",)'
+nohess_mgrid	'OPTIMIZE = False' 'HESSIAN_WEIGHT = 0.0' 'VMEX_ROUTES = ("mgrid",)'
