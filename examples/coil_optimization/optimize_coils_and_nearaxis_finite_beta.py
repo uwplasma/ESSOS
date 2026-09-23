@@ -265,21 +265,22 @@ for name, state in states.items():
     near, solution, match, targets = state["near"], state["solution"], state["match"], state["targets"]
     print(f"{name.capitalize()}: iota = {float(near.iota):.5f}, etabar = {float(near.etabar):.4f}, "
           f"max elongation = {float(jnp.max(near.elongation)):.3f}, r_singularity = {float(solution.r_singularity):.4f} m")
-    print(f"   plasma field on axis       : RMS {match['plasma_field_rms_T']:.3e} T   "
-          f"gradient RMS {match['plasma_gradient_rms_T_per_m']:.3e} T/m")
-    print(f"   coils - target on the axis : RMS {match['field_rms_T']:.3e} T   "
-          f"gradient RMS {match['gradient_rms_T_per_m']:.3e} T/m")
-    print(f"   Hessian: coils - target RMS {match['hessian_rms_T_per_m2']:.3e} T/m^2 of {match['target_hessian_rms_T_per_m2']:.3e} "
-          f"(plasma part {match['plasma_hessian_rms_T_per_m2']:.3e})")
+    # Relative to the objective's scales: field / B0, gradient R0 / B0, Hessian R0^2 / B0.
+    print(f"   plasma field on axis       : RMS {match['plasma_field_rms_over_B0']:.3e} B0   "
+          f"gradient RMS {match['plasma_gradient_rms_R0_over_B0']:.3e} B0/R0")
+    print(f"   coils - target on the axis : RMS {match['field_rms_over_B0']:.3e} B0   "
+          f"gradient RMS {match['gradient_rms_R0_over_B0']:.3e} B0/R0")
+    print(f"   Hessian: coils - target RMS {match['hessian_rms_R0sq_over_B0']:.3e} B0/R0^2 of "
+          f"{match['target_hessian_rms_R0sq_over_B0']:.3e} (plasma part {match['plasma_hessian_rms_R0sq_over_B0']:.3e})")
     print(f"   B.n/|B| on the a = {PLASMA_RADIUS} m boundary: max {100 * state['normal']['normal_error_max']:.3f} %, "
           f"RMS {100 * state['normal']['normal_error_rms']:.3f} %  ({'below' if state['normal']['normal_error_max'] < 0.01 else 'ABOVE'} the 1 % target)")
-    print(f"   target is a vacuum field   : gradient asymmetry {targets['gradient_asymmetry']:.1e} T/m, "
-          f"Hessian asymmetry {targets['hessian_asymmetry']:.1e} T/m^2")
+    print(f"   target is a vacuum field   : gradient asymmetry {targets['gradient_asymmetry'] * match['R0_m'] / B0:.1e} B0/R0, "
+          f"Hessian asymmetry {targets['hessian_asymmetry'] * match['R0_m']**2 / B0:.1e} B0/R0^2")
     print(f"   coil length max {float(jnp.max(state['field'].coils.length)):.3f} m, "
           f"coil curvature max {float(jnp.max(state['field'].coils.curvature)):.3f} 1/m")
 match = states["optimized"]["match"]
-print(f"The plasma field is {match['plasma_field_rms_T'] / match['field_rms_T']:.2f} times the remaining coil mismatch "
-      f"on the axis, the plasma gradient {match['plasma_gradient_rms_T_per_m'] / match['gradient_rms_T_per_m']:.2f} times.")
+print(f"The plasma field is {match['plasma_field_rms_over_B0'] / match['field_rms_over_B0']:.2f} times the remaining coil "
+      f"mismatch on the axis, the plasma gradient {match['plasma_gradient_rms_R0_over_B0'] / match['gradient_rms_R0_over_B0']:.2f} times.")
 summary = dict(case=CASE, inputs=dict(case, B0=B0, a=PLASMA_RADIUS), config=CONFIG, config_hash=CONFIG_HASH,
                optimization=optimization, vmex_settings=dict(VMEX, mgrid_shape=MGRID_SHAPE, mgrid_margin=MGRID_MARGIN),
                cost_history=cost_history,
