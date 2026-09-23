@@ -22,7 +22,8 @@ import numpy as np
 import vmex as vj
 from jax import jacfwd, jit, vmap
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
+from matplotlib.colors import LogNorm
+from matplotlib.ticker import FuncFormatter
 from vmex.core.freeboundary import _external_field_from_input
 from vmex.core.mgrid import read_mgrid, tabulate_cartesian_field, write_mgrid
 from vmex.core.plotting import surface_rz
@@ -82,18 +83,30 @@ def evaluate_field(field, xyz, chunk=512):
 
 
 def axis_match(solution, targets, field):
-    """Arclength-weighted RMS mismatch between the coils and the external-field target."""
+    """Arclength-weighted RMS mismatch between the coils and the external-field target.
+
+    Every quantity is returned in SI units and, under ``*_over_B0`` keys, in the objective's
+    normalization: field / B0, gradient R0 / B0 and Hessian R0^2 / B0, with B0 the on-axis
+    field and R0 the axis major radius at phi = 0.
+    """
     weights, points = axis_weights(solution), jnp.asarray(targets["points"])
     dB = evaluate_field(field, targets["points"]) - targets["B"]
     dG = np.asarray(jit(vmap(field.dB_by_dX))(points)) - targets["G"]
     dH = np.asarray(jit(vmap(jacfwd(jacfwd(field.B))))(points)) - targets["H"]
     rms = lambda value, axes: float(np.sqrt(np.sum(weights * np.sum(value**2, axis=axes))))
-    return dict(field_rms_T=rms(dB, 1), gradient_rms_T_per_m=rms(dG, (1, 2)),
-                hessian_rms_T_per_m2=rms(dH, (1, 2, 3)), target_hessian_rms_T_per_m2=rms(targets["H"], (1, 2, 3)),
-                plasma_hessian_rms_T_per_m2=rms(targets["H_plasma"], (1, 2, 3)),
-                plasma_field_rms_T=rms(targets["B_plasma"], 1),
-                plasma_gradient_rms_T_per_m=rms(targets["G_plasma"], (1, 2)),
-                total_gradient_rms_T_per_m=rms(targets["G_total"], (1, 2)))
+    match = dict(field_rms_T=rms(dB, 1), gradient_rms_T_per_m=rms(dG, (1, 2)),
+                 hessian_rms_T_per_m2=rms(dH, (1, 2, 3)), target_hessian_rms_T_per_m2=rms(targets["H"], (1, 2, 3)),
+                 plasma_hessian_rms_T_per_m2=rms(targets["H_plasma"], (1, 2, 3)),
+                 plasma_field_rms_T=rms(targets["B_plasma"], 1),
+                 plasma_gradient_rms_T_per_m=rms(targets["G_plasma"], (1, 2)),
+                 total_gradient_rms_T_per_m=rms(targets["G_total"], (1, 2)))
+    B0, R0 = float(solution.inputs.B0), float(solution.R0[0])
+    relative = {"_T": ("_over_B0", 1.0), "_T_per_m": ("_R0_over_B0", R0), "_T_per_m2": ("_R0sq_over_B0", R0**2)}
+    for key, value in list(match.items()):
+        suffix = next(s for s in ("_T_per_m2", "_T_per_m", "_T") if key.endswith(s))
+        name, scale = relative[suffix]
+        match[key[:-len(suffix)] + name] = value * scale / B0
+    return dict(match, B0_T=B0, R0_m=R0)
 
 
 # --------------------------------- surfaces ----------------------------------
@@ -496,7 +509,68 @@ def _torus(array, nfp):
     return np.concatenate((full, full[:1]), axis=0)
 
 
+def plot_optimization(history, matches, path, title):
+    """Least-squares cost history, and the axis mismatch before and after against the plasma terms."""
+    with plt.rc_context(STYLE):
+        fig, (ax, bx) = plt.subplots(1, 2, figsize=(10.5, 3.9), layout="constrained", width_ratios=[1.15, 1])
+        if len(history):
+            evaluation = np.arange(1, len(history) + 1)
+            ax.semilogy(evaluation, history, ".", color=MUTED, ms=3, alpha=0.6, label="every trial step")
+            ax.semilogy(evaluation, np.minimum.accumulate(history), color=COLORS["optimized"], lw=1.8,
+                        label="running minimum")
+            ax.legend(loc="upper right")
+        ax.set(xlabel="function evaluation", ylabel=r"cost  $\frac{1}{2}\sum r^2$", title="Optimization history")
+        ax.grid(True, which="both", alpha=0.6)
+        # The normalizations of the objective, so the bars are the residuals the optimizer saw.
+        labels = ["field\n/ $B_0$", "gradient\n$R_0$ / $B_0$", "Hessian\n$R_0^2$ / $B_0$"]
+        keys = [("field_rms_over_B0", "plasma_field_rms_over_B0"),
+                ("gradient_rms_R0_over_B0", "plasma_gradient_rms_R0_over_B0"),
+                ("hessian_rms_R0sq_over_B0", "plasma_hessian_rms_R0sq_over_B0")]
+        position = np.arange(3)
+        for offset, name in ((-0.27, "initial"), (0.0, "optimized")):
+            bx.bar(position + offset, [matches[name][k[0]] for k in keys], 0.25, color=COLORS[name],
+                   label=f"{name} coils $-$ target")
+        bx.bar(position + 0.27, [matches["optimized"][k[1]] for k in keys], 0.25, color=COLORS["direct"],
+               label="plasma contribution")
+        bx.set_yscale("log")
+        bx.set_xticks(position, labels)
+        bx.set(ylabel="axis RMS, relative", title="Coil match on the magnetic axis")
+        bx.grid(True, axis="y", which="both", alpha=0.6)
+        fig.legend(*bx.get_legend_handles_labels(), loc="outside lower center", ncols=3)
+        fig.suptitle(title, fontsize=12)
+        fig.savefig(path)
+    return fig
+
+
+def plot_axis_profiles(solution, targets, field, path, title):
+    """Frenet components along the axis of the plasma field, and of the coil mismatch, relative to B0."""
+    frame = np.stack([np.asarray(getattr(solution.geometry, n + "_cartesian")) for n in ("tangent", "normal", "binormal")], 1)
+    phi = np.asarray(solution.phi) * int(solution.inputs.axis.nfp) / (2 * np.pi)
+    B0 = float(solution.inputs.B0)
+    plasma = np.einsum("nai,ni->na", frame, targets["B_plasma"]) / B0
+    mismatch = np.einsum("nai,ni->na", frame, evaluate_field(field, targets["points"]) - targets["B"]) / B0
+    with plt.rc_context(STYLE):
+        fig, axes = plt.subplots(1, 2, figsize=(10.5, 3.7), layout="constrained", sharex=True)
+        for k, (name, color) in enumerate(zip(("tangent", "normal", "binormal"), ("#0f6fae", "#c2410c", "#15803d"))):
+            axes[0].plot(phi, plasma[:, k], color=color, lw=1.8, label=name)
+            axes[1].plot(phi, mismatch[:, k], color=color, lw=1.8, label=name)
+        axes[0].set(title=r"Plasma field on the axis, $\mathbf{B}_p$",
+                    ylabel=r"$\mathbf{B}_p\cdot\hat{\mathbf{e}}\,/\,B_0$")
+        axes[1].set(title=r"Optimized coils minus target, $\mathbf{B}_{coils}-(\mathbf{B}_{tot}-\mathbf{B}_p)$",
+                    ylabel=r"$\delta\mathbf{B}\cdot\hat{\mathbf{e}}\,/\,B_0$")
+        for ax in axes:
+            ax.ticklabel_format(axis="y", style="sci", scilimits=(-2, 2), useMathText=True)
+            ax.set_xlabel(r"toroidal angle  $\phi\,n_{fp}/2\pi$")
+            ax.axhline(0, color=MUTED, lw=0.6)
+            ax.grid(True, alpha=0.6)
+        fig.legend(*axes[0].get_legend_handles_labels(), loc="outside lower center", ncols=3)
+        fig.suptitle(title, fontsize=12)
+        fig.savefig(path)
+    return fig
+
+
 def _equal_3d(axes, clouds):
+    """Equal-aspect matplotlib 3D axes. Unused here since the 3D figure moved to pyvista; kept for callers."""
     points = np.concatenate([np.asarray(c).reshape(-1, 3) for c in clouds])
     centre, half = (points.min(0) + points.max(0)) / 2, 0.52 * np.ptp(points, axis=0).max()
     for ax in axes:
@@ -512,95 +586,116 @@ def _equal_3d(axes, clouds):
             pane._axinfo["grid"].update(color="#e3e6ea", linewidth=0.4)
 
 
-def plot_optimization(history, matches, path, title):
-    """Least-squares cost history, and the axis mismatch before and after against the plasma terms."""
-    with plt.rc_context(STYLE):
-        fig, (ax, bx) = plt.subplots(1, 2, figsize=(10.5, 3.9), layout="constrained", width_ratios=[1.15, 1])
-        if len(history):
-            evaluation = np.arange(1, len(history) + 1)
-            ax.semilogy(evaluation, history, ".", color=MUTED, ms=3, alpha=0.6, label="every trial step")
-            ax.semilogy(evaluation, np.minimum.accumulate(history), color=COLORS["optimized"], lw=1.8,
-                        label="running minimum")
-            ax.legend(loc="upper right")
-        ax.set(xlabel="function evaluation", ylabel=r"cost  $\frac{1}{2}\sum r^2$", title="Optimization history")
-        ax.grid(True, which="both", alpha=0.6)
-        labels = ["field\n[T]", "gradient\n[T/m]", "Hessian\n[T/m$^2$]"]
-        keys = [("field_rms_T", "plasma_field_rms_T"), ("gradient_rms_T_per_m", "plasma_gradient_rms_T_per_m"),
-                ("hessian_rms_T_per_m2", "plasma_hessian_rms_T_per_m2")]
-        position = np.arange(3)
-        for offset, name in ((-0.27, "initial"), (0.0, "optimized")):
-            bx.bar(position + offset, [matches[name][k[0]] for k in keys], 0.25, color=COLORS[name],
-                   label=f"coils $-$ target, {name}")
-        bx.bar(position + 0.27, [matches["optimized"][k[1]] for k in keys], 0.25, color=COLORS["direct"],
-               label="plasma contribution removed from the target")
-        bx.set_yscale("log")
-        bx.set_xticks(position, labels)
-        bx.set(ylabel="axis RMS", title="Coil match on the magnetic axis")
-        bx.grid(True, axis="y", which="both", alpha=0.6)
-        bx.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncols=1)
-        fig.suptitle(title, fontsize=12)
-        fig.savefig(path)
-    return fig
+# The boundary mismatch is shown as its magnitude on a logarithmic scale with viridis. A signed
+# diverging map is white (or, for the dark-centred ones, black) wherever the mismatch is small,
+# which after optimization is almost the whole surface, so the structure is lost. The magnitude on
+# a log scale resolves the small background and the localized peaks at once; viridis is perceptually
+# uniform, readable in greyscale and for colour-blind readers, and nowhere near white.
+NORMAL_ERROR_CMAP = "viridis"
+NORMAL_ERROR_DECADES = 3.0            # Colour range of each panel: its maximum and three decades below
+COIL_COLOR = "#2f343b"
 
 
-def plot_axis_profiles(solution, targets, field, path, title):
-    """Frenet components along the axis of the plasma field, and of the coil mismatch."""
-    frame = np.stack([np.asarray(getattr(solution.geometry, n + "_cartesian")) for n in ("tangent", "normal", "binormal")], 1)
-    phi = np.asarray(solution.phi) * int(solution.inputs.axis.nfp) / (2 * np.pi)
-    plasma = np.einsum("nai,ni->na", frame, targets["B_plasma"])
-    mismatch = np.einsum("nai,ni->na", frame, evaluate_field(field, targets["points"]) - targets["B"])
-    with plt.rc_context(STYLE):
-        fig, axes = plt.subplots(1, 2, figsize=(10.5, 3.7), layout="constrained", sharex=True)
-        for k, (name, color) in enumerate(zip(("tangent", "normal", "binormal"), ("#0f6fae", "#c2410c", "#15803d"))):
-            axes[0].plot(phi, 1e3 * plasma[:, k], color=color, lw=1.8, label=name)
-            axes[1].plot(phi, 1e3 * mismatch[:, k], color=color, lw=1.8, label=name)
-        axes[0].set(title=r"Plasma field on the axis, $\mathbf{B}_p$", ylabel="mT")
-        axes[1].set(title=r"Optimized coils minus target, $\mathbf{B}_{coils}-(\mathbf{B}_{tot}-\mathbf{B}_p)$", ylabel="mT")
-        for ax in axes:
-            ax.set_xlabel(r"toroidal angle  $\phi\,n_{fp}/2\pi$")
-            ax.axhline(0, color=MUTED, lw=0.6)
-            ax.grid(True, alpha=0.6)
-        fig.legend(*axes[0].get_legend_handles_labels(), loc="outside lower center", ncols=3)
-        fig.suptitle(title, fontsize=12)
-        fig.savefig(path)
-    return fig
+def surface_inflation(surface, axis):
+    """Factor by which a thin near-axis surface is drawn inflated about its axis to be visible next to the coils."""
+    major = np.mean(np.hypot(np.asarray(axis)[..., 0], np.asarray(axis)[..., 1]))
+    return max(1.0, 0.12 * major / surface["radius"])
+
+
+def normal_error_norm(surface, decades=NORMAL_ERROR_DECADES):
+    """Logarithmic colour scale of |B.n|/|B| in percent, from the surface maximum down ``decades``."""
+    top = 100 * float(np.max(np.abs(surface["error"])))
+    return LogNorm(top * 10.0**-decades, top, clip=True)
+
+
+def render_coils_and_surface(surface, field, axis=None, norm=None, cmap=NORMAL_ERROR_CMAP, inflate=None,
+                             extent=None, window_size=(1600, 1400), elevation=32.0, azimuth=38.0):
+    """Depth-correct off-screen pyvista render of coils and a boundary coloured by |B.n|/|B|.
+
+    ``surface`` is the dict of :func:`normal_field_error` (one field period of ``xyz`` and
+    ``error``), ``field`` an ESSOS ``BiotSavart`` or ``Coils``, and ``axis`` the Cartesian axis
+    of the same period (``solution.geometry.position_cartesian``). The surface is drawn inflated by
+    ``inflate`` about the axis (default :func:`surface_inflation`, 1 without an axis), but it is
+    coloured by the error on the physical surface. ``norm`` maps |B.n|/|B| in percent to colour
+    (default :func:`normal_error_norm`). Renders with the same ``extent`` (half-width of the scene
+    in metres, default from the coils) and angles share one camera, so panels compare directly.
+    Returns an RGB image on a white background, to place in a matplotlib figure.
+    """
+    try:
+        import pyvista as pv
+    except ImportError as error:
+        raise ImportError("The 3D coil figure needs pyvista: pip install pyvista") from error
+    coils = getattr(field, "coils", field)
+    nfp, norm = int(surface["nfp"]), norm or normal_error_norm(surface)
+    xyz = _torus(surface["xyz"], nfp)
+    if axis is not None:
+        axis = _torus(np.asarray(axis)[None], nfp)[0]
+        inflate = surface_inflation(surface, axis) if inflate is None else inflate
+        xyz = axis[None] + inflate * (xyz - axis[None])
+    error = 100 * np.abs(np.pad(np.tile(surface["error"], (1, nfp)), ((0, 1), (0, 1)), mode="wrap"))
+    colours = (255 * plt.get_cmap(cmap)(norm(error))[..., :3]).astype(np.uint8)
+    # Fortran order: the (theta, phi) grid becomes VTK's (i, j) with i fastest.
+    mesh = pv.StructuredGrid(*(np.asfortranarray(xyz[..., k]) for k in range(3)))
+    mesh.point_data["colour"] = colours.reshape(-1, 3, order="F")
+    gamma = np.asarray(coils.gamma)
+    extent = 0.55 * np.ptp(gamma.reshape(-1, 3), axis=0).max() if extent is None else extent
+    plotter = pv.Plotter(off_screen=True, window_size=list(window_size), lighting="light_kit")
+    try:
+        plotter.set_background("white")
+        plotter.add_mesh(mesh, scalars="colour", rgb=True, smooth_shading=True, ambient=0.25, diffuse=0.8,
+                         specular=0.1)
+        for curve in gamma:
+            tube = pv.Spline(np.vstack((curve, curve[:1])), 4 * len(curve)).tube(radius=0.009 * extent, n_sides=24)
+            plotter.add_mesh(tube, color=COIL_COLOR, smooth_shading=True, ambient=0.2, diffuse=0.7,
+                             specular=0.45, specular_power=30)
+        elevation, azimuth = np.radians(elevation), np.radians(azimuth)
+        direction = np.array([np.cos(elevation) * np.cos(azimuth), np.cos(elevation) * np.sin(azimuth),
+                              np.sin(elevation)])
+        plotter.camera.focal_point = (0.0, 0.0, 0.0)
+        plotter.camera.position = tuple(8 * extent * direction)
+        plotter.camera.up = (0.0, 0.0, 1.0)
+        plotter.camera.view_angle = 2 * np.degrees(np.arctan(1.1 / 8))
+        plotter.enable_anti_aliasing("ssaa")
+        return plotter.screenshot(return_img=True)
+    finally:
+        plotter.close()
 
 
 def plot_coils_and_normal_error(states, surfaces, path, title):
-    """Coils, axis and the normal-field mismatch on the plasma boundary, before and after."""
+    """Coils and the normal-field mismatch on the plasma boundary, before and after.
+
+    The 3D scenes are rendered by pyvista, which occludes correctly, and laid out with
+    matplotlib so that the titles and colour bars match the other figures.
+    """
+    names = list(states)
+    extent = max(0.55 * np.ptp(np.asarray(states[n]["field"].coils.gamma).reshape(-1, 3), axis=0).max() for n in names)
+    axes_xyz = {n: np.asarray(states[n]["solution"].geometry.position_cartesian) for n in names}
+    inflate = min(surface_inflation(surfaces[n], _torus(axes_xyz[n][None], surfaces[n]["nfp"])[0]) for n in names)
+    norms = {n: normal_error_norm(surfaces[n]) for n in names}
+    images = {n: render_coils_and_surface(surfaces[n], states[n]["field"], axis=axes_xyz[n], norm=norms[n],
+                                          inflate=inflate, extent=extent) for n in names}
+    # One crop for every panel, so the common camera also gives a common scale.
+    filled = np.any([np.any(image < 250, axis=-1) for image in images.values()], axis=0)
+    rows, columns = np.flatnonzero(filled.any(1)), np.flatnonzero(filled.any(0))
+    pad = 12
+    crop = (slice(max(rows[0] - pad, 0), rows[-1] + pad), slice(max(columns[0] - pad, 0), columns[-1] + pad))
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(12.5, 6.2), layout="constrained")
-        cmap, axes, clouds, norms = plt.get_cmap("RdBu_r"), [], [], []
-        for column, (name, state) in enumerate(states.items()):
-            ax = fig.add_subplot(1, 2, column + 1, projection="3d")
-            surface, nfp = surfaces[name], surfaces[name]["nfp"]
-            # The initial mismatch is orders of magnitude larger, so each panel has its own scale.
-            norm = Normalize(-100 * np.max(np.abs(surface["error"])), 100 * np.max(np.abs(surface["error"])))
-            norms.append(norm)
-            xyz = _torus(surface["xyz"], nfp)
-            colour = np.pad(np.tile(surface["error"], (1, nfp)), ((0, 1), (0, 1)), mode="wrap") * 100
-            # The plasma is thin next to the coils, so it is drawn inflated about the axis to be visible.
-            axis = _torus(np.asarray(state["solution"].geometry.position_cartesian)[None], nfp)[0]
-            scale = 0.12 * np.mean(np.hypot(axis[:, 0], axis[:, 1])) / surface["radius"]
-            shown = axis[None] + scale * (xyz - axis[None]) if scale > 1 else xyz
-            ax.plot_surface(*np.moveaxis(shown, -1, 0), facecolors=cmap(norm(colour)), rstride=1, cstride=1,
-                            linewidth=0, antialiased=False, shade=False)
-            gamma = np.asarray(state["field"].coils.gamma)
-            for curve in gamma:
-                ax.plot(*np.vstack((curve, curve[:1])).T, color=INK, lw=1.1, alpha=0.85)
-            ax.plot(*axis.T, color=INK, lw=0.8, ls=":")
-            ax.set_title(f"{name.capitalize()} coils\n" + r"$|\mathbf{B}\cdot\hat{\mathbf{n}}|/|\mathbf{B}|$: "
-                         + f"max {100 * state['normal']['normal_error_max']:.3g} %,  RMS {100 * state['normal']['normal_error_rms']:.3g} %")
-            axes.append(ax)
-            clouds += [shown, gamma]
-        _equal_3d(axes, clouds)
-        note = f" (surface drawn {scale:.0f}x inflated)" if scale > 1 else ""
-        for ax, norm in zip(axes, norms):
-            bar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, shrink=0.55, pad=0.08,
-                               orientation="horizontal")
-            bar.set_label(r"$(\mathbf{B}_{coils}-\mathbf{B}_{target})\cdot\hat{\mathbf{n}}\,/\,|\mathbf{B}|$  [%]")
-        fig.suptitle(f"{title}\nBoundary at a = {surfaces[name]['radius']:.3g} m{note}", fontsize=12)
-        fig.savefig(path, pad_inches=0.45)  # 3D axis labels are not counted in the tight bounding box
+        fig, axes = plt.subplots(1, len(names), figsize=(6.6, 3.55), layout="constrained", squeeze=False)
+        for ax, name in zip(axes[0], names):
+            normal = states[name]["normal"]
+            ax.imshow(images[name][crop], interpolation="lanczos")
+            ax.set_axis_off()
+            ax.set_title(f"{name.capitalize()} coils\nmax {100 * normal['normal_error_max']:.3g} %,  "
+                         f"RMS {100 * normal['normal_error_rms']:.3g} %", fontsize=9)
+            bar = fig.colorbar(ScalarMappable(norm=norms[name], cmap=NORMAL_ERROR_CMAP), ax=ax, shrink=0.8,
+                               orientation="horizontal", aspect=24, pad=0.02)
+            bar.ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+            bar.ax.tick_params(labelsize=8)
+            bar.outline.set_linewidth(0.5)
+            bar.set_label(r"$|\mathbf{B}\cdot\hat{\mathbf{n}}|\,/\,|\mathbf{B}|$  [%]", fontsize=9)
+        note = f" (surface drawn {inflate:.0f}x inflated about the axis)" if inflate > 1 else ""
+        fig.suptitle(f"{title}\nBoundary at a = {surfaces[names[-1]]['radius']:.3g} m{note}", fontsize=10)
+        fig.savefig(path, dpi=300)
     return fig
 
 
