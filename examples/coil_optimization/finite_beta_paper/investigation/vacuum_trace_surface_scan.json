@@ -1,0 +1,86 @@
+[
+ {
+  "r_flux": 0.013064088432274818,
+  "r_flux_over_a": 0.4354696144091606,
+  "r": 0.012,
+  "r_over_a": 0.4,
+  "confined": true,
+  "turns": 234.16023748664855,
+  "iota_lab": -0.20393757337906054,
+  "punctures": 468,
+  "puncture_fit_residual_over_r": 0.008714969681794464,
+  "max_distance_over_r": 1.8146738906061772
+ },
+ {
+  "r_flux": 0.02222319924469232,
+  "r_flux_over_a": 0.7407733081564107,
+  "r": 0.024,
+  "r_over_a": 0.8,
+  "confined": true,
+  "turns": 232.0167488844843,
+  "iota_lab": -0.1817345489801735,
+  "punctures": 464,
+  "puncture_fit_residual_over_r": 0.0015697863438731562,
+  "max_distance_over_r": 1.7473033887718277
+ },
+ {
+  "r_flux": 0.025468187475422472,
+  "r_flux_over_a": 0.8489395825140824,
+  "r": 0.03,
+  "r_over_a": 1.0,
+  "confined": true,
+  "turns": 230.30745942492885,
+  "iota_lab": -0.16461653402745086,
+  "punctures": 460,
+  "puncture_fit_residual_over_r": 0.015397494972856344,
+  "max_distance_over_r": 1.7486846359679287
+ },
+ {
+  "r_flux": 0.026819581311329437,
+  "r_flux_over_a": 0.8939860437109812,
+  "r": 0.034,
+  "r_over_a": 1.1333333333333335,
+  "confined": true,
+  "turns": 228.39442663511585,
+  "iota_lab": -0.145572282415289,
+  "punctures": 456,
+  "puncture_fit_residual_over_r": 0.01861915291563648,
+  "max_distance_over_r": 1.7337756069883983
+ },
+ {
+  "r_flux": 0.02739244479777048,
+  "r_flux_over_a": 0.913081493259016,
+  "r": 0.037,
+  "r_over_a": 1.2333333333333334,
+  "confined": true,
+  "turns": 226.20286415416112,
+  "iota_lab": -0.12363584987082647,
+  "punctures": 452,
+  "puncture_fit_residual_over_r": 0.024692703827500634,
+  "max_distance_over_r": 1.7226587659567842
+ },
+ {
+  "r_flux": NaN,
+  "r_flux_over_a": NaN,
+  "r": 0.039,
+  "r_over_a": 1.3,
+  "confined": false,
+  "turns": 3.9675798187516556,
+  "iota_lab": 0.02365539424763074,
+  "punctures": 7,
+  "puncture_fit_residual_over_r": NaN,
+  "max_distance_over_r": 127.05374297962318
+ },
+ {
+  "r_flux": NaN,
+  "r_flux_over_a": NaN,
+  "r": 0.041,
+  "r_over_a": 1.3666666666666667,
+  "confined": false,
+  "turns": 4.026451658753571,
+  "iota_lab": -0.2069753370751987,
+  "punctures": 8,
+  "puncture_fit_residual_over_r": NaN,
+  "max_distance_over_r": 132.87628935479734
+ }
+]

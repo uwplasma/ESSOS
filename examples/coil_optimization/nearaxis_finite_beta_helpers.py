@@ -109,6 +109,101 @@ def axis_match(solution, targets, field):
     return dict(match, B0_T=B0, R0_m=R0)
 
 
+def axis_centered_curves(solution, n_curves, order, radius, n_segments, stellsym=True):
+    """Circular coils of the given radius in the (R, Z) planes, centred on the magnetic axis.
+
+    ESSOS's equally spaced curves are centred on a circle of constant R; for an axis with a large
+    excursion (e.g. QH) that start is far from the plasma, and the fit may not recover.
+    """
+    from essos.coils import Curves
+    nfp = int(solution.inputs.axis.nfp)
+    angles = (np.arange(n_curves) + 0.5) * 2 * np.pi / ((1 + int(stellsym)) * nfp * n_curves)
+    period = 2 * np.pi / nfp
+    grid = np.asarray(solution.phi)
+    R = np.interp(angles, grid, np.asarray(solution.R0), period=period)
+    Z = np.interp(angles, grid, np.asarray(solution.Z0), period=period)
+    dofs = np.zeros((n_curves, 3, 1 + 2 * order))
+    dofs[:, 0, 0], dofs[:, 1, 0], dofs[:, 2, 0] = R * np.cos(angles), R * np.sin(angles), Z
+    dofs[:, 0, 2], dofs[:, 1, 2], dofs[:, 2, 1] = radius * np.cos(angles), radius * np.sin(angles), -radius
+    return Curves(jnp.asarray(dofs), n_segments=n_segments, nfp=nfp, stellsym=stellsym)
+
+
+def fit_coils(field, solution, targets, *, hessian_weight=0.01, length_target=None, curvature_target=None,
+              max_nfev=1000, verbose=2):
+    """Fit coils to a FIXED external-field target: field, gradient and Hessian on the axis samples.
+
+    The equilibrium does not change, so the targets are computed once and each residual only
+    evaluates the coils. The normalizations are those of the joint example: field / B0,
+    gradient R0 / B0 and Hessian R0^2 / B0, weighted by arclength. Returns the optimized field,
+    the optimizer record and the cost of every evaluation.
+    """
+    from jax.flatten_util import ravel_pytree
+    from scipy.optimize import least_squares
+
+    B0, R0 = float(solution.inputs.B0), float(solution.R0[0])
+    dofs, unravel = ravel_pytree(field)
+    points = jnp.asarray(targets["points"])
+    B_target, G_target, H_target = (jnp.asarray(targets[k]) for k in ("B", "G", "H"))
+    weight = jnp.sqrt(jnp.asarray(axis_weights(solution)))
+
+    def residuals(x):
+        coils = unravel(x)
+        parts = [(weight[:, None] * (vmap(coils.B)(points) - B_target) / B0).ravel(),
+                 (weight[:, None, None] * (vmap(coils.dB_by_dX)(points) - G_target) * R0 / B0).ravel(),
+                 (jnp.sqrt(hessian_weight) * weight[:, None, None, None]
+                  * (vmap(jacfwd(jacfwd(coils.B)))(points) - H_target) * R0**2 / B0).ravel()]
+        if length_target:
+            excess = jnp.maximum(0.0, coils.coils.length / length_target - 1)
+            parts.append(excess / jnp.sqrt(excess.size))
+        if curvature_target:
+            excess = jnp.maximum(0.0, coils.coils.curvature / curvature_target - 1).ravel()
+            parts.append(excess / jnp.sqrt(excess.size))
+        return jnp.concatenate(parts)
+
+    residuals_jit, jacobian_jit = jit(residuals), jit(jacfwd(residuals))
+    start = perf_counter()
+    residuals_jit(dofs).block_until_ready()
+    jacobian_jit(dofs).block_until_ready()
+    compile_seconds, history = perf_counter() - start, []
+
+    def recorded(x):
+        value = np.asarray(residuals_jit(jnp.asarray(x)))
+        history.append(0.5 * float(value @ value))
+        return value
+
+    start = perf_counter()
+    result = least_squares(recorded, np.asarray(dofs), jac=lambda x: np.asarray(jacobian_jit(jnp.asarray(x))),
+                           x_scale="jac", ftol=1e-8, gtol=1e-8, xtol=1e-10, max_nfev=max_nfev, verbose=verbose)
+    record = dict(status=int(result.status), message=str(result.message), success=bool(result.success),
+                  nfev=int(result.nfev), njev=int(result.njev), cost=float(result.cost),
+                  optimality=float(result.optimality), seconds=perf_counter() - start, compile_seconds=compile_seconds)
+    return unravel(jnp.asarray(result.x)), record, history
+
+
+def coil_state(field, solution, radius, n_segments=None):
+    """Everything the report and the figures need for one coil set on one equilibrium."""
+    field = refine_coils(field, n_segments) if n_segments else field
+    targets = coil_targets(solution, radius)
+    surface, normal = normal_field_error(solution, targets, field, radius)
+    return dict(field=field, solution=solution, targets=targets, surface=surface, normal=normal,
+                match=axis_match(solution, targets, field))
+
+
+def print_state(name, state):
+    """One block of the printed report, in relative units."""
+    solution, match, normal = state["solution"], state["match"], state["normal"]
+    print(f"{name}: iota = {float(solution.iota):.5f}, r_singularity = {float(solution.r_singularity):.4f} m")
+    print(f"   plasma on axis    : field {match['plasma_field_rms_over_B0']:.2e} B0,  gradient "
+          f"{match['plasma_gradient_rms_R0_over_B0']:.2e} B0/R0,  Hessian {match['plasma_hessian_rms_R0sq_over_B0']:.2e} B0/R0^2")
+    print(f"   coils - target    : field {match['field_rms_over_B0']:.2e} B0,  gradient "
+          f"{match['gradient_rms_R0_over_B0']:.2e} B0/R0,  Hessian {match['hessian_rms_R0sq_over_B0']:.2e} B0/R0^2 "
+          f"(target {match['target_hessian_rms_R0sq_over_B0']:.2e})")
+    print(f"   B.n/|B| on a = {normal['radius_m']:.3g} m: max {100 * normal['normal_error_max']:.3f} %, "
+          f"RMS {100 * normal['normal_error_rms']:.4f} %")
+    print(f"   coil length max {float(jnp.max(state['field'].coils.length)):.3f} m, "
+          f"curvature max {float(jnp.max(state['field'].coils.curvature)):.2f} 1/m")
+
+
 # --------------------------------- surfaces ----------------------------------
 def flux_surface(solution, radius, ntheta=64):
     """Near-axis flux surface on a uniform (theta, cylindrical phi) grid of one field period."""

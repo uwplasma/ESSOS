@@ -1,0 +1,4 @@
+V_mode12	'OPTIMIZE = False' 'CASE = "qa_vacuum"' 'VMEX_ROUTES = ("direct",)' 'TRACE_FIELD_LINES = False' '+VMEX.update(mpol=12, ntor=12, nzeta=48)'
+V_ab05	'OPTIMIZE = False' 'CASE = "qa_vacuum"' 'VMEX_ROUTES = ("direct",)' 'TRACE_FIELD_LINES = False' 'VMEX_RADIUS_FRACTION = 0.5'
+V_ab10	'OPTIMIZE = False' 'CASE = "qa_vacuum"' 'VMEX_ROUTES = ("direct",)' 'TRACE_FIELD_LINES = False' 'VMEX_RADIUS_FRACTION = 1.0'
+V_mode12_ab05	'OPTIMIZE = False' 'CASE = "qa_vacuum"' 'VMEX_ROUTES = ("direct",)' 'TRACE_FIELD_LINES = False' 'VMEX_RADIUS_FRACTION = 0.5' '+VMEX.update(mpol=12, ntor=12, nzeta=48)'

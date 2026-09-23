@@ -1,5 +1,58 @@
 # Finite-beta plasma-field paper: validation archive and report
 
+## Round 3 handoff (paused 2026-09-23)
+
+Requested in this round:
+1. investigate the vacuum iota gap;
+2. add a QH (I2 = 0, finite beta) and a stellarator-tokamak hybrid (finite I2) coil-only example;
+3. add a single-stage finite-beta (3 %) optimization;
+4. scan the boundary radius (PHIEDGE) for surfaces beyond the design radius;
+5. replace the matplotlib 3D figures with pyvista;
+6. make all field and error plots relative to B0.
+
+**Done**
+- **Vacuum iota gap (resolved).** Scripts and data are in `investigation/`.
+  - VMEX surfaces are coil-field surfaces: |B.n|/|B| < 0.5 % at 8 modes.
+  - The coil field on those surfaces, <sqrt(g) B^u>/<sqrt(g) B^v>, and lines traced from them give -0.211 to -0.197. That is consistent with the near-axis -0.2125.
+  - VMEX gives -0.188 to -0.177 on the same surfaces.
+  - VMEC2000 on the identical runtime deck and MAKEGRID file reproduces VMEX: -0.196 and -0.188 on axis and at s = 1/2, against VMEX's -0.197 and -0.188. The gap is common to VMEC-type solvers.
+  - It is not converged in Fourier resolution. At 12 modes VMEX meets FTOL, but its surfaces degrade (0.9 % B.n) and the axis iota is -0.089. At a_b = a it gives -0.165 with an 8.9 % shape error.
+  - Conclusion: the VMEC vacuum iota is unreliable in this zero-pressure, zero-current, aspect-50 case. The coils and the near-axis design agree. The finite-beta iota agrees to 1 % and converges.
+  - The mechanism is not identified. The manuscript text is updated.
+- **Vacuum last closed surface** (Giuliani-style trace, `vacuum_surface_scan.py`). Lines launched on the outboard midplane stay confined up to a flux radius of 0.91 a; lines just outside escape within 4 turns. Across this range iota goes from -0.204 to -0.124. There are no vacuum surfaces beyond the design radius for these coils.
+- **Flagship boundary scan** (`scan_qa.jobs`; p2 fixed, so the central pressure grows as a_b^2):
+
+  | a_b | Result |
+  |---|---|
+  | 1.0 a | converged (reference) |
+  | 1.25 a | converged: iota -0.2139 vs -0.2125, axis 0.2 mm, shape 3.7 %, beta 1.06e-3 |
+  | 1.5 a | converged, but a different equilibrium: axis 10.6 mm (24 %), iota -0.185 |
+  | 1.75 a, 2.0 a | FTOL not reached |
+  | 2.5 a | Jacobian sign failure |
+  | 3.0 a | FTOL not reached |
+
+  Not yet in the manuscript.
+- **Plots.** pyvista coil renderer (`render_coils_and_surface`, log |B.n|/|B| with viridis, never white), and every field and error plot is relative to B0. Figures are in `figures/qa`, `figures/vacuum` (from `replot.py`) and `figures/paper`.
+- **New scripts:**
+  - `optimize_coils_nearaxis_qh_finite_beta.py` and `optimize_coils_nearaxis_hybrid_finite_current.py`, which fit coils only to a fixed equilibrium (`helpers.fit_coils`, axis-centred initial coils `helpers.axis_centered_curves`, resumable segments);
+  - `optimize_single_stage_nearaxis_finite_beta.py`.
+
+**Incomplete (resume here)**
+- **QH.** a = 0.035 m, p2 = -1.76e6 (central pressure 2160 Pa, beta 0.27 %), 4 coils/half-period, order 10, 120 segments. The checkpoint is at 450 of 2000 evaluations; resume with `segments2.sh`.
+  - The previous run (a = 0.06, 60 segments, `figures/qh/*_a0.06_60seg.png`) reached axis mismatch 3.1e-4 B0, 10x below the plasma field.
+  - Its boundary B.n/|B| scaled as r^3: 0.06 / 0.51 / 1.8 / 4.9 % at a/4 to a. That is truncation of the quadratic target, hence the smaller a.
+  - Its curvature was 406 1/m at 240 points (a kink unseen at 60 points), hence 120 segments.
+- **Hybrid.** Axis rc = [1, 0.045], nfp = 3, etabar 0.9, I2 = 0.4 (iota 0.42 -> 0.71), p2 = -6e5, a = 0.04 m, 4 coils/half-period, order 10, 120 segments. The checkpoint is at 600 of 2000 evaluations.
+  - The previous 60-segment run: axis mismatch 7.4e-4 B0 (plasma field 4.0e-3), B.n max 1.16 %, curvature 21 1/m at 240 points.
+  - The target is a vacuum field to 1e-5.
+- **Next for QH and hybrid.** VMEX at a_b = a, plus boundary scans. Add the jobs like `scan_qa.jobs` with `EXAMPLE=<script>`. For the coil-only scripts, `run.py` takes `EXAMPLE` and inserts '+stmt' lines after `OUTPUT_DIR.mkdir`.
+- **Single stage.** Seed: vacuum QA (Landreman-Sengupta 5.1); a = 0.1 m; staged: near-axis 400, coils 300, single-stage 500, coil limits 400 evaluations.
+  - The optimization finished (`investigation/single_stage_summary.json`, `figures/single_stage`). The script is copied from the stopped worktree branch `work/single-stage-finite-beta`, untested there after the stop.
+  - VMEX free boundary at NS = 17 converged: beta 2.89 % (target 3 %), iota 0.556, aspect 9.6.
+  - The NS = 33 continuation (restart from the NS = 17 wout) had not converged. Resume the VMEX stage and the QS/coil report.
+- **Manuscript.** The vacuum section is rewritten, and it is compiled locally. Still to add: the scans, QH, hybrid and single stage, and relative-unit tables (`make_tables.py` still reads SI keys).
+
+
 These scripts and machine-readable results back every number in the plasma-field
 manuscript (from the example `optimize_coils_and_nearaxis_finite_beta.py`). The report
 below answers the external reviewer's validation handoff. It covers defects fixed,
