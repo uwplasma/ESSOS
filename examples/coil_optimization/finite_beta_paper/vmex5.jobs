@@ -1,0 +1,6 @@
+fixed_sub	'OPTIMIZE = False' 'OPTIMIZE_AXIS = False' 'VMEX_ROUTES = ("direct",)'
+fixed_nosub	'OPTIMIZE = False' 'OPTIMIZE_AXIS = False' 'SUBTRACT_PLASMA_FIELD = False' 'VMEX_ROUTES = ("direct",)'
+a010	'OPTIMIZE = False' 'PLASMA_RADIUS = 0.010' 'VMEX_ROUTES = ("direct",)'
+a015	'OPTIMIZE = False' 'PLASMA_RADIUS = 0.015' 'VMEX_ROUTES = ("direct",)'
+a020	'OPTIMIZE = False' 'PLASMA_RADIUS = 0.020' 'VMEX_ROUTES = ("direct",)'
+control	'OPTIMIZE = False' 'SUBTRACT_PLASMA_FIELD = False' 'VMEX_ROUTES = ("direct",)'

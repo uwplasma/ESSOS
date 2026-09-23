@@ -10,15 +10,34 @@ $0.5625$ & 4.6\% & 1.6\%\\
 $1.0000$ & 4.1\% & 2.2\%\\
 % Table: free-boundary cases (direct route)
 Finite pressure & $1$ & $-0.2099$ & $-0.2125$ & 5.0\% & 2.2\% & 0.62\%\\
-% control: free boundary not converged (None)
-% fixed_sub: free boundary not converged (None)
-% fixed_nosub: free boundary not converged (None)
-% a010: free boundary not converged (None)
-% a015: free boundary not converged (None)
-% a020: free boundary not converged (None)
+No Hessian residual & $1$ & $-0.2089$ & $-0.2125$ & 6.1\% & 4.8\% & 1.05\%\\
+Total field, joint$^\dagger$ & $1$ & $-0.2925$ & $-0.3447$ & 55.1\% & 6.8\% & 2.21\%\\
+Total field, joint (segmented) & $1$ & $-0.2858$ & $-0.3447$ & 58.7\% & 8.5\% & 2.09\%\\
+% fixed_sub: free boundary not converged (VMEX did not reach FTOL with the vacuum region active.)
+% fixed_nosub: free boundary not converged (VmecJacobianError: INITIAL JACOBIAN CHANGED SIGN!)
+Vacuum & $0.7$ & $-0.1977$ & $-0.2125$ & 4.5\% & 4.3\% & 0.67\%\\
+Axisymmetric & $1$ & $-0.3994$ & $-0.4000$ & 4.1\% & 0.6\% & 0.01\%\\
+% a010: free boundary not converged (VMEX did not reach FTOL with the vacuum region active.)
+% a015: free boundary not converged (VMEX did not reach FTOL with the vacuum region active.)
+% a020: free boundary not converged (VMEX did not reach FTOL with the vacuum region active.)
 % Table: radius sequence
-$0.010$ & $0.171$ & $3.6$ & $1.2$ & 0.02\% & -- & --\\
-$0.015$ & $0.252$ & $5.9$ & $2.3$ & 0.03\% & -- & --\\
-$0.020$ & $0.334$ & $8.9$ & $3.9$ & 0.04\% & -- & --\\
+$0.010$ & $0.176$ & $7.0$ & $1.7$ & 0.01\% & -- & --\\
+$0.015$ & $0.253$ & $10.4$ & $4.2$ & 0.04\% & -- & --\\
+$0.020$ & $0.329$ & $11.9$ & $6.7$ & 0.12\% & -- & --\\
 $0.030$ & $0.330$ & $21.2$ & $10.7$ & 0.62\% & 5.0\% & 2.2\%\\
 % Table: resolution ladder (qa coils)
+qa_ns33 & $-0.20554$ & 4.20\% & 2.32\% & 1.43\% & 214\\
+a010_ns33 & $-0.20818$ & 3.39\% & 1.00\% & 0.53\% & 131\\
+% a015_ns33: not converged (VMEX did not reach FTOL with the vacuum region active.)
+a020_ns33 & $-0.20359$ & 5.37\% & 1.94\% & 1.30\% & 157\\
+% fixed_sub_ns33: not converged (VMEX did not reach FTOL with the vacuum region active.)
+V_ftol & $-0.18799$ & 3.04\% & 4.05\% & 0.73\% & 949\\
+V_ns129 & $-0.19741$ & 4.32\% & 4.23\% & 1.38\% & 116\\
+L_ns129 & $-0.21197$ & 5.28\% & 2.16\% & 0.69\% & 563\\
+L_mode10 & $-0.21038$ & 5.02\% & 2.19\% & 0.83\% & 447\\
+L_nzeta64 & $-0.21004$ & 5.02\% & 2.20\% & 1.06\% & 425\\
+L_ftol & $-0.21318$ & 4.92\% & 2.20\% & 0.76\% & 447\\
+L_coilquad & $-0.20988$ & 4.96\% & 2.18\% & 0.96\% & 427\\
+L_grid65 & $-0.20999$ & 4.96\% & 2.20\% & 0.96\% & 428\\
+L_grid129 & $-0.20988$ & 4.96\% & 2.18\% & 0.96\% & 427\\
+L_gridwide & $-0.21000$ & 4.97\% & 2.20\% & 0.96\% & 427\\

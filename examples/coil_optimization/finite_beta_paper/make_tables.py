@@ -7,6 +7,8 @@ The displacement ratio is recomputed from the archived optimized axis at two axi
 """
 import hashlib
 import json
+import os
+import sys
 from pathlib import Path
 
 import jax
@@ -16,9 +18,11 @@ import jax.numpy as jnp
 import numpy as np
 from pyqsc_jax.near_axis import near_axis
 
-RUNS = Path(__file__).resolve().parent / "runs"
-CASES = ["qa", "nohess", "control", "fixed_sub", "fixed_nosub", "vacuum", "axisym", "a010", "a015", "a020"]
-LADDER = ["L_ns129", "L_mode10", "L_nzeta64", "L_ftol", "L_coilquad", "L_grid65", "L_grid129", "L_gridwide"]
+HERE = Path(__file__).resolve().parent
+RUNS = HERE / "runs"
+CASES = ["qa", "nohess", "control_single", "control", "fixed_sub", "fixed_nosub", "vacuum", "axisym", "a010", "a015", "a020"]
+NS33 = ["qa_ns33", "a010_ns33", "a015_ns33", "a020_ns33", "fixed_sub_ns33"]
+LADDER = NS33 + ["V_ftol", "V_ns129", "L_ns129", "L_mode10", "L_nzeta64", "L_ftol", "L_coilquad", "L_grid65", "L_grid129", "L_gridwide"]
 
 
 def load(name):
@@ -80,6 +84,14 @@ for name in CASES + LADDER:
                  summary_sha256=hashlib.sha256((RUNS / name / "summary.json").read_bytes()).hexdigest()[:16])
     for route in ("direct", "mgrid"):
         entry[route] = free_boundary_row(summary, route)
+    if entry["direct"] is not None:
+        entry["direct"]["ftol_final"] = summary["vmex_settings"]["ftol"][-1]
+    relaxed = load(f"{name}_f9")  # The same solve with final FTOL 1e-9, used only if 1e-10 failed.
+    if relaxed is not None:
+        entry["direct_ftol_1e-9"] = free_boundary_row(relaxed, "direct")
+        if entry["direct"] is not None and not entry["direct"]["converged"] and entry["direct_ftol_1e-9"]:
+            entry["direct_ftol_1e-10_failure"] = entry["direct"]
+            entry["direct"] = dict(entry["direct_ftol_1e-9"], ftol_final=1e-9)
     split = load(f"{name}_mgrid")  # A route run on its own, to keep every job under ten minutes.
     if split is not None and entry["mgrid"] is None:
         entry["mgrid"] = free_boundary_row(split, "mgrid")
@@ -88,6 +100,14 @@ for name in CASES + LADDER:
     fitted = summary.get("vmex", {}).get("fitted", {}).get("optimized", {})
     entry["mgrid_table"] = fitted.get("mgrid_table")
     entry["mgrid_vs_direct"] = fitted.get("mgrid_vs_direct")
+    pair = [RUNS / n / "vmex_fitted_optimized" / f"wout_{r}.nc" for n, r in ((name, "direct"), (f"{name}_mgrid", "mgrid"))]
+    if entry["mgrid_vs_direct"] is None and all(path.exists() for path in pair) and entry["mgrid"] and entry["mgrid"]["converged"]:
+        import vmex as vj
+        sys.path.insert(0, os.environ.get("ESSOS_EXAMPLE_DIR", str(HERE.parent)))
+        import nearaxis_finite_beta_helpers as helpers
+        entry["mgrid_vs_direct"] = helpers.compare_equilibria(
+            *(vj.read_wout(path) for path in pair), entry["direct"]["benchmark_radius_m"],
+            summary["vmex_settings"]["flux_levels"], summary["inputs"]["nfp"])
     trace = load(f"{name}_trace") or {}
     for key in ("poincare", "signed_iota_traced", "flux_check"):
         if key in summary or key in trace:
@@ -124,7 +144,8 @@ if qa:
             "% Table: surfaces (qa, direct)"]
     for row in qa["direct"]["surfaces"]:
         out.append(f"${row['s']:.4f}$ & {pct(row['rms_over_flux_radius'])} & {pct(row['shape_rms_over_flux_radius'])}\\\\")
-labels = dict(qa="Finite pressure", nohess="No Hessian residual", control="Total field, joint",
+labels = dict(qa="Finite pressure", nohess="No Hessian residual", control_single="Total field, joint",
+              control="Total field, joint (segmented)",
               fixed_sub="Subtracted, fixed axis", fixed_nosub="Total field, fixed axis", vacuum="Vacuum",
               axisym="Axisymmetric", a010="$a=0.010$", a015="$a=0.015$", a020="$a=0.020$")
 out.append("% Table: free-boundary cases (direct route)")
@@ -133,7 +154,8 @@ for name, entry in results["runs"].items():
     if not d or not d["converged"]:
         out.append(f"% {name}: free boundary not converged ({d and d['error']})")
         continue
-    out.append(f"{labels[name]} & ${d['benchmark_radius_m'] / entry['inputs']['a']:.2g}$ & ${d['iota_lab_vmex']:.4f}$ & "
+    mark = "$^\\dagger$" if d.get("ftol_final") == 1e-9 else ""
+    out.append(f"{labels[name]}{mark} & ${d['benchmark_radius_m'] / entry['inputs']['a']:.2g}$ & ${d['iota_lab_vmex']:.4f}$ & "
                f"${d['iota_lab_near_axis']:.4f}$ & {pct(d['axis_shift_over_benchmark_radius'])} & "
                f"{pct(d['surfaces'][-1]['shape_rms_over_flux_radius'])} & {pct(entry['boundary']['normal_error_max'], 2)}\\\\")
 out.append("% Table: radius sequence")

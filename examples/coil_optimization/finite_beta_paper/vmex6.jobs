@@ -1,0 +1,2 @@
+V_ftol	'OPTIMIZE = False' 'CASE = "qa_vacuum"' 'VMEX_ROUTES = ("direct",)' 'TRACE_FIELD_LINES = False' '+VMEX.update(ftol=(1e-8, 1e-9, 1e-10), niter=(4000, 8000, 16000))'
+V_ns129	'OPTIMIZE = False' 'CASE = "qa_vacuum"' 'VMEX_ROUTES = ("direct",)' 'TRACE_FIELD_LINES = False' '+VMEX.update(ns=(17, 33, 65, 129), ftol=(1e-7, 1e-7, 1e-7, 1e-7), niter=(2000, 4000, 8000, 8000))'
