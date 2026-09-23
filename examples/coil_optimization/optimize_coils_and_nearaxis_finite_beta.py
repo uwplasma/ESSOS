@@ -20,6 +20,8 @@ limits with known answers: no plasma field at all, and the vertical field of a t
 """
 import os
 os.environ.setdefault("XLA_FLAGS", "--xla_force_host_platform_device_count=1")
+import hashlib
+import json
 from pathlib import Path
 from time import time
 import jax
@@ -59,10 +61,20 @@ B0 = 1.0                              # Field on the magnetic axis [T]
 # whereas at a = 0.01 the plasma gradient is below that mismatch and its removal cannot be resolved.
 PLASMA_RADIUS = 0.03
 SUBTRACT_PLASMA_FIELD = True          # False: fit the coils to the total field instead, as a control
+# False keeps the axis and etabar at their initial values and optimizes the coils only. With
+# SUBTRACT_PLASMA_FIELD on and off it compares the two targets at one fixed equilibrium, which the
+# joint control cannot do, since there the axis and the transform move with the coils.
+OPTIMIZE_AXIS = True
 OPTIMIZE = True                       # False: reuse OUTPUT_DIR/optimized_dofs.npz
+# Evaluations per call of the optimizer, or None for all at once. With a limit, a run that has not
+# used MAX_FUNCTION_EVALUATIONS yet continues from its own checkpoint, so a long optimization can be
+# done in several shorter runs. Each restart resets the trust region, so the path differs slightly.
+EVALUATIONS_PER_RUN = None
 RUN_VMEX = True                       # Free-boundary benchmark of the coils
+TRACE_FIELD_LINES = True              # Vacuum only: Poincare sections, traced transform and enclosed flux
 SHOW_PLOTS = True
-OUTPUT_DIR = Path(__file__).resolve().parent / f"output_finite_beta_{CASE}{'' if SUBTRACT_PLASMA_FIELD else '_no_subtraction'}"
+RUN_NAME = f"{CASE}{'' if SUBTRACT_PLASMA_FIELD else '_no_subtraction'}{'' if OPTIMIZE_AXIS else '_fixed_axis'}"
+OUTPUT_DIR = Path(__file__).resolve().parent / f"output_finite_beta_{RUN_NAME}"
 
 # Coils
 # Matching the Hessian as well as the field and its gradient needs this much coil freedom: with 3 coils of
@@ -86,7 +98,7 @@ AXIS_SHAPE_BOUND = 0.02; ETABAR_RELATIVE_BOUND = 0.2
 
 # VMEX free-boundary benchmark
 VMEX_STATES = ("optimized",)          # The initial planar coils have no rotational transform to hold a plasma
-VMEX_ROUTES = ("direct", "mgrid")     # Coil field evaluated directly, and interpolated from an mgrid
+VMEX_ROUTES = ("direct", "mgrid")     # Coil field evaluated directly, and read from a MAKEGRID file
 # Optional stress test: a plasma of this fraction of r_singularity in the same coils, e.g. 0.8. The coils were
 # optimized for the fitted plasma only, and VMEX rarely converges for it.
 LARGER_PLASMA_FRACTION = None
@@ -100,6 +112,7 @@ VMEX = dict(mpol=8, ntor=8, nzeta=32, ntheta_boundary=64, delt=0.5, ns=(17, 33, 
 VMEX.update(case.get("vmex", {}))
 # The NESTOR vacuum solve limits the force residual near 2e-11 at NS = 65, so a tighter FTOL never converges.
 MGRID_SHAPE = (97, 97, 64)            # (R, Z, phi); the phi count must be a multiple of nzeta
+MGRID_MARGIN = None                   # Grid extent beyond the plasma [m]; None: max(8 % of R, 4 a)
 
 RC, ZS, NFP = np.array(case["rc"]), np.array(case["zs"]), case["nfp"]
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -124,10 +137,11 @@ field_initial = BiotSavart(Coils(curves=curves, currents=jnp.full(N_COILS, curre
 
 coil_dofs, unravel_coils = ravel_pytree(field_initial)
 n_coil_dofs, n_modes = coil_dofs.size, RC.size - 1
-initial_dofs = jnp.concatenate((coil_dofs, jnp.asarray(RC[1:]), jnp.asarray(ZS[1:]), jnp.array([case["etabar"]])))
+initial_shape = jnp.concatenate((jnp.asarray(RC[1:]), jnp.asarray(ZS[1:]), jnp.array([case["etabar"]])))
+initial_dofs = jnp.concatenate((coil_dofs, initial_shape)) if OPTIMIZE_AXIS else coil_dofs
 
 def dofs_to_fields(dofs, nphi=NPHI):
-    shape = dofs[n_coil_dofs:]
+    shape = dofs[n_coil_dofs:] if OPTIMIZE_AXIS else initial_shape
     rc = jnp.concatenate((jnp.asarray(RC[:1]), shape[:n_modes]))
     zs = jnp.concatenate((jnp.asarray(ZS[:1]), shape[n_modes:2 * n_modes]))
     return unravel_coils(dofs[:n_coil_dofs]), make_near_axis(rc, zs, shape[-1], nphi)
@@ -160,32 +174,72 @@ def residuals(dofs):
     return jnp.where(converged, residual, jnp.nan)
 
 
+""" Everything that defines the optimization problem. A checkpoint is reused only if this matches. """
+CONFIG = dict(case=CASE, inputs=dict(case, B0=B0), plasma_radius=PLASMA_RADIUS, order="r3",
+              subtract_plasma_field=SUBTRACT_PLASMA_FIELD, optimize_axis=OPTIMIZE_AXIS, n_coils=N_COILS,
+              fourier_order=FOURIER_ORDER, n_segments=N_SEGMENTS, nphi=NPHI, max_nfev=MAX_FUNCTION_EVALUATIONS,
+              length_target=LENGTH_TARGET, curvature_target=CURVATURE_TARGET, iota_weight=IOTA_WEIGHT,
+              r0_weight=R0_WEIGHT, hessian_weight=HESSIAN_WEIGHT, axis_shape_bound=AXIS_SHAPE_BOUND,
+              etabar_relative_bound=ETABAR_RELATIVE_BOUND, tolerances=dict(ftol=1e-8, gtol=1e-8, xtol=1e-10),
+              x_scale="jac", method="trf")
+CONFIG_HASH = hashlib.sha256(json.dumps(CONFIG, sort_keys=True, default=float).encode()).hexdigest()[:16]
+
+
 """ Optimization """
 print(f"Case '{CASE}' ({'plasma field subtracted' if SUBTRACT_PLASMA_FIELD else 'CONTROL: coils fit to the total field'}): nfp={NFP}, a={PLASMA_RADIUS} m, p2={case['p2']:g} Pa/m^2, I2={case['I2']:g} T/m, "
       f"axis pressure {-case['p2'] * PLASMA_RADIUS**2:.3g} Pa")
 checkpoint = OUTPUT_DIR / "optimized_dofs.npz"
-cost_history = []
+cost_history, segments, start_dofs = [], [], np.asarray(initial_dofs)
+if OPTIMIZE and EVALUATIONS_PER_RUN and checkpoint.exists():
+    with np.load(checkpoint) as saved:
+        if "config_hash" in saved and str(saved["config_hash"]) == CONFIG_HASH:
+            start_dofs, cost_history = saved["optimized"], list(saved["cost_history"])
+            segments = json.loads(str(saved["optimization"])).get("segments", [])
+    if len(cost_history) >= MAX_FUNCTION_EVALUATIONS or (segments and segments[-1]["status"] != 0):
+        OPTIMIZE = False  # Finished: the budget is spent or the optimizer stopped on its own.
+    else:
+        print(f"Continuing from evaluation {len(cost_history)} of {MAX_FUNCTION_EVALUATIONS}")
 if OPTIMIZE:
     residuals_jit, jacobian_jit = jit(residuals), jit(jacfwd(residuals))
+    time0 = time()
+    jax.block_until_ready(jacobian_jit(initial_dofs))
+    jax.block_until_ready(residuals_jit(initial_dofs))
+    compile_seconds = time() - time0
     def residuals_recorded(dofs):
         value = np.asarray(residuals_jit(jnp.asarray(dofs)))
         cost_history.append(0.5 * float(np.sum(value**2)))
         return value
-    lower = np.r_[np.full(n_coil_dofs, -np.inf), np.asarray(initial_dofs[n_coil_dofs:]) - np.r_[np.full(2 * n_modes, AXIS_SHAPE_BOUND), ETABAR_RELATIVE_BOUND * abs(case["etabar"])]]
-    upper = np.r_[np.full(n_coil_dofs, np.inf), np.asarray(initial_dofs[n_coil_dofs:]) + np.r_[np.full(2 * n_modes, AXIS_SHAPE_BOUND), ETABAR_RELATIVE_BOUND * abs(case["etabar"])]]
+    width = np.r_[np.full(2 * n_modes, AXIS_SHAPE_BOUND), ETABAR_RELATIVE_BOUND * abs(case["etabar"])]
+    lower = np.r_[np.full(n_coil_dofs, -np.inf), (np.asarray(initial_shape) - width) if OPTIMIZE_AXIS else []]
+    upper = np.r_[np.full(n_coil_dofs, np.inf), (np.asarray(initial_shape) + width) if OPTIMIZE_AXIS else []]
     time0 = time()
-    result = least_squares(residuals_recorded, np.asarray(initial_dofs), jac=lambda x: np.asarray(jacobian_jit(jnp.asarray(x))),
+    budget = MAX_FUNCTION_EVALUATIONS - len(cost_history)
+    result = least_squares(residuals_recorded, start_dofs, jac=lambda x: np.asarray(jacobian_jit(jnp.asarray(x))),
                            bounds=(lower, upper), x_scale="jac", verbose=2, ftol=1e-8, gtol=1e-8, xtol=1e-10,
-                           max_nfev=MAX_FUNCTION_EVALUATIONS)
-    print(f"Optimization took {time() - time0:.1f} seconds: {result.message}")
+                           max_nfev=min(budget, EVALUATIONS_PER_RUN or budget))
+    segments.append(dict(status=int(result.status), message=str(result.message), nfev=int(result.nfev),
+                         njev=int(result.njev), cost=float(result.cost), optimality=float(result.optimality),
+                         seconds=time() - time0, compile_seconds=compile_seconds))
+    optimization = dict(segments[-1], success=bool(result.success), nfev=len(cost_history), segments=segments,
+                        seconds=sum(g["seconds"] for g in segments))
+    print(f"Optimization took {optimization['seconds']:.1f} seconds after {compile_seconds:.1f} s of compilation: "
+          f"{result.message}")
     optimized_dofs = result.x
-    np.savez(checkpoint, initial=np.asarray(initial_dofs), optimized=optimized_dofs, cost_history=cost_history)
+    np.savez(checkpoint, initial=np.asarray(initial_dofs), optimized=optimized_dofs, cost_history=cost_history,
+             config=json.dumps(CONFIG, default=float), config_hash=CONFIG_HASH, optimization=json.dumps(optimization))
 else:
     with np.load(checkpoint) as saved:
-        if saved["initial"].shape != initial_dofs.shape or not np.allclose(saved["initial"], initial_dofs, rtol=1e-12):
-            raise ValueError(f"{checkpoint} was made with different inputs. Set OPTIMIZE = True.")
+        if "config_hash" not in saved or str(saved["config_hash"]) != CONFIG_HASH:
+            stored = json.loads(str(saved["config"])) if "config" in saved else {}
+            changed = sorted(k for k in set(stored) | set(CONFIG) if json.dumps(stored.get(k), default=float)
+                             != json.dumps(CONFIG.get(k), default=float))
+            raise ValueError(f"{checkpoint} was made for a different problem (differs in {changed or 'unrecorded inputs'})."
+                             " Set OPTIMIZE = True.")
+        if not np.allclose(saved["initial"], initial_dofs, rtol=1e-12):
+            raise ValueError(f"{checkpoint} starts from different coils. Set OPTIMIZE = True.")
         optimized_dofs, cost_history = saved["optimized"], list(saved["cost_history"])
-    print(f"Reusing {checkpoint}")
+        optimization = json.loads(str(saved["optimization"]))
+    print(f"Reusing {checkpoint} (configuration {CONFIG_HASH})")
 
 
 """ Diagnostics of the initial and optimized states, at higher axis and coil resolution """
@@ -226,7 +280,9 @@ for name, state in states.items():
 match = states["optimized"]["match"]
 print(f"The plasma field is {match['plasma_field_rms_T'] / match['field_rms_T']:.2f} times the remaining coil mismatch "
       f"on the axis, the plasma gradient {match['plasma_gradient_rms_T_per_m'] / match['gradient_rms_T_per_m']:.2f} times.")
-summary = dict(case=CASE, inputs=dict(case, B0=B0, a=PLASMA_RADIUS), vmex_settings=VMEX, cost_history=cost_history,
+summary = dict(case=CASE, inputs=dict(case, B0=B0, a=PLASMA_RADIUS), config=CONFIG, config_hash=CONFIG_HASH,
+               optimization=optimization, vmex_settings=dict(VMEX, mgrid_shape=MGRID_SHAPE, mgrid_margin=MGRID_MARGIN),
+               cost_history=cost_history,
                states={n: dict(iota=float(s["near"].iota), etabar=float(s["near"].etabar),
                                r_singularity=float(s["solution"].r_singularity), axis_match=s["match"],
                                boundary=s["normal"]) for n, s in states.items()}, vmex={})
@@ -245,11 +301,15 @@ if RUN_VMEX:
             equilibria[kind][name], reports = {}, {}
             for route in VMEX_ROUTES:
                 print(f"\n{'=' * 78}\nVMEX free boundary: {kind} plasma (a = {radius:.4g} m), {name} coils, {route} coil field")
-                external = state["field"]
+                mgrid = None
                 if route == "mgrid":
                     boundary = helpers.flux_surface(state["solution"], radius)
-                    external, reports["mgrid_table"] = helpers.tabulate_coils(state["field"], boundary, radius, MGRID_SHAPE, NFP)
-                wout, reports[route] = helpers.solve_free_boundary(state["solution"], external, radius, directory, route, VMEX)
+                    directory.mkdir(parents=True, exist_ok=True)
+                    mgrid = helpers.write_coil_mgrid(state["field"], boundary, radius, MGRID_SHAPE, NFP,
+                                                     directory / "mgrid_coils.nc", margin=MGRID_MARGIN)
+                    reports["mgrid_table"] = mgrid[1]
+                wout, reports[route] = helpers.solve_free_boundary(state["solution"], state["field"], radius, directory,
+                                                                   route, VMEX, mgrid=mgrid)
                 equilibria[kind][name][route] = wout
             solved = [w for w in equilibria[kind][name].values() if w is not None]
             if len(solved) == 2:
@@ -258,10 +318,10 @@ if RUN_VMEX:
             helpers.save_json(OUTPUT_DIR / "summary.json", summary)
 
     print("\n" + "#" * 78 + "\nVMEX free-boundary equilibria compared with the near-axis expansion")
-    # VMEC labels the poloidal angle with the opposite handedness, so its iota has the opposite
-    # sign. The surfaces below coincide, so this is a labeling convention, not a different plasma.
-    print(f"{'plasma':8s} {'coils':10s} {'field':7s} {'iters':>6s} {'|iota| axis':>12s} {'(near-axis)':>12s} "
-          f"{'axis shift/a':>13s} {'LCFS shape/a':>13s} {'beta':>9s}")
+    # Transforms are converted to one laboratory convention: counterclockwise rotation in (R, Z) per
+    # turn in +phi. The raw values differ in sign because the two poloidal angles turn opposite ways.
+    print(f"{'plasma':8s} {'coils':10s} {'field':7s} {'iters':>6s} {'iota lab':>10s} {'(near-axis)':>12s} "
+          f"{'axis shift/a_b':>15s} {'LCFS shape/a_b':>15s} {'beta':>9s}")
     for kind, cases in summary["vmex"].items():
         for name, reports in cases.items():
             for route in VMEX_ROUTES:
@@ -270,13 +330,14 @@ if RUN_VMEX:
                     print(f"{kind:8s} {name:10s} {route:7s}   not converged: {report.get('error')}")
                     continue
                 near = report["near_axis"]
-                print(f"{kind:8s} {name:10s} {route:7s} {report['iterations']:6d} {abs(report['iota_axis']):12.5f} "
-                      f"{abs(report['iota_near_axis']):12.5f} {near['axis_shift_over_a']:13.3e} "
-                      f"{near['surfaces'][-1]['shape_rms_over_flux_radius']:13.3e} {report['betatotal']:9.2e}")
+                print(f"{kind:8s} {name:10s} {route:7s} {report['iterations']:6d} "
+                      f"{report['signed']['vmex_iota_axis_lab']:10.5f} {report['signed']['near_axis_iota_lab']:12.5f} "
+                      f"{near['axis_shift_over_benchmark_radius']:15.3e} "
+                      f"{near['surfaces'][-1]['shape_rms_over_flux_radius']:15.3e} {report['betatotal']:9.2e}")
 
 """ Field-line tracing: without plasma the coil field is the total field, so its Poincare section is exact """
 poincare = None
-if case["p2"] == 0 and case["I2"] == 0:
+if TRACE_FIELD_LINES and case["p2"] == 0 and case["I2"] == 0:
     time0 = time()
     poincare, summary["poincare"] = helpers.trace_poincare(states["optimized"]["field"], states["optimized"]["solution"],
                                                            PLASMA_RADIUS, FLUX_LEVELS)
@@ -284,6 +345,24 @@ if case["p2"] == 0 and case["I2"] == 0:
     for row in summary["poincare"]:
         print(f"   s = {row['s']:<7g} phi = {row['plane']:g} period: {row['punctures']:4d} punctures, "
               f"RMS distance / flux radius = {row['rms_over_flux_radius']:.3e}")
+    # Two independent checks that need the total field, so only here: the handedness of the transform
+    # from a traced line, and the toroidal flux enclosed by the r2 and r3 surfaces of the same label.
+    optimized = states["optimized"]
+    traced, turns = helpers.traced_lab_iota(optimized["field"], optimized["solution"], 0.25 * PLASMA_RADIUS)
+    summary["signed_iota_traced"] = dict(radius_m=0.25 * PLASMA_RADIUS, toroidal_turns=turns, iota_lab=traced,
+                                         near_axis_iota_lab=helpers.near_axis_lab_iota(optimized["solution"],
+                                                                                       PLASMA_RADIUS)[0])
+    print(f"Traced laboratory transform {traced:.5f} over {turns:.1f} turns; near axis "
+          f"{summary['signed_iota_traced']['near_axis_iota_lab']:.5f}")
+    r2 = near_axis(rc=optimized["near"].rc, zs=optimized["near"].zs, etabar=optimized["near"].etabar, nfp=NFP,
+                   nphi=NPHI_DIAGNOSTIC, order="r2", B0=B0, I2=case["I2"], p2=case["p2"], B2c=case["B2c"]).solution
+    summary["flux_check"] = []
+    for fraction in (0.25, 0.5, 0.75, 1.0):
+        r = fraction * PLASMA_RADIUS
+        row = dict(radius_m=r, **{order: helpers.toroidal_flux(optimized["field"], sol, r) / (np.pi * B0 * r**2) - 1
+                                  for order, sol in (("r2", r2), ("r3", optimized["solution"]))})
+        summary["flux_check"].append(row)
+        print(f"   r = {r:.4f} m: enclosed flux / (pi B0 r^2) - 1 = {row['r2']:+.3e} (r2), {row['r3']:+.3e} (r3)")
 helpers.save_json(OUTPUT_DIR / "summary.json", summary)
 
 

@@ -15,6 +15,7 @@ import traceback
 from pathlib import Path
 from time import perf_counter
 
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,6 +23,8 @@ import vmex as vj
 from jax import jacfwd, jit, vmap
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
+from vmex.core.freeboundary import _external_field_from_input
+from vmex.core.mgrid import read_mgrid, tabulate_cartesian_field, write_mgrid
 from vmex.core.plotting import surface_rz
 
 from essos.coils import Coils
@@ -114,8 +117,8 @@ def flux_surface(solution, radius, ntheta=64):
     area = np.linalg.norm(normal, axis=-1)
     normal /= area[..., None]
     outward = np.sign(np.sum(normal * (xyz - np.asarray(solution.geometry.position_cartesian)), -1))
-    if not (np.all(outward > 0) or np.all(outward < 0)):
-        raise ValueError(f"Surface r={radius:.4g} m self-intersects.")
+    if not (np.all(outward > 0) or np.all(outward < 0)):  # A necessary condition only, not an intersection test.
+        raise ValueError(f"Surface r={radius:.4g} m has normals that do not all point away from the axis.")
     return dict(R=R, Z=Z, phi=phi, xyz=xyz, normal=normal * outward[..., None], area=area, nfp=nfp, radius=radius)
 
 
@@ -188,6 +191,64 @@ def trace_poincare(field, solution, radius, levels, maxtime=600.0, n_steps=12000
     return sections, rows
 
 
+def poloidal_orientation(R, Z, R_axis, Z_axis):
+    """+1 if the poloidal angle turns counterclockwise in the (R, Z) plane, -1 otherwise.
+
+    The laboratory rotation of a field line per toroidal turn, taken in +phi (cylindrical), is
+    this sign times a transform defined with that poloidal angle and a toroidal angle along +phi.
+    """
+    turn = np.sum(np.diff(np.unwrap(np.arctan2(np.r_[Z, Z[:1]] - Z_axis, np.r_[R, R[:1]] - R_axis))))
+    return int(np.sign(turn))
+
+
+def near_axis_lab_iota(solution, radius):
+    """Near-axis transform as a laboratory rotation: counterclockwise in (R, Z) per +phi turn."""
+    surface = flux_surface(solution, radius, 64)
+    sign = poloidal_orientation(surface["R"][:, 0], surface["Z"][:, 0], float(solution.R0[0]), float(solution.Z0[0]))
+    return sign * float(solution.iota), sign  # The Boozer angle increases with phi, as dvarphi/dphi > 0.
+
+
+def traced_lab_iota(field, solution, radius, maxtime=300.0, n_steps=6000, tolerance=1e-10):
+    """Laboratory rotation of one traced coil-field line about the near-axis magnetic axis.
+
+    Only a vacuum test: then the coil field is the total field. The winding angle about the
+    axis, sampled at the line's own toroidal angle, is divided by the toroidal angle travelled.
+    """
+    surface = flux_surface(solution, radius, 64)
+    start = jnp.asarray([[surface["R"][0, 0], 0.0, surface["Z"][0, 0]]])
+    tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=start,
+                      maxtime=maxtime, times_to_trace=n_steps, atol=tolerance, rtol=tolerance)
+    x, y, z = np.asarray(tracing.trajectories_xyz)[0, :, :3].T
+    phi = np.unwrap(np.arctan2(y, x))
+    nfp, grid = int(solution.inputs.axis.nfp), np.asarray(solution.phi)
+    period = 2 * np.pi / nfp
+    R_axis = np.interp(np.mod(phi, period), grid, np.asarray(solution.R0), period=period)
+    Z_axis = np.interp(np.mod(phi, period), grid, np.asarray(solution.Z0), period=period)
+    winding = np.unwrap(np.arctan2(z - Z_axis, np.hypot(x, y) - R_axis))
+    return float((winding[-1] - winding[0]) / (phi[-1] - phi[0])), float(abs(phi[-1] - phi[0]) / (2 * np.pi))
+
+
+def toroidal_flux(field, solution, radius, plane=0, nrho=24, ntheta=128):
+    """Toroidal flux of a field through a near-axis cross-section in the plane phi = phi[plane].
+
+    An independent check of the surface labels: with the coil field as the total field (vacuum),
+    a surface of label r should enclose pi B0 r^2. Gauss-Legendre in the fraction rho of the way
+    from the axis to the contour, trapezoidal in the contour parameter (star-shaped contours).
+    """
+    surface = flux_surface(solution, radius, ntheta)
+    Rc, Zc, phi = surface["R"][:, plane], surface["Z"][:, plane], float(surface["phi"][plane])
+    Ra, Za = float(solution.R0[plane]), float(solution.Z0[plane])
+    k = 1j * np.fft.fftfreq(ntheta, 1 / ntheta)
+    dRc, dZc = np.real(np.fft.ifft(k * np.fft.fft(Rc))), np.real(np.fft.ifft(k * np.fft.fft(Zc)))
+    rho, weight = np.polynomial.legendre.leggauss(nrho)
+    rho, weight = (rho + 1) / 2, weight / 2
+    R, Z = Ra + rho[:, None] * (Rc - Ra), Za + rho[:, None] * (Zc - Za)
+    jacobian = rho[:, None] * ((Rc - Ra) * dZc - (Zc - Za) * dRc)
+    B = evaluate_field(field, np.stack((R * np.cos(phi), R * np.sin(phi), Z), -1))
+    B_phi = -B[..., 0] * np.sin(phi) + B[..., 1] * np.cos(phi)
+    return float(abs(np.sum(weight[:, None] * B_phi * jacobian) * 2 * np.pi / ntheta))
+
+
 # ------------------------------ VMEX benchmark -------------------------------
 def flux_indices(wout, levels):
     s = np.asarray(wout.phi) / np.asarray(wout.phi)[-1]
@@ -220,7 +281,8 @@ def compare_to_near_axis(wout, solution, radius, levels, ntheta=256):
                          shape_rms_over_flux_radius=float(np.sqrt(np.mean(np.square(moved)))) / r))
     shift = np.hypot(dR, dZ)
     return dict(surfaces=rows, axis_shift_rms_m=float(np.sqrt(np.mean(shift**2))),
-                axis_shift_max_m=float(shift.max()), axis_shift_over_a=float(shift.max() / radius))
+                axis_shift_max_m=float(shift.max()), axis_shift_over_benchmark_radius=float(shift.max() / radius),
+                benchmark_radius_m=float(radius))
 
 
 def compare_equilibria(first, second, radius, levels, nfp, ntheta=256, nplanes=8):
@@ -237,28 +299,118 @@ def compare_equilibria(first, second, radius, levels, nfp, ntheta=256, nplanes=8
     return rows
 
 
-def tabulate_coils(field, surface, radius, shape, nfp):
-    """In-memory mgrid bracketing the plasma, with its interpolation error on the plasma boundary."""
-    margin = max(0.08 * float(surface["R"].mean()), 4 * radius)
+class GuardedMgridField(vj.MgridField):
+    """An mgrid field that is NaN outside its (R, Z) table rather than clamped to its edge.
+
+    VMEX clamps R and Z to the table, so a boundary that left the grid would silently see the
+    edge field. Every NESTOR evaluation goes through ``b_cyl``, so a NaN there fails the solve.
+    """
+
+    def b_cyl(self, r, phi, z):
+        values = super().b_cyl(r, phi, z)
+        r, _, z = jnp.broadcast_arrays(jnp.asarray(r), jnp.asarray(phi), jnp.asarray(z))
+        inside = (r >= self.rmin) & (r <= self.rmax) & (z >= self.zmin) & (z <= self.zmax)
+        return tuple(jnp.where(inside, value, jnp.nan) for value in values)
+
+
+jax.tree_util.register_dataclass(GuardedMgridField, data_fields=["br", "bp", "bz", "extcur"],
+                                 meta_fields=["rmin", "rmax", "zmin", "zmax", "nfp"])
+
+
+def _cartesian(field_cyl, phi):
+    c, s = np.cos(phi), np.sin(phi)
+    return np.stack((field_cyl[0] * c - field_cyl[1] * s, field_cyl[0] * s + field_cyl[1] * c, field_cyl[2]), -1)
+
+
+def write_coil_mgrid(field, surface, radius, shape, nfp, path, margin=None):
+    """MAKEGRID NetCDF file of the coils bracketing the plasma, checked by reading it back.
+
+    One coil group, scaled mode, unit current: with ``EXTCUR = 1`` the file reproduces the
+    physical coil currents exactly once. Returns the file path and the direct, in-memory and
+    reloaded fields compared on the plasma boundary.
+    """
+    margin = max(0.08 * float(surface["R"].mean()), 4 * radius) if margin is None else margin
     bounds = dict(rmin=float(surface["R"].min()) - margin, rmax=float(surface["R"].max()) + margin,
                   zmin=float(surface["Z"].min()) - margin, zmax=float(surface["Z"].max()) + margin)
     start = perf_counter()
-    grid = vj.MgridField.from_coils(field.coils, ir=shape[0], jz=shape[1], kp=shape[2], nfp=nfp, **bounds)
+    data = tabulate_cartesian_field(field, ir=shape[0], jz=shape[1], kp=shape[2], nfp=nfp, label="essos_coils",
+                                    **bounds)
+    write_mgrid(path, data)
+    reloaded = read_mgrid(path)
+    table_difference = max(float(np.max(np.abs(getattr(reloaded, k) - getattr(data, k)))) for k in ("br", "bp", "bz"))
     R, Z, phi = surface["R"], surface["Z"], np.broadcast_to(surface["phi"], surface["R"].shape)
-    cyl = np.stack([np.asarray(v) for v in grid.b_cyl(jnp.asarray(R), jnp.asarray(phi), jnp.asarray(Z))], -1)
-    c, s = np.cos(phi), np.sin(phi)
-    interpolated = np.stack((cyl[..., 0] * c - cyl[..., 1] * s, cyl[..., 0] * s + cyl[..., 1] * c, cyl[..., 2]), -1)
-    error = np.linalg.norm(interpolated - evaluate_field(field, surface["xyz"]), axis=-1)
-    return grid, dict(bounds=bounds, shape_R_Z_phi=list(shape), seconds=perf_counter() - start,
-                      interpolation_error_rms_T=float(np.sqrt(np.mean(error**2))),
-                      interpolation_error_max_T=float(error.max()))
+    direct = evaluate_field(field, surface["xyz"])
+    sample = lambda grid: _cartesian([np.asarray(v) for v in grid.b_cyl(jnp.asarray(R), jnp.asarray(phi),
+                                                                         jnp.asarray(Z))], phi)
+    in_memory = sample(vj.MgridField.from_mgrid_data(data, extcur=[1.0]))
+    from_file = sample(vj.MgridField.from_file(path, extcur=[1.0]))
+    error = np.linalg.norm(from_file - direct, axis=-1)
+    return Path(path), dict(
+        file=Path(path).name, bounds=bounds, margin_m=margin, shape_R_Z_phi=list(shape), seconds=perf_counter() - start,
+        mgrid_mode=reloaded.mgrid_mode, raw_coil_cur=list(reloaded.raw_coil_cur), extcur=[1.0],
+        write_read_table_difference_T=table_difference,
+        reloaded_minus_in_memory_max_T=float(np.max(np.abs(from_file - in_memory))),
+        interpolation_error_rms_T=float(np.sqrt(np.mean(error**2))), interpolation_error_max_T=float(error.max()),
+        interpolation_error_max_over_B=float(np.max(error / np.linalg.norm(direct, axis=-1))))
 
 
-def solve_free_boundary(solution, external_field, radius, directory, name, settings):
+def grid_margin(wout, bounds, ntheta=128, nphi=64):
+    """Smallest distance [m] from the final plasma boundary to the edge of the mgrid table."""
+    phi = np.arange(nphi) * 2 * np.pi / int(wout.nfp) / nphi
+    R, Z = surface_rz(wout, s_index=int(wout.ns) - 1, theta=np.arange(ntheta) * 2 * np.pi / ntheta, phi=phi)
+    return float(min(R.min() - bounds["rmin"], bounds["rmax"] - R.max(), Z.min() - bounds["zmin"],
+                     bounds["zmax"] - Z.max()))
+
+
+def interface_check(wout, ntheta=64, nphi=64):
+    """Plasma-side against vacuum-side field on the free boundary.
+
+    VMEX enforces B.n = 0 on the vacuum side (NESTOR) and total-pressure balance
+    |B_in|^2 + 2 mu0 p = |B_out|^2. It does not impose continuity of the tangential field, so a
+    jump there is a surface current mu0 K = n x (B_out - B_in) that the no-sheet-current source
+    model excludes. The plasma side is extrapolated from the last two half-mesh surfaces.
+    """
+    if getattr(wout, "bsubumnc_sur", None) is None:
+        return None
+    theta = np.arange(ntheta) * 2 * np.pi / ntheta
+    phi = np.arange(nphi) * 2 * np.pi / int(wout.nfp) / nphi
+    xm, xn = np.asarray(wout.xm_nyq), np.asarray(wout.xn_nyq)
+    cosine = np.cos(xm[:, None, None] * theta[None, :, None] - xn[:, None, None] * phi[None, None, :])
+    evaluate = lambda c: np.einsum("m,mtp->tp", np.asarray(c), cosine)
+    edge = lambda name: 1.5 * np.asarray(getattr(wout, name))[-1] - 0.5 * np.asarray(getattr(wout, name))[-2]
+    Bu_in, Bv_in, B_in = evaluate(edge("bsubumnc")), evaluate(edge("bsubvmnc")), evaluate(edge("bmnc"))
+    Bu_out, Bv_out = evaluate(wout.bsubumnc_sur), evaluate(wout.bsubvmnc_sur)
+    B2_out = Bu_out * evaluate(wout.bsupumnc_sur) + Bv_out * evaluate(wout.bsupvmnc_sur)
+    # Tangential metric of the boundary, to turn the covariant jumps into a physical field.
+    x, xg = np.asarray(wout.xm), np.asarray(wout.xn)
+    angle = x[:, None, None] * theta[None, :, None] - xg[:, None, None] * phi[None, None, :]
+    rmnc, zmns = np.asarray(wout.rmnc)[-1], np.asarray(wout.zmns)[-1]
+    R = np.einsum("m,mtp->tp", rmnc, np.cos(angle))
+    Ru = np.einsum("m,mtp->tp", -rmnc * x, np.sin(angle))
+    Rv = np.einsum("m,mtp->tp", rmnc * xg, np.sin(angle))
+    Zu = np.einsum("m,mtp->tp", zmns * x, np.cos(angle))
+    Zv = np.einsum("m,mtp->tp", -zmns * xg, np.cos(angle))
+    guu, guv, gvv = Ru**2 + Zu**2, Ru * Rv + Zu * Zv, R**2 + Rv**2 + Zv**2
+    det = guu * gvv - guv**2
+    du, dv = Bu_out - Bu_in, Bv_out - Bv_in
+    jump = np.sqrt((gvv * du**2 - 2 * guv * du * dv + guu * dv**2) / det)
+    p_edge = float(np.asarray(wout.presf)[-1])
+    balance = (B_in**2 + 2 * 4e-7 * np.pi * p_edge - B2_out) / B2_out
+    return dict(tangential_jump_max_over_B=float(np.max(jump / np.sqrt(B2_out))),
+                tangential_jump_rms_over_B=float(np.sqrt(np.mean((jump / np.sqrt(B2_out))**2))),
+                pressure_balance_max_rel=float(np.max(np.abs(balance))),
+                pressure_balance_rms_rel=float(np.sqrt(np.mean(balance**2))),
+                note="plasma side extrapolated from the last two half-mesh surfaces")
+
+
+def solve_free_boundary(solution, external_field, radius, directory, name, settings, mgrid=None):
     """VMEX free-boundary equilibrium in fixed coils, seeded by the near-axis boundary.
 
     The near-axis surface is only the initial guess: with ``LFREEB = T`` VMEX moves it.
-    ``external_field`` is an ESSOS ``BiotSavart`` (direct evaluation) or a VMEX ``MgridField``.
+    ``external_field`` is an ESSOS ``BiotSavart`` (direct evaluation). With ``mgrid``, a
+    ``(path, report)`` pair from :func:`write_coil_mgrid`, the field is read from that MAKEGRID
+    file through the deck's ``MGRID_FILE`` and ``EXTCUR`` instead, and made NaN off the grid.
+    The deck actually solved is saved as ``input.<name>.runtime``.
     Returns ``(wout or None, report)``; only ``report["converged"]`` equilibria are accepted.
     """
     directory = Path(directory)
@@ -273,9 +425,20 @@ def solve_free_boundary(solution, external_field, radius, directory, name, setti
         report.update(phiedge_Wb=export.phiedge, pressure_axis_Pa=export.pressure_axis, curtor_A=export.curtor,
                       boundary_fit_error_m=float(max(export.boundary.maximum_R_reconstruction_error,
                                                      export.boundary.maximum_Z_reconstruction_error)))
-        # A deck without MGRID_FILE is demoted to fixed boundary on reading, so label the field source.
-        inp = dataclasses.replace(vj.VmecInput.from_file(export.path), lfreeb=True,
-                                  mgrid_file=f"essos_coils({name})", nzeta=settings["nzeta"])
+        # A deck without MGRID_FILE is demoted to fixed boundary on reading, so name the field source.
+        source = dict(mgrid_file=mgrid[0].name, extcur=np.array([1.0])) if mgrid else dict(
+            mgrid_file=f"essos_coils({name})")  # Direct route: a label, the coils are in coils_*.json.
+        inp = dataclasses.replace(vj.VmecInput.from_file(export.path), lfreeb=True, nzeta=settings["nzeta"], **source)
+        inp.to_indata(directory / f"input.{name}.runtime")
+        report.update(runtime=dict(file=f"input.{name}.runtime", lfreeb=bool(inp.lfreeb), mgrid_file=inp.mgrid_file,
+                                   mpol=int(inp.mpol), ntor=int(inp.ntor), nzeta=int(inp.nzeta), ncurr=int(inp.ncurr),
+                                   highest_poloidal_mode_max_m=float(max(np.max(np.abs(np.asarray(inp.rbc)[:, -1])),
+                                                                         np.max(np.abs(np.asarray(inp.zbs)[:, -1]))))))
+        if mgrid:  # The solver's own file loader and EXTCUR scaling, then the off-grid guard.
+            loaded = _external_field_from_input(inp, mgrid[0])
+            external_field = GuardedMgridField(br=loaded.br, bp=loaded.bp, bz=loaded.bz, extcur=loaded.extcur,
+                                               rmin=loaded.rmin, rmax=loaded.rmax, zmin=loaded.zmin,
+                                               zmax=loaded.zmax, nfp=loaded.nfp)
         with (directory / f"vmex_{name}.log").open("w") as log:
             def emit(*values, **kwargs):
                 print(*values, **kwargs)
@@ -291,11 +454,28 @@ def solve_free_boundary(solution, external_field, radius, directory, name, setti
                       vacuum_active=result.vacuum is not None, betatotal=float(wout.betatotal),
                       iota_axis=float(np.asarray(wout.iotaf)[0]), iota_edge=float(np.asarray(wout.iotaf)[-1]),
                       iota_near_axis=float(solution.iota), aspect=float(wout.aspect))
+        # Signed transforms converted to one laboratory convention (see poloidal_orientation).
+        middle = int(wout.ns) // 2
+        theta = np.arange(64) * 2 * np.pi / 64
+        RM, ZM = surface_rz(wout, s_index=middle, theta=theta, phi=np.zeros(1))
+        RA, ZA = surface_rz(wout, s_index=0, theta=np.zeros(1), phi=np.zeros(1))
+        vmex_sign = poloidal_orientation(RM[:, 0], ZM[:, 0], float(RA[0, 0]), float(ZA[0, 0]))
+        near_lab, near_sign = near_axis_lab_iota(solution, radius)
+        report.update(signed=dict(vmex_iota_axis_raw=report["iota_axis"], vmex_theta_orientation=vmex_sign,
+                                  vmex_iota_axis_lab=vmex_sign * report["iota_axis"],
+                                  near_axis_iota_raw=float(solution.iota), near_axis_theta_orientation=near_sign,
+                                  near_axis_iota_lab=near_lab))
+        report["interface"] = interface_check(wout)
         report["converged"] = bool(result.converged and result.vacuum is not None)
+        if mgrid:
+            report["grid_margin_m"] = grid_margin(wout, mgrid[1]["bounds"])
+            if report["grid_margin_m"] <= 0:
+                report["converged"] = False
+                report["error"] = "The final boundary leaves the mgrid table."
         if report["converged"]:
             report["near_axis"] = compare_to_near_axis(wout, solution, radius, settings["flux_levels"])
             return wout, report
-        report["error"] = "VMEX did not reach FTOL with the vacuum region active."
+        report.setdefault("error", "VMEX did not reach FTOL with the vacuum region active.")
     except Exception as error:  # A failed case must not stop the remaining benchmarks.
         report.update(error=f"{type(error).__name__}: {error}", seconds=perf_counter() - start)
         (directory / f"failure_{name}.txt").write_text(traceback.format_exc())
@@ -339,7 +519,8 @@ def plot_optimization(history, matches, path, title):
         if len(history):
             evaluation = np.arange(1, len(history) + 1)
             ax.semilogy(evaluation, history, ".", color=MUTED, ms=3, alpha=0.6, label="every trial step")
-            ax.semilogy(evaluation, np.minimum.accumulate(history), color=COLORS["optimized"], lw=1.8, label="accepted")
+            ax.semilogy(evaluation, np.minimum.accumulate(history), color=COLORS["optimized"], lw=1.8,
+                        label="running minimum")
             ax.legend(loc="upper right")
         ax.set(xlabel="function evaluation", ylabel=r"cost  $\frac{1}{2}\sum r^2$", title="Optimization history")
         ax.grid(True, which="both", alpha=0.6)
@@ -519,7 +700,7 @@ def plot_benchmark_summary(summary, path, title):
         low, high = ax.get_ylim()
         ax.set_ylim(low, high * 2.2)  # Headroom on the log axis so the legend clears every bar.
         ax.legend(ncols=4, loc="upper center", handlelength=1.2, columnspacing=1.0)
-        shifts = [r[1]["axis_shift_over_a"] for r in rows]
+        shifts = [r[1]["axis_shift_over_benchmark_radius"] for r in rows]
         bx.bar(np.arange(len(rows)), shifts, 0.6, color=COLORS["direct"])
         # One magnitude, so a linear axis from zero; a log axis fitted to near-equal bars exaggerates them.
         bx.set_ylim(0, 1.25 * max(shifts))
@@ -527,7 +708,7 @@ def plot_benchmark_summary(summary, path, title):
             bx.annotate(f"{100 * value:.2f} %", (x, value), ha="center", va="bottom", xytext=(0, 3),
                         textcoords="offset points", fontsize=8)
         bx.set_xticks(np.arange(len(rows)), [r[0] for r in rows], fontsize=8)
-        bx.set(ylabel="max axis displacement / a", title="Magnetic-axis agreement")
+        bx.set(ylabel=r"max axis displacement / $a_b$", title="Magnetic-axis agreement")
         bx.grid(True, axis="y", which="both", alpha=0.6)
         fig.suptitle(title, fontsize=12)
         fig.savefig(path)
