@@ -1,0 +1,32 @@
+{
+  "target_field_rms_over_B0": {
+    "minimum": 2.430608937352403e-05,
+    "maximum": 2.430608937355813e-05,
+    "absolute_range": 3.4098158324669114e-17,
+    "relative_range": 1.4028648459504902e-12
+  },
+  "target_gradient_rms_R0_over_B0": {
+    "minimum": 0.0006680577775834506,
+    "maximum": 0.0006680577775834995,
+    "absolute_range": 4.889751797909625e-17,
+    "relative_range": 7.319354645637188e-14
+  },
+  "floquet_iota_lab": {
+    "minimum": -0.2123398806158491,
+    "maximum": -0.2123398806050215,
+    "absolute_range": 1.0827588825534917e-11,
+    "relative_range": 5.099178164032328e-11
+  },
+  "return_map_determinant": {
+    "minimum": 1.0000000829003362,
+    "maximum": 1.0000000829202904,
+    "absolute_range": 1.9954260466192864e-11,
+    "relative_range": 1.9954258811840224e-11
+  },
+  "effective_flux_radius_m": {
+    "minimum": 0.01781148964101863,
+    "maximum": 0.01781148964129694,
+    "absolute_range": 2.7830862614486307e-13,
+    "relative_range": 1.5625230216670405e-11
+  }
+}

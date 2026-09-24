@@ -1,0 +1,7 @@
+contribution,estimate,evidence
+coil-field quadrature,bounded by 240/480/960 segment spread; see quadrature_check.csv,"direct target-field, gradient, return-map transform, seed flux, and traced flux are invariant across the checked segment counts"
+pressure-step extrapolation,not isolated,five positive levels fit to fixed-zero linear + quadratic; no extra smaller levels
+radial/Fourier/toroidal VMEX discretization,not converged; see resolution_check.csv,NS=65/129 changes the selected pressure response and flips the axis-length sign; NS=257 did not reach its first vacuum iteration within 15 min
+vacuum interface / exterior response,diagnostic reported; no pressure-signal error bound,interface tangential and pressure-balance metrics are in pressure_points.csv
+coil-reference/model mismatch,unresolved,the measured slopes disagree in sign or by large factors with the ideal first-order response
+finite-radius truncation,unresolved,the three-radius trend is not a small correction to the first-order prediction
