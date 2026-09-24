@@ -154,9 +154,9 @@ dipole_field = DipoleField(
 combined_field = CombinedField(coil_field, dipole_field)
 
 
-R0_VALS = jnp.linspace(0.33, 0.348, 5)  # confirmed-safe window, no divergence
+R0_VALS = jnp.linspace(0.335, 0.345, 5)  
 R0_VAL = R0_VALS[0]  
-ENERGY_EV = 1000
+ENERGY_EV = 10000
 
 test_pt = jnp.array([R0_VAL, 0.0, 0.0])
 B_vec = combined_field.B(test_pt)

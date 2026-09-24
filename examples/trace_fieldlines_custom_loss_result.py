@@ -130,7 +130,7 @@ print(f"B at test point: {B_test}  shape={jnp.shape(B_test)}")
 print(f"|B| at test point: {jnp.asarray(absB_test).ravel()}  shape={jnp.shape(absB_test)}")
 
 print("\n Setting up field-line tracing ")
-R0   = jnp.linspace(0.33, 0.366, 15)  # lose after .371
+R0   = jnp.linspace(0.333, 0.385, 10)  # lose after .371
 Z0 = jnp.zeros(len(R0))
 phi0 = jnp.zeros(len(R0))
 initial_xyz = jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T

@@ -174,3 +174,14 @@ essos/version.py
 *.vts
 *.xml
 examples/input.optimized
+
+# Local PM optimization scratch output
+*.npy
+*.csv
+*.vtp
+*.ipynb
+.ipynb_checkpoints/
+*_output/
+essos/*.focus
+essos/rc_stage2_*.txt
+examples/particle_trace_log.txt

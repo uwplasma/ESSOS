@@ -21,11 +21,11 @@ SURFACE_RANGE  = "half period"
 SURFACE_NPHI   = 64
 SURFACE_NTHETA = 64
 
-FB_ONLY_STEPS       = 8000
+FB_ONLY_STEPS       = 82    # matched to scipy L-BFGS-B's actual Stage 1 iteration count
 FB_ONLY_LR_MAX      = 0.01
 FB_ONLY_LR_MIN_FRAC = 0.1
 
-FD_ANNEAL_STEPS       = 6000
+FD_ANNEAL_STEPS       = 779   # matched to scipy's actual total annealing-stage iteration count
 FD_ANNEAL_LR_MAX      = 0.001
 FD_ANNEAL_LR_MIN_FRAC = 0.001
 

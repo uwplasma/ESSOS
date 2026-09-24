@@ -144,7 +144,7 @@ print(f"B at (0.30,0,0): {B_test}")
 
 print("\n--- Setting up field-line tracing (SAME parameters as optimized-result trace) ---")
 
-R0   = jnp.linspace(0.30, 0.40, 18)  # matched to optimized-result sweep for iota(r) comparison
+R0   = jnp.linspace(0.355, 0.375, 5)
 phi0 = jnp.zeros(len(R0))
 Z0   = jnp.zeros(len(R0))
 initial_xyz = cyl_to_xyz(R0, phi0, Z0)
