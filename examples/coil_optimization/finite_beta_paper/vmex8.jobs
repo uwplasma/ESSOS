@@ -1,5 +1,0 @@
-qa_ns33	'OPTIMIZE = False'  'VMEX_ROUTES = ("direct",)' '+VMEX.update(ns=(17, 33), ftol=(1e-8, 1e-9), niter=(2000, 8000))'
-fixed_sub_ns33	'OPTIMIZE = False' 'OPTIMIZE_AXIS = False' 'VMEX_ROUTES = ("direct",)' '+VMEX.update(ns=(17, 33), ftol=(1e-8, 1e-9), niter=(2000, 8000))'
-a010_ns33	'OPTIMIZE = False' 'PLASMA_RADIUS = 0.010' 'VMEX_ROUTES = ("direct",)' '+VMEX.update(ns=(17, 33), ftol=(1e-8, 1e-9), niter=(2000, 8000))'
-a015_ns33	'OPTIMIZE = False' 'PLASMA_RADIUS = 0.015' 'VMEX_ROUTES = ("direct",)' '+VMEX.update(ns=(17, 33), ftol=(1e-8, 1e-9), niter=(2000, 8000))'
-a020_ns33	'OPTIMIZE = False' 'PLASMA_RADIUS = 0.020' 'VMEX_ROUTES = ("direct",)' '+VMEX.update(ns=(17, 33), ftol=(1e-8, 1e-9), niter=(2000, 8000))'

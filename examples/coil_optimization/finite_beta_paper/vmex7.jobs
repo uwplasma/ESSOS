@@ -1,6 +1,0 @@
-qa_f9	'OPTIMIZE = False'  'VMEX_ROUTES = ("direct",)' '+VMEX.update(ftol=(1e-8, 1e-9, 1e-9), niter=(2000, 4000, 16000))'
-control_single_f9	'OPTIMIZE = False' 'SUBTRACT_PLASMA_FIELD = False' 'VMEX_ROUTES = ("direct",)' '+VMEX.update(ftol=(1e-8, 1e-9, 1e-9), niter=(2000, 4000, 16000))'
-fixed_sub_f9	'OPTIMIZE = False' 'OPTIMIZE_AXIS = False' 'VMEX_ROUTES = ("direct",)' '+VMEX.update(ftol=(1e-8, 1e-9, 1e-9), niter=(2000, 4000, 16000))'
-a010_f9	'OPTIMIZE = False' 'PLASMA_RADIUS = 0.010' 'VMEX_ROUTES = ("direct",)' '+VMEX.update(ftol=(1e-8, 1e-9, 1e-9), niter=(2000, 4000, 16000))'
-a015_f9	'OPTIMIZE = False' 'PLASMA_RADIUS = 0.015' 'VMEX_ROUTES = ("direct",)' '+VMEX.update(ftol=(1e-8, 1e-9, 1e-9), niter=(2000, 4000, 16000))'
-a020_f9	'OPTIMIZE = False' 'PLASMA_RADIUS = 0.020' 'VMEX_ROUTES = ("direct",)' '+VMEX.update(ftol=(1e-8, 1e-9, 1e-9), niter=(2000, 4000, 16000))'
