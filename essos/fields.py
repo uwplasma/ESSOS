@@ -264,7 +264,15 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     return (powers @ (k == np.arange(-1, 4)[:, None])) * ((1 - t) * scaled[i] + t * scaled[i + 1])
 
 class Vmec():
-    def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus'):
+    """VMEC equilibrium from a wout file.
+
+    ``mode_tolerance`` drops a Fourier mode when, in every table of its set,
+    its largest amplitude over the radial grid is below that fraction of the
+    table's largest: R and Z for the geometry modes, and |B|, sqrt(g) and the
+    B components for the Nyquist modes. Evaluation cost scales with the
+    number of modes kept.
+    """
+    def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus', mode_tolerance=0.0):
         self.wout_filename = wout_filename
         from netCDF4 import Dataset
         self.nc = Dataset(self.wout_filename)
@@ -282,6 +290,8 @@ class Vmec():
         self.gmnc = jnp.array(self.nc.variables["gmnc"][:])
         self.xm_nyq = jnp.array(self.nc.variables["xm_nyq"][:])
         self.xn_nyq = jnp.array(self.nc.variables["xn_nyq"][:])
+        if mode_tolerance > 0:
+            self._drop_small_modes(mode_tolerance)
         self.len_xm_nyq = len(self.xm_nyq)
         self.ns = self.nc.variables["ns"][0]
         self.s_full_grid = jnp.linspace(0, 1, self.ns)
@@ -296,6 +306,15 @@ class Vmec():
         self.Aminor_p = jnp.array(self.nc.variables["Aminor_p"][:])
         #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
         
+    def _drop_small_modes(self, tolerance):
+        for tables, numbers in ((('rmnc', 'zmns'), ('xm', 'xn')),
+                                (('bmnc', 'gmnc', 'bsubsmns', 'bsubumnc', 'bsubvmnc', 'bsupumnc', 'bsupvmnc'),
+                                 ('xm_nyq', 'xn_nyq'))):
+            amplitude = [np.abs(np.asarray(getattr(self, name))).max(axis=0) for name in tables]
+            keep = np.any([a > tolerance * a.max() for a in amplitude], axis=0)
+            for name in tables + numbers:
+                setattr(self, name, getattr(self, name)[..., keep])
+
     @property
     def surface(self):
         return self._surface
@@ -314,39 +333,51 @@ class Vmec():
             b_theta = self.bsubumnc[1:3] / jnp.sqrt(self.s_half_grid[:2])[:, None]
             return (1.5 * b_theta[0] - 0.5 * b_theta[1]) / 2
         
+    # Nyquist tables: (on the half grid, _radial_interp options, cosine series).
+    _NYQUIST = {'bmnc': (True, {}, True), 'gmnc': (True, {}, True),
+                'bsubsmns': (False, {'covariant_s': True}, False),
+                'bsubumnc': (True, {}, True), 'bsubvmnc': (True, {}, True),
+                'bsupumnc': (True, {}, True), 'bsupvmnc': (True, {}, True)}
+
+    @partial(jit, static_argnames=['self'])
+    def _nyquist_series(self, points):
+        """Each Nyquist table's Fourier sum at ``points`` and its (s, theta, phi) gradient.
+
+        One set of angles, cosines, sines and radial weights serves every
+        table and the gradients are analytic, so |B|, sqrt(g), the B components
+        and their derivatives cost one evaluation between them when traced
+        together, and curl b and the curvature need no automatic differentiation.
+        """
+        s, theta, phi = points
+        angle = self.xm_nyq * theta - self.xn_nyq * phi
+        cos, sin = jnp.cos(angle), jnp.sin(angle)
+        series = {}
+        for name, (half_grid, options, is_cos) in self._NYQUIST.items():
+            grid = self.s_half_grid if half_grid else self.s_full_grid
+            if name == 'bsubsmns':
+                options = dict(options, axis_m1=self._bsubs_axis_m1())
+            f, df = jax.jvp(lambda s: _radial_interp(s, grid, getattr(self, name), self.xm_nyq,
+                                                     half_grid=half_grid, **options), (s,), (jnp.ones_like(s),))
+            if is_cos:
+                series[name] = (f @ cos, jnp.array([df @ cos, -(self.xm_nyq * f) @ sin, (self.xn_nyq * f) @ sin]))
+            else:
+                series[name] = (f @ sin, jnp.array([df @ sin, (self.xm_nyq * f) @ cos, -(self.xn_nyq * f) @ cos]))
+        return series
+
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
-        s, theta, phi = points
-        bsubsmns_interp = _radial_interp(s, self.s_full_grid, self.bsubsmns, self.xm_nyq, covariant_s=True,
-                                         axis_m1=self._bsubs_axis_m1())
-        bsubumnc_interp = _radial_interp(s, self.s_half_grid, self.bsubumnc, self.xm_nyq, half_grid=True)
-        bsubvmnc_interp = _radial_interp(s, self.s_half_grid, self.bsubvmnc, self.xm_nyq, half_grid=True)
-        cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
-        sinangle_nyq = jnp.sin(self.xm_nyq * theta - self.xn_nyq * phi)
-        B_sub_s = jnp.dot(bsubsmns_interp, sinangle_nyq)
-        B_sub_theta = jnp.dot(bsubumnc_interp, cosangle_nyq)
-        B_sub_phi = jnp.dot(bsubvmnc_interp, cosangle_nyq)
-        return jnp.array([B_sub_s, B_sub_theta, B_sub_phi])
-    
+        series = self._nyquist_series(points)
+        return jnp.array([series[name][0] for name in ('bsubsmns', 'bsubumnc', 'bsubvmnc')])
+
     @partial(jit, static_argnames=['self'])
     def B_contravariant(self, points):
-        s, theta, phi = points
-        bsupumnc_interp = _radial_interp(s, self.s_half_grid, self.bsupumnc, self.xm_nyq, half_grid=True)
-        bsupvmnc_interp = _radial_interp(s, self.s_half_grid, self.bsupvmnc, self.xm_nyq, half_grid=True)
-        cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
-        B_sup_theta = jnp.dot(bsupumnc_interp, cosangle_nyq)
-        B_sup_phi = jnp.dot(bsupvmnc_interp, cosangle_nyq)
+        series = self._nyquist_series(points)
+        B_sup_theta, B_sup_phi = series['bsupumnc'][0], series['bsupvmnc'][0]
         return jnp.array([0*B_sup_theta, B_sup_theta, B_sup_phi])
- 
+
     @partial(jit, static_argnames=['self'])
     def sqrtg(self, points):
-        s, theta, phi = points
-        gmnc_interp = _radial_interp(s, self.s_half_grid, self.gmnc, self.xm_nyq, half_grid=True)
-        cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
-        sqrt_g_vmec = jnp.dot(gmnc_interp, cosangle_nyq)
-        return sqrt_g_vmec
-
-
+        return self._nyquist_series(points)['gmnc'][0]
 
     @partial(jit, static_argnames=['self'])
     def B(self, points):
@@ -406,10 +437,7 @@ class Vmec():
         
     @partial(jit, static_argnames=['self'])
     def AbsB(self, points):
-        s, theta, phi = points
-        bmnc_interp = _radial_interp(s, self.s_half_grid, self.bmnc, self.xm_nyq, half_grid=True)
-        cos_values = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
-        return jnp.dot(bmnc_interp, cos_values)
+        return self._nyquist_series(points)['bmnc'][0]
     
     @partial(jit, static_argnames=['self'])
     def dB_by_dX(self, points):
@@ -419,11 +447,12 @@ class Vmec():
     
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
-        return grad(self.AbsB)(points)
+        return self._nyquist_series(points)['bmnc'][1]
     
     @partial(jit, static_argnames=['self'])
     def grad_B_covariant(self, points):
-        return jacfwd(self.B_covariant)(points)    
+        series = self._nyquist_series(points)
+        return jnp.stack([series[name][1] for name in ('bsubsmns', 'bsubumnc', 'bsubvmnc')])
  
     @partial(jit, static_argnames=['self'])
     def curl_B(self, points):

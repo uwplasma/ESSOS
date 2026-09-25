@@ -149,3 +149,25 @@ def test_vmec_radial_interpolation_keeps_grid_values_and_m0_modes():
     m0 = vmec.xm == 0
     expected = jax.vmap(lambda row: jnp.interp(s, vmec.s_full_grid, row))(vmec.rmnc[:, m0].T)
     assert jnp.allclose(_radial_interp(s, vmec.s_full_grid, vmec.rmnc, vmec.xm)[m0], expected)
+
+
+def test_vmec_analytic_derivatives_match_automatic_differentiation():
+    from essos.fields import Vmec
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    for point in (jnp.array([0.3, 0.4, 0.5]), jnp.array([1e-3, 2.0, 1.0]), jnp.array([0.97, 5.0, 3.0])):
+        assert jnp.allclose(vmec.dAbsB_by_dX(point), jax.grad(vmec.AbsB)(point), rtol=1e-12, atol=1e-12)
+        assert jnp.allclose(vmec.grad_B_covariant(point), jax.jacfwd(vmec.B_covariant)(point), rtol=1e-12, atol=1e-12)
+
+
+def test_vmec_mode_tolerance_keeps_the_field():
+    from essos.fields import Vmec
+
+    full = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    truncated = Vmec(WOUT_QA, ntheta=8, nphi=8, mode_tolerance=1e-3)
+    assert truncated.len_xm_nyq < full.len_xm_nyq and len(truncated.xm) < len(full.xm)
+    assert truncated.bmnc.shape == (full.bmnc.shape[0], truncated.len_xm_nyq)
+    points = jnp.array([[0.2, 0.1, 0.3], [0.7, 2.0, 1.0]])
+    for name in ("AbsB", "B_contravariant", "to_xyz"):
+        a, b = jax.vmap(getattr(full, name))(points), jax.vmap(getattr(truncated, name))(points)
+        assert jnp.abs(a - b).max() < 5e-3 * jnp.abs(a).max()
