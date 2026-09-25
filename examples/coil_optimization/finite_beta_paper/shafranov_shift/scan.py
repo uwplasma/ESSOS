@@ -690,6 +690,18 @@ def main():
         default=(1 / 16, 1 / 8, 1 / 4, 1 / 2, 1),
         help="ordered positive alpha fractions relative to the displacement-limited maximum",
     )
+    parser.add_argument(
+        "--alpha-max-multiple",
+        type=float,
+        default=1.0,
+        help="scale the displacement-screen maximum; values above 1 leave the "
+        "declared linearity screen and are recorded as such",
+    )
+    parser.add_argument(
+        "--cold-start",
+        action="store_true",
+        help="solve every pressure point from the seed boundary, not the previous alpha",
+    )
     args = parser.parse_args()
     if args.pressure_scan and not args.run_vmex:
         parser.error("--pressure-scan requires --run-vmex")
@@ -905,7 +917,13 @@ def main():
                 "physical_relative_difference"
             ],
             "actual_gradient_length_slope_over_L": actual_gradient_response[
-                "length_slope_over_L"
+                "physical_length_slope_over_L"
+            ],
+            "actual_gradient_rms_displacement": actual_gradient_response[
+                "physical_rms_displacement"
+            ],
+            "actual_gradient_max_displacement": actual_gradient_response[
+                "physical_max_displacement"
             ],
         },
     }
@@ -918,8 +936,8 @@ def main():
         v=response["v"],
         u_physical=response["u_physical"],
         v_physical=response["v_physical"],
-        delta_R_actual_gradient=actual_gradient_response["delta_R"],
-        delta_Z_actual_gradient=actual_gradient_response["delta_Z"],
+        delta_R_actual_gradient=actual_gradient_response["physical_delta_R"],
+        delta_Z_actual_gradient=actual_gradient_response["physical_delta_Z"],
     )
     write_json(output / "manifest.json", manifest)
     if not args.run_vmex:
@@ -1055,18 +1073,24 @@ def main():
         "p0_star_Pa": -spec["p2_star"] * flux_radius**2,
         "B0_T": spec["B0"],
         "alpha_max": scale,
+        "alpha_max_multiple": args.alpha_max_multiple,
+        "within_linearity_screen": args.alpha_max_multiple <= 1,
         "alpha_fractions": fractions.tolist(),
-        "alpha_values": (scale * fractions).tolist(),
+        "alpha_values": (args.alpha_max_multiple * scale * fractions).tolist(),
         "coil_sha256": manifest["coil_sha256"],
         "phiedge_Wb": row["phiedge_Wb"],
         "current_profile": "AC is identically zero; CURTOR is zero",
-        "restart_policy": "vacuum, then continue upward from the previous alpha",
+        "restart_policy": (
+            "cold start from the seed boundary at every alpha"
+            if args.cold_start
+            else "vacuum, then continue upward from the previous alpha"
+        ),
     }
     write_json(output / "manifest.json", manifest)
     rows = []
     restart = output / "alpha_000" / "wout.nc"
     for index, fraction in enumerate(fractions, start=1):
-        alpha = float(scale * fraction)
+        alpha = float(args.alpha_max_multiple * scale * fraction)
         inp = make_input(
             base_input, flux_radius, alpha, spec["p2_star"], settings["nzeta"]
         )
@@ -1076,7 +1100,7 @@ def main():
             output / f"alpha_{index:03d}",
             alpha,
             float(spec["B0"]),
-            restart=restart,
+            restart=None if args.cold_start else restart,
         )
         point["coil_sha256"] = manifest["coil_sha256"]
         point["delta_R"] = (np.asarray(point["axis_R"]) - R0).tolist()
