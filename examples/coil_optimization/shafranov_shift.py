@@ -65,6 +65,51 @@ def _fft_response(x, sigma, speed, ell, nu, cp, nfp, phi, varphi):
     return zeta_native, {"map_error_rad": map_error, "phi_uniform_boozer": inverse}
 
 
+def frenet_axis_response(solution, perturbation, *, gradient=None, tangent_field=None):
+    """Periodic Frenet-frame axis displacement driven by a perpendicular field.
+
+    ``perturbation`` is a Cartesian ``(nphi, 3)`` field on the reference axis;
+    only its normal and binormal parts drive the axis. ``gradient`` is
+    ``dB_i/dx_j`` on that axis (the ideal near-axis gradient by default) and
+    ``tangent_field`` its signed tangential field (``sG*B0`` by default).
+    Returns the normal and binormal displacements and the block operator.
+    """
+    geometry = solution.geometry
+    n = len(solution.phi)
+    B0 = float(solution.inputs.B0)
+    normal = _finite("normal", geometry.normal_cartesian)
+    binormal = _finite("binormal", geometry.binormal_cartesian)
+    speed = _finite("axis speed", geometry.d_l_d_phi)
+    torsion = _finite("torsion", geometry.torsion)
+    G = _finite(
+        "field gradient", solution.grad_B_axis if gradient is None else gradient
+    )
+    if G.shape != (n, 3, 3):
+        raise ValueError("field gradient must have shape (nphi,3,3)")
+    Bt = (
+        np.full(n, int(solution.inputs.sG) * B0)
+        if tangent_field is None
+        else _finite("tangent field", tangent_field)
+    )
+    if np.shape(Bt) != (n,) or np.min(abs(Bt)) < 1e-10 * B0:
+        raise ValueError("signed tangent field must be nonzero at every point")
+    delta = _finite("perturbation", perturbation)
+    if delta.shape != (n, 3):
+        raise ValueError("perturbation must have shape (nphi,3)")
+    project = lambda left, right: np.einsum("ni,nij,nj->n", left, G, right)
+    A11 = project(normal, normal) / Bt
+    A12 = project(normal, binormal) / Bt + torsion
+    A21 = project(binormal, normal) / Bt - torsion
+    A22 = project(binormal, binormal) / Bt
+    Ds = _finite("geometrical derivative", geometry.d_d_phi) / speed[:, None]
+    operator = np.block(
+        [[Ds - np.diag(A11), -np.diag(A12)], [-np.diag(A21), Ds - np.diag(A22)]]
+    )
+    rhs = np.r_[np.sum(delta * normal, axis=1) / Bt, np.sum(delta * binormal, axis=1) / Bt]
+    response = np.linalg.solve(operator, rhs)
+    return response[:n], response[n:], operator
+
+
 def pressure_axis_response(
     solution, radius, p2=None, *, gradient=None, tangent_field=None, check_fft=True
 ):
@@ -75,6 +120,11 @@ def pressure_axis_response(
     actual-coil Cartesian ``dB_i/dx_j`` on that axis, output first. The returned
     ``physical`` solution then uses it with ``tangent_field`` (signed tesla).
     The scalar solution always uses the ideal first-order QS operator.
+
+    Unprefixed observables (``delta_R``, ``delta_Z``, ``xi_lab``,
+    ``length_slope_over_L``, ``*_displacement``) belong to the ideal closed-form
+    response. The ``physical_`` observables belong to the block solve with the
+    supplied gradient, or with the ideal gradient when none is supplied.
     """
     radius = float(_finite("radius", radius))
     p2 = float(_finite("p2", solution.inputs.p2 if p2 is None else p2))
@@ -133,43 +183,38 @@ def pressure_axis_response(
     source_b = (
         -(MU0 * p2 / B0) * radius**2 * 2 * ell * eta * x / (nu * D) * spsi * (1 + x * x)
     )
-    G = _finite(
-        "field gradient", solution.grad_B_axis if gradient is None else gradient
+    u_physical, v_physical, operator = frenet_axis_response(
+        solution,
+        source_n[:, None] * normal + source_b[:, None] * binormal,
+        gradient=gradient,
+        tangent_field=tangent_field,
     )
-    if G.shape != (n, 3, 3):
-        raise ValueError("field gradient must have shape (nphi,3,3)")
-    Bt = (
-        np.full(n, sG * B0)
-        if tangent_field is None
-        else _finite("tangent field", tangent_field)
-    )
-    if np.shape(Bt) != (n,) or np.min(abs(Bt)) < 1e-10 * B0:
-        raise ValueError("signed tangent field must be nonzero at every point")
-    project = lambda left, right: np.einsum("ni,nij,nj->n", left, G, right)
-    A11 = project(normal, normal) / Bt
-    A12 = project(normal, binormal) / Bt + _finite("torsion", geometry.torsion)
-    A21 = project(binormal, normal) / Bt - _finite("torsion", geometry.torsion)
-    A22 = project(binormal, binormal) / Bt
-    Ds = Dphi / speed[:, None]
-    operator = np.block(
-        [[Ds - np.diag(A11), -np.diag(A12)], [-np.diag(A21), Ds - np.diag(A22)]]
-    )
-    physical = np.linalg.solve(operator, np.r_[source_n / Bt, source_b / Bt])
-    u_physical, v_physical = physical[:n], physical[n:]
-    xi = u[:, None] * normal + v[:, None] * binormal
+    physical = np.r_[u_physical, v_physical]
     eR = np.stack((np.cos(phi), np.sin(phi), np.zeros(n)), axis=-1)
     ephi = np.stack((-np.sin(phi), np.cos(phi), np.zeros(n)), axis=-1)
-    eZ = np.broadcast_to(np.array([0.0, 0.0, 1.0]), (n, 3))
     toroidal_tangent = np.einsum("ni,ni->n", ephi, tangent)
     if np.min(abs(toroidal_tangent)) < 1e-8:
         raise ValueError("axis tangent is nearly tangent to a cylindrical plane")
-    xi_lab = (
-        xi - tangent * (np.einsum("ni,ni->n", ephi, xi) / toroidal_tangent)[:, None]
-    )
-    delta_R = np.einsum("ni,ni->n", eR, xi_lab)
-    delta_Z = np.einsum("ni,ni->n", eZ, xi_lab)
     weight = speed / speed.sum()
-    length_slope = -float(np.dot(weight, kappa * u))
+
+    def observables(normal_part, binormal_part):
+        """Fixed-plane displacement and first length variation of one response."""
+        xi = normal_part[:, None] * normal + binormal_part[:, None] * binormal
+        xi_lab = (
+            xi - tangent * (np.einsum("ni,ni->n", ephi, xi) / toroidal_tangent)[:, None]
+        )
+        magnitude = np.linalg.norm(xi_lab, axis=1)
+        return {
+            "delta_R": np.einsum("ni,ni->n", eR, xi_lab),
+            "delta_Z": xi_lab[:, 2],
+            "xi_lab": xi_lab,
+            "length_slope_over_L": -float(np.dot(weight, kappa * normal_part)),
+            "max_displacement": float(np.max(magnitude)),
+            "rms_displacement": float(np.sqrt(np.dot(weight, magnitude**2))),
+        }
+
+    ideal = observables(u, v)
+    supplied = observables(u_physical, v_physical)
     beta_star = -2 * MU0 * p2 * radius**2 / B0**2
     length_formula = (
         beta_star
@@ -182,14 +227,22 @@ def pressure_axis_response(
         "varphi": varphi,
         "u": u,
         "v": v,
-        "delta_R": delta_R,
-        "delta_Z": delta_Z,
-        "xi_lab": xi_lab,
+        "delta_R": ideal["delta_R"],
+        "delta_Z": ideal["delta_Z"],
+        "xi_lab": ideal["xi_lab"],
+        "max_displacement": ideal["max_displacement"],
+        "rms_displacement": ideal["rms_displacement"],
         "u_physical": u_physical,
         "v_physical": v_physical,
         "source_n": source_n,
         "source_b": source_b,
-        "length_slope_over_L": length_slope,
+        "length_slope_over_L": ideal["length_slope_over_L"],
+        "physical_delta_R": supplied["delta_R"],
+        "physical_delta_Z": supplied["delta_Z"],
+        "physical_xi_lab": supplied["xi_lab"],
+        "physical_length_slope_over_L": supplied["length_slope_over_L"],
+        "physical_max_displacement": supplied["max_displacement"],
+        "physical_rms_displacement": supplied["rms_displacement"],
         "length_formula_over_L": length_formula,
         "physical_relative_difference": float(
             np.max(abs(physical - np.r_[u, v])) / max(np.max(abs(physical)), 1e-30)

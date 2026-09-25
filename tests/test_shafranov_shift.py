@@ -320,3 +320,61 @@ def test_fixed_boundary_circular_tokamak_reference_coefficients():
     shift_reference = minor_radius**2 * (beta_p + 0.25) / (2 * major_radius)
     assert Y2s == X2c
     np.testing.assert_allclose(shift_from_B2c, shift_reference, rtol=2e-15)
+
+
+def test_supplied_gradient_changes_physical_observables_only():
+    solution = near_axis(
+        rc=[1, 0.09],
+        zs=[0, -0.09],
+        nfp=2,
+        etabar=0.95,
+        nphi=101,
+        order="r1",
+        B0=1,
+        I2=0,
+        p2=0,
+    ).solution
+    ideal = pressure_axis_response(solution, 0.03, -6e5, check_fft=False)
+    # A traceless symmetric normal-binormal perturbation keeps the field
+    # curl- and divergence-free locally and changes the physical operator.
+    geom = solution.geometry
+    normal = np.asarray(geom.normal_cartesian)
+    binormal = np.asarray(geom.binormal_cartesian)
+    perturbation = 0.3 * (
+        np.einsum("ni,nj->nij", normal, normal)
+        - np.einsum("ni,nj->nij", binormal, binormal)
+    )
+    perturbed = pressure_axis_response(
+        solution,
+        0.03,
+        -6e5,
+        gradient=np.asarray(solution.grad_B_axis) + perturbation,
+        check_fft=False,
+    )
+    for key in ("u", "v", "delta_R", "length_slope_over_L", "rms_displacement"):
+        np.testing.assert_array_equal(perturbed[key], ideal[key])
+    np.testing.assert_allclose(
+        ideal["physical_length_slope_over_L"], ideal["length_slope_over_L"], rtol=1e-6
+    )
+    assert (
+        abs(perturbed["physical_length_slope_over_L"] / ideal["length_slope_over_L"] - 1)
+        > 1e-2
+    )
+    assert abs(perturbed["physical_rms_displacement"] / ideal["rms_displacement"] - 1) > 1e-2
+
+    # Independent first variation: displace the complete curve and difference.
+    phi = np.asarray(solution.phi)
+    xi = perturbed["physical_xi_lab"]
+    Dphi = np.asarray(geom.d_d_phi)
+    eR = np.stack((np.cos(phi), np.sin(phi), np.zeros(len(phi))), axis=-1)
+
+    def length(step):
+        R = np.asarray(solution.R0) + step * np.sum(xi * eR, axis=1)
+        Z = np.asarray(solution.Z0) + step * xi[:, 2]
+        return 2 * np.pi * np.mean(np.sqrt((Dphi @ R) ** 2 + R**2 + (Dphi @ Z) ** 2))
+
+    h = 1e-4
+    centered = (length(h) - length(-h)) / (2 * h * float(solution.axis_length))
+    np.testing.assert_allclose(
+        centered, perturbed["physical_length_slope_over_L"], rtol=1e-6
+    )
