@@ -693,10 +693,10 @@ class SurfaceRZFourier:
             f.write(nml)
             
     def mean_cross_sectional_area(self):
-        xyz = self.gamma
-        x2y2 = xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2
-        dgamma1 = self.gammadash_phi
-        dgamma2 = self.gammadash_theta
+        xyz = self.gamma # extracting the surface. shape: (nphi, ntheta, 3)
+        x2y2 = xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2 # Calculating R^2 = x^2 + y^2
+        dgamma1 = self.gammadash_phi # Calculating the derivative of gamma with respect to phi. shape: (nphi, ntheta, 3)
+        dgamma2 = self.gammadash_theta # Calculating the derivative of gamma with respect to theta. shape: (nphi, ntheta, 3)
         J = jnp.zeros((xyz.shape[0], xyz.shape[1], 2, 2))
         J = J.at[:, :, 0, 0].set((xyz[:, :, 0] * dgamma1[:, :, 1] - xyz[:, :, 1] * dgamma1[:, :, 0]) / x2y2)
         J = J.at[:, :, 0, 1].set((xyz[:, :, 0] * dgamma2[:, :, 1] - xyz[:, :, 1] * dgamma2[:, :, 0]) / x2y2)
@@ -705,9 +705,68 @@ class SurfaceRZFourier:
         detJ = jnp.linalg.det(J)
         Jinv = jnp.linalg.inv(J)
         dZ_dtheta = dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
-        mean_cross_sectional_area = jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))/(2 * jnp.pi)
+        mean_cross_sectional_area = (2 * jnp.pi) * jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))
         return mean_cross_sectional_area
-    
+
+    def area_section_by_phi(self):
+        """
+        Calculate the mean area enclosed by the poloidal cross sections. For each fixed toroidal angle phi:
+        A(phi) = abs(integral R * dZ/dtheta dtheta)
+        The result is then averaged over phi.
+        """
+        # Extract the surface coordinates (x, y, z) from the gamma property. The shape of xyz is (nphi, ntheta, 3).
+        xyz = self.gamma
+
+        # Cylindrical radius R = sqrt(x^2 + y^2).
+        R = jnp.sqrt(xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2)
+
+        # Derivative of Z with respect to the poloidal angle theta.
+        dZ_dtheta = self.gammadash_theta[:, :, 2]
+
+        # Green's-theorem integrand for each poloidal cross section.
+        area_integrand = R * dZ_dtheta
+
+        if self.close:
+            # The endpoints are present, so trapezoidal integration avoids
+            # counting the duplicated endpoints twice.
+            theta = self.theta2d[0, :]; phi = self.phi2d[:, 0]
+            area_by_phi = jnp.abs( jnp.trapezoid(area_integrand, x=theta, axis=1) )
+
+            if self.nphi == 1:
+                return area_by_phi[0]
+            
+            return jnp.trapezoid(area_by_phi, x=phi) / (phi[-1] - phi[0])
+
+        # Without the endpoint, the uniform periodic trapezoidal rule is equivalent to the grid spacing multiplied by the sum.
+        dtheta = 2 * jnp.pi / self.ntheta
+        area_by_phi = jnp.abs( dtheta * jnp.sum(area_integrand, axis=1) )
+
+        return jnp.mean(area_by_phi)
+
+
+    def curvature_section_by_phi(self):
+        """
+        Calculate the curvature of every poloidal cross section.
+        Returns an array with shape (nphi, ntheta).
+        """
+        # \(\text{angles}_{i,j,k} = m_i\theta_{j,k}-n_i\phi_{j,k},\)
+        # shape: (n_modes, nphi, ntheta)
+        sin_angles = jnp.sin(self.angles)
+        cos_angles = jnp.cos(self.angles)
+
+        # Derivatives of R and Z with respect to theta, using the Fourier representation.
+        dR_dtheta = -jnp.einsum( "i,ijk->jk" , self.xm * self.rc , sin_angles )
+        dZ_dtheta = jnp.einsum( "i,ijk->jk" , self.xm * self.zs , cos_angles )
+
+        d2R_dtheta2 = -jnp.einsum( "i,ijk->jk" , self.xm**2 * self.rc , cos_angles )
+        d2Z_dtheta2 = -jnp.einsum( "i,ijk->jk" , self.xm**2 * self.zs , sin_angles )
+
+        # Curvature formula for a parametric curve in 2D: \(\kappa = \frac{|x'y'' - y'x''|}{(x'^2 + y'^2)^{3/2}}\)
+        curvature_numerator = jnp.abs( dR_dtheta * d2Z_dtheta2 - dZ_dtheta * d2R_dtheta2 )
+        curvature_denominator = ( dR_dtheta**2 + dZ_dtheta**2 + 1e-14 ) ** 1.5
+
+        return curvature_numerator / curvature_denominator
+
     def _tree_flatten(self):
         if hasattr(self._rc, "shape") and hasattr(self._zs, "shape"):
             children = (self.rc * self.scaling, self.zs * self.scaling)  # arrays / dynamic values

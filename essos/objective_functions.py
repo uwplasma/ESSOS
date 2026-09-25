@@ -166,10 +166,6 @@ def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps
 
 
 
-
-
-
-
 ###################  B ON SURAFCE LOSSES ##########################
 @partial(jit, static_argnames=['npoints'])
 def normB_axis(field, npoints=15):
@@ -184,8 +180,12 @@ def loss_normB_axis_average(field,npoints=15, target_B=5.7):
     return jnp.abs(jnp.average(B_axis)-target_B)
 
 
-def loss_BdotN(field,surface):
+def loss_BdotN_sum(field,surface):
     return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+    # return jnp.mean(jnp.abs(BdotN_over_B(surface, field)))
+
+def loss_BdotN_mean(field,surface):
+    return jnp.mean(jnp.abs(BdotN_over_B(surface, field)))
 
 @partial(jit, static_argnames=['target_tol'])
 def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
@@ -194,7 +194,87 @@ def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
     return bdotn_over_b_loss
 
 
-###########################  B ON SURAFCE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
+########################### QUASI-SYMMETRY LOSS ########################### gftd13@gmail.com
+
+def quasi_symmetry_residual_on_surface( field , surface ):
+    """
+    Return a pointwise quasi-symmetry residual on the surface.
+    Shape is usually (nphi, ntheta) or flattened to (npoints,).
+    """
+    # 1. get surface points
+    surf_xyz = surface.gamma.reshape(-1, 3)
+
+    # 2. field and gradient of |B|
+    # BBvec_xyz = jax.vmap(field.B)(surf_xyz)
+    BBmod_xyz = jax.vmap(field.AbsB)(surf_xyz)
+    gradB_xyz = jax.vmap(field.dAbsB_by_dX)(surf_xyz)
+
+    # 3. surface normal
+    unitnormal_xyz = surface.unitnormal.reshape(-1, 3)
+
+    # 4. compute L_B and normalize the quasi-symmetry residual: L_B = sqrt(2) * |B| / ||grad(B)||_F   
+    LB_xyz = jax.vmap(field.L_gradB)(surf_xyz)
+    norm_factor = LB_xyz**3 / BBmod_xyz**3
+
+    # 5. quasi-symmetry condition
+    # 5.1. Compute grad(B · grad|B|) = grad(B · grad|B|)
+    grad_B_dot_gradB_xyz = jax.vmap(jax.grad(lambda x: jnp.dot(field.B(x), field.dAbsB_by_dX(x))))(surf_xyz)
+
+    # 5.2. Compute (n x grad|B|) · grad(B · grad|B|) and normalized quasi-symmetry residual
+    QS_residual_xyz = norm_factor * jnp.sum(jnp.cross(unitnormal_xyz, gradB_xyz) * grad_B_dot_gradB_xyz, axis=1)
+
+    return QS_residual_xyz
+
+
+def loss_quasi_symmetry(field, surface):
+    """
+    Scalar objective: smaller means closer to quasi-symmetry.
+    """
+    QS_residual_xyz = quasi_symmetry_residual_on_surface(field, surface)
+    QS_residual = jnp.mean(jnp.abs(QS_residual_xyz))
+    return QS_residual
+
+
+####################################### SURAFACE CONSTRAINTS ###########################################
+
+@partial(jit, static_argnames=["target_area"])
+def loss_mean_cross_sectional_area(surface, target_area):
+    current_area = surface.area_section_by_phi()
+    relative_area_change = ( current_area - target_area ) / target_area
+
+    return jnp.square(relative_area_change)
+
+@jit
+def loss_surface_normal_displacement(surface, surface_gamma_reference, unitnormal_reference, length_scale):
+    # Compute the displacement of the surface points from the reference surface along the reference normal direction,
+    #  normalized by the length scale.
+    rr_xyz = surface.gamma - surface_gamma_reference
+    rr_dot_unitnormal = jnp.sum( rr_xyz * unitnormal_reference , axis=2 )
+    rr_dot_unitnormal_normalized = rr_dot_unitnormal / length_scale
+
+    return jnp.mean(jnp.square(rr_dot_unitnormal_normalized))
+
+def loss_surface_poloidal_derivative( surface , qq_reference , alpha_qq ):
+    # Compute the norm of the poloidal derivative of the surface (qq)
+    # and penalize if it is below a certain fraction of a reference value (alpha_qq * qq_reference).
+    # \(q_{\mathrm{ref}} = \min_{\phi,\theta} \left\| \frac{\partial\mathbf{c}_{\phi,\mathrm{init}}}{\partial\theta} \right\|.\)
+
+    # Compute the norm of the poloidal derivative of the surface.
+    qq = jnp.linalg.norm( surface.gammadash_theta , axis=2 )
+
+    qq_minimum_allowed = alpha_qq * qq_reference
+    qq_relative_deficit = jnp.maximum( qq_minimum_allowed - qq , 0.0 ) / qq_minimum_allowed
+
+    return jnp.mean(jnp.square(qq_relative_deficit))
+
+def loss_surface_curvature_section(surface, kappa_max):
+    # Compute the curvature of the surface along a poloidal section (kappa_section)
+    # and penalize if it exceeds a maximum value (kappa_max).
+    kappa_section = surface.curvature_section_by_phi()
+    kappa_relative_excess = jnp.maximum( kappa_section - kappa_max, 0.0 ) / kappa_max
+    return jnp.mean(jnp.square(kappa_relative_excess))
+
+###########################  B ON SURAFACE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
 def copy_coils_from_field(field):
     return field.coils.copy()
 
@@ -228,18 +308,29 @@ def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6
     return jnp.sqrt(jnp.sum(jnp.maximum(expected_square - target_tol, 0.0)))
 
 
-
-
 ######################### COIL GEOMETRY LOSSES #################################
 
+# Penalize if the coil is shorter or larger than the target.
 @partial(jit, static_argnames=['max_coil_length'])
 def loss_coil_length(coils, max_coil_length=0):
     return jnp.square(coils.length/max_coil_length - 1)
+
+# Penalize only if the coil is longer than the target.
+@partial(jit, static_argnames=["max_coil_length"])
+def loss_coil_length_max(field, max_coil_length=0):
+    return jnp.mean(jnp.maximum(0.0, field.coils.length - max_coil_length) )
+
 
 @partial(jit, static_argnames=['max_coil_curvature'])
 def loss_coil_curvature(coils, max_coil_curvature=0):
     pointwise_curvature_loss = jnp.square(jnp.maximum(coils.curvature-max_coil_curvature, 0))
     return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
+
+# Adapter for optimization losses that use "field" as their dependency.
+@partial(jit, static_argnames=["max_coil_curvature"])
+def loss_coil_curvature_from_field(field, max_coil_curvature=0):
+    coil_losses = loss_coil_curvature( field.coils , max_coil_curvature=max_coil_curvature )
+    return jnp.mean(coil_losses)
 
 def compute_candidates(coils, min_separation):
     centers = coils.curves.curves[:, :, 0]

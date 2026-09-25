@@ -64,6 +64,14 @@ class MagneticField():
     def to_xyz(self, points):
         raise NotImplementedError("to_xyz method not implemented")
 
+    @jit
+    def L_gradB(self, points): # L_B = sqrt(2) * |B_{coils}| / ||grad( B_{coils} )||_F
+        B_modulus = self.AbsB(points)
+        grad_B_tensor = self.dB_by_dX(points)
+        norm_grad_B_tensor = jnp.linalg.norm(grad_B_tensor)
+        epsilon = 1e-14
+        return ( jnp.sqrt(2.0) * B_modulus / (norm_grad_B_tensor + epsilon) )
+
 class BiotSavart(MagneticField):
     def __init__(self, coils):
         self.coils = coils
@@ -249,7 +257,40 @@ class Vmec():
     @property
     def surface(self):
         return self._surface
-        
+
+    @property
+    def maxis_xyz(self):
+        """
+        Magnetic-axis points in Cartesian coordinates.
+
+        The points use the same toroidal-angle grid as self.surface. Shape: (nphi, 3).
+        """
+        phi_R1 = self.surface.phi2d[:, 0]
+
+        # The magnetic axis contains only the m = 0 Fourier modes.
+        # vmec.xm contains the poloidal mode number m for every Fourier mode.
+            # If m=0, the theta dependence dissapears.
+            # \[ R_{\text{axis}}(\phi) =  \sum_n R_{0n}\cos(n\phi),\]
+            # \[ Z_{\text{axis}}(\phi) = -\sum_n Z_{0n}\sin(n\phi).\]
+            # Creating a mask that is True for modes with \(m=0\).
+        m_eq_0_bool = self.xm == 0
+
+        # Now we take the n's associated to a m=0
+        xn_axis = self.xn[m_eq_0_bool]
+
+        # Now we take the R_{mn} and Z_{mn} that multiplies cos/sin where m=0
+        rmnc_axis = self.rmnc[0, m_eq_0_bool]
+        zmns_axis = self.zmns[0, m_eq_0_bool]
+
+        # This is a matrix formed by (xn_phi_R2)_{i,j} = xn_axis[i] * phi_R1[j]
+        xn_phi_R2 = jnp.outer(xn_axis, phi_R1)
+
+        # Finnally, we evaluate the Fourier series for R and Z at each phi_R1[j].
+        R_axis =  jnp.sum( rmnc_axis[:, None] * jnp.cos(xn_phi_R2), axis=0 )
+        Z_axis = -jnp.sum( zmns_axis[:, None] * jnp.sin(xn_phi_R2), axis=0 )
+
+        return jnp.stack( [ R_axis * jnp.cos(phi_R1) , R_axis * jnp.sin(phi_R1) , Z_axis ],  axis=1 )
+    
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
         s, theta, phi = points

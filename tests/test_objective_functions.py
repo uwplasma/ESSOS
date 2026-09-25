@@ -221,7 +221,8 @@ class TestObjectiveFunctions(unittest.TestCase):
     def test_surface_losses(self, bdotn):
         self.assertTrue(jnp.isfinite(objf.normB_axis(self.field)).all())
         self.assertTrue(jnp.isfinite(objf.loss_normB_axis_average(self.field)))
-        self.assertTrue(jnp.isfinite(objf.loss_BdotN(self.field, self.surface)))
+        self.assertTrue(jnp.isfinite(objf.loss_BdotN_sum(self.field, self.surface)))
+        self.assertTrue(jnp.isfinite(objf.loss_BdotN_mean(self.field, self.surface)))
         self.assertTrue(jnp.isfinite(objf.loss_BdotN_constraint(self.field, self.surface)))
 
     def test_copy_coils_from_field(self):
