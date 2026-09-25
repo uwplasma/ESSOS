@@ -22,7 +22,8 @@ from scipy.optimize import least_squares
 # ====================================================================================
 
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
-vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
+# vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
+vmec_input = os.path.join(input_filepath, 'input.toroidal_surface_02')
 
 # ====================================================================================
 # ====================================================================================
@@ -40,8 +41,8 @@ init_field = BiotSavart(init_coils)
 
 # Initialize the surface from a VMEC output file.
 ntheta = 30; nphi = 30; Npoints = ntheta * nphi  # Surface parametersrs
-surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=30, nphi=30, range_torus='half period')
-
+# surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=ntheta, nphi=nphi, range_torus='half period')
+surface = SurfaceRZFourier.from_input_file(vmec_input, ntheta=ntheta, nphi=nphi, close=True, range_torus='half period')
 
 # Build and cache surface geometry before JAX starts the optimization.
 surface.gamma.block_until_ready()
@@ -53,10 +54,10 @@ surface.unitnormal.block_until_ready()
 # ====================================================================================
 # ====================================================================================
 
-LENGTH_WEIGHT = 1.; LENGTH_TARGET = 32.
-CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.1
+LENGTH_WEIGHT = 10.; LENGTH_TARGET = 32.
+CURVATURE_WEIGHT = 100.; CURVATURE_TARGET = 0.1
 NORMAL_FIELD_WEIGHT = Npoints
-QS_WEIGHT = 1.
+QS_WEIGHT = 30.
 
 # ====================================================================================
 # ====================================================================================
@@ -96,7 +97,8 @@ L_total.dependencies = {"field": init_field}
 # ====================================================================================
 
 t_start = time()
-res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=200)
+# res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=200)
+res = least_squares(L_total, L_total.starting_dofs, L_total.grad, x_scale=2.18, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=300)
 t_end = time()
 
 # ====================================================================================
@@ -142,6 +144,21 @@ print("max abs residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) )
 print("Normal-field loss (initial):",loss_BdotN_mean(init_field, surface) )
 print("Normal-field loss (optimized):",loss_BdotN_mean(opt_field, surface) )
 
+print("\nQS residuals and losses:")
+QS_residual_xyz_init = quasi_symmetry_residual_on_surface(init_field, surface)
+QS_residual_xyz_opt = quasi_symmetry_residual_on_surface(opt_field, surface)
+print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz_init)))
+print("mean abs residual (optimized):", jnp.mean(jnp.abs(QS_residual_xyz_opt)))
+print("max abs residual (initial):", jnp.max(jnp.abs(QS_residual_xyz_init)))
+print("max abs residual (optimized):", jnp.max(jnp.abs(QS_residual_xyz_opt)))
+print("QS loss (initial):", loss_quasi_symmetry(init_field, surface))
+print("QS loss (optimized):", loss_quasi_symmetry(opt_field, surface))
+
+print("\nCoil displacement:")
+coil_displacement = jnp.linalg.norm(opt_coils.gamma - init_coils.gamma, axis=-1)
+print("Mean coil-point displacement:", jnp.mean(coil_displacement))
+print("Maximum coil-point displacement:", jnp.max(coil_displacement))
+
 print("\nCoil-length residuals and losses:")
 coil_length_residual_init = jnp.maximum(0, init_field.coils.length - LENGTH_TARGET)
 coil_length_residual_opt = jnp.maximum(0, opt_field.coils.length - LENGTH_TARGET)
@@ -168,15 +185,7 @@ print("max excess curvature (optimized):", jnp.max(coil_curvature_residual_opt))
 print("Curvature loss (initial):", loss_coil_curvature_from_field(init_field, max_coil_curvature=CURVATURE_TARGET))
 print("Curvature loss (optimized):", loss_coil_curvature_from_field(opt_field, max_coil_curvature=CURVATURE_TARGET))
 
-print("\nQS residuals and losses:")
-QS_residual_xyz_init = quasi_symmetry_residual_on_surface(init_field, surface)
-QS_residual_xyz_opt = quasi_symmetry_residual_on_surface(opt_field, surface)
-print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz_init)))
-print("mean abs residual (optimized):", jnp.mean(jnp.abs(QS_residual_xyz_opt)))
-print("max abs residual (initial):", jnp.max(jnp.abs(QS_residual_xyz_init)))
-print("max abs residual (optimized):", jnp.max(jnp.abs(QS_residual_xyz_opt)))
-print("QS loss (initial):", loss_quasi_symmetry(init_field, surface))
-print("QS loss (optimized):", loss_quasi_symmetry(opt_field, surface))
+
 
 
 # ====================================================================================
