@@ -546,6 +546,19 @@ def GuidingCenterCollisionsDrift(t,
 
 
 
+def _gc_quantities(field, points):
+    """Guiding-center field quantities, fused when the field provides them.
+
+    Fields without ``gc_quantities`` (for example :class:`Vmec`) use their
+    individual methods; the choice is made at trace time.
+    """
+    if hasattr(field, "gc_quantities"):
+        return field.gc_quantities(points)
+    return (field.B_covariant(points), field.B_contravariant(points), field.AbsB(points),
+            field.dAbsB_by_dX(points), field.curl_b(points), field.kappa(points),
+            field.sqrtg(points))
+
+
 @partial(jit, static_argnums=(2))
 def GuidingCenter(t,
                   initial_condition,
@@ -556,12 +569,14 @@ def GuidingCenter(t,
     m = particles.mass
     E = particles.energy
     points = jnp.array([x, y, z])
-    mu = (E - m*vpar**2/2)/field.AbsB(points)
-    Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
-    Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
-    F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)
-    dxdt =  Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points)
-    dvdt = -jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m    
+    # One evaluation of every field quantity (fused for Biot-Savart fields).
+    B_cov, B_contra, AbsB, dAbsB, curl_b, kappa, sqrtg = _gc_quantities(field, points)
+    mu = (E - m*vpar**2/2)/AbsB
+    Bstar=B_contra+vpar*m/q*curl_b#+m/q*flow.curl_U0(points)
+    Ustar=vpar*B_contra/AbsB#+flow.U0(points)
+    F_gc=mu*dAbsB+m*vpar**2*kappa-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)
+    dxdt =  Ustar + jnp.cross(B_cov, F_gc)/jnp.dot(B_cov,Bstar)/q/sqrtg
+    dvdt = -jnp.dot(Bstar,F_gc)/jnp.dot(B_cov,Bstar)*AbsB/m
 
     return jnp.append(dxdt,dvdt)
     # def zero_derivatives(_):

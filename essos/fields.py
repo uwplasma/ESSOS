@@ -61,6 +61,25 @@ class MagneticField():
         return -jnp.cross(self.B_contravariant(points), self.curl_b(points)) * self.sqrtg(points) / self.AbsB(points)
     
     @jit
+    def gc_quantities(self, points):
+        """Field quantities of the guiding-center equations at one point.
+
+        Returns ``(B_covariant, B_contravariant, |B|, grad|B|, curl b, kappa,
+        sqrtg)``. This generic version calls the individual methods; fields
+        that can form all of them from one evaluation of B and its gradient
+        (see :class:`BiotSavart`) override it.
+        """
+        return (
+            self.B_covariant(points),
+            self.B_contravariant(points),
+            self.AbsB(points),
+            self.dAbsB_by_dX(points),
+            self.curl_b(points),
+            self.kappa(points),
+            self.sqrtg(points),
+        )
+
+    @jit
     def to_xyz(self, points):
         raise NotImplementedError("to_xyz method not implemented")
 
@@ -82,6 +101,29 @@ class BiotSavart(MagneticField):
     def sqrtg(self, points):
         return 1.
     
+    @jit
+    def gc_quantities(self, points):
+        """Guiding-center field quantities from one pass over the coils.
+
+        The separate methods each rebuild B and its Jacobian (``kappa`` even
+        recomputes ``curl_b``). Here a single forward-mode Jacobian yields B
+        and dB/dX together, and in Cartesian coordinates (sqrtg = 1)
+        grad|B| = (dB/dX)^T b, curl b = curl B/|B| + B x grad|B|/|B|^2 and
+        kappa = -B x curl b / |B| follow algebraically.
+        """
+        points = jnp.asarray(points)
+        jacobian, field = jacfwd(lambda x: (self.B(x), self.B(x)), has_aux=True)(points)
+        magnitude = jnp.linalg.norm(field)
+        grad_magnitude = jacobian.T @ (field / magnitude)
+        curl_field = jnp.array([
+            jacobian[2, 1] - jacobian[1, 2],
+            jacobian[0, 2] - jacobian[2, 0],
+            jacobian[1, 0] - jacobian[0, 1],
+        ])
+        curl_unit = curl_field / magnitude + jnp.cross(field, grad_magnitude) / magnitude**2
+        curvature = -jnp.cross(field, curl_unit) / magnitude
+        return field, field, magnitude, grad_magnitude, curl_unit, curvature, 1.0
+
     @jit
     def B(self, points):
         dif_R = (jnp.array(points) - self.coils.gamma).T

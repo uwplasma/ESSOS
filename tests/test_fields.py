@@ -104,3 +104,20 @@ def test_combined_field_requires_at_least_one_field():
     with pytest.raises(ValueError):
         CombinedField()
 
+
+
+def test_fused_guiding_center_quantities_match_the_separate_methods():
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart, MagneticField
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    field = BiotSavart(Coils(curves=curves, currents=[1.1e6, 0.9e6]))
+    rng = np.random.default_rng(4)
+    points = jnp.asarray(rng.normal(scale=0.2, size=(6, 3)) + np.array([1.7, 0.1, 0.05]))
+    fused = jax.vmap(field.gc_quantities)(points)
+    generic = jax.vmap(lambda p: MagneticField.gc_quantities(field, p))(points)
+    for a, b in zip(fused, generic):
+        np.testing.assert_allclose(np.broadcast_to(a, np.shape(b)), b, rtol=1e-9, atol=1e-12)
