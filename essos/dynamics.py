@@ -977,26 +977,47 @@ class Tracing():
         def compute_trajectory(initial_condition, particle_key) -> jnp.ndarray:
             # initial_condition = initial_condition[0]
             if self.model == 'FullOrbit_Boris':
-                dt=self.timestep#self.maxtime / self.timesteps
-                def update_state(state, _):
-                    # def update_fn(state):
+                # Integrate the whole [0, maxtime] span: an inner scan of
+                # Boris pushes between consecutive save times, with dt
+                # adjusted (<= timestep) so the saves land on self.times.
+                n_saves = len(self.times) - 1
+                per_save = max(1, int(np.ceil(float(self.maxtime) / (n_saves * float(self.timestep)) - 1e-9)))
+                dt = self.maxtime / (n_saves * per_save)
+                charge_over_mass = self.particles.charge / self.particles.mass
+                criteria = self.stopping_criteria
+
+                def push(state, _):
                     x = state[:3]
                     v = state[3:]
-                    t = self.particles.charge / self.particles.mass *  self.field.B_contravariant(x) * 0.5 * dt
-                    s = 2. * t / (1. + jnp.dot(t,t))
+                    t = charge_over_mass * self.field.B_contravariant(x) * 0.5 * dt
+                    s = 2. * t / (1. + jnp.dot(t, t))
                     vprime = v + jnp.cross(v, t)
-                    v += jnp.cross(vprime, s)
-                    x += v * dt
-                    new_state = jnp.concatenate((x, v))
-                    return new_state, new_state
-                    # def no_update_fn(state):
-                    #     x, v = state
-                    #     return (x, v), jnp.concatenate((x, v))
-                    # condition = (jnp.sqrt(x1**2 + x2**2) > 50) | (jnp.abs(x3) > 20)
-                    # return lax.cond(condition, no_update_fn, update_fn, state)
-                    # return update_fn(state)
-                _, trajectory = lax.scan(update_state, initial_condition, jnp.arange(len(self.times)-1))
+                    v = v + jnp.cross(vprime, s)
+                    x = x + v * dt
+                    return jnp.concatenate((x, v)), None
+
+                def save_interval(carry, _):
+                    state, alive, hits = carry
+                    advanced, _ = lax.scan(push, state, None, length=per_save)
+                    if criteria is None:
+                        return (advanced, alive, hits), advanced
+                    # A particle leaving any level set (value <= 0) is held at
+                    # its last saved point inside, as the adaptive paths do.
+                    outside = jnp.stack([c(0.0, advanced, self.args) <= 0.0 for c in criteria])
+                    outside = outside | ~jnp.isfinite(advanced).all()
+                    stopped = alive & jnp.any(outside)
+                    hits = hits | (alive & outside)
+                    state = jnp.where(alive & ~stopped, advanced, state)
+                    return (state, alive & ~stopped, hits), state
+
+                n_criteria = 0 if criteria is None else len(criteria)
+                carry = (initial_condition, jnp.asarray(True), jnp.zeros((n_criteria,), bool))
+                (_, _, hits), trajectory = lax.scan(save_interval, carry, None, length=n_saves)
                 trajectory = jnp.vstack([initial_condition, trajectory])
+                if criteria is not None:
+                    event_mask = hits[0] if n_criteria == 1 else tuple(hits[i] for i in range(n_criteria))
+                    return trajectory, event_mask
+                return trajectory
             elif self.model == 'GuidingCenterCollisions':
                 import warnings
                 warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
