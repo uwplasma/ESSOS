@@ -1409,7 +1409,13 @@ class Tracing():
         
         return loss_fractions, total_particles_lost, lost_times
 
-    def loss_fraction(self,r_max=0.99):
+    def loss_fraction(self,r_max=1.0):
+        """Cumulative loss fraction of a flux-coordinate trace.
+
+        A particle is lost at the first saved time with ``s >= r_max``, or
+        with a non-finite state, which is what the LCFS event leaves after it
+        stops a trace. The default ``r_max`` is that LCFS.
+        """
         trajectories_r = self.trajectories[:,:, 0]
         lost_mask = trajectories_r >= r_max
         lost_indices = jnp.argmax(lost_mask, axis=1)
@@ -1462,15 +1468,19 @@ class Tracing():
         return loss_fractions, total_particles_lost, lost_times,lost_energies,lost_positions
 
     @partial(jit, static_argnums=(0))
-    def loss_fraction_collisions(self,r_max=0.99):
+    def loss_fraction_collisions(self,r_max=1.0):
+        """As :meth:`loss_fraction`, with the energy and position of each lost
+        particle at its last finite saved state."""
         trajectories_rtz = self.trajectories[:,:, :3]
         lost_mask = trajectories_rtz[:,:,0] >= r_max
         lost_indices = jnp.argmax(lost_mask, axis=1)
         lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
         lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
         has_lost = lost_indices != -1
-        safe_indices = jnp.clip(lost_indices, 0, len(self.times) - 1)
+        finite = jnp.isfinite(self.trajectories).all(axis=2)
+        last_finite = lax.cummax(jnp.where(finite, jnp.arange(len(self.times)), 0), axis=1)
         particle_indices = jnp.arange(self.particles.nparticles)
+        safe_indices = last_finite[particle_indices, jnp.clip(lost_indices, 0, len(self.times) - 1)]
         lost_energies = jnp.where(has_lost, self.energy()[particle_indices, safe_indices], 0.)
         lost_positions = jnp.where(
             has_lost[:, None],
