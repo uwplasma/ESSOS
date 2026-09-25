@@ -173,10 +173,11 @@ class BiotSavart_from_gamma(MagneticField):
         self._gamma_dash = gamma_dash
         self._gamma_dashdash = gamma_dashdash
 
-        self.coils_length = None
-        self.coils_curvature = None
-        self.r_axis = None
-        self.z_axis = None
+        # Lazily computed caches behind the read-only properties below.
+        self._coils_length = None
+        self._coils_curvature = None
+        self._r_axis = None
+        self._z_axis = None
 
     @property
     def gamma_dash(self):
@@ -192,9 +193,9 @@ class BiotSavart_from_gamma(MagneticField):
 
     @property
     def coils_length(self):
-        if self.coils_length is None:
-            self.coils_length = jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in self.gamma_dash])
-        return self.coils_length
+        if self._coils_length is None:
+            self._coils_length = jnp.array([jnp.mean(jnp.linalg.norm(d1gamma, axis=1)) for d1gamma in self.gamma_dash])
+        return self._coils_length
 
     @property
     def coils_curvature(self):
