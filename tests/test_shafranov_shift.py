@@ -18,17 +18,7 @@ sys.path.insert(
 )
 from shafranov_shift import pressure_axis_response
 
-sys.path.insert(
-    0,
-    str(
-        Path(__file__).resolve().parents[1]
-        / "examples"
-        / "coil_optimization"
-        / "finite_beta_paper"
-        / "shafranov_shift"
-    ),
-)
-from scan import make_input
+from nearaxis_finite_beta_helpers import pressure_family_input as make_input
 from vmex.core.profiles import current, pressure
 
 

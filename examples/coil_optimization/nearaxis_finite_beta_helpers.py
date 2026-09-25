@@ -27,6 +27,8 @@ from matplotlib.ticker import FuncFormatter
 from vmex.core.freeboundary import _external_field_from_input
 from vmex.core.mgrid import read_mgrid, tabulate_cartesian_field, write_mgrid
 from vmex.core.plotting import surface_rz
+from vmex.core.profiles import current as vmex_current
+from vmex.core.profiles import pressure as vmex_pressure
 
 from essos.coils import Coils
 from essos.dynamics import Tracing
@@ -915,3 +917,59 @@ def save_json(path, data):
             value = np.asarray(value).tolist()
         return None if isinstance(value, float) and not np.isfinite(value) else value
     Path(path).write_text(json.dumps(clean(data), indent=2) + "\n")
+
+
+def pressure_family_input(base, radius, alpha, p2_star, nzeta):
+    """Fixed-coil, current-free free-boundary deck with p = alpha*p0*(1 - s).
+
+    ``p0 = -p2_star*radius**2``. The whole current profile is zero and CURTOR is
+    zero; the evaluated profiles are checked against the requested family.
+    """
+    p0 = -p2_star * radius**2
+    if p0 <= 0:
+        raise ValueError("p2_star must be negative")
+    am, ac = np.zeros_like(base.am), np.zeros_like(base.ac)
+    am[:2] = [1.0, -1.0]
+    inp = dataclasses.replace(
+        base,
+        lfreeb=True,
+        mgrid_file="essos_coils(direct)",
+        extcur=np.array([1.0]),
+        nzeta=nzeta,
+        ncurr=1,
+        curtor=0.0,
+        pcurr_type="power_series",
+        ac=ac,
+        pmass_type="power_series",
+        am=am,
+        pres_scale=float(alpha * p0),
+        gamma=0.0,
+        spres_ped=1.0,
+        bloat=1.0,
+    )
+    sample = np.linspace(0, 1, 17)
+    profile = np.asarray(
+        vmex_current(
+            inp.pcurr_type, inp.ac, inp.ac_aux_s, inp.ac_aux_f, sample, bloat=inp.bloat
+        )
+    )
+    evaluated_p = np.asarray(
+        vmex_pressure(
+            inp.pmass_type,
+            inp.am,
+            inp.am_aux_s,
+            inp.am_aux_f,
+            sample,
+            pres_scale=inp.pres_scale,
+            bloat=inp.bloat,
+            spres_ped=inp.spres_ped,
+        )
+    )
+    if (
+        np.max(abs(profile)) > 1e-14
+        or np.max(abs(evaluated_p - alpha * p0 * (1 - sample))) > 1e-8
+    ):
+        raise ValueError(
+            "current or pressure profile does not match the requested family"
+        )
+    return inp
