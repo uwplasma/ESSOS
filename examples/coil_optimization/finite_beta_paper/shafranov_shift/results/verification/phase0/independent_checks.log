@@ -1,0 +1,61 @@
+{
+  "pressure_response": {
+    "method": "physical-frame monodromy IVP vs complex periodic collocation",
+    "beta_axis": 0.0013571680263507906,
+    "iotaN": 0.21252795338089273,
+    "axis_length": 6.384556743757263,
+    "relative_max_difference": 2.3548613669805548e-07,
+    "length_slope_formula": 0.01427391077791207,
+    "length_slope_IVP": 0.014273914212309027,
+    "mean_ReF": 0.5097913968537618,
+    "rms_displacement_m_per_alpha": 0.016712499458175743,
+    "lower_bound_rms_displacement_m_per_alpha": 0.013906488699544858,
+    "max_displacement_over_a_per_alpha": 0.7129464645834707
+  },
+  "trapped_fraction": {
+    "Ct_matched": 1.4624249563814937,
+    "quadrature": "800-point Gauss-Legendre angle, adaptive lambda, Boozer B^-2 weight",
+    "rows": [
+      {
+        "epsilon": 0.01,
+        "ft": 0.14595335065824866,
+        "ft_over_sqrt_epsilon": 1.4595335065824866
+      },
+      {
+        "epsilon": 0.003,
+        "ft": 0.08005910420756757,
+        "ft_over_sqrt_epsilon": 1.4616725769380503
+      },
+      {
+        "epsilon": 0.001,
+        "ft": 0.04623867676356863,
+        "ft_over_sqrt_epsilon": 1.4621953456517982
+      },
+      {
+        "epsilon": 0.0003,
+        "ft": 0.02532882091307065,
+        "ft_over_sqrt_epsilon": 1.4623601572417162
+      },
+      {
+        "epsilon": 0.0001,
+        "ft": 0.014624040690401463,
+        "ft_over_sqrt_epsilon": 1.4624040690401463
+      }
+    ]
+  },
+  "fractional_current_axis_regularity": {
+    "j_z": "jhalf*r^(1/2)",
+    "B_theta": "2*jhalf*mu*r**(3/2)/5",
+    "d2_Btheta_dr2": "3*jhalf*mu/(10*sqrt(r))",
+    "conclusion": "C1 but not C2 field at axis when jhalf != 0; no finite ordinary on-axis Hessian."
+  },
+  "circular_tokamak": {
+    "delta": "(1/4 - mu*p2/I2**2)*(aa**2 - r**2)/(2*R0)",
+    "Grad_Shafranov_residual": "0"
+  },
+  "scope": "Selected independent algebra, kinetic-integral, and linear-response checks. No full 3-D equilibrium or kinetic solver, no coil optimization, no proof of all manuscript claims."
+}
+real 1.86
+user 1.22
+sys 0.20
+exit 0

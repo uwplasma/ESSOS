@@ -1,0 +1,68 @@
+{
+  "tokamak_closure": "exact symbolic identity",
+  "tokamak_jacobian_constraint": "exact symbolic identity",
+  "tokamak_midpoint": "exact symbolic identity",
+  "tokamak_Grad_Shafranov": "exact symbolic identity",
+  "circle_normal_harmonics": "exact symbolic identity",
+  "conjugacy_-1_-1": "exact symbolic identity",
+  "forcing_-1_-1": "exact symbolic identity",
+  "flux_metric_-1_-1": "exact symbolic identity",
+  "flux_transport_-1_-1": "exact symbolic identity",
+  "conjugacy_-1_1": "exact symbolic identity",
+  "forcing_-1_1": "exact symbolic identity",
+  "flux_metric_-1_1": "exact symbolic identity",
+  "flux_transport_-1_1": "exact symbolic identity",
+  "conjugacy_1_-1": "exact symbolic identity",
+  "forcing_1_-1": "exact symbolic identity",
+  "flux_metric_1_-1": "exact symbolic identity",
+  "flux_transport_1_-1": "exact symbolic identity",
+  "conjugacy_1_1": "exact symbolic identity",
+  "forcing_1_1": "exact symbolic identity",
+  "flux_metric_1_1": "exact symbolic identity",
+  "flux_transport_1_1": "exact symbolic identity",
+  "direct_flux_critical_point": "exact symbolic identity",
+  "direct_flux_uncoupled_sign": "exact symbolic identity",
+  "manufactured_FFT_max_error_m": 1.0428649832939931e-17,
+  "manufactured_collocation_max_error_m": 1.5030290308170918e-16,
+  "periodic_Green_error_m": 2.961334006531866e-18,
+  "nonplanar_reference": [
+    {
+      "nphi": 51,
+      "iotaN": 0.212527953380974,
+      "response_relative_difference": 3.202626198343478e-09,
+      "length_slope_over_L_predicted": 0.014273910777901211,
+      "length_variation_over_L": 0.01427391077790121,
+      "length_finite_difference_over_L": 0.01427391077849169,
+      "length_identity_relative_error": 1.2153105781370696e-16,
+      "symmetry_max_error_m": 1.4137996329210978e-16,
+      "first_order_sigma_residual": 7.64333041303189e-13
+    },
+    {
+      "nphi": 101,
+      "iotaN": 0.2125279533808865,
+      "response_relative_difference": 7.790849619852302e-15,
+      "length_slope_over_L_predicted": 0.014273910777912905,
+      "length_variation_over_L": 0.014273910777912908,
+      "length_finite_difference_over_L": 0.014273910777100555,
+      "length_identity_relative_error": 2.430621156272148e-16,
+      "symmetry_max_error_m": 2.7929047963226594e-16,
+      "first_order_sigma_residual": 6.34492458573277e-14
+    },
+    {
+      "nphi": 151,
+      "iotaN": 0.21252795338089292,
+      "response_relative_difference": 7.950332689114403e-15,
+      "length_slope_over_L_predicted": 0.014273910777912041,
+      "length_variation_over_L": 0.014273910777912055,
+      "length_finite_difference_over_L": 0.01427391077710056,
+      "length_identity_relative_error": 9.722484625089181e-16,
+      "symmetry_max_error_m": 2.905661822261152e-16,
+      "first_order_sigma_residual": 6.23945339839338e-14
+    }
+  ],
+  "scope": "Algebra and linear-response tests only; no ESSOS or VMEX execution."
+}
+real 1.28
+user 1.00
+sys 0.13
+exit 0

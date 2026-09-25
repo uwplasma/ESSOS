@@ -152,6 +152,18 @@ tracked bundle. Until a finer radial check and additional pressure-step tests
 are complete, radial and pressure-step errors remain unresolved. No physical
 amplitude has been fitted to hide the discrepancy.
 
+## September 2026 verification campaign
+
+[`results/verification/README.md`](results/verification/README.md) supersedes
+the next-step list below for the 18 mm case. The pressure source and the
+closed-axis operator are verified independently of any MHD solver. The
+free-boundary derivative is shown to be unresolved: VMEX warm and cold starts
+disagree in sign, VMEC2000 agrees with neither, and every free-boundary vacuum
+axis lies 474-688 um from the directly traced coil axis, which is as large as
+the predicted shift at the screen amplitude. The folder has the paper figures,
+compact run data with WOUT hashes, and a drop-in replacement for the draft's
+`sec:scanstatus`.
+
 ## Current limits and revised next steps
 
 - The pressure response is not numerically converged in radial resolution;

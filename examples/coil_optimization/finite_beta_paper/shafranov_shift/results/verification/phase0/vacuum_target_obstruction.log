@@ -1,0 +1,22 @@
+{
+  "identity_symbolic_residual": "0",
+  "assumptions": [
+    "H_ijk = partial_j partial_k B_i",
+    "partial_i B_i=0 and its differentiated constraints",
+    "Frobenius norm counts all Cartesian indices",
+    "external coils are outside a neighborhood of the observation point"
+  ],
+  "projection": "P_ijk = Sym(H)_ijk - (delta_ij t_k + delta_ik t_j + delta_jk t_i)/5, t_i=Sym(H)_ijj",
+  "C_definition": "C_kl = epsilon_kji H_ijl = mu0 partial_l J_k",
+  "distance_squared": "||H-P||_F^2 = (2/3)||Sym(C)||_F^2 + (4/5)||Skew(C)||_F^2",
+  "coil_lower_bound": "Every realizable external-coil Hessian Hc satisfies ||H-Hc||_F^2 >= ||H-P||_F^2.",
+  "cylinder_H_norm_squared": "8 cp^2",
+  "cylinder_minimum_squared_error": "32*cp**2/5",
+  "cylinder_relative_error_floor": "2*sqrt(5)/5",
+  "qualification": "An exact LOCAL compatibility lower bound, not a sufficiency result for a global realizable coil set. Projecting the total Hessian does not recover the actual free-space plasma subtraction, whose harmonic part is not fixed by local Maxwell constraints.",
+  "novelty": "Derived in this audit as a proposed strengthening; no claim that harmonic tensor projection itself is new."
+}
+real 0.41
+user 0.33
+sys 0.05
+exit 0
