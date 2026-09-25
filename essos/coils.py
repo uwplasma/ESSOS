@@ -874,6 +874,13 @@ class Coils:
     def to_vtk(self, *args, **kwargs):
         self.curves.to_vtk(*args, **kwargs)
 
+    def to_mgrid(self, filename: str, **kwargs):
+        """Write this coil field to a VMEC MGRID file; see :func:`essos.mgrid.coils_to_mgrid`."""
+
+        from .mgrid import coils_to_mgrid
+
+        return coils_to_mgrid(self, filename, **kwargs)
+
     @classmethod
     def from_simsopt(cls, simsopt_coils, nfp=1, stellsym=True, scaling_type=2, scaling_factor=0.0, scale_fixed=1.0):
         """Create coils from simsopt coils.

@@ -28,6 +28,8 @@ pip install essos
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria, near-axis expansions, and
   `CombinedField` to trace a sum of fields as one.
+- **VMEC MGRID.** Export coil fields and load MGRID files as JAX-compatible
+  three-dimensional magnetic fields.
 - **Surfaces.** Fourier-represented toroidal surfaces, from a VMEC `wout` or
   built directly.
 - **Parallel.** JAX sharding across the visible devices; pass `devices=` to pick.
@@ -84,6 +86,19 @@ tracing.poincare_plot(shifts=[0.0])
 ```
 
 More in [`examples/fieldline_tracing`](examples/fieldline_tracing).
+
+## VMEC MGRID fields
+
+Run [`examples/simple_examples/mgrid_from_coils.py`](examples/simple_examples/mgrid_from_coils.py)
+to export the included Landreman-Paul QA coils, load the file as a magnetic
+field, and compare its interpolated field with direct Biot-Savart. It prints
+the differences and saves a plot; the maximum difference at its four sample
+points is about 0.2%. Accuracy depends on grid resolution and distance from
+the coils, so compare in your region of interest before using a grid.
+
+The cylindrical grid covers one field period in phi. The field repeats across
+periods, and R and Z queries are clamped to the grid bounds, so set the bounds
+to cover the region you intend to evaluate.
 
 ## Particle tracing
 
