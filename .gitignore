@@ -167,7 +167,6 @@ cython_debug/
 */output
 output/*
 tests/comparisons_SIMSOPT/output/*
-examples/coil_optimization/output_finite_beta_*/
 essos/version.py
 *.json
 *.png
