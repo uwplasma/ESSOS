@@ -1,166 +1,153 @@
 # ESSOS
 
-<p>
-    <img src="https://img.shields.io/github/license/uwplasma/ESSOS?style=default&color=0080ff" alt="license">
-    <img src="https://github.com/uwplasma/ESSOS/actions/workflows/build_test.yml/badge.svg" alt="Build Status">
-    <img src="https://codecov.io/gh/uwplasma/ESSOS/branch/main/graph/badge.svg" alt="Coverage">
-    <img src="https://readthedocs.org/projects/essos/badge/?version=latest" alt="Documentation">
-</p>
+[![PyPI](https://img.shields.io/pypi/v/essos)](https://pypi.org/project/essos/)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](pyproject.toml)
+[![License](https://img.shields.io/github/license/uwplasma/ESSOS)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/uwplasma/ESSOS/build_test.yml?branch=main&label=ci)](https://github.com/uwplasma/ESSOS/actions/workflows/build_test.yml)
+[![Coverage](https://codecov.io/gh/uwplasma/ESSOS/branch/main/graph/badge.svg)](https://codecov.io/gh/uwplasma/ESSOS)
+[![Docs](https://img.shields.io/readthedocs/essos/latest?label=docs)](https://essos.readthedocs.io/en/latest/)
 
-Stellarator coil and particle optimization in JAX. Everything ESSOS computes —
-coil geometry, Biot-Savart fields, guiding-centre orbits, field lines — is
-differentiable end to end and runs on CPU or GPU, so a design objective and its
-gradient come from the same code.
+ESSOS (e-Stellarator Simulation and Optimization Suite) computes stellarator
+coil fields and charged-particle orbits in JAX. It evaluates Biot-Savart fields
+of filamentary coils, VMEC equilibria and near-axis expansions, traces field
+lines, guiding centers and full orbits, with Monte Carlo collisions against
+background species, and optimizes coils against field, geometry and orbit
+objectives. The fields, the orbit integrators and the objectives are written in
+JAX, so a coil objective, a traced orbit and their derivatives with respect to
+all coil degrees of freedom come from the same code, on CPU or GPU.
 
-```sh
+- **Coils and fields:** Fourier coils with stellarator symmetry, Biot-Savart with a fused
+  guiding-center evaluation (B and its gradient from one Jacobian), VMEC `wout` files, near-axis
+  fields, MGRID export and import, and `CombinedField` sums.
+- **Orbits:** field lines (adaptive, arclength, toroidal-angle), guiding centers and full orbits
+  (Boris and adaptive), Poincare sections, connection lengths to a wall, and loss fractions.
+- **VMEC tracing:** guiding centers are integrated in `sqrt(s) (cos theta, sin theta)`, which is
+  regular on the magnetic axis, so orbits pass through it; the Fourier modes are interpolated with
+  their `sqrt(s)` behaviour there. An LCFS event ends each lost orbit, and loss fractions and loss
+  times are counted at the LCFS.
+- **Collisions:** Monte Carlo slowing down, pitch-angle scattering and energy diffusion against
+  Maxwellian background species whose density and temperature can be radial profiles.
+- **Optimization:** composable losses (`+`, scalar weights), SciPy, Optax and JAXopt drivers, an
+  augmented Lagrangian for constrained problems, and multiobjective optimization; coil length,
+  curvature, separation, surface distance, linking number, Lorentz force and orbit objectives.
+
+![Alpha-particle guiding centers through the magnetic axis and out to the LCFS](docs/readme_orbits.png)
+
+3.5 MeV alpha particles in the bundled reactor-scale QA equilibrium, with the bundled QA coils
+scaled to it. Blue orbits stay inside for 100 us, red ones reach the LCFS (black dots); of the 52
+traced, 20 are lost. Right: one orbit passes through the axis (closest approach `sqrt(s)` =
+8e-4), one is confined near the edge, two are lost.
+
+## Installation
+
+```console
 pip install essos
 ```
 
-## What it does
+Python 3.10, 3.11 and 3.12 are tested. The wheel installs JAX for the CPU; for a GPU, install the
+matching JAX build after ESSOS (see the [JAX installation guide](https://docs.jax.dev/en/latest/installation.html)).
+The examples and their input files live in the repository:
 
-- **Differentiable throughout.** `jax.grad` works through coil geometry, the
-  field, and the traced orbits, so objectives compose without finite differences.
-- **Coil optimization.** Fit coils to a plasma boundary under length, curvature,
-  separation and coil-surface-distance constraints.
-- **Particle tracing.** Guiding-centre and full-orbit (Boris) models, with
-  collisions, electric fields and alpha-loss diagnostics.
-- **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
-  Poincare sections.
-- **Fields.** Biot-Savart from coils, VMEC equilibria, near-axis expansions, and
-  `CombinedField` to trace a sum of fields as one.
-- **VMEC MGRID.** Export coil fields and load MGRID files as JAX-compatible
-  three-dimensional magnetic fields.
-- **Surfaces.** Fourier-represented toroidal surfaces, from a VMEC `wout` or
-  built directly.
-- **Parallel.** JAX sharding across the visible devices; pass `devices=` to pick.
-
-## Coil optimization
-
-Fit coils to a VMEC boundary, trading normal-field error against coil length and
-curvature. Losses compose with `+`, and `L.grad` is the exact gradient.
-
-![Coils fitted to a QA boundary](docs/readme_coil_optimization.png)
-
-```python
-from essos.coils import Coils, CreateEquallySpacedCurves
-from essos.fields import BiotSavart
-from essos.losses import custom_loss
-from essos.surfaces import BdotN_over_B, SurfaceRZFourier
-from scipy.optimize import least_squares
-
-surface = SurfaceRZFourier.from_wout_file("wout.nc", s=1, ntheta=30, nphi=30,
-                                          range_torus="half period")
-coils = Coils(curves=CreateEquallySpacedCurves(3, 3, 10.0, 5.6, n_segments=45,
-                                               nfp=2, stellsym=True),
-              currents=[1.0] * 3)
-
-L = (custom_loss(lambda field, surface: abs(BdotN_over_B(surface, field)).sum(),
-                 "field", surface=surface)
-     + custom_loss(lambda field: (field.coils.length - 32.0).clip(0).mean(), "field")
-     + custom_loss(lambda field: (field.coils.curvature - 0.1).clip(0).mean(), "field"))
-L.dependencies = {"field": BiotSavart(coils)}
-
-result = least_squares(L, L.starting_dofs, L.grad, max_nfev=400)
-optimized = L.dofs_to_pytree(result.x)["field"].coils
-```
-
-More in [`examples/coil_optimization`](examples/coil_optimization).
-
-## Field-line tracing
-
-![Poincare section of a coil field](docs/readme_fieldlines.png)
-
-```python
-import jax.numpy as jnp
-from essos.coils import Coils
-from essos.dynamics import Tracing
-from essos.fields import BiotSavart
-
-field = BiotSavart(Coils.from_json("coils.json"))
-R0 = jnp.linspace(1.21, 1.40, 8)
-seeds = jnp.array([R0, jnp.zeros_like(R0), jnp.zeros_like(R0)]).T
-
-tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=seeds,
-                  maxtime=8000, times_to_trace=40000, atol=1e-8, rtol=1e-8)
-tracing.poincare_plot(shifts=[0.0])
-```
-
-More in [`examples/fieldline_tracing`](examples/fieldline_tracing).
-
-## VMEC MGRID fields
-
-Run [`examples/simple_examples/mgrid_from_coils.py`](examples/simple_examples/mgrid_from_coils.py)
-to export the included Landreman-Paul QA coils, load the file as a magnetic
-field, and compare its interpolated field with direct Biot-Savart. It prints
-the differences and saves a plot; the maximum difference at its four sample
-points is about 0.2%. Accuracy depends on grid resolution and distance from
-the coils, so compare in your region of interest before using a grid.
-
-The cylindrical grid covers one field period in phi. The field repeats across
-periods, and R and Z queries are clamped to the grid bounds, so set the bounds
-to cover the region you intend to evaluate.
-
-## Particle tracing
-
-![Guiding-centre alpha orbits](docs/readme_particles.png)
-
-```python
-from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
-from essos.dynamics import Particles, Tracing
-
-particles = Particles(initial_xyz=seeds, mass=ALPHA_PARTICLE_MASS,
-                      charge=ALPHA_PARTICLE_CHARGE, energy=4000 * ONE_EV)
-tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles,
-                  maxtime=1e-4, times_to_trace=800, atol=1e-7, rtol=1e-7)
-tracing.plot()
-print(tracing.loss_fractions)
-```
-
-More in [`examples/particle_tracing`](examples/particle_tracing), including
-full-orbit, collisional and electric-field variants.
-
-## Tracing notes
-
-- **VMEC magnetic axis.** VMEC guiding centres are integrated in
-  `sqrt(s) (cos theta, sin theta)`, which is regular on the axis, so orbits
-  cross it; trajectories are returned in `(s, theta, phi, ...)` with `theta`
-  in `[0, 2 pi)`. A trace stops at `s >= 1` and reports it through
-  `tracing.boundary_hits`. Supplying `condition` replaces that event; it is
-  evaluated on `(s, theta, phi, ...)`.
-- **Stopping coil-field traces.** Pass `stopping_criteria=LevelsetStoppingCriterion(...)`
-  to end Cartesian traces once they leave a prescribed distance from a surface,
-  and read the per-line mask from `tracing.boundary_hits`.
-- **Step budget.** `max_steps` (default `1_000_000`) bounds every Diffrax solve,
-  so a trace that cannot finish returns instead of running unbounded.
-- **Progress bars** are off by default; pass `progress=True` when interactive.
-- **Model choice.** `FieldLineArclength` traces a fixed physical length so
-  rescaling `B` does not change the run; `FieldLineToroidal` sets coverage
-  directly in toroidal angle for flux-coordinate fields.
-
-## Optional: near-axis fields
-
-Near-axis expansions need [pyQSC_JAX](https://github.com/uwplasma/pyQSC_JAX),
-which is not on PyPI and therefore cannot be a declared dependency:
-
-```sh
-pip install git+https://github.com/uwplasma/pyQSC_JAX.git
-```
-
-Everything else works without it; the near-axis entry points raise with this
-command if it is missing.
-
-## Testing
-
-```sh
+```console
+git clone https://github.com/uwplasma/ESSOS
+cd ESSOS
+pip install -e . -r requirements.txt
 pytest
 ```
 
-## License
+Near-axis fields need [pyQSC_JAX](https://github.com/uwplasma/pyQSC_JAX), which is not on PyPI
+and so cannot be a declared dependency: `pip install git+https://github.com/uwplasma/pyQSC_JAX.git`.
+The near-axis entry points raise with this command if it is missing.
 
-MIT, see [LICENSE](LICENSE).
+## First steps
 
-## Acknowledgments
+From the root of a clone, trace alpha particles in a bundled VMEC equilibrium (about 15 s on a
+laptop):
 
-Developed by the [UWPlasma](https://rogerio.physics.wisc.edu/) group at the
-University of Wisconsin-Madison, with support from Simons Foundation grant
-560651.
+```python
+import jax.numpy as jnp
+from essos.dynamics import Particles, Tracing
+from essos.fields import Vmec
+
+vmec = Vmec("examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+n = 16  # 3.5 MeV alpha particles (the default) on s = 0.5, as (s, theta, phi)
+seeds = jnp.array([jnp.full(n, 0.5), jnp.linspace(0, 2 * jnp.pi, n), jnp.zeros(n)]).T
+particles = Particles(initial_xyz=seeds, initial_vparallel_over_v=jnp.linspace(-0.95, 0.95, n))
+tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
+                  maxtime=1e-3, times_to_trace=1000, atol=1e-8, rtol=1e-8)
+print(f"alpha particles lost in 1 ms: {tracing.loss_fractions[-1]:.1%}")
+```
+
+and differentiate a field quantity with respect to every coil degree of freedom:
+
+```python
+import jax
+import jax.numpy as jnp
+from essos.coils import Coils
+from essos.fields import BiotSavart
+
+coils = Coils.from_json("examples/input_files/ESSOS_biot_savart_LandremanPaulQA.json")
+point = jnp.array([1.2, 0.0, 0.0])
+dB = jax.grad(lambda c: BiotSavart(c).AbsB(point))(coils)  # a Coils pytree
+print(coils.dof_names[:3], dB.dofs[:3])
+```
+
+`tracing.trajectories`, `tracing.lost_times` and `tracing.plot()` hold the orbits; losses built
+with `essos.losses.custom_loss` expose `L(x)`, `L.grad(x)` and `L.dofs_to_pytree(x)` for
+optimizers.
+
+Tracing controls: `devices=` shards particles over JAX devices; `max_steps` (default 10^6)
+bounds every solve; `stopping_criteria=` ends coil-field traces at a surface (`boundary_hits`);
+for a VMEC trace, passing `condition` replaces the LCFS event.
+
+## Gradients and optimization
+
+![Coil optimization and an orbit gradient checked against finite differences](docs/readme_gradients.png)
+
+Left: coils fitted to a QA boundary by SciPy least squares with the exact gradient of normal
+field, length and curvature penalties. Right: the gradient of the mean distance of eight guiding
+centers from the axis after 10 us, taken through the adaptive orbit integration with respect to
+all 136 coil degrees of freedom, agrees with central finite differences to 2e-8 at the best step.
+Both panels: `python docs/make_readme_figures.py`.
+
+## Comparison with SIMSOPT
+
+The same Landreman-Paul QA coils in both codes, at the same tolerance
+(`python examples/comparisons_simsopt/readme_benchmark.py`, and `ESSOS_DEVICES=8` for the
+second ESSOS column; Apple M4 laptop, SIMSOPT 1.11 in one process):
+
+| Task | ESSOS vs SIMSOPT | ESSOS, 1 / 8 CPU devices | SIMSOPT |
+|---|---|---|---|
+| Biot-Savart `B` at 10^4 points | 8e-16 relative | 0.027 s / 0.027 s | 0.015 s |
+| 8 field lines, 60 m each, tol 1e-10 | 4e-9 m | 0.97 s / 0.90 s | 1.4 s |
+| 8 guiding centers, 5 keV protons, 40 us, tol 1e-10 | 1e-8 m | 1.4 s / 1.0 s | 1.5 s |
+
+The differences are those of the final positions. The ESSOS times are second calls; the
+Biot-Savart function is compiled once, but each `Tracing` call still compiles its integrator,
+about 0.5 s of each tracing time. On this shared laptop the times vary by up to 30% between
+runs. The other scripts in [examples/comparisons_simsopt](examples/comparisons_simsopt/) compare
+coils, surfaces, losses, full orbits and VMEC import, sweeping the tolerance.
+
+## Examples
+
+| Folder | What it shows |
+|---|---|
+| [simple_examples](examples/simple_examples/) | creating and perturbing coils, coils from near-axis or BOOZ_XFORM data, MGRID export, combined fields, derivatives |
+| [fieldline_tracing](examples/fieldline_tracing/) | field lines and Poincare sections in coil and VMEC fields, connection length to a wall |
+| [particle_tracing](examples/particle_tracing/) | guiding-center and full-orbit tracing in coil and VMEC fields, electric fields, loss classification |
+| [particle_tracing_collisions](examples/particle_tracing_collisions/) | Monte Carlo collisions, velocity-distribution statistics |
+| [coil_optimization](examples/coil_optimization/) | coils for a VMEC surface or near-axis field, particle confinement, forces and distances, augmented Lagrangian, stochastic and multiobjective optimization, finite-beta fields from VMEX |
+| [comparisons_simsopt](examples/comparisons_simsopt/) | accuracy and speed against SIMSOPT (needs `pip install simsopt`) |
+| [paper](examples/paper/) | integrator studies, guiding center against full orbit, gradients |
+
+Run the scripts from the root of a clone; each sets its parameters near the top.
+
+## Documentation and related codes
+
+The documentation is at [essos.readthedocs.io](https://essos.readthedocs.io/en/latest/).
+[VMEX](https://github.com/uwplasma/vmex) uses ESSOS coils for free-boundary and single-stage
+optimization and provides the exterior field `VmecExtender`. Contributions are welcome through
+issues and pull requests; `pytest` runs the test suite.
+
+ESSOS is developed by the [UWPlasma](https://rogerio.physics.wisc.edu/) group at the University of
+Wisconsin-Madison, with support from Simons Foundation grant 560651. MIT license, see [LICENSE](LICENSE).
