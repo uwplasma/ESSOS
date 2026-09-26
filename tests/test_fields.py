@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from essos.coils import Coils, Curves
 from essos.fields import BiotSavart
 import jax
@@ -104,3 +105,69 @@ def test_combined_field_requires_at_least_one_field():
     with pytest.raises(ValueError):
         CombinedField()
 
+
+
+WOUT_QA = str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+              / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+
+
+def test_vmec_fourier_modes_are_regular_on_the_axis():
+    """Odd-m modes go as sqrt(s) near the axis; linear interpolation in s left
+    them finite there, so |B| depended on theta on the axis itself."""
+    from essos.fields import Vmec
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    theta = jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False)
+
+    def on_circle(fun, s):
+        points = jnp.stack([jnp.full_like(theta, s), theta, jnp.full_like(theta, 0.3)], 1)
+        return jax.vmap(fun)(points)
+
+    d_theta = [jnp.abs(on_circle(vmec.dAbsB_by_dX, s)[:, 1]).max() / jnp.sqrt(s) for s in (1e-8, 1e-4)]
+    assert d_theta[0] < 1.1 * d_theta[1]
+    axis = vmec.to_xyz(jnp.array([0.0, 0.0, 0.3]))
+    radius = [jnp.linalg.norm(on_circle(vmec.to_xyz, s) - axis, axis=1).max() for s in (1e-6, 1e-4)]
+    assert radius[0] / radius[1] == pytest.approx(0.1, rel=1e-2)
+    AbsB = on_circle(vmec.AbsB, 1e-6)
+    assert jnp.abs(jnp.linalg.norm(on_circle(vmec.B, 1e-6), axis=1) / AbsB - 1).max() < 0.05
+    # sqrt(g) J^phi = d_s B_theta - d_theta B_s: its m = 1 part vanishes on the axis instead of
+    # tending to a constant (linear interpolation) or growing as 1/sqrt(s) (inconsistent B_s).
+    current = [jnp.abs(on_circle(lambda p: vmec.sqrtg(p) * vmec.curl_B(p)[2], s)).max() for s in (1e-8, 1e-4)]
+    assert current[0] < 0.5 * current[1]
+
+
+def test_vmec_radial_interpolation_keeps_grid_values_and_m0_modes():
+    from essos.fields import Vmec, _radial_interp
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    k = 7
+    assert jnp.allclose(_radial_interp(vmec.s_half_grid[k], vmec.s_half_grid, vmec.bmnc, vmec.xm_nyq, half_grid=True),
+                        vmec.bmnc[k + 1])
+    assert jnp.allclose(_radial_interp(vmec.s_full_grid[k], vmec.s_full_grid, vmec.rmnc, vmec.xm),
+                        vmec.rmnc[k])
+    s = 0.3141
+    m0 = vmec.xm == 0
+    expected = jax.vmap(lambda row: jnp.interp(s, vmec.s_full_grid, row))(vmec.rmnc[:, m0].T)
+    assert jnp.allclose(_radial_interp(s, vmec.s_full_grid, vmec.rmnc, vmec.xm)[m0], expected)
+
+
+def test_vmec_analytic_derivatives_match_automatic_differentiation():
+    from essos.fields import Vmec
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    for point in (jnp.array([0.3, 0.4, 0.5]), jnp.array([1e-3, 2.0, 1.0]), jnp.array([0.97, 5.0, 3.0])):
+        assert jnp.allclose(vmec.dAbsB_by_dX(point), jax.grad(vmec.AbsB)(point), rtol=1e-12, atol=1e-12)
+        assert jnp.allclose(vmec.grad_B_covariant(point), jax.jacfwd(vmec.B_covariant)(point), rtol=1e-12, atol=1e-12)
+
+
+def test_vmec_mode_tolerance_keeps_the_field():
+    from essos.fields import Vmec
+
+    full = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    truncated = Vmec(WOUT_QA, ntheta=8, nphi=8, mode_tolerance=1e-3)
+    assert truncated.len_xm_nyq < full.len_xm_nyq and len(truncated.xm) < len(full.xm)
+    assert truncated.bmnc.shape == (full.bmnc.shape[0], truncated.len_xm_nyq)
+    points = jnp.array([[0.2, 0.1, 0.3], [0.7, 2.0, 1.0]])
+    for name in ("AbsB", "B_contravariant", "to_xyz"):
+        a, b = jax.vmap(getattr(full, name))(points), jax.vmap(getattr(truncated, name))(points)
+        assert jnp.abs(a - b).max() < 5e-3 * jnp.abs(a).max()
