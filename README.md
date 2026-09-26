@@ -121,13 +121,24 @@ full-orbit, collisional and electric-field variants.
 
 ## Tracing notes
 
-- **VMEC magnetic axis.** The poloidal angle is undefined on axis, so a VMEC
-  guiding-centre trace stops at `s <= axis_threshold` (default `1e-6`) and
-  reports it through `tracing.axis_hits` and
-  `tracing.total_particles_unresolved`, separately from a loss at `s >= 1`. This
-  is a numerical safeguard, not a continuation through the axis; a trajectory
-  that must cross it needs a regular chart or a full-orbit handoff. Supplying
-  `condition` replaces the automatic axis and boundary events.
+- **VMEC magnetic axis.** VMEC guiding centres are integrated in
+  `sqrt(s) (cos theta, sin theta)`, which is regular on the axis, so orbits
+  cross it; trajectories are returned in `(s, theta, phi, ...)` with `theta`
+  in `[0, 2 pi)`.
+- **LCFS and wall.** A VMEC guiding-centre trace stops at the exact LCFS
+  crossing (`tracing.lcfs_times`, `lcfs_positions`, `lcfs_energies`), found by
+  root finding. Pass `exterior_field=` (ESSOS coils, a VMEX `VmecExtender` or
+  `MgridField`, or any batched `xyz -> B`) and `wall=` (a `SurfaceClassifier`
+  or a signed-distance callable, positive inside) to follow the orbit outside
+  in Cartesian coordinates until it strikes the wall (`wall_times`,
+  `wall_positions`, `wall_energies`) or comes back inside, where it returns to
+  flux coordinates (`returns`). `tracing.status` gives each outcome
+  (`essos.dynamics.VMEC_STATUS`); `trajectories_xyz` and `region` hold the
+  whole orbit. A non-finite step ends that orbit as `failed`, with its time.
+  Loss fractions use the exact wall, or LCFS, times. Collisions are switched
+  off outside the LCFS. Supplying `condition` replaces these events; it is
+  evaluated on `(s, theta, phi, ...)`. See
+  [`examples/particle_tracing/trace_particles_vmec_to_wall.py`](examples/particle_tracing/trace_particles_vmec_to_wall.py).
 - **Stopping coil-field traces.** Pass `stopping_criteria=LevelsetStoppingCriterion(...)`
   to end Cartesian traces once they leave a prescribed distance from a surface,
   and read the per-line mask from `tracing.boundary_hits`.

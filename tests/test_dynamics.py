@@ -1,4 +1,6 @@
 import pytest
+from pathlib import Path
+import jax
 import numpy as np
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -14,8 +16,9 @@ from essos.dynamics import (
     LevelsetStoppingCriterion,
     trace_field_lines,
     connection_length,
-    _fill_terminated_trajectories,
-    _vmec_radial_events,
+    _axis_regular,
+    _from_axis_regular,
+    _to_axis_regular,
     _VMEC_GUIDING_CENTER_MODELS,
 )
 from essos.background_species import BackgroundSpecies
@@ -250,33 +253,28 @@ def test_field_line(field):
     assert result.shape == (3,)
 
 
-def test_fill_terminated_trajectories():
-    trajectories = jnp.array(
-        [
-            [[0.2, 1.0], [0.3, 2.0], [jnp.inf, jnp.inf]],
-            [[0.4, 3.0], [0.5, 4.0], [0.6, 5.0]],
-        ]
-    )
-    filled = _fill_terminated_trajectories(trajectories)
-    assert jnp.allclose(filled[0, 2], trajectories[0, 1])
-    assert jnp.allclose(filled[1], trajectories[1])
+def test_axis_regular_chart_round_trip():
+    state = jnp.array([0.25, 2.0, 0.3, 1.0, 0.5])
+    regular = _to_axis_regular(state)
+    assert regular.shape == (6,)
+    assert jnp.allclose(regular[:2], 0.5 * jnp.array([jnp.cos(2.0), jnp.sin(2.0)]))
+    assert jnp.allclose(_from_axis_regular(regular), state)
+    assert jnp.allclose(_from_axis_regular(regular.at[-1].set(1.0))[1], 3.0)
+    assert jnp.isinf(_from_axis_regular(jnp.full(6, jnp.inf))).all()
 
 
-def test_fill_terminated_trajectories_rejects_below_axis_states():
-    trajectories = jnp.array([[[0.2, 1.0], [0.1, 2.0], [-0.1, 3.0]]])
-    filled = _fill_terminated_trajectories(trajectories, axis_threshold=0.0)
-    assert jnp.allclose(filled[0, 2], trajectories[0, 1])
+def test_axis_regular_vector_field_maps_back_to_the_flux_field():
+    def flux_field(t, y, args):
+        s, theta = y[0], y[1]
+        drift = jnp.array([s * jnp.sin(theta) + 0.3 * jnp.sqrt(s), 1.0 + jnp.cos(theta), 0.2, -0.1])
+        return jnp.stack([drift, 2 * drift]).T  # a diffusion-like matrix
 
-
-def test_vmec_radial_events_support_all_guiding_center_state_sizes():
-    reached_axis, reached_boundary = _vmec_radial_events(1e-6)
-
-    for state_size in (4, 5):
-        state = jnp.zeros(state_size).at[0].set(0.5)
-        assert not reached_axis(0.0, state, None)
-        assert not reached_boundary(0.0, state, None)
-        assert reached_axis(0.0, state.at[0].set(1e-6), None)
-        assert reached_boundary(0.0, state.at[0].set(1.0), None)
+    for y in (jnp.array([0.3, -0.2, 0.1, 0.5, 0.7]), jnp.array([0.01, 0.02, 0.1, 0.5, -2.0])):
+        regular = _axis_regular(flux_field)(0.0, y, None)
+        pushed = jnp.stack([jax.jvp(_from_axis_regular, (y,), (column,))[1] for column in regular.T]).T
+        assert jnp.allclose(pushed, flux_field(0.0, _from_axis_regular(y), None))
+    on_axis = _axis_regular(flux_field)(0.0, jnp.array([0.0, 0.0, 0.1, 0.5, 0.0]), None)
+    assert jnp.isfinite(on_axis).all()
 
 
 def test_vmec_axis_events_cover_every_guiding_center_stepper():
@@ -392,28 +390,58 @@ def test_vmec_fieldline_uses_the_lcfs_event():
     assert callable(tracing.condition)
 
 
-@pytest.mark.parametrize("model", ["GuidingCenter", "GuidingCenterAdaptative"])
-def test_vmec_axis_event_terminates_deterministic_steppers(model):
-    particles = Particles(
-        initial_xyz=jnp.array([[1e-2, 0.0, 0.0]]),
-        initial_vparallel_over_v=jnp.array([1.0]),
-    )
-    tracing = Tracing(
-        field=MockVmec(),
-        model=model,
-        particles=particles,
-        maxtime=1e-9,
-        timestep=1e-10,
-        times_to_trace=20,
-        axis_threshold=1e-6,
-    )
+WOUT_QA = str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+              / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 
-    assert tracing.axis_hits.tolist() == [True]
-    assert tracing.boundary_hits.tolist() == [False]
-    assert tracing.total_particles_unresolved == 1
-    assert tracing.total_particles_lost == 0
+
+def _near_axis_particles():
+    # 3.5 MeV alphas: four born at s = 0.01 whose orbits pass within s ~ 1e-4 of the
+    # axis, and one born at s = 1e-7, next to it.
+    theta = jnp.array([3, 4, 5, 0, 1]) * jnp.pi / 4
+    xyz = jnp.stack([jnp.array([0.01, 0.01, 0.01, 0.01, 1e-7]), theta, jnp.zeros(5)], axis=1)
+    return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([0.9, 0.9, 0.9, -0.9, 0.9]))
+
+
+def test_vmec_guiding_centers_cross_the_magnetic_axis():
+    """The orbit born at s = 1e-7 used to stop at once, at s <= axis_threshold = 1e-6."""
+    particles = _near_axis_particles()
+    tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
+                      particles=particles, maxtime=2e-5, timestep=1e-9, times_to_trace=200,
+                      atol=1e-9, rtol=1e-9)
+    s = tracing.trajectories[:, :, 0]
+    assert not tracing.axis_hits.any() and not tracing.boundary_hits.any()
     assert jnp.isfinite(tracing.trajectories).all()
-    assert jnp.all(tracing.trajectories[:, :, 0] > tracing.axis_threshold)
+    assert (s.min(axis=1) < 1e-3).all()
+    assert (s[:, -1] > 1.5 * s.min(axis=1)).all()
+    assert jnp.all((tracing.trajectories[:, :, 1] >= 0) & (tracing.trajectories[:, :, 1] < 2 * jnp.pi))
+    assert jnp.abs(tracing.energy() / particles.energy - 1).max() < 1e-5
+
+
+def test_vmec_guiding_center_condition_sees_flux_coordinates():
+    def below(t, y, args, **kwargs):
+        return y[0] < 5e-3
+
+    tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
+                      particles=_near_axis_particles(), maxtime=2e-5, timestep=1e-9, times_to_trace=200,
+                      atol=1e-9, rtol=1e-9, condition=below)
+    s = tracing.trajectories[:, :, 0]
+    stopped = ~jnp.isfinite(s[:, -1])
+    assert stopped.all()
+    assert (jnp.where(jnp.isfinite(s), s, 1.0).min(axis=1) > 4e-3).all()
+
+
+@pytest.mark.parametrize("model", ["GuidingCenterCollisions", "GuidingCenterCollisionsMuFixed"])
+def test_vmec_collisional_guiding_centers_cross_the_magnetic_axis(model):
+    species = BackgroundSpecies(number_species=2, mass_array=jnp.array([ELECTRON_MASS / PROTON_MASS, 2.0]),
+                                charge_array=jnp.array([-1.0, 1.0]), n_array=jnp.array([1e20, 1e20]),
+                                T_array=jnp.array([1e4, 1e4]))
+    tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model=model, particles=_near_axis_particles(),
+                      maxtime=2e-5, timestep=1e-8, times_to_trace=100, species=species)
+    s = tracing.trajectories[:, :, 0]
+    assert not tracing.axis_hits.any()
+    assert jnp.isfinite(tracing.trajectories).all()
+    assert (s.min(axis=1) < 2e-3).all()
+    assert (s[:, -1] > 1.5 * s.min(axis=1)).all()
 
 
 def test_tracing_initialization(field, particles,electric_field):
@@ -522,8 +550,41 @@ def test_tracing_max_steps_is_configurable_and_bounded():
 
     source = inspect.getsource(Tracing)
     assert "max_steps=10000000000" not in source
-    assert source.count("max_steps=self.max_steps") == 9
+    assert source.count("max_steps=self.max_steps") == 11
 
+
+
+def _edge_tracing(model, s0, times_to_trace, **kwargs):
+    from pathlib import Path
+    wout = Path(__file__).resolve().parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+    n = 16
+    particles = Particles(initial_xyz=jnp.stack([jnp.full(n, s0), jnp.linspace(0, 6, n), jnp.zeros(n)], axis=1),
+                          initial_vparallel_over_v=jnp.linspace(-0.9, 0.9, n))
+    return Tracing(field=Vmec(str(wout), ntheta=8, nphi=8), model=model, particles=particles, maxtime=1e-5,
+                   timestep=1e-8, times_to_trace=times_to_trace, **kwargs)
+
+
+def test_vmec_losses_are_counted_at_the_lcfs():
+    """Orbits born at s = 0.993 used to count as lost at t = 0 (r_max = 0.99)."""
+    tracing = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9)
+    assert 0 < tracing.boundary_hits.sum() < 16
+    assert tracing.total_particles_lost == tracing.boundary_hits.sum()
+    assert jnp.all((tracing.lost_times > 0) == tracing.boundary_hits)
+
+
+def test_vmec_lost_energies_and_positions_are_taken_at_the_crossing():
+    """With coarse saves the first sample after a loss is infinite, and the lost
+    energies and positions used to be read there; now they are the crossing state."""
+    species = BackgroundSpecies(number_species=2, mass_array=jnp.array([ELECTRON_MASS / PROTON_MASS, 2.0]),
+                                charge_array=jnp.array([-1.0, 1.0]), n_array=jnp.array([1e20, 1e20]),
+                                T_array=jnp.array([1e4, 1e4]))
+    tracing = _edge_tracing("GuidingCenterCollisionsMuFixed", 0.975, 4, species=species)
+    lost = tracing.boundary_hits
+    assert lost.any()
+    assert jnp.isfinite(tracing.lost_energies).all() and jnp.isfinite(tracing.lost_positions).all()
+    assert jnp.allclose(tracing.lost_energies[lost], tracing.particles.energy, rtol=1e-2)
+    # The LCFS crossing is root-found, so the lost position is on it.
+    assert jnp.allclose(tracing.lost_positions[lost, 0], 1.0, atol=1e-9)
 
 
 class _UniformField:
@@ -581,6 +642,133 @@ def test_particles_honours_the_full_orbit_phase_argument():
 
     particles = Particles(initial_xyz=jnp.zeros((2, 3)), phase_angle_full_orbit=0.7)
     assert particles.phase_angle_full_orbit == 0.7
+
+
+# The free-boundary vacuum equilibrium of the bundled Landreman-Paul QA coils
+# (VMEX, ns = 16, mpol = ntor = 5): inside it, VMEC and the coils agree to 0.5%.
+WOUT_QA_COILS = str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+                    / "wout_LandremanPaulQA_coils_free_boundary.nc")
+QA_COILS = str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+               / "ESSOS_biot_savart_LandremanPaulQA.json")
+
+
+def _exterior_tracing(xyz, vpar_over_v, maxtime=4e-6, model="GuidingCenterAdaptative", wall_gap=0.04, **kwargs):
+    from essos.coils import Coils
+    from essos.fields import BiotSavart
+
+    vmec = Vmec(WOUT_QA_COILS, ntheta=8, nphi=8)
+    particles = Particles(initial_xyz=jnp.asarray(xyz), initial_vparallel_over_v=jnp.asarray(vpar_over_v),
+                          mass=PROTON_MASS, charge=1.602176634e-19, energy=10e3 * 1.602176634e-19)
+    options = dict(atol=1e-8, rtol=1e-8) if model == "GuidingCenterAdaptative" else {}
+    options.update(kwargs)
+    timestep = 1e-9 if model == "GuidingCenterAdaptative" else 2e-8
+    return Tracing(field=vmec, model=model, particles=particles, maxtime=maxtime, timestep=timestep, times_to_trace=40,
+                   exterior_field=BiotSavart(Coils.from_json(QA_COILS)),
+                   wall=lambda x: vmec.boundary_distance(x) + wall_gap, **options)
+
+
+def test_vmec_lcfs_crossings_are_exact():
+    tracing = _edge_tracing("GuidingCenterAdaptative", 0.975, 50, atol=1e-9, rtol=1e-9)
+    crossed = jnp.isfinite(tracing.lcfs_times)
+    assert crossed.any() and jnp.all(crossed == tracing.boundary_hits)
+    assert jnp.all(tracing.status[crossed] == 1) and jnp.all(tracing.status[~crossed] == 0)
+    distance = jax.vmap(tracing.field.boundary_distance)(jnp.asarray(tracing.lcfs_positions[crossed]))
+    assert jnp.abs(distance).max() < 1e-10
+    assert jnp.allclose(tracing.lcfs_states[crossed, 0], 1.0, atol=1e-10)
+    assert jnp.allclose(tracing.lost_times[crossed], tracing.lcfs_times[crossed])
+    assert jnp.all(tracing.lost_times[~crossed] == -1)
+    # The saved samples stop at the crossing; the trajectory is not frozen at the last save.
+    assert jnp.all(tracing.region[crossed, -1] == -1)
+
+
+def test_vmec_orbits_continue_outside_and_strike_the_wall_exactly():
+    xyz = [[0.8134, 4.729, 2.7805], [0.7824, 5.2745, 2.1147], [0.9376, 4.8776, 0.8851], [0.8812, 5.4089, 0.9946]]
+    tracing = _exterior_tracing(xyz, [-0.8536, 0.9923, 0.2663, 0.6794], maxtime=2e-6)
+    struck = tracing.wall_hits
+    assert struck.any()
+    wall = jax.vmap(lambda x: tracing.field.boundary_distance(x) + 0.04)(jnp.asarray(tracing.wall_positions[struck]))
+    assert jnp.abs(wall).max() < 1e-10
+    assert jnp.abs(tracing.wall_energies[struck] / tracing.particles.energy - 1).max() < 1e-5
+    assert jnp.all(tracing.wall_times[struck] > tracing.lcfs_times[struck])
+    assert jnp.allclose(tracing.lost_times[struck], tracing.wall_times[struck])
+    for i in jnp.where(struck)[0]:
+        region = tracing.region[i]
+        assert region[0] == 0 and (region == 1).any() and region[-1] == -1
+        inside = region == 0
+        assert jnp.isfinite(tracing.trajectories[i][inside]).all() and jnp.isinf(tracing.trajectories[i][~inside]).all()
+        assert jnp.isfinite(tracing.trajectories_xyz[i][region >= 0]).all()
+
+
+def test_vmec_orbits_that_come_back_inside_return_to_flux_coordinates():
+    xyz, vpar = [[0.957, 6.22773, 1.86533]], [-0.61777]
+    tracing = _exterior_tracing(xyz, vpar, maxtime=2e-6)
+    assert tracing.returns[0] == 1 and tracing.status[0] == 0
+    region = np.asarray(tracing.region[0])
+    changes = np.flatnonzero(np.diff(region))
+    assert region[changes[0]] == 0 and region[changes[0] + 1] == 1 and region[changes[1] + 1] == 0
+    # Inside again, the flux-coordinate trajectory resumes with its energy.
+    later = region[changes[1] + 1:] == 0
+    E = tracing.energy()[0][changes[1] + 1:][later]
+    assert jnp.abs(E / tracing.particles.energy - 1).max() < 1e-5
+    capped = _exterior_tracing(xyz, vpar, maxtime=2e-6, max_returns=0)
+    assert capped.status[0] == 5 and capped.returns[0] == 0
+
+
+@pytest.mark.parametrize("model", ["GuidingCenterCollisionsMuFixed", "GuidingCenterCollisions"])
+def test_vmec_collisional_orbits_continue_outside(model):
+    species = BackgroundSpecies(number_species=2, mass_array=jnp.array([ELECTRON_MASS / PROTON_MASS, 1.0]),
+                                charge_array=jnp.array([-1.0, 1.0]), n_array=jnp.array([1e19, 1e19]),
+                                T_array=jnp.array([300.0, 300.0]))
+    xyz = [[0.8134, 4.729, 2.7805], [0.7824, 5.2745, 2.1147], [0.9376, 4.8776, 0.8851], [0.8812, 5.4089, 0.9946]]
+    tracing = _exterior_tracing(xyz, [-0.8536, 0.9923, 0.2663, 0.6794], maxtime=2e-6, model=model, species=species)
+    assert tracing.wall_hits.any() and not tracing.failed.any()
+    struck = tracing.wall_hits
+    assert jnp.all(tracing.wall_times[struck] > tracing.lcfs_times[struck])
+    assert jnp.isfinite(tracing.lost_energies[struck]).all()
+
+
+def test_vmec_non_finite_steps_are_reported():
+    """An exterior field that turns non-finite above the midplane stops those orbits as failed."""
+    from essos.fields import ExternalField
+
+    def toroidal(xyz):
+        R2 = xyz[:, 0]**2 + xyz[:, 1]**2
+        B = 0.3 * jnp.stack([-xyz[:, 1] / R2, xyz[:, 0] / R2, 0 * R2], axis=1)
+        return jnp.where(xyz[:, 2:] > 0.0, jnp.nan, B)
+
+    vmec = Vmec(WOUT_QA_COILS, ntheta=8, nphi=8)
+    particles = Particles(initial_xyz=jnp.asarray([[0.8134, 4.729, 2.7805], [0.7824, 5.2745, 2.1147],
+                                                   [0.9376, 4.8776, 0.8851], [0.8812, 5.4089, 0.9946]]),
+                          initial_vparallel_over_v=jnp.asarray([-0.8536, 0.9923, 0.2663, 0.6794]), mass=PROTON_MASS,
+                          charge=1.602176634e-19, energy=10e3 * 1.602176634e-19)
+    tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=2e-6, timestep=1e-9,
+                      times_to_trace=20, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(toroidal))
+    failed = tracing.failed
+    assert failed.any() and jnp.all(tracing.status[failed] == 4)
+    assert jnp.all(jnp.isfinite(tracing.failure_times[failed]))
+    assert jnp.all(tracing.failure_times[failed] >= tracing.lcfs_times[failed])
+    assert jnp.isinf(tracing.failure_times[~failed]).all()
+
+
+def test_exterior_arguments_are_validated():
+    particles = Particles(initial_xyz=jnp.array([[0.5, 0.0, 0.0]]))
+    with pytest.raises(ValueError, match="exterior_field"):
+        Tracing(field=MockField(), model="GuidingCenter", particles=particles, exterior_field=MockField())
+    with pytest.raises(ValueError, match="wall needs"):
+        Tracing(field=Vmec(WOUT_QA_COILS, ntheta=8, nphi=8), model="GuidingCenter", particles=particles,
+                wall=lambda x: 1.0)
+
+
+def test_guiding_center_mu_matches_guiding_center():
+    from essos.dynamics import GuidingCenterMu
+    from essos.electric_field import Electric_field_zero
+
+    field, particles = MockField(), Particles(jnp.array([[1.0, 0.0, 0.0]]))
+    y = jnp.array([1.0, 0.2, 0.1, 3e6])
+    mu = (particles.energy - 0.5 * particles.mass * y[3]**2) / field.AbsB(y[:3])
+    args = (field, particles, Electric_field_zero())
+    assert jnp.allclose(GuidingCenterMu(0.0, jnp.append(y, mu), args)[:4], GuidingCenter(0.0, y, args))
+    assert GuidingCenterMu(0.0, jnp.append(y, mu), args)[4] == 0.0
 
 
 class HelicalSlabField:
