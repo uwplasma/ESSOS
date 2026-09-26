@@ -1296,6 +1296,11 @@ class Tracing():
             if len(self.stopping_criteria) > 1:
                 event_sharding = tuple(sharding_index for _ in self.stopping_criteria)
             output_sharding = (sharding, event_sharding)
+        if isinstance(self.initial_conditions, jax.core.Tracer):
+            # Inside a JAX transformation (e.g. the gradient of a loss): no host
+            # round trip or device placement; the enclosing transformation places.
+            random_keys = self.particles.random_keys if self.particles else None
+            return vmap(compute_trajectory, in_axes=(0, 0))(self.initial_conditions, random_keys)
         if sharding is not None:
             initial_conditions = device_put(
                 np.asarray(jax.device_get(self.initial_conditions)), sharding)

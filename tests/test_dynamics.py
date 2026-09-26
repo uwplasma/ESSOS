@@ -129,6 +129,21 @@ def test_arclength_fieldline_has_unit_speed_without_changing_direction():
         tracing.trajectories[0, -1], jnp.array([1.2, 1.6, 0.0]))
 
 
+def test_tracing_is_differentiable_in_its_initial_conditions():
+    """Tracing inside jax.grad, as in the coil-optimization losses, must not move
+    traced initial conditions to the host."""
+    class ScaledField(MockField):
+        def B_contravariant(self, points):
+            return jnp.array([3.0, 4.0, 0.0])
+
+    def end_x(x0):
+        tracing = Tracing(field=ScaledField(), model="FieldLineArclength", initial_conditions=x0,
+                          maxtime=2.0, timestep=0.1, times_to_trace=11)
+        return tracing.trajectories[0, -1, 0]
+
+    assert jnp.allclose(jax.grad(end_x)(jnp.zeros((1, 3))), jnp.array([[1.0, 0.0, 0.0]]))
+
+
 def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
     class FluxField(MockField):
         def B_contravariant(self, points):
