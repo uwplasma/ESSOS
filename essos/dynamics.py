@@ -26,13 +26,19 @@ def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, ch
     """
     Computes full orbit positions for given guiding center positions,
     parallel speeds, and total velocities using JAX for efficiency.
+
+    The full-orbit start satisfies ``x - b x v / Omega = X`` with the signed
+    gyrofrequency ``Omega = charge |B| / mass``, so the guiding center of the
+    returned state is the requested point for either sign of the charge.
     """
     def compute_orbit_params(xyz, vpar):
         Bs = field.B_contravariant(xyz)
         AbsBs = jnp.linalg.norm(Bs)
         eB = Bs / AbsBs
         p1 = eB
-        p2 = jnp.array([0, 0, 1])
+        # Reference axis for the perpendicular basis: z, unless B is nearly
+        # parallel to it (cross(b, z) would vanish and give NaN).
+        p2 = jnp.where(jnp.abs(eB[2]) < 0.9, jnp.array([0.0, 0.0, 1.0]), jnp.array([1.0, 0.0, 0.0]))
         p3 = -jnp.cross(p1, p2)
         p3 /= jnp.linalg.norm(p3)
         q1 = p1
@@ -41,9 +47,9 @@ def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, ch
         q3 = p3 - jnp.dot(q1, p3) * q1 - jnp.dot(q2, p3) * q2
         q3 /= jnp.linalg.norm(q3)
         speed_perp = jnp.sqrt(total_speed**2 - vpar**2)
-        rg = mass * speed_perp / (jnp.abs(charge) * AbsBs)
-        xyz_full = xyz + rg * (jnp.sin(phase_angle_full_orbit) * q2 + jnp.cos(phase_angle_full_orbit) * q3)
         vperp = -speed_perp * jnp.cos(phase_angle_full_orbit) * q2 + speed_perp * jnp.sin(phase_angle_full_orbit) * q3
+        gyrofrequency = charge * AbsBs / mass
+        xyz_full = xyz + jnp.cross(eB, vperp) / gyrofrequency
         v_init = vpar * q1 + vperp
         return xyz_full, v_init
     xyz_inits_full, v_inits = vmap(compute_orbit_params)(initial_xyz, initial_vparallel)
@@ -60,7 +66,7 @@ class Particles():
         self.nparticles = len(initial_xyz)
         self.initial_xyz_fullorbit = initial_xyz_fullorbit
         self.initial_vxvyvz = initial_vxvyvz
-        self.phase_angle_full_orbit = 0
+        self.phase_angle_full_orbit = phase_angle_full_orbit
         self.particle_index=jnp.arange(self.nparticles)
         
         key=jax.random.key(42)
