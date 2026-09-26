@@ -682,24 +682,6 @@ def FieldLineToroidal(t, initial_condition, field) -> jnp.ndarray:
     return B / B[2]
 
 
-@jit
-def _fill_terminated_trajectories(trajectories, axis_threshold=None):
-    """Replace post-event or below-axis saves with the last valid state."""
-
-    def fill_trajectory(trajectory):
-        def fill_state(previous, current):
-            is_valid = jnp.isfinite(current).all()
-            if axis_threshold is not None:
-                is_valid = is_valid & (current[0] > axis_threshold)
-            state = jnp.where(is_valid, current, previous)
-            return state, state
-
-        _, tail = lax.scan(fill_state, trajectory[0], trajectory[1:])
-        return jnp.vstack((trajectory[0], tail))
-
-    return vmap(fill_trajectory)(trajectories)
-
-
 def _fill_stopped_trajectories(trajectories, criteria, args):
     """Hold each trajectory at its last point inside all level sets."""
 
@@ -742,18 +724,55 @@ _GUIDING_CENTER_COLLISION_MODELS = frozenset(
 )
 
 
-def _vmec_radial_events(axis_threshold):
-    """Return axis and LCFS events for VMEC guiding-center coordinates."""
+# Extent in s of the region around the magnetic axis where _axis_regular
+# advances the poloidal angle as a rotation of (u, w).
+_AXIS_REGION = 1e-2
 
-    def reached_axis(t, y, args, **kwargs):
-        del t, args, kwargs
-        return y[0] <= axis_threshold
 
-    def reached_boundary(t, y, args, **kwargs):
-        del t, args, kwargs
-        return y[0] >= 1.0
+def _to_axis_regular(y):
+    """Map (s, theta, ...) to (sqrt(s) cos theta, sqrt(s) sin theta, ..., 0)."""
+    r = jnp.sqrt(y[0])
+    return jnp.concatenate([jnp.array([r * jnp.cos(y[1]), r * jnp.sin(y[1])]), y[2:], jnp.zeros(1)])
 
-    return reached_axis, reached_boundary
+
+def _from_axis_regular(y):
+    """Map (u, w, ..., Theta) back to (s, theta, ...), with theta in [0, 2 pi)."""
+    s = y[0]**2 + y[1]**2
+    theta = jnp.mod(jnp.arctan2(y[1], y[0]) + y[-1], 2 * jnp.pi)
+    return jnp.concatenate([jnp.array([s, jnp.where(jnp.isfinite(s), theta, s)]), y[2:-1]])
+
+
+def _axis_regular(vector_field):
+    """Express a VMEC guiding-center vector field in a chart that is regular on the axis.
+
+    The state is (u, w, ..., Theta) with (u, w) = sqrt(s) (cos a, sin a) and
+    theta = a + Theta. (s, theta) is singular on the magnetic axis and (u, w)
+    is not, so orbits cross it instead of stopping there. Of the poloidal
+    rotation dtheta/dt, the fraction c = s / (s + _AXIS_REGION) goes to Theta
+    and the rest rotates (u, w):
+    du/dt = u/(2s) ds/dt - (1 - c) w dtheta/dt, dw/dt = w/(2s) ds/dt + (1 - c) u dtheta/dt,
+    dTheta/dt = c dtheta/dt, all regular on the axis. Away from it, a
+    fixed-step solver then advances theta as an angle, not by rotating (u, w)
+    with a truncation error that spirals orbits outward. Drift vectors and
+    diffusion matrices transform alike; the map involves position only and
+    the position has no noise, so Ito and Stratonovich forms need no extra
+    drift.
+    """
+    def wrapped(t, y, args):
+        u, w = y[0], y[1]
+        s = u**2 + w**2
+        half = jnp.where(s > 0, 0.5 / jnp.where(s > 0, s, 1.0), 0.0)
+        c = s / (s + _AXIS_REGION)
+        jacobian = jnp.array([[u * half, -(1 - c) * w], [w * half, (1 - c) * u]])
+        f = vector_field(t, _from_axis_regular(y), args)
+        return jnp.concatenate([jnp.tensordot(jacobian, f[:2], axes=1), f[2:], c * f[1:2]])
+    return wrapped
+
+
+def _vmec_boundary_event(t, y, args, **kwargs):
+    """LCFS event for VMEC guiding centers traced in (u, w)."""
+    del t, args, kwargs
+    return y[0]**2 + y[1]**2 >= 1.0
 
 
 class LevelsetStoppingCriterion:
@@ -786,7 +805,7 @@ class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
-                 solver=None, axis_threshold=1.e-6, stopping_criteria=None, progress=False, devices=None,
+                 solver=None, stopping_criteria=None, progress=False, devices=None,
                  max_steps=1_000_000):
 
         if condition is not None and stopping_criteria is not None:
@@ -829,10 +848,10 @@ class Tracing():
         self.particles = particles
         self.species=species
         self.tag_gc=tag_gc
-        if not 0.0 < axis_threshold < 1.0:
-            raise ValueError("axis_threshold must be strictly between 0 and 1")
-        self.axis_threshold = axis_threshold
-        self._has_vmec_axis_event = False
+        # VMEC guiding centers are traced in a chart that is regular on the
+        # magnetic axis; see _axis_regular.
+        self._axis_regular = isinstance(field, Vmec) and model in _VMEC_GUIDING_CENTER_MODELS
+        self._has_boundary_event = False
         # Diffrax's ceiling was effectively unbounded, so a trace that could not
         # finish ran until the process was killed rather than returning.
         self.max_steps = max_steps
@@ -850,8 +869,8 @@ class Tracing():
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
                 if model in _VMEC_GUIDING_CENTER_MODELS:
-                    self.condition = _vmec_radial_events(self.axis_threshold)
-                    self._has_vmec_axis_event = True
+                    self.condition = _vmec_boundary_event
+                    self._has_boundary_event = True
                 elif model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _ = y
@@ -867,10 +886,14 @@ class Tracing():
                         xx, yy, zz, _ = y
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
                 self.condition = condition_BioSavart                
+        elif self._axis_regular:
+            self.condition = tree_util.tree_map(
+                lambda c: lambda t, y, args, **kwargs: c(t, _from_axis_regular(y), args, **kwargs),
+                condition)
         else:
             self.condition = condition
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
-            self.ODE_term = ODETerm(GuidingCenter)
+            self.ODE_term = ODETerm(self._vector_field(GuidingCenter))
             self.args = (self.field, self.particles,self.electric_field)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
         elif model == 'GuidingCenterCollisions':
@@ -928,15 +951,10 @@ class Tracing():
 
             
         trace_result = self.trace()
-        if self._has_vmec_axis_event:
-            trajectories, self.event_mask = trace_result
-            self.axis_hits, self.boundary_hits = self.event_mask
-            filled = _fill_terminated_trajectories(
-                trajectories, self.axis_threshold
-            )
-            self._trajectories = jnp.where(
-                self.axis_hits[:, None, None], filled, trajectories
-            )
+        if self._has_boundary_event:
+            self._trajectories, self.event_mask = trace_result
+            self.boundary_hits = self.event_mask
+            self.axis_hits = jnp.zeros_like(self.boundary_hits)
         elif self.stopping_criteria is not None:
             trajectories, self.event_mask = trace_result
             event_leaves = tree_util.tree_leaves(self.event_mask)
@@ -981,6 +999,8 @@ class Tracing():
     def trace(self):
         @jit
         def compute_trajectory(initial_condition, particle_key) -> jnp.ndarray:
+            if self._axis_regular:
+                initial_condition = _to_axis_regular(initial_condition)
             # initial_condition = initial_condition[0]
             if self.model == 'FullOrbit_Boris':
                 dt=self.timestep#self.maxtime / self.timesteps
@@ -1011,7 +1031,7 @@ class Tracing():
                 dt0=self.timestep#self.maxtime / self.timesteps
                 tol=dt0*0.5
                 bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)            
-                self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
+                self.ODE_term = MultiTerm(ODETerm(self._vector_field(GuidingCenterCollisionsDrift)),ControlTerm(self._vector_field(GuidingCenterCollisionsDiffusion), bm))
                 solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
@@ -1038,7 +1058,7 @@ class Tracing():
                 dt0=self.timestep#self.maxtime / self.timesteps
                 tol=dt0*0.5
                 bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
-                self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMuStratonovich),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
+                self.ODE_term = MultiTerm(ODETerm(self._vector_field(GuidingCenterCollisionsDriftMuStratonovich)),ControlTerm(self._vector_field(GuidingCenterCollisionsDiffusionMu), bm))                
                 solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
@@ -1065,7 +1085,7 @@ class Tracing():
                 dt0=self.timestep#self.maxtime / self.timesteps
                 tol=dt0*0.5
                 bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
-                self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMuStratonovich),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
+                self.ODE_term = MultiTerm(ODETerm(self._vector_field(GuidingCenterCollisionsDriftMuStratonovich)),ControlTerm(self._vector_field(GuidingCenterCollisionsDiffusionMu), bm))                
                 solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
@@ -1090,7 +1110,7 @@ class Tracing():
                 dt0=self.timestep#self.maxtime / self.timesteps
                 tol=dt0*0.5
                 bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
-                self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMuIto),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
+                self.ODE_term = MultiTerm(ODETerm(self._vector_field(GuidingCenterCollisionsDriftMuIto)),ControlTerm(self._vector_field(GuidingCenterCollisionsDiffusionMu), bm))                
                 solution = diffeqsolve(
                     self.ODE_term,
                     t0=0.0,
@@ -1212,7 +1232,9 @@ class Tracing():
                     event = Event(self.condition)
                 )
                 trajectory = solution.ys
-            if self._has_vmec_axis_event or self.stopping_criteria is not None:
+            if self._axis_regular:
+                trajectory = vmap(_from_axis_regular)(trajectory)
+            if self._has_boundary_event or self.stopping_criteria is not None:
                 return trajectory, solution.event_mask
             return trajectory
         
@@ -1228,8 +1250,8 @@ class Tracing():
             sharding = sharding_index = None
 
         output_sharding = sharding
-        if self._has_vmec_axis_event:
-            output_sharding = (sharding, (sharding_index, sharding_index))
+        if self._has_boundary_event:
+            output_sharding = (sharding, sharding_index)
         elif self.stopping_criteria is not None:
             event_sharding = sharding_index
             if len(self.stopping_criteria) > 1:
@@ -1257,6 +1279,9 @@ class Tracing():
         #y=jax.device_put(self.particles.random_keys, sharding_index)        
         #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
         #return sharded_fun(x, y).block_until_ready()    
+
+    def _vector_field(self, vector_field):
+        return _axis_regular(vector_field) if self._axis_regular else vector_field
 
     @property
     def trajectories(self):
