@@ -796,7 +796,10 @@ VMEC_STATUS = {
 
 
 # Event times are refined to |dt| < 1e-8 t + 1e-11 s, and the event function
-# (1 - s, or a distance in metres) to 1e-11.
+# (1 - s, or a distance in metres) to 1e-11. Every event function starts on
+# one side of zero (inside the LCFS, inside the wall, reentry_depth outside
+# the re-entry surface), so its first sign change is the crossing sought and
+# no direction is needed.
 _EVENT_ROOT_FINDER = optx.Newton(rtol=1e-8, atol=1e-11)
 
 
@@ -1413,7 +1416,7 @@ class Tracing():
                                              dtmin=dt0, dtmax=1.e-4, force_dtmin=True),
                     step_ts=self.times, store_rejected_steps=self.rejected_steps)
         event = Event((lambda t, y, args, **kwargs: 1.0 - y[0]**2 - y[1]**2, _failed_event),
-                      root_finder=_EVENT_ROOT_FINDER, direction=(False, None))
+                      root_finder=_EVENT_ROOT_FINDER)
         solution = diffeqsolve(
             terms, solver, t0=t0, t1=T, dt0=dt0, y0=jnp.append(_to_axis_regular(y0), 0.0), args=self.args,
             saveat=SaveAt(subs=[diffrax.SubSaveAt(ts=jnp.clip(self.times, t0, T)), diffrax.SubSaveAt(t1=True)]),
@@ -1437,7 +1440,7 @@ class Tracing():
         event = Event((lambda t, y, args, **kwargs: wall(y[:3]) if wall is not None else jnp.ones(()),
                        lambda t, y, args, **kwargs: self.field.boundary_distance(y[:3]) - reentry_depth,
                        _failed_event),
-                      root_finder=_EVENT_ROOT_FINDER, direction=(False, True, None))
+                      root_finder=_EVENT_ROOT_FINDER)
         solution = diffeqsolve(
             ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else diffrax.Dopri8(),
             t0=t0, t1=self.maxtime, dt0=self.timestep, y0=jnp.append(y0, 0.0),
