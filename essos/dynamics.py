@@ -14,7 +14,7 @@ from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipSte
 import diffrax
 import optimistix as optx
 from essos.coils import Coils
-from essos.fields import BiotSavart, Vmec
+from essos.fields import BiotSavart, MagneticField, Vmec
 from essos.surfaces import SurfaceClassifier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
@@ -556,10 +556,12 @@ def GuidingCenterCollisionsDrift(t,
 def _gc_quantities(field, points):
     """Guiding-center field quantities, fused when the field provides them.
 
-    Fields without ``gc_quantities`` (for example :class:`Vmec`) use their
-    individual methods; the choice is made at trace time.
+    Fields that do not override ``MagneticField.gc_quantities`` (for example
+    :class:`Vmec`, or a field that is not a pytree) use their individual
+    methods; the choice is made at trace time.
     """
-    if hasattr(field, "gc_quantities"):
+    fused = getattr(type(field), "gc_quantities", None)
+    if fused is not None and fused is not MagneticField.gc_quantities:
         return field.gc_quantities(points)
     return (field.B_covariant(points), field.B_contravariant(points), field.AbsB(points),
             field.dAbsB_by_dX(points), field.curl_b(points), field.kappa(points),
