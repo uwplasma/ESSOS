@@ -769,3 +769,19 @@ def test_vmec_lost_energies_come_from_the_last_finite_state():
     assert jnp.isfinite(tracing.lost_energies).all() and jnp.isfinite(tracing.lost_positions).all()
     assert jnp.allclose(tracing.lost_energies[lost], tracing.particles.energy, rtol=1e-2)
     assert jnp.all(tracing.lost_positions[lost, 0] < 1)
+
+
+def test_vmec_guiding_centers_seeded_on_the_axis_leave_it():
+    """Seeds at s = 0 used to stay there: the VMEC Jacobian vanishes on the axis."""
+    from essos.constants import PROTON_MASS, ELEMENTARY_CHARGE
+
+    wout = str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+               / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+    vmec = Vmec(wout, ntheta=8, nphi=8)
+    particles = Particles(initial_xyz=jnp.array([[0.0, 0.0, 0.3], [0.0, 1.0, 1.0]]),
+                          initial_vparallel_over_v=jnp.array([0.9, -0.5]), mass=PROTON_MASS,
+                          charge=ELEMENTARY_CHARGE, energy=5e3 * ELEMENTARY_CHARGE)
+    tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
+                      maxtime=2e-5, timestep=1e-8, times_to_trace=5)
+    s = tracing.trajectories[:, :, 0]
+    assert jnp.all(jnp.isfinite(s)) and jnp.all(s[:, -1] > 1e-8)
