@@ -483,6 +483,73 @@ class Vmec():
         Y = R * jnp.sin(phi)
         return jnp.array([X, Y, Z])
 
+    def _boundary_rz(self, theta, phi):
+        """R, Z of the LCFS and their first two theta derivatives, on a theta array."""
+        angle = self.xm * theta[..., None] - self.xn * phi
+        cos, sin = jnp.cos(angle), jnp.sin(angle)
+        r, z, m = self.rmnc[-1], self.zmns[-1], self.xm
+        return (cos @ r, sin @ z, -sin @ (m * r), cos @ (m * z), -cos @ (m * m * r), -sin @ (m * m * z))
+
+    @partial(jit, static_argnames=['self'])
+    def boundary_distance(self, xyz):
+        """Signed distance [m] from a Cartesian point to the LCFS, in its phi = const plane.
+
+        Positive inside. The nearest point of the LCFS cross-section is found
+        on 64 poloidal nodes and refined by Newton iterations in theta, so the
+        distance is smooth and exact to rounding near the surface: its zero
+        is the LCFS of :meth:`to_xyz` at s = 1.
+        """
+        R, Z, phi = jnp.hypot(xyz[0], xyz[1]), xyz[2], jnp.arctan2(xyz[1], xyz[0])
+        grid = jnp.linspace(0, 2 * jnp.pi, 64, endpoint=False)
+        Rb, Zb = self._boundary_rz(grid, phi)[:2]
+        theta = grid[jnp.argmin((R - Rb)**2 + (Z - Zb)**2)]
+
+        def newton(theta, _):
+            Rb, Zb, dR, dZ, d2R, d2Z = self._boundary_rz(theta, phi)
+            slope = -(R - Rb) * dR - (Z - Zb) * dZ
+            curvature = dR**2 + dZ**2 - (R - Rb) * d2R - (Z - Zb) * d2Z
+            return theta - slope / jnp.where(curvature > 0, curvature, dR**2 + dZ**2), None
+
+        theta, _ = lax.scan(newton, theta, None, length=4)
+        Rb, Zb, dR, dZ = self._boundary_rz(theta, phi)[:4]
+        # VMEC's theta runs either way round; the sign of the enclosed area fixes the outward normal.
+        with jax.ensure_compile_time_eval():
+            Rc, _, _, dZc = self._boundary_rz(grid, 0.0)[:4]
+            orientation = jnp.sign(jnp.sum(Rc * dZc))
+        outward = orientation * ((R - Rb) * dZ - (Z - Zb) * dR)
+        return -jnp.sign(outward) * jnp.hypot(R - Rb, Z - Zb)
+
+    @partial(jit, static_argnames=['self'])
+    def flux_coordinates(self, xyz):
+        """Invert :meth:`to_xyz`: a Cartesian point to (s, theta, phi), and the residual [m].
+
+        Newton iterations in (sqrt(s) cos theta, sqrt(s) sin theta), which is
+        regular on the axis, from the nearest of 12 x 32 nodes of the
+        cross-section at the point's phi. Points outside the LCFS return
+        s > 1 only as far as the extrapolated geometry allows; check the
+        residual.
+        """
+        R, Z = jnp.hypot(xyz[0], xyz[1]), xyz[2]
+        phi = jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2 * jnp.pi)
+        target = jnp.array([R, Z])
+
+        def rz(x):
+            p = self.to_xyz(jnp.array([x[0]**2 + x[1]**2, jnp.arctan2(x[1], x[0]), phi]))
+            return jnp.array([jnp.hypot(p[0], p[1]), p[2]])
+
+        rho, theta = [a.ravel() for a in jnp.meshgrid(jnp.linspace(0.08, 1.0, 12),
+                                                     jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False))]
+        seeds = jnp.stack([rho * jnp.cos(theta), rho * jnp.sin(theta)], 1)
+        x = seeds[jnp.argmin(jnp.sum((vmap(rz)(seeds) - target)**2, 1))]
+
+        def newton(x, _):
+            dx = jnp.linalg.solve(jacfwd(rz)(x), rz(x) - target)
+            return x - dx * jnp.minimum(1.0, 0.1 / (jnp.linalg.norm(dx) + 1e-300)), None
+
+        x, _ = lax.scan(newton, x, None, length=40)
+        s = x[0]**2 + x[1]**2
+        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), jnp.linalg.norm(rz(x) - target)
+
 class near_axis:
     def __init__(self, *args, **kwargs):
         raise ImportError(
@@ -490,6 +557,72 @@ class near_axis:
             "Please run 'pip install git+https://github.com/uwplasma/pyQSC_JAX.git' "
             "and import it via 'from pyqsc_jax.near_axis import near_axis'."
         )
+
+
+class ExternalField(MagneticField):
+    """A Cartesian field from a batched source, for tracing one point at a time.
+
+    ``source`` is an object with ``b_cyl(R, phi, Z) -> (B_R, B_phi, B_Z)``
+    (a VMEX ``MgridField``), an object with a batched ``B(points)`` for
+    points of shape ``(n, 3)`` (a VMEX ``VmecExtender``), or a callable
+    ``xyz (n, 3) -> B (n, 3)``, in metres and tesla. It must be traceable by
+    JAX; the derivatives the guiding-center equations need come from
+    automatic differentiation of it.
+    """
+
+    def __init__(self, source):
+        self.source = source
+
+    @partial(jit, static_argnames=['self'])
+    def sqrtg(self, points):
+        return 1.
+
+    @partial(jit, static_argnames=['self'])
+    def B(self, points):
+        if hasattr(self.source, "b_cyl"):
+            R, phi = jnp.hypot(points[0], points[1]), jnp.arctan2(points[1], points[0])
+            BR, Bphi, BZ = (jnp.ravel(b)[0] for b in self.source.b_cyl(R[None], phi[None], points[2][None]))
+            return jnp.array([BR * jnp.cos(phi) - Bphi * jnp.sin(phi), BR * jnp.sin(phi) + Bphi * jnp.cos(phi), BZ])
+        batched = self.source.B if hasattr(self.source, "B") else self.source
+        return batched(points[None])[0]
+
+    @partial(jit, static_argnames=['self'])
+    def B_covariant(self, points):
+        return self.B(points)
+
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, points):
+        return self.B(points)
+
+    @partial(jit, static_argnames=['self'])
+    def AbsB(self, points):
+        return jnp.linalg.norm(self.B(points))
+
+    @partial(jit, static_argnames=['self'])
+    def dAbsB_by_dX(self, points):
+        return grad(self.AbsB)(points)
+
+    @partial(jit, static_argnames=['self'])
+    def grad_B_covariant(self, points):
+        return jacfwd(self.B)(points)
+
+    @partial(jit, static_argnames=['self'])
+    def curl_B(self, points):
+        g = self.grad_B_covariant(points)
+        return jnp.array([g[2][1] - g[1][2], g[0][2] - g[2][0], g[1][0] - g[0][1]])
+
+    @partial(jit, static_argnames=['self'])
+    def curl_b(self, points):
+        return (self.curl_B(points) / self.AbsB(points)
+                + jnp.cross(self.B(points), self.dAbsB_by_dX(points)) / self.AbsB(points)**2)
+
+    @partial(jit, static_argnames=['self'])
+    def kappa(self, points):
+        return -jnp.cross(self.B(points), self.curl_b(points)) / self.AbsB(points)
+
+    @partial(jit, static_argnames=['self'])
+    def to_xyz(self, points):
+        return points
 
 
 class CombinedField(MagneticField):

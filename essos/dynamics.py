@@ -12,8 +12,9 @@ from time import perf_counter
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
+import optimistix as optx
 from essos.coils import Coils
-from essos.fields import BiotSavart, Vmec
+from essos.fields import BiotSavart, Vmec, ExternalField
 from essos.surfaces import SurfaceClassifier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
@@ -552,6 +553,16 @@ def GuidingCenterCollisionsDrift(t,
 
 
 
+def _guiding_center_velocity(field, electric_field, q, m, points, vpar, mu):
+    """Guiding-center dx/dt and dv_par/dt at fixed magnetic moment ``mu``."""
+    Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
+    Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
+    F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)
+    dxdt =  Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points)
+    dvdt = -jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m    
+    return dxdt, dvdt
+
+
 @partial(jit, static_argnums=(2))
 def GuidingCenter(t,
                   initial_condition,
@@ -563,13 +574,17 @@ def GuidingCenter(t,
     E = particles.energy
     points = jnp.array([x, y, z])
     mu = (E - m*vpar**2/2)/field.AbsB(points)
-    Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
-    Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
-    F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)
-    dxdt =  Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points)
-    dvdt = -jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m    
-
+    dxdt, dvdt = _guiding_center_velocity(field, electric_field, q, m, points, vpar, mu)
     return jnp.append(dxdt,dvdt)
+
+
+@partial(jit, static_argnums=(2))
+def GuidingCenterMu(t, initial_condition, args) -> jnp.ndarray:
+    """Collisionless guiding center with state (x, y, z, v_par, mu); mu is constant."""
+    field, particles, electric_field = args
+    dxdt, dvdt = _guiding_center_velocity(field, electric_field, particles.charge, particles.mass,
+                                          initial_condition[:3], initial_condition[3], initial_condition[4])
+    return jnp.concatenate([dxdt, jnp.array([dvdt, 0.0])])
     # def zero_derivatives(_):
     #     return jnp.zeros(4, dtype=float)
     # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
@@ -769,10 +784,73 @@ def _axis_regular(vector_field):
     return wrapped
 
 
-def _vmec_boundary_event(t, y, args, **kwargs):
-    """LCFS event for VMEC guiding centers traced in (u, w)."""
+# Outcome of each VMEC guiding center, ``Tracing.status``.
+VMEC_STATUS = {
+    0: "inside the LCFS at maxtime",
+    1: "stopped at the LCFS (no exterior field)",
+    2: "outside the LCFS at maxtime",
+    3: "struck the wall",
+    4: "failed: non-finite state or solver failure",
+    5: "stopped after max_returns re-entries",
+}
+
+
+# Event times are refined to |dt| < 1e-8 t + 1e-11 s, and the event function
+# (1 - s, or a distance in metres) to 1e-11.
+_EVENT_ROOT_FINDER = optx.Newton(rtol=1e-8, atol=1e-11)
+
+
+def _with_failure_flag(vector_field, drift=True):
+    """Append a failure flag to the state of a vector field.
+
+    A non-finite right-hand side makes an adaptive controller reject every
+    step, and the solve runs to max_steps without the state ever turning
+    non-finite. Instead, the drift returns zero with the flag's rate set to
+    one, the step is accepted, and the flag event stops the solve there as a
+    failure. The flag has no noise.
+    """
+    def wrapped(t, y, args):
+        f = vector_field(t, y[:-1], args)
+        bad = ~jnp.isfinite(f).all()
+        f = jnp.where(bad, 0.0, f)
+        if drift:
+            return jnp.append(f, bad.astype(f.dtype))
+        return jnp.concatenate([f, jnp.zeros((1,) + f.shape[1:], f.dtype)])
+    return wrapped
+
+
+def _failed_event(t, y, args, **kwargs):
     del t, args, kwargs
-    return y[0]**2 + y[1]**2 >= 1.0
+    return (y[-1] > 0) | ~jnp.isfinite(y).all()
+
+
+def _solve_succeeded(solution):
+    """A solve that reached t1 or stopped on an event; an event whose root find
+    did not reach the tolerance still stops at the end of its step."""
+    result = solution.result
+    return ((result == diffrax.RESULTS.successful) | (result == diffrax.RESULTS.event_occurred)
+            | (result == diffrax.RESULTS.nonlinear_max_steps_reached))
+
+
+def _keep_energy(vpar, mu, E, B, m):
+    """v_par and mu in a field of strength B with energy E, the sign of v_par and, if possible, mu.
+
+    The fields on the two sides of the LCFS differ slightly; where mu B > E the
+    orbit mirrors there, with v_par = 0 and mu = E / B.
+    """
+    mu = jnp.minimum(mu, E / B)
+    return jnp.sign(vpar) * jnp.sqrt(jnp.maximum(2 * (E - mu * B) / m, 0.0)), mu
+
+
+def _wall_distance(wall):
+    """Signed distance function of a wall: a classifier with ``evaluate_xyz`` or a callable."""
+    if wall is None:
+        return None
+    if hasattr(wall, "evaluate_xyz"):
+        return wall.evaluate_xyz
+    if callable(wall):
+        return wall
+    raise TypeError("wall must provide evaluate_xyz(xyz) or be a callable of xyz")
 
 
 class LevelsetStoppingCriterion:
@@ -806,7 +884,7 @@ class Tracing():
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
                  solver=None, stopping_criteria=None, progress=False, devices=None,
-                 max_steps=1_000_000):
+                 max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None):
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")
@@ -851,7 +929,28 @@ class Tracing():
         # VMEC guiding centers are traced in a chart that is regular on the
         # magnetic axis; see _axis_regular.
         self._axis_regular = isinstance(field, Vmec) and model in _VMEC_GUIDING_CENTER_MODELS
-        self._has_boundary_event = False
+        # Without a user condition, VMEC guiding centers stop at the exact LCFS
+        # crossing, report non-finite steps, and continue outside in
+        # exterior_field up to the wall when one is given; see _trace_vmec.
+        self._vmec_default = self._axis_regular and condition is None
+        if (exterior_field is not None or wall is not None) and not self._vmec_default:
+            raise ValueError("exterior_field and wall need a VMEC field, a guiding-center model and no condition")
+        if wall is not None and exterior_field is None:
+            raise ValueError("a wall needs an exterior_field to trace the orbits outside the LCFS")
+        if isinstance(exterior_field, Coils):
+            exterior_field = BiotSavart(exterior_field)
+        elif exterior_field is not None and not hasattr(exterior_field, "curl_b"):
+            exterior_field = ExternalField(exterior_field)
+        self.exterior_field = exterior_field
+        self.wall = wall
+        self.max_returns = int(max_returns)
+        # An orbit outside counts as back inside once it is reentry_depth [m]
+        # inside the LCFS (default 1e-3 minor radii), so an orbit skimming the
+        # surface, where the two fields differ slightly, does not bounce
+        # between them.
+        if reentry_depth is None and self._vmec_default:
+            reentry_depth = 1e-3 * float(jnp.abs(jnp.asarray(field.Aminor_p)))
+        self.reentry_depth = reentry_depth
         # Diffrax's ceiling was effectively unbounded, so a trace that could not
         # finish ran until the process was killed rather than returning.
         self.max_steps = max_steps
@@ -868,10 +967,7 @@ class Tracing():
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
             if isinstance(field, Vmec):
-                if model in _VMEC_GUIDING_CENTER_MODELS:
-                    self.condition = _vmec_boundary_event
-                    self._has_boundary_event = True
-                elif model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
+                if model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _ = y
                         return s-1	 
@@ -950,12 +1046,14 @@ class Tracing():
             self.times = jnp.linspace(0, self.maxtime, self.times_to_trace,endpoint=True)
 
             
+        if self._vmec_default:
+            self._trace_vmec()
+            self.loss_fractions, self.total_particles_lost, self.lost_times = self._vmec_losses()
+            if self.model in _GUIDING_CENTER_COLLISION_MODELS:
+                self.lost_energies, self.lost_positions = self._vmec_lost_states()
+            return
         trace_result = self.trace()
-        if self._has_boundary_event:
-            self._trajectories, self.event_mask = trace_result
-            self.boundary_hits = self.event_mask
-            self.axis_hits = jnp.zeros_like(self.boundary_hits)
-        elif self.stopping_criteria is not None:
+        if self.stopping_criteria is not None:
             trajectories, self.event_mask = trace_result
             event_leaves = tree_util.tree_leaves(self.event_mask)
             self.boundary_hits = jnp.any(jnp.stack(event_leaves), axis=0)
@@ -1234,7 +1332,7 @@ class Tracing():
                 trajectory = solution.ys
             if self._axis_regular:
                 trajectory = vmap(_from_axis_regular)(trajectory)
-            if self._has_boundary_event or self.stopping_criteria is not None:
+            if self.stopping_criteria is not None:
                 return trajectory, solution.event_mask
             return trajectory
         
@@ -1250,9 +1348,7 @@ class Tracing():
             sharding = sharding_index = None
 
         output_sharding = sharding
-        if self._has_boundary_event:
-            output_sharding = (sharding, sharding_index)
-        elif self.stopping_criteria is not None:
+        if self.stopping_criteria is not None:
             event_sharding = sharding_index
             if len(self.stopping_criteria) > 1:
                 event_sharding = tuple(sharding_index for _ in self.stopping_criteria)
@@ -1279,6 +1375,265 @@ class Tracing():
         #y=jax.device_put(self.particles.random_keys, sharding_index)        
         #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
         #return sharded_fun(x, y).block_until_ready()    
+
+    # -- VMEC guiding centers: exact LCFS crossing, failures, exterior continuation --
+
+    def _vmec_inside_solve(self, t0, y0, key):
+        """Solve a VMEC guiding-center model from t0 to maxtime in the axis-regular chart.
+
+        Stops at the exact LCFS crossing (root-found event) or on a non-finite
+        state. Returns the saves at self.times, the end time and state in flux
+        coordinates, the two event flags and whether the solver succeeded.
+        """
+        T, dt0, model = self.maxtime, self.timestep, self.model
+        controller = diffrax.ConstantStepSize()
+        if model in ('GuidingCenter', 'GuidingCenterAdaptative'):
+            terms = ODETerm(_with_failure_flag(self._vector_field(GuidingCenter)))
+            solver = self.solver if self.solver is not None else diffrax.Dopri8()
+            if model == 'GuidingCenterAdaptative':
+                controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol)
+        else:
+            drift, diffusion, solver = {
+                'GuidingCenterCollisions': (GuidingCenterCollisionsDrift, GuidingCenterCollisionsDiffusion,
+                                            diffrax.StratonovichMilstein()),
+                'GuidingCenterCollisionsMuFixed': (GuidingCenterCollisionsDriftMuStratonovich,
+                                                   GuidingCenterCollisionsDiffusionMu, diffrax.StratonovichMilstein()),
+                'GuidingCenterCollisionsMuIto': (GuidingCenterCollisionsDriftMuIto, GuidingCenterCollisionsDiffusionMu,
+                                                 diffrax.ItoMilstein()),
+                'GuidingCenterCollisionsMuAdaptative': (GuidingCenterCollisionsDriftMuStratonovich,
+                                                        GuidingCenterCollisionsDiffusionMu, diffrax.SPaRK()),
+            }[model]
+            bm = diffrax.VirtualBrownianTree(0.0, T, tol=dt0 * 0.5, shape=(5,), key=key,
+                                             levy_area=diffrax.SpaceTimeTimeLevyArea)
+            terms = MultiTerm(ODETerm(_with_failure_flag(self._vector_field(drift))),
+                              ControlTerm(_with_failure_flag(self._vector_field(diffusion), drift=False), bm))
+            if model == 'GuidingCenterCollisionsMuAdaptative':
+                controller = ClipStepSizeController(
+                    controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,
+                                             dtmin=dt0, dtmax=1.e-4, force_dtmin=True),
+                    step_ts=self.times, store_rejected_steps=self.rejected_steps)
+        event = Event((lambda t, y, args, **kwargs: 1.0 - y[0]**2 - y[1]**2, _failed_event),
+                      root_finder=_EVENT_ROOT_FINDER, direction=(False, None))
+        solution = diffeqsolve(
+            terms, solver, t0=t0, t1=T, dt0=dt0, y0=jnp.append(_to_axis_regular(y0), 0.0), args=self.args,
+            saveat=SaveAt(subs=[diffrax.SubSaveAt(ts=jnp.clip(self.times, t0, T)), diffrax.SubSaveAt(t1=True)]),
+            stepsize_controller=controller, event=event, throw=False, max_steps=self.max_steps,
+            progress_meter=self.progress_meter)
+        saves, end = solution.ys
+        crossed, non_finite = solution.event_mask
+        ok = _solve_succeeded(solution)
+        return (vmap(_from_axis_regular)(saves[:, :-1]), solution.ts[1][-1], _from_axis_regular(end[-1, :-1]),
+                crossed, non_finite, ok)
+
+    def _vmec_exterior_solve(self, t0, y0):
+        """Collisionless guiding center (x, y, z, v_par, mu) in exterior_field from t0 to maxtime.
+
+        Stops, at the root-found crossing, on the wall or on re-entering the
+        LCFS (Vmec.boundary_distance rising through reentry_depth), or on a
+        non-finite state.
+        """
+        wall = _wall_distance(self.wall)
+        reentry_depth = self.reentry_depth
+        event = Event((lambda t, y, args, **kwargs: wall(y[:3]) if wall is not None else jnp.ones(()),
+                       lambda t, y, args, **kwargs: self.field.boundary_distance(y[:3]) - reentry_depth,
+                       _failed_event),
+                      root_finder=_EVENT_ROOT_FINDER, direction=(False, True, None))
+        solution = diffeqsolve(
+            ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else diffrax.Dopri8(),
+            t0=t0, t1=self.maxtime, dt0=self.timestep, y0=jnp.append(y0, 0.0),
+            args=(self.exterior_field, self.particles, Electric_field_zero()),
+            saveat=SaveAt(subs=[diffrax.SubSaveAt(ts=jnp.clip(self.times, t0, self.maxtime)),
+                                diffrax.SubSaveAt(t1=True)]),
+            stepsize_controller=PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
+            event=event, throw=False, max_steps=self.max_steps, progress_meter=self.progress_meter)
+        saves, end = solution.ys
+        struck, returned, non_finite = solution.event_mask
+        ok = _solve_succeeded(solution)
+        return saves[:, :-1], solution.ts[1][-1], end[-1, :-1], struck, returned, non_finite, ok
+
+    def _vmec_to_exterior(self, y):
+        """Model state on the LCFS -> (x, y, z, v_par, mu) and energy, keeping E and mu."""
+        point, m, c = y[:3], self.particles.mass, SPEED_OF_LIGHT
+        B = self.field.AbsB(point)
+        if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
+            vpar, E = y[3], self.particles.energy
+            mu = (E - 0.5 * m * vpar**2) / B
+        elif self.model == 'GuidingCenterCollisions':
+            vpar, E = y[3] * y[4], 0.5 * m * y[3]**2
+            mu = 0.5 * m * y[3]**2 * (1 - y[4]**2) / B
+        else:
+            vpar, mu = y[3] * c, y[4] * c**2 * m
+            E = 0.5 * m * vpar**2 + mu * B
+        x = self.field.to_xyz(point)
+        if self.exterior_field is not None:
+            vpar, mu = _keep_energy(vpar, mu, E, self.exterior_field.AbsB(x), m)
+        return jnp.concatenate([x, jnp.array([vpar, mu])]), E
+
+    def _vmec_from_exterior(self, y):
+        """(x, y, z, v_par, mu) just inside the LCFS -> model state in flux coordinates."""
+        m, c = self.particles.mass, SPEED_OF_LIGHT
+        E = 0.5 * m * y[3]**2 + y[4] * self.exterior_field.AbsB(y[:3])
+        point = self.field.flux_coordinates(y[:3])[0]
+        vpar, mu = _keep_energy(y[3], y[4], E, self.field.AbsB(point), m)
+        if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
+            return jnp.append(point, vpar)
+        if self.model == 'GuidingCenterCollisions':
+            v = jnp.sqrt(2 * E / m)
+            return jnp.concatenate([point, jnp.array([v, vpar / v])])
+        return jnp.concatenate([point, jnp.array([vpar / c, mu / (c**2 * m)])])
+
+    def _map_particles(self, fn, *arrays):
+        """jit(vmap(fn)) over the particles, sharded over self.devices as in trace().
+
+        The compiled function is kept, so later segments reuse it.
+        """
+        n = len(arrays[0])
+        count = min(len(self.devices), n)
+        while count > 1 and n % count:
+            count -= 1
+        cache = self.__dict__.setdefault("_compiled", {})
+        key = (fn.__name__, count)
+        if key not in cache:
+            if count > 1:
+                mesh = Mesh(np.asarray(self.devices[:count], dtype=object), ("dev",))
+                sharding = NamedSharding(mesh, PartitionSpec("dev"))
+                cache[key] = (jit(vmap(fn), in_shardings=sharding, out_shardings=sharding), sharding)
+            else:
+                cache[key] = (jit(vmap(fn)), None)
+        compiled, sharding = cache[key]
+        if sharding is not None:
+            return compiled(*[device_put(a, sharding) for a in arrays])
+        with jax.default_device(self.devices[0]):
+            return compiled(*arrays)
+
+    def _trace_vmec(self):
+        """Trace VMEC guiding centers segment by segment: inside, outside, and back inside.
+
+        Inside the LCFS the model runs in the axis-regular chart until it
+        reaches maxtime, crosses the LCFS (found by root finding), or produces
+        a non-finite state. Without exterior_field a crossing ends the orbit.
+        With it, the orbit continues as a collisionless guiding center in
+        Cartesian coordinates, with its energy and magnetic moment, until it
+        strikes the wall, reaches maxtime or re-enters the LCFS; a re-entered
+        orbit is mapped back to flux coordinates and continues inside, up to
+        max_returns times.
+        """
+        T, times = self.maxtime, np.asarray(self.times)
+        y_in = jnp.asarray(self.initial_conditions)
+        n, nt = y_in.shape[0], len(times)
+        keys = self.particles.random_keys
+        trajectories = np.full((n, nt, y_in.shape[1]), np.inf)
+        trajectories_xyz = np.full((n, nt, 3), np.nan)
+        region = np.full((n, nt), -1, dtype=np.int8)
+        t = np.zeros(n)
+        inside, active = np.ones(n, bool), np.ones(n, bool)
+        status = np.zeros(n, dtype=np.int8)
+        lcfs_time, wall_time, failure_time = (np.full(n, np.inf) for _ in range(3))
+        lcfs_state = np.full(y_in.shape, np.nan)
+        lcfs_xyz, wall_xyz = np.full((n, 3), np.nan), np.full((n, 3), np.nan)
+        lcfs_energy, wall_energy = np.full(n, np.nan), np.full(n, np.nan)
+        returns = np.zeros(n, dtype=int)
+        y_out = jnp.zeros((n, 5))
+        inside_solve = self._vmec_inside_solve
+        to_xyz = jit(vmap(vmap(self.field.to_xyz)))
+        to_exterior = jit(vmap(self._vmec_to_exterior))
+        from_exterior = jit(vmap(self._vmec_from_exterior))
+
+        def record(run, t0, t_end, saves_xyz, saves=None, code=0):
+            window = run[:, None] & (times >= t0[:, None]) & (times <= t_end[:, None])
+            window &= np.isfinite(saves_xyz if saves is None else saves).all(axis=2)
+            trajectories_xyz[window] = saves_xyz[window]
+            region[window] = code
+            if saves is not None:
+                trajectories[window] = saves[window]
+
+        started_outside = np.asarray(y_in[:, 0]) >= 1.0
+        for segment in range(2 * self.max_returns + 2):
+            run = active & inside
+            if run.any():
+                t0 = np.where(run, t, T)
+                saves, t_end, y_end, crossed, non_finite, ok = (
+                    np.asarray(a) for a in self._map_particles(inside_solve, jnp.asarray(t0), y_in, keys))
+                t_end = np.where(run & (segment == 0) & started_outside, 0.0, t_end)
+                crossed = crossed | (segment == 0) & started_outside
+                y_end = np.where((run & (segment == 0) & started_outside)[:, None], np.asarray(y_in), y_end)
+                record(run, t0, t_end, np.asarray(to_xyz(jnp.asarray(np.where(np.isfinite(saves), saves, 0.0)[..., :3]))),
+                       saves, code=0)
+                failed = run & (non_finite | ~ok)
+                crossed = run & crossed & ~failed
+                first = crossed & np.isinf(lcfs_time)
+                exit_state, exit_energy = (np.asarray(a) for a in to_exterior(jnp.asarray(np.where(crossed[:, None], y_end, y_in))))
+                lcfs_time[first], lcfs_state[first] = t_end[first], y_end[first]
+                lcfs_xyz[first], lcfs_energy[first] = exit_state[first, :3], exit_energy[first]
+                failure_time[failed] = t_end[failed]
+                status[failed] = 4
+                status[run & ~crossed & ~failed] = 0
+                active &= ~(failed | (run & ~crossed))
+                if self.exterior_field is None:
+                    status[crossed] = 1
+                    active &= ~crossed
+                else:
+                    inside &= ~crossed
+                    y_out = jnp.where(jnp.asarray(crossed)[:, None], jnp.asarray(exit_state), y_out)
+                t = np.where(run, t_end, t)
+            run = active & ~inside
+            if run.any():
+                t0 = np.where(run, t, T)
+                saves, t_end, y_end, struck, returned, non_finite, ok = (
+                    np.asarray(a) for a in self._map_particles(self._vmec_exterior_solve, jnp.asarray(t0), y_out))
+                record(run, t0, t_end, saves[..., :3], code=1)
+                failed = run & (non_finite | ~ok)
+                struck, returned = run & struck & ~failed, run & returned & ~failed & ~struck
+                wall_time[struck], wall_xyz[struck] = t_end[struck], y_end[struck, :3]
+                wall_energy[struck] = (0.5 * self.particles.mass * y_end[struck, 3]**2
+                                       + y_end[struck, 4] * np.asarray(vmap(self.exterior_field.AbsB)(jnp.asarray(y_end[struck, :3]))))
+                failure_time[failed] = t_end[failed]
+                status[failed], status[struck] = 4, 3
+                status[run & ~(failed | struck | returned)] = 2
+                over = returned & (returns >= self.max_returns)
+                status[over] = 5
+                back = returned & ~over
+                returns[back] += 1
+                active &= ~(run & ~back)
+                inside |= back
+                if back.any():
+                    y_in = jnp.where(jnp.asarray(back)[:, None],
+                                     from_exterior(jnp.asarray(np.where(back[:, None], y_end, np.asarray(y_out)))), y_in)
+                t = np.where(run, t_end, t)
+            if not active.any():
+                break
+
+        self._trajectories = jnp.asarray(trajectories)
+        self.trajectories_xyz = jnp.asarray(trajectories_xyz)
+        self.region, self.status = region, status
+        self.lcfs_times, self.lcfs_states, self.lcfs_positions, self.lcfs_energies = (
+            lcfs_time, lcfs_state, lcfs_xyz, lcfs_energy)
+        self.wall_hits, self.wall_times, self.wall_positions, self.wall_energies = (
+            status == 3, wall_time, wall_xyz, wall_energy)
+        self.returns, self.failed, self.failure_times = returns, status == 4, failure_time
+        self.boundary_hits = jnp.asarray(np.isfinite(lcfs_time))
+        self.event_mask = self.boundary_hits
+        self.axis_hits = jnp.zeros(n, dtype=bool)
+        self.total_particles_unresolved = jnp.sum(self.axis_hits)
+        self.toroidal_angles = None
+
+    def _vmec_loss_times(self):
+        return self.wall_times if self.exterior_field is not None else self.lcfs_times
+
+    def _vmec_losses(self):
+        """Loss fractions from the exact loss times: the wall with an exterior field, else the LCFS."""
+        lost_time = self._vmec_loss_times()
+        loss_fractions = jnp.asarray(np.mean(lost_time[:, None] <= np.asarray(self.times)[None, :], axis=0))
+        return loss_fractions, jnp.sum(jnp.isfinite(lost_time)), jnp.asarray(np.where(np.isfinite(lost_time), lost_time, -1))
+
+    def _vmec_lost_states(self):
+        """Energy of each lost particle at the loss, and where: xyz on the wall, else (s, theta, phi) on the LCFS."""
+        if self.exterior_field is not None:
+            return (jnp.asarray(np.where(self.wall_hits, self.wall_energies, 0.0)),
+                    jnp.asarray(np.where(self.wall_hits[:, None], self.wall_positions, 0.0)))
+        lost = np.isfinite(self.lcfs_times)
+        return (jnp.asarray(np.where(lost, self.lcfs_energies, 0.0)),
+                jnp.asarray(np.where(lost[:, None], self.lcfs_states[:, :3], 0.0)))
 
     def _vector_field(self, vector_field):
         return _axis_regular(vector_field) if self._axis_regular else vector_field

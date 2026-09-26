@@ -1,4 +1,5 @@
 import pytest
+import numpy as np
 from pathlib import Path
 from essos.coils import Coils, Curves
 from essos.fields import BiotSavart
@@ -171,3 +172,49 @@ def test_vmec_mode_tolerance_keeps_the_field():
     for name in ("AbsB", "B_contravariant", "to_xyz"):
         a, b = jax.vmap(getattr(full, name))(points), jax.vmap(getattr(truncated, name))(points)
         assert jnp.abs(a - b).max() < 5e-3 * jnp.abs(a).max()
+
+
+def test_vmec_flux_coordinates_invert_to_xyz_and_boundary_distance_is_signed():
+    from essos.fields import Vmec
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    rng = np.random.default_rng(0)
+    points = jnp.asarray(np.c_[rng.uniform(1e-3, 1, 40)**2, rng.uniform(0, 2 * np.pi, 40), rng.uniform(0, 2 * np.pi, 40)])
+    xyz = jax.vmap(vmec.to_xyz)(points)
+    flux, residual = jax.vmap(vmec.flux_coordinates)(xyz)
+    assert residual.max() < 1e-10
+    assert jnp.allclose(flux[:, 0], points[:, 0], atol=1e-10)
+    assert jnp.allclose(jax.vmap(vmec.to_xyz)(flux), xyz, atol=1e-10)
+    lcfs = jax.vmap(vmec.to_xyz)(points.at[:, 0].set(1.0))
+    axis = jax.vmap(vmec.to_xyz)(points.at[:, 0].set(0.0))
+    distance = jax.vmap(vmec.boundary_distance)
+    assert jnp.abs(distance(lcfs)).max() < 1e-10
+    assert (distance(jax.vmap(vmec.to_xyz)(points.at[:, 0].set(0.8))) > 0).all()
+    outward = (lcfs - axis) / jnp.linalg.norm(lcfs - axis, axis=1)[:, None]
+    assert (distance(lcfs + 0.05 * outward) < 0).all()
+
+
+def test_external_field_wraps_batched_sources():
+    from essos.coils import Coils
+    from essos.fields import ExternalField
+
+    coils = BiotSavart(Coils.from_json(str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+                                           / "ESSOS_biot_savart_LandremanPaulQA.json")))
+    batched = lambda xyz: jax.vmap(coils.B)(xyz)  # noqa: E731
+
+    class Cylindrical:
+        def b_cyl(self, R, phi, Z):
+            B = batched(jnp.stack([R * jnp.cos(phi), R * jnp.sin(phi), Z], axis=-1))
+            return (B[:, 0] * jnp.cos(phi) + B[:, 1] * jnp.sin(phi),
+                    -B[:, 0] * jnp.sin(phi) + B[:, 1] * jnp.cos(phi), B[:, 2])
+
+    class Batched:
+        B = staticmethod(batched)
+
+    x = jnp.array([1.1, 0.2, 0.05])
+    for source in (batched, Batched(), Cylindrical()):
+        field = ExternalField(source)
+        assert jnp.allclose(field.B(x), coils.B(x), rtol=1e-12)
+        assert jnp.allclose(field.dAbsB_by_dX(x), jax.grad(coils.AbsB)(x), rtol=1e-9)
+        assert jnp.allclose(field.curl_b(x), coils.curl_b(x), rtol=1e-8, atol=1e-12)
+        assert jnp.allclose(field.kappa(x), coils.kappa(x), rtol=1e-8, atol=1e-12)
