@@ -13,6 +13,7 @@ from essos.dynamics import (
     Tracing,
     LevelsetStoppingCriterion,
     trace_field_lines,
+    connection_length,
     _fill_terminated_trajectories,
     _vmec_radial_events,
     _VMEC_GUIDING_CENTER_MODELS,
@@ -580,3 +581,48 @@ def test_particles_honours_the_full_orbit_phase_argument():
 
     particles = Particles(initial_xyz=jnp.zeros((2, 3)), phase_angle_full_orbit=0.7)
     assert particles.phase_angle_full_orbit == 0.7
+
+
+class HelicalSlabField:
+    """B = (-y, x, pitch): helices of constant radius between walls z = +-1."""
+
+    def __init__(self, pitch):
+        self.pitch = pitch
+
+    def B_contravariant(self, xyz):
+        return jnp.array([-xyz[1], xyz[0], self.pitch])
+
+
+def test_connection_length_matches_helical_slab_closed_form():
+    pitch, max_length = 0.5, 20.0
+    seeds = jnp.array([[1.0, 0.0, 0.2], [0.0, 0.5, -0.6], [12.0, 0.0, 0.0]])
+    result = connection_length(HelicalSlabField(pitch), seeds,
+                               lambda xyz: 1.0 - xyz[2] ** 2, max_length=max_length)
+    r = jnp.hypot(seeds[:, 0], seeds[:, 1])
+    speed = jnp.hypot(r, pitch)
+    for direction, sign in enumerate((1.0, -1.0)):
+        s = (1.0 - sign * seeds[:, 2]) * speed / pitch
+        angle = jnp.arctan2(seeds[:, 1], seeds[:, 0]) + sign * s / speed
+        expected = jnp.stack([r * jnp.cos(angle), r * jnp.sin(angle),
+                              jnp.full_like(r, sign)], axis=1)
+        capped = s > max_length
+        assert jnp.allclose(result["hit"][:, direction], ~capped)
+        assert jnp.allclose(result["lengths"][:, direction],
+                            jnp.minimum(s, max_length), rtol=1e-7)
+        assert jnp.allclose(result["strike_points"][~capped, direction],
+                            expected[~capped], atol=1e-7)
+    assert jnp.allclose(result["connection_length"], result["lengths"].sum(axis=1))
+
+
+def test_connection_length_requires_positive_cap():
+    with pytest.raises(ValueError, match="max_length"):
+        connection_length(HelicalSlabField(1.0), jnp.zeros((1, 3)), lambda x: 1.0, max_length=0.0)
+
+
+def test_connection_length_flags_outside_seeds_and_step_exhaustion():
+    wall = lambda xyz: 1.0 - xyz[2] ** 2  # noqa: E731
+    result = connection_length(HelicalSlabField(0.5), jnp.array([[1.0, 0.0, 1.5]]), wall, max_length=20.0)
+    assert jnp.all(result["lengths"] == 0.0) and jnp.all(result["hit"])
+    result = connection_length(HelicalSlabField(0.5), jnp.array([[1.0, 0.0, 0.2]]), wall,
+                               max_length=20.0, max_steps=3)
+    assert jnp.all(jnp.isnan(result["lengths"])) and not jnp.any(result["hit"])

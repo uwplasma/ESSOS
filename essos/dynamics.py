@@ -12,6 +12,7 @@ from time import perf_counter
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
+import optimistix as optx
 from essos.coils import Coils
 from essos.fields import BiotSavart, Vmec
 from essos.surfaces import SurfaceClassifier
@@ -1665,3 +1666,59 @@ def trace_field_lines(
             message += f"; {hits}/{len(initial_conditions)} lines reached a stopping event"
         print(message, flush=True)
     return result
+
+
+def connection_length(field, initial_conditions, wall, *, max_length,
+                      tolerance=1.0e-8, max_steps=100000):
+    """Connection length and wall strike points of field lines.
+
+    Each seed is followed along ``+B`` and ``-B`` by physical arclength until
+    it crosses the wall or reaches ``max_length``. The crossing is located by
+    Diffrax event root finding, so the strike point is exact up to
+    ``tolerance`` rather than limited by a sampling interval. The result is
+    differentiable with respect to the seeds and field parameters.
+
+    Args:
+        field: ESSOS-compatible Cartesian magnetic field.
+        initial_conditions: Seeds of shape ``(n, 3)``. Seeds on or outside the
+            wall return zero length and ``hit`` true.
+        wall: Object with ``evaluate_xyz(xyz)`` (e.g. :class:`SurfaceClassifier`)
+            or a callable ``wall(xyz)``, positive inside the wall and zero on it.
+        max_length: Cap on the length followed in each direction.
+        tolerance: Relative and absolute integration and root-finding tolerance.
+        max_steps: Maximum adaptive steps per direction; a line that exhausts
+            them returns ``nan`` length and ``hit`` false.
+
+    Returns:
+        Dict with ``lengths`` ``(n, 2)`` (forward, backward), ``connection_length``
+        ``(n,)`` (their sum), ``strike_points`` ``(n, 2, 3)`` (end points; the
+        wall hit when ``hit`` is true) and ``hit`` ``(n, 2)`` booleans.
+    """
+    if float(max_length) <= 0.0:
+        raise ValueError("max_length must be positive")
+    distance = wall.evaluate_xyz if hasattr(wall, "evaluate_xyz") else wall
+    controller = PIDController(rtol=tolerance, atol=tolerance)
+    event = Event(lambda t, y, args, **kwargs: distance(y),
+                  root_finder=optx.Newton(rtol=tolerance, atol=tolerance))
+
+    def vector_field(t, y, sign):
+        B = field.B_contravariant(y)
+        return sign * B / jnp.maximum(jnp.linalg.norm(B), jnp.finfo(B.dtype).tiny)
+
+    def trace_one(seed, sign):
+        solution = diffeqsolve(
+            ODETerm(vector_field), diffrax.Dopri8(), t0=0.0, t1=float(max_length),
+            dt0=float(max_length) / 1000, y0=seed, args=sign,
+            saveat=SaveAt(t1=True), stepsize_controller=controller,
+            event=event, max_steps=int(max_steps), throw=False)
+        hit = solution.event_mask
+        failed = (solution.result != diffrax.RESULTS.successful) & ~hit
+        outside = distance(seed) <= 0.0
+        length = jnp.where(outside, 0.0, jnp.where(failed, jnp.nan, solution.ts[-1]))
+        return length, jnp.where(outside, seed, solution.ys[-1]), hit | outside
+
+    signs = jnp.array([1.0, -1.0])
+    trace = jit(vmap(vmap(trace_one, in_axes=(None, 0)), in_axes=(0, None)))
+    lengths, points, hit = trace(jnp.asarray(initial_conditions, dtype=float), signs)
+    return {"lengths": lengths, "connection_length": jnp.sum(lengths, axis=1),
+            "strike_points": points, "hit": hit}
