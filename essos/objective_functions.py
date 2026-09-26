@@ -49,6 +49,121 @@ def loss_r0_near_axis(field_nearaxis, r0_target=1.0):
     return jnp.abs((field_nearaxis.R0[0] - r0_target))
 
 
+
+def near_axis_coil_targets(solution, formal_radius, subtract_plasma_field=True):
+    """Field, gradient and Hessian the coils must supply on a finite-beta near-axis axis.
+
+    ``solution`` is a second-order pyQSC_JAX solution. With ``subtract_plasma_field`` the
+    free-space field of the plasma current inside ``formal_radius`` is removed from the total
+    jet (``pyqsc_jax.plasma``), leaving the external vacuum field; otherwise the total jet is
+    returned, which is only correct in vacuum. Returns ``(points, B, dB/dx, d2B/dx2)``.
+    """
+    from pyqsc_jax.plasma import plasma_hessian_on_axis
+    points = solution.geometry.position_cartesian
+    if not subtract_plasma_field:
+        return points, solution.B_axis, solution.grad_B_axis, solution.grad_grad_B_axis
+    target = plasma_hessian_on_axis(solution, formal_radius=formal_radius)
+    return points, target.field.external_field, target.field.external_gradient, target.external_hessian
+
+
+def near_axis_coil_residuals(field, solution, formal_radius, hessian_weight=0.01, subtract_plasma_field=True):
+    """Arclength-weighted coil-minus-target residuals of the on-axis field jet.
+
+    Field, gradient and Hessian are scaled by B0, B0/R0 and B0/R0**2, so the sum of squares is
+    dimensionless; the Hessian block carries ``sqrt(hessian_weight)``.
+    """
+    points, B, G, H = near_axis_coil_targets(solution, formal_radius, subtract_plasma_field)
+    B0, R0 = solution.inputs.B0, solution.R0[0]
+    w = jnp.sqrt(solution.geometry.d_l_d_phi / jnp.sum(solution.geometry.d_l_d_phi))
+    return jnp.concatenate((
+        (w[:, None] * (vmap(field.B)(points) - B) / B0).ravel(),
+        (w[:, None, None] * (vmap(field.dB_by_dX)(points) - G) * R0 / B0).ravel(),
+        (jnp.sqrt(hessian_weight) * w[:, None, None, None]
+         * (vmap(jax.jacfwd(field.dB_by_dX))(points) - H) * R0**2 / B0).ravel()))
+
+
+def frenet_axis_response(solution, perturbation, gradient=None, tangent_field=None):
+    """Periodic Frenet-frame displacement of a closed field line driven by a perpendicular field.
+
+    ``perturbation`` is a Cartesian ``(nphi, 3)`` field on the reference axis, ``gradient`` the
+    field gradient dB_i/dx_j there (the near-axis one by default) and ``tangent_field`` the
+    signed tangential field (sG*B0 by default). Returns the normal and binormal displacements.
+    """
+    import numpy as np
+    g, n = solution.geometry, len(solution.phi)
+    N, Bn = np.asarray(g.normal_cartesian), np.asarray(g.binormal_cartesian)
+    G = np.asarray(solution.grad_B_axis if gradient is None else gradient)
+    Bt = np.full(n, int(solution.inputs.sG) * float(solution.inputs.B0)) if tangent_field is None \
+        else np.asarray(tangent_field)
+    tau = np.asarray(g.torsion)
+    A = lambda a, b: np.diag(np.einsum("ni,nij,nj->n", a, G, b) / Bt)  # noqa: E731
+    Ds = np.asarray(g.d_d_phi) / np.asarray(g.d_l_d_phi)[:, None]
+    operator = np.block([[Ds - A(N, N), -A(N, Bn) - np.diag(tau)], [-A(Bn, N) + np.diag(tau), Ds - A(Bn, Bn)]])
+    d = np.asarray(perturbation)
+    response = np.linalg.solve(operator, np.r_[np.sum(d * N, 1) / Bt, np.sum(d * Bn, 1) / Bt])
+    return response[:n], response[n:]
+
+
+def pressure_axis_response(solution, radius, p2=None, gradient=None, tangent_field=None):
+    """First-order fixed-coil displacement of the magnetic axis per unit pressure amplitude.
+
+    ``solution`` is a current-free (I2 = 0) vacuum pyQSC_JAX solution on an odd number of
+    geometrical-phi points; the pressure is p = p0 + p2 r**2 inside the flux radius ``radius``.
+    The forcing is the on-axis Pfirsch-Schlueter/diamagnetic plasma field of first-order QS.
+    Unprefixed outputs are the closed-form (Boozer-angle) solution with the ideal QS operator;
+    ``physical_*`` outputs solve the Frenet-frame operator with ``gradient`` and
+    ``tangent_field`` (e.g. the actual coil field on the axis). ``delta_R``/``delta_Z`` are
+    displacements in fixed cylindrical planes, ``length_slope_over_L`` the relative first
+    variation of axis length, and ``length_formula_over_L`` its analytic value.
+    """
+    import numpy as np
+    inputs, g = solution.inputs, solution.geometry
+    p2 = float(inputs.p2 if p2 is None else p2)
+    B0, eta, nfp = float(inputs.B0), float(inputs.etabar), int(inputs.axis.nfp)
+    sG, spsi = int(inputs.sG), int(inputs.spsi)
+    phi = np.asarray(solution.phi)
+    n = len(phi)
+    if abs(float(inputs.I2)) > 1e-14 or n % 2 != 1 or radius <= 0:
+        raise ValueError("needs I2 = 0, an odd number of axis points and a positive radius")
+    speed, kappa, sigma = (np.asarray(v) for v in (g.d_l_d_phi, g.curvature, solution.sigma))
+    ell, nu = float(solution.axis_length) / (2 * np.pi), float(solution.iotaN)
+    wave = nfp * np.fft.fftfreq(n, d=1 / n)
+    full_turn_gap, forced_gap = abs(nu - round(nu)), float(np.min(abs(nu - wave)))
+    if min(full_turn_gap, forced_gap) < 1e-10:
+        raise ValueError("the periodic axis response is resonant")
+    x = eta / kappa
+    D = (1 + x * x) ** 2 + sigma * sigma
+    # Closed form: complex periodic solve in the Boozer angle (d/dvarphi = ell/speed d/dphi).
+    Cp = 2 * mu_0 * p2 * radius**2 * ell**2 * eta / (B0**2 * nu)
+    zeta = np.linalg.solve(ell / speed[:, None] * np.asarray(g.d_d_phi) - 1j * nu * np.eye(n),
+                           -1j * Cp * (1 - 1 / (1 + x * x + 1j * sigma)))
+    u, v = x * zeta.real, sG * spsi * (sigma * zeta.real + zeta.imag) / x
+    source = (mu_0 * p2 / B0) * radius**2 * 2 * ell * eta * x / (nu * D)
+    source_n, source_b = source * sG * sigma, -source * spsi * (1 + x * x)
+    N, Bn, T = (np.asarray(v) for v in (g.normal_cartesian, g.binormal_cartesian, g.tangent_cartesian))
+    u_p, v_p = frenet_axis_response(solution, source_n[:, None] * N + source_b[:, None] * Bn, gradient, tangent_field)
+    eR = np.stack((np.cos(phi), np.sin(phi), 0 * phi), -1)
+    ephi = np.stack((-np.sin(phi), np.cos(phi), 0 * phi), -1)
+    weight = speed / speed.sum()
+
+    def observables(prefix, un, vb):
+        xi = un[:, None] * N + vb[:, None] * Bn
+        xi = xi - T * (np.sum(ephi * xi, 1) / np.sum(ephi * T, 1))[:, None]  # same cylindrical plane
+        size = np.linalg.norm(xi, axis=1)
+        return {prefix + "delta_R": np.sum(eR * xi, 1), prefix + "delta_Z": xi[:, 2], prefix + "xi_lab": xi,
+                prefix + "length_slope_over_L": -float(weight @ (kappa * un)),
+                prefix + "max_displacement": float(size.max()),
+                prefix + "rms_displacement": float(np.sqrt(weight @ size**2))}
+
+    beta_star = -2 * mu_0 * p2 * radius**2 / B0**2
+    return dict(
+        observables("", u, v), **observables("physical_", u_p, v_p), phi=phi, varphi=np.asarray(solution.varphi),
+        u=u, v=v, zeta=zeta, u_physical=u_p, v_physical=v_p, source_n=source_n, source_b=source_b,
+        length_formula_over_L=beta_star * (ell * eta / nu) ** 2 * float(weight @ ((x * x * (1 + x * x) + sigma**2) / D)),
+        physical_relative_difference=float(np.max(abs(np.r_[u_p - u, v_p - v])) / max(np.max(abs(np.r_[u_p, v_p])), 1e-30)),
+        full_turn_gap=full_turn_gap, forced_gap=forced_gap, iotaN=nu, helicity=round(float(solution.iota) - nu), Cp=Cp)
+
+
 ##############################Particle confinement losses ##############################
 def loss_particle_radial_drift_fullorbit(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
     particles.to_full_orbit(field)
