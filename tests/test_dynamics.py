@@ -525,6 +525,69 @@ def test_tracing_max_steps_is_configurable_and_bounded():
 
 
 
+class _UniformCartesianField:
+    def __init__(self, direction, magnitude=1.0):
+        direction = jnp.asarray(direction, dtype=float)
+        self.vector = magnitude * direction / jnp.linalg.norm(direction)
+
+    def B_contravariant(self, xyz):
+        return self.vector
+
+    def to_xyz(self, point):
+        return point
+
+    def AbsB(self, point):
+        return jnp.linalg.norm(self.vector)
+
+
+def _boris(maxtime, timestep, times_to_trace=None, stopping_criteria=None):
+    from essos.dynamics import Particles, Tracing
+
+    field = _UniformCartesianField((0.0, 0.0, 1.0), magnitude=1.0)
+    mass, charge = 1.6726e-27, 1.602e-19
+    v_par, v_perp = 2.0e5, 3.0e5
+    particles = Particles(
+        initial_xyz=jnp.zeros((1, 3)), mass=mass, charge=charge,
+        initial_xyz_fullorbit=jnp.zeros((1, 3)),
+        initial_vxvyvz=jnp.asarray([[v_perp, 0.0, v_par]]),
+    )
+    tracing = Tracing(
+        field=field, particles=particles, model="FullOrbit_Boris", maxtime=maxtime,
+        timestep=timestep, times_to_trace=times_to_trace, stopping_criteria=stopping_criteria,
+    )
+    period = 2 * np.pi * mass / (charge * 1.0)
+    return tracing, v_par, v_perp, period
+
+
+def test_boris_integrates_the_whole_requested_time_span():
+    period = 2 * np.pi * 1.6726e-27 / 1.602e-19
+    tracing, v_par, v_perp, _ = _boris(maxtime=200 * period, timestep=period / 50, times_to_trace=11)
+    trajectory = tracing.trajectories[0]
+    assert trajectory.shape[0] == 11
+    np.testing.assert_allclose(trajectory[-1, 2], v_par * 200 * period, rtol=1e-10)
+    speeds = jnp.linalg.norm(trajectory[:, 3:], axis=1)
+    np.testing.assert_allclose(speeds, np.hypot(v_par, v_perp), rtol=1e-12)
+    # The perpendicular motion stays on the gyro-circle (diameter 2 rho).
+    rho = v_perp * period / (2 * np.pi)
+    excursion = jnp.linalg.norm(trajectory[:, :2] - trajectory[:1, :2], axis=1)
+    assert float(jnp.max(excursion)) <= 2.0 * rho * (1 + 1e-6)
+
+
+def test_boris_honours_stopping_criteria_with_an_event_mask():
+    period = 2 * np.pi * 1.6726e-27 / 1.602e-19
+    ceiling = 0.5 * 2.0e5 * 100 * period
+
+    def below_ceiling(t, y, args, **kwargs):
+        return ceiling - y[2]
+
+    tracing, *_ = _boris(maxtime=100 * period, timestep=period / 40, times_to_trace=21,
+                         stopping_criteria=below_ceiling)
+    trajectory = tracing.trajectories[0]
+    assert bool(tracing.boundary_hits[0])
+    assert float(jnp.max(trajectory[:, 2])) < ceiling
+    np.testing.assert_allclose(trajectory[-1], trajectory[-2], rtol=0, atol=0)
+
+
 class _UniformField:
     def __init__(self, direction, magnitude=2.5):
         direction = jnp.asarray(direction, dtype=float)
@@ -532,7 +595,6 @@ class _UniformField:
 
     def B_contravariant(self, xyz):
         return self.vector
-
 
 def _legacy_positive_charge_start(field, xyz, vpar, total_speed, mass, charge, phase):
     """The pre-fix construction, correct for a positive charge and B not along z."""
