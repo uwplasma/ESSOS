@@ -43,6 +43,9 @@ MIN_SURFACE_DISTANCE = 0.2
 MIN_COIL_DISTANCE = 0.2
 FORCE_THRESHOLD = 0.5e6
 FORCE_POWER = 1
+# Radius of the circular conductor cross-section (m); the self-force depends
+# on it logarithmically, so it must describe the actual winding pack.
+CONDUCTOR_RADIUS = 0.1
 BLOCK_SIZE = None
 
 """ Creating the loss functions """
@@ -64,7 +67,8 @@ def loss_coil_distance(field):
 
 def loss_force(field):
     return loss_lorentz_force_coils(
-        field.coils, p=FORCE_POWER, threshold=FORCE_THRESHOLD, block_size=BLOCK_SIZE
+        field.coils, p=FORCE_POWER, threshold=FORCE_THRESHOLD, block_size=BLOCK_SIZE,
+        conductor_radius=CONDUCTOR_RADIUS,
     )
 
 
