@@ -18,39 +18,41 @@ EV_PER_JOULE = 1 / JOULE_PER_EV
 
 
 class BackgroundSpecies():
-    def __init__(self, number_species, mass_array, charge_array, n_array, T_array):
+    """Maxwellian background species for the collision operators.
+
+    ``n_array`` [m^-3] and ``T_array`` [eV] hold one value per species, or,
+    with ``radial_grid``, one profile per species sampled on that grid of the
+    first coordinate of the traced points (``s`` for a VMEC field), shape
+    ``(number_species, len(radial_grid))``. Profiles are interpolated
+    linearly and held constant beyond the ends of the grid.
+    """
+    def __init__(self, number_species, mass_array, charge_array, n_array, T_array, radial_grid=None):
         self.number_species = number_species
         self.species_indeces = jnp.arange(number_species)
-        self.temperature = T_array   #Array of lambdas for now
-        self.density = n_array         #Array of lambdas for now 
+        self.temperature = T_array
+        self.density = n_array
+        self.radial_grid = None if radial_grid is None else jnp.asarray(radial_grid)
         self.mass=mass_array*PROTON_MASS
         self.charge=charge_array*ELEMENTARY_CHARGE
 
+    def _profile(self, values, species_index, points):
+        if self.radial_grid is None:
+            return values[species_index]
+        return jnp.interp(points[0], self.radial_grid, values[species_index])
+
     @partial(jit, static_argnames=['self'])
     def get_temperature(self,species_index, points):
-        x=points[0]
-        y=points[1]
-        z=points[2]
-        return self.temperature[species_index]#(x,y,z)
-    
+        return self._profile(self.temperature, species_index, points)
 
     @partial(jit, static_argnames=['self'])
     def get_density(self,species_index, points):
-        x=points[0]
-        y=points[1]
-        z=points[2]
-        return self.density[species_index]#self.density[species_index](x,y,z)
-    
+        return self._profile(self.density, species_index, points)
 
     @partial(jit, static_argnames=['self'])
     def get_v_thermal(self,species_index, points):
         m=self.mass[species_index]
-        x=points[0]
-        y=points[1]
-        z=points[2]
-        T=self.temperature[species_index]#(x,y,z)
+        T=self.get_temperature(species_index, points)
         return jnp.sqrt(2*T * JOULE_PER_EV/m)
- 
 
 
 @partial(jit, static_argnames=['species'])
