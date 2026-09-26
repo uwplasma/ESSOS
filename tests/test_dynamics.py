@@ -1,6 +1,7 @@
 import pytest
 from pathlib import Path
 import jax
+import numpy as np
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELECTRON_MASS,PROTON_MASS
@@ -555,3 +556,60 @@ def test_tracing_max_steps_is_configurable_and_bounded():
     assert "max_steps=10000000000" not in source
     assert source.count("max_steps=self.max_steps") == 9
 
+
+
+class _UniformField:
+    def __init__(self, direction, magnitude=2.5):
+        direction = jnp.asarray(direction, dtype=float)
+        self.vector = magnitude * direction / jnp.linalg.norm(direction)
+
+    def B_contravariant(self, xyz):
+        return self.vector
+
+
+def _legacy_positive_charge_start(field, xyz, vpar, total_speed, mass, charge, phase):
+    """The pre-fix construction, correct for a positive charge and B not along z."""
+    b = field.B_contravariant(xyz) / jnp.linalg.norm(field.B_contravariant(xyz))
+    p2 = jnp.array([0.0, 0.0, 1.0])
+    p3 = -jnp.cross(b, p2)
+    p3 /= jnp.linalg.norm(p3)
+    q2 = p2 - jnp.dot(b, p2) * b
+    q2 /= jnp.linalg.norm(q2)
+    q3 = p3 - jnp.dot(b, p3) * b - jnp.dot(q2, p3) * q2
+    q3 /= jnp.linalg.norm(q3)
+    speed_perp = jnp.sqrt(total_speed**2 - vpar**2)
+    rg = mass * speed_perp / (abs(charge) * jnp.linalg.norm(field.B_contravariant(xyz)))
+    return xyz + rg * (jnp.sin(phase) * q2 + jnp.cos(phase) * q3)
+
+
+@pytest.mark.parametrize("charge_sign", [1.0, -1.0])
+@pytest.mark.parametrize("direction", [(0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (0.3, -0.2, 0.9), (1.0, 0.0, 0.0)])
+@pytest.mark.parametrize("phase", [0.0, 1.1, 2.9])
+def test_gc_to_fullorbit_recovers_the_guiding_center(charge_sign, direction, phase):
+    from essos.dynamics import gc_to_fullorbit
+
+    field = _UniformField(direction)
+    mass, charge, total_speed = 6.64e-27, charge_sign * 3.2e-19, 1.3e7
+    centers = jnp.asarray([[1.0, 0.2, -0.3], [0.5, -1.0, 0.25]])
+    vpar = jnp.asarray([0.4e7, -0.9e7])
+    positions, velocities = gc_to_fullorbit(field, centers, vpar, total_speed, mass, charge, phase)
+    b = field.vector / jnp.linalg.norm(field.vector)
+    omega = charge * jnp.linalg.norm(field.vector) / mass
+    implied = positions - jnp.cross(b, velocities) / omega
+    assert jnp.all(jnp.isfinite(positions)) and jnp.all(jnp.isfinite(velocities))
+    np.testing.assert_allclose(implied, centers, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(velocities @ b, vpar, rtol=1e-12)
+    np.testing.assert_allclose(jnp.linalg.norm(velocities, axis=1), total_speed, rtol=1e-12)
+    if charge_sign > 0 and abs(b[2]) < 0.9:
+        legacy = jnp.stack([
+            _legacy_positive_charge_start(field, x, v, total_speed, mass, charge, phase)
+            for x, v in zip(centers, vpar)
+        ])
+        np.testing.assert_allclose(positions, legacy, rtol=0, atol=1e-13)
+
+
+def test_particles_honours_the_full_orbit_phase_argument():
+    from essos.dynamics import Particles
+
+    particles = Particles(initial_xyz=jnp.zeros((2, 3)), phase_angle_full_orbit=0.7)
+    assert particles.phase_angle_full_orbit == 0.7
