@@ -1680,12 +1680,14 @@ def connection_length(field, initial_conditions, wall, *, max_length,
 
     Args:
         field: ESSOS-compatible Cartesian magnetic field.
-        initial_conditions: Seeds of shape ``(n, 3)`` inside the wall.
+        initial_conditions: Seeds of shape ``(n, 3)``. Seeds on or outside the
+            wall return zero length and ``hit`` true.
         wall: Object with ``evaluate_xyz(xyz)`` (e.g. :class:`SurfaceClassifier`)
             or a callable ``wall(xyz)``, positive inside the wall and zero on it.
         max_length: Cap on the length followed in each direction.
         tolerance: Relative and absolute integration and root-finding tolerance.
-        max_steps: Maximum adaptive steps per direction.
+        max_steps: Maximum adaptive steps per direction; a line that exhausts
+            them returns ``nan`` length and ``hit`` false.
 
     Returns:
         Dict with ``lengths`` ``(n, 2)`` (forward, backward), ``connection_length``
@@ -1709,8 +1711,11 @@ def connection_length(field, initial_conditions, wall, *, max_length,
             dt0=float(max_length) / 1000, y0=seed, args=sign,
             saveat=SaveAt(t1=True), stepsize_controller=controller,
             event=event, max_steps=int(max_steps), throw=False)
-        hit = jnp.asarray(False) if solution.event_mask is None else solution.event_mask
-        return solution.ts[-1], solution.ys[-1], hit
+        hit = solution.event_mask
+        failed = (solution.result != diffrax.RESULTS.successful) & ~hit
+        outside = distance(seed) <= 0.0
+        length = jnp.where(outside, 0.0, jnp.where(failed, jnp.nan, solution.ts[-1]))
+        return length, jnp.where(outside, seed, solution.ys[-1]), hit | outside
 
     signs = jnp.array([1.0, -1.0])
     trace = jit(vmap(vmap(trace_one, in_axes=(None, 0)), in_axes=(0, None)))

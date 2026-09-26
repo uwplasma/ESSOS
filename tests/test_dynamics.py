@@ -617,3 +617,12 @@ def test_connection_length_matches_helical_slab_closed_form():
 def test_connection_length_requires_positive_cap():
     with pytest.raises(ValueError, match="max_length"):
         connection_length(HelicalSlabField(1.0), jnp.zeros((1, 3)), lambda x: 1.0, max_length=0.0)
+
+
+def test_connection_length_flags_outside_seeds_and_step_exhaustion():
+    wall = lambda xyz: 1.0 - xyz[2] ** 2  # noqa: E731
+    result = connection_length(HelicalSlabField(0.5), jnp.array([[1.0, 0.0, 1.5]]), wall, max_length=20.0)
+    assert jnp.all(result["lengths"] == 0.0) and jnp.all(result["hit"])
+    result = connection_length(HelicalSlabField(0.5), jnp.array([[1.0, 0.0, 0.2]]), wall,
+                               max_length=20.0, max_steps=3)
+    assert jnp.all(jnp.isnan(result["lengths"])) and not jnp.any(result["hit"])
