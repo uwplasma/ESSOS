@@ -3,6 +3,7 @@ jax.config.update("jax_enable_x64", True)
 from jax import vmap
 from essos.coils import Curves
 import jax.numpy as jnp
+import numpy as np
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
 from essos.surfaces import SurfaceRZFourier, BdotN_over_B, SurfaceClassifier
@@ -229,6 +230,39 @@ class BiotSavart_from_gamma(MagneticField):
     def to_xyz(self, points):
         return points
 
+def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_m1=None):
+    """Interpolate every Fourier mode of a wout table at ``s``.
+
+    ``table`` is on the full grid, or on the half grid with VMEC's unused
+    first row (``half_grid=True``); both grids are uniform. Near the magnetic
+    axis the modes of a regular scalar vanish as ``s**(m/2)``, and those of
+    B_s (``covariant_s=True``) one power of ``sqrt(s)`` lower. Each mode is
+    therefore divided by ``s**p``, interpolated linearly and multiplied back,
+    with ``p = min(m, 2 + m % 2) / 2`` (less 1 for B_s, at least -1/2; 0 for
+    m = 0). For m > 0 the axis row of a full-grid table is replaced by the
+    extrapolation of the next two rows, or, for m = 1, by ``axis_m1`` when it
+    is given. Interpolating the modes themselves leaves the m > 0 terms
+    finite on the axis, where |B| then depends on theta.
+    """
+    m = np.asarray(xm).astype(int)
+    k = np.minimum(m, 2 + m % 2)  # 2 p
+    if covariant_s:
+        k = np.where(m > 0, np.maximum(k - 2, -1), 0)
+    with jax.ensure_compile_time_eval():  # folded at trace time for a concrete table
+        if half_grid:
+            table = table[1:]
+        scaled = table / jnp.where(grid > 0, grid, 1.0)[:, None]**(k / 2)
+        if not half_grid:
+            scaled = scaled.at[0].set(jnp.where(m > 0, 2 * scaled[1] - scaled[2], scaled[0]))
+            if axis_m1 is not None:
+                scaled = scaled.at[0].set(jnp.where(m == 1, axis_m1, scaled[0]))
+    ds = grid[1] - grid[0]
+    i = jnp.clip(jnp.floor((s - grid[0]) / ds).astype(int), 0, len(grid) - 2)
+    t = jnp.where(s > grid[-1], 1.0, (s - grid[i]) / ds)
+    q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
+    powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
+    return (powers @ (k == np.arange(-1, 4)[:, None])) * ((1 - t) * scaled[i] + t * scaled[i + 1])
+
 class Vmec():
     def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus'):
         self.wout_filename = wout_filename
@@ -265,13 +299,28 @@ class Vmec():
     @property
     def surface(self):
         return self._surface
+
+    def _bsubs_axis_m1(self):
+        """Axis limit of sqrt(s) B_s for the m = 1 modes, from B_theta.
+
+        Near the axis the leading m = 1 parts of B_s and B_theta are the
+        gradient of sqrt(s) Psi(theta, phi), so sqrt(s) B_s tends to
+        B_theta / (2 sqrt(s)) and their contributions to the toroidal current
+        cancel. VMEC's B_s next to the axis misses that limit (by about 10% on
+        an HSX wout), and extrapolating it gave curl B a toroidal component
+        that grew as 1/sqrt(s) on the axis.
+        """
+        with jax.ensure_compile_time_eval():
+            b_theta = self.bsubumnc[1:3] / jnp.sqrt(self.s_half_grid[:2])[:, None]
+            return (1.5 * b_theta[0] - 0.5 * b_theta[1]) / 2
         
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
         s, theta, phi = points
-        bsubsmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.bsubsmns)
-        bsubumnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bsubumnc[1:])
-        bsubvmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bsubvmnc[1:])
+        bsubsmns_interp = _radial_interp(s, self.s_full_grid, self.bsubsmns, self.xm_nyq, covariant_s=True,
+                                         axis_m1=self._bsubs_axis_m1())
+        bsubumnc_interp = _radial_interp(s, self.s_half_grid, self.bsubumnc, self.xm_nyq, half_grid=True)
+        bsubvmnc_interp = _radial_interp(s, self.s_half_grid, self.bsubvmnc, self.xm_nyq, half_grid=True)
         cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
         sinangle_nyq = jnp.sin(self.xm_nyq * theta - self.xn_nyq * phi)
         B_sub_s = jnp.dot(bsubsmns_interp, sinangle_nyq)
@@ -282,8 +331,8 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def B_contravariant(self, points):
         s, theta, phi = points
-        bsupumnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bsupumnc[1:])
-        bsupvmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bsupvmnc[1:])
+        bsupumnc_interp = _radial_interp(s, self.s_half_grid, self.bsupumnc, self.xm_nyq, half_grid=True)
+        bsupvmnc_interp = _radial_interp(s, self.s_half_grid, self.bsupvmnc, self.xm_nyq, half_grid=True)
         cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
         B_sup_theta = jnp.dot(bsupumnc_interp, cosangle_nyq)
         B_sup_phi = jnp.dot(bsupvmnc_interp, cosangle_nyq)
@@ -292,7 +341,7 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def sqrtg(self, points):
         s, theta, phi = points
-        gmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.gmnc[1:])
+        gmnc_interp = _radial_interp(s, self.s_half_grid, self.gmnc, self.xm_nyq, half_grid=True)
         cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
         sqrt_g_vmec = jnp.dot(gmnc_interp, cosangle_nyq)
         return sqrt_g_vmec
@@ -302,11 +351,11 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def B(self, points):
         s, theta, phi = points
-        gmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.gmnc[1:])
-        rmnc_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.rmnc)
-        zmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.zmns)
-        d_rmnc_d_s_interp = vmap(lambda row: grad(lambda s: jnp.interp(s, self.s_full_grid, row))(s), in_axes=1)(self.rmnc)
-        d_zmns_d_s_interp = vmap(lambda row: grad(lambda s: jnp.interp(s, self.s_full_grid, row))(s), in_axes=1)(self.zmns)
+        gmnc_interp = _radial_interp(s, self.s_half_grid, self.gmnc, self.xm_nyq, half_grid=True)
+        rmnc_interp = _radial_interp(s, self.s_full_grid, self.rmnc, self.xm)
+        zmns_interp = _radial_interp(s, self.s_full_grid, self.zmns, self.xm)
+        d_rmnc_d_s_interp = jacfwd(_radial_interp)(s, self.s_full_grid, self.rmnc, self.xm)
+        d_zmns_d_s_interp = jacfwd(_radial_interp)(s, self.s_full_grid, self.zmns, self.xm)
         
         cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
         B_sub_s, B_sub_theta, B_sub_phi = self.B_covariant(points)
@@ -358,7 +407,7 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def AbsB(self, points):
         s, theta, phi = points
-        bmnc_interp = vmap(lambda row: jnp.interp(s, self.s_half_grid, row, left='extrapolate'), in_axes=1)(self.bmnc[1:, :])
+        bmnc_interp = _radial_interp(s, self.s_half_grid, self.bmnc, self.xm_nyq, half_grid=True)
         cos_values = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
         return jnp.dot(bmnc_interp, cos_values)
     
@@ -395,8 +444,8 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         s, theta, phi = points
-        rmnc_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.rmnc)
-        zmns_interp = vmap(lambda row: jnp.interp(s, self.s_full_grid, row, left='extrapolate'), in_axes=1)(self.zmns)
+        rmnc_interp = _radial_interp(s, self.s_full_grid, self.rmnc, self.xm)
+        zmns_interp = _radial_interp(s, self.s_full_grid, self.zmns, self.xm)
         cosangle = jnp.cos(self.xm * theta - self.xn * phi)
         sinangle = jnp.sin(self.xm * theta - self.xn * phi)
         R = jnp.dot(rmnc_interp, cosangle)
