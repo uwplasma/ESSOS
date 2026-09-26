@@ -558,6 +558,38 @@ def test_tracing_max_steps_is_configurable_and_bounded():
 
 
 
+def _edge_tracing(model, s0, times_to_trace, **kwargs):
+    from pathlib import Path
+    wout = Path(__file__).resolve().parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+    n = 16
+    particles = Particles(initial_xyz=jnp.stack([jnp.full(n, s0), jnp.linspace(0, 6, n), jnp.zeros(n)], axis=1),
+                          initial_vparallel_over_v=jnp.linspace(-0.9, 0.9, n))
+    return Tracing(field=Vmec(str(wout), ntheta=8, nphi=8), model=model, particles=particles, maxtime=1e-5,
+                   timestep=1e-8, times_to_trace=times_to_trace, **kwargs)
+
+
+def test_vmec_losses_are_counted_at_the_lcfs():
+    """Orbits born at s = 0.993 used to count as lost at t = 0 (r_max = 0.99)."""
+    tracing = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9)
+    assert 0 < tracing.boundary_hits.sum() < 16
+    assert tracing.total_particles_lost == tracing.boundary_hits.sum()
+    assert jnp.all((tracing.lost_times > 0) == tracing.boundary_hits)
+
+
+def test_vmec_lost_energies_come_from_the_last_finite_state():
+    """With coarse saves the first sample after a loss is infinite, and the lost
+    energies and positions used to be read there."""
+    species = BackgroundSpecies(number_species=2, mass_array=jnp.array([ELECTRON_MASS / PROTON_MASS, 2.0]),
+                                charge_array=jnp.array([-1.0, 1.0]), n_array=jnp.array([1e20, 1e20]),
+                                T_array=jnp.array([1e4, 1e4]))
+    tracing = _edge_tracing("GuidingCenterCollisionsMuFixed", 0.975, 4, species=species)
+    lost = tracing.boundary_hits
+    assert lost.any()
+    assert jnp.isfinite(tracing.lost_energies).all() and jnp.isfinite(tracing.lost_positions).all()
+    assert jnp.allclose(tracing.lost_energies[lost], tracing.particles.energy, rtol=1e-2)
+    assert jnp.all(tracing.lost_positions[lost, 0] < 1)
+
+
 class _UniformField:
     def __init__(self, direction, magnitude=2.5):
         direction = jnp.asarray(direction, dtype=float)
