@@ -536,6 +536,13 @@ tree_util.register_pytree_node(Curves,
                                Curves._tree_unflatten)
 
 
+def _static_scale(value):
+    """A concrete scale as a Python float, so pytree metadata compares and hashes."""
+    if value is None or isinstance(value, jax.core.Tracer) or jnp.ndim(value) != 0:
+        return value
+    return float(value)
+
+
 def _initialize_currents_scale(currents, currents_scale):
     """Return a fixed current scale for normalized current dofs."""
     currents = jnp.atleast_1d(jnp.asarray(currents))
@@ -964,7 +971,7 @@ class Coils:
     
     def _tree_flatten(self):
         children = (self.curves, self.dofs_currents)  # arrays / dynamic values
-        aux_data = {"currents_scale": self.currents_scale}  # static values
+        aux_data = {"currents_scale": _static_scale(self.currents_scale)}  # static values
         return (children, aux_data)
     
     @classmethod
@@ -1722,8 +1729,8 @@ class DiscretizedCoils:
             "n_segments": self._n_segments,
             "nfp": self._nfp,
             "stellsym": self._stellsym,
-            "currents_scale": self.currents_scale,
-            "scale_fixed": self.scale_fixed,
+            "currents_scale": _static_scale(self.currents_scale),
+            "scale_fixed": _static_scale(self.scale_fixed),
         }
         return (children, aux_data)
     
