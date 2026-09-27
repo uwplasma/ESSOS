@@ -188,3 +188,16 @@ def test_fused_guiding_center_quantities_match_the_separate_methods():
     generic = jax.vmap(lambda p: MagneticField.gc_quantities(field, p))(points)
     for a, b in zip(fused, generic):
         np.testing.assert_allclose(np.broadcast_to(a, np.shape(b)), b, rtol=1e-9, atol=1e-12)
+
+
+def test_surface_from_input_file_matches_the_wout_boundary():
+    from essos.fields import Vmec
+    from essos.surfaces import SurfaceRZFourier
+
+    input_file = WOUT_QA.replace("wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
+                                 "input.LandremanPaul2021_QA_reactorScale_lowres")
+    surface = SurfaceRZFourier.from_input_file(input_file, ntheta=8, nphi=8, close=False)
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8, close=False)
+    assert (surface.nfp, surface.mpol, surface.ntor) == (2, 5, 5)
+    # VMEC keeps the prescribed boundary up to its own mode truncation (mpol 5 -> 4)
+    assert jnp.abs(surface.gamma - vmec.surface.gamma).max() < 2e-3
