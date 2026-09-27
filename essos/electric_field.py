@@ -33,5 +33,13 @@ class Electric_field_zero():
         
     @partial(jit, static_argnames=['self'])
     def E_covariant(self, points):
-        return jnp.array([0.0,0.0,0.0])    
+        return jnp.array([0.0,0.0,0.0])
+
+    # Every instance is the same field, so traces that each build a default
+    # zero field still share one compiled solve.
+    def __eq__(self, other):
+        return type(other) is type(self)
+
+    def __hash__(self):
+        return hash(type(self))    
     

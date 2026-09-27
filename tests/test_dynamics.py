@@ -548,14 +548,19 @@ def test_tracing_max_steps_is_configurable_and_bounded():
     until the process was killed rather than returning."""
     import inspect
 
-    from essos.dynamics import Tracing
+    from essos.dynamics import Tracing, _compute_trajectory
 
     default = inspect.signature(Tracing).parameters["max_steps"].default
     assert default == 1_000_000
 
+    # Tracing hands max_steps to the module-level solve, which passes it to
+    # every diffeqsolve call.
     source = inspect.getsource(Tracing)
     assert "max_steps=10000000000" not in source
-    assert source.count("max_steps=self.max_steps") == 9
+    assert source.count("max_steps=self.max_steps") == 1
+    solve_source = inspect.getsource(_compute_trajectory)
+    assert "max_steps=10000000000" not in solve_source
+    assert solve_source.count("max_steps=spec.max_steps") == 9
 
 
 
