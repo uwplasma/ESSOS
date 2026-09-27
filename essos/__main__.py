@@ -6,7 +6,8 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.coils import Coils, CreateEquallySpacedCurves
-from essos.fields import near_axis, BiotSavart
+from essos.fields import BiotSavart
+
 from essos.dynamics import Tracing
 from essos.optimization import optimize_loss_function
 from essos.objective_functions import loss_coils_for_nearaxis
@@ -37,6 +38,13 @@ def main(cl_args=sys.argv[1:]):
     zs=jnp.array([0,-0.045])
     etabar=-0.9
     nfp=3
+    try:
+        from pyqsc_jax.near_axis import near_axis
+    except ImportError as exc:  # pragma: no cover - only without pyQSC_JAX
+        raise ImportError(
+            "near-axis fields need pyQSC_JAX, which is not on PyPI. Run "
+            "'pip install git+https://github.com/uwplasma/pyQSC_JAX.git'."
+        ) from exc
     field = near_axis(rc=rc, zs=zs, etabar=etabar, nfp=nfp)
 
     # Initialize coils

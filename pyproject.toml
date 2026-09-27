@@ -27,8 +27,27 @@ keywords = ["Plasma",
      "Simulation",
      "JAX"]
  
-dependencies = [ "jax", "jaxlib", "tqdm", "matplotlib", "diffrax", "optax", "jaxopt", "optimistix", "scipy", "jaxkd", "netcdf4"]
- 
+dependencies = [ 
+    "jax", 
+    "jaxlib", 
+    "tqdm", 
+    "matplotlib", 
+    "diffrax", 
+    "optax", 
+    "jaxopt", 
+    "optimistix", 
+    "scipy", 
+    "jaxkd", 
+    "netcdf4",
+    # Used internally by SurfaceRZFourier.to_vtk() and Coils.to_vtk().
+    "pyevtk",
+]
+
+# pyQSC_JAX is not on PyPI, and PyPI rejects any distribution that names a
+# direct URL, so it cannot be declared here at all -- not even as an extra.
+# The near-axis entry points import it lazily and raise with the install
+# command; see "Optional: near-axis fields" in the README.
+#   pip install git+https://github.com/uwplasma/pyQSC_JAX.git 
 requires-python = ">=3.10"
 
 [project.urls]
@@ -36,4 +55,3 @@ Homepage = "https://github.com/uwplasma/ESSOS"
 
 [project.scripts]
 essos = "essos.__main__:main"
- 
