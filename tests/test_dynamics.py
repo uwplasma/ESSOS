@@ -754,3 +754,34 @@ def test_vmec_lost_energies_come_from_the_last_finite_state():
     assert jnp.isfinite(tracing.lost_energies).all() and jnp.isfinite(tracing.lost_positions).all()
     assert jnp.allclose(tracing.lost_energies[lost], tracing.particles.energy, rtol=1e-2)
     assert jnp.all(tracing.lost_positions[lost, 0] < 1)
+
+
+def test_custom_loss_grad_through_adaptive_guiding_center_matches_finite_difference():
+    # custom_loss jits its value and gradient, so Tracing.trace sees tracer
+    # initial conditions and must not pull them back to the host.
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart
+    from essos.losses import custom_loss
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.4, n_segments=24, nfp=2, stellsym=True)
+    coils = Coils(curves=curves, currents=jnp.array([1e6, 1e6]))
+    R0 = jnp.linspace(0.95, 1.05, 2)
+    particles = Particles(initial_xyz=jnp.array([R0, 0 * R0, 0 * R0]).T)
+
+    def final_position(field, particles):
+        tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles,
+                          maxtime=1e-7, times_to_trace=4, atol=1e-10, rtol=1e-10)
+        xyz = tracing.trajectories[:, -1, :3]
+        return jnp.sum(jnp.sqrt(xyz[:, 0]**2 + xyz[:, 1]**2)) + jnp.sum(xyz[:, 2])
+
+    loss = custom_loss(final_position, "field", particles=particles)
+    loss.dependencies = {"field": BiotSavart(coils)}
+    dofs = loss.starting_dofs
+
+    gradient = loss.grad(dofs)
+    direction = jax.random.normal(jax.random.key(0), dofs.shape)
+    step = 1e-4 * jnp.linalg.norm(dofs) / jnp.linalg.norm(direction)
+    finite_difference = (loss(dofs + step * direction) - loss(dofs - step * direction)) / (2 * step)
+
+    assert jnp.all(jnp.isfinite(gradient))
+    np.testing.assert_allclose(gradient @ direction, finite_difference, rtol=1e-6)
