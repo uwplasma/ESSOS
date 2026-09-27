@@ -189,3 +189,16 @@ def test_curves_iter():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_two_coil_fields_share_jit_caches():
+    """Coils carried its current scale as an array in pytree metadata, so the
+    second BiotSavart traced under jit failed comparing it with the first."""
+    from pathlib import Path
+    from essos.fields import BiotSavart
+
+    path = str(Path(__file__).resolve().parents[1] / "examples" / "input_files" / "ESSOS_biot_savart_LandremanPaulQA.json")
+    first, second = BiotSavart(Coils.from_json(path)), BiotSavart(Coils.from_json(path))
+    x = jnp.array([1.0, 0.1, 0.05])
+    assert jnp.allclose(jax.jit(lambda p: first.AbsB(p))(x), jax.jit(lambda p: second.AbsB(p))(x))
+    assert isinstance(first.coils._tree_flatten()[1]["currents_scale"], float)

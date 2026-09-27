@@ -28,6 +28,8 @@ pip install essos
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria, near-axis expansions, and
   `CombinedField` to trace a sum of fields as one.
+- **VMEC MGRID.** Export coil fields and load MGRID files as JAX-compatible
+  three-dimensional magnetic fields.
 - **Surfaces.** Fourier-represented toroidal surfaces, from a VMEC `wout` or
   built directly.
 - **Parallel.** JAX sharding across the visible devices; pass `devices=` to pick.
@@ -85,6 +87,19 @@ tracing.poincare_plot(shifts=[0.0])
 
 More in [`examples/fieldline_tracing`](examples/fieldline_tracing).
 
+## VMEC MGRID fields
+
+Run [`examples/simple_examples/mgrid_from_coils.py`](examples/simple_examples/mgrid_from_coils.py)
+to export the included Landreman-Paul QA coils, load the file as a magnetic
+field, and compare its interpolated field with direct Biot-Savart. It prints
+the differences and saves a plot; the maximum difference at its four sample
+points is about 0.2%. Accuracy depends on grid resolution and distance from
+the coils, so compare in your region of interest before using a grid.
+
+The cylindrical grid covers one field period in phi. The field repeats across
+periods, and R and Z queries are clamped to the grid bounds, so set the bounds
+to cover the region you intend to evaluate.
+
 ## Particle tracing
 
 ![Guiding-centre alpha orbits](docs/readme_particles.png)
@@ -106,13 +121,12 @@ full-orbit, collisional and electric-field variants.
 
 ## Tracing notes
 
-- **VMEC magnetic axis.** The poloidal angle is undefined on axis, so a VMEC
-  guiding-centre trace stops at `s <= axis_threshold` (default `1e-6`) and
-  reports it through `tracing.axis_hits` and
-  `tracing.total_particles_unresolved`, separately from a loss at `s >= 1`. This
-  is a numerical safeguard, not a continuation through the axis; a trajectory
-  that must cross it needs a regular chart or a full-orbit handoff. Supplying
-  `condition` replaces the automatic axis and boundary events.
+- **VMEC magnetic axis.** VMEC guiding centres are integrated in
+  `sqrt(s) (cos theta, sin theta)`, which is regular on the axis, so orbits
+  cross it; trajectories are returned in `(s, theta, phi, ...)` with `theta`
+  in `[0, 2 pi)`. A trace stops at `s >= 1` and reports it through
+  `tracing.boundary_hits`. Supplying `condition` replaces that event; it is
+  evaluated on `(s, theta, phi, ...)`.
 - **Stopping coil-field traces.** Pass `stopping_criteria=LevelsetStoppingCriterion(...)`
   to end Cartesian traces once they leave a prescribed distance from a surface,
   and read the per-line mask from `tracing.boundary_hits`.
