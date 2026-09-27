@@ -111,10 +111,9 @@ def compute_G_parallel(pm_obj, surf_pts, surf_n):
         term2 = -dot_mn / (R_mag**3 + 1e-30)
         return jnp.squeeze((term1 + term2) * MU0_4PI, axis=2)
 
-    pts_d = jax.device_put_sharded(list(pts_sharded), jax.local_devices())
-    n_d = jax.device_put_sharded(list(n_sharded), jax.local_devices())
-    
-    G_sharded = jax.pmap(device_kernel)(pts_d, n_d)
+    # pmap shards the leading (device) axis itself; jax.device_put_sharded
+    # was removed in JAX 0.11.
+    G_sharded = jax.pmap(device_kernel)(pts_sharded, n_sharded)
     G_sharded.block_until_ready()
     
     G_full = G_sharded.reshape(-1, len(m_pos))

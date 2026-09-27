@@ -968,9 +968,9 @@ class DipoleField(MagneticField):
                 term2  = -dot_mn / (R_mag**3 + 1e-30)
                 return jnp.squeeze((term1 + term2) * 1e-7, axis=2)
         
-            pts_d = jax.device_put_sharded(list(pts_s), jax.local_devices())
-            n_d   = jax.device_put_sharded(list(n_s),   jax.local_devices())
-            G_s   = jax.pmap(kernel)(pts_d, n_d)
+            # pmap shards the leading (device) axis itself; jax.device_put_sharded
+            # was removed in JAX 0.11.
+            G_s   = jax.pmap(kernel)(pts_s, n_s)
             G_s.block_until_ready()
             G_full = G_s.reshape(-1, len(m_pos))
             if remainder != 0:
