@@ -5,10 +5,16 @@ from jax import jit, grad
 from functools import partial
 from essos.coils import Curves, Coils
 from scipy.optimize import least_squares, minimize
-from pyqsc_jax.near_axis import near_axis
 from essos.surfaces import SurfaceRZFourier
 
 def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
+    try:
+        from pyqsc_jax.near_axis import near_axis
+    except ImportError as exc:  # pragma: no cover - exercised only without pyQSC_JAX
+        raise ImportError(
+            "near-axis fields need pyQSC_JAX, which is not on PyPI. Run "
+            "'pip install git+https://github.com/uwplasma/pyQSC_JAX.git'."
+        ) from exc
     len_rc = len(field_nearaxis.rc)
     len_zs = len(field_nearaxis.zs)
     # # keeping the first rc and zs the same

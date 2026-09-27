@@ -408,17 +408,31 @@ def loss_linkingnumber(coils, candidates=None, block_size=None):
 
 #  Lorentz force loss: accepts Coils object, keyword args, JAX-friendly
 @partial(jit, static_argnames=["p", "threshold", "block_size"])
-def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
+def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None, conductor_radius=None):
     """
     Loss function penalizing Lorentz force on coils using Landreman-Hurwitz method.
+
+    Matches SIMSOPT's ``LpCurveForce``::
+
+        J = (1/p) sum_i (1/L_i) int max(|dF_i/dl| - F_0, 0)^p dl_i
+
+    so it is independent of the quadrature resolution. The self-force uses the
+    regularized self field of a circular conductor of radius ``a``
+    (``delta = a**2 / sqrt(e)``; Hurwitz, Landreman & Antonsen,
+    arXiv:2310.09313).
+
     Args:
         coils: Coils object (with gamma, gamma_dash, gamma_dashdash, currents, quadpoints)
         p: Power for penalty (default 1)
-        threshold: Force threshold (default 0.5e6)
+        threshold: Force threshold F_0 in N/m (default 0.5e6)
         block_size: Block size for memory efficiency. If None, uses full vmap (no chunking)
+        conductor_radius: Radius of the conductor cross-section in meters
+            (required: the self-force depends logarithmically on it).
     Returns:
         Scalar loss (sum over all coils)
     """
+    if conductor_radius is None:
+        raise ValueError("loss_lorentz_force_coils needs conductor_radius (the coil cross-section radius in m)")
     n_coils = coils.gamma.shape[0]
     indices = jnp.arange(n_coils)
     other_indices = jnp.array([
@@ -432,8 +446,7 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
         gamma_dashdash_i = coils.gamma_dashdash[idx]
         current_i = coils.currents[idx]
         quadpoints = coils.curves.quadpoints
-        curvature = Curves.compute_curvature(gamma_dash_i, gamma_dashdash_i)
-        regularization = regularization_circ(1. / jnp.mean(curvature))
+        regularization = regularization_circ(conductor_radius)
         other_idx = other_indices[idx]
         gamma_others = coils.gamma[other_idx]
         gamma_dash_others = coils.gamma_dash[other_idx]
@@ -462,8 +475,9 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None):
         )
         block_force = jnp.cross(current_i * block_tangent, block_B_self + block_B_mutual)
         block_force_norm = jnp.linalg.norm(block_force, axis=1)
-        total_penalty = jnp.sum(jnp.maximum(block_force_norm - threshold, 0) ** p * block_gammadash_norm)
-        return total_penalty * (1. / p)
+        # Uniform quadrature on [0, 1): int f dl = mean(f |gamma'|), L = mean(|gamma'|).
+        integral = jnp.mean(jnp.maximum(block_force_norm - threshold, 0) ** p * block_gammadash_norm)
+        return integral / jnp.mean(block_gammadash_norm) / p
 
     penalties = jax.vmap(single_coil_loss)(indices)
     return jnp.sum(penalties)
