@@ -123,12 +123,27 @@ class Curves:
     def dofs(self):
         # Apply scaling to each coordinate (X, Y, Z) independently
         return self._dofs * self.scaling[None, None, :]
+
+    @property
+    def dof_names(self):
+        """Names ordered exactly like :attr:`dofs` flattened in C order."""
+        coefficients = ["0"] + [f"{kind}({mode})" for mode in range(1, self.order + 1)
+                                  for kind in ("s", "c")]
+        return tuple(f"coil[{coil}].{axis}{coefficient}"
+                     for coil in range(self.n_base_curves) for axis in "xyz"
+                     for coefficient in coefficients)
     
     @dofs.setter
     def dofs(self, new_dofs):
         self.reset_cache()
         self._dofs = new_dofs / self.scaling[None, None, :]
         self._order = self._dofs.shape[2] // 2
+
+    def with_dofs(self, dofs):
+        """Return a differentiable copy with new public curve ``dofs``."""
+        curves = self.copy()
+        curves.dofs = dofs
+        return curves
     
     # n_segments property and setter
     @property
@@ -521,6 +536,13 @@ tree_util.register_pytree_node(Curves,
                                Curves._tree_unflatten)
 
 
+def _static_scale(value):
+    """A concrete scale as a Python float, so pytree metadata compares and hashes."""
+    if value is None or isinstance(value, jax.core.Tracer) or jnp.ndim(value) != 0:
+        return value
+    return float(value)
+
+
 def _initialize_currents_scale(currents, currents_scale):
     """Return a fixed current scale for normalized current dofs."""
     currents = jnp.atleast_1d(jnp.asarray(currents))
@@ -651,12 +673,24 @@ class Coils:
     @property
     def dofs(self):
         return jnp.hstack([self.dofs_curves.ravel(), self.dofs_currents])
+
+    @property
+    def dof_names(self):
+        """Names ordered exactly like the combined curve/current :attr:`dofs`."""
+        return self.curves.dof_names + tuple(
+            f"coil[{coil}].current" for coil in range(self.curves.n_base_curves))
     
     @dofs.setter
     def dofs(self, new_dofs):
         n_curve_dofs = jnp.size(self.dofs_curves)
         self.dofs_curves = jnp.reshape(new_dofs[:n_curve_dofs], self.dofs_curves.shape)
         self.dofs_currents = new_dofs[n_curve_dofs:]
+
+    def with_dofs(self, dofs):
+        """Return a differentiable copy with new curve and current ``dofs``."""
+        coils = self.copy()
+        coils.dofs = dofs
+        return coils
 
     # TODO: remove x property. This is a placeholder for compatibility with the examples that need to be updated.
     # x property and setter 
@@ -847,6 +881,13 @@ class Coils:
     def to_vtk(self, *args, **kwargs):
         self.curves.to_vtk(*args, **kwargs)
 
+    def to_mgrid(self, filename: str, **kwargs):
+        """Write this coil field to a VMEC MGRID file; see :func:`essos.mgrid.coils_to_mgrid`."""
+
+        from .mgrid import coils_to_mgrid
+
+        return coils_to_mgrid(self, filename, **kwargs)
+
     @classmethod
     def from_simsopt(cls, simsopt_coils, nfp=1, stellsym=True, scaling_type=2, scaling_factor=0.0, scale_fixed=1.0):
         """Create coils from simsopt coils.
@@ -930,7 +971,7 @@ class Coils:
     
     def _tree_flatten(self):
         children = (self.curves, self.dofs_currents)  # arrays / dynamic values
-        aux_data = {"currents_scale": self.currents_scale}  # static values
+        aux_data = {"currents_scale": _static_scale(self.currents_scale)}  # static values
         return (children, aux_data)
     
     @classmethod
@@ -1688,8 +1729,8 @@ class DiscretizedCoils:
             "n_segments": self._n_segments,
             "nfp": self._nfp,
             "stellsym": self._stellsym,
-            "currents_scale": self.currents_scale,
-            "scale_fixed": self.scale_fixed,
+            "currents_scale": _static_scale(self.currents_scale),
+            "scale_fixed": _static_scale(self.scale_fixed),
         }
         return (children, aux_data)
     
