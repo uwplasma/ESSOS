@@ -824,7 +824,7 @@ class Tracing():
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
                  solver=None, stopping_criteria=None, progress=False, devices=None,
-                 max_steps=1_000_000):
+                 max_steps=1_000_000, particle_batch_size=None):
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")
@@ -874,7 +874,16 @@ class Tracing():
         # finish ran until the process was killed rather than returning.
         self.max_steps = max_steps
         self.progress = bool(progress)
-        self.progress_meter = TqdmProgressMeter() if self.progress else NoProgressMeter()
+        # With particle_batch_size, particles are traced in batches of that
+        # size, which bounds the memory of one solve, and progress counts
+        # completed particles instead of Diffrax steps.
+        if particle_batch_size is not None and (
+                isinstance(particle_batch_size, bool) or not isinstance(particle_batch_size, (int, np.integer))
+                or particle_batch_size <= 0):
+            raise ValueError("particle_batch_size must be a positive integer or None")
+        self.particle_batch_size = None if particle_batch_size is None else int(particle_batch_size)
+        self.progress_meter = (TqdmProgressMeter() if self.progress and self.particle_batch_size is None
+                               else NoProgressMeter())
         # Diffrax solver to use for the adaptive integrators. If left as None,
         # each integrator falls back to its previous default (Dopri8), so
         # existing call sites are unaffected. Selecting the solver here (rather
@@ -1277,9 +1286,11 @@ class Tracing():
                 return trajectory, solution.event_mask
             return trajectory
         
+        nparticles = len(self.initial_conditions)
+        batch_size = nparticles if self.particle_batch_size is None else min(self.particle_batch_size, nparticles)
         devices = self.devices
-        device_count = min(len(devices), len(self.initial_conditions))
-        while device_count > 1 and len(self.initial_conditions) % device_count:
+        device_count = min(len(devices), batch_size)
+        while device_count > 1 and batch_size % device_count:
             device_count -= 1
         if device_count > 1:
             mesh = Mesh(np.asarray(devices[:device_count], dtype=object), ("dev",))
@@ -1297,23 +1308,44 @@ class Tracing():
                 event_sharding = tuple(sharding_index for _ in self.stopping_criteria)
             output_sharding = (sharding, event_sharding)
         if sharding is not None:
-            initial_conditions = device_put(
-                np.asarray(jax.device_get(self.initial_conditions)), sharding)
-            random_keys = self.particles.random_keys if self.particles else None
-            if random_keys is not None:
-                random_keys = device_put(jax.device_get(random_keys), sharding_index)
-            return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
-                        initial_conditions, random_keys)
+            traced = jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index),
+                         out_shardings=output_sharding)
         else:
+            traced = jit(vmap(compute_trajectory,in_axes=(0,0)))
+
+        def trace_batch(initial_conditions, random_keys):
+            if sharding is not None:
+                initial_conditions = device_put(np.asarray(jax.device_get(initial_conditions)), sharding)
+                if random_keys is not None:
+                    random_keys = device_put(jax.device_get(random_keys), sharding_index)
+                return traced(initial_conditions, random_keys)
             device = devices[0]
-            initial_conditions = device_put(
-                np.asarray(jax.device_get(self.initial_conditions)), device)
-            random_keys = self.particles.random_keys if self.particles else None
+            initial_conditions = device_put(np.asarray(jax.device_get(initial_conditions)), device)
             if random_keys is not None:
                 random_keys = device_put(jax.device_get(random_keys), device)
             with jax.default_device(device):
-                return jit(vmap(compute_trajectory,in_axes=(0,0)))(
-                    initial_conditions, random_keys)
+                return traced(initial_conditions, random_keys)
+
+        random_keys = self.particles.random_keys if self.particles else None
+        if batch_size == nparticles:
+            return trace_batch(self.initial_conditions, random_keys)
+
+        # Every batch has batch_size particles, the last one padded by
+        # repeating its final particle, so the solve is compiled once. Each
+        # batch is gathered to the host, and the result is uncommitted, so it
+        # combines with arrays on any device.
+        from tqdm.auto import tqdm
+        results = []
+        with tqdm(total=nparticles, desc="Tracing particles", unit="particle",
+                  disable=not self.progress) as progress_bar:
+            for start in range(0, nparticles, batch_size):
+                stop = min(start + batch_size, nparticles)
+                index = np.minimum(np.arange(start, start + batch_size), nparticles - 1)
+                result = trace_batch(self.initial_conditions[index],
+                                     None if random_keys is None else random_keys[index])
+                results.append(tree_util.tree_map(lambda value: np.asarray(value)[:stop - start], result))
+                progress_bar.update(stop - start)
+        return tree_util.tree_map(lambda *values: jnp.asarray(np.concatenate(values, axis=0)), *results)
         #x=jax.device_put(self.initial_conditions, sharding)
         #y=jax.device_put(self.particles.random_keys, sharding_index)        
         #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
@@ -1655,7 +1687,8 @@ class Tracing():
         aux_data = {'field': self.field, 'electric_field': self.electric_field, 'model': self.model, 'maxtime': self.maxtime, 'timestep': self.timestep,
                     'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc,
                     'solver': self.solver, 'stopping_criteria': self.stopping_criteria,
-                    'progress': self.progress, 'devices': self.devices}  # static values
+                    'progress': self.progress, 'devices': self.devices,
+                    'particle_batch_size': self.particle_batch_size}  # static values
         return (children, aux_data)
 
     @classmethod

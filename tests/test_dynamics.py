@@ -754,3 +754,30 @@ def test_vmec_lost_energies_come_from_the_last_finite_state():
     assert jnp.isfinite(tracing.lost_energies).all() and jnp.isfinite(tracing.lost_positions).all()
     assert jnp.allclose(tracing.lost_energies[lost], tracing.particles.energy, rtol=1e-2)
     assert jnp.all(tracing.lost_positions[lost, 0] < 1)
+
+
+def test_particle_batches_report_completed_particles_and_match_one_batch(capsys):
+    """Batches of 6 (the last one padded) give the same orbits, events and losses
+    as one batch, and progress counts completed particles."""
+    whole = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9)
+    capsys.readouterr()
+    batched = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9,
+                            particle_batch_size=6, progress=True)
+    progress = capsys.readouterr().err
+    assert "Tracing particles" in progress and "16/16" in progress
+    assert batched.particle_batch_size == 6
+    # The adaptive steps of a vmapped solve depend on the batch in the last
+    # bits, which the rtol = 1e-9 integration carries to ~1e-8.
+    both = jnp.isfinite(batched.trajectories) & jnp.isfinite(whole.trajectories)
+    assert both[:, :2].all()
+    np.testing.assert_allclose(batched.trajectories[both], whole.trajectories[both], rtol=1e-6, atol=1e-7)
+    assert jnp.array_equal(batched.boundary_hits, whole.boundary_hits)
+    assert jnp.array_equal(batched.lost_times, whole.lost_times)
+    assert jnp.array_equal(batched.loss_fractions, whole.loss_fractions)
+
+
+@pytest.mark.parametrize("batch_size", [0, -2, 1.5, True])
+def test_particle_batch_size_is_validated(batch_size):
+    with pytest.raises(ValueError, match="particle_batch_size"):
+        Tracing(field=MockField(), model="FieldLineAdaptative", initial_conditions=jnp.array([[1.0, 0.0, 0.0]]),
+                maxtime=1.0, timestep=0.01, particle_batch_size=batch_size)
