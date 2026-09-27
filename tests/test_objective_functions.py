@@ -1,8 +1,11 @@
+import dataclasses
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import jax
+import numpy as np
+import pytest
 import jax.numpy as jnp
 
 import essos.objective_functions as objf
@@ -288,19 +291,18 @@ class TestObjectiveFunctions(unittest.TestCase):
             self.assertTrue(jnp.isfinite(exact))
             self.assertAlmostEqual(float(exact), float(finite_difference), places=6)
 
-    @patch("essos.objective_functions.Curves.compute_curvature", return_value=jnp.ones(5))
     @patch("essos.objective_functions.BiotSavart_from_gamma")
-    def test_loss_lorentz_force_coils(self, biot_savart_from_gamma, compute_curvature):
+    def test_loss_lorentz_force_coils(self, biot_savart_from_gamma):
         class DummyBS:
             def B(self, point):
                 return jnp.zeros(3)
 
         biot_savart_from_gamma.return_value = DummyBS()
-        force_loss = objf.loss_lorentz_force_coils(self.coils, threshold=1e6, block_size=2)
+        force_loss = objf.loss_lorentz_force_coils(self.coils, threshold=1e6, block_size=2, conductor_radius=0.05)
         self.assertTrue(jnp.isfinite(force_loss))
         self.assertAlmostEqual(
             float(force_loss),
-            float(objf.loss_lorentz_force_coils.__wrapped__(self.coils, threshold=1e6, block_size=2)),
+            float(objf.loss_lorentz_force_coils.__wrapped__(self.coils, threshold=1e6, block_size=2, conductor_radius=0.05)),
         )
 
     def test_regularization_helpers(self):
@@ -320,3 +322,69 @@ class TestObjectiveFunctions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@jax.tree_util.register_dataclass
+@dataclasses.dataclass
+class _Quadrature:
+    quadpoints: jnp.ndarray
+
+
+@jax.tree_util.register_dataclass
+@dataclasses.dataclass
+class _LoopCoils:
+    gamma: jnp.ndarray
+    gamma_dash: jnp.ndarray
+    gamma_dashdash: jnp.ndarray
+    currents: jnp.ndarray
+    curves: _Quadrature
+
+
+def _two_distant_loops(n, radius=1.3, current=2.0e6, separation=1.0e5):
+    """Two coaxial circular loops so far apart that their mutual force is negligible."""
+
+    theta = jnp.arange(n) / n
+    phase = 2 * jnp.pi * theta
+    ring = jnp.stack([radius * jnp.cos(phase), radius * jnp.sin(phase), jnp.zeros(n)], axis=1)
+    ring_dash = 2 * jnp.pi * jnp.stack([-radius * jnp.sin(phase), radius * jnp.cos(phase), jnp.zeros(n)], axis=1)
+    ring_dashdash = -(2 * jnp.pi) ** 2 * ring.at[:, 2].set(0.0)
+    offset = jnp.asarray([0.0, 0.0, separation])
+    return _LoopCoils(
+        gamma=jnp.stack([ring, ring + offset]),
+        gamma_dash=jnp.stack([ring_dash, ring_dash]),
+        gamma_dashdash=jnp.stack([ring_dashdash, ring_dashdash]),
+        currents=jnp.asarray([current, current]),
+        curves=_Quadrature(quadpoints=theta),
+    ), radius, current
+
+
+def test_biot_savart_from_gamma_constructs_and_measures_length():
+    from essos.fields import BiotSavart_from_gamma
+
+    coils, radius, _ = _two_distant_loops(64)
+    field = BiotSavart_from_gamma(coils.gamma, coils.gamma_dash, coils.gamma_dashdash, coils.currents)
+    np.testing.assert_allclose(field.coils_length, 2 * np.pi * radius, rtol=1e-12)
+
+
+@pytest.mark.parametrize("a_over_r", [0.01, 0.1])
+def test_lorentz_force_loss_matches_the_analytic_hoop_force(a_over_r):
+    coils, radius, current = _two_distant_loops(128)
+    a = a_over_r * radius
+    mu0 = 4e-7 * np.pi
+    hoop = mu0 * current**2 / (4 * np.pi * radius) * (np.log(8 * radius / a) - 0.75)
+    loss = objf.loss_lorentz_force_coils(coils, p=1, threshold=0.0, conductor_radius=a)
+    # Two identical loops, threshold 0, p = 1: J = 2 * (force per length).
+    np.testing.assert_allclose(float(loss), 2 * hoop, rtol=1e-6)
+
+
+def test_lorentz_force_loss_is_independent_of_quadrature_resolution():
+    values = [
+        float(objf.loss_lorentz_force_coils(_two_distant_loops(n)[0], p=2, threshold=1e5, conductor_radius=0.05))
+        for n in (64, 128, 256)
+    ]
+    np.testing.assert_allclose(values, values[0], rtol=1e-8)
+
+
+def test_lorentz_force_loss_requires_a_conductor_radius():
+    with pytest.raises(ValueError, match="conductor_radius"):
+        objf.loss_lorentz_force_coils(_two_distant_loops(16)[0])
