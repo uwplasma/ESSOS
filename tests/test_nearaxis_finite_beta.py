@@ -6,7 +6,9 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from pyqsc_jax.near_axis import near_axis
+# pyQSC_JAX is not on PyPI, and these tests need its plasma-field module
+pytest.importorskip("pyqsc_jax.plasma")
+from pyqsc_jax.near_axis import near_axis  # noqa: E402
 from scipy.integrate import solve_ivp
 
 from essos.coils import Coils, CreateEquallySpacedCurves
