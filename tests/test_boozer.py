@@ -103,3 +103,17 @@ def test_pitch_angle_scattering_decays_the_mean_pitch_at_nu_D():
     v, lam = kicks(species, jnp.full(n, V0), jnp.full(n, 0.6), t, 400)
     assert float(jnp.mean(v)) == pytest.approx(V0, rel=5e-2)
     assert float(jnp.mean(lam)) == pytest.approx(0.6 * np.exp(-0.5), abs=4 * 0.8 / np.sqrt(n) + 1e-2)
+
+
+def test_progress_chunks_reproduce_the_unchunked_trace():
+    """Host-side chunks for progress carry the whole state: the trace is bit-identical."""
+    field, n = tokamak(), 6
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=1e-4, timestep=2e-8, n_save=23,
+                  species=electron_background(), seed=3)
+    args = (jnp.full(n, 0.5), jnp.linspace(0, 6, n), jnp.zeros(n), jnp.linspace(-0.9, 0.9, n))
+    calls = []
+    chunked = trace_boozer(field, *args, **kwargs, progress=lambda d, t: calls.append((d, t)))
+    whole = trace_boozer(field, *args, **kwargs)
+    assert calls == [(k, 22) for k in (3, 6, 9, 12, 15, 18, 21, 22)]
+    for name in ("states", "loss_times", "thermalized_times", "energy_error"):
+        np.testing.assert_array_equal(getattr(chunked, name), getattr(whole, name))
