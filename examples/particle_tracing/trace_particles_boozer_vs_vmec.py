@@ -14,6 +14,7 @@ from essos.dynamics import Tracing, Particles
 
 # Same alphas traced in Boozer coordinates (essos.boozer, from booz_xform_jax)
 # and in VMEC coordinates (essos.fields.Vmec) through the ARIES-CS equilibrium.
+# Needs booz_xform_jax (pip install booz_xform_jax).
 tmax = 1e-4
 nparticles = number_of_processors_to_use*16
 times_to_trace = 200
