@@ -1,5 +1,6 @@
 """Boozer-coordinate guiding-centre tracing and Monte Carlo collisions."""
 
+import dataclasses
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -103,3 +104,14 @@ def test_pitch_angle_scattering_decays_the_mean_pitch_at_nu_D():
     v, lam = kicks(species, jnp.full(n, V0), jnp.full(n, 0.6), t, 400)
     assert float(jnp.mean(v)) == pytest.approx(V0, rel=5e-2)
     assert float(jnp.mean(lam)) == pytest.approx(0.6 * np.exp(-0.5), abs=4 * 0.8 / np.sqrt(n) + 1e-2)
+
+
+def test_angle_addition_phases_match_direct_cos_sin():
+    xm, xn, nfp = np.array([0, 0, 1, 2, 3, 3]), 5 * np.array([0, 2, -1, 0, 1, -2]), 5
+    s = np.linspace(0.02, 1.0, 20)
+    field = BoozerField.from_booz(s, np.ones((xm.size, s.size)), xm, xn, np.full_like(s, IOTA),
+                                  np.full_like(s, 10.0), np.zeros_like(s), 1.0, nfp)
+    direct = dataclasses.replace(field, harmonics=None)
+    for theta, zeta in [(0.3, -1.2), (2.9, 4.1), (-5.0, 0.7)]:
+        np.testing.assert_allclose(field._phases(theta, zeta), direct._phases(theta, zeta),
+                                   rtol=0, atol=1e-13)

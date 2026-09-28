@@ -63,6 +63,9 @@ class BoozerField(eqx.Module):
     xn: jax.Array
     psi0: float
     nfp: int = eqx.field(static=True)
+    # (max m, min n / nfp, max n / nfp): the phases are then built from powers
+    # of exp(i theta) and exp(-i nfp zeta) instead of one cos/sin per mode.
+    harmonics: tuple | None = eqx.field(static=True, default=None)
 
     @classmethod
     def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6):
@@ -89,8 +92,31 @@ class BoozerField(eqx.Module):
         s_prof = np.concatenate([[0.0], s])
         profiles = np.vstack([axis, profiles])
         s_knots, profile_coef = _spline(s_prof, profiles)
+        n = xn // int(nfp)
+        harmonics = (int(xm.max()), int(n.min()), int(n.max()))
         return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
-                   float(psi0), int(nfp))
+                   float(psi0), int(nfp), harmonics)
+
+    def _phases(self, theta, zeta):
+        """``cos`` and ``sin`` of ``m theta - n zeta`` for every mode."""
+        if self.harmonics is None:
+            phase = self.xm * theta - self.xn * zeta
+            return jnp.cos(phase), jnp.sin(phase)
+        m_max, n_min, n_max = self.harmonics
+
+        def table(x, k0, k1):  # cos and sin of k x for k = k0 .. k1, by angle addition
+            c1, s1 = jnp.cos(x), jnp.sin(x)
+            c, s = [jnp.cos(k0 * x)], [jnp.sin(k0 * x)]
+            for _ in range(k1 - k0):
+                c, s = c + [c[-1] * c1 - s[-1] * s1], s + [s[-1] * c1 + c[-1] * s1]
+            return jnp.stack(c), jnp.stack(s)
+
+        # one-hot selections as small matrix products, which vectorize better than gathers
+        pick_m = jax.nn.one_hot(self.xm, m_max + 1)
+        pick_n = jax.nn.one_hot(self.xn // self.nfp - n_min, n_max - n_min + 1)
+        cm, sm = (x @ pick_m.T for x in table(theta, 0, m_max))
+        cn, sn = (x @ pick_n.T for x in table(self.nfp * zeta, n_min, n_max))
+        return cm * cn + sm * sn, sm * cn - cm * sn
 
     @classmethod
     def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6):
@@ -105,8 +131,7 @@ class BoozerField(eqx.Module):
     def modB_derivatives(self, r, theta, zeta):
         """``|B|``, ``d|B|/dr``, ``(d|B|/dtheta)/r`` and ``d|B|/dzeta``."""
         a, da = _evaluate(self.r_knots, self.b_coef, r)
-        phase = self.xm * theta - self.xn * zeta
-        c, s = jnp.cos(phase), jnp.sin(phase)
+        c, s = self._phases(theta, zeta)
         has_m = self.xm > 0
         f = jnp.where(has_m, r * a, a)
         df = jnp.where(has_m, a + r * da, da)
@@ -187,7 +212,7 @@ class BoozerTrace:
     states: np.ndarray
     loss_times: np.ndarray
     thermalized_times: np.ndarray
-    energy_error: np.ndarray  # max |E/E0 - 1| per particle (collisionless drift only)
+    energy_error: np.ndarray  # max |E/E0 - 1| per particle, at the saved times when collisionless
 
     @property
     def lost(self):
@@ -231,11 +256,11 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
             k4 = rhs(y + dt * k3, mu)
             y1 = y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
             s1, r1, th1, *_ = _chart(y1)
-            B1 = field.modB_derivatives(r1, th1, y1[2])[0]
-            e_orbit = 0.5 * y1[3] ** 2 + mu * B1
-            err = jnp.where(alive, jnp.maximum(err, jnp.abs(e_orbit / e0 - 1)), err)
             thermal = jnp.asarray(False)
             if species is not None:
+                B1 = field.modB_derivatives(r1, th1, y1[2])[0]
+                e_orbit = 0.5 * y1[3] ** 2 + mu * B1
+                err = jnp.where(alive, jnp.maximum(err, jnp.abs(e_orbit / e0 - 1)), err)
                 v = jnp.sqrt(2 * e_orbit)
                 point = jnp.array([s1, th1, y1[2]])
                 v, lam = collision_kick(species, mass, charge, v, y1[3] / v, point, dt,
@@ -263,6 +288,10 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
             s1, r1, th1, *_ = _chart(y)
             B1 = field.modB_derivatives(r1, th1, y[2])[0]
             v = jnp.sqrt(y[3] ** 2 + 2 * mu * B1)
+            if species is None:  # collisionless: the energy is checked at saved times
+                err = jnp.where(carry[3] | (carry[4] >= 0),
+                                jnp.maximum(carry[6], jnp.abs(0.5 * v * v / carry[7] - 1)), carry[6])
+                carry = carry[:6] + (err,) + carry[7:]
             return carry, jnp.array([s1, th1, y[2], y[3], v])
 
         e0 = 0.5 * y0[3] ** 2 + mu0 * field.modB_derivatives(*(_chart(y0)[1:3]), y0[2])[0]
