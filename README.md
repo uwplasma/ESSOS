@@ -29,7 +29,7 @@ pip install essos
   Monte Carlo collisions on background species with density and temperature
   profiles, electric fields and alpha-loss diagnostics.
 - **Boozer-coordinate tracing.** A guiding-centre tracer that needs only the
-  Boozer `|B|` spectrum; about 66x faster than VMEC-coordinate tracing and
+  Boozer `|B|` spectrum and the flux functions `iota`, `G` and `I`; about 66x faster than VMEC-coordinate tracing and
   3.8x faster than SIMPLE and 7.4x faster than SIMSOPT on the same alphas (see below).
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
@@ -141,6 +141,7 @@ slowing down and energy diffusion on `BackgroundSpecies`).
 
 ```python
 import numpy as np
+from netCDF4 import Dataset
 from booz_xform_jax import Booz_xform
 from essos.boozer import BoozerField, trace_boozer
 from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
@@ -148,6 +149,8 @@ from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
 booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout("wout.nc", flux=False)
 booz.run()
+with Dataset("wout.nc") as wout:
+    phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
 field = BoozerField.from_booz_xform(booz, psi0=phi_edge / (2 * np.pi),
                                     mode_tolerance=1e-3)
 
@@ -160,7 +163,7 @@ result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np
 print(result.lost.mean(), result.loss_fractions())
 ```
 
-`phi_edge` is the boundary toroidal flux (`phi[-1]` in the `wout`). A particle
+`psi0` is the boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 
 ![Boozer vs VMEC-coordinate and cross-code tracing times](docs/readme_boozer_speed.png)
@@ -173,7 +176,7 @@ is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 | | SIMPLE | 12.4% | 556 s |
 | | SIMSOPT | 11.9% | 1079 s |
 
-The first case is [`examples/particle_tracing/trace_particles_boozer_vs_vmec.py`](examples/particle_tracing):
+The first case is [`examples/particle_tracing/trace_particles_boozer_vs_vmec.py`](examples/particle_tracing/trace_particles_boozer_vs_vmec.py):
 the loss fractions agree within their binomial errors and Boozer tracing is
 about 66x faster. The figure is redrawn from these numbers by
 `python docs/make_readme_boozer_figure.py`.
