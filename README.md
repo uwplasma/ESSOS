@@ -30,7 +30,7 @@ pip install essos
   profiles, electric fields and alpha-loss diagnostics.
 - **Boozer-coordinate tracing.** A guiding-centre tracer that needs only the
   Boozer `|B|` spectrum; about 66x faster than VMEC-coordinate tracing and
-  4-7x faster than SIMPLE and SIMSOPT on the same alphas (see below).
+  3.8x faster than SIMPLE and 7.4x faster than SIMSOPT on the same alphas (see below).
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria (analytic derivatives,
