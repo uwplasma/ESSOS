@@ -200,12 +200,18 @@ class BoozerTrace:
 
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
-                 n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None):
+                 n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
+                 progress=None):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The step is shortened so that a whole number of steps fits between the
     ``n_save`` saved times (``t = 0`` included).  Particles are sharded over
     ``devices`` (default: every local device).
+
+    ``progress``, if given, is called as ``progress(done, total)`` in saved
+    intervals: the horizon then runs as up to ten host-side chunks of the same
+    compiled program, with the whole state carried between them, so the orbits
+    are those of an unchunked trace.
     """
     s, theta, zeta, pitch = (jnp.atleast_1d(jnp.asarray(a, float)) for a in (s, theta, zeta, pitch))
     n = s.size
@@ -222,7 +228,12 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     def rhs(y, mu):
         return guiding_center_rhs(field, y, mu, mass, charge)
 
-    def one(y0, mu0, key):
+    def start(y0, mu0):
+        e0 = 0.5 * y0[3] ** 2 + mu0 * field.modB_derivatives(*(_chart(y0)[1:3]), y0[2])[0]
+        first = jnp.array([_chart(y0)[0], _chart(y0)[2], y0[2], y0[3], jnp.sqrt(2 * e0)])
+        return (y0, mu0, 0.0, jnp.asarray(True), -1.0, -1.0, 0.0, e0), first
+
+    def advance(carry, key, first_interval, count):
         def step(carry, k):
             y, mu, t, alive, t_loss, t_therm, err, e0 = carry
             k1 = rhs(y, mu)
@@ -265,19 +276,27 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
             v = jnp.sqrt(y[3] ** 2 + 2 * mu * B1)
             return carry, jnp.array([s1, th1, y[2], y[3], v])
 
-        e0 = 0.5 * y0[3] ** 2 + mu0 * field.modB_derivatives(*(_chart(y0)[1:3]), y0[2])[0]
-        carry = (y0, mu0, 0.0, jnp.asarray(True), -1.0, -1.0, 0.0, e0)
-        carry, saved = jax.lax.scan(interval, carry, jnp.arange(n_int))
-        first = jnp.array([_chart(y0)[0], _chart(y0)[2], y0[2], y0[3], jnp.sqrt(2 * e0)])
-        return jnp.vstack([first, saved]), carry[4], carry[5], carry[6]
+        return jax.lax.scan(interval, carry, first_interval + jnp.arange(count))
 
     devices = jax.devices() if devices is None else devices
     ndev = max(1, min(len(devices), n))
     pad = (-n) % ndev
     args = [jnp.concatenate([a, jnp.repeat(a[-1:], pad, axis=0)]) for a in (y0, mu0, keys)]
-    run = jax.jit(jax.vmap(one))
     if ndev > 1:
         sharding = NamedSharding(Mesh(np.asarray(devices[:ndev]), ("p",)), PartitionSpec("p"))
         args = [jax.device_put(a, sharding) for a in args]
-    states, t_loss, t_therm, err = (np.asarray(x)[:n] for x in run(*args))
+    y0, mu0, keys = args
+    carry, first = jax.jit(jax.vmap(start))(y0, mu0)
+    run = jax.jit(jax.vmap(advance, in_axes=(0, 0, None, None)), static_argnums=3)
+    chunk = n_int if progress is None else -(-n_int // 10)
+    saved = []
+    for first_interval in range(0, n_int, chunk):
+        count = min(chunk, n_int - first_interval)
+        carry, part = run(carry, keys, first_interval, count)
+        saved.append(part)
+        if progress is not None:
+            jax.block_until_ready(part)
+            progress(first_interval + count, n_int)
+    states = np.concatenate([np.asarray(first)[:, None]] + [np.asarray(p) for p in saved], axis=1)[:n]
+    t_loss, t_therm, err = (np.asarray(x)[:n] for x in (carry[4], carry[5], carry[6]))
     return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm, err)
