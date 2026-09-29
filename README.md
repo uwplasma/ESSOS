@@ -184,18 +184,29 @@ binomial errors; the Boozer call is 68 times faster on this workload.
 A second comparison uses the same 1,024 fusion-alpha births in a reactor-scaled,
 nonoptimized NFP=2 vacuum VMEX equilibrium (`ns=31`, `mpol=5`, `ntor=5`),
 traced for 2 ms. ESSOS uses 12 retained Boozer modes, fixed RK4 steps of
-`1.25e-7 s`; CATAPULT uses a 25-point tricubic field and adaptive DP5 at
+`1.25e-7 s`; CATAPULT uses a 25×25×25 tricubic field table and adaptive DP5 at
 `1e-10` tolerance. These warmed GPU timings were made
 on the same NVIDIA GTX TITAN X; Boozer transform, field setup and JIT
 compilation are excluded. Both request 101 sample times, but CATAPULT
 truncates lost trajectories (median four stored rows across this ensemble)
 while ESSOS returns 101 states per particle.
 
-| Tracer | Lost / 1,024 | Labels matching ESSOS | Warm GPU time | Speed vs ESSOS | Maximum confined-orbit energy drift |
+| Tracer | Lost / 1,024 | Labels matching ESSOS | Warm GPU time | Speed vs ESSOS scan | Maximum confined-orbit energy drift |
 |---|---:|---:|---:|---:|---:|
-| ESSOS Boozer ([kernel PR #95](https://github.com/uwplasma/ESSOS/pull/95)) | 795 | 1,024 / 1,024 | 15.17 s | 1.0× | 2.08e-6 |
-| CATAPULT, released radial interpolation | 802 | 1,017 / 1,024 | 4.88 s | 3.1× | 7.84e-3 |
-| CATAPULT, [axis fix PR #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) | 795 | 1,024 / 1,024 | 4.75 s | 3.2× | 3.54e-4 |
+| ESSOS Boozer, default scan ([kernel PR #95](https://github.com/uwplasma/ESSOS/pull/95)) | 795 | 1,024 / 1,024 | 14.72 s | 1.0× | 2.08e-6 |
+| ESSOS Boozer, [GPU lookup PR #98](https://github.com/uwplasma/ESSOS/pull/98) | 795 | 1,024 / 1,024 | 3.81 s | 3.9× | 2.08e-6 |
+| CATAPULT, released radial interpolation | 802 | 1,017 / 1,024 | 4.88 s | 3.0× | 7.84e-3 |
+| CATAPULT, [axis fix PR #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) | 795 | 1,024 / 1,024 | 4.68 s | 3.1× | 3.54e-4 |
+
+The ESSOS lookup change leaves loss times, saved states and energy errors
+bitwise identical on this field and on larger 100- and 300-knot fields.
+With the same field table, births and requested output on one host
+i7-3820 CPU core, patched FIRM3D's serial particle loop takes 74.67 and
+74.70 s in two warmed runs. It loses the same 795 particles and has maximum
+all-path energy drift `3.55e-4`. CPU and GPU setup times are excluded.
+On the same host, ESSOS takes 18.15 s using eight CPU devices, with the
+same loss labels and energy diagnostics. Its one-device run takes 260.76 s;
+CPU comparisons depend strongly on particle parallelism.
 
 The seven released-CATAPULT disagreements all cross `s < 0.03`. Its radial
 interpolant assigns a nonzero `m=1` field harmonic on the magnetic axis,
@@ -211,14 +222,36 @@ output; its maximum surviving-particle endpoint energy error is 2.59e-4.
 ESSOS takes about 1.55 s on the M2 with 101 saved states. The different
 output policies and hardware across rows preclude a general speed ranking.
 
-| Code | Orbit models and solver | CPU / GPU | Collisions | Trajectory differentiation | Matched accuracy evidence |
+On the same 64 Boozer births, SIMPLE's direct-Boozer `startmode=6` and the
+[SIMSOPT VMEC-flux fix](https://github.com/hiddenSymmetries/simsopt/pull/664)
+each reproduce all 55 ESSOS losses. The unpatched SIMSOPT field agreed on
+only 44 of 64 labels because its radial drift had the opposite sign. SIMPLE's
+symplectic Euler run (`npoiper2=512`) has maximum endpoint energy drift
+`8.28e-4`; its midpoint option (`npoiper2=256`) lowers that to `8.03e-6`
+with the same labels. Corrected SIMSOPT's maximum endpoint drift is
+`3.00e-4`. These endpoint checks sample less of the orbit than ESSOS's
+every-step diagnostic. The [VMEX comparison guide](https://github.com/uwplasma/vmex/pull/516)
+gives the seed-WOUT recipe and a fail-closed three-code benchmark script.
+
+| Same 64 births, i7-3820 CPU | Lost / 64 | Warm trace-only time | Maximum reported energy drift |
+|---|---:|---:|---:|
+| ESSOS Boozer RK4, eight devices | 55 | 1.701 s | 1.66e-6, every step |
+| SIMPLE symplectic Euler, eight threads | 55 | 1.898 s | 8.28e-4, endpoint |
+| SIMPLE symplectic midpoint, eight threads | 55 | 3.469 s | 8.03e-6, endpoint |
+| SIMSOPT `gc_noK`, eight workers | 55 | 0.400 s | 3.00e-4, endpoint |
+
+Field construction and compilation are excluded; SIMSOPT's interpolation
+table alone takes roughly two minutes on this host. These times and the GPU
+table above describe their specific output and solver policies.
+
+| Code | Orbit models and solver | CPU / GPU | Collisions | Trajectory differentiation | Matched accuracy and speed evidence |
 |---|---|---|---|---|---|
-| ESSOS Boozer | guiding centre, fixed RK4 | both (JAX) | yes | host result is NumPy | 795/1,024; max drift 2.08e-6 |
-| ESSOS VMEC/coil | guiding centre, adaptive; full orbit | both (JAX) | yes | JAX trajectories | 17/128 in separate example |
-| [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic CPU or CUDA Dormand–Prince | CPU (OpenMP) / NVIDIA GPU | no | none documented | old sign-dependent comparison withdrawn |
-| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre or full orbit, adaptive | CPU | no in this model | none documented | old sign-dependent comparison withdrawn |
-| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic; GPU DP5 | CPU / NVIDIA GPU | no in this comparison | none documented | axis-regularized CATAPULT: 795/1,024 |
-| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | vacuum guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64; max survivor endpoint drift 2.59e-4 |
+| ESSOS Boozer | guiding centre, fixed RK4 | both (JAX) | yes | host result is NumPy | 795/1,024; 3.81 s GPU, 3.9× default scan |
+| ESSOS VMEC/coil | guiding centre, adaptive; full orbit | both (JAX) | yes | JAX trajectories | 17/128; Boozer 68× faster on that M2 case |
+| [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic CPU or CUDA Dormand–Prince | CPU (OpenMP) / NVIDIA GPU | no | none documented | 55/64; 1.898 s, eight CPU threads |
+| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre or full orbit, adaptive | CPU | no in this model | none documented | [sign fixed](https://github.com/hiddenSymmetries/simsopt/pull/664): 55/64; 0.400 s, eight CPU workers |
+| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic; GPU DP5 | CPU / NVIDIA GPU | no in this comparison | none documented | axis fixed: 795/1,024; 4.68 s GPU, 74.7 s CPU core |
+| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | vacuum guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64; 32.46 s M2 CPU, endpoint output |
 
 SIMPLE's documented production CUDA mode is collisionless Boozer tracing
 without orbit output or classifiers; its CPU mode has a broader solver set.
