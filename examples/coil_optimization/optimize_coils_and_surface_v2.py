@@ -293,26 +293,6 @@ opt_dict = L_total.dofs_to_pytree(res.x)
 field_opt = opt_dict["field"]
 surface_opt = opt_dict["surface"]
 
-print("3D coefficient amplitude (initial):", surface_init.non_axisymmetric_amplitude())
-print("3D coefficient amplitude (optimized):", surface_opt.non_axisymmetric_amplitude())
-
-print("Non-axisymmetric surface coefficients (initial -> optimized):")
-for i in range(surface_init.rc.size):
-    if int(surface_init.xn[i]) == 0:
-        continue
-    m = int(surface_init.xm[i])
-    n = int(surface_init.xn[i]) // surface_init.nfp
-    print(f"(m={m}, n={n}): R {float(surface_init.rc[i]):+.3e} -> {float(surface_opt.rc[i]):+.3e}; Z {float(surface_init.zs[i]):+.3e} -> {float(surface_opt.zs[i]):+.3e}")
-
-
-print("3D amplitude loss (initial):", loss_surface_non_axisymmetric_amplitude(surface_init, A3D_min=A3D_MIN))
-print("3D amplitude loss (optimized):", loss_surface_non_axisymmetric_amplitude(surface_opt, A3D_min=A3D_MIN))
-
-
-
-
-
-
 # Coils geometry is extracted from the optimized field.
 opt_coils = field_opt.coils
 
@@ -360,6 +340,11 @@ if QS_WEIGHT != 0.0:
     print("QS LOSS (INITIAL, WEIGHTED):", QS_WEIGHT * loss_quasi_symmetry(field_init, surface_init) )
     print("QS LOSS (OPTIMIZED, WEIGHTED):",QS_WEIGHT * loss_quasi_symmetry(field_opt, surface_opt) )
 
+if A3D_WEIGHT !=0.0:
+    print("\n---------------------------------------------------------------------------")
+    print("3D modes amplitude weighted losses:")
+    print("3D AMPLITUDE LOSS (INITIAL):", A3D_WEIGHT * loss_surface_non_axisymmetric_amplitude(surface_init, A3D_min=A3D_MIN))
+    print("3D AMPLITUDE (OPTIMIZED):", A3D_WEIGHT * loss_surface_non_axisymmetric_amplitude(surface_opt, A3D_min=A3D_MIN))
 
 if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
@@ -367,13 +352,11 @@ if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
     print("AREA LOSS (INITIAL, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_mean_cross_sectional_area( surface_init, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
     print("AREA LOSS (OPTIMIZED, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_mean_cross_sectional_area( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
 
-
 if NORMAL_DISPLACEMENT_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
     print("Surface normal-displacement weighted losses:")
     print("NORMAL-DISPLACEMENT LOSS (INITIAL, WEIGHTED):", NORMAL_DISPLACEMENT_WEIGHT * loss_surface_normal_displacement( surface_init, surface_gamma_reference=surface_gamma_reference, unitnormal_reference=unitnormal_reference, length_scale=LENGTH_SCALE_SURFACE ) )
     print("NORMAL-DISPLACEMENT LOSS (OPTIMIZED, WEIGHTED):", NORMAL_DISPLACEMENT_WEIGHT * loss_surface_normal_displacement( surface_opt, surface_gamma_reference=surface_gamma_reference, unitnormal_reference=unitnormal_reference, length_scale=LENGTH_SCALE_SURFACE ) )
-
 
 if KAPPA_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
@@ -440,6 +423,13 @@ if QS_WEIGHT != 0.0:
     field_hybrid = BiotSavart(coils_hybrid)
     print("QS loss (optimized coil shapes, initial currents, initial surface):", loss_quasi_symmetry(field_hybrid, surface_init))
 
+print("\n---------------------------------------------------------------------------")
+print("3D modes amplitude residuals and losses:")
+print("3D coefficient amplitude (initial):", surface_init.non_axisymmetric_amplitude())
+print("3D coefficient amplitude (optimized):", surface_opt.non_axisymmetric_amplitude())
+if A3D_WEIGHT !=0.0:
+    print("3D amplitude loss (initial):", loss_surface_non_axisymmetric_amplitude(surface_init, A3D_min=A3D_MIN))
+    print("3D amplitude loss (optimized):", loss_surface_non_axisymmetric_amplitude(surface_opt, A3D_min=A3D_MIN))
 
 print("\n---------------------------------------------------------------------------")
 print("Mean cross-sectional area:")
