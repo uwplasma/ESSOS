@@ -185,9 +185,11 @@ A second comparison uses the same 1,024 fusion-alpha births in a reactor-scaled,
 nonoptimized NFP=2 vacuum VMEX equilibrium (`ns=31`, `mpol=5`, `ntor=5`),
 traced for 2 ms. ESSOS uses 12 retained Boozer modes, fixed RK4 steps of
 `1.25e-7 s`; CATAPULT uses a 25-point tricubic field and adaptive DP5 at
-`1e-10` tolerance. Both save 101 states. These warmed GPU timings were made
+`1e-10` tolerance. These warmed GPU timings were made
 on the same NVIDIA GTX TITAN X; Boozer transform, field setup and JIT
-compilation are excluded.
+compilation are excluded. Both request 101 sample times, but CATAPULT
+truncates lost trajectories (median four stored rows across this ensemble)
+while ESSOS returns 101 states per particle.
 
 | Tracer | Lost / 1,024 | Labels matching ESSOS | Warm GPU time | Speed vs ESSOS | Maximum confined-orbit energy drift |
 |---|---:|---:|---:|---:|---:|
