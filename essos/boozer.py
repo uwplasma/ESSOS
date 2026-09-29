@@ -208,7 +208,7 @@ class BoozerTrace:
 
     def loss_fractions(self):
         """Cumulative lost fraction at each saved time."""
-        if self.failed.any():
+        if self.failed.any() or not np.isfinite(self.energy_error).all():
             raise RuntimeError("Loss fraction is undefined when particle trajectories fail; inspect failed_times")
         lt = self.loss_times[self.lost]
         return np.array([(lt <= t).sum() for t in self.times]) / self.loss_times.size
@@ -256,7 +256,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             finite = (jnp.isfinite(y1).all() & jnp.isfinite(mu1) &
                       jnp.isfinite(e_orbit) & jnp.isfinite(e0_new) &
                       jnp.isfinite(B1) & (B1 > 0))
-            lost = alive & jnp.isfinite(y1).all() & (s1 >= 1.0)
+            lost = alive & finite & (s1 >= 1.0)
             failed = alive & ~lost & ~finite
             t_fail = jnp.where(failed, t + dt, t_fail)
             err = jnp.where(alive & ~finite, jnp.inf, err)
@@ -303,7 +303,8 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     if np.any((inputs[0] < 0) | (inputs[0] >= 1)) or np.any(np.abs(inputs[3]) > 1):
         raise ValueError("Boozer births require 0 <= s < 1 and |pitch| <= 1")
     if not (np.isfinite(tmax) and tmax > 0 and np.isfinite(timestep) and timestep > 0
-            and int(n_save) >= 2):
+            and np.ndim(n_save) == 0 and np.isfinite(n_save)
+            and n_save >= 2 and n_save == int(n_save)):
         raise ValueError("tmax and timestep must be positive and finite; n_save >= 2")
     if (not all(np.ndim(x) == 0 and np.isfinite(x) for x in (speed, mass, charge))
             or speed <= 0 or mass <= 0 or charge == 0):
@@ -315,6 +316,9 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     speed = jnp.full(n, float(speed))
     r = jnp.sqrt(s)
     B0 = jax.vmap(field.modB)(s, theta, zeta)
+    B0_host = np.asarray(B0)
+    if not np.all(np.isfinite(B0_host) & (B0_host > 0)):
+        raise ValueError("Boozer birth |B| must be positive and finite")
     y0 = jnp.stack([r * jnp.cos(theta), r * jnp.sin(theta), zeta, pitch * speed], axis=1)
     mu0 = speed**2 * (1 - pitch**2) / (2 * B0)
     keys = jax.random.split(jax.random.PRNGKey(int(seed)), n)
