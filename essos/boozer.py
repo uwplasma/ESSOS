@@ -34,6 +34,11 @@ from essos.background_species import nu_D_ab, nu_par_ab, d_nu_par_ab, nu_s_ab, J
 jax.config.update("jax_enable_x64", True)
 
 
+def psi0_from_vmec(phi_edge):
+    """Boozer guiding-centre psi0 from VMEC's edge toroidal flux [Wb]."""
+    return -float(phi_edge) / (2 * np.pi)
+
+
 def _spline(x, y):
     from scipy.interpolate import CubicSpline
 
@@ -69,8 +74,8 @@ class BoozerField(eqx.Module):
         """Build from half-mesh Boozer tables.
 
         ``bmnc`` is ``(modes, len(s))`` as written by ``booz_xform``; ``xn``
-        includes the ``nfp`` factor; ``psi0`` is the toroidal flux at the
-        boundary over ``2 pi``.  Modes whose amplitude never exceeds
+        includes the ``nfp`` factor; ``psi0`` uses the Boozer convention
+        (``-VMEC phi[-1]/(2 pi)``).  Modes whose amplitude never exceeds
         ``mode_tolerance`` times the largest amplitude are dropped.
         """
         s = np.asarray(s, float)
