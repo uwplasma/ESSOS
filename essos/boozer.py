@@ -180,7 +180,8 @@ class BoozerTrace:
     ``states`` is ``(particles, n_save, 5)``: ``s, theta, zeta, v_par`` and the
     speed ``v``, held at the loss or thermalisation point afterwards.
     ``loss_times`` is ``-1`` for particles that were not lost;
-    ``thermalized_times`` likewise.
+    ``thermalized_times`` and ``failed_times`` likewise. A failed orbit
+    is frozen at its last finite state and is not counted as confined.
     """
 
     times: np.ndarray
@@ -188,13 +189,21 @@ class BoozerTrace:
     loss_times: np.ndarray
     thermalized_times: np.ndarray
     energy_error: np.ndarray  # max |E/E0 - 1| per particle (collisionless drift only)
+    failed_times: np.ndarray | None = None
 
     @property
     def lost(self):
         return self.loss_times >= 0
 
+    @property
+    def failed(self):
+        return (np.zeros_like(self.loss_times, dtype=bool) if self.failed_times is None
+                else self.failed_times >= 0)
+
     def loss_fractions(self):
         """Cumulative lost fraction at each saved time."""
+        if self.failed.any():
+            raise RuntimeError("Loss fraction is undefined when particle trajectories fail; inspect failed_times")
         lt = self.loss_times[self.lost]
         return np.array([(lt <= t).sum() for t in self.times]) / self.loss_times.size
 
@@ -231,11 +240,11 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     def start(y0, mu0):
         e0 = 0.5 * y0[3] ** 2 + mu0 * field.modB_derivatives(*(_chart(y0)[1:3]), y0[2])[0]
         first = jnp.array([_chart(y0)[0], _chart(y0)[2], y0[2], y0[3], jnp.sqrt(2 * e0)])
-        return (y0, mu0, 0.0, jnp.asarray(True), -1.0, -1.0, 0.0, e0), first
+        return (y0, mu0, 0.0, jnp.asarray(True), -1.0, -1.0, -1.0, 0.0, e0), first
 
     def advance(carry, key, first_interval, count):
         def step(carry, k):
-            y, mu, t, alive, t_loss, t_therm, err, e0 = carry
+            y, mu, t, alive, t_loss, t_therm, t_fail, err, e0 = carry
             k1 = rhs(y, mu)
             k2 = rhs(y + 0.5 * dt * k1, mu)
             k3 = rhs(y + 0.5 * dt * k2, mu)
@@ -258,15 +267,21 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
                 e0_new = 0.5 * v * v
             else:
                 mu1, e0_new = mu, e0
-            lost = alive & (s1 >= 1.0)
-            therm = alive & ~lost & thermal
+            finite = (jnp.isfinite(y1).all() & jnp.isfinite(mu1) &
+                      jnp.isfinite(e_orbit) & jnp.isfinite(e0_new) &
+                      jnp.isfinite(B1) & (B1 > 0))
+            lost = alive & jnp.isfinite(y1).all() & (s1 >= 1.0)
+            failed = alive & ~lost & ~finite
+            t_fail = jnp.where(failed, t + dt, t_fail)
+            err = jnp.where(alive & ~finite, jnp.inf, err)
+            therm = alive & ~lost & finite & thermal
             t_loss = jnp.where(lost, t + dt, t_loss)
             t_therm = jnp.where(therm, t + dt, t_therm)
-            keep = alive & ~therm & (jnp.isfinite(y1).all())
+            keep = alive & ~therm & finite
             y = jnp.where(keep | lost, y1, y)
             mu = jnp.where(keep, mu1, mu)
             e0 = jnp.where(keep, e0_new, e0)
-            return (y, mu, t + dt, keep & ~lost, t_loss, t_therm, err, e0), None
+            return (y, mu, t + dt, keep & ~lost, t_loss, t_therm, t_fail, err, e0), None
 
         def interval(carry, i):
             carry, _ = jax.lax.scan(step, carry, i * n_sub + jnp.arange(n_sub))
@@ -298,5 +313,5 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
             jax.block_until_ready(part)
             progress(first_interval + count, n_int)
     states = np.concatenate([np.asarray(first)[:, None]] + [np.asarray(p) for p in saved], axis=1)[:n]
-    t_loss, t_therm, err = (np.asarray(x)[:n] for x in (carry[4], carry[5], carry[6]))
-    return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm, err)
+    t_loss, t_therm, t_fail, err = (np.asarray(x)[:n] for x in (carry[4], carry[5], carry[6], carry[7]))
+    return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm, err, t_fail)

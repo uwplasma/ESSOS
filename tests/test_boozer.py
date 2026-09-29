@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import equinox as eqx
 
 from essos.background_species import BackgroundSpecies, coulomb_logarithm, nu_D_ab
 from essos.boozer import BoozerField, collision_kick, trace_boozer
@@ -43,6 +44,19 @@ def test_orbits_conserve_energy_and_toroidal_canonical_momentum():
     B = B0 * (1 - EPS * np.sqrt(s) * np.cos(th))
     p_zeta = M * vpar * G / B - Q * IOTA * PSI0 * s
     np.testing.assert_allclose(p_zeta - p_zeta[:, :1], 0.0, atol=1e-7 * np.abs(p_zeta).max())
+
+
+def test_nonfinite_step_is_reported_as_failed_not_confined():
+    """The last finite state alone cannot reveal a failed RK step."""
+    singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.0)
+    out = trace_boozer(singular, [0.3], [0.0], [0.0], [0.2], speed=V0,
+                       mass=M, charge=Q, tmax=1e-6, timestep=1e-7, n_save=3)
+    assert out.failed[0] and not out.lost[0]
+    assert out.failed_times[0] == pytest.approx(1e-7)
+    assert np.isfinite(out.states).all()  # frozen at the previous, finite state
+    assert np.isinf(out.energy_error[0])
+    with pytest.raises(RuntimeError, match="trajectories fail"):
+        out.loss_fractions()
 
 
 def electron_background(n=1e20, T=1.0e4):
