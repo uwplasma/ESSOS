@@ -152,7 +152,7 @@ booz.run()
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
 field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi),
-                                    mode_tolerance=1e-3)
+                                    mode_tolerance=1e-4)
 
 n = 1000
 speed = np.sqrt(2 * 3.5e6 * ONE_EV / ALPHA_PARTICLE_MASS)
@@ -166,6 +166,8 @@ print(result.lost.mean(), result.loss_fractions())
 For a VMEC WOUT, `psi0` is the negative of its boundary `phi` over `2 pi`
 because VMEC uses a negative coordinate Jacobian. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
+Check the mode cut on the intended equilibrium: small discarded harmonics can
+change individual loss labels ([VMEX cutoff study](https://github.com/uwplasma/vmex/pull/516)).
 
 ![Boozer and VMEC-coordinate tracing times for the corrected 128-alpha example](docs/readme_boozer_speed.png)
 
@@ -187,11 +189,11 @@ traced for 2 ms. ESSOS uses 12 retained Boozer modes, fixed RK4 steps of
 on the same NVIDIA GTX TITAN X; Boozer transform, field setup and JIT
 compilation are excluded.
 
-| Tracer | Lost / 1,024 | Labels matching ESSOS | Warm GPU time | Maximum confined-orbit energy drift |
-|---|---:|---:|---:|---:|
-| ESSOS Boozer ([kernel PR #95](https://github.com/uwplasma/ESSOS/pull/95)) | 795 | 1,024 / 1,024 | 15.17 s | 2.08e-6 |
-| CATAPULT, released radial interpolation | 802 | 1,017 / 1,024 | 4.88 s | 7.84e-3 |
-| CATAPULT, [axis fix PR #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) | 795 | 1,024 / 1,024 | 4.75 s | 3.54e-4 |
+| Tracer | Lost / 1,024 | Labels matching ESSOS | Warm GPU time | Speed vs ESSOS | Maximum confined-orbit energy drift |
+|---|---:|---:|---:|---:|---:|
+| ESSOS Boozer ([kernel PR #95](https://github.com/uwplasma/ESSOS/pull/95)) | 795 | 1,024 / 1,024 | 15.17 s | 1.0× | 2.08e-6 |
+| CATAPULT, released radial interpolation | 802 | 1,017 / 1,024 | 4.88 s | 3.1× | 7.84e-3 |
+| CATAPULT, [axis fix PR #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) | 795 | 1,024 / 1,024 | 4.75 s | 3.2× | 3.54e-4 |
 
 The seven released-CATAPULT disagreements all cross `s < 0.03`. Its radial
 interpolant assigns a nonzero `m=1` field harmonic on the magnetic axis,
@@ -200,8 +202,11 @@ all seven to confined and lowers energy drift; the regularization is proposed in
 [FIRM3D PR #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) and remains experimental until merged. An independent [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html)
 trace keeps those seven confined. On a separate 64-birth subset, ESSOS,
 CATAPULT, FIRM3D CPU and DESC agree on all 64 loss labels (55 losses).
+The patch still uses a cubic spline in `s`, so its near-axis `m=1` radial
+scaling is approximate even though these loss labels agree.
 DESC's warmed 64-birth CPU trace takes 32.46 s on an Apple M2 with endpoint
-output; ESSOS takes about 1.55 s on the M2 with 101 saved states. The different
+output; its maximum surviving-particle endpoint energy error is 2.59e-4.
+ESSOS takes about 1.55 s on the M2 with 101 saved states. The different
 output policies and hardware across rows preclude a general speed ranking.
 
 | Code | Orbit models and solver | CPU / GPU | Collisions | Trajectory differentiation | Matched accuracy evidence |
@@ -211,9 +216,11 @@ output policies and hardware across rows preclude a general speed ranking.
 | [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic CPU or CUDA Dormand–Prince | CPU (OpenMP) / NVIDIA GPU | no | none documented | old sign-dependent comparison withdrawn |
 | [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre or full orbit, adaptive | CPU | no in this model | none documented | old sign-dependent comparison withdrawn |
 | [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic; GPU DP5 | CPU / NVIDIA GPU | no in this comparison | none documented | axis-regularized CATAPULT: 795/1,024 |
-| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | vacuum guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64, matching all labels |
+| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | vacuum guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64; max survivor endpoint drift 2.59e-4 |
 
-These are matched-case measurements, not throughput claims across different
+SIMPLE's documented production CUDA mode is collisionless Boozer tracing
+without orbit output or classifiers; its CPU mode has a broader solver set.
+The measured rows above are case-specific, not throughput claims across different
 physics or devices. Recheck field interpolation, energy and individual labels
 when moving to another equilibrium, particle ensemble or time horizon.
 
