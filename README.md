@@ -7,10 +7,10 @@
     <img src="https://readthedocs.org/projects/essos/badge/?version=latest" alt="Documentation">
 </p>
 
-Stellarator coil and particle optimization in JAX. Everything ESSOS computes —
-coil geometry, Biot-Savart fields, guiding-centre orbits, field lines — is
-differentiable end to end and runs on CPU or GPU, so a design objective and its
-gradient come from the same code.
+Stellarator coil and particle optimization in JAX. Coil geometry, Biot-Savart
+fields, and the JAX orbit models run on CPU or GPU and support derivatives of
+smooth design objectives. The fast Boozer tracer returns NumPy diagnostics;
+see its capabilities in the comparison table below.
 
 ```sh
 pip install essos
@@ -18,8 +18,8 @@ pip install essos
 
 ## What it does
 
-- **Differentiable throughout.** `jax.grad` works through coil geometry, the
-  field, and the traced orbits, so objectives compose without finite differences.
+- **Differentiable optimization models.** `jax.grad` works through coil geometry,
+  the field, and JAX orbit models for smooth objectives.
 - **Coil optimization.** Fit coils to a plasma boundary under length, curvature,
   separation, coil-surface-distance and force constraints, with `least_squares`,
   an augmented Lagrangian, multi-objective (Pareto) search, or stochastic
@@ -180,6 +180,28 @@ The first case is [`examples/particle_tracing/trace_particles_boozer_vs_vmec.py`
 the loss fractions agree within their binomial errors and Boozer tracing is
 about 66x faster. The figure is redrawn from these numbers by
 `python docs/make_readme_boozer_figure.py`.
+
+The 1000-particle rows above use one WOUT, the same births and energy, a 10 ms
+horizon, and eight CPU cores; compilation and field setup are excluded
+([protocol](https://github.com/uwplasma/vmex/blob/main/benchmarks/trace_cross_code.py)).
+Capabilities differ, so the measured speed ratios apply only to this case:
+
+| tracer | particle model and method | hardware | collisions | orbit derivatives | matched loss / run time | ESSOS speedup |
+|---|---|---|---|---|---|---|
+| ESSOS Boozer | guiding centre, fixed RK4 | JAX CPU/GPU | yes | current host API returns NumPy | 12.8% / 146 s | 1× |
+| ESSOS VMEC/coil | guiding centre, adaptive; full orbit, Boris/adaptive | JAX CPU/GPU | yes | JAX trajectories | separate 128-particle case above | 66× on that case |
+| [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic CPU or CUDA Dormand–Prince | CPU/GPU | collisionless in matched run | no tracing AD documented | 12.4% / 556 s | 3.8× |
+| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre or full orbit, adaptive | CPU | collisionless in matched run | no tracing AD documented | 11.9% / 1079 s | 7.4× |
+| [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive tricubic field | NVIDIA GPU | collisionless in published study | no tracing AD documented | not run on matched case | unknown |
+| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | vacuum guiding centre, adaptive Diffrax | JAX CPU/GPU | collisionless in documented model | JAX trajectory adjoints | not run on matched case | unknown |
+
+CATAPULT reports converged loss estimates for 32,768 particles over 1 ms and
+5–10× throughput versus 128 CPU cores on an A100; its [study](https://arxiv.org/abs/2604.07617)
+uses different fields, births, horizons and hardware, so those numbers cannot
+be divided by the eight-core ESSOS time above. DESC's [particle API](https://desc-docs.readthedocs.io/en/latest/api_particles.html)
+provides a vacuum guiding-centre tracer, but no same-WOUT loss fraction or
+runtime has been established here. A numerical ranking needs identical
+initial conditions, field accuracy, loss surface and time horizon.
 
 **Why it is fast.** In Boozer coordinates the guiding-centre equations of
 motion depend only on `|B|` and the flux functions `G`, `I` and `iota`, not on
