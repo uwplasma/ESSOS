@@ -29,8 +29,8 @@ pip install essos
   Monte Carlo collisions on background species with density and temperature
   profiles, electric fields and alpha-loss diagnostics.
 - **Boozer-coordinate tracing.** A guiding-centre tracer that needs only the
-  Boozer `|B|` spectrum and the flux functions `iota`, `G` and `I`; about 66x faster than VMEC-coordinate tracing and
-  3.8x faster than SIMPLE and 7.4x faster than SIMSOPT on the same alphas (see below).
+  Boozer `|B|` spectrum and the flux functions `iota`, `G` and `I`; about 68x
+  faster than VMEC-coordinate tracing in the 128-alpha example below.
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria (analytic derivatives,
@@ -151,7 +151,7 @@ booz.read_wout("wout.nc", flux=False)
 booz.run()
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
-field = BoozerField.from_booz_xform(booz, psi0=phi_edge / (2 * np.pi),
+field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi),
                                     mode_tolerance=1e-3)
 
 n = 1000
@@ -163,45 +163,59 @@ result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np
 print(result.lost.mean(), result.loss_fractions())
 ```
 
-`psi0` is the boundary toroidal flux over `2 pi`. A particle
+For a VMEC WOUT, `psi0` is the negative of its boundary `phi` over `2 pi`
+because VMEC uses a negative coordinate Jacobian. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 
-![Boozer vs VMEC-coordinate and cross-code tracing times](docs/readme_boozer_speed.png)
+![Boozer and VMEC-coordinate tracing times for the corrected 128-alpha example](docs/readme_boozer_speed.png)
 
-| Case (8 CPU cores, compile excluded) | Tracer | Lost | Wall time |
-|---|---|---|---|
-| 128 ARIES-CS alphas, 0.1 ms | ESSOS Boozer (RK4) | 14.8% ± 3.1% | 0.91 s |
-| | ESSOS VMEC coordinates (adaptive) | 13.3% ± 3.0% | 60.5 s |
-| 1000 alphas, 10 ms (VMEX benchmark) | ESSOS Boozer | 12.8% | 146 s |
-| | SIMPLE | 12.4% | 556 s |
-| | SIMSOPT | 11.9% | 1079 s |
+The [128-alpha ARIES-CS example](examples/particle_tracing/trace_particles_boozer_vs_vmec.py)
+uses the corrected VMEC flux sign, 0.1 ms, and eight Apple M2 CPU devices.
+Times exclude JIT compilation. The two loss fractions agree within their
+binomial errors; the Boozer call is 68 times faster on this workload.
 
-The first case is [`examples/particle_tracing/trace_particles_boozer_vs_vmec.py`](examples/particle_tracing/trace_particles_boozer_vs_vmec.py):
-the loss fractions agree within their binomial errors and Boozer tracing is
-about 66x faster. The figure is redrawn from these numbers by
-`python docs/make_readme_boozer_figure.py`.
+| ESSOS tracer | Lost / 128 | Warm trace time | Maximum Boozer energy drift |
+|---|---:|---:|---:|
+| Boozer RK4 | 14 (10.9% ± 2.8%) | 0.221 s | 2.39e-5 |
+| VMEC adaptive | 17 (13.3% ± 3.0%) | 14.94 s | not recorded |
 
-The 1000-particle rows above use one WOUT, the same births and energy, a 10 ms
-horizon, and eight CPU cores; compilation and field setup are excluded
-([protocol](https://github.com/uwplasma/vmex/blob/main/benchmarks/trace_cross_code.py)).
-Capabilities differ, so the measured speed ratios apply only to this case:
+A second comparison uses the same 1,024 fusion-alpha births in a reactor-scaled,
+nonoptimized NFP=2 vacuum VMEX equilibrium (`ns=31`, `mpol=5`, `ntor=5`),
+traced for 2 ms. ESSOS uses 12 retained Boozer modes, fixed RK4 steps of
+`1.25e-7 s`; CATAPULT uses a 25-point tricubic field and adaptive DP5 at
+`1e-10` tolerance. Both save 101 states. These warmed GPU timings were made
+on the same NVIDIA GTX TITAN X; Boozer transform, field setup and JIT
+compilation are excluded.
 
-| tracer | particle model and method | hardware | collisions | orbit derivatives | matched loss / run time | ESSOS speedup |
-|---|---|---|---|---|---|---|
-| ESSOS Boozer | guiding centre, fixed RK4 | JAX CPU/GPU | yes | current host API returns NumPy | 12.8% / 146 s | 1× |
-| ESSOS VMEC/coil | guiding centre, adaptive; full orbit, Boris/adaptive | JAX CPU/GPU | yes | JAX trajectories | separate 128-particle case above | 66× on that case |
-| [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic CPU or CUDA Dormand–Prince | CPU/GPU | collisionless in matched run | no tracing AD documented | 12.4% / 556 s | 3.8× |
-| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre or full orbit, adaptive | CPU | collisionless in matched run | no tracing AD documented | 11.9% / 1079 s | 7.4× |
-| [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive tricubic field | NVIDIA GPU | collisionless in published study | no tracing AD documented | not run on matched case | unknown |
-| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | vacuum guiding centre, adaptive Diffrax | JAX CPU/GPU | collisionless in documented model | JAX trajectory adjoints | not run on matched case | unknown |
+| Tracer | Lost / 1,024 | Labels matching ESSOS | Warm GPU time | Maximum confined-orbit energy drift |
+|---|---:|---:|---:|---:|
+| ESSOS Boozer ([kernel PR #95](https://github.com/uwplasma/ESSOS/pull/95)) | 795 | 1,024 / 1,024 | 15.17 s | 2.08e-6 |
+| CATAPULT, released radial interpolation | 802 | 1,017 / 1,024 | 4.88 s | 7.84e-3 |
+| CATAPULT, experimental regularized axis | 795 | 1,024 / 1,024 | 4.75 s | 3.54e-4 |
 
-CATAPULT reports converged loss estimates for 32,768 particles over 1 ms and
-5–10× throughput versus 128 CPU cores on an A100; its [study](https://arxiv.org/abs/2604.07617)
-uses different fields, births, horizons and hardware, so those numbers cannot
-be divided by the eight-core ESSOS time above. DESC's [particle API](https://desc-docs.readthedocs.io/en/latest/api_particles.html)
-provides a vacuum guiding-centre tracer, but no same-WOUT loss fraction or
-runtime has been established here. A numerical ranking needs identical
-initial conditions, field accuracy, loss surface and time horizon.
+The seven released-CATAPULT disagreements all cross `s < 0.03`. Its radial
+interpolant assigns a nonzero `m=1` field harmonic on the magnetic axis,
+where regularity requires zero. A temporary axis-regularized version changes
+all seven to confined and lowers energy drift; the regularization is being
+prepared for upstream review. An independent [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html)
+trace keeps those seven confined. On a separate 64-birth subset, ESSOS,
+CATAPULT, FIRM3D CPU and DESC agree on all 64 loss labels (55 losses).
+DESC's warmed 64-birth CPU trace takes 32.46 s on an Apple M2 with endpoint
+output; ESSOS takes about 1.55 s on the M2 with 101 saved states. The different
+output policies and hardware across rows preclude a general speed ranking.
+
+| Code | Orbit models and solver | CPU / GPU | Collisions | Trajectory differentiation | Matched accuracy evidence |
+|---|---|---|---|---|---|
+| ESSOS Boozer | guiding centre, fixed RK4 | both (JAX) | yes | host result is NumPy | 795/1,024; max drift 2.08e-6 |
+| ESSOS VMEC/coil | guiding centre, adaptive; full orbit | both (JAX) | yes | JAX trajectories | 17/128 in separate example |
+| [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic CPU or CUDA Dormand–Prince | CPU (OpenMP) / NVIDIA GPU | no | none documented | old sign-dependent comparison withdrawn |
+| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre or full orbit, adaptive | CPU | no in this model | none documented | old sign-dependent comparison withdrawn |
+| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic; GPU DP5 | CPU / NVIDIA GPU | no in this comparison | none documented | axis-regularized CATAPULT: 795/1,024 |
+| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | vacuum guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64, matching all labels |
+
+These are matched-case measurements, not throughput claims across different
+physics or devices. Recheck field interpolation, energy and individual labels
+when moving to another equilibrium, particle ensemble or time horizon.
 
 **Why it is fast.** In Boozer coordinates the guiding-centre equations of
 motion depend only on `|B|` and the flux functions `G`, `I` and `iota`, not on
