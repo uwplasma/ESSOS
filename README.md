@@ -191,13 +191,13 @@ compilation are excluded.
 |---|---:|---:|---:|---:|
 | ESSOS Boozer ([kernel PR #95](https://github.com/uwplasma/ESSOS/pull/95)) | 795 | 1,024 / 1,024 | 15.17 s | 2.08e-6 |
 | CATAPULT, released radial interpolation | 802 | 1,017 / 1,024 | 4.88 s | 7.84e-3 |
-| CATAPULT, experimental regularized axis | 795 | 1,024 / 1,024 | 4.75 s | 3.54e-4 |
+| CATAPULT, [axis fix PR #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) | 795 | 1,024 / 1,024 | 4.75 s | 3.54e-4 |
 
 The seven released-CATAPULT disagreements all cross `s < 0.03`. Its radial
 interpolant assigns a nonzero `m=1` field harmonic on the magnetic axis,
 where regularity requires zero. A temporary axis-regularized version changes
-all seven to confined and lowers energy drift; the regularization is being
-prepared for upstream review. An independent [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html)
+all seven to confined and lowers energy drift; the regularization is proposed in
+[FIRM3D PR #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) and remains experimental until merged. An independent [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html)
 trace keeps those seven confined. On a separate 64-birth subset, ESSOS,
 CATAPULT, FIRM3D CPU and DESC agree on all 64 loss labels (55 losses).
 DESC's warmed 64-birth CPU trace takes 32.46 s on an Apple M2 with endpoint
