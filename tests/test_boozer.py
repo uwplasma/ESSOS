@@ -59,6 +59,20 @@ def test_nonfinite_step_is_reported_as_failed_not_confined():
         out.loss_fractions()
 
 
+def test_invalid_births_and_steps_are_rejected_before_tracing():
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=1e-6, timestep=1e-7, n_save=3)
+    for args, override in (
+        (([], [], [], []), {}),
+        (([1.0], [0.0], [0.0], [0.0]), {}),
+        (([0.3], [np.nan], [0.0], [0.0]), {}),
+        (([0.3], [0.0], [0.0], [1.2]), {}),
+        (([0.3], [0.0], [0.0], [0.0]), {"timestep": 0.0}),
+        (([0.3], [0.0], [0.0], [0.0]), {"n_save": 1}),
+    ):
+        with pytest.raises(ValueError):
+            trace_boozer(tokamak(), *args, **(kwargs | override))
+
+
 def electron_background(n=1e20, T=1.0e4):
     return BackgroundSpecies(1, jnp.array([ELECTRON_MASS / PROTON_MASS]), jnp.array([-1.0]),
                              jnp.array([n]), jnp.array([T]))

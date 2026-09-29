@@ -222,8 +222,16 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     compiled program, with the whole state carried between them, so the orbits
     are those of an unchunked trace.
     """
-    s, theta, zeta, pitch = (jnp.atleast_1d(jnp.asarray(a, float)) for a in (s, theta, zeta, pitch))
-    n = s.size
+    inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
+    n = inputs[0].size
+    if n < 1 or any(a.size != n or not np.isfinite(a).all() for a in inputs):
+        raise ValueError("Boozer births must be nonempty, equally sized and finite")
+    if np.any((inputs[0] < 0) | (inputs[0] >= 1)) or np.any(np.abs(inputs[3]) > 1):
+        raise ValueError("Boozer births require 0 <= s < 1 and |pitch| <= 1")
+    if not (np.isfinite(tmax) and tmax > 0 and np.isfinite(timestep) and timestep > 0
+            and int(n_save) >= 2):
+        raise ValueError("tmax and timestep must be positive and finite; n_save >= 2")
+    s, theta, zeta, pitch = map(jnp.asarray, inputs)
     n_int = max(int(n_save) - 1, 1)
     n_sub = max(1, int(np.ceil(float(tmax) / n_int / float(timestep) - 1e-9)))
     dt = float(tmax) / (n_int * n_sub)
