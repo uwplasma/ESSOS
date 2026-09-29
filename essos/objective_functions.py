@@ -274,6 +274,16 @@ def loss_surface_curvature_section(surface, kappa_max):
     kappa_relative_excess = jnp.maximum( kappa_section - kappa_max, 0.0 ) / kappa_max
     return jnp.mean(jnp.square(kappa_relative_excess))
 
+def loss_surface_non_axisymmetric_amplitude(surface, A3D_min):
+    # It calculates the amplitude of the non-axisymmetric modes (A3D)
+    # and penalize if it did not reach a minimum.
+    
+    # Measure the combined amplitude of all toroidally varying modes.
+    A3D = surface.non_axisymmetric_amplitude()
+    # Penalize only the amount below the requested minimum.
+    relative_deficit = jnp.maximum( A3D_min - A3D, 0.0) / A3D_min
+    return jnp.square(relative_deficit)
+
 ###########################  B ON SURAFACE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
 def copy_coils_from_field(field):
     return field.coils.copy()

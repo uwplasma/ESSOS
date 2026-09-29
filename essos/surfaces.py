@@ -767,6 +767,18 @@ class SurfaceRZFourier:
 
         return curvature_numerator / curvature_denominator
 
+    def non_axisymmetric_amplitude(self):
+        """Measure the combined size of the surface's toroidal Fourier modes."""
+        # xn = 0 means the mode has no toroidal-angle dependence.
+        non_axisymmetric = self.xn != 0
+
+        # Each rc and zs pair describes one mode. Square both coefficients so their signs cannot cancel,
+        #  and exclude axisymmetric modes.
+        amplitude_squared = jnp.sum( jnp.where(non_axisymmetric, self.rc**2 + self.zs**2, 0.0) )
+
+        # The square root gives the measure the same length units as rc and zs.
+        return jnp.sqrt(amplitude_squared)
+
     def _tree_flatten(self):
         if hasattr(self._rc, "shape") and hasattr(self._zs, "shape"):
             children = (self.rc * self.scaling, self.zs * self.scaling)  # arrays / dynamic values

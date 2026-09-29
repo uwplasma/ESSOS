@@ -11,7 +11,7 @@ from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_from_field,
                                         loss_coil_length_max, loss_mean_cross_sectional_area,
                                         loss_quasi_symmetry, loss_surface_curvature_section,
-                                        loss_surface_normal_displacement,
+                                        loss_surface_non_axisymmetric_amplitude, loss_surface_normal_displacement,
                                         loss_surface_poloidal_derivative,
                                         quasi_symmetry_residual_on_surface )
 
@@ -20,9 +20,6 @@ from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_fro
 #  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares, minimize
 
-# There are two different controls:
-# x_scale  → controls how easily variables move
-# weights  → control what results the optimizer considers important
 
 # ====================================================================================
 # ====================================================================================
@@ -35,9 +32,14 @@ input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 # vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
 vmec_input = os.path.join(input_filepath, 'input.toroidal_surface_02')
 
-
 # SURFACE PARAMETERS -----------------------------------------------------------------
 ntheta = 26; nphi = 26; Npoints = ntheta * nphi
+
+# COILS PARAMETERS -------------------------------------------------------------------
+# The coils are initialized as equally spaced curves around a torus.
+N_COILS = 3; FOURIER_ORDER = 3; LARGE_R = 10;
+SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 40; STELLSYM = True
+COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 #  CONTROL PARAMETERS FOR THE OPTIMIZATION -------------------------------------------
 # There are two different controls:
@@ -67,6 +69,12 @@ ALPHA_QQ = 1.
 KAPPA_WEIGHT = 0. # 1e5;
 ALPHA_KAPPA = 1.
 
+# Non-axisymmetry control: Forces the initial torus to became a stellarator faster
+A3D_MIN = 0.2
+A3D_WEIGHT = 100.0
+
+# Numerical method parameters --------------------------------------------------------
+MAXITER=200
 
 # ====================================================================================
 # ====================================================================================
@@ -109,9 +117,6 @@ def diagnostic_gradient(loss_total, dofs, field, surface, scale_field, scale_sur
 
 # ------------------------------------------------------------------------------------
 # Define the initial coils and their corresponding field.
-# The coils are initialized as equally spaced curves around a torus.
-N_COILS = 3; FOURIER_ORDER = 3; LARGE_R = 10; SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 40; STELLSYM = True
-COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
 init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
@@ -153,6 +158,7 @@ L_surface_normal_displacement = custom_loss( loss_surface_normal_displacement , 
                                             length_scale=LENGTH_SCALE_SURFACE )
 L_surface_poloidal_derivative = custom_loss( loss_surface_poloidal_derivative, "surface", qq_reference=qq_reference, alpha_qq=ALPHA_QQ )
 L_surface_curvature_section = custom_loss( loss_surface_curvature_section , "surface" , kappa_max=kappa_max )
+L_surface_non_axisymmetric_amplitude = custom_loss( loss_surface_non_axisymmetric_amplitude, "surface", A3D_min=A3D_MIN )
 
 
 # ====================================================================================
@@ -161,25 +167,16 @@ L_surface_curvature_section = custom_loss( loss_surface_curvature_section , "sur
 # ====================================================================================
 # ====================================================================================
 
-# The total loss is a weighted sum of the individual losses.
-# L_total = ( NORMAL_FIELD_WEIGHT*L_normal_field + 
-#            LENGTH_WEIGHT*L_length_max + 
-#            CURVATURE_WEIGHT*L_curvature + 
-#            CROSS_SECTIONAL_AREA_WEIGHT*L_cross_sectional_area +
-#            NORMAL_DISPLACEMENT_WEIGHT*L_surface_normal_displacement +
-#            QQ_WEIGHT*L_surface_poloidal_derivative +
-#            KAPPA_WEIGHT*L_surface_curvature_section +
-#            QS_WEIGHT*L_quasi_symmetry )
-
-
 losses_weighted = [(NORMAL_FIELD_WEIGHT, L_normal_field),
                    (LENGTH_WEIGHT, L_length_max),
                    (CURVATURE_WEIGHT, L_curvature),
                    (CROSS_SECTIONAL_AREA_WEIGHT, L_cross_sectional_area),
                    (NORMAL_DISPLACEMENT_WEIGHT, L_surface_normal_displacement),
+                   (A3D_WEIGHT, L_surface_non_axisymmetric_amplitude),
                    (QQ_WEIGHT, L_surface_poloidal_derivative),
                    (KAPPA_WEIGHT, L_surface_curvature_section),
                    (QS_WEIGHT, L_quasi_symmetry) ]
+
 
 losses_active = [ weight * loss for weight, loss in losses_weighted if weight != 0.0 ]
 
@@ -223,10 +220,53 @@ diagnostic_gradient(L_total, L_total.starting_dofs, field_init, surface_init, SC
 """ Optimizing the total loss """
 # ====================================================================================
 # ====================================================================================
-def loss_callback(intermediate_result): print(f"Current loss: {intermediate_result.fun}")
+
+# Values remembered between calls to the callback.
+iteration_callback = 0
+dofs_previous = None
+cost_previous = None
+
+def loss_callback(intermediate_result):
+    # Allow this function to update the values defined above.
+    global iteration_callback, dofs_previous, cost_previous
+
+    # SciPy first calls the callback after iteration 1.
+    if iteration_callback == 0:
+        # We calculate and print the initial state (iteration 0) ourselves.
+        dofs_previous = L_total.starting_dofs
+        cost_previous = float(L_total(dofs_previous))
+
+        gradient_init = L_total.grad(dofs_previous)
+        optimality_init = float(jnp.max(jnp.abs(gradient_init)))
+
+        print(f"{'Iteration':>10}{'Cost':>15}{'Cost reduction':>18}{'Step norm':>15}{'Optimality':>15}")
+        print(f"{0:>6}{cost_previous:>19.4e}{'':>18}{'':>15}{optimality_init:>15.2e}")
+
+    # SciPy provides the parameters and objective value after this iteration.
+    dofs_current = jnp.asarray(intermediate_result.x)
+    cost_current = float(intermediate_result.fun)
+
+    # Compare this accepted point with the previous accepted point.
+    cost_reduction = cost_previous - cost_current
+    step_norm = float(jnp.linalg.norm(dofs_current - dofs_previous))
+
+    # The largest absolute gradient component measures first-order optimality.
+    gradient_current = L_total.grad(dofs_current)
+    optimality = float(jnp.max(jnp.abs(gradient_current)))
+
+    # Print one row of the table.
+    iteration_callback += 1
+    print(f"{iteration_callback:>6}{cost_current:>19.4e}{cost_reduction:>18.2e}{step_norm:>15.2e}{optimality:>15.2e}")
+
+    # Keep this point so the next callback can compare against it.
+    dofs_previous = dofs_current
+    cost_previous = cost_current
+
 t_start = time()
+
+
 res = minimize(L_total, L_total.starting_dofs, jac = L_total.grad, method = "L-BFGS-B", callback=loss_callback ,
-                 options={'maxiter': 200, 'disp': True} )
+                 options={'maxiter': MAXITER} )
 
 
 
@@ -253,6 +293,26 @@ opt_dict = L_total.dofs_to_pytree(res.x)
 field_opt = opt_dict["field"]
 surface_opt = opt_dict["surface"]
 
+print("3D coefficient amplitude (initial):", surface_init.non_axisymmetric_amplitude())
+print("3D coefficient amplitude (optimized):", surface_opt.non_axisymmetric_amplitude())
+
+print("Non-axisymmetric surface coefficients (initial -> optimized):")
+for i in range(surface_init.rc.size):
+    if int(surface_init.xn[i]) == 0:
+        continue
+    m = int(surface_init.xm[i])
+    n = int(surface_init.xn[i]) // surface_init.nfp
+    print(f"(m={m}, n={n}): R {float(surface_init.rc[i]):+.3e} -> {float(surface_opt.rc[i]):+.3e}; Z {float(surface_init.zs[i]):+.3e} -> {float(surface_opt.zs[i]):+.3e}")
+
+
+print("3D amplitude loss (initial):", loss_surface_non_axisymmetric_amplitude(surface_init, A3D_min=A3D_MIN))
+print("3D amplitude loss (optimized):", loss_surface_non_axisymmetric_amplitude(surface_opt, A3D_min=A3D_MIN))
+
+
+
+
+
+
 # Coils geometry is extracted from the optimized field.
 opt_coils = field_opt.coils
 
@@ -270,11 +330,12 @@ surface_normal_displacement = jnp.sum( surface_displacement_xyz * surface_init.u
 # ====================================================================================
 
 print("\n===========================================================================")
-print("\n===========================================================================")
-print("\nGENERAL RESULTS:")
+print("===========================================================================")
+print("GENERAL RESULTS:")
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")
 print("Initial loss:", L_total(L_total.starting_dofs))    
 print("Loss after optimization:", L_total(res.x))
+print("Total function evaluations:", res.nfev)
 
 B_dot_n_over_B_init = BdotN_over_B( surface_init , field_init )
 B_dot_n_over_B_opt = BdotN_over_B( surface_opt , field_opt )
@@ -284,39 +345,39 @@ print("max|B dot n| residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) 
 
 
 print("\n===========================================================================")
-print("\n===========================================================================")
-print("\nWEIGHTED LOSSES:")
+print("===========================================================================")
+print("WEIGHTED LOSSES:")
 
 if NORMAL_FIELD_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
-    print("\nNormal-field weighted losses:")
+    print("Normal-field weighted losses:")
     print("NORMAL-FIELD LOSS (INITIAL, WEIGHTED):", NORMAL_FIELD_WEIGHT * loss_BdotN_mean(field_init, surface_init) )
     print("NORMAL-FIELD LOSS (OPTIMIZED, WEIGHTED):",NORMAL_FIELD_WEIGHT * loss_BdotN_mean(field_opt, surface_opt) )
 
 if QS_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
-    print("\nQuasi-symmetry weighted losses:")
+    print("Quasi-symmetry weighted losses:")
     print("QS LOSS (INITIAL, WEIGHTED):", QS_WEIGHT * loss_quasi_symmetry(field_init, surface_init) )
     print("QS LOSS (OPTIMIZED, WEIGHTED):",QS_WEIGHT * loss_quasi_symmetry(field_opt, surface_opt) )
 
 
 if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
-    print("\nMean cross-sectional area weighted losses:")
+    print("Mean cross-sectional area weighted losses:")
     print("AREA LOSS (INITIAL, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_mean_cross_sectional_area( surface_init, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
     print("AREA LOSS (OPTIMIZED, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_mean_cross_sectional_area( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
 
 
 if NORMAL_DISPLACEMENT_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
-    print("\nSurface normal-displacement weighted losses:")
+    print("Surface normal-displacement weighted losses:")
     print("NORMAL-DISPLACEMENT LOSS (INITIAL, WEIGHTED):", NORMAL_DISPLACEMENT_WEIGHT * loss_surface_normal_displacement( surface_init, surface_gamma_reference=surface_gamma_reference, unitnormal_reference=unitnormal_reference, length_scale=LENGTH_SCALE_SURFACE ) )
     print("NORMAL-DISPLACEMENT LOSS (OPTIMIZED, WEIGHTED):", NORMAL_DISPLACEMENT_WEIGHT * loss_surface_normal_displacement( surface_opt, surface_gamma_reference=surface_gamma_reference, unitnormal_reference=unitnormal_reference, length_scale=LENGTH_SCALE_SURFACE ) )
 
 
 if KAPPA_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
-    print("\nCross-sectional surface curvature:")
+    print("Cross-sectional surface curvature:")
     loss_kappa_init = loss_surface_curvature_section(surface_init, kappa_max=kappa_max)
     loss_kappa_opt = loss_surface_curvature_section(surface_opt, kappa_max=kappa_max)
     print("CROSS-SECTIONAL SURFACE CURVATURE LOSS (INITIAL, WEIGHTED):", KAPPA_WEIGHT * loss_kappa_init)
@@ -324,7 +385,7 @@ if KAPPA_WEIGHT != 0.0:
 
 if QQ_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
-    print("\nNorm of the poloidal-parametrization derivative:")
+    print("Norm of the poloidal-parametrization derivative:")
     loss_qq_init = loss_surface_poloidal_derivative(surface_init, qq_reference=qq_reference, alpha_qq=ALPHA_QQ)
     loss_qq_opt = loss_surface_poloidal_derivative(surface_opt, qq_reference=qq_reference, alpha_qq=ALPHA_QQ)
     print("POLOIDAL-DERIVATIVE LOSS (INITIAL, WEIGHTED):", QQ_WEIGHT * loss_qq_init)
@@ -332,13 +393,13 @@ if QQ_WEIGHT != 0.0:
 
 if LENGTH_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
-    print("\nCoil-length residuals and losses:")
+    print("Coil-length residuals and losses:")
     print("LENGTH LOSS (INITIAL, WEIGHTED):", LENGTH_WEIGHT * loss_coil_length_max(field_init, max_coil_length=LENGTH_TARGET))
     print("LENGTH LOSS (OPTIMIZED, WEIGHTED):", LENGTH_WEIGHT * loss_coil_length_max(field_opt, max_coil_length=LENGTH_TARGET))
 
 if CURVATURE_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
-    print("\nCoil-curvature residuals and losses:")
+    print("Coil-curvature residuals and losses:")
     print("COIL CURVATURE LOSS (INITIAL, WEIGHTED):", CURVATURE_WEIGHT * loss_coil_curvature_from_field(field_init, max_coil_curvature=CURVATURE_TARGET))
     print("COIL CURVATURE LOSS (OPTIMIZED, WEIGHTED):", CURVATURE_WEIGHT * loss_coil_curvature_from_field(field_opt, max_coil_curvature=CURVATURE_TARGET))
 
@@ -346,10 +407,10 @@ if CURVATURE_WEIGHT != 0.0:
 
 
 print("\n===========================================================================")
-print("\n===========================================================================")
-print("\nDIAGNOSTICS:")
+print("===========================================================================")
+print("DIAGNOSTICS:")
 print("\n---------------------------------------------------------------------------")
-print("\nNormal-field:")
+print("Normal-field:")
 B_dot_n_over_B_init = BdotN_over_B( surface_init , field_init )
 B_dot_n_over_B_opt = BdotN_over_B( surface_opt , field_opt )
 print("mean abs residual (initial):", jnp.mean(jnp.abs(B_dot_n_over_B_init)) )
@@ -362,7 +423,7 @@ if NORMAL_FIELD_WEIGHT != 0.0:
 
 
 print("\n---------------------------------------------------------------------------")
-print("\nQuasi-symmetry residuals and losses:")
+print("Quasi-symmetry residuals and losses:")
 QS_residual_xyz_init = quasi_symmetry_residual_on_surface(field_init, surface_init)
 QS_residual_xyz_opt = quasi_symmetry_residual_on_surface(field_opt, surface_opt)
 print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz_init)))
@@ -381,7 +442,7 @@ if QS_WEIGHT != 0.0:
 
 
 print("\n---------------------------------------------------------------------------")
-print("\nMean cross-sectional area:")
+print("Mean cross-sectional area:")
 cross_sectional_area_initial = surface_init.area_section_by_phi()
 cross_sectional_area_optimized = surface_opt.area_section_by_phi()
 relative_cross_sectional_area_change = ( cross_sectional_area_optimized - cross_sectional_area_initial ) / cross_sectional_area_initial
@@ -398,7 +459,7 @@ if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
 
 
 print("\n---------------------------------------------------------------------------")
-print("\nCross-sectional curvature:")
+print("Cross-sectional curvature:")
 
 curvature_section_init = surface_init.curvature_section_by_phi()
 curvature_section_opt = surface_opt.curvature_section_by_phi()
@@ -432,7 +493,7 @@ if KAPPA_WEIGHT != 0.0:
 
 
 print("\n---------------------------------------------------------------------------")
-print("\nNorm of the poloidal-parametrization derivative:")
+print("Norm of the poloidal-parametrization derivative:")
 
 qq_init = jnp.linalg.norm(surface_init.gammadash_theta, axis=2)
 qq_opt = jnp.linalg.norm(surface_opt.gammadash_theta, axis=2)
@@ -453,13 +514,13 @@ if QQ_WEIGHT != 0.0:
 
 
 print("\n---------------------------------------------------------------------------")
-print("\nCoils displacement:")
+print("Coils displacement:")
 coil_displacement = jnp.linalg.norm(opt_coils.gamma - init_coils.gamma, axis=-1)
 print("Mean coil-point displacement:", jnp.mean(coil_displacement))
 print("Maximum coil-point displacement:", jnp.max(coil_displacement))
 
 print("\n---------------------------------------------------------------------------")
-print("\nCoil-length residuals and losses:")
+print("Coil-length residuals and losses:")
 coil_length_residual_init = jnp.maximum(0, field_init.coils.length - LENGTH_TARGET)
 coil_length_residual_opt = jnp.maximum(0, field_opt.coils.length - LENGTH_TARGET)
 print("Coil lengths (initial):", field_init.coils.length)
@@ -475,7 +536,7 @@ if LENGTH_WEIGHT != 0.0:
 
 
 print("\n---------------------------------------------------------------------------")
-print("\nCoil-curvature residuals and losses:")
+print("Coil-curvature residuals and losses:")
 coil_curvature_residual_init = jnp.maximum(0, field_init.coils.curvature - CURVATURE_TARGET)
 coil_curvature_residual_opt = jnp.maximum(0, field_opt.coils.curvature - CURVATURE_TARGET)
 print("mean curvature (initial):", jnp.mean(field_init.coils.curvature))
@@ -495,7 +556,7 @@ if CURVATURE_WEIGHT != 0.0:
 
 
 print("\n---------------------------------------------------------------------------")
-print("\nCoil currents:")
+print("Coil currents:")
 print("Base-coil currents (initial):", init_coils.dofs_currents_raw)
 print("Base-coil currents (optimized):", opt_coils.dofs_currents_raw)
 
@@ -506,6 +567,12 @@ print("Base-coil currents (optimized):", opt_coils.dofs_currents_raw)
 """ Plotting the initial and optimized coils """
 # ====================================================================================
 # ====================================================================================
+
+surface_init.range_torus = "full torus"
+surface_opt.range_torus = "full torus"
+
+surface_init.reset_cache()
+surface_opt.reset_cache()
 
 fig = plt.figure(figsize=(8, 4))
 
