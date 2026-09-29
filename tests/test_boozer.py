@@ -77,6 +77,23 @@ def test_invalid_births_and_steps_are_rejected_before_tracing():
             trace_boozer(tokamak(), *args, **(kwargs | override))
 
 
+def test_repeated_traces_use_current_field_coefficients():
+    """A compiled trace must not retain coefficients from the previous field."""
+    s = np.linspace(0.005, 0.995, 50)
+    stronger_ripple = BoozerField.from_booz(
+        s, np.stack([np.full_like(s, B0), -2 * B0 * EPS * np.sqrt(s)]),
+        [0, 1], [0, 0], np.full_like(s, IOTA), np.full_like(s, G),
+        np.zeros_like(s), PSI0, 1)
+    args = (jnp.full(4, 0.3), jnp.linspace(0, 3, 4),
+            jnp.zeros(4), jnp.linspace(-0.6, 0.6, 4))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=1e-5, timestep=1e-7, n_save=3)
+    original = trace_boozer(tokamak(), *args, **kwargs)
+    changed = trace_boozer(stronger_ripple, *args, **kwargs)
+    repeated = trace_boozer(tokamak(), *args, **kwargs)
+    assert np.max(np.abs(original.states - changed.states)) > 1e-4
+    np.testing.assert_array_equal(original.states, repeated.states)
+
+
 def electron_background(n=1e20, T=1.0e4):
     return BackgroundSpecies(1, jnp.array([ELECTRON_MASS / PROTON_MASS]), jnp.array([-1.0]),
                              jnp.array([n]), jnp.array([T]))

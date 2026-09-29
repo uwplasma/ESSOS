@@ -22,6 +22,7 @@ stops, counted as confined.
 from __future__ import annotations
 
 import dataclasses
+from functools import partial
 
 import equinox as eqx
 import jax
@@ -208,58 +209,27 @@ class BoozerTrace:
         return np.array([(lt <= t).sum() for t in self.times]) / self.loss_times.size
 
 
-def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
-                 n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=None):
-    """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
+@jax.jit
+def _start(field, y0, mu0):
+    def one(y, mu):
+        s, r, theta, *_ = _chart(y)
+        e0 = 0.5 * y[3] ** 2 + mu * field.modB_derivatives(r, theta, y[2])[0]
+        first = jnp.array([s, theta, y[2], y[3], jnp.sqrt(2 * e0)])
+        return (y, mu, 0.0, jnp.asarray(True), -1.0, -1.0, -1.0, 0.0, e0), first
 
-    The step is shortened so that a whole number of steps fits between the
-    ``n_save`` saved times (``t = 0`` included).  Particles are sharded over
-    ``devices`` (default: every local device).
+    return jax.vmap(one)(y0, mu0)
 
-    ``progress``, if given, is called as ``progress(done, total)`` in saved
-    intervals: the horizon then runs as up to ten host-side chunks of the same
-    compiled program, with the whole state carried between them, so the orbits
-    are those of an unchunked trace.
-    """
-    inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
-    n = inputs[0].size
-    if n < 1 or any(a.ndim != 1 or a.size != n or not np.isfinite(a).all() for a in inputs):
-        raise ValueError("Boozer births must be nonempty, one-dimensional, equally sized and finite")
-    if np.any((inputs[0] < 0) | (inputs[0] >= 1)) or np.any(np.abs(inputs[3]) > 1):
-        raise ValueError("Boozer births require 0 <= s < 1 and |pitch| <= 1")
-    if not (np.isfinite(tmax) and tmax > 0 and np.isfinite(timestep) and timestep > 0
-            and int(n_save) >= 2):
-        raise ValueError("tmax and timestep must be positive and finite; n_save >= 2")
-    if (not all(np.ndim(x) == 0 and np.isfinite(x) for x in (speed, mass, charge))
-            or speed <= 0 or mass <= 0 or charge == 0):
-        raise ValueError("speed and mass must be positive; charge must be nonzero and finite")
-    s, theta, zeta, pitch = map(jnp.asarray, inputs)
-    n_int = max(int(n_save) - 1, 1)
-    n_sub = max(1, int(np.ceil(float(tmax) / n_int / float(timestep) - 1e-9)))
-    dt = float(tmax) / (n_int * n_sub)
-    speed = jnp.full(n, float(speed))
-    r = jnp.sqrt(s)
-    B0 = jax.vmap(field.modB)(s, theta, zeta)
-    y0 = jnp.stack([r * jnp.cos(theta), r * jnp.sin(theta), zeta, pitch * speed], axis=1)
-    mu0 = speed**2 * (1 - pitch**2) / (2 * B0)
-    keys = jax.random.split(jax.random.PRNGKey(int(seed)), n)
-
-    def rhs(y, mu):
-        return guiding_center_rhs(field, y, mu, mass, charge)
-
-    def start(y0, mu0):
-        e0 = 0.5 * y0[3] ** 2 + mu0 * field.modB_derivatives(*(_chart(y0)[1:3]), y0[2])[0]
-        first = jnp.array([_chart(y0)[0], _chart(y0)[2], y0[2], y0[3], jnp.sqrt(2 * e0)])
-        return (y0, mu0, 0.0, jnp.asarray(True), -1.0, -1.0, -1.0, 0.0, e0), first
-
-    def advance(carry, key, first_interval, count):
+@partial(jax.jit, static_argnames=("n_sub", "count", "species"))
+def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
+             carry, keys, first_interval, count):
+    def one(carry, key):
         def step(carry, k):
             y, mu, t, alive, t_loss, t_therm, t_fail, err, e0 = carry
-            k1 = rhs(y, mu)
-            k2 = rhs(y + 0.5 * dt * k1, mu)
-            k3 = rhs(y + 0.5 * dt * k2, mu)
-            k4 = rhs(y + dt * k3, mu)
+            rhs = lambda state: guiding_center_rhs(field, state, mu, mass, charge)
+            k1 = rhs(y)
+            k2 = rhs(y + 0.5 * dt * k1)
+            k3 = rhs(y + 0.5 * dt * k2)
+            k4 = rhs(y + dt * k3)
             y1 = y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
             s1, r1, th1, *_ = _chart(y1)
             B1 = field.modB_derivatives(r1, th1, y1[2])[0]
@@ -304,6 +274,46 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
 
         return jax.lax.scan(interval, carry, first_interval + jnp.arange(count))
 
+    return jax.vmap(one)(carry, keys)
+
+
+def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
+                 n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
+                 progress=None):
+    """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
+
+    The step is shortened so that a whole number of steps fits between the
+    ``n_save`` saved times (``t = 0`` included).  Particles are sharded over
+    ``devices`` (default: every local device).
+
+    ``progress``, if given, is called as ``progress(done, total)`` in saved
+    intervals: the horizon then runs as up to ten host-side chunks of the same
+    compiled program, with the whole state carried between them, so the orbits
+    are those of an unchunked trace.
+    """
+    inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
+    n = inputs[0].size
+    if n < 1 or any(a.ndim != 1 or a.size != n or not np.isfinite(a).all() for a in inputs):
+        raise ValueError("Boozer births must be nonempty, one-dimensional, equally sized and finite")
+    if np.any((inputs[0] < 0) | (inputs[0] >= 1)) or np.any(np.abs(inputs[3]) > 1):
+        raise ValueError("Boozer births require 0 <= s < 1 and |pitch| <= 1")
+    if not (np.isfinite(tmax) and tmax > 0 and np.isfinite(timestep) and timestep > 0
+            and int(n_save) >= 2):
+        raise ValueError("tmax and timestep must be positive and finite; n_save >= 2")
+    if (not all(np.ndim(x) == 0 and np.isfinite(x) for x in (speed, mass, charge))
+            or speed <= 0 or mass <= 0 or charge == 0):
+        raise ValueError("speed and mass must be positive; charge must be nonzero and finite")
+    s, theta, zeta, pitch = map(jnp.asarray, inputs)
+    n_int = max(int(n_save) - 1, 1)
+    n_sub = max(1, int(np.ceil(float(tmax) / n_int / float(timestep) - 1e-9)))
+    dt = float(tmax) / (n_int * n_sub)
+    speed = jnp.full(n, float(speed))
+    r = jnp.sqrt(s)
+    B0 = jax.vmap(field.modB)(s, theta, zeta)
+    y0 = jnp.stack([r * jnp.cos(theta), r * jnp.sin(theta), zeta, pitch * speed], axis=1)
+    mu0 = speed**2 * (1 - pitch**2) / (2 * B0)
+    keys = jax.random.split(jax.random.PRNGKey(int(seed)), n)
+
     devices = jax.devices() if devices is None else devices
     ndev = max(1, min(len(devices), n))
     pad = (-n) % ndev
@@ -312,13 +322,13 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         sharding = NamedSharding(Mesh(np.asarray(devices[:ndev]), ("p",)), PartitionSpec("p"))
         args = [jax.device_put(a, sharding) for a in args]
     y0, mu0, keys = args
-    carry, first = jax.jit(jax.vmap(start))(y0, mu0)
-    run = jax.jit(jax.vmap(advance, in_axes=(0, 0, None, None)), static_argnums=3)
+    carry, first = _start(field, y0, mu0)
     chunk = n_int if progress is None else -(-n_int // 10)
     saved = []
     for first_interval in range(0, n_int, chunk):
         count = min(chunk, n_int - first_interval)
-        carry, part = run(carry, keys, first_interval, count)
+        carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
+                               carry, keys, first_interval, count)
         saved.append(part)
         if progress is not None:
             jax.block_until_ready(part)
