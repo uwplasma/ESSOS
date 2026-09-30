@@ -171,15 +171,14 @@ In the [128-alpha ARIES-CS example](examples/particle_tracing/trace_particles_bo
 | Boozer RK4 | 14 (10.9% ± 2.8%) | 0.221 s | 2.39e-5, every step |
 | VMEC adaptive | 17 (13.3% ± 3.0%) | 14.94 s | not recorded |
 
-The GPU comparison uses 4,096 common alpha births in a reactor-scaled VMEX equilibrium (`ns=31`, `mpol=5`, `ntor=5`) for 20 ms. ESSOS uses 12 Boozer modes and `dt=1.25e-7 s`; CATAPULT uses a 25³ tricubic table and adaptive DP5 at `1e-10` tolerance. Times are one first and one repeated trace on an RTX A4000, excluding field setup. Both request 101 times; CATAPULT truncates lost paths while ESSOS returns 101 states per particle.
+The GPU comparison uses 4,096 common alpha births in a reactor-scaled VMEX equilibrium (`ns=31`, `mpol=5`, `ntor=5`) for 10 ms. ESSOS uses 12 Boozer modes and `dt=1.25e-7 s`; CATAPULT uses a 25³ tricubic table and adaptive DP5 at `1e-10` tolerance. Times are one first and one repeated trace on the same RTX A4000, excluding field setup. Both request 101 times; CATAPULT truncates lost paths while ESSOS returns 101 states per particle.
 
 | RTX A4000 tracer | Lost / 4,096 | Labels matching ESSOS | First trace | Repeated trace | Maximum energy drift |
 |---|---:|---:|---:|---:|---:|
-| ESSOS GPU lookup ([#98](https://github.com/uwplasma/ESSOS/pull/98)) | 3,340 | 4,096 | 60.34 s | 50.95 s | 2.10e-5, every step |
-| CATAPULT released | 3,371 | 4,065 | 46.34 s | 49.21 s | 1.97e-2, saved confined paths |
-| CATAPULT proposed axis patch ([FIRM3D #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90)) | 3,342 | 4,094 | 22.09 s | 24.98 s | 5.57e-4, saved confined paths |
+| ESSOS GPU lookup ([#98](https://github.com/uwplasma/ESSOS/pull/98)) | 3,340 | 4,096 | 33.31 s | 25.63 s | 1.05e-5, every step |
+| CATAPULT released | 3,371 | 4,065 | 11.53 s | 11.58 s | 1.97e-2, saved confined paths |
 
-Thirty of the 31 released CATAPULT-only losses reach `s<0.01` in ESSOS. The proposed patch still disagrees on two labels and has unvalidated near-axis scaling. Field representations and energy sampling differ.
+At 20 ms, the loss counts are unchanged. CATAPULT's three repeated calls take 21.97–22.14 s; ESSOS's repeated calls range from 50.95 to 103.49 s across two A4000 runs despite bitwise-identical states. That spread prevents a single 20 ms speed ratio. Thirty of the 31 released CATAPULT-only losses reach `s<0.01` in ESSOS. The proposed [FIRM3D #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) patch matches 4,094 labels but has unvalidated near-axis scaling.
 
 In a separate QA equilibrium, 4,096 births at `s=0.25` traced for 10 ms
 with 101 requested times give 16 ESSOS and 21 released CATAPULT losses
