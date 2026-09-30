@@ -176,7 +176,7 @@ The GPU comparison uses 8,192 common alpha births in a reactor-scaled VMEX equil
 | RTX A4000 tracer | Lost / 8,192 | Labels matching ESSOS | First trace | Repeated trace | Maximum energy drift |
 |---|---:|---:|---:|---:|---:|
 | ESSOS GPU lookup ([#98](https://github.com/uwplasma/ESSOS/pull/98)) | 6,577 | 8,192 | 76.29 s | 69.24 s | 2.08e-5, every step |
-| CATAPULT released | 6,648 | 8,121 | 32.61 s | 32.71 s | 2.60e-2, saved confined paths |
+| CATAPULT released | 6,647 | 8,122 | 34.17 s | 34.48 s | 5.17e-2, saved confined paths |
 
 All ESSOS losses occur before 0.16 ms, but its fixed-step kernel continues through 20 ms. The draft [FIRM3D #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) axis patch is undergoing near-axis validation.
 
