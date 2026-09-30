@@ -225,7 +225,7 @@ bitwise identical on this field and on larger 100- and 300-knot fields.
 With the same field table, births and requested output on one host
 i7-3820 CPU core, patched FIRM3D's serial particle loop takes 74.67 and
 74.70 s in two warmed runs. It loses the same 795 particles and has maximum
-all-path energy drift `3.55e-4`. CPU and GPU setup times are excluded.
+saved-path energy drift `3.55e-4`. CPU and GPU setup times are excluded.
 On the same host, ESSOS takes 18.15 s using eight CPU devices, with the
 same loss labels and energy diagnostics. Its one-device run takes 260.76 s;
 CPU comparisons depend strongly on particle parallelism.
