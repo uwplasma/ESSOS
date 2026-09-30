@@ -164,10 +164,9 @@ def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps
     return jnp.sum(jnp.maximum(target_iota-B_theta/B_phi,0.0))
 
 def loss_soft_lost_fraction(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None,r_max=0.99,width=0.02):
-    """Smooth surrogate of the fraction of particles lost past ``r_max``.
+    """Differentiable flux-peak crossing score for VMEC guiding centres.
 
-    Differentiable with respect to the field, so alpha confinement can drive
-    gradient-based optimization. Report `Tracing.loss_fraction` for the exact value.
+    Report ``Tracing.loss_fraction`` for hard losses.
     """
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
                       timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
