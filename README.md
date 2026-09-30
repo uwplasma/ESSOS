@@ -178,9 +178,9 @@ The GPU comparison uses 1,024 identical alpha births in a reactor-scaled VMEX eq
 | ESSOS default scan ([#95](https://github.com/uwplasma/ESSOS/pull/95)) | 795 | 1,024 | 14.71 s | 7.43 s | 2.08e-6, every step |
 | ESSOS GPU lookup ([#98](https://github.com/uwplasma/ESSOS/pull/98)) | 795 | 1,024 | 9.03 s | 2.41 s | 2.08e-6, every step |
 | CATAPULT released | 802 | 1,017 | 2.87 s | 2.86 s | 9.48e-3, saved confined paths |
-| CATAPULT axis fix ([FIRM3D #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90)) | 795 | 1,024 | 2.89 s | 2.84 s | 3.55e-4, saved confined paths |
+| CATAPULT draft axis patch ([FIRM3D #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90)) | 795 | 1,024 | 2.89 s | 2.84 s | 3.55e-4, saved confined paths |
 
-The ESSOS lookup gives bitwise-identical outputs; the experimental FIRM3D axis fix resolves seven near-axis label disagreements. Energy checks use different sampling, so the drift columns are not equivalent measures.
+The ESSOS lookup gives bitwise-identical outputs. The draft CATAPULT patch matches seven additional near-axis labels, but its axis treatment is unvalidated; energy checks also use different sampling.
 
 For the first 64 births, ESSOS, SIMPLE and SIMSOPT agree on all resolved loss labels. Six SIMSOPT orbits reach the `s=0.001` stop surface and remain unresolved; the CPU times below use the same i7-3820, with code-specific output and parallelism.
 
@@ -190,15 +190,15 @@ For the first 64 births, ESSOS, SIMPLE and SIMSOPT agree on all resolved loss la
 | SIMPLE midpoint, eight threads | 55 | 5.247 s | 1.20e-5, 401 saved states |
 | SIMSOPT `gc_noK`, eight workers, axis stop ([flux fix #664](https://github.com/hiddenSymmetries/simsopt/pull/664)) | 50/58 resolved; six stops | 0.415 s | 6.77e-4, resolved path states |
 
-On the RTX A4000, DESC 0.17.1 also matches all 64 labels (55 losses); its warmed 101-time trace takes 21.40 s, versus 1.94 s for ESSOS #98 and 2.63 s for FIRM3D #90. DESC's surviving-endpoint energy drift reaches 2.62e-4. These times apply to the stated settings; the [VMEX comparison guide](https://github.com/uwplasma/vmex/pull/516) gives the WOUT recipe, orbit checks and full timing conditions.
+On the RTX A4000, DESC 0.17.1 also matches all 64 labels (55 losses); its warmed 101-time trace takes 21.40 s, versus 1.94 s for ESSOS #98 and 2.63 s for the draft FIRM3D #90 patch. DESC's surviving-endpoint energy drift reaches 2.62e-4. The [VMEX comparison guide](https://github.com/uwplasma/vmex/pull/516) gives the WOUT recipe, orbit checks and full timing conditions.
 
 | Code | Orbit models | CPU / GPU | Collisions | Differentiation | Measured result here |
 |---|---|---|---|---|---|
 | ESSOS Boozer | guiding centre, RK4 | both (JAX) | yes | JAX RHS; public trace returns NumPy | 795/1,024; 2.41 s A4000 |
 | ESSOS VMEC/coil | guiding centre; full orbit | both (JAX) | yes | JAX trajectories | 17/128; Boozer 68× faster in that case |
 | [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic or adaptive | CPU / NVIDIA GPU | no | none documented | 55/64; midpoint 5.247 s CPU |
-| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre; full orbit | CPU | no in tested model | none documented | 58/58 resolved labels; six axis stops |
-| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic | CPU / NVIDIA GPU | not tested | none documented | axis fixed: 795/1,024; 2.84 s A4000 |
+| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre; full orbit | CPU | no in tested model | none documented | 58 matched labels; six axis stops |
+| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic | CPU / NVIDIA GPU | not tested | none documented | released: 802/1,024; 2.86 s A4000 |
 | [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64; 21.40 s A4000 |
 
 ## Tracing notes
