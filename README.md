@@ -177,8 +177,9 @@ The GPU comparison uses 4,096 common alpha births in a reactor-scaled VMEX equil
 |---|---:|---:|---:|---:|---:|
 | ESSOS GPU lookup ([#98](https://github.com/uwplasma/ESSOS/pull/98)) | 3,340 | 4,096 | 60.34 s | 50.95 s | 2.10e-5, every step |
 | CATAPULT released | 3,371 | 4,065 | 46.34 s | 49.21 s | 1.97e-2, saved confined paths |
+| CATAPULT proposed axis patch ([FIRM3D #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90)) | 3,342 | 4,094 | 22.09 s | 24.98 s | 5.57e-4, saved confined paths |
 
-Thirty of the 31 CATAPULT-only losses reach `s<0.01` in ESSOS. The field representations and energy sampling differ; the near-axis outcomes remain unresolved.
+Thirty of the 31 released CATAPULT-only losses reach `s<0.01` in ESSOS. The proposed patch still disagrees on two labels and has unvalidated near-axis scaling. Field representations and energy sampling differ.
 
 For the first 64 births, ESSOS, SIMPLE and SIMSOPT agree on all resolved loss labels. Six SIMSOPT orbits reach the `s=0.001` stop surface and remain unresolved; the CPU times below use the same i7-3820, with code-specific output and parallelism.
 
