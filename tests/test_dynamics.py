@@ -459,6 +459,10 @@ def radial_tracing(peaks, times=jnp.linspace(0.0, 1.0, 40)):
     tracing = Tracing.__new__(Tracing)
     tracing.trajectories = jnp.stack([trajectories_r, jnp.zeros_like(trajectories_r), jnp.zeros_like(trajectories_r)], axis=-1)
     tracing.times = times
+    tracing.field = Vmec.__new__(Vmec)
+    tracing.model = "GuidingCenterAdaptative"
+    tracing._has_boundary_event = True
+    tracing.boundary_hits = jnp.zeros(len(peaks), dtype=bool)
     return tracing
 
 def test_soft_loss_fraction_converges_to_loss_fraction():
@@ -477,6 +481,29 @@ def test_soft_loss_fraction_gradient_is_nonzero_where_loss_fraction_is_flat():
 
     assert jnp.all(exact_gradient == 0.0)
     assert jnp.all(soft_gradient[1:] > 0.0)
+
+@pytest.mark.parametrize("width", [0.0, -0.02, float("nan"), float("inf")])
+def test_soft_loss_rejects_invalid_width(width):
+    with pytest.raises(ValueError, match="width"):
+        radial_tracing(jnp.array([0.8])).soft_loss_fraction(width=width)
+
+
+def test_soft_loss_distinguishes_boundary_stop_from_failure():
+    trace = radial_tracing(jnp.array([0.8]))
+    trace.trajectories = trace.trajectories.at[0, -1, 1].set(jnp.nan)
+    assert jnp.isnan(trace.soft_loss_fraction())
+    trace.boundary_hits = jnp.array([True])
+    assert jnp.isfinite(trace.soft_loss_fraction())
+    assert trace.soft_loss_fraction(width=0.001) > 0.99
+
+
+@pytest.mark.parametrize("model, field", [("Lorentz", Vmec.__new__(Vmec)), ("GuidingCenterAdaptative", object())])
+def test_soft_loss_rejects_nonflux_trajectories(model, field):
+    trace = radial_tracing(jnp.array([0.8]))
+    trace.model, trace.field = model, field
+    with pytest.raises(ValueError, match="VMEC guiding"):
+        trace.soft_loss_fraction()
+
 
 def vmec_alpha_tracing(field, nparticles=4, maxtime=4e-6, times_to_trace=10):
     theta = jnp.linspace(0, 2*jnp.pi, nparticles)
@@ -502,7 +529,10 @@ def test_soft_loss_fraction_differentiates_vmec_coefficients():
                                  **{**arrays, **{name: arrays[name]*scale for name in scaled}})
         return vmec_alpha_tracing(field).soft_loss_fraction(r_max=0.88, width=0.01)
 
-    assert jax.grad(soft_loss_of_field_scale)(1.0) != 0.0
+    evaluate = jax.jit(jax.value_and_grad(soft_loss_of_field_scale))
+    for scale in (1.0, 1.01):
+        value, gradient = evaluate(scale)
+        assert jnp.isfinite(value) and jnp.isfinite(gradient) and gradient != 0.0
 
 
 def test_tracing_initialization(field, particles,electric_field):

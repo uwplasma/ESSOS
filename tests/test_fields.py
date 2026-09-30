@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import pytest
 from pathlib import Path
 from essos.coils import Coils, Curves
@@ -88,7 +89,7 @@ def test_biot_savart_cylindrical_interface_matches_cartesian_and_differentiates(
 
 def test_vmec_from_arrays_matches_wout_file():
     vmec = Vmec(WOUT_FILE)
-    rebuilt = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns,
+    rebuilt = Vmec.from_arrays(nfp=np.int64(vmec.nfp), ns=jnp.asarray(vmec.ns),
                                **{name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS})
     points = jnp.array([[0.3, 0.4, 0.5], [0.7, 1.2, 0.2], [0.9, 3.0, 1.1]])
 
@@ -102,10 +103,18 @@ def test_vmec_from_arrays_is_differentiable_in_the_coefficients():
     arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
     point = jnp.array([0.7, 1.2, 0.2])
 
+    traced = []
+
     def AbsB_of_scale(scale):
+        traced.append(scale)
         return Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **{**arrays, 'bmnc': arrays['bmnc']*scale}).AbsB(point)
 
-    assert jnp.isclose(jax.grad(AbsB_of_scale)(1.0), vmec.AbsB(point))
+    evaluate = jax.jit(jax.value_and_grad(AbsB_of_scale))
+    for scale in (1.0, 1.1):
+        value, gradient = evaluate(scale)
+        assert jnp.isclose(value, scale * vmec.AbsB(point))
+        assert jnp.isclose(gradient, vmec.AbsB(point))
+    assert len(traced) == 1
 
 if __name__ == "__main__":
     pytest.main()

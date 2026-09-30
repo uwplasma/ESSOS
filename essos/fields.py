@@ -331,18 +331,15 @@ class Vmec():
     def from_arrays(cls, nfp, ns, bmnc, xm, xn, rmnc, zmns, bsubsmns, bsubumnc, bsubvmnc,
                     bsupumnc, bsupvmnc, gmnc, xm_nyq, xn_nyq, Aminor_p,
                     ntheta=50, nphi=50, close=True, range_torus='full torus', mode_tolerance=0.0):
-        """Build a Vmec field from wout quantities held in memory.
+        """Build a differentiable VMEC field from in-memory wout arrays.
 
-        The arguments carry the wout variable names and are stored as given, so JAX
-        tracers reach B, AbsB and the traced trajectories and the field stays
-        differentiable with respect to its spectral coefficients. ``nfp``, ``ns`` and
-        the mode numbers set array shapes and must be concrete, and so must the
-        tables when ``mode_tolerance`` is positive, since it selects modes by amplitude.
+        Metadata and mode numbers must be concrete. Positive ``mode_tolerance``
+        also requires concrete coefficient tables to select modes by amplitude.
         """
         self = cls.__new__(cls)
         self.wout_filename = None
         self.nc = None
-        self._set_state(nfp=nfp, ns=ns, bmnc=bmnc, xm=xm, xn=xn, rmnc=rmnc, zmns=zmns,
+        self._set_state(nfp=int(nfp), ns=int(ns), bmnc=bmnc, xm=xm, xn=xn, rmnc=rmnc, zmns=zmns,
                         bsubsmns=bsubsmns, bsubumnc=bsubumnc, bsubvmnc=bsubvmnc,
                         bsupumnc=bsupumnc, bsupvmnc=bsupvmnc, gmnc=gmnc, xm_nyq=xm_nyq,
                         xn_nyq=xn_nyq, Aminor_p=Aminor_p, ntheta=ntheta, nphi=nphi,
@@ -375,8 +372,9 @@ class Vmec():
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
         self.r_axis = self.rmnc[0, 0]
         self.z_axis=self.zmns[0,0]
-        self.mpol = int(jnp.max(self.xm))
-        self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
+        with jax.ensure_compile_time_eval():
+            self.mpol = int(jnp.max(self.xm))
+            self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier.from_vmec(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
         self.Aminor_p = Aminor_p
@@ -609,4 +607,3 @@ class CombinedField(MagneticField):
 tree_util.register_pytree_node(CombinedField,
                                CombinedField._tree_flatten,
                                CombinedField._tree_unflatten)
-
