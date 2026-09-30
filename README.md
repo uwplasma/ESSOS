@@ -199,11 +199,11 @@ On the RTX A4000, DESC 0.17.1 also matches all 64 labels (55 losses); its warmed
 
 | Code | Orbit models | CPU / GPU | Collisions | Differentiation | Measured result here |
 |---|---|---|---|---|---|
-| ESSOS Boozer | guiding centre, RK4 | both (JAX) | yes | JAX RHS; public trace returns NumPy | 3,340/4,096; 50.95 s A4000 |
+| ESSOS Boozer | guiding centre, RK4 | both (JAX) | yes | JAX RHS; public trace returns NumPy | 3,340/4,096; 25.63 s A4000, 10 ms |
 | ESSOS VMEC/coil | guiding centre; full orbit | both (JAX) | yes | JAX trajectories | 17/128; Boozer 68× faster in that case |
 | [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic or adaptive | CPU / NVIDIA GPU | no | none documented | 55/64; midpoint 5.247 s CPU |
 | [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre; full orbit | CPU | no in tested model | none documented | 58 matched labels; six axis stops |
-| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic | CPU / NVIDIA GPU | not tested | none documented | released: 3,371/4,096; 49.21 s A4000 |
+| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic | CPU / NVIDIA GPU | not tested | none documented | released: 3,371/4,096; 11.58 s A4000, 10 ms |
 | [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64; 21.40 s A4000 |
 
 ## Tracing notes
