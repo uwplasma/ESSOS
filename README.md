@@ -171,14 +171,14 @@ In the [128-alpha ARIES-CS example](examples/particle_tracing/trace_particles_bo
 | Boozer RK4 | 14 (10.9% ± 2.8%) | 0.221 s | 2.39e-5, every step |
 | VMEC adaptive | 17 (13.3% ± 3.0%) | 14.94 s | not recorded |
 
-The GPU comparison uses 4,096 common alpha births in a reactor-scaled VMEX equilibrium (`ns=31`, `mpol=5`, `ntor=5`) for 10 ms. ESSOS uses 12 Boozer modes and `dt=1.25e-7 s`; CATAPULT uses a 25³ tricubic table and adaptive DP5 at `1e-10` tolerance. Times are one first and one repeated trace on the same RTX A4000, excluding field setup. Both request 101 times; CATAPULT truncates lost paths while ESSOS returns 101 states per particle.
+The GPU comparison uses 8,192 common alpha births in a reactor-scaled VMEX equilibrium (`ns=31`, `mpol=5`, `ntor=5`) for 20 ms. ESSOS uses 12 Boozer modes and `dt=1.25e-7 s`; CATAPULT uses a 25³ tricubic table and adaptive DP5 at `1e-10` tolerance. Times are one first and one repeated trace on the same RTX A4000, excluding field setup. Both request 101 times; CATAPULT truncates lost paths while ESSOS returns 101 states per particle.
 
-| RTX A4000 tracer | Lost / 4,096 | Labels matching ESSOS | First trace | Repeated trace | Maximum energy drift |
+| RTX A4000 tracer | Lost / 8,192 | Labels matching ESSOS | First trace | Repeated trace | Maximum energy drift |
 |---|---:|---:|---:|---:|---:|
-| ESSOS GPU lookup ([#98](https://github.com/uwplasma/ESSOS/pull/98)) | 3,340 | 4,096 | 33.31 s | 25.63 s | 1.05e-5, every step |
-| CATAPULT released | 3,371 | 4,065 | 11.53 s | 11.58 s | 1.97e-2, saved confined paths |
+| ESSOS GPU lookup ([#98](https://github.com/uwplasma/ESSOS/pull/98)) | 6,577 | 8,192 | 76.29 s | 69.24 s | 2.08e-5, every step |
+| CATAPULT released | 6,648 | 8,121 | 32.61 s | 32.71 s | 2.60e-2, saved confined paths |
 
-At 20 ms, the loss counts are unchanged. CATAPULT's three repeated calls take 21.97–22.14 s; ESSOS's repeated calls range from 50.95 to 103.49 s across two A4000 runs despite bitwise-identical states. That spread prevents a single 20 ms speed ratio. Thirty of the 31 released CATAPULT-only losses reach `s<0.01` in ESSOS. The draft [FIRM3D #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) patch matches 4,094 labels but worsens some higher-resolution near-axis energy errors.
+All ESSOS losses occur before 0.16 ms, but its fixed-step kernel continues through 20 ms. The draft [FIRM3D #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) axis patch is undergoing near-axis validation.
 
 In a separate QA equilibrium, 4,096 births at `s=0.25` traced for 10 ms
 with 101 requested times give 16 ESSOS and 21 released CATAPULT losses
@@ -199,11 +199,11 @@ On the RTX A4000, DESC 0.17.1 also matches all 64 labels (55 losses); its warmed
 
 | Code | Orbit models | CPU / GPU | Collisions | Differentiation | Measured result here |
 |---|---|---|---|---|---|
-| ESSOS Boozer | guiding centre, RK4 | both (JAX) | yes | JAX RHS; public trace returns NumPy | 3,340/4,096; 25.63 s A4000, 10 ms |
+| ESSOS Boozer | guiding centre, RK4 | both (JAX) | yes | JAX RHS; public trace returns NumPy | 6,577/8,192; 69.24 s A4000, 20 ms |
 | ESSOS VMEC/coil | guiding centre; full orbit | both (JAX) | yes | JAX trajectories | 17/128; Boozer 68× faster in that case |
 | [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic or adaptive | CPU / NVIDIA GPU | no | none documented | 55/64; midpoint 5.247 s CPU |
 | [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre; full orbit | CPU | no in tested model | none documented | 58 matched labels; six axis stops |
-| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic | CPU / NVIDIA GPU | not tested | none documented | released: 3,371/4,096; 11.58 s A4000, 10 ms |
+| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic | CPU / NVIDIA GPU | not tested | none documented | released: 6,648/8,192; 32.71 s A4000, 20 ms |
 | [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64; 21.40 s A4000 |
 
 ## Tracing notes
