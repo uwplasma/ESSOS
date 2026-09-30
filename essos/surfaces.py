@@ -52,7 +52,33 @@ def B_on_surface(surface, field):
     B_on_surface = vmap(field.B)(gamma_reshaped)
 
     return B_on_surface.reshape(nphi, ntheta, 3)
-    
+
+
+def B_contravariant_theta_phi_on_surface(surface, field):
+    """Return (B^theta, B^phi) for B projected onto the surface tangent plane."""
+    # ESSOS evaluates the Cartesian magnetic field at each surface point.
+    # These three arrays have shape (nphi, ntheta, 3).
+    B_xyz = B_on_surface(surface, field)
+    e_theta = surface.gammadash_theta
+    e_phi = surface.gammadash_phi
+
+    # Right-hand side of G (B^theta, B^phi)^T = (b_theta, b_phi)^T.
+    b_theta = jnp.sum(B_xyz * e_theta, axis=-1)
+    b_phi = jnp.sum(B_xyz * e_phi, axis=-1)
+
+    # Read the entries of the surface metric. G has shape (nphi, ntheta, 2, 2).
+    G = surface.metric_tensor_theta_phi
+    g_theta_theta = G[..., 0, 0]
+    g_theta_phi = G[..., 0, 1]
+    g_phi_phi = G[..., 1, 1]
+
+    # Solve the 2-by-2 system using the formulas we derived.
+    det_G = g_theta_theta * g_phi_phi - g_theta_phi**2
+    B_contra_theta = (g_phi_phi * b_theta - g_theta_phi * b_phi) / det_G
+    B_contra_phi = (g_theta_theta * b_phi - g_theta_phi * b_theta) / det_G
+
+    # The final index selects theta (0) or phi (1).
+    return jnp.stack((B_contra_theta, B_contra_phi), axis=-1)
 
 @jit
 def BdotN(surface, field):
@@ -487,6 +513,26 @@ class SurfaceRZFourier:
         if self._gammadash_phi is None:
             self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
         return self._gammadash_phi
+
+    @property
+    def metric_tensor_theta_phi(self):
+        """Return the surface metric in the (theta, phi) coordinate basis."""
+        # These are the tangent basis vectors at each surface-grid point.
+        # Both have shape (nphi, ntheta, 3).
+        e_theta = self.gammadash_theta
+        e_phi = self.gammadash_phi
+
+        # Dot over the Cartesian components, leaving one value per grid point.
+        g_theta_theta = jnp.sum(e_theta * e_theta, axis=-1)
+        g_theta_phi = jnp.sum(e_theta * e_phi, axis=-1)
+        g_phi_phi = jnp.sum(e_phi * e_phi, axis=-1)
+
+        # Assemble G = [[g_theta_theta, g_theta_phi],
+        #               [g_theta_phi,     g_phi_phi]]
+        # at every point. The resulting shape is (nphi, ntheta, 2, 2).
+        row_theta = jnp.stack((g_theta_theta, g_theta_phi), axis=-1)
+        row_phi = jnp.stack((g_theta_phi, g_phi_phi), axis=-1)
+        return jnp.stack((row_theta, row_phi), axis=-2)
 
     # _compute_properties method
     @jit

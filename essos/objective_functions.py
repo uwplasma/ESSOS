@@ -7,7 +7,7 @@ from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart,BiotSavart_from_gamma
-from essos.surfaces import BdotN_over_B
+from essos.surfaces import BdotN_over_B, B_contravariant_theta_phi_on_surface
 from essos.coils import Curves, Coils
 from essos.constants import mu_0
 from essos.coil_perturbation import perturb_curves, perturb_curves_systematic, perturb_curves_statistic
@@ -234,6 +234,25 @@ def loss_quasi_symmetry(field, surface):
     QS_residual = jnp.mean(jnp.abs(QS_residual_xyz))
     return QS_residual
 
+def loss_poloidal_slope_min(field, surface, slope_min, B_phi_reference, phi_floor_fraction):
+    """Penalize insufficient positive poloidal slope and small B^phi."""
+    # Components are ordered (B^theta, B^phi).
+    B_contra = B_contravariant_theta_phi_on_surface(surface, field)
+    B_theta = B_contra[..., 0]
+    B_phi = B_contra[..., 1]
+
+    # For B^phi > 0, a positive value means B^theta / B^phi < slope_min.
+    slope_deficit = jnp.maximum(slope_min * B_phi - B_theta, 0.0)
+
+    # Penalize B^phi if it falls below the positive floor.
+    B_phi_floor = phi_floor_fraction * B_phi_reference
+    phi_deficit = jnp.maximum(B_phi_floor - B_phi, 0.0)
+
+    # Normalize with a fixed scale, not the changing B^phi.
+    return jnp.mean(
+        jnp.square(slope_deficit / B_phi_reference)
+        + jnp.square(phi_deficit / B_phi_reference)
+    )
 
 ####################################### SURAFACE CONSTRAINTS ###########################################
 
@@ -277,7 +296,7 @@ def loss_surface_curvature_section(surface, kappa_max):
 def loss_surface_non_axisymmetric_amplitude(surface, A3D_min):
     # It calculates the amplitude of the non-axisymmetric modes (A3D)
     # and penalize if it did not reach a minimum.
-    
+
     # Measure the combined amplitude of all toroidally varying modes.
     A3D = surface.non_axisymmetric_amplitude()
     # Penalize only the amount below the requested minimum.

@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B
+from essos.surfaces import SurfaceRZFourier, BdotN_over_B, B_contravariant_theta_phi_on_surface, B_on_surface
 from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_from_field,
                                         loss_coil_length_max, loss_mean_cross_sectional_area,
                                         loss_quasi_symmetry, loss_surface_curvature_section,
-                                        loss_surface_non_axisymmetric_amplitude, loss_surface_normal_displacement,
-                                        loss_surface_poloidal_derivative,
+                                        loss_surface_non_axisymmetric_amplitude, loss_poloidal_slope_min,
+                                        loss_surface_normal_displacement, loss_surface_poloidal_derivative,
                                         quasi_symmetry_residual_on_surface )
 
 
@@ -73,8 +73,13 @@ ALPHA_KAPPA = 1.
 A3D_MIN = 0.2
 A3D_WEIGHT = 100.0
 
+# dtheta/dphi slope penalty
+SLOPE_MIN = 0.05
+PHI_FLOOR_FRACTION = 0.1
+POLOIDAL_SLOPE_WEIGHT = 0. 1e3
+
 # Numerical method parameters --------------------------------------------------------
-MAXITER=200
+MAXITER=3000
 
 # ====================================================================================
 # ====================================================================================
@@ -142,6 +147,10 @@ CROSS_SECTIONAL_AREA_TARGET = float(surface_init.area_section_by_phi())
 LENGTH_SCALE_SURFACE = float(jnp.sqrt(CROSS_SECTIONAL_AREA_TARGET / jnp.pi))
 kappa_max = ALPHA_KAPPA * kappa_reference
 
+# Fixed numerical scale from the initial field; this is not a physics target.
+B_phi_init = B_contravariant_theta_phi_on_surface(surface_init, field_init)[..., 1]
+B_phi_reference = float(jnp.mean(jnp.abs(B_phi_init)))
+
 # ====================================================================================
 # ====================================================================================
 """ Defining custom losses """
@@ -159,7 +168,8 @@ L_surface_normal_displacement = custom_loss( loss_surface_normal_displacement , 
 L_surface_poloidal_derivative = custom_loss( loss_surface_poloidal_derivative, "surface", qq_reference=qq_reference, alpha_qq=ALPHA_QQ )
 L_surface_curvature_section = custom_loss( loss_surface_curvature_section , "surface" , kappa_max=kappa_max )
 L_surface_non_axisymmetric_amplitude = custom_loss( loss_surface_non_axisymmetric_amplitude, "surface", A3D_min=A3D_MIN )
-
+L_poloidal_slope_min = custom_loss( loss_poloidal_slope_min, "field", "surface",
+                                   slope_min=SLOPE_MIN, B_phi_reference=B_phi_reference, phi_floor_fraction=PHI_FLOOR_FRACTION )
 
 # ====================================================================================
 # ====================================================================================
@@ -173,6 +183,7 @@ losses_weighted = [(NORMAL_FIELD_WEIGHT, L_normal_field),
                    (CROSS_SECTIONAL_AREA_WEIGHT, L_cross_sectional_area),
                    (NORMAL_DISPLACEMENT_WEIGHT, L_surface_normal_displacement),
                    (A3D_WEIGHT, L_surface_non_axisymmetric_amplitude),
+                   (POLOIDAL_SLOPE_WEIGHT, L_poloidal_slope_min),
                    (QQ_WEIGHT, L_surface_poloidal_derivative),
                    (KAPPA_WEIGHT, L_surface_curvature_section),
                    (QS_WEIGHT, L_quasi_symmetry) ]
@@ -187,7 +198,6 @@ L_total = losses_active[0]
 
 for loss_active in losses_active[1:]:
     L_total = L_total + loss_active
-
 
 
 # The dependencies of the total loss are set to the field and surface. Both will be modified during the optimization.
@@ -264,10 +274,8 @@ def loss_callback(intermediate_result):
 
 t_start = time()
 
-
 res = minimize(L_total, L_total.starting_dofs, jac = L_total.grad, method = "L-BFGS-B", callback=loss_callback ,
                  options={'maxiter': MAXITER} )
-
 
 
 # res = least_squares(L_total, L_total.starting_dofs, L_total.grad, x_scale=x_scale_optimization,
@@ -292,6 +300,9 @@ opt_dict = L_total.dofs_to_pytree(res.x)
 # The optimized field and surface are extracted from the results of the optimization.
 field_opt = opt_dict["field"]
 surface_opt = opt_dict["surface"]
+
+
+# raise SystemExit("Stopping script after the optimized-field check.")
 
 # Coils geometry is extracted from the optimized field.
 opt_coils = field_opt.coils
@@ -345,6 +356,15 @@ if A3D_WEIGHT !=0.0:
     print("3D modes amplitude weighted losses:")
     print("3D AMPLITUDE LOSS (INITIAL):", A3D_WEIGHT * loss_surface_non_axisymmetric_amplitude(surface_init, A3D_min=A3D_MIN))
     print("3D AMPLITUDE (OPTIMIZED):", A3D_WEIGHT * loss_surface_non_axisymmetric_amplitude(surface_opt, A3D_min=A3D_MIN))
+
+if POLOIDAL_SLOPE_WEIGHT != 0.0:
+    # Evaluate once, then show the raw loss and its contribution to L_total.
+    loss_slope_init = loss_poloidal_slope_min(
+        field_init, surface_init, SLOPE_MIN, B_phi_reference, PHI_FLOOR_FRACTION
+    )
+    print("\n---------------------------------------------------------------------------")
+    print("Poloidal-slope loss (initial, unweighted):", loss_slope_init)
+    print("Poloidal-slope loss (initial, weighted):", POLOIDAL_SLOPE_WEIGHT * loss_slope_init)
 
 if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
@@ -579,9 +599,11 @@ plt.show()
 
 """ Exporting results """
 
-EXPORT = False
+EXPORT = True
 if EXPORT:
     output_filepath = os.path.join(os.path.dirname(__file__), "output")
+
+    os.makedirs(output_filepath , exist_ok=True)
 
     """ Save the coils to a json file """
     init_coils.to_json(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
@@ -590,5 +612,8 @@ if EXPORT:
     """ Save results in vtk format to analyze in Paraview """
     surface_init.to_vtk(os.path.join(output_filepath, "init_surface_vmec_surface.json"), field=field_init)
     surface_opt.to_vtk(os.path.join(output_filepath, "final_surface_vmec_surface.json"), field=field_opt)
+    surface_opt.to_vmec(os.path.join(output_filepath, "input.final_surface"))
     init_coils.to_vtk(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
     opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
+ 
+    
