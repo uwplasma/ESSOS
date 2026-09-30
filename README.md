@@ -181,6 +181,13 @@ The GPU comparison uses 4,096 common alpha births in a reactor-scaled VMEX equil
 
 Thirty of the 31 released CATAPULT-only losses reach `s<0.01` in ESSOS. The proposed patch still disagrees on two labels and has unvalidated near-axis scaling. Field representations and energy sampling differ.
 
+In a separate QA equilibrium, 4,096 births at `s=0.25` traced for 10 ms
+with 101 requested times give 16 ESSOS and 21 released CATAPULT losses
+(4,081 matching labels). First/repeated traces take 31.76/24.82 s for
+ESSOS and 160.51/161.47 s for CATAPULT;
+maximum relative energy drift is 9.46e-5 at every ESSOS step and 3.03e-2
+on saved confined CATAPULT paths. These loss labels have not been converged.
+
 For the first 64 births, ESSOS, SIMPLE and SIMSOPT agree on all resolved loss labels. Six SIMSOPT orbits reach the `s=0.001` stop surface and remain unresolved; the CPU times below use the same i7-3820, with code-specific output and parallelism.
 
 | 64-birth CPU trace | Loss result | Warm trace | Maximum energy drift |
