@@ -294,7 +294,7 @@ solver policies.
 
 | Code | Orbit models and solver | CPU / GPU | Collisions | Trajectory differentiation | Matched accuracy and speed evidence |
 |---|---|---|---|---|---|
-| ESSOS Boozer | guiding centre, fixed RK4 | both (JAX) | yes | host result is NumPy | 795/1,024; 2.41 s A4000 GPU, 3.1× default scan |
+| ESSOS Boozer | guiding centre, fixed RK4 | both (JAX) | yes | JAX RHS; public trace returns NumPy | 795/1,024; 2.41 s A4000 GPU, 3.1× default scan |
 | ESSOS VMEC/coil | guiding centre, adaptive; full orbit | both (JAX) | yes | JAX trajectories | 17/128; Boozer 68× faster on that M2 case |
 | [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic CPU or CUDA Dormand–Prince | CPU (OpenMP) / NVIDIA GPU | no | none documented | 55/64; midpoint 5.247 s with saved orbits, eight CPU threads |
 | [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre or full orbit, adaptive | CPU | no in this model | none documented | [sign fixed](https://github.com/hiddenSymmetries/simsopt/pull/664): 58/58 resolved labels; 6 axis stops; 0.415 s, eight CPU workers |
