@@ -225,7 +225,7 @@ output policies and hardware across rows preclude a general speed ranking.
 On the same 64 Boozer births, SIMPLE's direct-Boozer `startmode=6` reproduces
 all 55 ESSOS losses. The
 [SIMSOPT VMEC-flux fix](https://github.com/hiddenSymmetries/simsopt/pull/664)
-reproduces the 64 terminal labels, but six trajectories reach its Boozer-axis
+reproduces the 64 terminal labels, but six trajectories approach its Boozer-axis
 singularity. An inner-flux stop at `s=0.001` leaves 58 resolved trajectories,
 including 50 losses, with 58/58 labels matching ESSOS. The unpatched SIMSOPT
 field agreed on only 44 of 64 labels because its radial drift had the opposite sign. SIMPLE's
@@ -238,7 +238,10 @@ SIMSOPT trajectories enter `s < 0`, where
 its Boozer poloidal angle is ill-defined; their matching terminal labels do
 not validate those paths. A full-path check reaches `4.88e-3` energy drift
 near the axis; the guarded resolved paths have maximum full-path drift
-`6.77e-4` on both the i7-3820 and Apple M2. The [VMEX comparison guide](https://github.com/uwplasma/vmex/pull/516)
+`6.77e-4` on both the i7-3820 and Apple M2. Sampled SIMPLE and ESSOS paths
+for two stopped births stay above the stop surface, suggesting a near-axis
+interpolation difference; the physical outcome of the six stops is unresolved.
+The [VMEX comparison guide](https://github.com/uwplasma/vmex/pull/516)
 gives the seed-WOUT recipe and a fail-closed three-code benchmark script.
 
 | Same 64 births, i7-3820 CPU | Loss result | Warm trace-only time | Maximum reported energy drift |
