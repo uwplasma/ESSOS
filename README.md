@@ -176,16 +176,13 @@ The GPU comparison uses 8,192 common alpha births in a reactor-scaled VMEX equil
 | RTX A4000 tracer | Lost / 8,192 | Labels matching ESSOS | First trace | Repeated trace | Maximum energy drift |
 |---|---:|---:|---:|---:|---:|
 | ESSOS GPU lookup ([#98](https://github.com/uwplasma/ESSOS/pull/98)) | 6,577 | 8,192 | 76.29 s | 69.24 s | 2.08e-5, every step |
+| ESSOS [survivor compaction #100](https://github.com/uwplasma/ESSOS/pull/100), opt-in | 6,577 | 8,192 | — | 37.49 / 37.52 s | 2.08e-5, every step |
 | CATAPULT released | 6,647 | 8,122 | 34.17 s | 34.48 s | 5.17e-2, saved confined paths |
+| CATAPULT [regular axis #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90), opt-in | 6,578 | 8,191 | 36.61 s | 36.88 s | 1.17e-5, saved confined paths |
 
-All ESSOS losses occur before 0.16 ms, but its fixed-step kernel continues through 20 ms. The draft [FIRM3D #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90) axis patch is undergoing near-axis validation.
+The compaction times are two warmed calls; its first call followed baseline compilation. All ESSOS losses occur before 0.16 ms, so compaction skips most later particle steps. The one regular-axis label differing from ESSOS at cut `1e-4` crosses `s=1` with the full Boozer spectrum.
 
-In a separate QA equilibrium, 4,096 births at `s=0.25` traced for 10 ms
-with 101 requested times give 16 ESSOS and 21 released CATAPULT losses
-(4,081 matching labels). First/repeated traces take 31.76/24.82 s for
-ESSOS and 160.51/161.47 s for CATAPULT;
-maximum relative energy drift is 9.46e-5 at every ESSOS step and 3.03e-2
-on saved confined CATAPULT paths. These loss labels have not been converged.
+In a separate QA equilibrium, 4,096 births at `s=0.25` traced for 10 ms with 101 requested times give 16–20 ESSOS losses across fresh processes with identical inputs and source, versus 21 for released CATAPULT. Both observed ESSOS sets match 4,081 CATAPULT labels, but only 11–13 lost IDs overlap. ESSOS repeated traces take 24.62–24.67 s; CATAPULT takes 161.47 s. Measured ESSOS energy drift stays below 1e-4 at every step; CATAPULT reaches 3.03e-2 on saved confined paths. These long-orbit labels are not converged.
 
 For the first 64 births, ESSOS, SIMPLE and SIMSOPT agree on all resolved loss labels. Six SIMSOPT orbits reach the `s=0.001` stop surface and remain unresolved; the CPU times below use the same i7-3820, with code-specific output and parallelism.
 
@@ -195,15 +192,15 @@ For the first 64 births, ESSOS, SIMPLE and SIMSOPT agree on all resolved loss la
 | SIMPLE midpoint, eight threads | 55 | 5.247 s | 1.20e-5, 401 saved states |
 | SIMSOPT `gc_noK`, eight workers, axis stop ([flux fix #664](https://github.com/hiddenSymmetries/simsopt/pull/664)) | 50/58 resolved; six stops | 0.415 s | 6.77e-4, resolved path states |
 
-On the RTX A4000, DESC 0.17.1 also matches all 64 labels (55 losses); its warmed 101-time trace takes 21.40 s, versus 1.94 s for ESSOS #98 and 2.63 s for the draft FIRM3D #90 patch. DESC's surviving-endpoint energy drift reaches 2.62e-4. The [VMEX comparison guide](https://github.com/uwplasma/vmex/pull/516) gives the WOUT recipe, orbit checks and full timing conditions.
+On the RTX A4000, DESC 0.17.1 also matches all 64 labels (55 losses); its warmed 101-time trace takes 21.40 s versus 1.94 s for ESSOS #98. DESC's surviving-endpoint energy drift reaches 2.62e-4. The [VMEX comparison guide](https://github.com/uwplasma/vmex/pull/516) gives the WOUT recipe and orbit checks.
 
 | Code | Orbit models | CPU / GPU | Collisions | Differentiation | Measured result here |
 |---|---|---|---|---|---|
-| ESSOS Boozer | guiding centre, RK4 | both (JAX) | yes | JAX RHS; public trace returns NumPy | 6,577/8,192; 69.24 s A4000, 20 ms |
+| ESSOS Boozer | guiding centre, RK4 | both (JAX) | yes | JAX RHS; public trace returns NumPy | 6,577/8,192; 69.24 s, or 37.52 s with [#100](https://github.com/uwplasma/ESSOS/pull/100) |
 | ESSOS VMEC/coil | guiding centre; full orbit | both (JAX) | yes | JAX trajectories | 17/128; Boozer 68× faster in that case |
 | [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic or adaptive | CPU / NVIDIA GPU | no | none documented | 55/64; midpoint 5.247 s CPU |
 | [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre; full orbit | CPU | no in tested model | none documented | 58 matched labels; six axis stops |
-| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic | CPU / NVIDIA GPU | not tested | none documented | released: 6,648/8,192; 32.71 s A4000, 20 ms |
+| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic | CPU / NVIDIA GPU | not tested | none documented | released: 6,647/8,192, 34.48 s; regular axis: 6,578, 36.88 s |
 | [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64; 21.40 s A4000 |
 
 ## Tracing notes
