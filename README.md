@@ -175,6 +175,7 @@ The [128-alpha ARIES-CS example](examples/particle_tracing/trace_particles_booze
 uses the corrected VMEC flux sign, 0.1 ms, and eight Apple M2 CPU devices.
 Times exclude JIT compilation. The two loss fractions agree within their
 binomial errors; the Boozer call is 68 times faster on this workload.
+The reported one-sigma error is `sqrt(f(1-f)/N)`, for birth sampling only.
 
 | ESSOS tracer | Lost / 128 | Warm trace time | Maximum Boozer energy drift |
 |---|---:|---:|---:|
