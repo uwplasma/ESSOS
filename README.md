@@ -222,34 +222,47 @@ output; its maximum surviving-particle endpoint energy error is 2.59e-4.
 ESSOS takes about 1.55 s on the M2 with 101 saved states. The different
 output policies and hardware across rows preclude a general speed ranking.
 
-On the same 64 Boozer births, SIMPLE's direct-Boozer `startmode=6` and the
+On the same 64 Boozer births, SIMPLE's direct-Boozer `startmode=6` reproduces
+all 55 ESSOS losses. The
 [SIMSOPT VMEC-flux fix](https://github.com/hiddenSymmetries/simsopt/pull/664)
-each reproduce all 55 ESSOS losses. The unpatched SIMSOPT field agreed on
-only 44 of 64 labels because its radial drift had the opposite sign. SIMPLE's
+reproduces the 64 terminal labels, but six trajectories reach its Boozer-axis
+singularity. An inner-flux stop at `s=0.001` leaves 58 resolved trajectories,
+including 50 losses, with 58/58 labels matching ESSOS. The unpatched SIMSOPT
+field agreed on only 44 of 64 labels because its radial drift had the opposite sign. SIMPLE's
 symplectic Euler run (`npoiper2=512`) has maximum endpoint energy drift
 `8.28e-4`; its midpoint option (`npoiper2=256`) lowers that to `8.03e-6`
-with the same labels. Corrected SIMSOPT's maximum endpoint drift is
-`3.00e-4`. These endpoint checks sample less of the orbit than ESSOS's
-every-step diagnostic. The [VMEX comparison guide](https://github.com/uwplasma/vmex/pull/516)
+with the same labels. Across 401 saved orbit states per particle, the maxima
+rise to `1.25e-3` and `1.20e-5`, respectively. SIMPLE's saved states still
+sample less of the orbit than ESSOS's every-step diagnostic. Several unguarded
+SIMSOPT trajectories enter `s < 0`, where
+its Boozer poloidal angle is ill-defined; their matching terminal labels do
+not validate those paths. A full-path check reaches `4.88e-3` energy drift
+near the axis; the guarded resolved paths have maximum full-path drift
+`6.77e-4` on both the i7-3820 and Apple M2. The [VMEX comparison guide](https://github.com/uwplasma/vmex/pull/516)
 gives the seed-WOUT recipe and a fail-closed three-code benchmark script.
 
-| Same 64 births, i7-3820 CPU | Lost / 64 | Warm trace-only time | Maximum reported energy drift |
+| Same 64 births, i7-3820 CPU | Loss result | Warm trace-only time | Maximum reported energy drift |
 |---|---:|---:|---:|
 | ESSOS Boozer RK4, eight devices | 55 | 1.701 s | 1.66e-6, every step |
-| SIMPLE symplectic Euler, eight threads | 55 | 1.898 s | 8.28e-4, endpoint |
-| SIMPLE symplectic midpoint, eight threads | 55 | 3.469 s | 8.03e-6, endpoint |
-| SIMSOPT `gc_noK`, eight workers | 55 | 0.400 s | 3.00e-4, endpoint |
+| SIMPLE symplectic Euler, eight threads | 55 | 5.078 s | 1.25e-3, 401 saved states |
+| SIMPLE symplectic midpoint, eight threads | 55 | 5.247 s | 1.20e-5, 401 saved states |
+| SIMSOPT `gc_noK`, eight workers, axis stop | 50/58 resolved; 6 axis stops | 0.415 s | 6.77e-4, all resolved path states |
 
-Field construction and compilation are excluded; SIMSOPT's interpolation
-table alone takes roughly two minutes on this host. These times and the GPU
-table above describe their specific output and solver policies.
+Field construction and compilation are excluded from the warm table. On a
+fresh run, ESSOS takes 4.526 s to construct its field and 5.541 s for its
+first trace including JIT; SIMPLE's field/start setup takes 8.055 s before
+a 1.890 s Euler trace without saved orbits or 5.247 s midpoint trace with
+401 saved states; SIMSOPT's Boozer conversion and interpolation table take
+130.728 s before a 0.415 s guarded trace.
+These times and the GPU table above describe their specific output and
+solver policies.
 
 | Code | Orbit models and solver | CPU / GPU | Collisions | Trajectory differentiation | Matched accuracy and speed evidence |
 |---|---|---|---|---|---|
 | ESSOS Boozer | guiding centre, fixed RK4 | both (JAX) | yes | host result is NumPy | 795/1,024; 3.81 s GPU, 3.9× default scan |
 | ESSOS VMEC/coil | guiding centre, adaptive; full orbit | both (JAX) | yes | JAX trajectories | 17/128; Boozer 68× faster on that M2 case |
-| [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic CPU or CUDA Dormand–Prince | CPU (OpenMP) / NVIDIA GPU | no | none documented | 55/64; 1.898 s, eight CPU threads |
-| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre or full orbit, adaptive | CPU | no in this model | none documented | [sign fixed](https://github.com/hiddenSymmetries/simsopt/pull/664): 55/64; 0.400 s, eight CPU workers |
+| [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic CPU or CUDA Dormand–Prince | CPU (OpenMP) / NVIDIA GPU | no | none documented | 55/64; midpoint 5.247 s with saved orbits, eight CPU threads |
+| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre or full orbit, adaptive | CPU | no in this model | none documented | [sign fixed](https://github.com/hiddenSymmetries/simsopt/pull/664): 58/58 resolved labels; 6 axis stops; 0.415 s, eight CPU workers |
 | [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic; GPU DP5 | CPU / NVIDIA GPU | no in this comparison | none documented | axis fixed: 795/1,024; 4.68 s GPU, 74.7 s CPU core |
 | [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | vacuum guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints | 55/64; 32.46 s M2 CPU, endpoint output |
 
