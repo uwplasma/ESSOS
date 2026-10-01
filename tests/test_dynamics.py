@@ -681,6 +681,8 @@ class _UniformField:
     def B_contravariant(self, xyz):
         return self.vector
 
+    B = B_contravariant
+
     def to_xyz(self, xyz):
         return xyz
 
@@ -708,6 +710,8 @@ def test_full_orbit_collisions_accepts_solver_tolerances_and_stops(monkeypatch, 
                     stopping_criteria=below_ceiling if stop else None)
     assert trace.trajectories.shape == (1, 3, 6)
     assert jnp.all(jnp.isfinite(trace.trajectories))
+    np.testing.assert_allclose(trace.energy()[0, 0], particles.energy, rtol=1e-12)
+    np.testing.assert_allclose(trace.v_perp()[0, 0], particles.initial_vperpendicular[0], rtol=1e-12)
     if stop:
         assert bool(trace.boundary_hits[0])
         assert float(jnp.max(trace.trajectories[0, :, 2])) < ceiling

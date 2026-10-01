@@ -1446,7 +1446,7 @@ class Tracing():
                 return 0.5 * mass * trajectory[:, 3]**2
             energy = vmap(compute_energy)(self.trajectories)
 
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris' or self.model == 'FullOrbitAdaptative':
+        elif self.model in ('FullOrbit', 'FullOrbit_Boris', 'FullOrbitAdaptative', 'FullOrbitCollisions'):
             def compute_energy(trajectory):
                 vxvyvz = trajectory[:, 3:]
                 v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)
@@ -1485,7 +1485,7 @@ class Tracing():
                 return jnp.sqrt(v**2-vpar**2)
             v_perp = vmap(compute_vperp)(self.trajectories)
 
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris' or self.model == 'FullOrbitAdaptative':
+        elif self.model in ('FullOrbit', 'FullOrbit_Boris', 'FullOrbitAdaptative', 'FullOrbitCollisions'):
             def compute_vperp(trajectory):
                 xyz = trajectory[:, :3]
                 vxvyvz = trajectory[:, 3:]
