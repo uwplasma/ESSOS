@@ -6,11 +6,11 @@ import matplotlib.pyplot as plt
 
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B, B_contravariant_theta_phi_on_surface, B_on_surface
+from essos.surfaces import SurfaceRZFourier, BdotN_over_B, B_contravariant_theta_phi_on_surface, iota_approx_on_surface
 from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_from_field,
                                         loss_coil_length_max, loss_mean_cross_sectional_area,
-                                        loss_quasi_symmetry, loss_surface_curvature_section,
+                                        loss_quasi_symmetry, loss_iota_approx, loss_surface_curvature_section,
                                         loss_surface_non_axisymmetric_amplitude, loss_poloidal_slope_min,
                                         loss_surface_normal_displacement, loss_surface_poloidal_derivative,
                                         quasi_symmetry_residual_on_surface )
@@ -54,29 +54,33 @@ LENGTH_WEIGHT = 10.; LENGTH_TARGET = 40.;
 CURVATURE_WEIGHT = 100.; CURVATURE_TARGET = 0.5
 
 # Field ~~~~~~~~~~~~~~~~~~~~
-NORMAL_FIELD_WEIGHT = 900.;
+NORMAL_FIELD_WEIGHT = 1e4;
 QS_WEIGHT = 30.
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
-CROSS_SECTIONAL_AREA_WEIGHT = 1e3
-NORMAL_DISPLACEMENT_WEIGHT = 0. # 1e4      # Importance of this constraint in the total loss
+CROSS_SECTIONAL_AREA_WEIGHT = 0.
+NORMAL_DISPLACEMENT_WEIGHT = 1e2 # 1e4      # Importance of this constraint in the total loss
 
 # Surface-parametrization control: prevent qq = ||dc_phi/dtheta|| from approaching zero.
 QQ_WEIGHT = 0. # 1e5;
 ALPHA_QQ = 1.
 
 # Cross-sectional curvature control: limit kappa relative to the initial maximum.
-KAPPA_WEIGHT = 0. # 1e5;
-ALPHA_KAPPA = 1.
+KAPPA_WEIGHT = 1e2 # 1e5;
+ALPHA_KAPPA = 3.
 
 # Non-axisymmetry control: Forces the initial torus to became a stellarator faster
 A3D_MIN = 0.2
-A3D_WEIGHT = 100.0
+A3D_WEIGHT = 1e2
+
+# Rotational transform ~~~~~~~~~~~~~~~~~~~~
+IOTA_APPROX_WEIGHT = 1e3    
+IOTA_APPROX_TARGET = 0.4
 
 # dtheta/dphi slope penalty
 SLOPE_MIN = 0.05
 PHI_FLOOR_FRACTION = 0.1
-POLOIDAL_SLOPE_WEIGHT = 0. 1e3
+POLOIDAL_SLOPE_WEIGHT = 0.
 
 # Numerical method parameters --------------------------------------------------------
 MAXITER=3000
@@ -170,6 +174,8 @@ L_surface_curvature_section = custom_loss( loss_surface_curvature_section , "sur
 L_surface_non_axisymmetric_amplitude = custom_loss( loss_surface_non_axisymmetric_amplitude, "surface", A3D_min=A3D_MIN )
 L_poloidal_slope_min = custom_loss( loss_poloidal_slope_min, "field", "surface",
                                    slope_min=SLOPE_MIN, B_phi_reference=B_phi_reference, phi_floor_fraction=PHI_FLOOR_FRACTION )
+L_iota_approx = custom_loss( loss_iota_approx, "field", "surface", iota_target=IOTA_APPROX_TARGET )
+
 
 # ====================================================================================
 # ====================================================================================
@@ -182,6 +188,7 @@ losses_weighted = [(NORMAL_FIELD_WEIGHT, L_normal_field),
                    (CURVATURE_WEIGHT, L_curvature),
                    (CROSS_SECTIONAL_AREA_WEIGHT, L_cross_sectional_area),
                    (NORMAL_DISPLACEMENT_WEIGHT, L_surface_normal_displacement),
+                   (IOTA_APPROX_WEIGHT, L_iota_approx),
                    (A3D_WEIGHT, L_surface_non_axisymmetric_amplitude),
                    (POLOIDAL_SLOPE_WEIGHT, L_poloidal_slope_min),
                    (QQ_WEIGHT, L_surface_poloidal_derivative),
@@ -442,6 +449,11 @@ if QS_WEIGHT != 0.0:
     coils_hybrid = Coils(curves=opt_coils.curves, currents=init_coils.dofs_currents_raw)
     field_hybrid = BiotSavart(coils_hybrid)
     print("QS loss (optimized coil shapes, initial currents, initial surface):", loss_quasi_symmetry(field_hybrid, surface_init))
+
+print("\n---------------------------------------------------------------------------")
+print("Rotational transform:")
+print("iota (initial):", iota_approx_on_surface(surface_init, field_init))
+print("iota (optimized):", iota_approx_on_surface(surface_opt, field_opt))
 
 print("\n---------------------------------------------------------------------------")
 print("3D modes amplitude residuals and losses:")

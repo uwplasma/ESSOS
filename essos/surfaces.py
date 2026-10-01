@@ -80,6 +80,45 @@ def B_contravariant_theta_phi_on_surface(surface, field):
     # The final index selects theta (0) or phi (1).
     return jnp.stack((B_contra_theta, B_contra_phi), axis=-1)
 
+def iota_approx_on_surface(surface, field, regularization=1e-10):
+    """
+    Rotational transform (iota) on the surface.
+    Only meaningful when B.n ~ 0 (the surface is a flux surface).
+    """
+
+    # --- 1. Local field-line slope on the surface -------------------------------------
+    # A field line tangent to the surface moves as dtheta/dphi = B^theta / B^phi.
+    # This slope depends on how theta is parametrized, so it is NOT iota yet.
+    B_contra = B_contravariant_theta_phi_on_surface(surface, field)
+    slope = ( B_contra[..., 0] / B_contra[..., 1] ).ravel()          # shape (nphi*ntheta,)
+
+    # --- 2. Basis for lambda, reusing the surface's own Fourier modes ------------------
+    # Straight-field-line angle: theta* = theta + lambda(theta, phi), where iota is constant.
+    # Stellarator symmetry -> lambda = sum_mn l_mn sin(m theta - xn phi).
+    # Drop mode (0,0): sin(0) = 0 has no effect.
+    xm = surface.xm[1:]
+    xn = surface.xn[1:]
+    angles = surface.angles[1:].reshape(xm.size, -1).T                 # shape (npoints, nmodes)
+
+    # --- 3. Linear system: one equation per grid point ---------------------------------
+    # Along a field line, d(theta*)/dphi = iota  ->  slope*(1 + dlambda/dtheta) + dlambda/dphi = iota
+    # With dlambda/dtheta = sum l m cos(.),  dlambda/dphi = -sum l xn cos(.):
+    #     iota - sum_mn l_mn (m*slope - xn) cos(angle) = slope
+    # Unknowns: x = [iota, l_mn]. Linear in x.
+    lambda_columns = -( xm[None, :] * slope[:, None] - xn[None, :] ) * jnp.cos(angles)
+    A = jnp.concatenate([ jnp.ones((slope.size, 1)), lambda_columns ], axis=1)
+
+    # --- 4. Least-squares solution (normal equations) ----------------------------------
+    # Small system (1 + nmodes unknowns), cheap and differentiable with JAX.
+    # The tiny regularization only avoids a singular matrix.
+    AtA = A.T @ A + regularization * jnp.eye(A.shape[1])
+    Ats = A.T @ slope
+    solution = jnp.linalg.solve(AtA, Ats)
+
+    # --- 5. iota is the first unknown ---------------------------------------------------
+    iota = solution[0]
+    return iota
+
 @jit
 def BdotN(surface, field):
     B_surface = B_on_surface(surface, field)

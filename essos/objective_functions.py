@@ -7,7 +7,7 @@ from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart,BiotSavart_from_gamma
-from essos.surfaces import BdotN_over_B, B_contravariant_theta_phi_on_surface
+from essos.surfaces import BdotN_over_B, B_contravariant_theta_phi_on_surface, iota_approx_on_surface
 from essos.coils import Curves, Coils
 from essos.constants import mu_0
 from essos.coil_perturbation import perturb_curves, perturb_curves_systematic, perturb_curves_statistic
@@ -233,6 +233,17 @@ def loss_quasi_symmetry(field, surface):
     QS_residual_xyz = quasi_symmetry_residual_on_surface(field, surface)
     QS_residual = jnp.mean(jnp.abs(QS_residual_xyz))
     return QS_residual
+
+def loss_iota_approx(field, surface, iota_target):
+    """
+    Penalize the distance between the surface rotational transform and a target.
+    iota is dimensionless, so no normalization is needed.
+    """
+    # Rotational transform from the straight-field-line fit on the surface.
+    iota = iota_approx_on_surface(surface, field)
+
+    # Quadratic penalty: smooth, with gradient -> 0 only at the target.
+    return jnp.square(iota - iota_target)
 
 def loss_poloidal_slope_min(field, surface, slope_min, B_phi_reference, phi_floor_fraction):
     """Penalize insufficient positive poloidal slope and small B^phi."""
