@@ -1,12 +1,15 @@
 """Boozer-coordinate guiding-centre tracing and Monte Carlo collisions."""
 
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import equinox as eqx
 
 from essos.background_species import BackgroundSpecies, coulomb_logarithm, nu_D_ab
-from essos.boozer import BoozerField, collision_kick, trace_boozer
+from essos.boozer import BoozerField, BoozerTrace, collision_kick, guiding_center_rhs, psi0_from_vmec, trace_boozer
 from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as M, ELECTRON_MASS,
                              ELEMENTARY_CHARGE, EPSILON_0, FUSION_ALPHA_PARTICLE_ENERGY, PROTON_MASS)
 
@@ -30,6 +33,21 @@ def test_field_reproduces_the_spectrum_and_is_regular_on_the_axis():
     assert (iota, G_s, I_s) == pytest.approx((IOTA, G, 0.0))
 
 
+def test_vmec_flux_sign_sets_the_analytic_radial_drift():
+    """For B=B0(1-eps*r*cos theta), positive ions at theta=pi/2 drift outward."""
+    import equinox as eqx
+
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(), psi0_from_vmec(2 * np.pi * PSI0))
+    r = np.sqrt(0.3)
+    y = jnp.array([0.0, r, 0.0, 0.0])
+    mu = V0**2 / (2 * B0)
+    dy = guiding_center_rhs(field, y, mu, M, Q)
+    sdot = 2 * r * float(dy[1])
+    expected = EPS * r * M * V0**2 / (2 * Q * PSI0)
+    assert field.psi0 == pytest.approx(-PSI0)
+    assert sdot == pytest.approx(expected, rel=1e-12)
+
+
 def test_orbits_conserve_energy_and_toroidal_canonical_momentum():
     """Axisymmetry: E and P_zeta = m v_par G / B - q iota psi0 s are invariants (White 2014)."""
     field = tokamak()
@@ -45,9 +63,130 @@ def test_orbits_conserve_energy_and_toroidal_canonical_momentum():
     np.testing.assert_allclose(p_zeta - p_zeta[:, :1], 0.0, atol=1e-7 * np.abs(p_zeta).max())
 
 
+def test_nonfinite_step_is_reported_as_failed_not_confined():
+    """The last finite state alone cannot reveal a failed RK step."""
+    singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.0)
+    out = trace_boozer(singular, [0.3], [0.0], [0.0], [0.2], speed=V0,
+                       mass=M, charge=Q, tmax=1e-6, timestep=1e-7, n_save=3)
+    assert out.failed[0] and not out.lost[0]
+    assert out.failed_times[0] == pytest.approx(1e-7)
+    assert np.isfinite(out.states).all()  # frozen at the previous, finite state
+    assert np.isinf(out.energy_error[0])
+    with pytest.raises(RuntimeError, match="trajectories fail"):
+        out.loss_fractions()
+    legacy = dataclasses.replace(out, failed_times=None)
+    with pytest.raises(RuntimeError, match="trajectories fail"):
+        legacy.loss_fractions()
+
+
+def test_crossing_with_invalid_field_is_failed_not_lost():
+    """A finite LCFS crossing cannot hide an invalid outside-field evaluation."""
+    base = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
+
+    class BadOutside(eqx.Module):
+        base: BoozerField
+        psi0: float
+
+        def modB(self, s, theta, zeta):
+            return self.modB_derivatives(jnp.sqrt(s), theta, zeta)[0]
+
+        def modB_derivatives(self, r, theta, zeta):
+            B, br, bt, bz = self.base.modB_derivatives(r, theta, zeta)
+            return jnp.where(r * r >= 1, -1.0, B), br, bt, bz
+
+        def profiles(self, s):
+            return self.base.profiles(s)
+
+    args = ([0.999], [np.pi / 2], [0.0], [0.0])
+    kw = dict(speed=V0, mass=M, charge=Q, tmax=1e-7, timestep=1e-7, n_save=2)
+    assert trace_boozer(base, *args, **kw).lost[0]
+    out = trace_boozer(BadOutside(base, -PSI0), *args, **kw)
+    assert not out.lost[0] and out.failed[0]
+    assert out.failed_times[0] == pytest.approx(1e-7)
+    assert np.isfinite(out.states).all() and np.isinf(out.energy_error[0])
+    with pytest.raises(RuntimeError, match="trajectories fail"):
+        out.loss_fractions()
+
+
+def test_invalid_births_and_steps_are_rejected_before_tracing():
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=1e-6, timestep=1e-7, n_save=3)
+    for args, override in (
+        (([], [], [], []), {}),
+        (([1.0], [0.0], [0.0], [0.0]), {}),
+        (([0.3], [np.nan], [0.0], [0.0]), {}),
+        (([0.3], [0.0], [0.0], [1.2]), {}),
+        (([[0.3]], [[0.0]], [[0.0]], [[0.0]]), {}),
+        (([0.3], [0.0], [0.0], [0.0]), {"timestep": 0.0}),
+        (([0.3], [0.0], [0.0], [0.0]), {"n_save": 1}),
+        (([0.3], [0.0], [0.0], [0.0]), {"n_save": 2.5}),
+        (([0.3], [0.0], [0.0], [0.0]), {"speed": 0.0}),
+        (([0.3], [0.0], [0.0], [0.0]), {"mass": 0.0}),
+        (([0.3], [0.0], [0.0], [0.0]), {"charge": 0.0}),
+    ):
+        with pytest.raises(ValueError):
+            trace_boozer(tokamak(), *args, **(kwargs | override))
+    for coefficients in (jnp.zeros_like(tokamak().b_coef),
+                         -jnp.abs(tokamak().b_coef),
+                         jnp.full_like(tokamak().b_coef, jnp.nan)):
+        bad_field = eqx.tree_at(lambda f: f.b_coef, tokamak(), coefficients)
+        with pytest.raises(ValueError, match="birth.*B"):
+            trace_boozer(bad_field, [0.3], [0.0], [0.0], [0.0], **kwargs)
+
+
+def test_repeated_traces_use_current_field_coefficients():
+    """A compiled trace must not retain coefficients from the previous field."""
+    s = np.linspace(0.005, 0.995, 50)
+    stronger_ripple = BoozerField.from_booz(
+        s, np.stack([np.full_like(s, B0), -2 * B0 * EPS * np.sqrt(s)]),
+        [0, 1], [0, 0], np.full_like(s, IOTA), np.full_like(s, G),
+        np.zeros_like(s), PSI0, 1)
+    args = (jnp.full(4, 0.3), jnp.linspace(0, 3, 4),
+            jnp.zeros(4), jnp.linspace(-0.6, 0.6, 4))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=1e-5, timestep=1e-7, n_save=3)
+    original = trace_boozer(tokamak(), *args, **kwargs)
+    changed = trace_boozer(stronger_ripple, *args, **kwargs)
+    repeated = trace_boozer(tokamak(), *args, **kwargs)
+    assert np.max(np.abs(original.states - changed.states)) > 1e-4
+    np.testing.assert_array_equal(original.states, repeated.states)
+
+
 def electron_background(n=1e20, T=1.0e4):
     return BackgroundSpecies(1, jnp.array([ELECTRON_MASS / PROTON_MASS]), jnp.array([-1.0]),
                              jnp.array([n]), jnp.array([T]))
+
+
+def test_zero_density_kick_and_lcfs_crossing_are_finite():
+    species = BackgroundSpecies(
+        2, jnp.array([ELECTRON_MASS / PROTON_MASS, 1.]), jnp.array([-1., 1.]),
+        jnp.array([[1e19, 0.], [1e19, 0.]]), jnp.array([[1e3, 10.], [1e3, 10.]]),
+        radial_grid=jnp.array([0., 1.]))
+    velocity, pitch = collision_kick(species, M, Q, V0, .4, jnp.array([1., 0., 0.]),
+                                     1e-7, jnp.array([1., -1.]))
+    assert velocity == V0 and pitch == .4
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
+    out = trace_boozer(field, [.999], [np.pi / 2], [0.], [0.], speed=V0,
+                       mass=M, charge=Q, tmax=1e-7, timestep=1e-7, n_save=2, species=species)
+    assert out.lost[0] and not out.failed[0]
+    assert out.loss_fractions()[-1] == 1
+
+
+@pytest.mark.parametrize("density", [0., 1e20, -1., np.nan])
+def test_coulomb_logarithm_preserves_positive_and_invalid_densities(density):
+    value = float(coulomb_logarithm(M, Q, 0, V0, jnp.zeros(3), electron_background(density)))
+    if density == 0:
+        assert np.isfinite(value)
+    elif density > 0:
+        assert value == pytest.approx(32.2 + 1.15 * np.log10(1e8 / density), rel=1e-14)
+    else:
+        assert np.isnan(value)
+
+
+@pytest.mark.parametrize("asym, sine", [(True, 0.), (False, 0.1), (False, np.nan)])
+def test_booz_xform_rejects_asymmetry_and_sine_modes(asym, sine):
+    from types import SimpleNamespace
+
+    with pytest.raises(ValueError, match="stellarator symmetry"):
+        BoozerField.from_booz_xform(SimpleNamespace(asym=asym, bmns_b=np.array([[sine]])), PSI0)
 
 
 def kicks(species, v, pitch, t, steps, seed=0):
@@ -117,3 +256,14 @@ def test_progress_chunks_reproduce_the_unchunked_trace():
     assert calls == [(k, 22) for k in (3, 6, 9, 12, 15, 18, 21, 22)]
     for name in ("states", "loss_times", "thermalized_times", "energy_error"):
         np.testing.assert_array_equal(getattr(chunked, name), getattr(whole, name))
+
+
+@pytest.mark.parametrize("loss_times", [[1.0, 0.5, 0.5, -1.0, 2.0, 0.0],
+                                       [-1.0] * 6, [0.0] * 6])
+def test_loss_fractions_count_ties_and_preserve_requested_time_order(loss_times):
+    times = np.array([1.0, 0.5, 0.0, 0.5, 2.0])
+    losses = np.array(loss_times)
+    out = BoozerTrace(times, np.empty((6, 5, 5)), losses, np.full(6, -1.0), np.zeros(6))
+    expected = np.array([np.count_nonzero((losses >= 0) & (losses <= t))
+                         for t in times]) / losses.size
+    np.testing.assert_array_equal(out.loss_fractions(), expected)
