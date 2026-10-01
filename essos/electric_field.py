@@ -41,5 +41,5 @@ class Electric_field_zero():
         return type(other) is type(self)
 
     def __hash__(self):
-        return hash(type(self))    
+        return hash(type(self))
     
