@@ -170,16 +170,15 @@ The RTX A4000 comparison uses 8,192 common births for 20 ms and 101 requested ti
 
 | Tracer | Lost / 8,192 | Matching labels | Cold trace | Warm trace | Maximum energy drift |
 |---|---:|---:|---:|---:|---:|
-| ESSOS [GPU lookup #98](https://github.com/uwplasma/ESSOS/pull/98) | 6,577 | 8,192 | 76.52 s | 69.18 s | 2.08e-5, every step |
-| ESSOS [compaction #100](https://github.com/uwplasma/ESSOS/pull/100), opt-in | 6,577 | 8,192 | 49.59 s | 37.35 s | 2.08e-5, every step |
-| CATAPULT released | 6,647 | 8,122 | 34.17 s | 34.48 s | 5.17e-2, saved confined paths |
-| CATAPULT [regular axis #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90), opt-in | 6,578 | 8,191 | 36.61 s | 36.88 s | 1.17e-5, saved confined paths |
+| ESSOS [GPU lookup #98](https://github.com/uwplasma/ESSOS/pull/98) | 6,572 | 8,192 | 76.40 s | 69.06 s | 2.14e-5, every step |
+| ESSOS [compaction #100](https://github.com/uwplasma/ESSOS/pull/100), opt-in | 6,572 | 8,192 | 49.29 s | 37.42 s | 2.14e-5, every step |
+| CATAPULT [regular axis #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90), opt-in | 6,573 | 8,191 | 36.69 s | 37.04 s | 1.36e-5, saved confined paths |
 
-Measurements use the earlier ESSOS alpha mass, `6.6951e-27 kg`. Cold ESSOS traces use fresh processes with compilation caches disabled; field setup adds 1.44–1.48 s. Compaction preserves every output and benefits from losses occurring before 0.16 ms; CATAPULT truncates lost paths, while ESSOS returns all requested states.
+Mass: `6.6446573450e-27 kg`; cold traces use fresh processes, with ESSOS compilation caches disabled. Setup adds 1.19–1.30 s for ESSOS (saved tables) and 8.70 s for CATAPULT (includes Boozer transform). Compaction preserves recorded arrays; ESSOS returns 101 states per birth, while CATAPULT truncates lost paths.
 
-The [comparison guide](https://github.com/uwplasma/vmex/pull/516) records settings, field errors and orbit checks. One regular-axis label depends on the mode cut; QA long-orbit labels remain unconverged.
+The [comparison guide](https://github.com/uwplasma/vmex/pull/516) records settings, field errors and orbit checks. One corrected-mass loss label differs; its convergence is untested. Earlier QA long-orbit labels remain unconverged.
 
-The 64-birth, 2 ms comparison uses the same reactor-scaled seed. CPU timings use an i7-3820 with eight workers/devices; DESC and the GPU ESSOS row use the RTX A4000.
+The earlier 64-birth, 2 ms comparison uses the same seed with mass `6.6951e-27 kg`. CPU timings use an i7-3820 with eight workers/devices; DESC and the GPU ESSOS row use the RTX A4000.
 
 | Tracer | Loss result | Warm trace | Maximum energy drift |
 |---|---:|---:|---:|
@@ -197,7 +196,7 @@ Shaded loss bands use the pointwise binomial standard error `f(t) ± sqrt(f(t)[1
 
 | Code | Orbit models | CPU / GPU | Collisions | Differentiation |
 |---|---|---|---|---|
-| ESSOS Boozer | guiding centre, RK4 | both (JAX) | yes | JAX RHS; public trace returns NumPy |
+| ESSOS Boozer | guiding centre, RK4; [Dopri8 #103](https://github.com/uwplasma/ESSOS/pull/103), opt-in | both (JAX) | yes | JAX RHS; public trace returns NumPy |
 | ESSOS VMEC/coil | guiding centre; full orbit | both (JAX) | yes | JAX trajectories |
 | [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic or adaptive | CPU; optional CUDA, unbenchmarked here | no | none documented |
 | [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre; full orbit | CPU | no in tested model | none documented |

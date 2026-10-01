@@ -7,11 +7,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ESSOS 7200cc7, JAX 0.9.2, fresh processes with compilation caches disabled.
-# CATAPULT released and opt-in FIRM3D #90; field setup excluded.
-names = ["ESSOS lookup", "ESSOS compact", "CATAPULT", "CATAPULT regular axis"]
-cold = [76.521, 49.589, 34.17, 36.61]
-warm = [69.178, 37.354, 34.48, 36.88]
+# ESSOS 1307356 + mass fix 9ab3e36, JAX 0.9.2; compilation caches disabled.
+# FIRM3D 4dbeb5e + non-MPI guard #91; mass 6.6446573450e-27 kg; setup excluded.
+# Record: https://github.com/uwplasma/vmex/pull/516 (benchmarks/trace_accuracy.json).
+names = ["ESSOS lookup", "ESSOS compact", "CATAPULT regular axis"]
+cold = [76.399, 49.287, 36.694]
+warm = [69.062, 37.418, 37.044]
 y = np.arange(len(names))
 fig, ax = plt.subplots(figsize=(6.5, 2.8), constrained_layout=True)
 for offset, values, color, label in [(-0.18, cold, "#86b6ef", "Cold"),
