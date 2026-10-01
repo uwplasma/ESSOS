@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from essos.background_species import BackgroundSpecies, coulomb_logarithm, nu_D_ab
-from essos.boozer import BoozerField, collision_kick, trace_boozer
+from essos.boozer import BoozerField, collision_kick, guiding_center_rhs, psi0_from_vmec, trace_boozer
 from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as M, ELECTRON_MASS,
                              ELEMENTARY_CHARGE, EPSILON_0, FUSION_ALPHA_PARTICLE_ENERGY, PROTON_MASS)
 
@@ -28,6 +28,21 @@ def test_field_reproduces_the_spectrum_and_is_regular_on_the_axis():
         assert float(field.modB(s, theta, 0.3)) == pytest.approx(B0 * (1 - EPS * np.sqrt(s) * np.cos(theta)), rel=1e-10)
     iota, G_s, I_s = (float(x) for x in field.profiles(0.0)[0])
     assert (iota, G_s, I_s) == pytest.approx((IOTA, G, 0.0))
+
+
+def test_vmec_flux_sign_sets_the_analytic_radial_drift():
+    """For B=B0(1-eps*r*cos theta), positive ions at theta=pi/2 drift outward."""
+    import equinox as eqx
+
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(), psi0_from_vmec(2 * np.pi * PSI0))
+    r = np.sqrt(0.3)
+    y = jnp.array([0.0, r, 0.0, 0.0])
+    mu = V0**2 / (2 * B0)
+    dy = guiding_center_rhs(field, y, mu, M, Q)
+    sdot = 2 * r * float(dy[1])
+    expected = EPS * r * M * V0**2 / (2 * Q * PSI0)
+    assert field.psi0 == pytest.approx(-PSI0)
+    assert sdot == pytest.approx(expected, rel=1e-12)
 
 
 def test_orbits_conserve_energy_and_toroidal_canonical_momentum():
