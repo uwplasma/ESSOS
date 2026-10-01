@@ -155,6 +155,40 @@ def electron_background(n=1e20, T=1.0e4):
                              jnp.array([n]), jnp.array([T]))
 
 
+def test_zero_density_kick_and_lcfs_crossing_are_finite():
+    species = BackgroundSpecies(
+        2, jnp.array([ELECTRON_MASS / PROTON_MASS, 1.]), jnp.array([-1., 1.]),
+        jnp.array([[1e19, 0.], [1e19, 0.]]), jnp.array([[1e3, 10.], [1e3, 10.]]),
+        radial_grid=jnp.array([0., 1.]))
+    velocity, pitch = collision_kick(species, M, Q, V0, .4, jnp.array([1., 0., 0.]),
+                                     1e-7, jnp.array([1., -1.]))
+    assert velocity == V0 and pitch == .4
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
+    out = trace_boozer(field, [.999], [np.pi / 2], [0.], [0.], speed=V0,
+                       mass=M, charge=Q, tmax=1e-7, timestep=1e-7, n_save=2, species=species)
+    assert out.lost[0] and not out.failed[0]
+    assert out.loss_fractions()[-1] == 1
+
+
+@pytest.mark.parametrize("density", [0., 1e20, -1., np.nan])
+def test_coulomb_logarithm_preserves_positive_and_invalid_densities(density):
+    value = float(coulomb_logarithm(M, Q, 0, V0, jnp.zeros(3), electron_background(density)))
+    if density == 0:
+        assert np.isfinite(value)
+    elif density > 0:
+        assert value == pytest.approx(32.2 + 1.15 * np.log10(1e8 / density), rel=1e-14)
+    else:
+        assert np.isnan(value)
+
+
+@pytest.mark.parametrize("asym, sine", [(True, 0.), (False, 0.1), (False, np.nan)])
+def test_booz_xform_rejects_asymmetry_and_sine_modes(asym, sine):
+    from types import SimpleNamespace
+
+    with pytest.raises(ValueError, match="stellarator symmetry"):
+        BoozerField.from_booz_xform(SimpleNamespace(asym=asym, bmns_b=np.array([[sine]])), PSI0)
+
+
 def kicks(species, v, pitch, t, steps, seed=0):
     dt = t / steps
     point = jnp.array([0.5, 0.0, 0.0])

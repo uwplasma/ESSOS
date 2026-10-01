@@ -127,7 +127,10 @@ def coulomb_logarithm(ma:float, ea: float, species_b: int, vth_a: float, points,
     ##bmin, bmax =   impact_parameter(ma, ea, species_b, vth_a, points, species)
     ##return jnp.log(bmax / bmin)
     #lnL = 25.3 + 1.15*jnp.log10(species.temperature[0,r_index]**2/species.density[0,r_index])  
-    lnL = 32.2 + 1.15*jnp.log10(species.get_temperature(0,points)**2/species.get_density(0,points)) 
+    density = species.get_density(0, points)
+    # Zero-density rates vanish; keep their logarithm finite to avoid 0 * inf.
+    density = jnp.where(density == 0, 1.0, density)
+    lnL = 32.2 + 1.15*jnp.log10(species.get_temperature(0,points)**2/density)
     #32.2+1.15*alog10(temp(1)**2/density(1))
     return lnL
 
