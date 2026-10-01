@@ -1513,6 +1513,7 @@ class Tracing():
         stopped = (self.boundary_hits & self._has_boundary_event)[:, None]
         radial = jnp.where(finite, radial, jnp.where(stopped, 1.0, jnp.nan))
         peak = jnp.sum(radial * jax.nn.softmax(radial / width, axis=1), axis=1)
+        peak = jnp.where(stopped[:, 0], jnp.maximum(peak, 1.0), peak)
         return jnp.mean(jax.nn.sigmoid((peak - r_max) / width))
 
 
