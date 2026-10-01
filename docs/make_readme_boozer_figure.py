@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
-RECORD = "https://raw.githubusercontent.com/uwplasma/vmex/91eda6ab/benchmarks/trace_accuracy.json"
+RECORD = "https://raw.githubusercontent.com/uwplasma/vmex/045db9f6/benchmarks/trace_accuracy.json"
 record_text = Path(sys.argv[1]).read_text() if len(sys.argv)>1 else urlopen(RECORD, timeout=30).read()
 BLUE, BLUE_LIGHT = "#2a78d6", "#86b6ef"
 
