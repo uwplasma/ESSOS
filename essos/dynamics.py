@@ -815,13 +815,7 @@ class LevelsetStoppingCriterion:
 
 
 def _place_on_devices(x, target):
-    """Place ``x`` on ``target`` (a device or sharding) for tracing.
-
-    Concrete arrays take a host round trip so they land exactly on the
-    requested devices. Tracers (``Tracing.trace`` called inside ``jit``,
-    e.g. through ``custom_loss.grad``) cannot leave the trace, so they are
-    constrained in place when sharded and passed through otherwise.
-    """
+    """Place concrete arrays on ``target``; constrain tracers without a host copy."""
     if isinstance(x, jax.core.Tracer):
         if isinstance(target, NamedSharding):
             return lax.with_sharding_constraint(x, target)
@@ -1511,6 +1505,23 @@ class Tracing():
         loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times
+
+    def soft_loss_fraction(self, r_max=0.99, width=0.02):
+        """Soft peak-flux crossing score for VMEC guiding centres.
+
+        Boundary stops count as exits; unrelated failures return NaN. A smaller
+        positive width sharpens the score. Hard losses remain the diagnostic.
+        """
+        if not isinstance(self.field, Vmec) or self.model not in _VMEC_GUIDING_CENTER_MODELS:
+            raise ValueError("soft_loss_fraction requires VMEC guiding centres")
+        if not np.isfinite(width) or width <= 0:
+            raise ValueError("width must be finite and positive")
+        radial = self.trajectories[:, :, 0]
+        finite = jnp.all(jnp.isfinite(self.trajectories), axis=-1)
+        stopped = (self.boundary_hits & self._has_boundary_event)[:, None]
+        radial = jnp.where(finite, radial, jnp.where(stopped, 1.0, jnp.nan))
+        peak = jnp.sum(radial * jax.nn.softmax(radial / width, axis=1), axis=1)
+        return jnp.mean(jax.nn.sigmoid((peak - r_max) / width))
 
 
 
