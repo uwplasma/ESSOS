@@ -8,10 +8,12 @@ import numpy as np
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
+from typing import Any, NamedTuple
 from time import perf_counter
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
+import equinox as eqx
 import optimistix as optx
 from essos.coils import Coils
 from essos.fields import BiotSavart, MagneticField, Vmec
@@ -287,6 +289,23 @@ class Particles():
                   field=field)
 
 
+
+
+def _particles_flatten(particles):
+    names = tuple(sorted(vars(particles)))
+    return tuple(getattr(particles, name) for name in names), names
+
+
+def _particles_unflatten(names, values):
+    particles = object.__new__(Particles)
+    particles.__dict__.update(zip(names, values))
+    return particles
+
+
+# As a pytree, a Particles instance enters the compiled trace as arrays
+# (traced) plus Python scalars such as charge and mass (static by value), so
+# a new but identical Particles object does not force a recompilation.
+tree_util.register_pytree_node(Particles, _particles_flatten, _particles_unflatten)
 
 @partial(jit, static_argnums=(2))
 def GuidingCenterCollisionsDiffusionMu(t,
@@ -834,6 +853,323 @@ def _place_on_devices(x, target):
     return device_put(x, target)
 
 
+def _never_stop(t, y, args, **kwargs):
+    """Event condition of a trace without a stopping criterion."""
+    return False
+
+
+def _vmec_field_line_boundary(t, y, args, **kwargs):
+    """LCFS condition for VMEC field lines traced in (s, theta, phi)."""
+    s, _, _ = y
+    return s - 1
+
+
+class _BiotSavartBoundaryCondition:
+    """Event on a :class:`SurfaceClassifier` boundary for Cartesian traces.
+
+    Instances compare equal when they share the classifier and the state
+    layout, so repeated traces against one boundary reuse the compiled solve.
+    """
+
+    def __init__(self, boundary, collisions):
+        self.boundary = boundary
+        self.collisions = bool(collisions)
+
+    def __call__(self, t, y, args, **kwargs):
+        if self.collisions:
+            xx, yy, zz, _, _ = y
+        else:
+            xx, yy, zz, _ = y
+        return self.boundary.evaluate_xyz(jnp.array([xx, yy, zz]))
+
+    def __eq__(self, other):
+        return (type(other) is type(self) and other.boundary is self.boundary
+                and other.collisions == self.collisions)
+
+    def __hash__(self):
+        return hash((type(self), id(self.boundary), self.collisions))
+
+
+class _AxisRegularCondition:
+    """A user condition evaluated in (s, theta, ...) for the axis-regular chart."""
+
+    def __init__(self, condition):
+        self.condition = condition
+
+    def __call__(self, t, y, args, **kwargs):
+        return self.condition(t, _from_axis_regular(y), args, **kwargs)
+
+    def __eq__(self, other):
+        return type(other) is type(self) and other.condition == self.condition
+
+    def __hash__(self):
+        return hash((type(self), self.condition))
+
+
+# Models whose integration span, first step and tolerances enter the compiled
+# solve as array arguments, so changing them does not recompile. Boris sizes
+# its inner scan from maxtime/timestep, and the stochastic models build a
+# Brownian tree from them, so those keep them as static values.
+_DYNAMIC_SPAN_MODELS = frozenset(
+    {
+        "GuidingCenter",
+        "GuidingCenterAdaptative",
+        "FullOrbit",
+        "FullOrbitAdaptative",
+        "FieldLine",
+        "FieldLineAdaptative",
+        "FieldLineArclength",
+        "FieldLineToroidal",
+    }
+)
+
+
+class _TraceSpec(NamedTuple):
+    """Dynamic trace arrays and the static model, solver and event cache key."""
+    model: str
+    args: Any
+    field: Any
+    particles: Any
+    condition: Any
+    stopping_criteria: Any
+    times: Any
+    maxtime: Any
+    timestep: Any
+    rtol: Any
+    atol: Any
+    solver: Any
+    progress_meter: Any
+    max_steps: int
+    rejected_steps: int
+    axis_regular: bool
+    return_events: bool
+
+
+def _vector_field(spec, vector_field):
+    return _axis_regular(vector_field) if spec.axis_regular else vector_field
+
+
+def _ode_term(spec):
+    """Deterministic ODE term of ``spec.model``; stochastic models build their own."""
+    if spec.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
+        return ODETerm(_vector_field(spec, GuidingCenter))
+    if spec.model in ('FullOrbit', 'FullOrbitAdaptative'):
+        return ODETerm(Lorentz)
+    if spec.model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
+        return ODETerm({
+            'FieldLineArclength': FieldLineArclength,
+            'FieldLineToroidal': FieldLineToroidal,
+        }.get(spec.model, FieldLine))
+    return None
+
+
+def _compute_trajectory(spec, initial_condition, particle_key):
+    """Trace one particle; ``spec`` is a :class:`_TraceSpec`."""
+    ode_term = _ode_term(spec)
+    if spec.axis_regular:
+        initial_condition = _to_axis_regular(initial_condition)
+    # initial_condition = initial_condition[0]
+    if spec.model == 'FullOrbit_Boris':
+        # Integrate the whole [0, maxtime] span: an inner scan of
+        # Boris pushes between consecutive save times, with dt
+        # adjusted (<= timestep) so the saves land on spec.times.
+        n_saves = len(spec.times) - 1
+        per_save = max(1, int(np.ceil(float(spec.maxtime) / (n_saves * float(spec.timestep)) - 1e-9)))
+        dt = spec.maxtime / (n_saves * per_save)
+        charge_over_mass = spec.particles.charge / spec.particles.mass
+        criteria = spec.stopping_criteria
+
+        def push(state, _):
+            x = state[:3]
+            v = state[3:]
+            t = charge_over_mass * spec.field.B_contravariant(x) * 0.5 * dt
+            s = 2. * t / (1. + jnp.dot(t, t))
+            vprime = v + jnp.cross(v, t)
+            v = v + jnp.cross(vprime, s)
+            x = x + v * dt
+            return jnp.concatenate((x, v)), None
+
+        def save_interval(carry, _):
+            state, alive, hits = carry
+            advanced, _ = lax.scan(push, state, None, length=per_save)
+            if criteria is None:
+                return (advanced, alive, hits), advanced
+            # A particle leaving any level set (value <= 0) is held at
+            # its last saved point inside, as the adaptive paths do.
+            outside = jnp.stack([c(0.0, advanced, spec.args) <= 0.0 for c in criteria])
+            outside = outside | ~jnp.isfinite(advanced).all()
+            stopped = alive & jnp.any(outside)
+            hits = hits | (alive & outside)
+            state = jnp.where(alive & ~stopped, advanced, state)
+            return (state, alive & ~stopped, hits), state
+
+        n_criteria = 0 if criteria is None else len(criteria)
+        carry = (initial_condition, jnp.asarray(True), jnp.zeros((n_criteria,), bool))
+        (_, _, hits), trajectory = lax.scan(save_interval, carry, None, length=n_saves)
+        trajectory = jnp.vstack([initial_condition, trajectory])
+        if criteria is not None:
+            event_mask = hits[0] if n_criteria == 1 else tuple(hits[i] for i in range(n_criteria))
+            return trajectory, event_mask
+        return trajectory
+    elif spec.model == 'GuidingCenterCollisions':
+        import warnings
+        warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+        t0=0.0
+        t1=spec.maxtime
+        dt0=spec.timestep#spec.maxtime / spec.timesteps
+        tol=dt0*0.5
+        bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)
+        ode_term = MultiTerm(ODETerm(_vector_field(spec, GuidingCenterCollisionsDrift)),ControlTerm(_vector_field(spec, GuidingCenterCollisionsDiffusion), bm))
+        solution = diffeqsolve(
+            ode_term,
+            t0=0.0,
+            t1=spec.maxtime,
+            dt0=dt0,
+            y0=initial_condition,
+            #solver=diffrax.SlowRK(),
+            solver=diffrax.StratonovichMilstein(),
+            args=spec.args,
+            saveat=SaveAt(ts=spec.times),
+            throw=False,
+            # adjoint=DirectAdjoint(),
+            #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=spec.tol_step_size, atol=spec.tol_step_size),
+            max_steps=spec.max_steps,
+            event = Event(spec.condition),
+            progress_meter=spec.progress_meter,
+        )
+        trajectory = solution.ys
+    elif spec.model == 'GuidingCenterCollisionsMuAdaptative':
+        import warnings
+        warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+        t0=0.0
+        t1=spec.maxtime
+        dt0=spec.timestep#spec.maxtime / spec.timesteps
+        tol=dt0*0.5
+        bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)
+        ode_term = MultiTerm(ODETerm(_vector_field(spec, GuidingCenterCollisionsDriftMuStratonovich)),ControlTerm(_vector_field(spec, GuidingCenterCollisionsDiffusionMu), bm))
+        solution = diffeqsolve(
+            ode_term,
+            t0=0.0,
+            t1=spec.maxtime,
+            dt0=dt0,
+            y0=initial_condition,
+            solver=diffrax.SPaRK(),
+            #solver=diffrax.HalfSolver(diffrax.GeneralShARK()),
+            args=spec.args,
+            saveat=SaveAt(ts=spec.times),
+            throw=False,
+            # adjoint=DirectAdjoint(),
+            stepsize_controller=ClipStepSizeController(controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=spec.rtol, atol=spec.atol,dtmin=dt0,dtmax=1.e-4,force_dtmin=True),step_ts=spec.times,store_rejected_steps=spec.rejected_steps),
+            max_steps=spec.max_steps,
+            event = Event(spec.condition),
+            progress_meter=spec.progress_meter,
+        )
+        trajectory = solution.ys
+    elif spec.model == 'GuidingCenterCollisionsMuFixed':
+        import warnings
+        warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+        t0=0.0
+        t1=spec.maxtime
+        dt0=spec.timestep#spec.maxtime / spec.timesteps
+        tol=dt0*0.5
+        bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)
+        ode_term = MultiTerm(ODETerm(_vector_field(spec, GuidingCenterCollisionsDriftMuStratonovich)),ControlTerm(_vector_field(spec, GuidingCenterCollisionsDiffusionMu), bm))
+        solution = diffeqsolve(
+            ode_term,
+            t0=0.0,
+            t1=spec.maxtime,
+            dt0=dt0,
+            y0=initial_condition,
+            solver=diffrax.StratonovichMilstein(),
+            args=spec.args,
+            saveat=SaveAt(ts=spec.times),
+            throw=False,
+            # adjoint=DirectAdjoint(),
+            max_steps=spec.max_steps,
+            event = Event(spec.condition),
+            progress_meter=spec.progress_meter,
+        )
+        trajectory = solution.ys
+    elif spec.model == 'GuidingCenterCollisionsMuIto':
+        import warnings
+        warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+        t0=0.0
+        t1=spec.maxtime
+        dt0=spec.timestep#spec.maxtime / spec.timesteps
+        tol=dt0*0.5
+        bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)
+        ode_term = MultiTerm(ODETerm(_vector_field(spec, GuidingCenterCollisionsDriftMuIto)),ControlTerm(_vector_field(spec, GuidingCenterCollisionsDiffusionMu), bm))
+        solution = diffeqsolve(
+            ode_term,
+            t0=0.0,
+            t1=spec.maxtime,
+            dt0=dt0,
+            y0=initial_condition,
+            solver=diffrax.ItoMilstein(),
+            args=spec.args,
+            saveat=SaveAt(ts=spec.times),
+            throw=False,
+            # adjoint=DirectAdjoint(),
+            max_steps=spec.max_steps,
+            event = Event(spec.condition),
+            progress_meter=spec.progress_meter,
+        )
+        trajectory = solution.ys
+    elif spec.model == 'FullOrbitCollisions':
+        import warnings
+        warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+        t0=0.0
+        t1=spec.maxtime
+        dt0=spec.timestep#spec.maxtime / spec.timesteps
+        tol=dt0*0.5
+        bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(6,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)
+        ode_term = MultiTerm(ODETerm(LorentzCollisionsDrift),ControlTerm(LorentzCollisionsDiffusion,bm))
+        solution = diffeqsolve(
+            ode_term,
+            t0=0.0,
+            t1=spec.maxtime,
+            dt0=dt0,
+            y0=initial_condition,
+            solver=diffrax.SPaRK(),
+            #solver=diffrax.ItoMilstein(),
+            args=spec.args,
+            saveat=SaveAt(ts=spec.times),
+            throw=False,
+            # adjoint=DirectAdjoint(),
+            stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=spec.rtol, atol=spec.atol, dtmin=dt0),
+            max_steps=spec.max_steps,
+            event = Event(spec.condition),
+            progress_meter=spec.progress_meter,
+        )
+        trajectory = solution.ys
+    else:
+        adaptive = spec.model in ('GuidingCenterAdaptative', 'FullOrbitAdaptative',
+                                  'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal')
+        controller = (PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=spec.rtol, atol=spec.atol)
+                      if adaptive else diffrax.ConstantStepSize())
+        solution = diffeqsolve(
+            ode_term, solver=spec.solver if spec.solver is not None else diffrax.Dopri8(),
+            t0=0.0, t1=spec.maxtime, dt0=spec.timestep, y0=initial_condition, args=spec.args,
+            saveat=SaveAt(ts=spec.times), throw=not adaptive, max_steps=spec.max_steps,
+            progress_meter=spec.progress_meter, stepsize_controller=controller, event=Event(spec.condition))
+        trajectory = solution.ys
+    if spec.axis_regular:
+        trajectory = vmap(_from_axis_regular)(trajectory)
+    if spec.return_events:
+        return trajectory, solution.event_mask
+    return trajectory
+
+@eqx.filter_jit
+def _trace_batch(spec, initial_conditions, random_keys, output_sharding):
+    """Reuse compiled models across traces; field, particle and time arrays remain differentiable."""
+    result = vmap(_compute_trajectory, in_axes=(None, 0, 0))(spec, initial_conditions, random_keys)
+    if output_sharding is not None:
+        result = lax.with_sharding_constraint(result, output_sharding)
+    return result
+
+
+
+
 ## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
 ## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
 ## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
@@ -895,39 +1231,22 @@ class Tracing():
         self.max_steps = max_steps
         self.progress = bool(progress)
         self.progress_meter = TqdmProgressMeter() if self.progress else NoProgressMeter()
-        # Diffrax solver to use for the adaptive integrators. If left as None,
-        # each integrator falls back to its previous default (Dopri8), so
-        # existing call sites are unaffected. Selecting the solver here (rather
-        # than hard-coding it) lets the integrator-comparison examples sweep
-        # several solvers. The fallback is a plain Python branch on this
-        # attribute, so it is resolved at trace time and does not affect
-        # differentiability of the traced trajectories.
+        # Solver selection is static; particle and field derivatives stay live.
         self.solver = solver
         if condition is None:
-            self.condition = lambda t, y, args, **kwargs: False
+            # Module-level conditions keep repeated traces on one compiled solve.
+            self.condition = _never_stop
             if isinstance(field, Vmec):
                 if model in _VMEC_GUIDING_CENTER_MODELS:
                     self.condition = _vmec_boundary_event
                     self._has_boundary_event = True
                 elif model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
-                    def condition_Vmec(t, y, args, **kwargs):
-                        s, _, _ = y
-                        return s-1	 
-                    self.condition = condition_Vmec
+                    self.condition = _vmec_field_line_boundary
             elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
-                if model in _GUIDING_CENTER_COLLISION_MODELS:
-                    def condition_BioSavart(t, y, args, **kwargs):
-                        xx, yy, zz, _,_ = y
-                        return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.                      
-                else:
-                    def condition_BioSavart(t, y, args, **kwargs):                      
-                        xx, yy, zz, _ = y
-                        return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
-                self.condition = condition_BioSavart                
+                self.condition = _BiotSavartBoundaryCondition(
+                    boundary, model in _GUIDING_CENTER_COLLISION_MODELS)
         elif self._axis_regular:
-            self.condition = tree_util.tree_map(
-                lambda c: lambda t, y, args, **kwargs: c(t, _from_axis_regular(y), args, **kwargs),
-                condition)
+            self.condition = tree_util.tree_map(_AxisRegularCondition, condition)
         else:
             self.condition = condition
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
@@ -967,8 +1286,7 @@ class Tracing():
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
         elif model == 'FullOrbitCollisions':
-            self.args = (self.field, self.particles,self.species,self.tag_gc)
-            print(self.args)
+            self.args = (self.field, self.particles, self.species)
             if self.particles.initial_xyz_fullorbit is None:
                 raise ValueError("Initial full orbit positions require field input to Particles")
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
@@ -1035,268 +1353,28 @@ class Tracing():
                 self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction_BioSavart(boundary)
 
     def trace(self):
-        @jit
-        def compute_trajectory(initial_condition, particle_key) -> jnp.ndarray:
-            if self._axis_regular:
-                initial_condition = _to_axis_regular(initial_condition)
-            # initial_condition = initial_condition[0]
-            if self.model == 'FullOrbit_Boris':
-                # Integrate the whole [0, maxtime] span: an inner scan of
-                # Boris pushes between consecutive save times, with dt
-                # adjusted (<= timestep) so the saves land on self.times.
-                n_saves = len(self.times) - 1
-                per_save = max(1, int(np.ceil(float(self.maxtime) / (n_saves * float(self.timestep)) - 1e-9)))
-                dt = self.maxtime / (n_saves * per_save)
-                charge_over_mass = self.particles.charge / self.particles.mass
-                criteria = self.stopping_criteria
+        dynamic_span = self.model in _DYNAMIC_SPAN_MODELS
+        as_array = jnp.asarray if dynamic_span else (lambda value: value)
+        spec = _TraceSpec(
+            model=self.model,
+            args=self.args,
+            field=self.field,
+            particles=self.particles,
+            condition=self.condition,
+            stopping_criteria=self.stopping_criteria,
+            times=self.times,
+            maxtime=as_array(self.maxtime),
+            timestep=as_array(self.timestep),
+            rtol=as_array(self.rtol),
+            atol=as_array(self.atol),
+            solver=self.solver,
+            progress_meter=self.progress_meter,
+            max_steps=self.max_steps,
+            rejected_steps=self.rejected_steps,
+            axis_regular=self._axis_regular,
+            return_events=self._has_boundary_event or self.stopping_criteria is not None,
+        )
 
-                def push(state, _):
-                    x = state[:3]
-                    v = state[3:]
-                    t = charge_over_mass * self.field.B_contravariant(x) * 0.5 * dt
-                    s = 2. * t / (1. + jnp.dot(t, t))
-                    vprime = v + jnp.cross(v, t)
-                    v = v + jnp.cross(vprime, s)
-                    x = x + v * dt
-                    return jnp.concatenate((x, v)), None
-
-                def save_interval(carry, _):
-                    state, alive, hits = carry
-                    advanced, _ = lax.scan(push, state, None, length=per_save)
-                    if criteria is None:
-                        return (advanced, alive, hits), advanced
-                    # A particle leaving any level set (value <= 0) is held at
-                    # its last saved point inside, as the adaptive paths do.
-                    outside = jnp.stack([c(0.0, advanced, self.args) <= 0.0 for c in criteria])
-                    outside = outside | ~jnp.isfinite(advanced).all()
-                    stopped = alive & jnp.any(outside)
-                    hits = hits | (alive & outside)
-                    state = jnp.where(alive & ~stopped, advanced, state)
-                    return (state, alive & ~stopped, hits), state
-
-                n_criteria = 0 if criteria is None else len(criteria)
-                carry = (initial_condition, jnp.asarray(True), jnp.zeros((n_criteria,), bool))
-                (_, _, hits), trajectory = lax.scan(save_interval, carry, None, length=n_saves)
-                trajectory = jnp.vstack([initial_condition, trajectory])
-                if criteria is not None:
-                    event_mask = hits[0] if n_criteria == 1 else tuple(hits[i] for i in range(n_criteria))
-                    return trajectory, event_mask
-                return trajectory
-            elif self.model == 'GuidingCenterCollisions':
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                t0=0.0
-                t1=self.maxtime
-                dt0=self.timestep#self.maxtime / self.timesteps
-                tol=dt0*0.5
-                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)            
-                self.ODE_term = MultiTerm(ODETerm(self._vector_field(GuidingCenterCollisionsDrift)),ControlTerm(self._vector_field(GuidingCenterCollisionsDiffusion), bm))
-                solution = diffeqsolve(
-                    self.ODE_term,
-                    t0=0.0,
-                    t1=self.maxtime,
-                    dt0=dt0,
-                    y0=initial_condition,
-                    #solver=diffrax.SlowRK(),
-                    solver=diffrax.StratonovichMilstein(),
-                    args=self.args,
-                    saveat=SaveAt(ts=self.times),
-                    throw=False,
-                    # adjoint=DirectAdjoint(),
-                    #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
-                    max_steps=self.max_steps,
-                    event = Event(self.condition),
-                    progress_meter=self.progress_meter,
-                )
-                trajectory = solution.ys
-            elif self.model == 'GuidingCenterCollisionsMuAdaptative':
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                t0=0.0
-                t1=self.maxtime
-                dt0=self.timestep#self.maxtime / self.timesteps
-                tol=dt0*0.5
-                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
-                self.ODE_term = MultiTerm(ODETerm(self._vector_field(GuidingCenterCollisionsDriftMuStratonovich)),ControlTerm(self._vector_field(GuidingCenterCollisionsDiffusionMu), bm))                
-                solution = diffeqsolve(
-                    self.ODE_term,
-                    t0=0.0,
-                    t1=self.maxtime,
-                    dt0=dt0,
-                    y0=initial_condition,
-                    solver=diffrax.SPaRK(),
-                    #solver=diffrax.HalfSolver(diffrax.GeneralShARK()),
-                    args=self.args,
-                    saveat=SaveAt(ts=self.times),
-                    throw=False,
-                    # adjoint=DirectAdjoint(),
-                    stepsize_controller=ClipStepSizeController(controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,dtmin=dt0,dtmax=1.e-4,force_dtmin=True),step_ts=self.times,store_rejected_steps=self.rejected_steps),
-                    max_steps=self.max_steps,
-                    event = Event(self.condition),
-                    progress_meter=self.progress_meter,
-                )
-                trajectory = solution.ys
-            elif self.model == 'GuidingCenterCollisionsMuFixed':
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                t0=0.0
-                t1=self.maxtime
-                dt0=self.timestep#self.maxtime / self.timesteps
-                tol=dt0*0.5
-                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
-                self.ODE_term = MultiTerm(ODETerm(self._vector_field(GuidingCenterCollisionsDriftMuStratonovich)),ControlTerm(self._vector_field(GuidingCenterCollisionsDiffusionMu), bm))                
-                solution = diffeqsolve(
-                    self.ODE_term,
-                    t0=0.0,
-                    t1=self.maxtime,
-                    dt0=dt0,
-                    y0=initial_condition,
-                    solver=diffrax.StratonovichMilstein(),                    
-                    args=self.args,
-                    saveat=SaveAt(ts=self.times),
-                    throw=False,
-                    # adjoint=DirectAdjoint(),
-                    max_steps=self.max_steps,
-                    event = Event(self.condition),
-                    progress_meter=self.progress_meter,
-                )
-                trajectory = solution.ys
-            elif self.model == 'GuidingCenterCollisionsMuIto':
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                t0=0.0
-                t1=self.maxtime
-                dt0=self.timestep#self.maxtime / self.timesteps
-                tol=dt0*0.5
-                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
-                self.ODE_term = MultiTerm(ODETerm(self._vector_field(GuidingCenterCollisionsDriftMuIto)),ControlTerm(self._vector_field(GuidingCenterCollisionsDiffusionMu), bm))                
-                solution = diffeqsolve(
-                    self.ODE_term,
-                    t0=0.0,
-                    t1=self.maxtime,
-                    dt0=dt0,
-                    y0=initial_condition,
-                    solver=diffrax.ItoMilstein(),                    
-                    args=self.args,
-                    saveat=SaveAt(ts=self.times),
-                    throw=False,
-                    # adjoint=DirectAdjoint(),
-                    max_steps=self.max_steps,
-                    event = Event(self.condition),
-                    progress_meter=self.progress_meter,
-                )
-                trajectory = solution.ys
-            elif self.model == 'FullOrbitCollisions':
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                t0=0.0
-                t1=self.maxtime
-                dt0=self.timestep#self.maxtime / self.timesteps
-                tol=dt0*0.5
-                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(6,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)            
-                self.ODE_term = MultiTerm(ODETerm(LorentzCollisionsDrift),ControlTerm(LorentzCollisionsDiffusion,bm))
-                trajectory = diffeqsolve(
-                    self.ODE_term,
-                    t0=0.0,
-                    t1=self.maxtime,
-                    dt0=dt0,
-                    y0=initial_condition,
-                    solver=diffrax.SPaRK(),
-                    #solver=diffrax.ItoMilstein(),
-                    args=self.args,
-                    saveat=SaveAt(ts=self.times),
-                    throw=False,
-                    # adjoint=DirectAdjoint(),                   
-                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
-                    max_steps=self.max_steps,
-                    event = Event(self.condition),
-                    progress_meter=self.progress_meter,
-                ).ys          
-            elif self.model == 'GuidingCenterAdaptative' :  
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                solution = diffeqsolve(
-                    self.ODE_term,
-                    t0=0.0,
-                    t1=self.maxtime,
-                    dt0=self.timestep,#self.maxtime / self.timesteps,
-                    y0=initial_condition,
-                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
-                    args=self.args,
-                    saveat=SaveAt(ts=self.times),
-                    throw=False,
-                    # adjoint=DirectAdjoint(),
-                    progress_meter=self.progress_meter,
-                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
-                    max_steps=self.max_steps,
-                    event = Event(self.condition)
-                )
-                trajectory = solution.ys
-            elif self.model == 'FullOrbitAdaptative' :
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning)
-                solution = diffeqsolve(
-                    self.ODE_term,
-                    t0=0.0,
-                    t1=self.maxtime,
-                    dt0=self.timestep,
-                    y0=initial_condition,
-                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
-                    args=self.args,
-                    saveat=SaveAt(ts=self.times),
-                    throw=False,
-                    progress_meter=self.progress_meter,
-                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
-                    max_steps=self.max_steps,
-                    event = Event(self.condition)
-                )
-                trajectory = solution.ys
-            elif self.model in ('FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                solution = diffeqsolve(
-                    self.ODE_term,
-                    t0=0.0,
-                    t1=self.maxtime,
-                    dt0=self.timestep,#self.maxtime / self.timesteps,
-                    y0=initial_condition,
-                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
-                    args=self.args,
-                    saveat=SaveAt(ts=self.times),
-                    throw=False,
-                    # adjoint=DirectAdjoint(),
-                    progress_meter=self.progress_meter,
-                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
-                    max_steps=self.max_steps,
-                    event = Event(self.condition)
-                )
-                trajectory = solution.ys
-            #Fixed guiding center
-            else:
-                import warnings
-                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-                solution = diffeqsolve(
-                    self.ODE_term,
-                    t0=0.0,
-                    t1=self.maxtime,
-                    dt0=self.timestep,#self.maxtime / self.timesteps,
-                    y0=initial_condition,
-                    solver=(self.solver if self.solver is not None else diffrax.Dopri8()),
-                    args=self.args,
-                    saveat=SaveAt(ts=self.times),
-                    throw=True,
-                    # adjoint=DirectAdjoint(),
-                    progress_meter=self.progress_meter,
-                    max_steps=self.max_steps,
-                    event = Event(self.condition)
-                )
-                trajectory = solution.ys
-            if self._axis_regular:
-                trajectory = vmap(_from_axis_regular)(trajectory)
-            if self._has_boundary_event or self.stopping_criteria is not None:
-                return trajectory, solution.event_mask
-            return trajectory
-        
         devices = self.devices
         device_count = min(len(devices), len(self.initial_conditions))
         while device_count > 1 and len(self.initial_conditions) % device_count:
@@ -1321,20 +1399,13 @@ class Tracing():
             initial_conditions = _place_on_devices(self.initial_conditions, sharding)
             if random_keys is not None:
                 random_keys = _place_on_devices(random_keys, sharding_index)
-            return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
-                        initial_conditions, random_keys)
-        else:
-            device = devices[0]
-            initial_conditions = _place_on_devices(self.initial_conditions, device)
-            if random_keys is not None:
-                random_keys = _place_on_devices(random_keys, device)
-            with jax.default_device(device):
-                return jit(vmap(compute_trajectory,in_axes=(0,0)))(
-                    initial_conditions, random_keys)
-        #x=jax.device_put(self.initial_conditions, sharding)
-        #y=jax.device_put(self.particles.random_keys, sharding_index)        
-        #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
-        #return sharded_fun(x, y).block_until_ready()    
+            return _trace_batch(spec, initial_conditions, random_keys, output_sharding)
+        device = devices[0]
+        initial_conditions = _place_on_devices(self.initial_conditions, device)
+        if random_keys is not None:
+            random_keys = _place_on_devices(random_keys, device)
+        with jax.default_device(device):
+            return _trace_batch(spec, initial_conditions, random_keys, None)
 
     def _vector_field(self, vector_field):
         return _axis_regular(vector_field) if self._axis_regular else vector_field
@@ -1375,7 +1446,7 @@ class Tracing():
                 return 0.5 * mass * trajectory[:, 3]**2
             energy = vmap(compute_energy)(self.trajectories)
 
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris' or self.model == 'FullOrbitAdaptative':
+        elif self.model in ('FullOrbit', 'FullOrbit_Boris', 'FullOrbitAdaptative', 'FullOrbitCollisions'):
             def compute_energy(trajectory):
                 vxvyvz = trajectory[:, 3:]
                 v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)
@@ -1414,7 +1485,7 @@ class Tracing():
                 return jnp.sqrt(v**2-vpar**2)
             v_perp = vmap(compute_vperp)(self.trajectories)
 
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris' or self.model == 'FullOrbitAdaptative':
+        elif self.model in ('FullOrbit', 'FullOrbit_Boris', 'FullOrbitAdaptative', 'FullOrbitCollisions'):
             def compute_vperp(trajectory):
                 xyz = trajectory[:, :3]
                 vxvyvz = trajectory[:, 3:]

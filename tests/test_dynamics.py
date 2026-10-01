@@ -651,16 +651,25 @@ if __name__ == "__main__":
 def test_tracing_max_steps_is_configurable_and_bounded():
     """The Diffrax ceiling used to be 1e10, so a trace that could not finish ran
     until the process was killed rather than returning."""
+    import ast
     import inspect
 
-    from essos.dynamics import Tracing
+    from essos.dynamics import Tracing, _compute_trajectory
 
     default = inspect.signature(Tracing).parameters["max_steps"].default
     assert default == 1_000_000
 
+    # Tracing hands max_steps to the module-level solve, which passes it to
+    # every diffeqsolve call.
     source = inspect.getsource(Tracing)
     assert "max_steps=10000000000" not in source
-    assert source.count("max_steps=self.max_steps") == 9
+    assert source.count("max_steps=self.max_steps") == 1
+    solve_source = inspect.getsource(_compute_trajectory)
+    assert "max_steps=10000000000" not in solve_source
+    calls = [node for node in ast.walk(ast.parse(solve_source))
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "diffeqsolve"]
+    assert calls and all(any(kw.arg == "max_steps" and ast.unparse(kw.value) == "spec.max_steps"
+                             for kw in call.keywords) for call in calls)
 
 
 
@@ -671,6 +680,42 @@ class _UniformField:
 
     def B_contravariant(self, xyz):
         return self.vector
+
+    B = B_contravariant
+
+    def to_xyz(self, xyz):
+        return xyz
+
+
+@pytest.mark.parametrize("stop", [False, True])
+def test_full_orbit_collisions_accepts_solver_tolerances_and_stops(monkeypatch, stop):
+    import essos.dynamics as dynamics
+
+    controller = dynamics.PIDController
+    def checked_controller(**kwargs):
+        assert kwargs["rtol"] == 1e-6
+        assert kwargs["atol"] == 1e-7
+        return controller(**kwargs)
+    monkeypatch.setattr(dynamics, "PIDController", checked_controller)
+    field = _UniformField((0., 0., 1.), magnitude=1e-3)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]),
+                                jnp.array([1e18]), jnp.array([1e3]))
+    ceiling = 0.75 * float(particles.initial_vparallel[0]) * 1e-5
+    def below_ceiling(t, y, args, **kwargs):
+        return ceiling - y[2]
+    trace = Tracing(field=field, particles=particles, species=species,
+                    model="FullOrbitCollisions", maxtime=1e-5, timestep=1e-7,
+                    times_to_trace=3, rtol=1e-6, atol=1e-7,
+                    stopping_criteria=below_ceiling if stop else None)
+    assert trace.trajectories.shape == (1, 3, 6)
+    assert jnp.all(jnp.isfinite(trace.trajectories))
+    np.testing.assert_allclose(trace.energy()[0, 0], particles.energy, rtol=1e-12)
+    np.testing.assert_allclose(trace.v_perp()[0, 0], particles.initial_vperpendicular[0], rtol=1e-12)
+    if stop:
+        assert bool(trace.boundary_hits[0])
+        assert float(jnp.max(trace.trajectories[0, :, 2])) < ceiling
+        np.testing.assert_array_equal(trace.trajectories[0, -1], trace.trajectories[0, -2])
 
 
 def _legacy_positive_charge_start(field, xyz, vpar, total_speed, mass, charge, phase):
@@ -906,3 +951,75 @@ def test_vmec_guiding_centers_seeded_on_the_axis_leave_it():
                       maxtime=2e-5, timestep=1e-8, times_to_trace=5)
     s = tracing.trajectories[:, :, 0]
     assert jnp.all(jnp.isfinite(s)) and jnp.all(s[:, -1] > 1e-8)
+
+
+COILS_JSON = (Path(__file__).resolve().parents[1] / "examples" / "input_files"
+              / "ESSOS_biot_savart_LandremanPaulQA.json")
+
+
+@pytest.fixture(scope="module")
+def trace_coil_field():
+    from essos.coils import Coils
+    from essos.fields import BiotSavart
+
+    return BiotSavart(Coils.from_json(str(COILS_JSON)))
+
+
+def _protons(n=4):
+    from essos.constants import ELEMENTARY_CHARGE
+
+    xyz = jnp.stack([jnp.linspace(1.20, 1.26, n), jnp.zeros(n), jnp.zeros(n)], axis=1)
+    return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.linspace(-0.5, 0.5, n),
+                     charge=ELEMENTARY_CHARGE, mass=PROTON_MASS, energy=5000 * ELEMENTARY_CHARGE)
+
+
+def _cached_trace(field, maxtime=1e-6, particles=None):
+    return Tracing(field=field, model="GuidingCenterAdaptative",
+                   particles=_protons() if particles is None else particles,
+                   maxtime=maxtime, timestep=1e-8, times_to_trace=10, rtol=1e-8, atol=1e-8)
+
+
+def _compilations(caplog, run):
+    """Run ``run`` and return its result with every jit it compiled."""
+    import logging
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING), jax.log_compiles(True):
+        result = run()
+    return result, [record.getMessage() for record in caplog.records
+                    if record.getMessage().startswith("Compiling ")]
+
+
+def test_identical_tracing_reuses_the_compiled_solve(trace_coil_field, caplog):
+    field = trace_coil_field
+    first = _cached_trace(field)
+    # New particles and the default electric field must reuse the same kernel.
+    second, compiled = _compilations(caplog, lambda: _cached_trace(field))
+    assert compiled == []
+    np.testing.assert_array_equal(np.asarray(first.trajectories), np.asarray(second.trajectories))
+
+
+def test_changing_maxtime_or_coil_values_does_not_recompile(trace_coil_field, caplog):
+    field = trace_coil_field
+    _cached_trace(field)
+    shifted = jax.tree_util.tree_map(lambda leaf: leaf * 1.001, field)
+    _, compiled = _compilations(
+        caplog, lambda: (_cached_trace(field, maxtime=2e-6), _cached_trace(shifted)))
+    # Eager scaling kernels may compile; the batched solve must be reused.
+    assert not [message for message in compiled if "jit(_trace_batch)" in message]
+
+
+def test_gradient_through_tracing_matches_finite_differences(trace_coil_field):
+    field = trace_coil_field
+    particles = _protons(2)
+
+    def final_radius(scale):
+        scaled = jax.tree_util.tree_map(lambda leaf: leaf * scale, field)
+        xyz = _cached_trace(scaled, particles=particles).trajectories[:, -1, :3]
+        return jnp.sum(jnp.sqrt(xyz[:, 0]**2 + xyz[:, 1]**2))
+
+    gradient = jax.grad(final_radius)(1.0)
+    step = 1e-4
+    finite_difference = (final_radius(1.0 + step) - final_radius(1.0 - step)) / (2 * step)
+    assert jnp.isfinite(gradient)
+    np.testing.assert_allclose(gradient, finite_difference, rtol=1e-3)
