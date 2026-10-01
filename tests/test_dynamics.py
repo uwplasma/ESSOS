@@ -1,3 +1,4 @@
+import os
 import pytest
 import numpy as np
 from pathlib import Path
@@ -23,8 +24,11 @@ from essos.dynamics import (
     _VMEC_GUIDING_CENTER_MODELS,
 )
 from essos.background_species import BackgroundSpecies
-from essos.fields import Vmec
+from essos.fields import Vmec, VMEC_WOUT_ARRAYS
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
+
+WOUT_FILE = os.path.join(os.path.dirname(__file__), "..", "examples", "input_files",
+                         "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 
 def test_particles_initialization_all_params():
     nparticles = 100
@@ -127,6 +131,21 @@ def test_arclength_fieldline_has_unit_speed_without_changing_direction():
         timestep=0.1, times_to_trace=11)
     assert jnp.allclose(
         tracing.trajectories[0, -1], jnp.array([1.2, 1.6, 0.0]))
+
+
+def test_tracing_is_differentiable_in_its_initial_conditions():
+    """Tracing inside jax.grad, as in the coil-optimization losses, must not move
+    traced initial conditions to the host."""
+    class ScaledField(MockField):
+        def B_contravariant(self, points):
+            return jnp.array([3.0, 4.0, 0.0])
+
+    def end_x(x0):
+        tracing = Tracing(field=ScaledField(), model="FieldLineArclength", initial_conditions=x0,
+                          maxtime=2.0, timestep=0.1, times_to_trace=11)
+        return tracing.trajectories[0, -1, 0]
+
+    assert jnp.allclose(jax.grad(end_x)(jnp.zeros((1, 3))), jnp.array([[1.0, 0.0, 0.0]]))
 
 
 def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
@@ -447,6 +466,88 @@ def test_vmec_collisional_guiding_centers_cross_the_magnetic_axis(model):
     assert jnp.isfinite(tracing.trajectories).all()
     assert (s.min(axis=1) < 2e-3).all()
     assert (s[:, -1] > 1.5 * s.min(axis=1)).all()
+
+
+def radial_tracing(peaks, times=jnp.linspace(0.0, 1.0, 40)):
+    """Tracing holding prescribed radial excursions, bypassing the ODE solve."""
+    trajectories_r = 0.5 + (peaks[:, None] - 0.5) * jnp.sin(jnp.pi * times)[None, :]
+    tracing = Tracing.__new__(Tracing)
+    tracing.trajectories = jnp.stack([trajectories_r, jnp.zeros_like(trajectories_r), jnp.zeros_like(trajectories_r)], axis=-1)
+    tracing.times = times
+    tracing.field = Vmec.__new__(Vmec)
+    tracing.model = "GuidingCenterAdaptative"
+    tracing._has_boundary_event = True
+    tracing.boundary_hits = jnp.zeros(len(peaks), dtype=bool)
+    return tracing
+
+def test_soft_loss_fraction_converges_to_loss_fraction():
+    tracing = radial_tracing(jnp.array([0.70, 0.93, 0.86, 0.99]))
+    exact = tracing.loss_fraction(r_max=0.9)[0][-1]
+    assert exact == 0.5
+
+    errors = [abs(float(tracing.soft_loss_fraction(r_max=0.9, width=width) - exact)) for width in (0.02, 0.01, 0.005, 0.002)]
+    assert errors == sorted(errors, reverse=True)
+    assert errors[-1] < 1e-3
+
+def test_soft_loss_fraction_gradient_is_nonzero_where_loss_fraction_is_flat():
+    peaks = jnp.array([0.70, 0.93, 0.86, 0.99])
+    exact_gradient = jax.grad(lambda p: radial_tracing(p).loss_fraction(r_max=0.9)[0][-1])(peaks)
+    soft_gradient = jax.grad(lambda p: radial_tracing(p).soft_loss_fraction(r_max=0.9, width=0.01))(peaks)
+
+    assert jnp.all(exact_gradient == 0.0)
+    assert jnp.all(soft_gradient[1:] > 0.0)
+
+@pytest.mark.parametrize("width", [0.0, -0.02, float("nan"), float("inf")])
+def test_soft_loss_rejects_invalid_width(width):
+    with pytest.raises(ValueError, match="width"):
+        radial_tracing(jnp.array([0.8])).soft_loss_fraction(width=width)
+
+
+def test_soft_loss_distinguishes_boundary_stop_from_failure():
+    trace = radial_tracing(jnp.array([0.8]))
+    trace.trajectories = trace.trajectories.at[0, -1, 1].set(jnp.nan)
+    assert jnp.isnan(trace.soft_loss_fraction())
+    trace.boundary_hits = jnp.array([True])
+    assert jnp.isfinite(trace.soft_loss_fraction())
+    assert trace.soft_loss_fraction(width=0.001) > 0.99
+
+
+@pytest.mark.parametrize("model, field", [("Lorentz", Vmec.__new__(Vmec)), ("GuidingCenterAdaptative", object())])
+def test_soft_loss_rejects_nonflux_trajectories(model, field):
+    trace = radial_tracing(jnp.array([0.8]))
+    trace.model, trace.field = model, field
+    with pytest.raises(ValueError, match="VMEC guiding"):
+        trace.soft_loss_fraction()
+
+
+def vmec_alpha_tracing(field, nparticles=4, maxtime=4e-6, times_to_trace=10):
+    theta = jnp.linspace(0, 2*jnp.pi, nparticles)
+    phi = jnp.linspace(0, 2*jnp.pi/field.nfp, nparticles)
+    particles = Particles(initial_xyz=jnp.array([0.85*jnp.ones(nparticles), theta, phi]).T, mass=ALPHA_PARTICLE_MASS,
+                          charge=ALPHA_PARTICLE_CHARGE, energy=FUSION_ALPHA_PARTICLE_ENERGY, field=field)
+    return Tracing(field=field, model='GuidingCenterAdaptative', particles=particles, maxtime=maxtime,
+                   timestep=1e-8, times_to_trace=times_to_trace, atol=1e-5, rtol=1e-5)
+
+def test_vmec_from_arrays_traces_identically():
+    vmec = Vmec(WOUT_FILE)
+    rebuilt = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **{name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS})
+
+    assert jnp.array_equal(vmec_alpha_tracing(rebuilt).trajectories, vmec_alpha_tracing(vmec).trajectories)
+
+def test_soft_loss_fraction_differentiates_vmec_coefficients():
+    vmec = Vmec(WOUT_FILE)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    scaled = ('bmnc', 'bsubsmns', 'bsubumnc', 'bsubvmnc', 'bsupumnc', 'bsupvmnc')
+
+    def soft_loss_of_field_scale(scale):
+        field = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns,
+                                 **{**arrays, **{name: arrays[name]*scale for name in scaled}})
+        return vmec_alpha_tracing(field).soft_loss_fraction(r_max=0.88, width=0.01)
+
+    evaluate = jax.jit(jax.value_and_grad(soft_loss_of_field_scale))
+    for scale in (1.0, 1.01):
+        value, gradient = evaluate(scale)
+        assert jnp.isfinite(value) and jnp.isfinite(gradient) and gradient != 0.0
 
 
 def test_tracing_initialization(field, particles,electric_field):
@@ -782,3 +883,50 @@ def test_vmec_lost_energies_come_from_the_last_finite_state():
     assert jnp.isfinite(tracing.lost_energies).all() and jnp.isfinite(tracing.lost_positions).all()
     assert jnp.allclose(tracing.lost_energies[lost], tracing.particles.energy, rtol=1e-2)
     assert jnp.all(tracing.lost_positions[lost, 0] < 1)
+
+
+def test_custom_loss_grad_through_adaptive_guiding_center_matches_finite_difference():
+    # custom_loss jits its value and gradient, so Tracing.trace sees tracer
+    # initial conditions and must not pull them back to the host.
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart
+    from essos.losses import custom_loss
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.4, n_segments=24, nfp=2, stellsym=True)
+    coils = Coils(curves=curves, currents=jnp.array([1e6, 1e6]))
+    R0 = jnp.linspace(0.95, 1.05, 2)
+    particles = Particles(initial_xyz=jnp.array([R0, 0 * R0, 0 * R0]).T)
+
+    def final_position(field, particles):
+        tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles,
+                          maxtime=1e-7, times_to_trace=4, atol=1e-10, rtol=1e-10)
+        xyz = tracing.trajectories[:, -1, :3]
+        return jnp.sum(jnp.sqrt(xyz[:, 0]**2 + xyz[:, 1]**2)) + jnp.sum(xyz[:, 2])
+
+    loss = custom_loss(final_position, "field", particles=particles)
+    loss.dependencies = {"field": BiotSavart(coils)}
+    dofs = loss.starting_dofs
+
+    gradient = loss.grad(dofs)
+    direction = jax.random.normal(jax.random.key(0), dofs.shape)
+    step = 1e-4 * jnp.linalg.norm(dofs) / jnp.linalg.norm(direction)
+    finite_difference = (loss(dofs + step * direction) - loss(dofs - step * direction)) / (2 * step)
+
+    assert jnp.all(jnp.isfinite(gradient))
+    np.testing.assert_allclose(gradient @ direction, finite_difference, rtol=1e-6)
+
+
+def test_vmec_guiding_centers_seeded_on_the_axis_leave_it():
+    """Seeds at s = 0 used to stay there: the VMEC Jacobian vanishes on the axis."""
+    from essos.constants import PROTON_MASS, ELEMENTARY_CHARGE
+
+    wout = str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+               / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+    vmec = Vmec(wout, ntheta=8, nphi=8)
+    particles = Particles(initial_xyz=jnp.array([[0.0, 0.0, 0.3], [0.0, 1.0, 1.0]]),
+                          initial_vparallel_over_v=jnp.array([0.9, -0.5]), mass=PROTON_MASS,
+                          charge=ELEMENTARY_CHARGE, energy=5e3 * ELEMENTARY_CHARGE)
+    tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
+                      maxtime=2e-5, timestep=1e-8, times_to_trace=5)
+    s = tracing.trajectories[:, :, 0]
+    assert jnp.all(jnp.isfinite(s)) and jnp.all(s[:, -1] > 1e-8)

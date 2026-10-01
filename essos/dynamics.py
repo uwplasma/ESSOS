@@ -766,9 +766,17 @@ _GUIDING_CENTER_COLLISION_MODELS = frozenset(
 _AXIS_REGION = 1e-2
 
 
+_AXIS_SEED = 1e-12  # smallest s of a seed: the VMEC Jacobian vanishes on the axis itself
+
+
 def _to_axis_regular(y):
-    """Map (s, theta, ...) to (sqrt(s) cos theta, sqrt(s) sin theta, ..., 0)."""
-    r = jnp.sqrt(y[0])
+    """Map (s, theta, ...) to (sqrt(s) cos theta, sqrt(s) sin theta, ..., 0).
+
+    A seed exactly on the axis (s = 0) is moved to s = _AXIS_SEED, where the
+    guiding-center velocity is finite; orbits that later pass the axis never
+    land on s = 0 exactly.
+    """
+    r = jnp.sqrt(jnp.maximum(y[0], _AXIS_SEED))
     return jnp.concatenate([jnp.array([r * jnp.cos(y[1]), r * jnp.sin(y[1])]), y[2:], jnp.zeros(1)])
 
 
@@ -831,6 +839,18 @@ class LevelsetStoppingCriterion:
     def __call__(self, t, y, args, **kwargs):
         del t, args, kwargs
         return self.classifier.evaluate_xyz(y[:3]) + self.maximum_distance
+
+
+def _place_on_devices(x, target):
+    """Place concrete arrays on ``target``; constrain tracers without a host copy."""
+    if isinstance(x, jax.core.Tracer):
+        if isinstance(target, NamedSharding):
+            return lax.with_sharding_constraint(x, target)
+        return x
+    x = jax.device_get(x)
+    if not jax.dtypes.issubdtype(x.dtype, jax.dtypes.prng_key):
+        x = np.asarray(x)
+    return device_put(x, target)
 
 
 def _never_stop(t, y, args, **kwargs):
@@ -1460,16 +1480,14 @@ class Tracing():
             output_sharding = (sharding, event_sharding)
         random_keys = self.particles.random_keys if self.particles else None
         if sharding is not None:
-            initial_conditions = device_put(
-                np.asarray(jax.device_get(self.initial_conditions)), sharding)
+            initial_conditions = _place_on_devices(self.initial_conditions, sharding)
             if random_keys is not None:
-                random_keys = device_put(jax.device_get(random_keys), sharding_index)
+                random_keys = _place_on_devices(random_keys, sharding_index)
             return _trace_batch(spec, initial_conditions, random_keys, output_sharding)
         device = devices[0]
-        initial_conditions = device_put(
-            np.asarray(jax.device_get(self.initial_conditions)), device)
+        initial_conditions = _place_on_devices(self.initial_conditions, device)
         if random_keys is not None:
-            random_keys = device_put(jax.device_get(random_keys), device)
+            random_keys = _place_on_devices(random_keys, device)
         with jax.default_device(device):
             return _trace_batch(spec, initial_conditions, random_keys, None)
 
@@ -1650,6 +1668,23 @@ class Tracing():
         loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times
+
+    def soft_loss_fraction(self, r_max=0.99, width=0.02):
+        """Soft peak-flux crossing score for VMEC guiding centres.
+
+        Boundary stops count as exits; unrelated failures return NaN. A smaller
+        positive width sharpens the score. Hard losses remain the diagnostic.
+        """
+        if not isinstance(self.field, Vmec) or self.model not in _VMEC_GUIDING_CENTER_MODELS:
+            raise ValueError("soft_loss_fraction requires VMEC guiding centres")
+        if not np.isfinite(width) or width <= 0:
+            raise ValueError("width must be finite and positive")
+        radial = self.trajectories[:, :, 0]
+        finite = jnp.all(jnp.isfinite(self.trajectories), axis=-1)
+        stopped = (self.boundary_hits & self._has_boundary_event)[:, None]
+        radial = jnp.where(finite, radial, jnp.where(stopped, 1.0, jnp.nan))
+        peak = jnp.sum(radial * jax.nn.softmax(radial / width, axis=1), axis=1)
+        return jnp.mean(jax.nn.sigmoid((peak - r_max) / width))
 
 
 
