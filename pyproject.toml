@@ -27,17 +27,24 @@ keywords = ["Plasma",
      "Simulation",
      "JAX"]
  
-dependencies = [ 
-    "jax", 
-    "jaxlib", 
-    "tqdm", 
-    "matplotlib", 
-    "diffrax", 
-    "optax", 
-    "jaxopt", 
-    "optimistix", 
-    "scipy", 
-    "jaxkd", 
+# Floors matter when ESSOS is installed into an environment that already has
+# older packages: pip keeps anything that satisfies the requirement. equinox
+# 0.13.3 is the first release whose primitives trace under jax 0.10/0.11, and
+# diffrax 0.7.0 is the first with ClipStepSizeController (essos.dynamics).
+# jax 0.6.2 is the newest JAX for Python 3.10, which the 3.10 CI lane tests.
+dependencies = [
+    "jax>=0.6.2",
+    "jaxlib>=0.6.2",
+    "equinox>=0.13.3",
+    "jaxtyping>=0.2.24",
+    "tqdm",
+    "matplotlib",
+    "diffrax>=0.7.0",
+    "optax",
+    "jaxopt",
+    "optimistix",
+    "scipy",
+    "jaxkd",
     "netcdf4",
     # Used internally by SurfaceRZFourier.to_vtk() and Coils.to_vtk().
     "pyevtk",
