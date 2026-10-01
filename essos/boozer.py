@@ -1,22 +1,10 @@
-"""Fast guiding-centre tracing in Boozer coordinates, with optional collisions.
+"""Fixed-step K=0 Boozer guiding-centre tracing (White, 2014).
 
-:class:`BoozerField` holds a Boozer spectrum of ``|B|`` (``cos(m theta - n zeta)``
-modes from ``booz_xform`` / ``booz_xform_jax``) with cubic splines in
-``r = sqrt(s)`` and the profiles ``iota``, ``G`` and ``I`` with cubic splines in
-``s``.  For ``m >= 1`` the spline holds ``b_mn / r``, so ``|B|`` is regular at
-the magnetic axis.
-
-:func:`trace_boozer` integrates the guiding-centre equations of White (2014)
-in the ``K = 0`` Boozer form used by SIMSOPT (``GuidingCenterNoKBoozerRHS``),
-in the chart ``(u, w) = sqrt(s) (cos theta, sin theta)``, which is regular on
-the axis, with fixed-step RK4 or Dormand–Prince 8 under ``vmap``. A particle
-is lost at ``s = 1``. With ``species`` (an
-:class:`essos.background_species.BackgroundSpecies` whose profiles are given on
-``s``) a Monte Carlo collision operator (pitch-angle scattering, slowing down
-and energy diffusion, Ito Euler-Maruyama, Boozer & Kuo-Petravic, J. Comput.
-Phys. 1981) acts after every orbit step; a particle whose energy falls below
-``thermal_cutoff`` times the local temperature of species 0 is thermalised and
-stops, counted as confined.
+Interpolate the |B| spectrum in sqrt(s), with m>=1 coefficients divided by
+sqrt(s) for axis regularity; interpolate iota, G and I in s. RK4 or Dopri8 runs in
+sqrt(s)*(cos(theta), sin(theta)). LCFS crossings are lost; nonfinite steps
+are failed. Optional Euler-Maruyama collisions apply pitch scattering,
+slowing down and energy diffusion (Boozer & Kuo-Petravic, 1981).
 """
 
 from __future__ import annotations
@@ -219,7 +207,7 @@ class BoozerTrace:
             if error > max_energy_error:
                 raise RuntimeError(f"Relative energy drift {error:.3g} exceeds {max_energy_error:.3g}; reduce timestep")
         lt = self.loss_times[self.lost]
-        return np.array([(lt <= t).sum() for t in self.times]) / self.loss_times.size
+        return np.searchsorted(np.sort(lt), self.times, side="right") / self.loss_times.size
 
 
 def _rk_step(rhs, y, dt, method):

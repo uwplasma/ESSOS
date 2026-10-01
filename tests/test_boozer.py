@@ -295,3 +295,14 @@ def test_survivor_compaction_preserves_failures(method):
     assert whole.failed.all() and not whole.lost.any()
     for name in ("states", "loss_times", "thermalized_times", "failed_times", "energy_error"):
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
+
+
+@pytest.mark.parametrize("loss_times", [[1.0, 0.5, 0.5, -1.0, 2.0, 0.0],
+                                       [-1.0] * 6, [0.0] * 6])
+def test_loss_fractions_count_ties_and_preserve_requested_time_order(loss_times):
+    times = np.array([1.0, 0.5, 0.0, 0.5, 2.0])
+    losses = np.array(loss_times)
+    out = BoozerTrace(times, np.zeros((6, 5, 5)), losses, np.full(6, -1.0), np.zeros(6))
+    expected = np.array([np.count_nonzero((losses >= 0) & (losses <= t))
+                         for t in times]) / losses.size
+    np.testing.assert_array_equal(out.loss_fractions(), expected)
