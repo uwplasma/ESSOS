@@ -164,11 +164,11 @@ VMEC's flux convention requires `psi0 = -phi_edge / (2*pi)`. A loss occurs at `s
 
 ### Matched tracing
 
-Common alpha births are traced through a reactor-scale vacuum equilibrium without collisions. The two workloads use matched births within each workload.
+8,192 common 3.52 MeV alpha births are traced for 20 ms through a reactor-scale vacuum equilibrium without collisions.
 
-![Loss agreement and CPU/GPU tracing runtimes](docs/readme_boozer_speed.png)
+![Loss agreement and cold/warm GPU tracing runtimes](docs/readme_boozer_speed.png)
 
-For 8,192 births over 20 ms, ESSOS and CATAPULT lose 6,572 and 6,573 particles; 8,191 labels agree. Cold/warm timings exclude field setup. Energy drift is `2.14e-5` at every ESSOS step and `1.36e-5` at saved confined CATAPULT states. The 64-birth comparison resolves all labels in ESSOS, SIMPLE and DESC; six SIMSOPT axis stops remain unresolved. CPU: i7-3820, eight workers; GPU: RTX A4000. [Settings, source revisions and field checks](https://github.com/uwplasma/vmex/blob/0cc4d60a/docs/explanation/validation.md#cross-code-alpha-tracing).
+ESSOS and CATAPULT lose 6,572 and 6,573 particles; 8,191 labels agree. Alpha mass is `6.6446573450e-27 kg`; timings use an RTX A4000 and exclude field setup. Energy drift is `2.14e-5` at every ESSOS step and `1.36e-5` at saved confined CATAPULT states. [Controls, source revisions and CPU/DESC/SIMPLE/SIMSOPT comparisons](https://github.com/uwplasma/vmex/blob/91eda6ab/docs/explanation/validation.md#cross-code-alpha-tracing).
 
 Shaded loss bands use `f(t) ± sqrt(f(t)[1-f(t)]/N)`, the pointwise binomial sampling error. Timestep and spectrum convergence are checked separately. Collisional cross-code benchmarks are not yet available.
 
