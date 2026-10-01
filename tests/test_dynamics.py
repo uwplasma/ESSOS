@@ -503,10 +503,14 @@ def test_soft_loss_rejects_invalid_width(width):
         radial_tracing(jnp.array([0.8])).soft_loss_fraction(width=width)
 
 
-def test_soft_loss_distinguishes_boundary_stop_from_failure():
+@pytest.mark.parametrize("nonfinite", [False, True])
+def test_soft_loss_distinguishes_boundary_stop_from_failure(nonfinite):
     trace = radial_tracing(jnp.array([0.8]))
-    trace.trajectories = trace.trajectories.at[0, -1, 1].set(jnp.nan)
-    assert jnp.isnan(trace.soft_loss_fraction())
+    if nonfinite:
+        trace.trajectories = trace.trajectories.at[0, -1, 1].set(jnp.nan)
+        assert jnp.isnan(trace.soft_loss_fraction())
+    else:
+        assert trace.soft_loss_fraction(width=0.001) < 0.01
     trace.boundary_hits = jnp.array([True])
     assert jnp.isfinite(trace.soft_loss_fraction())
     assert trace.soft_loss_fraction(width=0.001) > 0.99
