@@ -1296,9 +1296,11 @@ class Tracing():
             if len(self.stopping_criteria) > 1:
                 event_sharding = tuple(sharding_index for _ in self.stopping_criteria)
             output_sharding = (sharding, event_sharding)
+        initial_conditions = self.initial_conditions
+        if not isinstance(initial_conditions, jax.core.Tracer):
+            initial_conditions = np.asarray(jax.device_get(initial_conditions))
         if sharding is not None:
-            initial_conditions = device_put(
-                np.asarray(jax.device_get(self.initial_conditions)), sharding)
+            initial_conditions = device_put(initial_conditions, sharding)
             random_keys = self.particles.random_keys if self.particles else None
             if random_keys is not None:
                 random_keys = device_put(jax.device_get(random_keys), sharding_index)
@@ -1306,8 +1308,7 @@ class Tracing():
                         initial_conditions, random_keys)
         else:
             device = devices[0]
-            initial_conditions = device_put(
-                np.asarray(jax.device_get(self.initial_conditions)), device)
+            initial_conditions = device_put(initial_conditions, device)
             random_keys = self.particles.random_keys if self.particles else None
             if random_keys is not None:
                 random_keys = device_put(jax.device_get(random_keys), device)
@@ -1496,6 +1497,24 @@ class Tracing():
         loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times
+
+    def soft_loss_fraction(self, r_max=0.99, width=0.02):
+        """Soft peak-flux crossing score for VMEC guiding centres.
+
+        Boundary stops count as exits; unrelated failures return NaN. A smaller
+        positive width sharpens the score. Hard losses remain the diagnostic.
+        """
+        if not isinstance(self.field, Vmec) or self.model not in _VMEC_GUIDING_CENTER_MODELS:
+            raise ValueError("soft_loss_fraction requires VMEC guiding centres")
+        if not np.isfinite(width) or width <= 0:
+            raise ValueError("width must be finite and positive")
+        radial = self.trajectories[:, :, 0]
+        finite = jnp.all(jnp.isfinite(self.trajectories), axis=-1)
+        stopped = (self.boundary_hits & self._has_boundary_event)[:, None]
+        radial = jnp.where(finite, radial, jnp.where(stopped, 1.0, jnp.nan))
+        peak = jnp.sum(radial * jax.nn.softmax(radial / width, axis=1), axis=1)
+        peak = jnp.where(stopped[:, 0], jnp.maximum(peak, 1.0), peak)
+        return jnp.mean(jax.nn.sigmoid((peak - r_max) / width))
 
 
 

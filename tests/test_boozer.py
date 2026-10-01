@@ -302,6 +302,13 @@ def test_sine_orbits_match_rotated_cosine_field():
     bmns = np.stack([np.zeros_like(s), -B0*EPS*np.sqrt(s)*np.sin(shift)])
     field = BoozerField.from_booz(s, bmnc, [0, 1], [0, 0], np.full_like(s, IOTA),
                                  np.full_like(s, G), np.zeros_like(s), PSI0, 1, bmns=bmns)
+    def value(amplitude):
+        live = eqx.tree_at(lambda f: f.sine_coef, field, amplitude * field.sine_coef)
+        return live.modB(0.3, 0.9, 0.0)
+    expected = -B0 * EPS * np.sqrt(0.3) * np.sin(shift) * np.sin(0.9)
+    derivative = jax.jit(jax.grad(value))
+    for amplitude in (0.0, 1.0):
+        assert float(derivative(amplitude)) == pytest.approx(expected, rel=1e-12)
     theta, pitch = np.linspace(0, 6, 8), np.linspace(-0.9, 0.9, 8)
     kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-5, timestep=2e-8, n_save=7)
     reference = trace_boozer(tokamak(), np.full(8, 0.3), theta, np.zeros(8), pitch, **kwargs)
