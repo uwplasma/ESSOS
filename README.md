@@ -175,7 +175,7 @@ The RTX A4000 comparison uses 8,192 common births for 20 ms and 101 requested ti
 | CATAPULT released | 6,647 | 8,122 | 34.17 s | 34.48 s | 5.17e-2, saved confined paths |
 | CATAPULT [regular axis #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90), opt-in | 6,578 | 8,191 | 36.61 s | 36.88 s | 1.17e-5, saved confined paths |
 
-Cold ESSOS traces use fresh processes with compilation caches disabled; field setup adds 1.44–1.48 s. Compaction preserves every output and benefits from losses occurring before 0.16 ms; CATAPULT truncates lost paths, while ESSOS returns all requested states.
+Measurements use the earlier ESSOS alpha mass, `6.6951e-27 kg`. Cold ESSOS traces use fresh processes with compilation caches disabled; field setup adds 1.44–1.48 s. Compaction preserves every output and benefits from losses occurring before 0.16 ms; CATAPULT truncates lost paths, while ESSOS returns all requested states.
 
 The [comparison guide](https://github.com/uwplasma/vmex/pull/516) records settings, field errors and orbit checks. One regular-axis label depends on the mode cut; QA long-orbit labels remain unconverged.
 
