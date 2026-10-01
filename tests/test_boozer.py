@@ -9,7 +9,7 @@ import pytest
 import equinox as eqx
 
 from essos.background_species import BackgroundSpecies, coulomb_logarithm, nu_D_ab
-from essos.boozer import BoozerField, collision_kick, guiding_center_rhs, psi0_from_vmec, trace_boozer
+from essos.boozer import BoozerField, BoozerTrace, collision_kick, guiding_center_rhs, psi0_from_vmec, trace_boozer
 from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as M, ELECTRON_MASS,
                              ELEMENTARY_CHARGE, EPSILON_0, FUSION_ALPHA_PARTICLE_ENERGY, PROTON_MASS)
 
@@ -222,3 +222,14 @@ def test_progress_chunks_reproduce_the_unchunked_trace():
     assert calls == [(k, 22) for k in (3, 6, 9, 12, 15, 18, 21, 22)]
     for name in ("states", "loss_times", "thermalized_times", "energy_error"):
         np.testing.assert_array_equal(getattr(chunked, name), getattr(whole, name))
+
+
+@pytest.mark.parametrize("loss_times", [[1.0, 0.5, 0.5, -1.0, 2.0, 0.0],
+                                       [-1.0] * 6, [0.0] * 6])
+def test_loss_fractions_count_ties_and_preserve_requested_time_order(loss_times):
+    times = np.array([1.0, 0.5, 0.0, 0.5, 2.0])
+    losses = np.array(loss_times)
+    out = BoozerTrace(times, np.empty((6, 5, 5)), losses, np.full(6, -1.0), np.zeros(6))
+    expected = np.array([np.count_nonzero((losses >= 0) & (losses <= t))
+                         for t in times]) / losses.size
+    np.testing.assert_array_equal(out.loss_fractions(), expected)
