@@ -317,7 +317,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     are those of an unchunked trace.
     ``compact`` can omit stopped particles after the first saved interval on
     one device; it adds a host synchronization and another compiled batch size.
-    ``method="dopri8"`` uses a fixed eighth-order Dormand–Prince step;
+    ``method="dopri8"`` uses a fixed, non-symplectic eighth-order Dormand–Prince step;
     the default is ``"rk4"``. Refine timestep and modes to check loss labels.
     """
     if method not in ("rk4", "dopri8"):
