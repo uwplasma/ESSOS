@@ -100,7 +100,9 @@ class BoozerField(eqx.Module):
 
     @classmethod
     def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6):
-        """Build from a run ``Booz_xform`` object (every surface computed)."""
+        """Build from a stellarator-symmetric ``Booz_xform`` (every surface computed)."""
+        if bool(getattr(booz, "asym", False)) or np.any(getattr(booz, "bmns_b", 0)):
+            raise ValueError("BoozerField requires stellarator symmetry; sine modes are unsupported")
         return cls.from_booz(booz.s_b, booz.bmnc_b, booz.xm_b, booz.xn_b, booz.iota,
                              booz.Boozer_G, booz.Boozer_I, psi0, int(booz.nfp), mode_tolerance)
 
