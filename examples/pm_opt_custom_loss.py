@@ -21,11 +21,11 @@ SURFACE_RANGE  = "half period"
 SURFACE_NPHI   = 64
 SURFACE_NTHETA = 64
 
-FB_ONLY_STEPS       = 82    # matched to scipy L-BFGS-B's actual Stage 1 iteration count
-FB_ONLY_LR_MAX      = 0.01
+FB_ONLY_STEPS       = 8000
+FB_ONLY_LR_MAX      = 0.03
 FB_ONLY_LR_MIN_FRAC = 0.1
 
-FD_ANNEAL_STEPS       = 779   # matched to scipy's actual total annealing-stage iteration count
+FD_ANNEAL_STEPS       = 6000
 FD_ANNEAL_LR_MAX      = 0.001
 FD_ANNEAL_LR_MIN_FRAC = 0.001
 
@@ -62,12 +62,12 @@ def load_surface(surf_file, surface_range, nphi, ntheta):
 def load_coils_essos(coil_file):
     from simsopt.field import Coil, Current
     from simsopt.util.permanent_magnet_helper_functions import read_focus_coils
-    from essos.coils import Coils_from_simsopt
+    from essos.coils import Coils
 
     base_curves, base_currents0, ncoils = read_focus_coils(str(coil_file))
     total_current = float(np.sum([c.get_value() for c in base_currents0]))
     all_coils = [Coil(base_curves[i], Current(total_current / ncoils)) for i in range(ncoils)]
-    return Coils_from_simsopt(all_coils, nfp=1, stellsym=False)
+    return Coils.from_simsopt(all_coils, nfp=1, stellsym=False)
 
 
 def compute_Bn_fixed_essos(coils, surf_pts, surf_n):

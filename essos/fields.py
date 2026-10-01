@@ -717,6 +717,8 @@ class DipoleField:
                  surf_pts=None, surf_n=None):
         self.mu0_over_4pi = 1e-7
         self.nfp = nfp
+        self.stellsym = stellsym
+        self.coordinate_flag = coordinate_flag
         self.R0 = R0
         self.pho_values = pho_values
         self.scale_factor = scale_factor
@@ -730,51 +732,6 @@ class DipoleField:
         self.n_dipoles = self.dipole_positions.shape[0]
         self._last_field = None
         self._last_eval_points = None
-        # PERFORMANCE FIX: the original implementation double-vmapped 
-        DIPOLE_CHUNK_SIZE = 5000
-
-        def _field_kernel(eval_pts, dip_pos, dip_mom):
-            """Vectorized B at eval_pts from a batch of dipoles (dip_pos,
-            dip_mom), broadcasting over both -- no per-pair function calls."""
-            P = eval_pts[:, None, :]           # (n_pts, 1, 3)
-            Pos = dip_pos[None, :, :]          # (1, n_chunk, 3)
-            Mom = dip_mom[None, :, :]          # (1, n_chunk, 3)
-            R = P - Pos                        # (n_pts, n_chunk, 3)
-            R_mag = jnp.linalg.norm(R, axis=-1, keepdims=True) + 1e-12
-            dot_mr = jnp.sum(Mom * R, axis=-1, keepdims=True)
-            term1 = 3.0 * dot_mr * R / (R_mag ** 5)
-            term2 = Mom / (R_mag ** 3)
-            B_per_dipole = (term1 - term2) * 1e-7   # mu0_over_4pi
-            return jnp.sum(B_per_dipole, axis=1)     # (n_pts, 3)
-
-        def _compute_field_chunked(eval_pts):
-            n_dip_full = self.dipole_positions_full.shape[0]
-            n_chunks = (n_dip_full + DIPOLE_CHUNK_SIZE - 1) // DIPOLE_CHUNK_SIZE
-            pad = n_chunks * DIPOLE_CHUNK_SIZE - n_dip_full
-            if pad > 0:
-                pos_padded = jnp.concatenate([
-                    self.dipole_positions_full,
-                    jnp.zeros((pad, 3), self.dipole_positions_full.dtype)], axis=0)
-                mom_padded = jnp.concatenate([
-                    self.dipole_moments_full,
-                    jnp.zeros((pad, 3), self.dipole_moments_full.dtype)], axis=0)
-            else:
-                pos_padded = self.dipole_positions_full
-                mom_padded = self.dipole_moments_full
-            pos_chunks = pos_padded.reshape(n_chunks, DIPOLE_CHUNK_SIZE, 3)
-            mom_chunks = mom_padded.reshape(n_chunks, DIPOLE_CHUNK_SIZE, 3)
-
-            def scan_body(carry, chunk):
-                dip_pos_c, dip_mom_c = chunk
-                contribution = _field_kernel(eval_pts, dip_pos_c, dip_mom_c)
-                return carry + contribution, None
-
-            n_pts = eval_pts.shape[0]
-            init = jnp.zeros((n_pts, 3), eval_pts.dtype)
-            total, _ = lax.scan(scan_body, init, (pos_chunks, mom_chunks))
-            return total
-
-        self._compute_field = jit(_compute_field_chunked)
 
         # During optimization only pho changes. magnet positions and orientations
         # are fixed. So we compute G once here (~8s for 99k magnets) and each
@@ -868,7 +825,7 @@ class DipoleField:
 
 
 
-    @partial(jit, static_argnames=['self'])
+    @jit
     def B(self, eval_points, chunk_size=512):
         """Magnetic field at eval_points (with caching).
 
@@ -895,18 +852,20 @@ class DipoleField:
         # verified ~2.5s for the full 64x64/99k-magnet MUSE case),
         # simply recomputing every call is both correct under tracing
         # and not a meaningful performance regression.
-        result = self._compute_field(query_points)
+        result = _dipole_compute_field(query_points,
+                                       self.dipole_positions_full,
+                                       self.dipole_moments_full)
         return result[0] if is_single_point else result
     
-    @partial(jit, static_argnames=['self'])
+    @jit
     def B_covariant(self, eval_points):
         return self.B(eval_points)
     
-    @partial(jit, static_argnames=['self'])
+    @jit
     def B_contravariant(self, eval_points):
         return self.B(eval_points)
     
-    @partial(jit, static_argnames=['self'])
+    @jit
     def AbsB(self, eval_points):
         return jnp.linalg.norm(self.B(eval_points), axis=-1)
     
@@ -970,3 +929,92 @@ class DipoleField:
                 all_pos.append(pos_stell @ R.T)
                 all_mom.append(mom_stell @ R.T)
         return jnp.concatenate(all_pos, axis=0), jnp.concatenate(all_mom, axis=0)
+
+
+DIPOLE_CHUNK_SIZE = 5000
+
+
+@jit
+def _dipole_field_kernel(eval_pts, dip_pos, dip_mom):
+    """B at eval_pts from a batch of dipoles, broadcasting over both."""
+    P = eval_pts[:, None, :]
+    Pos = dip_pos[None, :, :]
+    Mom = dip_mom[None, :, :]
+    dt = jnp.result_type(eval_pts, dip_pos, dip_mom)
+    R = P - Pos
+    R_mag = jnp.linalg.norm(R, axis=-1, keepdims=True) + jnp.asarray(1e-12, dt)
+    dot_mr = jnp.sum(Mom * R, axis=-1, keepdims=True)
+    term1 = jnp.asarray(3.0, dt) * dot_mr * R / (R_mag ** 5)
+    term2 = Mom / (R_mag ** 3)
+    return jnp.sum((term1 - term2) * jnp.asarray(1e-7, dt), axis=1)
+
+
+@jit
+def _dipole_compute_field(eval_pts, positions_full, moments_full):
+    """Chunked lax.scan over dipoles. Module-level (not a closure on
+    self) so DipoleField can be a JAX pytree: reconstruction from
+    flattened arrays needs no captured state.
+
+    All three inputs are promoted to a common dtype up front: under
+    jax_enable_x64 the dipole arrays and the evaluation points can
+    arrive with different precisions, and lax.scan requires the carry
+    dtype to match the kernel's output exactly.
+    """
+    out_dtype = jnp.result_type(eval_pts, positions_full, moments_full)
+    eval_pts = eval_pts.astype(out_dtype)
+    positions_full = positions_full.astype(out_dtype)
+    moments_full = moments_full.astype(out_dtype)
+
+    n_dip_full = positions_full.shape[0]
+    n_chunks = (n_dip_full + DIPOLE_CHUNK_SIZE - 1) // DIPOLE_CHUNK_SIZE
+    pad = n_chunks * DIPOLE_CHUNK_SIZE - n_dip_full
+    if pad > 0:
+        positions_full = jnp.concatenate(
+            [positions_full, jnp.zeros((pad, 3), out_dtype)], axis=0)
+        moments_full = jnp.concatenate(
+            [moments_full, jnp.zeros((pad, 3), out_dtype)], axis=0)
+    pos_chunks = positions_full.reshape(n_chunks, DIPOLE_CHUNK_SIZE, 3)
+    mom_chunks = moments_full.reshape(n_chunks, DIPOLE_CHUNK_SIZE, 3)
+
+    def scan_body(carry, chunk):
+        dip_pos_c, dip_mom_c = chunk
+        return carry + _dipole_field_kernel(eval_pts, dip_pos_c, dip_mom_c), None
+
+    init = jnp.zeros((eval_pts.shape[0], 3), out_dtype)
+    total, _ = lax.scan(scan_body, init, (pos_chunks, mom_chunks))
+    return total
+
+
+def _dipolefield_tree_flatten(self):
+    children = (self.dipole_positions, self.dipole_moments, self.pho_values,
+                self.dipole_positions_full, self.dipole_moments_full)
+    aux_data = {'stellsym': self.stellsym, 'nfp': self.nfp,
+                'coordinate_flag': self.coordinate_flag, 'R0': self.R0,
+                'n_dipoles': self.n_dipoles}
+    return children, aux_data
+
+
+@classmethod
+def _dipolefield_tree_unflatten(cls, aux_data, children):
+    obj = object.__new__(cls)
+    (obj.dipole_positions, obj.dipole_moments, obj.pho_values,
+     obj.dipole_positions_full, obj.dipole_moments_full) = children
+    obj.mu0_over_4pi = 1e-7
+    obj.nfp = aux_data['nfp']
+    obj.stellsym = aux_data['stellsym']
+    obj.coordinate_flag = aux_data['coordinate_flag']
+    obj.R0 = aux_data['R0']
+    obj.n_dipoles = aux_data['n_dipoles']
+    obj.scale_factor = 1.0
+    obj._last_field = None
+    obj._last_eval_points = None
+    obj.G = None
+    return obj
+
+
+DipoleField._tree_flatten = _dipolefield_tree_flatten
+DipoleField._tree_unflatten = _dipolefield_tree_unflatten
+
+tree_util.register_pytree_node(DipoleField,
+                               DipoleField._tree_flatten,
+                               DipoleField._tree_unflatten)

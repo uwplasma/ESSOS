@@ -20,30 +20,60 @@ import jax
 import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
-from essos.fields import DipoleField, BiotSavart
-from essos.coils import Coils_from_simsopt
+from essos.fields import DipoleField, BiotSavart, MagneticField
+from jax import jit, tree_util
+from essos.coils import Coils
 from essos.dynamics import Tracing
 import matplotlib.pyplot as plt
 
 
-class CombinedField:
+class CombinedField(MagneticField):
+    """Sum of a coil field and a dipole field.
+
+    Inherits MagneticField for dB_by_dX, dAbsB_by_dX, grad_B_covariant,
+    curl_B, curl_b and kappa, and is registered as a JAX pytree so the
+    sub-fields flow through jit/vmap as traced data rather than being
+    baked in as compile-time constants.
+    """
 
     def __init__(self, coil_field, dipole_field):
         self.coil_field = coil_field
         self.dipole_field = dipole_field
 
+    @jit
     def B(self, points):
         return self.coil_field.B(points) + self.dipole_field.B(points)
 
+    @jit
     def AbsB(self, points):
         return jnp.linalg.norm(self.B(points), axis=-1)
 
+    @jit
+    def B_covariant(self, points):
+        return self.B(points)
+
+    @jit
     def B_contravariant(self, points):
         return self.coil_field.B_contravariant(points) + self.dipole_field.B_contravariant(points)
 
+    @jit
+    def sqrtg(self, points):
+        return 1.0
+
     def to_xyz(self, points):
-    
         return self.coil_field.to_xyz(points)
+
+    def _tree_flatten(self):
+        return (self.coil_field, self.dipole_field), {}
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(*children, **aux_data)
+
+
+tree_util.register_pytree_node(CombinedField,
+                               CombinedField._tree_flatten,
+                               CombinedField._tree_unflatten)
 
 
 def load_surface(surf_file):
@@ -62,7 +92,7 @@ def load_coils_essos(coil_file):
     base_curves, base_currents0, ncoils = read_focus_coils(str(coil_file))
     total_current = float(np.sum([c.get_value() for c in base_currents0]))
     all_coils = [Coil(base_curves[i], Current(total_current / ncoils)) for i in range(ncoils)]
-    return Coils_from_simsopt(all_coils, nfp=1, stellsym=False)
+    return Coils.from_simsopt(all_coils, nfp=1, stellsym=False)
 
 
 def load_magnet_grid(mag_file):
