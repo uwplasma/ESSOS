@@ -132,7 +132,7 @@ full-orbit, collisional and electric-field variants.
 
 ## Boozer tracing
 
-Transform a stellarator-symmetric VMEC WOUT with [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax), then trace guiding centres from its `|B|` spectrum and flux functions. The fixed-step RK4 tracer supports optional Monte Carlo collisions; check the mode cut for each equilibrium.
+Transform a VMEC WOUT with [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax), then trace guiding centres from cosine/sine Boozer spectra with RK4 and optional collisions.
 
 ```python
 import numpy as np
