@@ -284,7 +284,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=None, compact=False):
+                 progress=None, compact=True):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The step is shortened so that a whole number of steps fits between the
@@ -295,8 +295,9 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     intervals: the horizon then runs as up to ten host-side chunks of the same
     compiled program, with the whole state carried between them, so the orbits
     are those of an unchunked trace.
-    ``compact`` can omit stopped particles after the first saved interval on
-    one device; it adds a host synchronization and another compiled batch size.
+    Stopped particles are compacted after the first saved interval on one
+    device when at least half have stopped. ``compact=False`` skips the host
+    synchronization and extra compiled batch size.
     """
     inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
     n = inputs[0].size

@@ -237,9 +237,9 @@ def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, 
                   timestep=1e-7, n_save=n_save, seed=3,
                   species=electron_background() if collisions else None)
     callbacks = [[], []]
-    whole = trace_boozer(field, *args, **kwargs, **(
+    whole = trace_boozer(field, *args, **kwargs, compact=False, **(
         {"progress": lambda d, t: callbacks[0].append((d, t))} if with_progress else {}))
-    compacted = trace_boozer(field, *args, **kwargs, compact=True, **(
+    compacted = trace_boozer(field, *args, **kwargs, **(
         {"progress": lambda d, t: callbacks[1].append((d, t))} if with_progress else {}))
     assert callbacks[0] == callbacks[1]
     for name in ("times", "states", "loss_times", "thermalized_times",
@@ -251,8 +251,8 @@ def test_survivor_compaction_preserves_failures():
     singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.0)
     args = ([0.3] * 4, [0.0] * 4, [0.0] * 4, [0.2] * 4)
     kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-7, timestep=1e-7, n_save=3)
-    whole = trace_boozer(singular, *args, **kwargs)
-    compacted = trace_boozer(singular, *args, compact=True, **kwargs)
+    whole = trace_boozer(singular, *args, compact=False, **kwargs)
+    compacted = trace_boozer(singular, *args, **kwargs)
     assert whole.failed.all() and not whole.lost.any()
     for name in ("states", "loss_times", "thermalized_times", "failed_times", "energy_error"):
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
