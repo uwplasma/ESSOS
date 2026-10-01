@@ -1,5 +1,7 @@
 import pytest
+from essos.coils import Coils, Curves
 from essos.fields import BiotSavart
+import jax
 import jax.numpy as jnp
 from jax import random
 
@@ -15,9 +17,27 @@ def test_biot_savart_initialization():
     coils = MockCoils()
     biot_savart = BiotSavart(coils)
     assert biot_savart.coils == coils
-    assert jnp.allclose(biot_savart.currents, coils.currents)
-    assert jnp.allclose(biot_savart.gamma, coils.gamma)
-    assert jnp.allclose(biot_savart.gamma_dash, coils.gamma_dash)
+    assert jnp.allclose(biot_savart.coils.currents, coils.currents)
+    assert jnp.allclose(biot_savart.coils.gamma, coils.gamma)
+    assert jnp.allclose(biot_savart.coils.gamma_dash, coils.gamma_dash)
+
+
+def test_biot_savart_cylindrical_interface_matches_cartesian_and_differentiates():
+    dofs = jnp.zeros((1, 3, 3)).at[0, 0, 2].set(1.0).at[0, 1, 1].set(1.0)
+    field = BiotSavart(Coils(Curves(dofs, n_segments=32, stellsym=False),
+                              jnp.array([1.0e5])))
+    R = jnp.array([[0.7, 0.8], [0.9, 1.0]])
+    phi = jnp.array([[0.1, 0.2], [0.3, 0.4]])
+    Z = jnp.array([[-0.2, -0.1], [0.1, 0.2]])
+    br, bp, bz = field.b_cyl(R, phi, Z)
+    xyz = jnp.stack((R * jnp.cos(phi), R * jnp.sin(phi), Z), axis=-1)
+    B = jax.vmap(field.B)(xyz.reshape((-1, 3))).reshape(xyz.shape)
+    expected = jnp.stack((B[..., 0] * jnp.cos(phi) + B[..., 1] * jnp.sin(phi),
+                          -B[..., 0] * jnp.sin(phi) + B[..., 1] * jnp.cos(phi),
+                          B[..., 2]))
+    assert jnp.allclose(jnp.stack((br, bp, bz)), expected)
+    derivative = jax.grad(lambda radius: jnp.sum(field.b_cyl(radius, phi, Z)[0]))(R)
+    assert jnp.all(jnp.isfinite(derivative))
 
 # def test_biot_savart_B():
 #     coils = MockCoils()
@@ -63,3 +83,24 @@ def test_biot_savart_initialization():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_combined_field_sums_correctly():
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import CombinedField
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.3,
+                                       n_segments=20, nfp=2, stellsym=True)
+    field = BiotSavart(Coils(curves=curves, currents=[1e5] * 2))
+    points = jnp.array([0.5, 0.5, 0.5])
+
+    assert jnp.allclose(CombinedField(field, field).B(points), 2 * field.B(points))
+    assert jnp.allclose(CombinedField(field, field, field).B(points), 3 * field.B(points))
+
+
+def test_combined_field_requires_at_least_one_field():
+    from essos.fields import CombinedField
+
+    with pytest.raises(ValueError):
+        CombinedField()
+
