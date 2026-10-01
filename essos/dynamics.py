@@ -925,12 +925,7 @@ _DYNAMIC_SPAN_MODELS = frozenset(
 
 
 class _TraceSpec(NamedTuple):
-    """Everything one batched trace depends on.
-
-    :func:`_trace_batch` splits this pytree into arrays, which are traced
-    arguments of the compiled solve, and the remaining leaves (model name,
-    solver, conditions, non-pytree fields, ...), which form its cache key.
-    """
+    """Dynamic trace arrays and the static model, solver and event cache key."""
     model: str
     args: Any
     field: Any
@@ -1129,7 +1124,7 @@ def _compute_trajectory(spec, initial_condition, particle_key):
         tol=dt0*0.5
         bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(6,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)
         ode_term = MultiTerm(ODETerm(LorentzCollisionsDrift),ControlTerm(LorentzCollisionsDiffusion,bm))
-        trajectory = diffeqsolve(
+        solution = diffeqsolve(
             ode_term,
             t0=0.0,
             t1=spec.maxtime,
@@ -1145,85 +1140,18 @@ def _compute_trajectory(spec, initial_condition, particle_key):
             max_steps=spec.max_steps,
             event = Event(spec.condition),
             progress_meter=spec.progress_meter,
-        ).ys
-    elif spec.model == 'GuidingCenterAdaptative' :
-        import warnings
-        warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-        solution = diffeqsolve(
-            ode_term,
-            t0=0.0,
-            t1=spec.maxtime,
-            dt0=spec.timestep,#spec.maxtime / spec.timesteps,
-            y0=initial_condition,
-            solver=(spec.solver if spec.solver is not None else diffrax.Dopri8()),
-            args=spec.args,
-            saveat=SaveAt(ts=spec.times),
-            throw=False,
-            # adjoint=DirectAdjoint(),
-            progress_meter=spec.progress_meter,
-            stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=spec.rtol, atol=spec.atol),
-            max_steps=spec.max_steps,
-            event = Event(spec.condition)
         )
         trajectory = solution.ys
-    elif spec.model == 'FullOrbitAdaptative' :
-        import warnings
-        warnings.simplefilter("ignore", category=FutureWarning)
-        solution = diffeqsolve(
-            ode_term,
-            t0=0.0,
-            t1=spec.maxtime,
-            dt0=spec.timestep,
-            y0=initial_condition,
-            solver=(spec.solver if spec.solver is not None else diffrax.Dopri8()),
-            args=spec.args,
-            saveat=SaveAt(ts=spec.times),
-            throw=False,
-            progress_meter=spec.progress_meter,
-            stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=spec.rtol, atol=spec.atol),
-            max_steps=spec.max_steps,
-            event = Event(spec.condition)
-        )
-        trajectory = solution.ys
-    elif spec.model in ('FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
-        import warnings
-        warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
-        solution = diffeqsolve(
-            ode_term,
-            t0=0.0,
-            t1=spec.maxtime,
-            dt0=spec.timestep,#spec.maxtime / spec.timesteps,
-            y0=initial_condition,
-            solver=(spec.solver if spec.solver is not None else diffrax.Dopri8()),
-            args=spec.args,
-            saveat=SaveAt(ts=spec.times),
-            throw=False,
-            # adjoint=DirectAdjoint(),
-            progress_meter=spec.progress_meter,
-            stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=spec.rtol, atol=spec.atol),
-            max_steps=spec.max_steps,
-            event = Event(spec.condition)
-        )
-        trajectory = solution.ys
-    #Fixed guiding center
     else:
-        import warnings
-        warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+        adaptive = spec.model in ('GuidingCenterAdaptative', 'FullOrbitAdaptative',
+                                  'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal')
+        controller = (PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=spec.rtol, atol=spec.atol)
+                      if adaptive else diffrax.ConstantStepSize())
         solution = diffeqsolve(
-            ode_term,
-            t0=0.0,
-            t1=spec.maxtime,
-            dt0=spec.timestep,#spec.maxtime / spec.timesteps,
-            y0=initial_condition,
-            solver=(spec.solver if spec.solver is not None else diffrax.Dopri8()),
-            args=spec.args,
-            saveat=SaveAt(ts=spec.times),
-            throw=True,
-            # adjoint=DirectAdjoint(),
-            progress_meter=spec.progress_meter,
-            max_steps=spec.max_steps,
-            event = Event(spec.condition)
-        )
+            ode_term, solver=spec.solver if spec.solver is not None else diffrax.Dopri8(),
+            t0=0.0, t1=spec.maxtime, dt0=spec.timestep, y0=initial_condition, args=spec.args,
+            saveat=SaveAt(ts=spec.times), throw=not adaptive, max_steps=spec.max_steps,
+            progress_meter=spec.progress_meter, stepsize_controller=controller, event=Event(spec.condition))
         trajectory = solution.ys
     if spec.axis_regular:
         trajectory = vmap(_from_axis_regular)(trajectory)
@@ -1233,13 +1161,7 @@ def _compute_trajectory(spec, initial_condition, particle_key):
 
 @eqx.filter_jit
 def _trace_batch(spec, initial_conditions, random_keys, output_sharding):
-    """Trace a batch of particles with one compiled solve per static configuration.
-
-    Being module level, the compiled executable is cached across
-    :class:`Tracing` instances: a second trace with the same model, solver,
-    conditions and array shapes reuses it, while the field, particle and
-    time arrays are ordinary (differentiable) arguments.
-    """
+    """Reuse compiled models across traces; field, particle and time arrays remain differentiable."""
     result = vmap(_compute_trajectory, in_axes=(None, 0, 0))(spec, initial_conditions, random_keys)
     if output_sharding is not None:
         result = lax.with_sharding_constraint(result, output_sharding)
@@ -1309,13 +1231,7 @@ class Tracing():
         self.max_steps = max_steps
         self.progress = bool(progress)
         self.progress_meter = TqdmProgressMeter() if self.progress else NoProgressMeter()
-        # Diffrax solver to use for the adaptive integrators. If left as None,
-        # each integrator falls back to its previous default (Dopri8), so
-        # existing call sites are unaffected. Selecting the solver here (rather
-        # than hard-coding it) lets the integrator-comparison examples sweep
-        # several solvers. The fallback is a plain Python branch on this
-        # attribute, so it is resolved at trace time and does not affect
-        # differentiability of the traced trajectories.
+        # Solver selection is static; particle and field derivatives stay live.
         self.solver = solver
         if condition is None:
             # Module-level conditions keep repeated traces on one compiled solve.
