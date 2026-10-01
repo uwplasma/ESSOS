@@ -49,7 +49,7 @@ def _spline(x, y):
 
 def _evaluate(knots, coef, x):
     """Value and derivative of a piecewise cubic (end pieces extrapolate)."""
-    i = jnp.clip(jnp.searchsorted(knots, x, side="right") - 1, 0, knots.size - 2)
+    i = jnp.clip(jnp.searchsorted(knots, x, side="right", method="compare_all") - 1, 0, knots.size - 2)
     c = coef[i]
     d = x - knots[i]
     d = jnp.reshape(d, d.shape + (1,) * (c.ndim - 1 - d.ndim))
