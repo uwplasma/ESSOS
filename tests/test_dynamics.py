@@ -572,6 +572,29 @@ class _UniformField:
     def B_contravariant(self, xyz):
         return self.vector
 
+    def to_xyz(self, xyz):
+        return xyz
+
+
+def test_full_orbit_collisions_accepts_solver_tolerances(monkeypatch):
+    import essos.dynamics as dynamics
+
+    controller = dynamics.PIDController
+    def checked_controller(**kwargs):
+        assert kwargs["rtol"] == 1e-6
+        assert kwargs["atol"] == 1e-7
+        return controller(**kwargs)
+    monkeypatch.setattr(dynamics, "PIDController", checked_controller)
+    field = _UniformField((0., 0., 1.), magnitude=1e-3)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]),
+                                jnp.array([1e18]), jnp.array([1e3]))
+    trace = Tracing(field=field, particles=particles, species=species,
+                    model="FullOrbitCollisions", maxtime=1e-5, timestep=1e-7,
+                    times_to_trace=3, rtol=1e-6, atol=1e-7)
+    assert trace.trajectories.shape == (1, 3, 6)
+    assert jnp.all(jnp.isfinite(trace.trajectories))
+
 
 def _legacy_positive_charge_start(field, xyz, vpar, total_speed, mass, charge, phase):
     """The pre-fix construction, correct for a positive charge and B not along z."""

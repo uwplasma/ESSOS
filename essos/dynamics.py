@@ -1121,7 +1121,7 @@ def _compute_trajectory(spec, initial_condition, particle_key):
             saveat=SaveAt(ts=spec.times),
             throw=False,
             # adjoint=DirectAdjoint(),
-            stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=spec.tol_step_size, atol=spec.tol_step_size,dtmin=dt0),
+            stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=spec.rtol, atol=spec.atol, dtmin=dt0),
             max_steps=spec.max_steps,
             event = Event(spec.condition),
             progress_meter=spec.progress_meter,
@@ -1350,8 +1350,7 @@ class Tracing():
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
         elif model == 'FullOrbitCollisions':
-            self.args = (self.field, self.particles,self.species,self.tag_gc)
-            print(self.args)
+            self.args = (self.field, self.particles, self.species)
             if self.particles.initial_xyz_fullorbit is None:
                 raise ValueError("Initial full orbit positions require field input to Particles")
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
