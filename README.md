@@ -29,8 +29,7 @@ pip install essos
   Monte Carlo collisions on background species with density and temperature
   profiles, electric fields and alpha-loss diagnostics.
 - **Boozer-coordinate tracing.** A guiding-centre tracer that needs only the
-  Boozer `|B|` spectrum and the flux functions `iota`, `G` and `I`; about 68x
-  faster than VMEC-coordinate tracing in the 128-alpha example below.
+  Boozer `|B|` spectrum and the flux functions `iota`, `G` and `I`.
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria (analytic derivatives,
