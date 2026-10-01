@@ -9,7 +9,7 @@ import pytest
 import equinox as eqx
 
 from essos.background_species import BackgroundSpecies, coulomb_logarithm, nu_D_ab
-from essos.boozer import BoozerField, collision_kick, guiding_center_rhs, psi0_from_vmec, trace_boozer
+from essos.boozer import BoozerField, BoozerTrace, collision_kick, guiding_center_rhs, psi0_from_vmec, trace_boozer
 from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as M, ELECTRON_MASS,
                              ELEMENTARY_CHARGE, EPSILON_0, FUSION_ALPHA_PARTICLE_ENERGY, PROTON_MASS)
 
@@ -155,6 +155,40 @@ def electron_background(n=1e20, T=1.0e4):
                              jnp.array([n]), jnp.array([T]))
 
 
+def test_zero_density_kick_and_lcfs_crossing_are_finite():
+    species = BackgroundSpecies(
+        2, jnp.array([ELECTRON_MASS / PROTON_MASS, 1.]), jnp.array([-1., 1.]),
+        jnp.array([[1e19, 0.], [1e19, 0.]]), jnp.array([[1e3, 10.], [1e3, 10.]]),
+        radial_grid=jnp.array([0., 1.]))
+    velocity, pitch = collision_kick(species, M, Q, V0, .4, jnp.array([1., 0., 0.]),
+                                     1e-7, jnp.array([1., -1.]))
+    assert velocity == V0 and pitch == .4
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
+    out = trace_boozer(field, [.999], [np.pi / 2], [0.], [0.], speed=V0,
+                       mass=M, charge=Q, tmax=1e-7, timestep=1e-7, n_save=2, species=species)
+    assert out.lost[0] and not out.failed[0]
+    assert out.loss_fractions()[-1] == 1
+
+
+@pytest.mark.parametrize("density", [0., 1e20, -1., np.nan])
+def test_coulomb_logarithm_preserves_positive_and_invalid_densities(density):
+    value = float(coulomb_logarithm(M, Q, 0, V0, jnp.zeros(3), electron_background(density)))
+    if density == 0:
+        assert np.isfinite(value)
+    elif density > 0:
+        assert value == pytest.approx(32.2 + 1.15 * np.log10(1e8 / density), rel=1e-14)
+    else:
+        assert np.isnan(value)
+
+
+@pytest.mark.parametrize("asym, sine", [(True, 0.), (False, 0.1), (False, np.nan)])
+def test_booz_xform_rejects_asymmetry_and_sine_modes(asym, sine):
+    from types import SimpleNamespace
+
+    with pytest.raises(ValueError, match="stellarator symmetry"):
+        BoozerField.from_booz_xform(SimpleNamespace(asym=asym, bmns_b=np.array([[sine]])), PSI0)
+
+
 def kicks(species, v, pitch, t, steps, seed=0):
     dt = t / steps
     point = jnp.array([0.5, 0.0, 0.0])
@@ -256,3 +290,12 @@ def test_survivor_compaction_preserves_failures():
     assert whole.failed.all() and not whole.lost.any()
     for name in ("states", "loss_times", "thermalized_times", "failed_times", "energy_error"):
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
+@pytest.mark.parametrize("loss_times", [[1.0, 0.5, 0.5, -1.0, 2.0, 0.0],
+                                       [-1.0] * 6, [0.0] * 6])
+def test_loss_fractions_count_ties_and_preserve_requested_time_order(loss_times):
+    times = np.array([1.0, 0.5, 0.0, 0.5, 2.0])
+    losses = np.array(loss_times)
+    out = BoozerTrace(times, np.empty((6, 5, 5)), losses, np.full(6, -1.0), np.zeros(6))
+    expected = np.array([np.count_nonzero((losses >= 0) & (losses <= t))
+                         for t in times]) / losses.size
+    np.testing.assert_array_equal(out.loss_fractions(), expected)
