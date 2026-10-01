@@ -1,9 +1,12 @@
 """Boozer-coordinate guiding-centre tracing and Monte Carlo collisions."""
 
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import equinox as eqx
 
 from essos.background_species import BackgroundSpecies, coulomb_logarithm, nu_D_ab
 from essos.boozer import BoozerField, collision_kick, guiding_center_rhs, psi0_from_vmec, trace_boozer
@@ -58,6 +61,76 @@ def test_orbits_conserve_energy_and_toroidal_canonical_momentum():
     B = B0 * (1 - EPS * np.sqrt(s) * np.cos(th))
     p_zeta = M * vpar * G / B - Q * IOTA * PSI0 * s
     np.testing.assert_allclose(p_zeta - p_zeta[:, :1], 0.0, atol=1e-7 * np.abs(p_zeta).max())
+
+
+def test_nonfinite_step_is_reported_as_failed_not_confined():
+    """The last finite state alone cannot reveal a failed RK step."""
+    singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.0)
+    out = trace_boozer(singular, [0.3], [0.0], [0.0], [0.2], speed=V0,
+                       mass=M, charge=Q, tmax=1e-6, timestep=1e-7, n_save=3)
+    assert out.failed[0] and not out.lost[0]
+    assert out.failed_times[0] == pytest.approx(1e-7)
+    assert np.isfinite(out.states).all()  # frozen at the previous, finite state
+    assert np.isinf(out.energy_error[0])
+    with pytest.raises(RuntimeError, match="trajectories fail"):
+        out.loss_fractions()
+    legacy = dataclasses.replace(out, failed_times=None)
+    with pytest.raises(RuntimeError, match="trajectories fail"):
+        legacy.loss_fractions()
+
+
+def test_crossing_with_invalid_field_is_failed_not_lost():
+    """A finite LCFS crossing cannot hide an invalid outside-field evaluation."""
+    base = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
+
+    class BadOutside(eqx.Module):
+        base: BoozerField
+        psi0: float
+
+        def modB(self, s, theta, zeta):
+            return self.modB_derivatives(jnp.sqrt(s), theta, zeta)[0]
+
+        def modB_derivatives(self, r, theta, zeta):
+            B, br, bt, bz = self.base.modB_derivatives(r, theta, zeta)
+            return jnp.where(r * r >= 1, -1.0, B), br, bt, bz
+
+        def profiles(self, s):
+            return self.base.profiles(s)
+
+    args = ([0.999], [np.pi / 2], [0.0], [0.0])
+    kw = dict(speed=V0, mass=M, charge=Q, tmax=1e-7, timestep=1e-7, n_save=2)
+    assert trace_boozer(base, *args, **kw).lost[0]
+    out = trace_boozer(BadOutside(base, -PSI0), *args, **kw)
+    assert not out.lost[0] and out.failed[0]
+    assert out.failed_times[0] == pytest.approx(1e-7)
+    assert np.isfinite(out.states).all() and np.isinf(out.energy_error[0])
+    with pytest.raises(RuntimeError, match="trajectories fail"):
+        out.loss_fractions()
+
+
+def test_invalid_births_and_steps_are_rejected_before_tracing():
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=1e-6, timestep=1e-7, n_save=3)
+    for args, override in (
+        (([], [], [], []), {}),
+        (([1.0], [0.0], [0.0], [0.0]), {}),
+        (([0.3], [np.nan], [0.0], [0.0]), {}),
+        (([0.3], [0.0], [0.0], [1.2]), {}),
+        (([[0.3]], [[0.0]], [[0.0]], [[0.0]]), {}),
+        (([0.3], [0.0], [0.0], [0.0]), {"timestep": 0.0}),
+        (([0.3], [0.0], [0.0], [0.0]), {"n_save": 1}),
+        (([0.3], [0.0], [0.0], [0.0]), {"n_save": 2.5}),
+        (([0.3], [0.0], [0.0], [0.0]), {"speed": 0.0}),
+        (([0.3], [0.0], [0.0], [0.0]), {"mass": 0.0}),
+        (([0.3], [0.0], [0.0], [0.0]), {"charge": 0.0}),
+    ):
+        with pytest.raises(ValueError):
+            trace_boozer(tokamak(), *args, **(kwargs | override))
+    for coefficients in (jnp.zeros_like(tokamak().b_coef),
+                         -jnp.abs(tokamak().b_coef),
+                         jnp.full_like(tokamak().b_coef, jnp.nan)):
+        bad_field = eqx.tree_at(lambda f: f.b_coef, tokamak(), coefficients)
+        with pytest.raises(ValueError, match="birth.*B"):
+            trace_boozer(bad_field, [0.3], [0.0], [0.0], [0.0], **kwargs)
 
 
 def test_repeated_traces_use_current_field_coefficients():
