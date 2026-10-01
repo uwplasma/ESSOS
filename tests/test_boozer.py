@@ -181,12 +181,7 @@ def test_coulomb_logarithm_preserves_positive_and_invalid_densities(density):
         assert np.isnan(value)
 
 
-@pytest.mark.parametrize("asym, sine", [(True, 0.), (False, 0.1), (False, np.nan)])
-def test_booz_xform_rejects_asymmetry_and_sine_modes(asym, sine):
-    from types import SimpleNamespace
 
-    with pytest.raises(ValueError, match="stellarator symmetry"):
-        BoozerField.from_booz_xform(SimpleNamespace(asym=asym, bmns_b=np.array([[sine]])), PSI0)
 
 
 def kicks(species, v, pitch, t, steps, seed=0):
@@ -267,3 +262,58 @@ def test_loss_fractions_count_ties_and_preserve_requested_time_order(loss_times)
     expected = np.array([np.count_nonzero((losses >= 0) & (losses <= t))
                          for t in times]) / losses.size
     np.testing.assert_array_equal(out.loss_fractions(), expected)
+
+
+def test_sine_spectrum_derivatives_cutoff_and_axis():
+    s = np.linspace(0.005, 0.995, 50)
+    cos = np.stack([np.full_like(s, B0), np.zeros_like(s), np.zeros_like(s)])
+    sine = np.stack([np.zeros_like(s), 0.2 * np.sqrt(s), np.full_like(s, 0.1)])
+    args = (s, cos, [0, 1, 0], [0, 3, 2], np.full_like(s, IOTA),
+            np.full_like(s, G), np.zeros_like(s), PSI0, 3)
+    field = BoozerField.from_booz(*args, bmns=sine, mode_tolerance=1e-4)
+    assert field.xm.size == 3  # Retain sine-only modes.
+    from types import SimpleNamespace
+    booz = SimpleNamespace(s_b=s, bmnc_b=cos, bmns_b=sine, xm_b=args[2], xn_b=args[3],
+                           iota=args[4], Boozer_G=args[5], Boozer_I=args[6], nfp=3, asym=True)
+    converted = BoozerField.from_booz_xform(booz, PSI0)
+    np.testing.assert_array_equal(converted.modB_derivatives(0.4, 0.7, 0.2),
+                                  field.modB_derivatives(0.4, 0.7, 0.2))
+    for r in (0.0, 0.4):
+        theta, zeta = 0.7, 0.2
+        angle = theta - 3 * zeta
+        expected = (B0 + 0.2*r*np.sin(angle) - 0.1*np.sin(2*zeta),
+                    0.2*np.sin(angle), 0.2*np.cos(angle),
+                    -0.6*r*np.cos(angle) - 0.2*np.cos(2*zeta))
+        np.testing.assert_allclose(field.modB_derivatives(r, theta, zeta), expected, atol=1e-12)
+    assert np.isfinite(guiding_center_rhs(field, jnp.array([0., 0., 0.2, V0/2]), 1., M, Q)).all()
+    symmetric = BoozerField.from_booz(*args)
+    zero_sine = BoozerField.from_booz(*args, bmns=np.zeros_like(sine))
+    assert zero_sine.sine_coef is None
+    np.testing.assert_array_equal(symmetric.modB_derivatives(0.4, 0.7, 0.2),
+                                  zero_sine.modB_derivatives(0.4, 0.7, 0.2))
+    for invalid in (sine[:, :-1], np.full_like(sine, np.nan)):
+        with pytest.raises(ValueError, match="bmns"):
+            BoozerField.from_booz(*args, bmns=invalid)
+
+
+def test_sine_orbits_match_rotated_cosine_field():
+    s, shift = np.linspace(0.005, 0.995, 50), 0.7
+    bmnc = np.stack([np.full_like(s, B0), -B0*EPS*np.sqrt(s)*np.cos(shift)])
+    bmns = np.stack([np.zeros_like(s), -B0*EPS*np.sqrt(s)*np.sin(shift)])
+    field = BoozerField.from_booz(s, bmnc, [0, 1], [0, 0], np.full_like(s, IOTA),
+                                 np.full_like(s, G), np.zeros_like(s), PSI0, 1, bmns=bmns)
+    def value(amplitude):
+        live = eqx.tree_at(lambda f: f.sine_coef, field, amplitude * field.sine_coef)
+        return live.modB(0.3, 0.9, 0.0)
+    expected = -B0 * EPS * np.sqrt(0.3) * np.sin(shift) * np.sin(0.9)
+    derivative = jax.jit(jax.grad(value))
+    for amplitude in (0.0, 1.0):
+        assert float(derivative(amplitude)) == pytest.approx(expected, rel=1e-12)
+    theta, pitch = np.linspace(0, 6, 8), np.linspace(-0.9, 0.9, 8)
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-5, timestep=2e-8, n_save=7)
+    reference = trace_boozer(tokamak(), np.full(8, 0.3), theta, np.zeros(8), pitch, **kwargs)
+    rotated = trace_boozer(field, np.full(8, 0.3), theta+shift, np.zeros(8), pitch, **kwargs)
+    np.testing.assert_allclose(rotated.states[..., [0, 2, 3, 4]],
+                                reference.states[..., [0, 2, 3, 4]], rtol=1e-9, atol=1e-7)
+    np.testing.assert_array_equal(rotated.lost, reference.lost)
+    assert np.max(rotated.energy_error) < 1e-8
