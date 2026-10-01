@@ -176,7 +176,7 @@ The RTX A4000 comparison uses 8,192 common births for 20 ms and 101 requested ti
 
 Mass: `6.6446573450e-27 kg`; cold traces use fresh processes, with ESSOS compilation caches disabled. Setup adds 1.19–1.30 s for ESSOS (saved tables) and 8.70 s for CATAPULT (includes Boozer transform). Compaction preserves recorded arrays; ESSOS returns 101 states per birth, while CATAPULT truncates lost paths.
 
-The [comparison guide](https://github.com/uwplasma/vmex/pull/516) records settings, field errors and orbit checks. One corrected-mass loss label differs; its convergence is untested. Earlier QA long-orbit labels remain unconverged.
+The [comparison guide](https://github.com/uwplasma/vmex/pull/516) records settings, field errors and orbit checks. The single differing loss is spectrum-sensitive; individual loss convergence remains necessary. Earlier QA long-orbit labels remain unconverged.
 
 The earlier 64-birth, 2 ms comparison uses the same seed with mass `6.6951e-27 kg`. CPU timings use an i7-3820 with eight workers/devices; DESC and the GPU ESSOS row use the RTX A4000.
 
