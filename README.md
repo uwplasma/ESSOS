@@ -164,44 +164,25 @@ VMEC's flux convention requires `psi0 = -phi_edge / (2*pi)`. A loss occurs at `s
 
 ### Matched tracing
 
-The RTX A4000 comparison uses 8,192 common births for 20 ms and 101 requested times. ESSOS uses 12 modes and RK4 at `1.25e-7 s`; CATAPULT uses a 25³ table and adaptive DP5 at `1e-10` tolerance.
+Common alpha births are traced through a reactor-scale vacuum equilibrium without collisions. The two workloads use matched births within each workload.
 
-![Cold and warm alpha tracing runtimes](docs/readme_boozer_speed.png)
+![Loss agreement and CPU/GPU tracing runtimes](docs/readme_boozer_speed.png)
 
-| Tracer | Lost / 8,192 | Matching labels | Cold trace | Warm trace | Maximum energy drift |
-|---|---:|---:|---:|---:|---:|
-| ESSOS [GPU lookup #98](https://github.com/uwplasma/ESSOS/pull/98) | 6,572 | 8,192 | 76.40 s | 69.06 s | 2.14e-5, every step |
-| ESSOS [compaction #100](https://github.com/uwplasma/ESSOS/pull/100), opt-in | 6,572 | 8,192 | 49.29 s | 37.42 s | 2.14e-5, every step |
-| CATAPULT [regular axis #90](https://github.com/ColumbiaStellaratorTheory/firm3d/pull/90), opt-in | 6,573 | 8,191 | 36.69 s | 37.04 s | 1.36e-5, saved confined paths |
+For 8,192 births over 20 ms, ESSOS and CATAPULT lose 6,572 and 6,573 particles; 8,191 labels agree. Cold/warm timings exclude field setup. Energy drift is `2.14e-5` at every ESSOS step and `1.36e-5` at saved confined CATAPULT states. The 64-birth comparison resolves all labels in ESSOS, SIMPLE and DESC; six SIMSOPT axis stops remain unresolved. CPU: i7-3820, eight workers; GPU: RTX A4000. [Settings, source revisions and field checks](https://github.com/uwplasma/vmex/blob/0cc4d60a/docs/explanation/validation.md#cross-code-alpha-tracing).
 
-Mass: `6.6446573450e-27 kg`; cold traces use fresh processes, with ESSOS compilation caches disabled. Setup adds 1.19–1.30 s for ESSOS (saved tables) and 8.70 s for CATAPULT (includes Boozer transform). Compaction preserves recorded arrays; ESSOS returns 101 states per birth, while CATAPULT truncates lost paths.
-
-The [comparison guide](https://github.com/uwplasma/vmex/pull/516) records settings, field errors and orbit checks. The single differing loss is spectrum-sensitive; individual loss convergence remains necessary. Earlier QA long-orbit labels remain unconverged.
-
-The earlier 64-birth, 2 ms comparison uses the same seed with mass `6.6951e-27 kg`. CPU timings use an i7-3820 with eight workers/devices; DESC and the GPU ESSOS row use the RTX A4000.
-
-| Tracer | Loss result | Warm trace | Maximum energy drift |
-|---|---:|---:|---:|
-| ESSOS RK4, CPU | 55/64 | 1.701 s | 1.66e-6, every step |
-| SIMPLE midpoint, CPU | 55/64 | 5.247 s | 1.20e-5, 401 saved states |
-| SIMSOPT `gc_noK`, CPU ([flux fix #664](https://github.com/hiddenSymmetries/simsopt/pull/664)) | 50/58 resolved; six axis stops | 0.415 s | 6.77e-4, resolved path states |
-| ESSOS RK4, GPU | 55/64 | 1.94 s | every-step checks |
-| DESC 0.17.1, GPU | 55/64 | 21.40 s | 2.62e-4, survivor endpoints |
-
-All resolved loss labels agree; DESC's independently fitted field differs by up to 0.4% in `|B|`. In the [128-alpha ARIES-CS example](examples/particle_tracing/trace_particles_boozer_vs_vmec.py), warmed Boozer/VMEC traces take 0.221/14.94 s on eight Apple M2 CPU devices, with 14/17 losses.
-
-Shaded loss bands use the pointwise binomial standard error `f(t) ± sqrt(f(t)[1-f(t)]/N)`. They measure sampling uncertainty; timestep and field errors require separate convergence checks.
+Shaded loss bands use `f(t) ± sqrt(f(t)[1-f(t)]/N)`, the pointwise binomial sampling error. Timestep and spectrum convergence are checked separately. Collisional cross-code benchmarks are not yet available.
 
 ### Tracing capabilities
 
-| Code | Orbit models | CPU / GPU | Collisions | Differentiation |
-|---|---|---|---|---|
-| ESSOS Boozer | guiding centre, RK4; [Dopri8 #103](https://github.com/uwplasma/ESSOS/pull/103), opt-in | both (JAX) | yes | JAX RHS; public trace returns NumPy |
-| ESSOS VMEC/coil | guiding centre; full orbit | both (JAX) | yes | JAX trajectories |
-| [SIMPLE](https://github.com/itpplasma/SIMPLE) | guiding centre, symplectic or adaptive | CPU; optional CUDA, unbenchmarked here | no | none documented |
-| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | guiding centre; full orbit | CPU | no in tested model | none documented |
-| [FIRM3D](https://firm3d.readthedocs.io/) / [CATAPULT](https://arxiv.org/abs/2604.07617) | guiding centre, adaptive or symplectic | CPU / NVIDIA GPU | not tested | none documented |
-| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | guiding centre, adaptive Diffrax | both (JAX) | no in documented model | JAX adjoints |
+| Code | CPU | GPU | Guiding centre | Full orbit | Collisions | Differentiable trajectories |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| ESSOS | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| [FIRM3D / CATAPULT](https://firm3d.readthedocs.io/) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| [SIMPLE](https://github.com/itpplasma/SIMPLE) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+
+Availability refers to documented orbit models; unbenchmarked devices imply no speed ranking. ESSOS JAX orbit models support derivatives; the fast Boozer diagnostic API returns NumPy arrays. SIMPLE's CUDA backend is unbenchmarked here; collisions and full orbits use its CPU backend.
 
 ## Tracing notes
 

@@ -1,30 +1,48 @@
-"""Plot matched 8,192-alpha, 20 ms cold/warm RTX A4000 trace times."""
+"""Render matched collisionless loss curves and CPU/GPU trace timings."""
 
 from pathlib import Path
-
+import sys
+import json
+from urllib.request import urlopen
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
 
-# ESSOS 1307356 + mass fix 9ab3e36, JAX 0.9.2; compilation caches disabled.
-# FIRM3D 4dbeb5e + non-MPI guard #91; mass 6.6446573450e-27 kg; setup excluded.
-# Record: https://github.com/uwplasma/vmex/pull/516 (benchmarks/trace_accuracy.json).
-names = ["ESSOS lookup", "ESSOS compact", "CATAPULT regular axis"]
-cold = [76.399, 49.287, 36.694]
-warm = [69.062, 37.418, 37.044]
-y = np.arange(len(names))
-fig, ax = plt.subplots(figsize=(6.5, 2.8), constrained_layout=True)
-for offset, values, color, label in [(-0.18, cold, "#86b6ef", "Cold"),
-                                      (0.18, warm, "#2a78d6", "Warm")]:
-    bars = ax.barh(y + offset, values, height=0.34, color=color, label=label)
-    ax.bar_label(bars, fmt="%.1f", padding=3, fontsize=8)
-ax.set_yticks(y, names)
-ax.invert_yaxis()
-ax.set_xlim(0, max(cold) * 1.3)
-ax.set_xlabel("Trace wall time [s]; field setup excluded")
-ax.set_title("8,192 common alpha births, 20 ms; RTX A4000")
-ax.legend(loc="lower right", fontsize=8)
-for side in ("top", "right"):
-    ax.spines[side].set_visible(False)
-fig.savefig(Path(__file__).with_name("readme_boozer_speed.png"), dpi=140)
+RECORD = "https://raw.githubusercontent.com/uwplasma/vmex/0cc4d60a/benchmarks/trace_accuracy.json"
+record_text = Path(sys.argv[1]).read_text() if len(sys.argv)>1 else urlopen(RECORD, timeout=30).read()
+BLUE, BLUE_LIGHT = "#2a78d6", "#86b6ef"
+
+def make_trace_comparison_figure(out: Path) -> None:
+    record = json.loads(record_text)["long_gpu"]
+    fig, axes = plt.subplots(1, 3, figsize=(11, 3.1), layout="constrained")
+    curve = record["loss_curve"]
+    for name, color in [("ESSOS", BLUE), ("CATAPULT", "#d89039")]:
+        f = np.asarray(curve[name + "_lost"]) / record["particles"]
+        error = np.sqrt(f * (1-f) / record["particles"])
+        axes[0].plot(1e6*np.asarray(curve["times_s"]), 100*f, label=name, color=color)
+        axes[0].fill_between(1e6*np.asarray(curve["times_s"]), 100*(f-error), 100*(f+error), color=color, alpha=.2)
+    axes[0].set(xlabel="Time [µs]", ylabel="Lost [%]", title="8,192 births; 20 ms horizon")
+    axes[0].legend(fontsize=8)
+    rows = [record["results"][1], record["results"][2]]
+    for offset, column, color, label in [(-.18, 3, BLUE_LIGHT, "Cold"), (.18, 4, BLUE, "Warm")]:
+        bars = axes[1].barh(np.arange(2)+offset, [row[column] for row in rows], height=.34, color=color, label=label)
+        axes[1].bar_label(bars, fmt="%.1f", padding=3, fontsize=8)
+    axes[1].set(yticks=[0,1], yticklabels=["ESSOS", "CATAPULT"], xlabel="Trace time [s]", title="8,192 births, 20 ms; RTX A4000", xlim=(0, 62))
+    axes[1].invert_yaxis()
+    axes[1].legend(fontsize=8)
+    small = record["short_warm_timings"]
+    bars = axes[2].barh(np.arange(len(small)), [row[2] for row in small], color=[BLUE if row[1]=="CPU" else "#d89039" for row in small])
+    axes[2].bar_label(bars, fmt="%.2f", padding=3, fontsize=8)
+    axes[2].set(yticks=np.arange(len(small)), yticklabels=[f"{name} ({device})" for name,device,_ in small], xlabel="Warm trace time [s]", title="64 births, 2 ms\nSIMSOPT: 58 resolved", xlim=(0,27))
+    axes[2].invert_yaxis()
+    for ax in axes:
+        ax.spines[["top", "right"]].set_visible(False)
+    fig.savefig(out, dpi=130, pil_kwargs={"lossless": True})
+    plt.close(fig)
+    with Image.open(out) as image:
+        image.convert("RGB").quantize(colors=64).convert("RGB").save(out, lossless=True)
+
+
+make_trace_comparison_figure(Path(__file__).with_name("readme_boozer_speed.png"))
