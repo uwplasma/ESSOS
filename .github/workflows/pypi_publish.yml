@@ -1,12 +1,10 @@
 name: Upload Python Package
 
 on:
-  # A GitHub release both pushes its tag and fires this event, so listening for
-  # both started two publishes for every release and one of them always failed
-  # with PyPI's "file already exists".
+  # Publish once, including releases published from drafts.
   release:
     types:
-      - created
+      - published
 
 permissions:
   contents: read
