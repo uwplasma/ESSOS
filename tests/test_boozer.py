@@ -9,7 +9,8 @@ import pytest
 import equinox as eqx
 
 from essos.background_species import BackgroundSpecies, coulomb_logarithm, nu_D_ab
-from essos.boozer import BoozerField, collision_kick, guiding_center_rhs, psi0_from_vmec, trace_boozer
+from essos.boozer import (BoozerField, BoozerTrace, _rk_step, collision_kick,
+                          guiding_center_rhs, psi0_from_vmec, trace_boozer)
 from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as M, ELECTRON_MASS,
                              ELEMENTARY_CHARGE, EPSILON_0, FUSION_ALPHA_PARTICLE_ENERGY, PROTON_MASS)
 
@@ -48,19 +49,52 @@ def test_vmec_flux_sign_sets_the_analytic_radial_drift():
     assert sdot == pytest.approx(expected, rel=1e-12)
 
 
-def test_orbits_conserve_energy_and_toroidal_canonical_momentum():
+@pytest.mark.parametrize("method", ["rk4", "dopri8"])
+def test_orbits_conserve_energy_and_toroidal_canonical_momentum(method):
     """Axisymmetry: E and P_zeta = m v_par G / B - q iota psi0 s are invariants (White 2014)."""
     field = tokamak()
     n = 16
     pitch = jnp.linspace(-0.95, 0.95, n)
     theta = jnp.linspace(0, 2 * np.pi, n, endpoint=False)
     out = trace_boozer(field, jnp.full(n, 0.3), theta, jnp.zeros(n), pitch, speed=V0, mass=M,
-                       charge=Q, tmax=2e-4, timestep=2e-8, n_save=5, devices=jax.devices()[:1])
+                       charge=Q, tmax=2e-4, timestep=2e-8, n_save=5,
+                       devices=jax.devices()[:1], method=method)
     assert not out.lost.any() and np.all(out.energy_error < 1e-8)
     s, th, ze, vpar, v = np.moveaxis(out.states, -1, 0)
     B = B0 * (1 - EPS * np.sqrt(s) * np.cos(th))
     p_zeta = M * vpar * G / B - Q * IOTA * PSI0 * s
     np.testing.assert_allclose(p_zeta - p_zeta[:, :1], 0.0, atol=1e-7 * np.abs(p_zeta).max())
+
+
+def test_dopri8_tableau_matches_diffrax_and_preserves_derivatives():
+    from diffrax import Dopri8, ODETerm
+
+    rhs = lambda y: jnp.array([y[1], -y[0]])
+    y, dt = jnp.array([1.0, 0.3]), 0.1
+    term, solver = ODETerm(lambda t, y, args: rhs(y)), Dopri8()
+    reference, *_ = solver.step(term, 0.0, dt, y, None,
+                                solver.init(term, 0.0, dt, y, None), False)
+    step = lambda y: _rk_step(rhs, y, dt, "dopri8")
+    np.testing.assert_allclose(jax.jit(step)(y), reference, rtol=1e-14, atol=1e-14)
+    rotation = [[np.cos(dt), np.sin(dt)], [-np.sin(dt), np.cos(dt)]]
+    np.testing.assert_allclose(jax.jacfwd(step)(y), rotation, rtol=1e-11, atol=1e-11)
+
+
+def test_loss_fraction_rejects_excessive_finite_energy_drift():
+    out = BoozerTrace(np.array([0.0, 1.0]), np.ones((2, 2, 5)),
+                      np.array([0.5, -1.0]), np.full(2, -1.0), np.array([0.002, 0.0]))
+    with pytest.raises(RuntimeError, match="energy drift.*reduce timestep"):
+        out.loss_fractions()
+    for limit in (None, 0.002, 0.003):
+        np.testing.assert_array_equal(out.loss_fractions(limit), [0.0, 0.5])
+    for limit in (-1.0, np.inf, np.nan, [0.001]):
+        with pytest.raises(ValueError, match="max_energy_error"):
+            out.loss_fractions(limit)
+    for failed in (dataclasses.replace(out, energy_error=np.array([np.nan, 0.0])),
+                   dataclasses.replace(out, states=np.full_like(out.states, np.nan)),
+                   dataclasses.replace(out, failed_times=np.array([0.0, -1.0]))):
+        with pytest.raises(RuntimeError, match="trajectories fail"):
+            failed.loss_fractions(None)
 
 
 def test_nonfinite_step_is_reported_as_failed_not_confined():
@@ -79,7 +113,8 @@ def test_nonfinite_step_is_reported_as_failed_not_confined():
         legacy.loss_fractions()
 
 
-def test_crossing_with_invalid_field_is_failed_not_lost():
+@pytest.mark.parametrize("method", ["rk4", "dopri8"])
+def test_crossing_with_invalid_field_is_failed_not_lost(method):
     """A finite LCFS crossing cannot hide an invalid outside-field evaluation."""
     base = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
 
@@ -98,7 +133,7 @@ def test_crossing_with_invalid_field_is_failed_not_lost():
             return self.base.profiles(s)
 
     args = ([0.999], [np.pi / 2], [0.0], [0.0])
-    kw = dict(speed=V0, mass=M, charge=Q, tmax=1e-7, timestep=1e-7, n_save=2)
+    kw = dict(speed=V0, mass=M, charge=Q, tmax=1e-7, timestep=1e-7, n_save=2, method=method)
     assert trace_boozer(base, *args, **kw).lost[0]
     out = trace_boozer(BadOutside(base, -PSI0), *args, **kw)
     assert not out.lost[0] and out.failed[0]
@@ -122,6 +157,7 @@ def test_invalid_births_and_steps_are_rejected_before_tracing():
         (([0.3], [0.0], [0.0], [0.0]), {"speed": 0.0}),
         (([0.3], [0.0], [0.0], [0.0]), {"mass": 0.0}),
         (([0.3], [0.0], [0.0], [0.0]), {"charge": 0.0}),
+        (([0.3], [0.0], [0.0], [0.0]), {"method": "unknown"}),
     ):
         with pytest.raises(ValueError):
             trace_boozer(tokamak(), *args, **(kwargs | override))
@@ -210,11 +246,12 @@ def test_pitch_angle_scattering_decays_the_mean_pitch_at_nu_D():
     assert float(jnp.mean(lam)) == pytest.approx(0.6 * np.exp(-0.5), abs=4 * 0.8 / np.sqrt(n) + 1e-2)
 
 
-def test_progress_chunks_reproduce_the_unchunked_trace():
+@pytest.mark.parametrize("method", ["rk4", "dopri8"])
+def test_progress_chunks_reproduce_the_unchunked_trace(method):
     """Host-side chunks for progress carry the whole state: the trace is bit-identical."""
     field, n = tokamak(), 6
     kwargs = dict(speed=V0, mass=M, charge=Q, tmax=1e-4, timestep=2e-8, n_save=23,
-                  species=electron_background(), seed=3)
+                  species=electron_background(), seed=3, method=method)
     args = (jnp.full(n, 0.5), jnp.linspace(0, 6, n), jnp.zeros(n), jnp.linspace(-0.9, 0.9, n))
     calls = []
     chunked = trace_boozer(field, *args, **kwargs, progress=lambda d, t: calls.append((d, t)))
@@ -229,13 +266,14 @@ def test_progress_chunks_reproduce_the_unchunked_trace():
     (4, 2, False), (4, 23, True),
 ])
 @pytest.mark.parametrize("with_progress", [False, True])
-def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, with_progress):
+@pytest.mark.parametrize("method", ["rk4", "dopri8"])
+def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, with_progress, method):
     field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
     s = np.array([0.999] * edge_births + [0.3] * (6 - edge_births))
     args = (s, np.full(6, np.pi / 2), np.zeros(6), np.zeros(6))
     kwargs = dict(speed=V0, mass=M, charge=Q, tmax=(n_save - 1) * 1e-7,
                   timestep=1e-7, n_save=n_save, seed=3,
-                  species=electron_background() if collisions else None)
+                  species=electron_background() if collisions else None, method=method)
     callbacks = [[], []]
     whole = trace_boozer(field, *args, **kwargs, **(
         {"progress": lambda d, t: callbacks[0].append((d, t))} if with_progress else {}))
@@ -247,10 +285,11 @@ def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, 
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
 
 
-def test_survivor_compaction_preserves_failures():
+@pytest.mark.parametrize("method", ["rk4", "dopri8"])
+def test_survivor_compaction_preserves_failures(method):
     singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.0)
     args = ([0.3] * 4, [0.0] * 4, [0.0] * 4, [0.2] * 4)
-    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-7, timestep=1e-7, n_save=3)
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-7, timestep=1e-7, n_save=3, method=method)
     whole = trace_boozer(singular, *args, **kwargs)
     compacted = trace_boozer(singular, *args, compact=True, **kwargs)
     assert whole.failed.all() and not whole.lost.any()
