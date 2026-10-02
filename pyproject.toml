@@ -62,3 +62,6 @@ Homepage = "https://github.com/uwplasma/ESSOS"
 
 [project.scripts]
 essos = "essos.__main__:main"
+
+[project.optional-dependencies]
+booz = ["booz_xform_jax>=0.4.3"]
