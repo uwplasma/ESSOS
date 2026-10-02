@@ -151,7 +151,7 @@ booz.read_wout("wout.nc", flux=False)
 booz.run()
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
-field = BoozerField.from_booz_xform(booz, psi0=phi_edge / (2 * np.pi),
+field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi),
                                     mode_tolerance=1e-3)
 
 n = 1000
@@ -163,7 +163,7 @@ result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np
 print(result.lost.mean(), result.loss_fractions())
 ```
 
-`psi0` is the boundary toroidal flux over `2 pi`. A particle
+`psi0` is minus VMEC's boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 
 ![Boozer vs VMEC-coordinate and cross-code tracing times](docs/readme_boozer_speed.png)
