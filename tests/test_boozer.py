@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import equinox as eqx
 
-from essos.background_species import BackgroundSpecies, coulomb_logarithm, nu_D_ab
+from essos.background_species import BackgroundSpecies, coulomb_logarithm
 from essos.boozer import BoozerField, BoozerTrace, collision_kick, guiding_center_rhs, psi0_from_vmec, trace_boozer
 from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as M, ELECTRON_MASS,
                              ELEMENTARY_CHARGE, EPSILON_0, FUSION_ALPHA_PARTICLE_ENERGY, PROTON_MASS)
@@ -230,9 +230,10 @@ def test_slowing_down_on_electrons_follows_the_spitzer_time():
 
 
 def test_pitch_angle_scattering_decays_the_mean_pitch_at_nu_D():
-    """Lorentz operator: <lambda>(t) = lambda0 exp(-nu_D t) at fixed speed."""
+    """Mean pitch decays at the independent cold-heavy-ion Rutherford rate."""
     species = BackgroundSpecies(1, jnp.array([1e4]), jnp.array([1.0]), jnp.array([1e20]), jnp.array([1.0e4]))
-    nu = float(nu_D_ab(M, Q, 0, V0, jnp.zeros(3), species))
+    ln = float(coulomb_logarithm(M, Q, 0, V0, jnp.zeros(3), species))
+    nu = 1e20 * Q**2 * ELEMENTARY_CHARGE**2 * ln / (4 * np.pi * EPSILON_0**2 * M**2 * V0**3)
     n, t = 20000, 0.5 / nu
     v, lam = kicks(species, jnp.full(n, V0), jnp.full(n, 0.6), t, 400)
     assert float(jnp.mean(v)) == pytest.approx(V0, rel=5e-2)
