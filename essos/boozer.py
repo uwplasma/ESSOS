@@ -233,7 +233,7 @@ def _start(field, y0, mu0):
 
     return jax.vmap(one)(y0, mu0)
 
-@partial(jax.jit, static_argnames=("n_sub", "count", "species"))
+@partial(jax.jit, static_argnames=("count", "species"))
 def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
              carry, keys, first_interval, count):
     def one(carry, key):
@@ -279,7 +279,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             return (y, mu, t + dt, keep & ~lost, t_loss, t_therm, t_fail, err, e0), None
 
         def interval(carry, i):
-            carry, _ = jax.lax.scan(step, carry, i * n_sub + jnp.arange(n_sub))
+            carry = jax.lax.fori_loop(0, n_sub, lambda k, state: step(state, i * n_sub + k)[0], carry)
             y, mu = carry[0], carry[1]
             s1, r1, th1, *_ = _chart(y)
             B1 = field.modB_derivatives(r1, th1, y[2])[0]

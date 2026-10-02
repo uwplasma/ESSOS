@@ -342,3 +342,27 @@ def test_sine_orbits_match_rotated_cosine_field():
                                 reference.states[..., [0, 2, 3, 4]], rtol=1e-9, atol=1e-7)
     np.testing.assert_array_equal(rotated.lost, reference.lost)
     assert np.max(rotated.energy_error) < 1e-8
+
+
+@pytest.mark.parametrize("collisions", [False, True])
+def test_substep_counts_reuse_compilation_and_preserve_static_outputs(collisions):
+    from essos.boozer import _advance, _start
+
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
+    s = jnp.array([0.99999, 0.99999, 0.3, 0.4])
+    theta = jnp.full(4, np.pi / 2)
+    y0 = jnp.stack([jnp.sqrt(s) * jnp.cos(theta), jnp.sqrt(s) * jnp.sin(theta),
+                    jnp.zeros(4), jnp.zeros(4)], axis=1)
+    mu = V0**2 / (2 * jax.vmap(field.modB)(s, theta, jnp.zeros(4)))
+    carry = _start(field, y0, mu)[0]
+    keys = jax.random.split(jax.random.PRNGKey(17), 4)
+    species = electron_background() if collisions else None
+    dynamic = jax.jit(lambda *args: _advance.__wrapped__(*args), static_argnums=(5, 10))
+    static = jax.jit(lambda *args: _advance.__wrapped__(*args), static_argnums=(2, 5, 10))
+    for n_sub in (2, 5):
+        args = (field, 1e-7, n_sub, M, Q, species, 1.5, carry, keys, 0, 3)
+        a, b = static(*args), dynamic(*args)
+        for x, y in zip(jax.tree_util.tree_leaves(a), jax.tree_util.tree_leaves(b)):
+            np.testing.assert_array_equal(x, y)
+        assert np.count_nonzero(np.asarray(b[0][4]) >= 0) == 2
+    assert static._cache_size() == 2 and dynamic._cache_size() == 1
