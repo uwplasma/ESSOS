@@ -1,4 +1,5 @@
 import jax
+import numpy as np
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import tree_util, jit, vmap
@@ -123,12 +124,27 @@ class Curves:
     def dofs(self):
         # Apply scaling to each coordinate (X, Y, Z) independently
         return self._dofs * self.scaling[None, None, :]
+
+    @property
+    def dof_names(self):
+        """Names ordered exactly like :attr:`dofs` flattened in C order."""
+        coefficients = ["0"] + [f"{kind}({mode})" for mode in range(1, self.order + 1)
+                                  for kind in ("s", "c")]
+        return tuple(f"coil[{coil}].{axis}{coefficient}"
+                     for coil in range(self.n_base_curves) for axis in "xyz"
+                     for coefficient in coefficients)
     
     @dofs.setter
     def dofs(self, new_dofs):
         self.reset_cache()
         self._dofs = new_dofs / self.scaling[None, None, :]
         self._order = self._dofs.shape[2] // 2
+
+    def with_dofs(self, dofs):
+        """Return a differentiable copy with new public curve ``dofs``."""
+        curves = self.copy()
+        curves.dofs = dofs
+        return curves
     
     # n_segments property and setter
     @property
@@ -481,7 +497,9 @@ class Curves:
         return cls(dofs, n_segments, nfp, stellsym, scaling_type, scaling_factor, scale_fixed)
     
     def _tree_flatten(self):
-        dofs = self.dofs if hasattr(self._dofs, "shape") else self._dofs
+        # Placeholder leaves (e.g. jax.ShapeDtypeStruct, which diffrax's implicit
+        # solvers pass through) round-trip unscaled; only arrays are scaled.
+        dofs = self.dofs if _is_array(self._dofs) else self._dofs
         children = (dofs,)  # arrays / dynamic values
         aux_data = {"n_segments": self._n_segments,
                     "nfp": self._nfp,
@@ -495,7 +513,7 @@ class Curves:
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         dofs, = children
-        if hasattr(dofs, "shape"):
+        if _is_array(dofs):
             scaling = cls._compute_mode_scaling(
                 aux_data["order"],
                 aux_data["scaling_type"],
@@ -521,6 +539,13 @@ tree_util.register_pytree_node(Curves,
                                Curves._tree_unflatten)
 
 
+def _static_scale(value):
+    """A concrete scale as a Python float, so pytree metadata compares and hashes."""
+    if value is None or isinstance(value, jax.core.Tracer) or jnp.ndim(value) != 0:
+        return value
+    return float(value)
+
+
 def _initialize_currents_scale(currents, currents_scale):
     """Return a fixed current scale for normalized current dofs."""
     currents = jnp.atleast_1d(jnp.asarray(currents))
@@ -538,8 +563,14 @@ def _normalize_base_currents(currents, curves):
     return currents
 
 
+def _is_array(x):
+    """True for NumPy/JAX arrays and tracers; False for pytree placeholders
+    (None, bool sentinels, jax.ShapeDtypeStruct), which pass through unscaled."""
+    return isinstance(x, (jax.Array, np.ndarray, jax.core.Tracer))
+
+
 def _currents_as_array(currents):
-    if isinstance(currents, bool):
+    if isinstance(currents, bool) or isinstance(currents, jax.ShapeDtypeStruct):
         return None
     if isinstance(currents, (list, tuple)) or hasattr(currents, "shape") or jnp.isscalar(currents):
         return jnp.atleast_1d(jnp.asarray(currents))
@@ -592,7 +623,7 @@ class Coils:
             currents_raw = _normalize_base_currents(currents_raw, curves)
         self._dofs_currents_raw = currents_raw
         self._currents_scale = currents_scale
-        self._dofs_currents = None if hasattr(currents_raw, "shape") else currents_raw
+        self._dofs_currents = None if _is_array(currents_raw) else currents_raw
         self._currents = None
 
     # reset_cache method
@@ -633,8 +664,8 @@ class Coils:
     # dofs_currents property and setter
     @property
     def dofs_currents(self):
-        # Sentinel leaf during PyTree traversal: pass through, don't scale.
-        if self._dofs_currents_raw is None or isinstance(self._dofs_currents_raw, bool):
+        # Sentinel or placeholder leaf during PyTree traversal: pass through, don't scale.
+        if not _is_array(self._dofs_currents_raw):
             return self._dofs_currents_raw
         if self._dofs_currents is None:
             dofs_currents = self.dofs_currents_raw / self.currents_scale
@@ -651,12 +682,24 @@ class Coils:
     @property
     def dofs(self):
         return jnp.hstack([self.dofs_curves.ravel(), self.dofs_currents])
+
+    @property
+    def dof_names(self):
+        """Names ordered exactly like the combined curve/current :attr:`dofs`."""
+        return self.curves.dof_names + tuple(
+            f"coil[{coil}].current" for coil in range(self.curves.n_base_curves))
     
     @dofs.setter
     def dofs(self, new_dofs):
         n_curve_dofs = jnp.size(self.dofs_curves)
         self.dofs_curves = jnp.reshape(new_dofs[:n_curve_dofs], self.dofs_curves.shape)
         self.dofs_currents = new_dofs[n_curve_dofs:]
+
+    def with_dofs(self, dofs):
+        """Return a differentiable copy with new curve and current ``dofs``."""
+        coils = self.copy()
+        coils.dofs = dofs
+        return coils
 
     # TODO: remove x property. This is a placeholder for compatibility with the examples that need to be updated.
     # x property and setter 
@@ -847,6 +890,13 @@ class Coils:
     def to_vtk(self, *args, **kwargs):
         self.curves.to_vtk(*args, **kwargs)
 
+    def to_mgrid(self, filename: str, **kwargs):
+        """Write this coil field to a VMEC MGRID file; see :func:`essos.mgrid.coils_to_mgrid`."""
+
+        from .mgrid import coils_to_mgrid
+
+        return coils_to_mgrid(self, filename, **kwargs)
+
     @classmethod
     def from_simsopt(cls, simsopt_coils, nfp=1, stellsym=True, scaling_type=2, scaling_factor=0.0, scale_fixed=1.0):
         """Create coils from simsopt coils.
@@ -930,13 +980,13 @@ class Coils:
     
     def _tree_flatten(self):
         children = (self.curves, self.dofs_currents)  # arrays / dynamic values
-        aux_data = {"currents_scale": self.currents_scale}  # static values
+        aux_data = {"currents_scale": _static_scale(self.currents_scale)}  # static values
         return (children, aux_data)
     
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         curves, dofs_currents = children
-        if hasattr(dofs_currents, "shape"):
+        if _is_array(dofs_currents):
             dofs_currents = dofs_currents * aux_data["currents_scale"]
         obj = object.__new__(cls)
         obj._initialize_state(curves, dofs_currents, aux_data["currents_scale"])
@@ -1688,8 +1738,8 @@ class DiscretizedCoils:
             "n_segments": self._n_segments,
             "nfp": self._nfp,
             "stellsym": self._stellsym,
-            "currents_scale": self.currents_scale,
-            "scale_fixed": self.scale_fixed,
+            "currents_scale": _static_scale(self.currents_scale),
+            "scale_fixed": _static_scale(self.scale_fixed),
         }
         return (children, aux_data)
     

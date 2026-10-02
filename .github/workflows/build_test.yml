@@ -2,9 +2,12 @@ name: Build and Test
 
 on:
   push:
-    branches: [ main ]
+    branches:
+    - main
+    - en/**
+    - fix/**
+    - eg/**
   pull_request:
-    branches: [ main ]
 
 permissions:
   contents: read
