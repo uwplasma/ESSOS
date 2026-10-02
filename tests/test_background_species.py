@@ -90,3 +90,47 @@ def test_deflection_derivative_matches_autodiff_and_finite_difference(b):
         h = speed*1e-4
         finite = float((rate(speed+h)-rate(speed-h))/(2*h))
         assert derivative == pytest.approx(finite, rel=1e-6)
+
+
+@pytest.mark.parametrize("mass,z,background,T,n", [
+    (ELECTRON_MASS, -1., 0, 2., 1e16),
+    (PROTON_MASS, 1., 1, 100., 1e19),
+    (2*PROTON_MASS, 1., 0, 1e4, 1e21),
+    (4*PROTON_MASS, 2., 2, 1e3, 1e18),
+])
+def test_deflection_matches_maxwellian_integral_across_species_and_speeds(mass, z, background, T, n):
+    """Helander et al. (2017): integrate H(x)=2x/sqrt(pi) int_0^1 (1-t²) exp(-x²t²) dt.
+
+    This positive integral independently checks both the warm and cold limits,
+    avoiding the implementation's subtraction of erf and Chandrasekhar terms.
+    """
+    from scipy.integrate import quad
+    from essos.background_species import JOULE_PER_EV
+
+    masses = np.array([ELECTRON_MASS, PROTON_MASS, 12*PROTON_MASS])
+    charges = np.array([-1., 1., 6.])
+    species = BackgroundSpecies(3, jnp.asarray(masses/PROTON_MASS), jnp.asarray(charges),
+                                jnp.full(3, n), jnp.full(3, T))
+    point = jnp.zeros(3)
+    vth = np.sqrt(2*T*JOULE_PER_EV/masses[background])
+    ln = float(coulomb_logarithm(mass, z*ELEMENTARY_CHARGE, background, vth, point, species))
+    prefactor = n*(z*charges[background]*ELEMENTARY_CHARGE**2)**2*ln/(4*np.pi*EPSILON_0**2*mass**2)
+    for x in (1e-3, .02, .5, 2., 8., 100.):
+        h = 2*x/np.sqrt(np.pi)*quad(lambda t: (1-t*t)*np.exp(-x*x*t*t), 0, 1, epsabs=1e-13)[0]
+        dh = 2/np.sqrt(np.pi)*quad(lambda t: (1-t*t)*(1-2*x*x*t*t)*np.exp(-x*x*t*t),
+                                 0, 1, epsabs=1e-13)[0]
+        v = x*vth
+        rate = nu_D_ab(mass, z*ELEMENTARY_CHARGE, background, v, point, species)
+        derivative = d_nu_D_ab(mass, z*ELEMENTARY_CHARGE, background, v, point, species)
+        assert rate == pytest.approx(prefactor*h/v**3, rel=1e-9)
+        assert derivative == pytest.approx(prefactor*(x*dh-3*h)/v**4, rel=1e-9)
+        assert nu_D_ab(mass, -z*ELEMENTARY_CHARGE, background, v, point, species) == rate
+
+
+@pytest.mark.parametrize("densities", [(0., 0.), (1e19, 0.), (0., 1e19)])
+def test_absent_background_species_have_zero_deflection_and_derivative(densities):
+    species = BackgroundSpecies(2, MASS, CHARGE, jnp.asarray(densities), jnp.array([100., 150.]))
+    for b, density in enumerate(densities):
+        if density == 0:
+            assert nu_D_ab(PROTON_MASS, ELEMENTARY_CHARGE, b, 1e6, jnp.zeros(3), species) == 0
+            assert d_nu_D_ab(PROTON_MASS, ELEMENTARY_CHARGE, b, 1e6, jnp.zeros(3), species) == 0
