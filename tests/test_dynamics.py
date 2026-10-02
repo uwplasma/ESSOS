@@ -129,6 +129,21 @@ def test_arclength_fieldline_has_unit_speed_without_changing_direction():
         tracing.trajectories[0, -1], jnp.array([1.2, 1.6, 0.0]))
 
 
+def test_tracing_is_differentiable_in_its_initial_conditions():
+    """Tracing inside jax.grad, as in the coil-optimization losses, must not move
+    traced initial conditions to the host."""
+    class ScaledField(MockField):
+        def B_contravariant(self, points):
+            return jnp.array([3.0, 4.0, 0.0])
+
+    def end_x(x0):
+        tracing = Tracing(field=ScaledField(), model="FieldLineArclength", initial_conditions=x0,
+                          maxtime=2.0, timestep=0.1, times_to_trace=11)
+        return tracing.trajectories[0, -1, 0]
+
+    assert jnp.allclose(jax.grad(end_x)(jnp.zeros((1, 3))), jnp.array([[1.0, 0.0, 0.0]]))
+
+
 def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
     class FluxField(MockField):
         def B_contravariant(self, points):
@@ -785,3 +800,19 @@ def test_custom_loss_grad_through_adaptive_guiding_center_matches_finite_differe
 
     assert jnp.all(jnp.isfinite(gradient))
     np.testing.assert_allclose(gradient @ direction, finite_difference, rtol=1e-6)
+
+
+def test_vmec_guiding_centers_seeded_on_the_axis_leave_it():
+    """Seeds at s = 0 used to stay there: the VMEC Jacobian vanishes on the axis."""
+    from essos.constants import PROTON_MASS, ELEMENTARY_CHARGE
+
+    wout = str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+               / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+    vmec = Vmec(wout, ntheta=8, nphi=8)
+    particles = Particles(initial_xyz=jnp.array([[0.0, 0.0, 0.3], [0.0, 1.0, 1.0]]),
+                          initial_vparallel_over_v=jnp.array([0.9, -0.5]), mass=PROTON_MASS,
+                          charge=ELEMENTARY_CHARGE, energy=5e3 * ELEMENTARY_CHARGE)
+    tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
+                      maxtime=2e-5, timestep=1e-8, times_to_trace=5)
+    s = tracing.trajectories[:, :, 0]
+    assert jnp.all(jnp.isfinite(s)) and jnp.all(s[:, -1] > 1e-8)
