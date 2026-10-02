@@ -14,7 +14,8 @@ from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_fro
                                         loss_cross_sectional_area_uniformity, loss_surface_normal_displacement, 
                                         loss_quasi_symmetry, loss_iota_approx, loss_surface_curvature_section,
                                         loss_surface_non_axisymmetric_amplitude, loss_poloidal_slope_min,
-                                        loss_surface_poloidal_derivative, quasi_symmetry_residual_on_surface )
+                                        loss_surface_poloidal_derivative, quasi_symmetry_residual_on_surface,
+                                        loss_major_radius )
 
 
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
@@ -41,7 +42,7 @@ ntheta = 26; nphi = 26; Npoints = ntheta * nphi
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
-N_COILS = 4; FOURIER_ORDER = 3; LARGE_R = 10;
+N_COILS = 3; FOURIER_ORDER = 3; LARGE_R = 10;
 SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 40; STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
@@ -52,6 +53,9 @@ SCALE_FIELD = 2.18
 SCALE_SURFACE = 1.
 
 # Losses weights and targets  → control what results the optimizer considers important
+
+# General Geometry ~~~~~~~~~
+MAJOR_RADIUS_WEIGHT = 1 # The target will be calculated from the initial surface
 
 # Coils ~~~~~~~~~~~~~~~~~~~~
 LENGTH_WEIGHT = 10.; LENGTH_TARGET = 40.;
@@ -155,6 +159,8 @@ qq_reference = float( jnp.min(jnp.linalg.norm(surface_init.gammadash_theta, axis
 kappa_reference = float(jnp.max(surface_init.curvature_section_by_phi()))
 
 
+MAJOR_RADIUS_TARGET = float(surface_init.rc[0])
+
 CROSS_SECTIONAL_AREA_TARGET = float(jnp.mean(surface_init.area_section_by_phi()))
 LENGTH_SCALE_SURFACE = float(jnp.sqrt(CROSS_SECTIONAL_AREA_TARGET / jnp.pi))
 kappa_max = ALPHA_KAPPA * kappa_reference
@@ -184,7 +190,7 @@ L_surface_non_axisymmetric_amplitude = custom_loss( loss_surface_non_axisymmetri
 L_poloidal_slope_min = custom_loss( loss_poloidal_slope_min, "field", "surface",
                                    slope_min=SLOPE_MIN, B_phi_reference=B_phi_reference, phi_floor_fraction=PHI_FLOOR_FRACTION )
 L_iota_approx = custom_loss( loss_iota_approx, "field", "surface", iota_target=IOTA_APPROX_TARGET )
-
+L_major_radius = MAJOR_RADIUS_WEIGHT * custom_loss( loss_major_radius, "surface", target_major_radius=MAJOR_RADIUS_TARGET )
 
 # ====================================================================================
 # ====================================================================================
@@ -203,7 +209,8 @@ losses_weighted = [(NORMAL_FIELD_WEIGHT, L_normal_field),
                    (POLOIDAL_SLOPE_WEIGHT, L_poloidal_slope_min),
                    (QQ_WEIGHT, L_surface_poloidal_derivative),
                    (KAPPA_WEIGHT, L_surface_curvature_section),
-                   (QS_WEIGHT, L_quasi_symmetry) ]
+                   (QS_WEIGHT, L_quasi_symmetry),
+                   (MAJOR_RADIUS_WEIGHT, L_major_radius) ]
 
 
 losses_active = [ weight * loss for weight, loss in losses_weighted if weight != 0.0 ]
@@ -393,6 +400,12 @@ if A3D_WEIGHT !=0.0:
     print("3D modes amplitude weighted losses:")
     print("3D AMPLITUDE LOSS (INITIAL):", A3D_WEIGHT * loss_surface_non_axisymmetric_amplitude(surface_init, A3D_min=A3D_MIN))
     print("3D AMPLITUDE (OPTIMIZED):", A3D_WEIGHT * loss_surface_non_axisymmetric_amplitude(surface_opt, A3D_min=A3D_MIN))
+
+if MAJOR_RADIUS_WEIGHT !=0.0:
+    print("\n---------------------------------------------------------------------------")
+    print("Major Radius losses:")
+    print("MAJOR RADIUS LOSS (INITIAL):", MAJOR_RADIUS_WEIGHT * loss_major_radius(surface_init, MAJOR_RADIUS_TARGET))
+    print("MAJOR RADIUS LOSS (OPTIMIZED):", MAJOR_RADIUS_WEIGHT * loss_major_radius(surface_opt, MAJOR_RADIUS_TARGET))
 
 if POLOIDAL_SLOPE_WEIGHT != 0.0:
     # Evaluate once, then show the raw loss and its contribution to L_total.
@@ -641,13 +654,16 @@ plt.tight_layout()
 plt.show()
 
 
-
 # ====================================================================================
-""" Cross-section geometry along one field period """
+""" Poincaré sections at the narrowest and widest cross-sections """
 # ====================================================================================
 import jax
+from essos.dynamics import Tracing
 
-# --- 1. Cross-section of a SurfaceRZFourier at fixed phi (uses its own modes) -------
+N_FIELDLINES = 6
+N_TURNS = 100
+
+# --- 1. Cross-section of a SurfaceRZFourier at a fixed phi ---------------------------
 def surface_section(surface, phi, ntheta=256):
     theta = jnp.linspace(0, 2 * jnp.pi, ntheta, endpoint=False)
     angles = surface.xm[:, None] * theta[None, :] - surface.xn[:, None] * phi
@@ -655,121 +671,53 @@ def surface_section(surface, phi, ntheta=256):
     Z = jnp.sum(surface.zs[:, None] * jnp.sin(angles), axis=0)
     return R, Z
 
-# --- 2. Area and elongation of one section (exact polygon moments) ------------------
-def section_geometry(surface, phi):
+# --- 2. Section area (shoelace) along one field period -> narrowest / widest phi ----
+def section_area(surface, phi):
     R, Z = surface_section(surface, phi)
-    R1, Z1 = jnp.roll(R, -1), jnp.roll(Z, -1)
-    c = R * Z1 - R1 * Z                       # shoelace terms
-    A = 0.5 * jnp.sum(c)                      # signed area
-    # Centroid and second moments of area (polygon formulas)
-    Rc = jnp.sum((R + R1) * c) / (6 * A)
-    Zc = jnp.sum((Z + Z1) * c) / (6 * A)
-    I_RR = jnp.sum((R**2 + R * R1 + R1**2) * c) / 12 - A * Rc**2
-    I_ZZ = jnp.sum((Z**2 + Z * Z1 + Z1**2) * c) / 12 - A * Zc**2
-    I_RZ = jnp.sum((R * Z1 + 2 * R * Z + 2 * R1 * Z1 + R1 * Z) * c) / 24 - A * Rc * Zc
-    # Elongation = sqrt(lambda_max / lambda_min); exact a/b for an ellipse
-    lam = jnp.linalg.eigvalsh(jnp.array([[I_RR, I_RZ], [I_RZ, I_ZZ]]))
-    return jnp.abs(A), jnp.sqrt(lam[1] / lam[0])
+    return 0.5 * jnp.abs(jnp.sum(R * jnp.roll(Z, -1) - jnp.roll(R, -1) * Z))
 
-# --- 3. Scan one field period and summarize ------------------------------------------
-def section_summary(surface, label, nphi=64):
-    phis = jnp.linspace(0, 2 * jnp.pi / surface.nfp, nphi, endpoint=False)
-    areas, elong = jax.vmap(lambda p: section_geometry(surface, p))(phis)
-    R0 = float(surface.rc[0]); a_eff = float(jnp.sqrt(jnp.mean(areas) / jnp.pi))
-    i_min, i_max = int(jnp.argmin(areas)), int(jnp.argmax(areas))
-    print(f"{label:<14} R0={R0:6.2f}  A=R0/a={R0/a_eff:5.2f}  "
-          f"Amax/Amin={float(areas[i_max]/areas[i_min]):5.2f}  "
-          f"elong=[{float(jnp.min(elong)):4.2f}, {float(jnp.max(elong)):4.2f}]  "
-          f"phi_min/period={i_min/nphi:4.2f}  phi_max/period={i_max/nphi:4.2f}")
-    return phis, areas, elong
+phis = jnp.linspace(0, 2 * jnp.pi / surface_opt.nfp, 64, endpoint=False)
+areas = jax.vmap(lambda p: section_area(surface_opt, p))(phis)
+PHI_NARROW, PHI_WIDE = float(phis[jnp.argmin(areas)]), float(phis[jnp.argmax(areas)])
 
-# --- 4. Our surfaces and the reference stellarators in the repo ---------------------
-print("\n---------------------------------------------------------------------------")
-print("Cross-section geometry (one field period):")
-phis_opt, areas_opt, elong_opt = section_summary(surface_opt, "optimized")
-section_summary(surface_init, "initial")
-for name, f in [("LP QA", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"),
-                ("QH", "wout_QH_simple_scaled.nc"),
-                ("n3are", "wout_n3are_R7.75B5.7.nc")]:
-    section_summary(SurfaceRZFourier.from_wout_file(os.path.join(input_filepath, f), s=1), name)
-
-PHI_NARROW = float(phis_opt[jnp.argmin(areas_opt)])
-PHI_WIDE = float(phis_opt[jnp.argmax(areas_opt)])
-
-
-# ====================================================================================
-""" Poincaré check of the optimized field """
-# ====================================================================================
-from essos.dynamics import Tracing
-
-N_FIELDLINES = 6
-N_TURNS = 100
-PHI_SECTION = jnp.pi / 2
-
-# --- 1. Cross-section of a SurfaceRZFourier at a fixed phi (uses its own modes) -----
-def surface_section(surface, phi, ntheta=200):
-    theta = jnp.linspace(0, 2 * jnp.pi, ntheta)
-    angles = surface.xm[:, None] * theta[None, :] - surface.xn[:, None] * phi
-    R = jnp.sum(surface.rc[:, None] * jnp.cos(angles), axis=0)
-    Z = jnp.sum(surface.zs[:, None] * jnp.sin(angles), axis=0)
-    return R, Z
-
-# --- 2. Rescale currents so |B| ~ 1 on the surface (field-line ODE is dx/dt = B) ----
+# --- 3. Rescale currents so |B| ~ 1 (field-line ODE is dx/dt = B) --------------------
 B_mean = jnp.mean(jnp.linalg.norm(B_on_surface(surface_opt, field_opt), axis=-1))
-coils_trace = Coils(curves=opt_coils.curves, currents=opt_coils.dofs_currents_raw / B_mean)
-field_trace = BiotSavart(coils_trace)
+field_trace = BiotSavart(Coils(curves=opt_coils.curves, currents=opt_coils.dofs_currents_raw / B_mean))
 
-# --- 3. Starting points on phi = 0 (Z = 0 by stellsym), from section centre to edge -
+# --- 4. Starting points on phi = 0, Z = 0, from section centre to edge --------------
 R_phi0, _ = surface_section(surface_opt, 0.0)
 R_center = 0.5 * (jnp.max(R_phi0) + jnp.min(R_phi0))
 R_start = jnp.linspace(R_center, R_center + 0.95 * (jnp.max(R_phi0) - R_center), N_FIELDLINES)
 initial_xyz = jnp.stack([R_start, jnp.zeros_like(R_start), jnp.zeros_like(R_start)], axis=1)
 
-# --- 4. Trace: with |B| ~ 1, time ~ arc length ~ 2*pi*R0 per toroidal turn -----------
+# --- 5. Trace field lines (time ~ arc length ~ 2*pi*R0 per turn) ---------------------
 R0 = float(surface_opt.rc[0])
 tracing = Tracing(field=field_trace, model='FieldLineAdaptative', initial_conditions=initial_xyz,
                   maxtime=N_TURNS * 2 * jnp.pi * R0, times_to_trace=N_TURNS * 200,
                   atol=1e-8, rtol=1e-8)
 
-# --- 5. Poincaré section with the optimized boundary on top --------------------------
-R_sec, Z_sec = surface_section(surface_opt, PHI_SECTION)
-fig, ax = plt.subplots(figsize=(5, 5))
-tracing.poincare_plot(ax=ax, shifts=[PHI_SECTION], show=False)
-ax.plot(R_sec, Z_sec, 'r-', lw=1, label='optimized surface')
-ax.set_xlabel('R'); ax.set_ylabel('Z'); ax.set_aspect('equal'); ax.legend()
-plt.show()
-
-
-
-
-# --- Poincaré points at any phi0, using field-period symmetry -------------------------
-def poincare_points(trajectories, phi0, nfp):
+# --- 6. Poincaré points at any phi0, using field-period symmetry ---------------------
+def poincare_points(traj, phi0, nfp):
     period = 2 * jnp.pi / nfp
-    R_all, Z_all = [], []
-    for traj in trajectories:
-        X, Y, Z = traj[:, 0], traj[:, 1], traj[:, 2]
-        R = jnp.sqrt(X**2 + Y**2)
-        phi = jnp.unwrap(jnp.arctan2(Y, X))
-        k = jnp.floor((phi - phi0) / period)          # field-period index
-        i = jnp.where(jnp.diff(k) != 0)[0]            # steps that cross phi0 + k*period
-        phi_cross = phi0 + jnp.maximum(k[i], k[i + 1]) * period
-        w = (phi_cross - phi[i]) / (phi[i + 1] - phi[i])   # linear interpolation
-        R_all.append(R[i] + w * (R[i + 1] - R[i]))
-        Z_all.append(Z[i] + w * (Z[i + 1] - Z[i]))
-    return R_all, Z_all
+    X, Y, Z = traj[:, 0], traj[:, 1], traj[:, 2]
+    R = jnp.sqrt(X**2 + Y**2)
+    phi = jnp.unwrap(jnp.arctan2(Y, X))
+    k = jnp.floor((phi - phi0) / period)
+    i = jnp.where(jnp.diff(k) != 0)[0]
+    w = (phi0 + jnp.maximum(k[i], k[i + 1]) * period - phi[i]) / (phi[i + 1] - phi[i])
+    return R[i] + w * (R[i + 1] - R[i]), Z[i] + w * (Z[i + 1] - Z[i])
 
+# --- 7. Plot ------------------------------------------------------------------------
 fig, axes = plt.subplots(1, 2, figsize=(11, 5))
-for ax, phi0, title in zip(axes, [PHI_NARROW, PHI_WIDE], ["narrowest section", "widest section"]):
-    R_pts, Z_pts = poincare_points(tracing.trajectories, phi0, surface_opt.nfp)
-    for Rp, Zp in zip(R_pts, Z_pts):
-        ax.scatter(Rp, Zp, s=1)
+for ax, phi0, title in zip(axes, [PHI_NARROW, PHI_WIDE], ["Narrowest section", "Widest section"]):
+    for traj in tracing.trajectories:
+        ax.scatter(*poincare_points(traj, phi0, surface_opt.nfp), s=1)
     R_b, Z_b = surface_section(surface_opt, phi0)
-    ax.plot(jnp.append(R_b, R_b[0]), jnp.append(Z_b, Z_b[0]), 'r-', lw=1)
+    ax.plot(jnp.append(R_b, R_b[0]), jnp.append(Z_b, Z_b[0]), 'r-', lw=1, label='optimized surface')
     ax.set_title(f"{title}, phi = {phi0:.3f}")
     ax.set_xlabel('R'); ax.set_ylabel('Z'); ax.set_aspect('equal')
+axes[0].legend()
 plt.tight_layout(); plt.show()
-
-
 
 
 """ Exporting results """

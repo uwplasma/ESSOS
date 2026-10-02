@@ -278,6 +278,15 @@ def _average_over_phi(surface, values_by_phi):
     # Without the endpoint, the uniform periodic trapezoidal rule reduces to the plain mean.
     return jnp.mean(values_by_phi)
 
+
+@partial(jit, static_argnames=["target_major_radius"])
+def loss_major_radius(surface, target_major_radius):
+    # Penalize changes of the major radius R0 relative to a target.
+    # R0 is the (m=0, n=0) Fourier coefficient of R, i.e. surface.rc[0].
+    major_radius = surface.rc[0]
+    relative_radius_change = ( major_radius - target_major_radius ) / target_major_radius
+    return jnp.square(relative_radius_change)
+
 @partial(jit, static_argnames=["target_area"])
 def loss_cross_sectional_area_mean(surface, target_area):
     # Penalize the relative change of the phi-averaged cross-sectional area with respect to a target.
