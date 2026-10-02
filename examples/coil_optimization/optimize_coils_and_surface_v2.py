@@ -10,11 +10,11 @@ from essos.surfaces import ( SurfaceRZFourier, BdotN_over_B, B_on_surface, B_con
                              iota_approx_on_surface, SquaredFlux )
 from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_from_field,
-                                        loss_coil_length_max, loss_mean_cross_sectional_area,
+                                        loss_coil_length_max, loss_cross_sectional_area_mean,
+                                        loss_cross_sectional_area_uniformity, loss_surface_normal_displacement, 
                                         loss_quasi_symmetry, loss_iota_approx, loss_surface_curvature_section,
                                         loss_surface_non_axisymmetric_amplitude, loss_poloidal_slope_min,
-                                        loss_surface_normal_displacement, loss_surface_poloidal_derivative,
-                                        quasi_symmetry_residual_on_surface )
+                                        loss_surface_poloidal_derivative, quasi_symmetry_residual_on_surface )
 
 
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
@@ -29,7 +29,7 @@ from scipy.optimize import least_squares, minimize
 # ====================================================================================
 
 # True -> skip optimization, load saved dofs
-LOAD_RESULT = True
+LOAD_RESULT = False
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -41,7 +41,7 @@ ntheta = 26; nphi = 26; Npoints = ntheta * nphi
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
-N_COILS = 3; FOURIER_ORDER = 3; LARGE_R = 10;
+N_COILS = 4; FOURIER_ORDER = 3; LARGE_R = 10;
 SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 40; STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
@@ -63,7 +63,11 @@ QS_WEIGHT = 30.
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e3
+AREA_UNIFORMITY_WEIGHT = 1e3
+AREA_UNIFORMITY_TOLERANCE = 0.05     # |A(phi)/<A> - 1| allowed without penalty (~ Amax/Amin <= 1.1)
+
 NORMAL_DISPLACEMENT_WEIGHT = 0. # 1e4      # Importance of this constraint in the total loss
+
 
 # Surface-parametrization control: prevent qq = ||dc_phi/dtheta|| from approaching zero.
 QQ_WEIGHT = 0. # 1e5;
@@ -151,7 +155,7 @@ qq_reference = float( jnp.min(jnp.linalg.norm(surface_init.gammadash_theta, axis
 kappa_reference = float(jnp.max(surface_init.curvature_section_by_phi()))
 
 
-CROSS_SECTIONAL_AREA_TARGET = float(surface_init.area_section_by_phi())
+CROSS_SECTIONAL_AREA_TARGET = float(jnp.mean(surface_init.area_section_by_phi()))
 LENGTH_SCALE_SURFACE = float(jnp.sqrt(CROSS_SECTIONAL_AREA_TARGET / jnp.pi))
 kappa_max = ALPHA_KAPPA * kappa_reference
 
@@ -169,7 +173,8 @@ L_normal_field = custom_loss( loss_BdotN_mean, "field", "surface" )
 L_length_max = custom_loss( loss_coil_length_max , "field", max_coil_length=LENGTH_TARGET )
 L_curvature = custom_loss( loss_coil_curvature_from_field , "field" , max_coil_curvature=CURVATURE_TARGET )
 L_quasi_symmetry = custom_loss(loss_quasi_symmetry, "field", "surface")
-L_cross_sectional_area = custom_loss( loss_mean_cross_sectional_area, "surface", target_area=CROSS_SECTIONAL_AREA_TARGET )
+L_cross_sectional_area = custom_loss( loss_cross_sectional_area_mean, "surface", target_area=CROSS_SECTIONAL_AREA_TARGET )
+L_area_uniformity = custom_loss( loss_cross_sectional_area_uniformity, "surface", tolerance=AREA_UNIFORMITY_TOLERANCE )
 L_surface_normal_displacement = custom_loss( loss_surface_normal_displacement , "surface" ,
                                             surface_gamma_reference=surface_gamma_reference , unitnormal_reference=unitnormal_reference,
                                             length_scale=LENGTH_SCALE_SURFACE )
@@ -191,6 +196,7 @@ losses_weighted = [(NORMAL_FIELD_WEIGHT, L_normal_field),
                    (LENGTH_WEIGHT, L_length_max),
                    (CURVATURE_WEIGHT, L_curvature),
                    (CROSS_SECTIONAL_AREA_WEIGHT, L_cross_sectional_area),
+                   (AREA_UNIFORMITY_WEIGHT, L_area_uniformity),
                    (NORMAL_DISPLACEMENT_WEIGHT, L_surface_normal_displacement),
                    (IOTA_APPROX_WEIGHT, L_iota_approx),
                    (A3D_WEIGHT, L_surface_non_axisymmetric_amplitude),
@@ -400,8 +406,8 @@ if POLOIDAL_SLOPE_WEIGHT != 0.0:
 if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
     print("Mean cross-sectional area weighted losses:")
-    print("AREA LOSS (INITIAL, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_mean_cross_sectional_area( surface_init, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
-    print("AREA LOSS (OPTIMIZED, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_mean_cross_sectional_area( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
+    print("AREA LOSS (INITIAL, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_cross_sectional_area_mean( surface_init, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
+    print("AREA LOSS (OPTIMIZED, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_cross_sectional_area_mean( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
 
 if NORMAL_DISPLACEMENT_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
@@ -501,8 +507,8 @@ print("Relative area change:", relative_cross_sectional_area_change)
 print("Relative area change (%):", 100 * relative_cross_sectional_area_change)
 
 if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
-    print("Area loss:", loss_mean_cross_sectional_area( surface_opt , target_area=CROSS_SECTIONAL_AREA_TARGET ) )
-    print("Weighted area loss:", CROSS_SECTIONAL_AREA_WEIGHT * loss_mean_cross_sectional_area( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
+    print("Area loss:", loss_cross_sectional_area_mean( surface_opt , target_area=CROSS_SECTIONAL_AREA_TARGET ) )
+    print("Weighted area loss:", CROSS_SECTIONAL_AREA_WEIGHT * loss_cross_sectional_area_mean( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
 
 
 print("\n---------------------------------------------------------------------------")

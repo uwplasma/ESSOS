@@ -776,28 +776,12 @@ class SurfaceRZFourier:
         
         with open(filename, 'w') as f:
             f.write(nml)
-            
-    def mean_cross_sectional_area(self):
-        xyz = self.gamma # extracting the surface. shape: (nphi, ntheta, 3)
-        x2y2 = xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2 # Calculating R^2 = x^2 + y^2
-        dgamma1 = self.gammadash_phi # Calculating the derivative of gamma with respect to phi. shape: (nphi, ntheta, 3)
-        dgamma2 = self.gammadash_theta # Calculating the derivative of gamma with respect to theta. shape: (nphi, ntheta, 3)
-        J = jnp.zeros((xyz.shape[0], xyz.shape[1], 2, 2))
-        J = J.at[:, :, 0, 0].set((xyz[:, :, 0] * dgamma1[:, :, 1] - xyz[:, :, 1] * dgamma1[:, :, 0]) / x2y2)
-        J = J.at[:, :, 0, 1].set((xyz[:, :, 0] * dgamma2[:, :, 1] - xyz[:, :, 1] * dgamma2[:, :, 0]) / x2y2)
-        J = J.at[:, :, 1, 0].set(0)
-        J = J.at[:, :, 1, 1].set(1)
-        detJ = jnp.linalg.det(J)
-        Jinv = jnp.linalg.inv(J)
-        dZ_dtheta = dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
-        mean_cross_sectional_area = (2 * jnp.pi) * jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))
-        return mean_cross_sectional_area
 
     def area_section_by_phi(self):
         """
-        Calculate the mean area enclosed by the poloidal cross sections. For each fixed toroidal angle phi:
+        Calculate the area enclosed by every poloidal cross section. For each fixed toroidal angle phi:
         A(phi) = abs(integral R * dZ/dtheta dtheta)
-        The result is then averaged over phi.
+        Returns an array with shape (nphi,).
         """
         # Extract the surface coordinates (x, y, z) from the gamma property. The shape of xyz is (nphi, ntheta, 3).
         xyz = self.gamma
@@ -814,20 +798,12 @@ class SurfaceRZFourier:
         if self.close:
             # The endpoints are present, so trapezoidal integration avoids
             # counting the duplicated endpoints twice.
-            theta = self.theta2d[0, :]; phi = self.phi2d[:, 0]
-            area_by_phi = jnp.abs( jnp.trapezoid(area_integrand, x=theta, axis=1) )
-
-            if self.nphi == 1:
-                return area_by_phi[0]
-            
-            return jnp.trapezoid(area_by_phi, x=phi) / (phi[-1] - phi[0])
+            theta = self.theta2d[0, :]
+            return jnp.abs( jnp.trapezoid(area_integrand, x=theta, axis=1) )
 
         # Without the endpoint, the uniform periodic trapezoidal rule is equivalent to the grid spacing multiplied by the sum.
         dtheta = 2 * jnp.pi / self.ntheta
-        area_by_phi = jnp.abs( dtheta * jnp.sum(area_integrand, axis=1) )
-
-        return jnp.mean(area_by_phi)
-
+        return jnp.abs( dtheta * jnp.sum(area_integrand, axis=1) )
 
     def curvature_section_by_phi(self):
         """

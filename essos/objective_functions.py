@@ -266,13 +266,44 @@ def loss_poloidal_slope_min(field, surface, slope_min, B_phi_reference, phi_floo
     )
 
 ####################################### SURAFACE CONSTRAINTS ###########################################
+def _average_over_phi(surface, values_by_phi):
+    # Average of a per-section quantity over the toroidal angle phi. Shape of values_by_phi: (nphi,).
+    if surface.close:
+        # The endpoints are present, so the trapezoidal rule avoids counting the duplicated endpoint twice.
+        if surface.nphi == 1:
+            return values_by_phi[0]
+        phi = surface.phi2d[:, 0]
+        return jnp.trapezoid(values_by_phi, x=phi) / (phi[-1] - phi[0])
+
+    # Without the endpoint, the uniform periodic trapezoidal rule reduces to the plain mean.
+    return jnp.mean(values_by_phi)
 
 @partial(jit, static_argnames=["target_area"])
-def loss_mean_cross_sectional_area(surface, target_area):
-    current_area = surface.area_section_by_phi()
-    relative_area_change = ( current_area - target_area ) / target_area
-
+def loss_cross_sectional_area_mean(surface, target_area):
+    # Penalize the relative change of the phi-averaged cross-sectional area with respect to a target.
+    # Only the mean is constrained: individual cross sections may grow or shrink.
+    mean_area = _average_over_phi(surface, surface.area_section_by_phi())
+    relative_area_change = ( mean_area - target_area ) / target_area
     return jnp.square(relative_area_change)
+
+
+@partial(jit, static_argnames=["tolerance"])
+def loss_cross_sectional_area_uniformity(surface, tolerance=0.05):
+    # Penalize cross sections whose area departs from the phi-averaged area by more than a relative tolerance.
+    # Controls the mirror ratio A_max/A_min; the overall size is left to loss_cross_sectional_area_mean.
+
+    # Area of every poloidal cross section and its phi-average. Shapes: (nphi,) and scalar.
+    area_by_phi = surface.area_section_by_phi()
+    mean_area = _average_over_phi(surface, area_by_phi)
+
+    # Relative deviation of every section from the mean, |A(phi)/<A> - 1|.
+    relative_deviation = jnp.abs( area_by_phi / mean_area - 1.0 )
+
+    # Only the part outside the tolerance band is penalized (squared hinge: zero inside, smooth outside).
+    relative_excess = jnp.maximum( relative_deviation - tolerance, 0.0 )
+
+    return _average_over_phi(surface, jnp.square(relative_excess))
+
 
 @jit
 def loss_surface_normal_displacement(surface, surface_gamma_reference, unitnormal_reference, length_scale):
