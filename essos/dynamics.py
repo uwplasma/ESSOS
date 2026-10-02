@@ -747,9 +747,17 @@ _GUIDING_CENTER_COLLISION_MODELS = frozenset(
 _AXIS_REGION = 1e-2
 
 
+_AXIS_SEED = 1e-12  # smallest s of a seed: the VMEC Jacobian vanishes on the axis itself
+
+
 def _to_axis_regular(y):
-    """Map (s, theta, ...) to (sqrt(s) cos theta, sqrt(s) sin theta, ..., 0)."""
-    r = jnp.sqrt(y[0])
+    """Map (s, theta, ...) to (sqrt(s) cos theta, sqrt(s) sin theta, ..., 0).
+
+    A seed exactly on the axis (s = 0) is moved to s = _AXIS_SEED, where the
+    guiding-center velocity is finite; orbits that later pass the axis never
+    land on s = 0 exactly.
+    """
+    r = jnp.sqrt(jnp.maximum(y[0], _AXIS_SEED))
     return jnp.concatenate([jnp.array([r * jnp.cos(y[1]), r * jnp.sin(y[1])]), y[2:], jnp.zeros(1)])
 
 
