@@ -82,21 +82,15 @@ def test_tableau_matches_diffrax_and_preserves_derivatives(method):
     np.testing.assert_allclose(jax.jacfwd(step)(y), rotation, rtol=1e-11, atol=1e-11)
 
 
-def test_loss_fraction_rejects_excessive_finite_energy_drift():
+def test_loss_fraction_accepts_finite_drift_and_rejects_failed_states():
     out = BoozerTrace(np.array([0.0, 1.0]), np.ones((2, 2, 5)),
                       np.array([0.5, -1.0]), np.full(2, -1.0), np.array([0.002, 0.0]))
-    with pytest.raises(RuntimeError, match="energy drift.*reduce timestep"):
-        out.loss_fractions()
-    for limit in (None, 0.002, 0.003):
-        np.testing.assert_array_equal(out.loss_fractions(limit), [0.0, 0.5])
-    for limit in (-1.0, np.inf, np.nan, [0.001]):
-        with pytest.raises(ValueError, match="max_energy_error"):
-            out.loss_fractions(limit)
+    np.testing.assert_array_equal(out.loss_fractions(), [0.0, 0.5])
     for failed in (dataclasses.replace(out, energy_error=np.array([np.nan, 0.0])),
                    dataclasses.replace(out, states=np.full_like(out.states, np.nan)),
                    dataclasses.replace(out, failed_times=np.array([0.0, -1.0]))):
         with pytest.raises(RuntimeError, match="trajectories fail"):
-            failed.loss_fractions(None)
+            failed.loss_fractions()
 
 
 def test_nonfinite_step_is_reported_as_failed_not_confined():
@@ -386,3 +380,28 @@ def test_sine_orbits_match_rotated_cosine_field():
                                 reference.states[..., [0, 2, 3, 4]], rtol=1e-9, atol=1e-7)
     np.testing.assert_array_equal(rotated.lost, reference.lost)
     assert np.max(rotated.energy_error) < 1e-8
+
+
+@pytest.mark.parametrize("collisions", [False, True])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "tsit5", "dopri5"])
+def test_substep_counts_reuse_compilation_and_preserve_static_outputs(collisions, method):
+    from essos.boozer import _advance, _start
+
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
+    s = jnp.array([0.99999, 0.99999, 0.3, 0.4])
+    theta = jnp.full(4, np.pi / 2)
+    y0 = jnp.stack([jnp.sqrt(s) * jnp.cos(theta), jnp.sqrt(s) * jnp.sin(theta),
+                    jnp.zeros(4), jnp.zeros(4)], axis=1)
+    mu = V0**2 / (2 * jax.vmap(field.modB)(s, theta, jnp.zeros(4)))
+    carry = _start(field, y0, mu)[0]
+    keys = jax.random.split(jax.random.PRNGKey(17), 4)
+    species = electron_background() if collisions else None
+    dynamic = jax.jit(lambda *args: _advance.__wrapped__(*args), static_argnums=(5, 10, 11))
+    static = jax.jit(lambda *args: _advance.__wrapped__(*args), static_argnums=(2, 5, 10, 11))
+    for n_sub in (2, 5):
+        args = (field, 1e-7, n_sub, M, Q, species, 1.5, carry, keys, 0, 3, method)
+        a, b = static(*args), dynamic(*args)
+        for x, y in zip(jax.tree_util.tree_leaves(a), jax.tree_util.tree_leaves(b)):
+            np.testing.assert_array_equal(x, y)
+        assert np.count_nonzero(np.asarray(b[0][4]) >= 0) == 2
+    assert static._cache_size() == 2 and dynamic._cache_size() == 1

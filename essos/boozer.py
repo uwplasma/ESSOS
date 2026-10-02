@@ -1,7 +1,7 @@
 """Fixed-step K=0 Boozer guiding-centre tracing (White, 2014).
 
 Interpolate the |B| spectrum in sqrt(s), with m>=1 coefficients divided by
-sqrt(s) for axis regularity; interpolate iota, G and I in s. RK4 or Dopri8 runs in
+sqrt(s) for axis regularity; interpolate iota, G and I in s. Explicit RK runs in
 sqrt(s)*(cos(theta), sin(theta)). LCFS crossings are lost; nonfinite steps
 are failed. Optional Euler-Maruyama collisions apply pitch scattering,
 slowing down and energy diffusion (Boozer & Kuo-Petravic, 1981).
@@ -215,18 +215,11 @@ class BoozerTrace:
         return (np.zeros_like(self.loss_times, dtype=bool) if self.failed_times is None
                 else self.failed_times >= 0)
 
-    def loss_fractions(self, max_energy_error=1e-3):
-        """Cumulative losses; ``None`` disables only the finite energy-drift limit."""
+    def loss_fractions(self):
+        """Cumulative losses; failed or nonfinite trajectories are undefined."""
         if (self.failed.any() or not np.isfinite(self.energy_error).all()
                 or not np.isfinite(self.states).all()):
             raise RuntimeError("Loss fraction is undefined when particle trajectories fail; inspect failed_times")
-        if max_energy_error is not None:
-            if (np.ndim(max_energy_error) != 0 or not np.isfinite(max_energy_error)
-                    or max_energy_error < 0):
-                raise ValueError("max_energy_error must be nonnegative and finite, or None")
-            error = np.max(self.energy_error, initial=0.0)
-            if error > max_energy_error:
-                raise RuntimeError(f"Relative energy drift {error:.3g} exceeds {max_energy_error:.3g}; reduce timestep")
         lt = self.loss_times[self.lost]
         return np.searchsorted(np.sort(lt), self.times, side="right") / self.loss_times.size
 
@@ -257,7 +250,7 @@ def _start(field, y0, mu0):
 
     return jax.vmap(one)(y0, mu0)
 
-@partial(jax.jit, static_argnames=("n_sub", "count", "species", "method"))
+@partial(jax.jit, static_argnames=("count", "species", "method"))
 def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
              carry, keys, first_interval, count, method="rk4"):
     def one(carry, key):
@@ -299,7 +292,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             return (y, mu, t + dt, keep & ~lost, t_loss, t_therm, t_fail, err, e0), None
 
         def interval(carry, i):
-            carry, _ = jax.lax.scan(step, carry, i * n_sub + jnp.arange(n_sub))
+            carry = jax.lax.fori_loop(0, n_sub, lambda k, state: step(state, i * n_sub + k)[0], carry)
             y, mu = carry[0], carry[1]
             s1, r1, th1, *_ = _chart(y)
             B1 = field.modB_derivatives(r1, th1, y[2])[0]
