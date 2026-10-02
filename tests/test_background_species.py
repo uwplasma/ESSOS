@@ -21,6 +21,11 @@ def test_chandrasekhar_matches_positive_integral_at_zero_and_small_speed(dtype):
         assert float(chandrasekhar(x)) == pytest.approx(reference, rel=tolerance, abs=1e-30)
         assert float(d_chandrasekhar(x)) == pytest.approx(derivative, rel=tolerance)
         assert float(jax.grad(chandrasekhar)(x)) == pytest.approx(derivative, rel=tolerance)
+    for value in (100., 1e4, 1e8):
+        x = jnp.asarray(value, dtype=dtype)
+        assert float(chandrasekhar(x)) == pytest.approx(1/(2*value**2), rel=tolerance)
+        assert float(d_chandrasekhar(x)) == pytest.approx(-1/value**3, rel=tolerance, abs=1e-30)
+        assert float(jax.grad(chandrasekhar)(x)) == pytest.approx(-1/value**3, rel=tolerance, abs=1e-30)
 
 MASS = jnp.array([ELECTRON_MASS / PROTON_MASS, 1.0])
 CHARGE = jnp.array([-1.0, 1.0])

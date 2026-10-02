@@ -174,7 +174,8 @@ def chandrasekhar(x: jax.Array) -> jax.Array:
     """Chandrasekhar function."""
     small = jnp.abs(x) < 0.25
     denominator = jnp.where(small, 1.0, x)
-    series = 2*x/jnp.sqrt(jnp.pi)*(1/3 + x*x*(-1/5 + x*x*(1/14 + x*x*(-1/54 + x*x*(1/264 + x*x*(-1/1560 + x*x/10800))))))
+    xs = jnp.where(small, x, 0.0)
+    series = 2*xs/jnp.sqrt(jnp.pi)*(1/3 + xs*xs*(-1/5 + xs*xs*(1/14 + xs*xs*(-1/54 + xs*xs*(1/264 + xs*xs*(-1/1560 + xs*xs/10800))))))
     direct = (
         jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))
     ) / (2 * denominator**2)
