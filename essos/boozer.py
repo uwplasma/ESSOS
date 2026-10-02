@@ -238,9 +238,9 @@ def _rk_step(rhs, y, dt, method):
         k3 = rhs(y + 0.5 * dt * k2)
         k4 = rhs(y + dt * k3)
         return y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
-    from diffrax import Dopri8
+    from diffrax import Dopri5, Dopri8, Tsit5
 
-    tableau = Dopri8.tableau
+    tableau = {"dopri5": Dopri5, "dopri8": Dopri8, "tsit5": Tsit5}[method].tableau
     stages = [rhs(y)]
     for weights in tableau.a_lower[:np.flatnonzero(tableau.b_sol)[-1]]:
         stages.append(rhs(y + dt * sum(a * k for a, k in zip(weights, stages) if a)))
@@ -327,11 +327,11 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     Stopped particles are compacted after the first saved interval on one
     device when at least half have stopped. ``compact=False`` skips the host
     synchronization and extra compiled batch size.
-    ``method="dopri8"`` uses a fixed, non-symplectic eighth-order Dormand–Prince step;
-    the default is ``"rk4"``. Refine timestep and modes to check loss labels.
+    Fixed explicit methods are ``"rk4"`` (default), ``"tsit5"``, ``"dopri5"`` and
+    ``"dopri8"``. Refine timestep and modes to check loss labels and bounce phase.
     """
-    if method not in ("rk4", "dopri8"):
-        raise ValueError("method must be 'rk4' or 'dopri8'")
+    if method not in ("rk4", "tsit5", "dopri5", "dopri8"):
+        raise ValueError("method must be 'rk4', 'tsit5', 'dopri5' or 'dopri8'")
     inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
     n = inputs[0].size
     if n < 1 or any(a.ndim != 1 or a.size != n or not np.isfinite(a).all() for a in inputs):
