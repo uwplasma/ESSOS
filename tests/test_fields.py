@@ -279,7 +279,7 @@ def test_asymmetric_vmec_partner_gradients_and_sine_only_cutoff():
     np.testing.assert_allclose(plain.B(point), evaluate(0.0)[:3], atol=2e-14)
     for name in (*Vmec._NYQUIST, *[VMEC_WOUT_PARTNERS[name] for name in Vmec._NYQUIST]):
         arrays[name] = arrays[name].at[:, 1].set(0.0)
-    arrays['bmns'] = arrays['bmns'].at[1:, 1].set(0.5)
+    arrays['bmns'] = arrays['bmns'].at[1:, 1].set(0.75)
     field = Vmec.from_arrays(**arrays, ntheta=4, nphi=4, mode_tolerance=0.1)
     assert len(field.xm_nyq) == 2
     assert float(field.AbsB(point)) > 5.0
