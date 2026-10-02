@@ -293,7 +293,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=None):
+                 progress=None, compact=True):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The step is shortened so that a whole number of steps fits between the
@@ -304,6 +304,9 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     intervals: the horizon then runs as up to ten host-side chunks of the same
     compiled program, with the whole state carried between them, so the orbits
     are those of an unchunked trace.
+    Stopped particles are compacted after the first saved interval on one
+    device when at least half have stopped. ``compact=False`` skips the host
+    synchronization and extra compiled batch size.
     """
     inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
     n = inputs[0].size
@@ -342,6 +345,41 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     y0, mu0, keys = args
     carry, first = _start(field, y0, mu0)
     chunk = n_int if progress is None else -(-n_int // 10)
+    if compact and n_int > 1 and ndev == 1:
+        initial = carry
+        carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
+                               carry, keys, 0, 1)
+        active = np.flatnonzero(np.asarray(carry[3])[:n])
+        padded = 1 << (active.size - 1).bit_length() if active.size else 0
+        if padded <= n // 2:
+            selected = active
+            if active.size:
+                indices = np.pad(active, (0, padded - active.size), mode="edge")
+                running = tuple(x[indices] for x in carry)
+                running_keys = keys[indices]
+            states = np.empty((n, n_int + 1, 5), dtype=np.asarray(part).dtype)
+            states[:, 0] = np.asarray(first)[:n]
+            states[:, 1:] = np.asarray(part)[:n]
+            boundaries = (list(range(chunk, n_int, chunk)) + [n_int]
+                          if progress is not None else [n_int])
+            first_interval = 1
+            for stop in boundaries:
+                if stop > first_interval and selected.size:
+                    running, next_part = _advance(field, dt, n_sub, mass, charge, species,
+                                                  thermal_cutoff, running, running_keys,
+                                                  first_interval, stop - first_interval)
+                    states[selected, first_interval + 1:stop + 1] = np.asarray(next_part)[:selected.size]
+                if progress is not None:
+                    progress(stop, n_int)
+                first_interval = stop
+            status = [np.asarray(carry[i])[:n].copy() for i in (4, 5, 6, 7)]
+            if selected.size:
+                for result, i in zip(status, (4, 5, 6, 7)):
+                    result[selected] = np.asarray(running[i])[:selected.size]
+            t_loss, t_therm, t_fail, err = status
+            return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states,
+                               t_loss, t_therm, err, t_fail)
+        carry = initial
     saved = []
     for first_interval in range(0, n_int, chunk):
         count = min(chunk, n_int - first_interval)
