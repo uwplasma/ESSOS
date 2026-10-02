@@ -1,7 +1,26 @@
+import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from essos.background_species import BackgroundSpecies, nu_D_ab, nu_s_ab
 from essos.constants import ELECTRON_MASS, PROTON_MASS, ELEMENTARY_CHARGE
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_chandrasekhar_matches_positive_integral_at_zero_and_small_speed(dtype):
+    """G(x)=2x/sqrt(pi) int_0^1 t² exp(-x²t²) dt has a regular origin."""
+    from scipy.integrate import quad
+    from essos.background_species import chandrasekhar, d_chandrasekhar
+
+    tolerance = 3e-5 if dtype == jnp.float32 else 2e-11
+    for value in (0., 1e-10, 1e-8, 1e-6, .0999, .1001, .2499, .2501, 1., 10., -1e-8, -.2501):
+        x = jnp.asarray(value, dtype=dtype)
+        value = float(x)
+        reference = 2*value/np.sqrt(np.pi)*quad(lambda t: t*t*np.exp(-value*value*t*t), 0, 1)[0]
+        derivative = 2/np.sqrt(np.pi)*quad(lambda t: t*t*(1-2*value*value*t*t)*np.exp(-value*value*t*t), 0, 1)[0]
+        assert float(chandrasekhar(x)) == pytest.approx(reference, rel=tolerance, abs=1e-30)
+        assert float(d_chandrasekhar(x)) == pytest.approx(derivative, rel=tolerance)
+        assert float(jax.grad(chandrasekhar)(x)) == pytest.approx(derivative, rel=tolerance)
 
 MASS = jnp.array([ELECTRON_MASS / PROTON_MASS, 1.0])
 CHARGE = jnp.array([-1.0, 1.0])
