@@ -566,7 +566,7 @@ def _normalize_base_currents(currents, curves):
 def _is_array(x):
     """True for NumPy/JAX arrays and tracers; False for pytree placeholders
     (None, bool sentinels, jax.ShapeDtypeStruct), which pass through unscaled."""
-    return isinstance(x, (jax.Array, np.ndarray))
+    return isinstance(x, (jax.Array, np.ndarray, jax.core.Tracer))
 
 
 def _currents_as_array(currents):

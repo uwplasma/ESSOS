@@ -217,3 +217,19 @@ def test_curves_pytree_round_trips_placeholder_leaves():
     rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
     assert jnp.allclose(rebuilt.dofs_curves, coils.dofs_curves)
     assert jnp.allclose(rebuilt.gamma, coils.gamma)
+
+
+def test_coil_tracer_unflatten_preserves_physical_scales():
+    curves = Curves(jnp.arange(18.).reshape(2, 3, 3), stellsym=False,
+                    scale_fixed=3., scaling_factor=0.4)
+    coils = Coils(curves, jnp.array([3., 6.]), currents_scale=3.)
+    leaves, tree = jax.tree_util.tree_flatten(coils)
+    weights = jnp.arange(1., 19.).reshape(2, 3, 3)
+    def physical_value(coefficients, currents):
+        rebuilt = jax.tree_util.tree_unflatten(tree, [coefficients, currents])
+        return jnp.sum(rebuilt.curves._dofs * weights) + jnp.sum(rebuilt.dofs_currents_raw**2)
+    value, (geometry_grad, current_grad) = jax.jit(jax.value_and_grad(
+        physical_value, argnums=(0, 1)))(*leaves)
+    assert jnp.allclose(value, jnp.sum(curves._dofs * weights) + 45.)
+    assert jnp.allclose(geometry_grad, weights / curves.scaling[None, None, :])
+    assert jnp.allclose(current_grad, jnp.array([18., 36.]))
