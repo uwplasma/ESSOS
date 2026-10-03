@@ -7,10 +7,8 @@
     <img src="https://readthedocs.org/projects/essos/badge/?version=latest" alt="Documentation">
 </p>
 
-Stellarator coil and particle optimization in JAX. Coil geometry, Biot-Savart
-fields, and the JAX orbit models run on CPU or GPU and support derivatives of
-smooth design objectives. The fast Boozer tracer returns NumPy diagnostics;
-see its capabilities in the comparison table below.
+Stellarator coil optimization and particle tracing in JAX, on CPU or GPU.
+Coil objectives and adaptive tracing support automatic differentiation.
 
 ```sh
 pip install essos
@@ -18,8 +16,8 @@ pip install essos
 
 ## What it does
 
-- **Differentiable optimization models.** `jax.grad` works through coil geometry,
-  the field, and JAX orbit models for smooth objectives.
+- **Automatic differentiation.** `jax.grad` works through coil geometry,
+  Biot-Savart fields and adaptive tracing.
 - **Coil optimization.** Fit coils to a plasma boundary under length, curvature,
   separation, coil-surface-distance and force constraints, with `least_squares`,
   an augmented Lagrangian, multi-objective (Pareto) search, or stochastic
@@ -28,8 +26,8 @@ pip install essos
 - **Particle tracing.** Guiding-centre and full-orbit (Boris) models, with
   Monte Carlo collisions on background species with density and temperature
   profiles, electric fields and alpha-loss diagnostics.
-- **Boozer-coordinate tracing.** A guiding-centre tracer that needs only the
-  Boozer `|B|` spectrum and the flux functions `iota`, `G` and `I`.
+- **Boozer-coordinate tracing.** Guiding-centre diagnostics from the Boozer
+  `|B|` spectrum and flux functions `iota`, `G` and `I`, with optional collisions.
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria (analytic derivatives,

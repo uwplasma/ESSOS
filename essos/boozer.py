@@ -57,12 +57,14 @@ class BoozerField(eqx.Module):
     xn: jax.Array
     psi0: float
     nfp: int = eqx.field(static=True)
+    sine_coef: jax.Array | None = None
 
     @classmethod
-    def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6):
+    def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6, *, bmns=None):
         """Build from half-mesh Boozer tables.
 
-        ``bmnc`` is ``(modes, len(s))`` as written by ``booz_xform``; ``xn``
+        ``bmnc`` and optional sine coefficients ``bmns`` are ``(modes, len(s))``;
+        ``xn``
         includes the ``nfp`` factor; ``psi0`` uses the Boozer convention
         (``-VMEC phi[-1]/(2 pi)``).  Modes whose amplitude never exceeds
         ``mode_tolerance`` times the largest amplitude are dropped.
@@ -70,12 +72,19 @@ class BoozerField(eqx.Module):
         s = np.asarray(s, float)
         bmnc = np.asarray(bmnc, float)
         xm = np.asarray(xm, int)
-        amplitude = np.abs(bmnc).max(axis=1)
+        sine = None if bmns is None else np.asarray(bmns, float)
+        if sine is not None and (sine.shape != bmnc.shape or not np.isfinite(sine).all()):
+            raise ValueError("bmns must be finite and have the same shape as bmnc")
+        amplitude = (np.abs(bmnc) if sine is None else np.hypot(bmnc, sine)).max(axis=1)
         keep = amplitude > mode_tolerance * amplitude.max()
         bmnc, xm, xn = bmnc[keep], xm[keep], np.asarray(xn, int)[keep]
         r = np.sqrt(s)
         scaled = np.where(xm[:, None] > 0, bmnc / r, bmnc)
         r_knots, b_coef = _spline(r, scaled.T)
+        sine_coef = None
+        if sine is not None and np.any(sine[keep]):
+            scaled_sine = np.where(xm[:, None] > 0, sine[keep] / r, sine[keep])
+            _, sine_coef = _spline(r, scaled_sine.T)
         profiles = np.stack([iota, G, np.asarray(I, float)], axis=1)
         # Axis row: iota and G extrapolated linearly, I(0) = 0.
         axis = profiles[0] - s[0] * (profiles[1] - profiles[0]) / (s[1] - s[0])
@@ -84,15 +93,17 @@ class BoozerField(eqx.Module):
         profiles = np.vstack([axis, profiles])
         s_knots, profile_coef = _spline(s_prof, profiles)
         return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
-                   float(psi0), int(nfp))
+                   float(psi0), int(nfp), sine_coef)
 
     @classmethod
     def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6):
-        """Build from a stellarator-symmetric ``Booz_xform`` (every surface computed)."""
-        if bool(getattr(booz, "asym", False)) or np.any(getattr(booz, "bmns_b", 0)):
-            raise ValueError("BoozerField requires stellarator symmetry; sine modes are unsupported")
+        """Build from a run ``Booz_xform`` (every surface computed)."""
+        sine = getattr(booz, "bmns_b", None)
+        if bool(getattr(booz, "asym", False)) and sine is None:
+            raise ValueError("Asymmetric Boozer transform requires bmns_b")
         return cls.from_booz(booz.s_b, booz.bmnc_b, booz.xm_b, booz.xn_b, booz.iota,
-                             booz.Boozer_G, booz.Boozer_I, psi0, int(booz.nfp), mode_tolerance)
+                             booz.Boozer_G, booz.Boozer_I, psi0, int(booz.nfp), mode_tolerance,
+                             bmns=sine)
 
     def profiles(self, s):
         """``(iota, G, I)`` and their ``s`` derivatives."""
@@ -106,8 +117,16 @@ class BoozerField(eqx.Module):
         has_m = self.xm > 0
         f = jnp.where(has_m, r * a, a)
         df = jnp.where(has_m, a + r * da, da)
-        return (jnp.sum(f * c), jnp.sum(df * c), -jnp.sum(self.xm * a * s),
-                jnp.sum(self.xn * f * s))
+        values = (jnp.sum(f * c), jnp.sum(df * c), -jnp.sum(self.xm * a * s),
+                  jnp.sum(self.xn * f * s))
+        if self.sine_coef is not None:
+            a, da = _evaluate(self.r_knots, self.sine_coef, r)
+            f = jnp.where(has_m, r * a, a)
+            df = jnp.where(has_m, a + r * da, da)
+            values = tuple(x + y for x, y in zip(values, (
+                jnp.sum(f * s), jnp.sum(df * s), jnp.sum(self.xm * a * c),
+                -jnp.sum(self.xn * f * c))))
+        return values
 
     def modB(self, s, theta, zeta):
         return self.modB_derivatives(jnp.sqrt(s), theta, zeta)[0]
@@ -214,7 +233,7 @@ def _start(field, y0, mu0):
 
     return jax.vmap(one)(y0, mu0)
 
-@partial(jax.jit, static_argnames=("n_sub", "count", "species"))
+@partial(jax.jit, static_argnames=("count", "species"))
 def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
              carry, keys, first_interval, count):
     def one(carry, key):
@@ -260,7 +279,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             return (y, mu, t + dt, keep & ~lost, t_loss, t_therm, t_fail, err, e0), None
 
         def interval(carry, i):
-            carry, _ = jax.lax.scan(step, carry, i * n_sub + jnp.arange(n_sub))
+            carry = jax.lax.fori_loop(0, n_sub, lambda k, state: step(state, i * n_sub + k)[0], carry)
             y, mu = carry[0], carry[1]
             s1, r1, th1, *_ = _chart(y)
             B1 = field.modB_derivatives(r1, th1, y[2])[0]
@@ -274,7 +293,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=None):
+                 progress=None, compact=True):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The step is shortened so that a whole number of steps fits between the
@@ -285,6 +304,9 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     intervals: the horizon then runs as up to ten host-side chunks of the same
     compiled program, with the whole state carried between them, so the orbits
     are those of an unchunked trace.
+    Stopped particles are compacted after the first saved interval on one
+    device when at least half have stopped. ``compact=False`` skips the host
+    synchronization and extra compiled batch size.
     """
     inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
     n = inputs[0].size
@@ -323,6 +345,41 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     y0, mu0, keys = args
     carry, first = _start(field, y0, mu0)
     chunk = n_int if progress is None else -(-n_int // 10)
+    if compact and n_int > 1 and ndev == 1:
+        initial = carry
+        carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
+                               carry, keys, 0, 1)
+        active = np.flatnonzero(np.asarray(carry[3])[:n])
+        padded = 1 << (active.size - 1).bit_length() if active.size else 0
+        if padded <= n // 2:
+            selected = active
+            if active.size:
+                indices = np.pad(active, (0, padded - active.size), mode="edge")
+                running = tuple(x[indices] for x in carry)
+                running_keys = keys[indices]
+            states = np.empty((n, n_int + 1, 5), dtype=np.asarray(part).dtype)
+            states[:, 0] = np.asarray(first)[:n]
+            states[:, 1:] = np.asarray(part)[:n]
+            boundaries = (list(range(chunk, n_int, chunk)) + [n_int]
+                          if progress is not None else [n_int])
+            first_interval = 1
+            for stop in boundaries:
+                if stop > first_interval and selected.size:
+                    running, next_part = _advance(field, dt, n_sub, mass, charge, species,
+                                                  thermal_cutoff, running, running_keys,
+                                                  first_interval, stop - first_interval)
+                    states[selected, first_interval + 1:stop + 1] = np.asarray(next_part)[:selected.size]
+                if progress is not None:
+                    progress(stop, n_int)
+                first_interval = stop
+            status = [np.asarray(carry[i])[:n].copy() for i in (4, 5, 6, 7)]
+            if selected.size:
+                for result, i in zip(status, (4, 5, 6, 7)):
+                    result[selected] = np.asarray(running[i])[:selected.size]
+            t_loss, t_therm, t_fail, err = status
+            return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states,
+                               t_loss, t_therm, err, t_fail)
+        carry = initial
     saved = []
     for first_interval in range(0, n_int, chunk):
         count = min(chunk, n_int - first_interval)

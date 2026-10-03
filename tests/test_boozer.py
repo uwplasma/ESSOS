@@ -181,12 +181,7 @@ def test_coulomb_logarithm_preserves_positive_and_invalid_densities(density):
         assert np.isnan(value)
 
 
-@pytest.mark.parametrize("asym, sine", [(True, 0.), (False, 0.1), (False, np.nan)])
-def test_booz_xform_rejects_asymmetry_and_sine_modes(asym, sine):
-    from types import SimpleNamespace
 
-    with pytest.raises(ValueError, match="stellarator symmetry"):
-        BoozerField.from_booz_xform(SimpleNamespace(asym=asym, bmns_b=np.array([[sine]])), PSI0)
 
 
 def kicks(species, v, pitch, t, steps, seed=0):
@@ -258,6 +253,38 @@ def test_progress_chunks_reproduce_the_unchunked_trace():
         np.testing.assert_array_equal(getattr(chunked, name), getattr(whole, name))
 
 
+@pytest.mark.parametrize("edge_births,n_save,collisions", [
+    (0, 3, False), (4, 3, False), (6, 3, False),
+    (4, 2, False), (4, 23, True),
+])
+@pytest.mark.parametrize("with_progress", [False, True])
+def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, with_progress):
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
+    s = np.array([0.999] * edge_births + [0.3] * (6 - edge_births))
+    args = (s, np.full(6, np.pi / 2), np.zeros(6), np.zeros(6))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=(n_save - 1) * 1e-7,
+                  timestep=1e-7, n_save=n_save, seed=3,
+                  species=electron_background() if collisions else None)
+    callbacks = [[], []]
+    whole = trace_boozer(field, *args, **kwargs, compact=False, **(
+        {"progress": lambda d, t: callbacks[0].append((d, t))} if with_progress else {}))
+    compacted = trace_boozer(field, *args, **kwargs, **(
+        {"progress": lambda d, t: callbacks[1].append((d, t))} if with_progress else {}))
+    assert callbacks[0] == callbacks[1]
+    for name in ("times", "states", "loss_times", "thermalized_times",
+                 "failed_times", "energy_error"):
+        np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
+
+
+def test_survivor_compaction_preserves_failures():
+    singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.0)
+    args = ([0.3] * 4, [0.0] * 4, [0.0] * 4, [0.2] * 4)
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-7, timestep=1e-7, n_save=3)
+    whole = trace_boozer(singular, *args, compact=False, **kwargs)
+    compacted = trace_boozer(singular, *args, **kwargs)
+    assert whole.failed.all() and not whole.lost.any()
+    for name in ("states", "loss_times", "thermalized_times", "failed_times", "energy_error"):
+        np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
 @pytest.mark.parametrize("loss_times", [[1.0, 0.5, 0.5, -1.0, 2.0, 0.0],
                                        [-1.0] * 6, [0.0] * 6])
 def test_loss_fractions_count_ties_and_preserve_requested_time_order(loss_times):
@@ -267,3 +294,75 @@ def test_loss_fractions_count_ties_and_preserve_requested_time_order(loss_times)
     expected = np.array([np.count_nonzero((losses >= 0) & (losses <= t))
                          for t in times]) / losses.size
     np.testing.assert_array_equal(out.loss_fractions(), expected)
+
+
+def test_sine_spectrum_derivatives_cutoff_and_axis():
+    s = np.linspace(0.005, 0.995, 50)
+    cos = np.stack([np.full_like(s, B0), np.zeros_like(s), np.zeros_like(s)])
+    sine = np.stack([np.zeros_like(s), 0.2 * np.sqrt(s), np.full_like(s, 0.1)])
+    args = (s, cos, [0, 1, 0], [0, 3, 2], np.full_like(s, IOTA),
+            np.full_like(s, G), np.zeros_like(s), PSI0, 3)
+    field = BoozerField.from_booz(*args, bmns=sine, mode_tolerance=1e-4)
+    assert field.xm.size == 3  # Retain sine-only modes.
+    from types import SimpleNamespace
+    booz = SimpleNamespace(s_b=s, bmnc_b=cos, bmns_b=sine, xm_b=args[2], xn_b=args[3],
+                           iota=args[4], Boozer_G=args[5], Boozer_I=args[6], nfp=3, asym=True)
+    converted = BoozerField.from_booz_xform(booz, PSI0)
+    np.testing.assert_array_equal(converted.modB_derivatives(0.4, 0.7, 0.2),
+                                  field.modB_derivatives(0.4, 0.7, 0.2))
+    for r in (0.0, 0.4):
+        theta, zeta = 0.7, 0.2
+        angle = theta - 3 * zeta
+        expected = (B0 + 0.2*r*np.sin(angle) - 0.1*np.sin(2*zeta),
+                    0.2*np.sin(angle), 0.2*np.cos(angle),
+                    -0.6*r*np.cos(angle) - 0.2*np.cos(2*zeta))
+        np.testing.assert_allclose(field.modB_derivatives(r, theta, zeta), expected, atol=1e-12)
+    assert np.isfinite(guiding_center_rhs(field, jnp.array([0., 0., 0.2, V0/2]), 1., M, Q)).all()
+    symmetric = BoozerField.from_booz(*args)
+    zero_sine = BoozerField.from_booz(*args, bmns=np.zeros_like(sine))
+    assert zero_sine.sine_coef is None
+    np.testing.assert_array_equal(symmetric.modB_derivatives(0.4, 0.7, 0.2),
+                                  zero_sine.modB_derivatives(0.4, 0.7, 0.2))
+    for invalid in (sine[:, :-1], np.full_like(sine, np.nan)):
+        with pytest.raises(ValueError, match="bmns"):
+            BoozerField.from_booz(*args, bmns=invalid)
+
+
+def test_sine_orbits_match_rotated_cosine_field():
+    s, shift = np.linspace(0.005, 0.995, 50), 0.7
+    bmnc = np.stack([np.full_like(s, B0), -B0*EPS*np.sqrt(s)*np.cos(shift)])
+    bmns = np.stack([np.zeros_like(s), -B0*EPS*np.sqrt(s)*np.sin(shift)])
+    field = BoozerField.from_booz(s, bmnc, [0, 1], [0, 0], np.full_like(s, IOTA),
+                                 np.full_like(s, G), np.zeros_like(s), PSI0, 1, bmns=bmns)
+    theta, pitch = np.linspace(0, 6, 8), np.linspace(-0.9, 0.9, 8)
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-5, timestep=2e-8, n_save=7)
+    reference = trace_boozer(tokamak(), np.full(8, 0.3), theta, np.zeros(8), pitch, **kwargs)
+    rotated = trace_boozer(field, np.full(8, 0.3), theta+shift, np.zeros(8), pitch, **kwargs)
+    np.testing.assert_allclose(rotated.states[..., [0, 2, 3, 4]],
+                                reference.states[..., [0, 2, 3, 4]], rtol=1e-9, atol=1e-7)
+    np.testing.assert_array_equal(rotated.lost, reference.lost)
+    assert np.max(rotated.energy_error) < 1e-8
+
+
+@pytest.mark.parametrize("collisions", [False, True])
+def test_substep_counts_reuse_compilation_and_preserve_static_outputs(collisions):
+    from essos.boozer import _advance, _start
+
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
+    s = jnp.array([0.99999, 0.99999, 0.3, 0.4])
+    theta = jnp.full(4, np.pi / 2)
+    y0 = jnp.stack([jnp.sqrt(s) * jnp.cos(theta), jnp.sqrt(s) * jnp.sin(theta),
+                    jnp.zeros(4), jnp.zeros(4)], axis=1)
+    mu = V0**2 / (2 * jax.vmap(field.modB)(s, theta, jnp.zeros(4)))
+    carry = _start(field, y0, mu)[0]
+    keys = jax.random.split(jax.random.PRNGKey(17), 4)
+    species = electron_background() if collisions else None
+    dynamic = jax.jit(lambda *args: _advance.__wrapped__(*args), static_argnums=(5, 10))
+    static = jax.jit(lambda *args: _advance.__wrapped__(*args), static_argnums=(2, 5, 10))
+    for n_sub in (2, 5):
+        args = (field, 1e-7, n_sub, M, Q, species, 1.5, carry, keys, 0, 3)
+        a, b = static(*args), dynamic(*args)
+        for x, y in zip(jax.tree_util.tree_leaves(a), jax.tree_util.tree_leaves(b)):
+            np.testing.assert_array_equal(x, y)
+        assert np.count_nonzero(np.asarray(b[0][4]) >= 0) == 2
+    assert static._cache_size() == 2 and dynamic._cache_size() == 1
