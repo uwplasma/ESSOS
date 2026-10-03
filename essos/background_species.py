@@ -64,22 +64,22 @@ def gamma_ab(ma: float, ea: float, species_b: int,vth_a: float, points, species:
 
 @partial(jit, static_argnames=['species'])
 def nu_D_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
-    """Deflection collision frequency"""
+    """Decay rate of the l=1 pitch moment; the angular operator is nu_D L/2."""
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     prefactor = gamma_ab(ma,ea, species_b, v,points,species) * nb 
     erf_part = (jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb))/ v**3
-    return prefactor * erf_part*2.
+    return prefactor * erf_part
 
 
 @partial(jit, static_argnames=['species'])
 def d_nu_D_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
-    """Deflection collision frequency"""
+    """Speed derivative of the l=1 deflection rate."""
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     prefactor = gamma_ab(ma,ea, species_b, v,points,species) * nb 
     erf_part = (d_erf(v/vtb)-d_chandrasekhar(v/vtb))/vtb/v**3-3.*(jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb))/ v**4
-    return 2.*prefactor*erf_part
+    return prefactor*erf_part
 
 @partial(jit, static_argnames=['species'])
 def nu_par_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
