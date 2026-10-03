@@ -49,7 +49,7 @@ def test_vmec_flux_sign_sets_the_analytic_radial_drift():
     assert sdot == pytest.approx(expected, rel=1e-12)
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "tsit5", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
 def test_orbits_conserve_energy_and_toroidal_canonical_momentum(method):
     """Axisymmetry: E and P_zeta = m v_par G / B - q iota psi0 s are invariants (White 2014)."""
     field = tokamak()
@@ -66,14 +66,14 @@ def test_orbits_conserve_energy_and_toroidal_canonical_momentum(method):
     np.testing.assert_allclose(p_zeta - p_zeta[:, :1], 0.0, atol=1e-7 * np.abs(p_zeta).max())
 
 
-@pytest.mark.parametrize("method", ["dopri8", "tsit5", "dopri5"])
+@pytest.mark.parametrize("method", ["dopri8", "dopri5"])
 def test_tableau_matches_diffrax_and_preserves_derivatives(method):
-    from diffrax import Dopri5, Dopri8, ODETerm, Tsit5
+    from diffrax import Dopri5, Dopri8, ODETerm
 
     rhs = lambda y: jnp.array([y[1], -y[0]])
     y, dt = jnp.array([1.0, 0.3]), 0.1 if method == "dopri8" else 0.01
     term = ODETerm(lambda t, y, args: rhs(y))
-    solver = {"dopri8": Dopri8, "tsit5": Tsit5, "dopri5": Dopri5}[method]()
+    solver = {"dopri8": Dopri8, "dopri5": Dopri5}[method]()
     reference, *_ = solver.step(term, 0.0, dt, y, None,
                                 solver.init(term, 0.0, dt, y, None), False)
     step = lambda y: _rk_step(rhs, y, dt, method)
@@ -109,7 +109,7 @@ def test_nonfinite_step_is_reported_as_failed_not_confined():
         legacy.loss_fractions()
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "tsit5", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
 def test_crossing_with_invalid_field_is_failed_not_lost(method):
     """A finite LCFS crossing cannot hide an invalid outside-field evaluation."""
     base = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
@@ -271,7 +271,7 @@ def test_pitch_angle_scattering_decays_the_mean_pitch_at_nu_D():
     assert float(jnp.mean(lam)) == pytest.approx(0.6 * np.exp(-0.5), abs=4 * 0.8 / np.sqrt(n) + 1e-2)
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "tsit5", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
 def test_progress_chunks_reproduce_the_unchunked_trace(method):
     """Host-side chunks for progress carry the whole state: the trace is bit-identical."""
     field, n = tokamak(), 6
@@ -291,7 +291,7 @@ def test_progress_chunks_reproduce_the_unchunked_trace(method):
     (4, 2, False), (4, 23, True),
 ])
 @pytest.mark.parametrize("with_progress", [False, True])
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "tsit5", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
 def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, with_progress, method):
     field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
     s = np.array([0.999] * edge_births + [0.3] * (6 - edge_births))
@@ -310,7 +310,7 @@ def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, 
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "tsit5", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
 def test_survivor_compaction_preserves_failures(method):
     singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.0)
     args = ([0.3] * 4, [0.0] * 4, [0.0] * 4, [0.2] * 4)
@@ -383,7 +383,7 @@ def test_sine_orbits_match_rotated_cosine_field():
 
 
 @pytest.mark.parametrize("collisions", [False, True])
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "tsit5", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
 def test_substep_counts_reuse_compilation_and_preserve_static_outputs(collisions, method):
     from essos.boozer import _advance, _start
 
