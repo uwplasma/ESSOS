@@ -747,9 +747,17 @@ _GUIDING_CENTER_COLLISION_MODELS = frozenset(
 _AXIS_REGION = 1e-2
 
 
+_AXIS_SEED = 1e-12  # smallest s of a seed: the VMEC Jacobian vanishes on the axis itself
+
+
 def _to_axis_regular(y):
-    """Map (s, theta, ...) to (sqrt(s) cos theta, sqrt(s) sin theta, ..., 0)."""
-    r = jnp.sqrt(y[0])
+    """Map (s, theta, ...) to (sqrt(s) cos theta, sqrt(s) sin theta, ..., 0).
+
+    A seed exactly on the axis (s = 0) is moved to s = _AXIS_SEED, where the
+    guiding-center velocity is finite; orbits that later pass the axis never
+    land on s = 0 exactly.
+    """
+    r = jnp.sqrt(jnp.maximum(y[0], _AXIS_SEED))
     return jnp.concatenate([jnp.array([r * jnp.cos(y[1]), r * jnp.sin(y[1])]), y[2:], jnp.zeros(1)])
 
 
@@ -812,6 +820,19 @@ class LevelsetStoppingCriterion:
     def __call__(self, t, y, args, **kwargs):
         del t, args, kwargs
         return self.classifier.evaluate_xyz(y[:3]) + self.maximum_distance
+
+
+def _place_on_devices(x, target):
+    """Place concrete arrays on ``target``; constrain tracers without a host copy."""
+    if isinstance(x, jax.core.Tracer):
+        if isinstance(target, NamedSharding):
+            return lax.with_sharding_constraint(x, target)
+        return x
+    x = jax.device_get(x)
+    if not jax.dtypes.issubdtype(x.dtype, jax.dtypes.prng_key):
+        x = np.asarray(x)
+    return device_put(x, target)
+
 
 
 ## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
@@ -1297,20 +1318,18 @@ class Tracing():
                 event_sharding = tuple(sharding_index for _ in self.stopping_criteria)
             output_sharding = (sharding, event_sharding)
         if sharding is not None:
-            initial_conditions = device_put(
-                np.asarray(jax.device_get(self.initial_conditions)), sharding)
+            initial_conditions = _place_on_devices(self.initial_conditions, sharding)
             random_keys = self.particles.random_keys if self.particles else None
             if random_keys is not None:
-                random_keys = device_put(jax.device_get(random_keys), sharding_index)
+                random_keys = _place_on_devices(random_keys, sharding_index)
             return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=output_sharding)(
                         initial_conditions, random_keys)
         else:
             device = devices[0]
-            initial_conditions = device_put(
-                np.asarray(jax.device_get(self.initial_conditions)), device)
+            initial_conditions = _place_on_devices(self.initial_conditions, device)
             random_keys = self.particles.random_keys if self.particles else None
             if random_keys is not None:
-                random_keys = device_put(jax.device_get(random_keys), device)
+                random_keys = _place_on_devices(random_keys, device)
             with jax.default_device(device):
                 return jit(vmap(compute_trajectory,in_axes=(0,0)))(
                     initial_conditions, random_keys)
