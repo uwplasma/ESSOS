@@ -1,4 +1,5 @@
 from functools import partial
+import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.scipy.interpolate import RegularGridInterpolator
@@ -111,7 +112,7 @@ def nested_lists_to_array(ll):
 
 
 def surfacerzfourier_from_boundary(rbc, zbs, nfp, ntheta=30, nphi=30,
-                                   close=False, range_torus="full torus"):
+                                   close=False, range_torus="full torus", *, rbs=None, zbc=None, _cls=None):
     """Create a differentiable surface from VMEC ``rbc`` and ``zbs`` arrays.
 
     VMEC stores arrays as ``[n + ntor, m]`` and omits negative-``n`` modes
@@ -122,21 +123,27 @@ def surfacerzfourier_from_boundary(rbc, zbs, nfp, ntheta=30, nphi=30,
     if rbc.ndim != 2 or rbc.shape != zbs.shape or rbc.shape[0] % 2 != 1:
         raise ValueError("rbc and zbs must have equal shape (2*ntor+1, mpol+1)")
     ntor, mpol = (rbc.shape[0] - 1) // 2, rbc.shape[1] - 1
-    rc = jnp.concatenate((rbc[ntor:, 0], rbc[:, 1:].T.ravel()))
-    zs = jnp.concatenate((zbs[ntor:, 0], zbs[:, 1:].T.ravel()))
-    return SurfaceRZFourier(rc, zs, int(nfp), mpol, ntor, ntheta=ntheta, nphi=nphi,
-                            close=close, range_torus=range_torus)
+    def pack(table):
+        table = jnp.asarray(table)
+        if table.shape != rbc.shape:
+            raise ValueError("Fourier partner arrays must match rbc.shape")
+        return jnp.concatenate((table[ntor:, 0], table[:, 1:].T.ravel()))
+    partners = {name: pack(table) for name, table in (('rs', rbs), ('zc', zbc)) if table is not None}
+    cls = SurfaceRZFourier if _cls is None else _cls
+    return cls(pack(rbc), pack(zbs), int(nfp), mpol, ntor, ntheta=ntheta, nphi=nphi,
+                            close=close, range_torus=range_torus, **partners)
 
     
 
 class SurfaceRZFourier:
     def __init__(self, rc, zs, nfp, mpol, ntor, ntheta=30, nphi=30, close=True, range_torus='full torus',
-                 scaling_type=2, scaling_factor=0):
+                 scaling_type=2, scaling_factor=0, *, rs=None, zc=None):
         """Initialize a Fourier surface.
 
         Args:
             rc: cosine Fourier coefficients for R.
             zs: sine Fourier coefficients for Z.
+            rs, zc: optional sine R and cosine Z coefficients for asymmetric surfaces.
             nfp: number of field periods.
             mpol: maximum poloidal mode number.
             ntor: maximum toroidal mode number.
@@ -150,8 +157,7 @@ class SurfaceRZFourier:
                 ``exp(scaling_factor * ||(xm, xn)||)``.
 
         Note:
-            The optimized dofs are stored as ``[rc * scaling, zs * scaling]``,
-            with the scaling computed mode-by-mode from ``xm`` and ``xn``.
+            Dofs contain scaled ``rc, zs``, followed by any active ``rs, zc`` arrays.
         """
 
         assert isinstance(nfp, int) and nfp > 0, "nfp must be a positive integer."
@@ -172,12 +178,16 @@ class SurfaceRZFourier:
             close,
             range_torus,
             self._normalize_scaling_type(scaling_type),
-            scaling_factor,
+            scaling_factor, rs, zc,
         )
 
-    def _initialize_state(self, rc, zs, nfp, mpol, ntor, ntheta, nphi, close, range_torus, scaling_type, scaling_factor):
+    def _initialize_state(self, rc, zs, nfp, mpol, ntor, ntheta, nphi, close, range_torus, scaling_type, scaling_factor, rs=None, zc=None):
         self._rc = rc
         self._zs = zs
+        for name, table in (('rs', rs), ('zc', zc)):
+            if table is not None and hasattr(table, 'shape') and table.shape != rc.shape:
+                raise ValueError(f"{name} must match rc.shape")
+            setattr(self, '_' + name, table)
         self._nfp = nfp
         self._mpol = mpol
         self._ntor = ntor
@@ -190,6 +200,7 @@ class SurfaceRZFourier:
         self._area_element = None
         self._xm = None
         self._xn = None
+        self._mode_numbers = None
 
         self._ntheta = ntheta
         self._nphi = nphi
@@ -226,30 +237,47 @@ class SurfaceRZFourier:
 
     @classmethod
     def from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus'):
+        """Read indexed boundary coefficients; truncate outside MPOL/NTOR as VMEC does."""
         from f90nml import Parser
         nml = Parser().read(file)['indata']
 
-        nfp = nml["nfp"] if "nfp" in nml else 1
-        mpol = nml['mpol']            
-        ntor = nml['ntor']
-        
-        rc = jnp.ravel(nested_lists_to_array(nml['rbc']))[2:]
-        zs = jnp.ravel(nested_lists_to_array(nml['zbs']))[2:]
-
-        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
-        return surface
+        nfp, mpol, ntor = int(nml.get('nfp', 1)), int(nml.get('mpol', 6)) - 1, int(nml.get('ntor', 0))
+        if mpol < 0 or ntor < 0:
+            raise ValueError('Require MPOL >= 1 and NTOR >= 0')
+        def coefficients(name):
+            matrix = np.zeros((mpol + 1, 2 * ntor + 1))
+            if name not in nml:
+                return jnp.asarray(matrix.T)
+            n0, m0 = nml.start_index[name]
+            for i, row in enumerate(nml[name]):
+                for j, value in enumerate(row or []):
+                    m, n = m0 + i, n0 + j
+                    if value is not None and 0 <= m <= mpol and abs(n) <= ntor:
+                        sign = -1 if m == 0 and n < 0 and name in ('rbs', 'zbs') else 1
+                        n = abs(n) if m == 0 else n
+                        matrix[m, n + ntor] += sign * value
+            return jnp.asarray(matrix.T)
+        partners = {name: coefficients(name) for name in ('rbs', 'zbc')
+                    if nml.get('lasym', False) and name in nml}
+        return surfacerzfourier_from_boundary(coefficients('rbc'), coefficients('zbs'), nfp,
+                                             ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus, _cls=cls, **partners)
     
     @classmethod
     def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus'):
+        from essos.fields import _radial_interp
         nfp = vmec.nfp
         mpol = vmec.mpol
         ntor = vmec.ntor
 
         s_full_grid = vmec.s_full_grid
-        rc = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(vmec.rmnc)
-        zs = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(vmec.zmns)
+        rc = _radial_interp(s, s_full_grid, vmec.rmnc, vmec.xm)
+        zs = _radial_interp(s, s_full_grid, vmec.zmns, vmec.xm)
 
-        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
+        partners = {target: _radial_interp(s, s_full_grid, table, vmec.xm)
+                    for target, table in (('rs', getattr(vmec, 'rmns', None)), ('zc', getattr(vmec, 'zmnc', None)))
+                    if table is not None}
+        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus, **partners)
+        surface._mode_numbers = tuple(tuple(np.asarray(a).astype(int)) for a in (vmec.xm, vmec.xn))
         surface._xm = vmec.xm
         surface._xn = vmec.xn
 
@@ -257,23 +285,32 @@ class SurfaceRZFourier:
 
     @classmethod
     def from_wout_file(cls, file, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus'):
+        from essos.fields import _radial_interp
         from netCDF4 import Dataset
-        nc = Dataset(file)
+        with Dataset(file) as nc:
+            nfp = int(nc.variables["nfp"][0])
+            xm = jnp.array(nc.variables["xm"][:])
+            xn = jnp.array(nc.variables["xn"][:])
+            mpol = int(jnp.max(xm))
+            ntor = int(jnp.max(jnp.abs(xn)) / nfp)
 
-        nfp = int(nc.variables["nfp"][0])
-        xm = jnp.array(nc.variables["xm"][:])
-        xn = jnp.array(nc.variables["xn"][:])
-        mpol = int(jnp.max(xm))
-        ntor = int(jnp.max(jnp.abs(xn)) / nfp)
+            ns = int(nc.variables["ns"][0])
+            if ns < 3:
+                raise ValueError("Require ns >= 3")
+            s_full_grid = jnp.linspace(0, 1, ns)
+            rc = _radial_interp(s, s_full_grid, jnp.array(nc.variables["rmnc"][:]), xm)
+            zs = _radial_interp(s, s_full_grid, jnp.array(nc.variables["zmns"][:]), xm)
         
-        ns = nc.variables["ns"][0]
-        s_full_grid = jnp.linspace(0, 1, ns)
-        rc = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(jnp.array(nc.variables["rmnc"][:]))
-        zs = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(jnp.array(nc.variables["zmns"][:]))
-
-        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
-        surface._xm = xm
-        surface._xn = xn
+            lasym = any(bool(nc.variables[name][:].item())
+                        for name in ('lasym__logical__', 'lasym') if name in nc.variables)
+            if lasym and any(name not in nc.variables for name in ('rmns', 'zmnc')):
+                raise ValueError("Asymmetric wout is missing geometry partner tables")
+            partners = {target: _radial_interp(s, s_full_grid, jnp.array(nc.variables[name][:]), xm)
+                        for target, name in (('rs', 'rmns'), ('zc', 'zmnc')) if name in nc.variables and np.any(nc.variables[name][:])}
+            surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus, **partners)
+            surface._mode_numbers = tuple(tuple(np.asarray(a).astype(int)) for a in (xm, xn))
+            surface._xm = xm
+            surface._xn = xn
 
         return surface
 
@@ -317,6 +354,28 @@ class SurfaceRZFourier:
         self._zs = new_zs
         self.reset_cache()
 
+    @property
+    def rs(self):
+        return self._rs
+
+    @rs.setter
+    def rs(self, value):
+        if value is not None and value.shape != self.rc.shape:
+            raise ValueError("rs must match rc.shape")
+        self._rs = value
+        self.reset_cache()
+
+    @property
+    def zc(self):
+        return self._zc
+
+    @zc.setter
+    def zc(self, value):
+        if value is not None and value.shape != self.rc.shape:
+            raise ValueError("zc must match rc.shape")
+        self._zc = value
+        self.reset_cache()
+
     # nfp property
     @property
     def nfp(self):
@@ -336,7 +395,8 @@ class SurfaceRZFourier:
     @property
     def xm(self):
         if self._xm is None:
-            value = jnp.repeat(jnp.arange(self.mpol + 1), 2 * self.ntor + 1)[self.ntor:]
+            value = (jnp.asarray(self._mode_numbers[0]) if self._mode_numbers is not None
+                     else jnp.repeat(jnp.arange(self.mpol + 1), 2 * self.ntor + 1)[self.ntor:])
             if _cacheable(value):
                 self._xm = value
             return value
@@ -346,8 +406,8 @@ class SurfaceRZFourier:
     @property
     def xn(self):
         if self._xn is None:
-            value = self.nfp * jnp.tile(
-                jnp.arange(-self.ntor, self.ntor + 1), self.mpol + 1)[self.ntor:]
+            value = (jnp.asarray(self._mode_numbers[1]) if self._mode_numbers is not None
+                     else self.nfp * jnp.tile(jnp.arange(-self.ntor, self.ntor + 1), self.mpol + 1)[self.ntor:])
             if _cacheable(value):
                 self._xn = value
             return value
@@ -470,12 +530,15 @@ class SurfaceRZFourier:
     # dofs property and setter
     @property
     def dofs(self):
-        return jnp.hstack([self.rc * self.scaling, self.zs * self.scaling])
+        return jnp.hstack([table * self.scaling for table in (self.rc, self.zs, self.rs, self.zc) if table is not None])
     
     @dofs.setter
     def dofs(self, new_dofs):
-        self._rc = new_dofs[:self.rc.size] / self.scaling
-        self._zs = new_dofs[self.rc.size:] / self.scaling
+        names = [name for name in ('rc', 'zs', 'rs', 'zc') if getattr(self, name) is not None]
+        if new_dofs.size != len(names) * self.rc.size:
+            raise ValueError("dofs must contain every active Fourier coefficient family")
+        for name, table in zip(names, jnp.split(new_dofs, len(names))):
+            setattr(self, '_' + name, table / self.scaling)
         self.reset_cache()
         
     # _compute_gamma method
@@ -491,18 +554,21 @@ class SurfaceRZFourier:
 
         R = jnp.einsum('i,ijk->jk', rc, cos_angles)
         Z = jnp.einsum('i,ijk->jk', zs, sin_angles)
-        X = R * cos_phi2d
-        Y = R * sin_phi2d
-        gamma = jnp.stack([X, Y, Z], axis=-1)
-
         dR_dtheta = -jnp.einsum('i,ijk->jk', xm * rc, sin_angles)
         dZ_dtheta = jnp.einsum('i,ijk->jk', xm * zs, cos_angles)
-        dX_dtheta = dR_dtheta * cos_phi2d
-        dY_dtheta = dR_dtheta * sin_phi2d
-        gammadash_theta = jnp.stack([dX_dtheta, dY_dtheta, dZ_dtheta], axis=-1)
+        dR_dphi = jnp.einsum('i,ijk->jk', xn * rc, sin_angles)
+        dZ_dphi = -jnp.einsum('i,ijk->jk', xn * zs, cos_angles)
+        if self.rs is not None:
+            R += jnp.einsum('i,ijk->jk', self.rs, sin_angles)
+            dR_dtheta += jnp.einsum('i,ijk->jk', xm * self.rs, cos_angles)
+            dR_dphi -= jnp.einsum('i,ijk->jk', xn * self.rs, cos_angles)
+        if self.zc is not None:
+            Z += jnp.einsum('i,ijk->jk', self.zc, cos_angles)
+            dZ_dtheta -= jnp.einsum('i,ijk->jk', xm * self.zc, sin_angles)
+            dZ_dphi += jnp.einsum('i,ijk->jk', xn * self.zc, sin_angles)
+        gamma = jnp.stack([R * cos_phi2d, R * sin_phi2d, Z], axis=-1)
+        gammadash_theta = jnp.stack([dR_dtheta * cos_phi2d, dR_dtheta * sin_phi2d, dZ_dtheta], axis=-1)
 
-        dR_dphi = jnp.einsum('i,ijk->jk', xn*rc, sin_angles)
-        dZ_dphi = -jnp.einsum('i,ijk->jk', xn*zs, cos_angles)
         dX_dphi = dR_dphi * cos_phi2d - R * sin_phi2d
         dY_dphi = dR_dphi * sin_phi2d + R * cos_phi2d
         gammadash_phi = jnp.stack([dX_dphi, dY_dphi, dZ_dphi], axis=-1)
@@ -729,26 +795,19 @@ class SurfaceRZFourier:
         gridToVTK(str(filename), x, y, z, pointData=pointData)
 
     def to_vmec(self, filename):
-        """
-        Generates a fortran namelist file containing the RBC/RBS/ZBC/ZBS
-        coefficients, in the form used in VMEC and SPEC input
-        files. The result will be returned as a string. For saving a
-        file, see the ``write_nml()`` function.
-        """
-        nml = ''
-        nml += '&INDATA\n'
-        nml += 'LASYM = .FALSE.\n'
-        nml += f'NFP = {self.nfp}\n'
-
-        # Copy overlapping region
-        for l in range(len(self.xm)):
-            rc = self.rc[l]
-            zs = self.zs[l]
-            nml += f"RBC({self.xn[l]:4d},{self.xm[l]:4d}) ={rc:23.15e},    ZBS({self.xn[l]:4d},{self.xm[l]:4d}) ={zs:23.15e}\n"
-        nml += '/\n'
-        
+        """Write a VMEC boundary namelist, including any asymmetric partners."""
+        families = {'RBC': self.rc, 'ZBS': self.zs, 'RBS': self.rs, 'ZBC': self.zc}
+        asym = self.rs is not None or self.zc is not None
+        lines = ['&INDATA', f'LASYM = .{str(asym).upper()}.', f'NFP = {self.nfp}',
+                 f'MPOL = {self.mpol + 1}', f'NTOR = {self.ntor}']
+        for m, xn, i in zip(self.xm, self.xn, range(len(self.xm))):
+            if int(xn) % self.nfp:
+                raise ValueError('Toroidal mode numbers must be multiples of nfp')
+            n = int(xn) // self.nfp
+            lines.append(', '.join(f'{name}({n},{int(m)}) = {float(table[i]):.15e}'
+                                   for name, table in families.items() if table is not None))
         with open(filename, 'w') as f:
-            f.write(nml)
+            f.write('\n'.join(lines) + '\n/\n')
             
     def mean_cross_sectional_area(self):
         xyz = self.gamma
@@ -767,10 +826,8 @@ class SurfaceRZFourier:
         return mean_cross_sectional_area
     
     def _tree_flatten(self):
-        if hasattr(self._rc, "shape") and hasattr(self._zs, "shape"):
-            children = (self.rc * self.scaling, self.zs * self.scaling)  # arrays / dynamic values
-        else:
-            children = (self._rc, self._zs)
+        tables = (self._rc, self._zs, self._rs, self._zc)
+        children = tuple(table * self.scaling if hasattr(table, "shape") else table for table in tables)
         aux_data = {"nfp": self._nfp,
                     "mpol": self._mpol,
                     "ntor": self._ntor,
@@ -779,12 +836,13 @@ class SurfaceRZFourier:
                     "close": self._close,
                     "range_torus": self._range_torus,
                     "scaling_type": self._scaling_type,
-                    "scaling_factor": self._scaling_factor}  # static values
+                    "scaling_factor": self._scaling_factor,
+                    "mode_numbers": self._mode_numbers}  # static values
         return (children, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        rc_scaled, zs_scaled = children
+        rc_scaled, zs_scaled = children[:2]
 
         if hasattr(rc_scaled, "shape") and hasattr(zs_scaled, "shape"):
             mpol = aux_data["mpol"]
@@ -793,15 +851,14 @@ class SurfaceRZFourier:
             scaling_type = cls._normalize_scaling_type(aux_data["scaling_type"])
             scaling_factor = aux_data["scaling_factor"]
 
-            xm = jnp.repeat(jnp.arange(mpol + 1), 2 * ntor + 1)[ntor:]
-            xn = nfp * jnp.tile(jnp.arange(-ntor, ntor + 1), mpol + 1)[ntor:]
+            modes = aux_data["mode_numbers"]
+            xm = jnp.repeat(jnp.arange(mpol + 1), 2 * ntor + 1)[ntor:] if modes is None else jnp.asarray(modes[0])
+            xn = nfp * jnp.tile(jnp.arange(-ntor, ntor + 1), mpol + 1)[ntor:] if modes is None else jnp.asarray(modes[1])
             scaling = cls._compute_scaling(xm, xn, scaling_type, scaling_factor)
 
-            rc = rc_scaled / scaling
-            zs = zs_scaled / scaling
+            rc, zs, rs, zc = (table / scaling if table is not None else None for table in children)
         else:
-            rc = rc_scaled
-            zs = zs_scaled
+            rc, zs, rs, zc = children
 
         obj = object.__new__(cls)
         obj._initialize_state(
@@ -815,8 +872,9 @@ class SurfaceRZFourier:
             aux_data["close"],
             aux_data["range_torus"],
             aux_data["scaling_type"],
-            aux_data["scaling_factor"],
+            aux_data["scaling_factor"], rs, zc,
         )
+        obj._mode_numbers = aux_data["mode_numbers"]
         return obj
 
 tree_util.register_pytree_node(SurfaceRZFourier,
