@@ -57,7 +57,7 @@ seed = replace(seed, lfreeb=True, mgrid_file='essos_coils', nzeta=16, phiedge=ph
 
 # Solve the free boundary in vmex
 time0 = time()
-result = vj.solve_free_boundary(seed, external_field=external_field, error_on_no_convergence=False)
+result = vj.solve_free_boundary(seed, external_field=external_field, error_on_no_convergence=True)
 wout = vj.wout_from_state(inp=seed, state=result.state, fsqr=float(result.fsqr),
                           fsqz=float(result.fsqz), fsql=float(result.fsql),
                           niter=int(result.iterations), converged=bool(result.converged),

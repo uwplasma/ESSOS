@@ -55,12 +55,10 @@ coil-clearance penalties; ``block_size`` bounds their temporary memory.
 VMEC equilibria with VMEX
 -------------------------
 
-`VMEX <https://github.com/uwplasma/VMEX>`_ (``pip install vmex``) solves the
-VMEC equilibrium ESSOS traces through, and neither package imports the other:
-coils leave ESSOS as a Biot-Savart field tabulated onto a cylindrical grid,
-which VMEX's free-boundary solver consumes, and the equilibrium comes back as
-a wout file, which ``essos.fields.Vmec`` reads.
+`VMEX <https://github.com/uwplasma/VMEX>`_ solves a free-boundary equilibrium
+from ESSOS coils; ESSOS reads its wout file and traces field lines through it.
 
 .. code-block:: console
 
+    pip install vmex
     python examples/simple_examples/equilibrium_from_coils_vmex.py
