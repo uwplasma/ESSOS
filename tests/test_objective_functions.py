@@ -92,7 +92,6 @@ class DummyTracing:
         self.maxtime = 1e-5
         self.model = kwargs.get("model", "GuidingCenterAdaptative")
         self.boundary_hits = jnp.zeros(2, dtype=bool)
-        self._has_boundary_event = True
 
     def soft_loss_fraction(self, r_max=0.99, width=0.02):
         return Tracing.soft_loss_fraction(self, r_max=r_max, width=width)

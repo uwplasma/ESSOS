@@ -7,10 +7,8 @@
     <img src="https://readthedocs.org/projects/essos/badge/?version=latest" alt="Documentation">
 </p>
 
-Stellarator coil and particle optimization in JAX. Everything ESSOS computes —
-coil geometry, Biot-Savart fields, guiding-centre orbits, field lines — is
-differentiable end to end and runs on CPU or GPU, so a design objective and its
-gradient come from the same code.
+Stellarator coil optimization and particle tracing in JAX, on CPU or GPU.
+Coil objectives and adaptive tracing support automatic differentiation.
 
 ```sh
 pip install essos
@@ -18,8 +16,8 @@ pip install essos
 
 ## What it does
 
-- **Differentiable throughout.** `jax.grad` works through coil geometry, the
-  field, and the traced orbits, so objectives compose without finite differences.
+- **Automatic differentiation.** `jax.grad` works through coil geometry,
+  Biot-Savart fields and adaptive tracing.
 - **Coil optimization.** Fit coils to a plasma boundary under length, curvature,
   separation, coil-surface-distance and force constraints, with `least_squares`,
   an augmented Lagrangian, multi-objective (Pareto) search, or stochastic
@@ -28,9 +26,8 @@ pip install essos
 - **Particle tracing.** Guiding-centre and full-orbit (Boris) models, with
   Monte Carlo collisions on background species with density and temperature
   profiles, electric fields and alpha-loss diagnostics.
-- **Boozer-coordinate tracing.** A guiding-centre tracer that needs only the
-  Boozer `|B|` spectrum and the flux functions `iota`, `G` and `I`; about 66x faster than VMEC-coordinate tracing and
-  3.8x faster than SIMPLE and 7.4x faster than SIMSOPT on the same alphas (see below).
+- **Boozer-coordinate tracing.** Guiding-centre diagnostics from the Boozer
+  `|B|` spectrum and flux functions `iota`, `G` and `I`, with optional collisions.
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria (analytic derivatives,
@@ -132,12 +129,9 @@ full-orbit, collisional and electric-field variants.
 
 ## Boozer-coordinate tracing
 
-For alpha-loss studies in a VMEC equilibrium, transform it to Boozer
-coordinates once (with [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax))
-and trace there. `essos.boozer` integrates the guiding-centre equations in a
-chart regular on the magnetic axis, with fixed-step RK4 vectorized and sharded
-over particles, and optional Monte Carlo collisions (pitch-angle scattering,
-slowing down and energy diffusion on `BackgroundSpecies`).
+Transform a VMEC equilibrium with [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax),
+then trace guiding centres in an axis-regular chart with fixed-step RK4 and
+optional Monte Carlo collisions. This tracer provides forward diagnostics.
 
 ```python
 import numpy as np
@@ -151,7 +145,7 @@ booz.read_wout("wout.nc", flux=False)
 booz.run()
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
-field = BoozerField.from_booz_xform(booz, psi0=phi_edge / (2 * np.pi),
+field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi),
                                     mode_tolerance=1e-3)
 
 n = 1000
@@ -163,7 +157,7 @@ result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np
 print(result.lost.mean(), result.loss_fractions())
 ```
 
-`psi0` is the boundary toroidal flux over `2 pi`. A particle
+`psi0` is minus VMEC's boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 
 ![Boozer vs VMEC-coordinate and cross-code tracing times](docs/readme_boozer_speed.png)
@@ -176,32 +170,41 @@ is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 | | SIMPLE | 12.4% | 556 s |
 | | SIMSOPT | 11.9% | 1079 s |
 
-The first case is [`examples/particle_tracing/trace_particles_boozer_vs_vmec.py`](examples/particle_tracing/trace_particles_boozer_vs_vmec.py):
-the loss fractions agree within their binomial errors and Boozer tracing is
-about 66x faster. The figure is redrawn from these numbers by
-`python docs/make_readme_boozer_figure.py`.
+The first case is [`examples/particle_tracing/trace_particles_boozer_vs_vmec.py`](examples/particle_tracing/trace_particles_boozer_vs_vmec.py).
+Its ± values are one-sigma binomial standard errors, `sqrt(p (1-p) / N)`.
+Redraw the figure with `python docs/make_readme_boozer_figure.py`.
 
-**Why it is fast.** In Boozer coordinates the guiding-centre equations of
-motion depend only on `|B|` and the flux functions `G`, `I` and `iota`, not on
-the full vector field or its Cartesian gradients. Each step evaluates one
-scalar Fourier series, `|B| = sum b_mn(s) cos(m theta - n zeta)`, and its three
-derivatives (about 1 us per particle with 135 modes), instead of the 3-D
-field and its gradient from the VMEC geometry (8-10 us).
+Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
+and its derivatives, together with the flux functions `G`, `I` and `iota`.
 
 ## Tracing notes
 
 - **VMEC magnetic axis.** VMEC guiding centres are integrated in
   `sqrt(s) (cos theta, sin theta)`, which is regular on the axis, so orbits
   cross it; trajectories are returned in `(s, theta, phi, ...)` with `theta`
-  in `[0, 2 pi)`. A trace stops at `s >= 1` and reports it through
-  `tracing.boundary_hits`. Supplying `condition` replaces that event; it is
-  evaluated on `(s, theta, phi, ...)`.
+  in `[0, 2 pi)`.
+- **LCFS and wall.** A VMEC guiding-centre trace stops at the exact LCFS
+  crossing (`tracing.lcfs_times`, `lcfs_positions`, `lcfs_energies`), found by
+  root finding. Pass `exterior_field=` (ESSOS coils, a VMEX `VmecExtender` or
+  `MgridField`, or any batched `xyz -> B`) and `wall=` (a `SurfaceClassifier`
+  or a signed-distance callable, positive inside) to follow the orbit outside
+  in Cartesian coordinates until it strikes the wall (`wall_times`,
+  `wall_positions`, `wall_energies`) or comes back inside, where it returns to
+  flux coordinates (`returns`). `tracing.status` gives each outcome
+  (`essos.dynamics.VMEC_STATUS`); `trajectories_xyz` and `region` hold the
+  whole orbit. A non-finite step ends that orbit as `failed`, with its time.
+  Loss fractions use the exact wall, or LCFS, times. Collisions are switched
+  off outside the LCFS. Supplying `condition` replaces these events; it is
+  evaluated on `(s, theta, phi, ...)`. See
+  [`examples/particle_tracing/trace_particles_vmec_to_wall.py`](examples/particle_tracing/trace_particles_vmec_to_wall.py).
 - **Stopping coil-field traces.** Pass `stopping_criteria=LevelsetStoppingCriterion(...)`
   to end Cartesian traces once they leave a prescribed distance from a surface,
   and read the per-line mask from `tracing.boundary_hits`.
 - **Step budget.** `max_steps` (default `1_000_000`) bounds every Diffrax solve,
   so a trace that cannot finish returns instead of running unbounded.
 - **Progress bars** are off by default; pass `progress=True` when interactive.
+  With `particle_batch_size=n` particles are traced `n` at a time and the bar
+  counts completed particles (batches are bypassed under `jax.jit`/`grad`).
 - **Model choice.** `FieldLineArclength` traces a fixed physical length so
   rescaling `B` does not change the run; `FieldLineToroidal` sets coverage
   directly in toroidal angle for flux-coordinate fields.
