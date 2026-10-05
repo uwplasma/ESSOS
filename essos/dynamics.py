@@ -912,7 +912,8 @@ class Tracing():
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
                  solver=None, stopping_criteria=None, progress=False, devices=None,
-                 max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None):
+                 max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
+                 particle_batch_size=None):
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")
@@ -981,7 +982,16 @@ class Tracing():
         # finish ran until the process was killed rather than returning.
         self.max_steps = max_steps
         self.progress = bool(progress)
-        self.progress_meter = TqdmProgressMeter() if self.progress else NoProgressMeter()
+        # With particle_batch_size, particles are traced in batches of that
+        # size and progress counts completed particles instead of Diffrax
+        # steps. Under a JAX transformation the batches are bypassed.
+        if particle_batch_size is not None and (
+                isinstance(particle_batch_size, bool) or not isinstance(particle_batch_size, (int, np.integer))
+                or particle_batch_size <= 0):
+            raise ValueError("particle_batch_size must be a positive integer or None")
+        self.particle_batch_size = None if particle_batch_size is None else int(particle_batch_size)
+        self.progress_meter = (TqdmProgressMeter() if self.progress and self.particle_batch_size is None
+                               else NoProgressMeter())
         # Diffrax solver to use for the adaptive integrators. If left as None,
         # each integrator falls back to its previous default (Dopri8), so
         # existing call sites are unaffected. Selecting the solver here (rather
@@ -1174,19 +1184,38 @@ class Tracing():
                 return trajectory, solution.event_mask
             return trajectory
 
-        n = len(self.initial_conditions)
-        count = min(len(self.devices), n)
-        while count > 1 and n % count:
+        y0, keys = self.initial_conditions, self.particles.random_keys if self.particles else None
+        n = len(y0)
+        traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys)))
+        batch = n if self.particle_batch_size is None or traced else min(self.particle_batch_size, n)
+        count = min(len(self.devices), batch)
+        while count > 1 and batch % count:
             count -= 1
         if count > 1:
             place = NamedSharding(Mesh(np.asarray(self.devices[:count], dtype=object), ("dev",)), PartitionSpec("dev"))
             solve = jit(vmap(compute_trajectory), in_shardings=place, out_shardings=place)
         else:
             place, solve = self.devices[0], jit(vmap(compute_trajectory))
-        keys = self.particles.random_keys if self.particles else None
-        with jax.default_device(self.devices[0]):
-            return solve(_place_on_devices(self.initial_conditions, place),
-                         None if keys is None else _place_on_devices(keys, place))
+
+        def run(y0, keys):
+            with jax.default_device(self.devices[0]):
+                return solve(_place_on_devices(y0, place), None if keys is None else _place_on_devices(keys, place))
+
+        if batch == n:
+            return run(y0, keys)
+        # Every batch has `batch` particles, the last one padded by repeating
+        # its final particle, so the solve compiles once. Batches are gathered
+        # on the host, so the result combines with arrays on any device.
+        from tqdm.auto import tqdm
+        results = []
+        with tqdm(total=n, desc="Tracing particles", unit="particle", disable=not self.progress) as bar:
+            for start in range(0, n, batch):
+                index = np.minimum(np.arange(start, start + batch), n - 1)
+                done = min(batch, n - start)
+                result = run(y0[index], None if keys is None else keys[index])
+                results.append(tree_util.tree_map(lambda x: np.asarray(x)[:done], result))
+                bar.update(done)
+        return tree_util.tree_map(lambda *x: jnp.asarray(np.concatenate(x)), *results)
 
     def _terms(self, key, flag=False):
         """Diffrax terms, solver and step-size controller of self.model (with _with_failure_flag if ``flag``)."""
@@ -1695,7 +1724,8 @@ class Tracing():
                     'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc,
                     'solver': self.solver, 'stopping_criteria': self.stopping_criteria,
                     'progress': self.progress, 'devices': self.devices, 'exterior_field': self.exterior_field,
-                    'wall': self.wall, 'max_returns': self.max_returns, 'reentry_depth': self.reentry_depth}  # static values
+                    'wall': self.wall, 'max_returns': self.max_returns, 'reentry_depth': self.reentry_depth,
+                    'particle_batch_size': self.particle_batch_size}  # static values
         return (children, aux_data)
 
     @classmethod

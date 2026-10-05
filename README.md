@@ -203,6 +203,8 @@ and its derivatives, together with the flux functions `G`, `I` and `iota`.
 - **Step budget.** `max_steps` (default `1_000_000`) bounds every Diffrax solve,
   so a trace that cannot finish returns instead of running unbounded.
 - **Progress bars** are off by default; pass `progress=True` when interactive.
+  With `particle_batch_size=n` particles are traced `n` at a time and the bar
+  counts completed particles (batches are bypassed under `jax.jit`/`grad`).
 - **Model choice.** `FieldLineArclength` traces a fixed physical length so
   rescaling `B` does not change the run; `FieldLineToroidal` sets coverage
   directly in toroidal angle for flux-coordinate fields.
