@@ -7,11 +7,12 @@ from matplotlib.colors import is_color_like
 import numpy as np
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
-from functools import partial
+from functools import cache, partial
 from time import perf_counter
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
+import equinox as eqx
 import optimistix as optx
 from essos.coils import Coils
 from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
@@ -286,6 +287,23 @@ class Particles():
                   energy=energy,
                   field=field)
 
+
+
+def _particles_flatten(particles):
+    names = tuple(sorted(vars(particles)))
+    return tuple(getattr(particles, name) for name in names), names
+
+
+def _particles_unflatten(names, values):
+    particles = object.__new__(Particles)
+    particles.__dict__.update(zip(names, values))
+    return particles
+
+
+# As a pytree, Particles enters the compiled trace as arrays (traced) plus
+# Python scalars such as charge and mass (static by value), so a new but
+# identical Particles object does not force a recompilation.
+tree_util.register_pytree_node(Particles, _particles_flatten, _particles_unflatten)
 
 
 @partial(jit, static_argnums=(2))
@@ -779,6 +797,7 @@ def _from_axis_regular(y):
     return jnp.concatenate([jnp.array([s, jnp.where(jnp.isfinite(s), theta, s)]), y[2:-1]])
 
 
+@cache  # one wrapper per vector field, so traces share the compiled solve
 def _axis_regular(vector_field):
     """Express a VMEC guiding-center vector field in a chart that is regular on the axis.
 
@@ -902,6 +921,50 @@ def _place_on_devices(x, target):
 
 
 
+# Stopping conditions are part of the compiled solve's cache key, so they are
+# module-level functions or classes that compare equal by value: a new
+# Tracing then reuses the solve compiled for an earlier one.
+def _never_stop(t, y, args, **kwargs):
+    return False
+
+
+def _vmec_field_line_boundary(t, y, args, **kwargs):
+    s, _, _ = y
+    return s - 1
+
+
+class _BoundaryCondition:
+    """Signed distance of a Cartesian state (x, y, z, ...) to a SurfaceClassifier."""
+
+    def __init__(self, boundary):
+        self.boundary = boundary
+
+    def __call__(self, t, y, args, **kwargs):
+        return self.boundary.evaluate_xyz(y[:3])
+
+    def __eq__(self, other):
+        return type(other) is type(self) and other.boundary is self.boundary
+
+    def __hash__(self):
+        return id(self.boundary)
+
+
+class _AxisRegularCondition:
+    """A user condition on (s, theta, ...) evaluated on the axis-regular state."""
+
+    def __init__(self, condition):
+        self.condition = condition
+
+    def __call__(self, t, y, args, **kwargs):
+        return self.condition(t, _from_axis_regular(y), args, **kwargs)
+
+    def __eq__(self, other):
+        return type(other) is type(self) and other.condition == self.condition
+
+    def __hash__(self):
+        return hash(self.condition)
+
+
 ## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
 ## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
 ## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
@@ -1001,27 +1064,14 @@ class Tracing():
         # differentiability of the traced trajectories.
         self.solver = solver
         if condition is None:
-            self.condition = lambda t, y, args, **kwargs: False
+            self.condition = _never_stop
             if isinstance(field, Vmec):
                 if model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
-                    def condition_Vmec(t, y, args, **kwargs):
-                        s, _, _ = y
-                        return s-1	 
-                    self.condition = condition_Vmec
+                    self.condition = _vmec_field_line_boundary
             elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
-                if model in _GUIDING_CENTER_COLLISION_MODELS:
-                    def condition_BioSavart(t, y, args, **kwargs):
-                        xx, yy, zz, _,_ = y
-                        return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.                      
-                else:
-                    def condition_BioSavart(t, y, args, **kwargs):                      
-                        xx, yy, zz, _ = y
-                        return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
-                self.condition = condition_BioSavart                
+                self.condition = _BoundaryCondition(boundary)
         elif self._axis_regular:
-            self.condition = tree_util.tree_map(
-                lambda c: lambda t, y, args, **kwargs: c(t, _from_axis_regular(y), args, **kwargs),
-                condition)
+            self.condition = tree_util.tree_map(_AxisRegularCondition, condition)
         else:
             self.condition = condition
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
@@ -1126,64 +1176,63 @@ class Tracing():
             else:                
                 self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction_BioSavart(boundary)
 
-    def trace(self):
-        @jit
-        def compute_trajectory(initial_condition, particle_key) -> jnp.ndarray:
-            if self._vmec_default:
-                return self._vmec_orbit(initial_condition, particle_key)
-            if self._axis_regular:
-                initial_condition = _to_axis_regular(initial_condition)
-            if self.model == 'FullOrbit_Boris':
-                # Integrate the whole [0, maxtime] span: an inner scan of
-                # Boris pushes between consecutive save times, with dt
-                # adjusted (<= timestep) so the saves land on self.times.
-                n_saves = len(self.times) - 1
-                per_save = max(1, int(np.ceil(float(self.maxtime) / (n_saves * float(self.timestep)) - 1e-9)))
-                dt = self.maxtime / (n_saves * per_save)
-                charge_over_mass = self.particles.charge / self.particles.mass
-                criteria = self.stopping_criteria
+    def _compute_trajectory(self, initial_condition, particle_key):
+        if self._vmec_default:
+            return self._vmec_orbit(initial_condition, particle_key)
+        if self._axis_regular:
+            initial_condition = _to_axis_regular(initial_condition)
+        if self.model == 'FullOrbit_Boris':
+            # Integrate the whole [0, maxtime] span: an inner scan of
+            # Boris pushes between consecutive save times, with dt
+            # adjusted (<= timestep) so the saves land on self.times.
+            n_saves = len(self.times) - 1
+            per_save = max(1, int(np.ceil(float(self.maxtime) / (n_saves * float(self.timestep)) - 1e-9)))
+            dt = self.maxtime / (n_saves * per_save)
+            charge_over_mass = self.particles.charge / self.particles.mass
+            criteria = self.stopping_criteria
 
-                def push(state, _):
-                    x = state[:3]
-                    v = state[3:]
-                    t = charge_over_mass * self.field.B_contravariant(x) * 0.5 * dt
-                    s = 2. * t / (1. + jnp.dot(t, t))
-                    vprime = v + jnp.cross(v, t)
-                    v = v + jnp.cross(vprime, s)
-                    x = x + v * dt
-                    return jnp.concatenate((x, v)), None
+            def push(state, _):
+                x = state[:3]
+                v = state[3:]
+                t = charge_over_mass * self.field.B_contravariant(x) * 0.5 * dt
+                s = 2. * t / (1. + jnp.dot(t, t))
+                vprime = v + jnp.cross(v, t)
+                v = v + jnp.cross(vprime, s)
+                x = x + v * dt
+                return jnp.concatenate((x, v)), None
 
-                def save_interval(carry, _):
-                    state, alive, hits = carry
-                    advanced, _ = lax.scan(push, state, None, length=per_save)
-                    if criteria is None:
-                        return (advanced, alive, hits), advanced
-                    # A particle leaving any level set (value <= 0) is held at
-                    # its last saved point inside, as the adaptive paths do.
-                    outside = jnp.stack([c(0.0, advanced, self.args) <= 0.0 for c in criteria])
-                    outside = outside | ~jnp.isfinite(advanced).all()
-                    stopped = alive & jnp.any(outside)
-                    hits = hits | (alive & outside)
-                    state = jnp.where(alive & ~stopped, advanced, state)
-                    return (state, alive & ~stopped, hits), state
+            def save_interval(carry, _):
+                state, alive, hits = carry
+                advanced, _ = lax.scan(push, state, None, length=per_save)
+                if criteria is None:
+                    return (advanced, alive, hits), advanced
+                # A particle leaving any level set (value <= 0) is held at
+                # its last saved point inside, as the adaptive paths do.
+                outside = jnp.stack([c(0.0, advanced, self.args) <= 0.0 for c in criteria])
+                outside = outside | ~jnp.isfinite(advanced).all()
+                stopped = alive & jnp.any(outside)
+                hits = hits | (alive & outside)
+                state = jnp.where(alive & ~stopped, advanced, state)
+                return (state, alive & ~stopped, hits), state
 
-                n_criteria = 0 if criteria is None else len(criteria)
-                carry = (initial_condition, jnp.asarray(True), jnp.zeros((n_criteria,), bool))
-                (_, _, hits), trajectory = lax.scan(save_interval, carry, None, length=n_saves)
-                trajectory = jnp.vstack([initial_condition, trajectory])
-                if criteria is not None:
-                    event_mask = hits[0] if n_criteria == 1 else tuple(hits[i] for i in range(n_criteria))
-                    return trajectory, event_mask
-                return trajectory
-            solution = self._solve(*self._terms(particle_key), 0.0, initial_condition, self.args, Event(self.condition),
-                                   throw=self.model in ('GuidingCenter', 'FullOrbit', 'FieldLine'))
-            trajectory = solution.ys[0]
-            if self._axis_regular:
-                trajectory = vmap(_from_axis_regular)(trajectory)
-            if self.stopping_criteria is not None:
-                return trajectory, solution.event_mask
+            n_criteria = 0 if criteria is None else len(criteria)
+            carry = (initial_condition, jnp.asarray(True), jnp.zeros((n_criteria,), bool))
+            (_, _, hits), trajectory = lax.scan(save_interval, carry, None, length=n_saves)
+            trajectory = jnp.vstack([initial_condition, trajectory])
+            if criteria is not None:
+                event_mask = hits[0] if n_criteria == 1 else tuple(hits[i] for i in range(n_criteria))
+                return trajectory, event_mask
             return trajectory
+        solution = self._solve(*self._terms(particle_key), 0.0, initial_condition, self.args, Event(self.condition),
+                               throw=self.model in ('GuidingCenter', 'FullOrbit', 'FieldLine'))
+        trajectory = solution.ys[0]
+        if self._axis_regular:
+            trajectory = vmap(_from_axis_regular)(trajectory)
+        if self.stopping_criteria is not None:
+            return trajectory, solution.event_mask
+        return trajectory
 
+    def trace(self):
         y0, keys = self.initial_conditions, self.particles.random_keys if self.particles else None
         n = len(y0)
         traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys)))
@@ -1193,13 +1242,14 @@ class Tracing():
             count -= 1
         if count > 1:
             place = NamedSharding(Mesh(np.asarray(self.devices[:count], dtype=object), ("dev",)), PartitionSpec("dev"))
-            solve = jit(vmap(compute_trajectory), in_shardings=place, out_shardings=place)
         else:
-            place, solve = self.devices[0], jit(vmap(compute_trajectory))
+            place = self.devices[0]
+        state = _TracingState.of(self)
 
         def run(y0, keys):
             with jax.default_device(self.devices[0]):
-                return solve(_place_on_devices(y0, place), None if keys is None else _place_on_devices(keys, place))
+                return _trace_batch(state, _place_on_devices(y0, place),
+                                    None if keys is None else _place_on_devices(keys, place), place)
 
         if batch == n:
             return run(y0, keys)
@@ -1736,6 +1786,53 @@ class Tracing():
 tree_util.register_pytree_node(Tracing,
                                Tracing._tree_flatten,
                                Tracing._tree_unflatten)
+
+
+# Models whose span, first step and tolerances are traced arguments of the
+# compiled solve, so changing them does not recompile. Boris sizes its scan
+# from maxtime and timestep, and the stochastic models their Brownian tree.
+_DYNAMIC_SPAN_MODELS = frozenset({'GuidingCenter', 'GuidingCenterAdaptative', 'FullOrbit', 'FullOrbitAdaptative',
+                                  'FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'})
+
+
+class _TracingState(Tracing):
+    """The attributes of a Tracing as a pytree, the argument of _trace_batch.
+
+    Its arrays are traced arguments; everything else (model, solver,
+    conditions, non-pytree fields, ...) is the cache key of the compiled solve.
+    """
+
+    @classmethod
+    def of(cls, tracing):
+        state = object.__new__(cls)
+        state.__dict__.update(vars(tracing))
+        if tracing.model in _DYNAMIC_SPAN_MODELS:
+            for name in ('maxtime', 'timestep', 'rtol', 'atol'):
+                setattr(state, name, jnp.asarray(getattr(tracing, name)))
+        return state
+
+
+def _tracing_state_flatten(state):
+    names = tuple(sorted(vars(state)))
+    return tuple(getattr(state, name) for name in names), names
+
+
+def _tracing_state_unflatten(names, values):
+    state = object.__new__(_TracingState)
+    state.__dict__.update(zip(names, values))
+    return state
+
+
+tree_util.register_pytree_node(_TracingState, _tracing_state_flatten, _tracing_state_unflatten)
+
+
+@eqx.filter_jit
+def _trace_batch(state, y0, keys, place):
+    """Trace a batch of particles; module level, so it is compiled once per static configuration."""
+    result = vmap(state._compute_trajectory)(y0, keys)
+    if isinstance(place, NamedSharding):
+        result = lax.with_sharding_constraint(result, place)
+    return result
 
 
 def trace_field_lines(

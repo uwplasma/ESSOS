@@ -657,6 +657,14 @@ class ExternalField(MagneticField):
     def __init__(self, source):
         self.source = source
 
+    # Wrappers of one source are the same field, so traces that each wrap it
+    # share one compiled solve.
+    def __eq__(self, other):
+        return type(other) is type(self) and other.source is self.source
+
+    def __hash__(self):
+        return id(self.source)
+
     @jit
     def sqrtg(self, points):
         return 1.
