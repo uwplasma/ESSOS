@@ -172,12 +172,19 @@ def debye_length(points, species: BackgroundSpecies ) -> float:
 
 def chandrasekhar(x: jax.Array) -> jax.Array:
     """Chandrasekhar function."""
-    return (
+    small = jnp.abs(x) < 0.25
+    denominator = jnp.where(small, 1.0, x)
+    xs = jnp.where(small, x, 0.0)
+    series = 2*xs/jnp.sqrt(jnp.pi)*(1/3 + xs*xs*(-1/5 + xs*xs*(1/14 + xs*xs*(-1/54 + xs*xs*(1/264 + xs*xs*(-1/1560 + xs*xs/10800))))))
+    direct = (
         jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))
-    ) / (2 * x**2)
+    ) / (2 * denominator**2)
+    return jnp.where(small, series, direct)
 
 def d_chandrasekhar(x: jax.Array) -> jax.Array:
-    return 2 / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2)) - 2 / x * chandrasekhar(x)
+    denominator = jnp.where(x == 0, 1.0, x)
+    return jnp.where(x == 0, 2/(3*jnp.sqrt(jnp.pi)),
+                     2/jnp.sqrt(jnp.pi)*jnp.exp(-(x**2)) - 2/denominator*chandrasekhar(x))
     
     
 def d_erf(x: jax.Array) -> jax.Array:
