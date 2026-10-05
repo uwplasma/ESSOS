@@ -244,11 +244,11 @@ def _rk_step(rhs, y, dt, method):
 MAX_ATTEMPTS = 1_000_000
 
 
-def _embedded_step(rhs, y, dt, scale):
-    """Dopri5 solution and its error norm (<= 1 accepts) against ``scale``."""
-    from diffrax import Dopri5
+def _embedded_step(rhs, y, dt, scale, method):
+    """Dormand-Prince solution and its error norm (<= 1 accepts) against ``scale``."""
+    from diffrax import Dopri5, Dopri8
 
-    tableau = Dopri5.tableau
+    tableau = (Dopri8 if method == "adaptive8" else Dopri5).tableau
     stages = [rhs(y)]
     for weights in tableau.a_lower:
         stages.append(rhs(y + dt * sum(a * k for a, k in zip(weights, stages) if a)))
@@ -314,17 +314,19 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
         def fixed(carry):
             return finish(carry, _rk_step(rhs_of(carry), carry[0], dt, method), dt)
 
+        order = 8 if method == "adaptive8" else 5
+
         def adaptive(carry, t_end):
-            """Error-controlled Dopri5 steps that land exactly on ``t_end``."""
+            """Error-controlled Dormand-Prince steps that land exactly on ``t_end``."""
             def attempt(state):
                 carry, attempts = state
                 y, t, h = carry[0], carry[2], carry[9]
                 h_try = jnp.minimum(h, t_end - t)
                 scale = tolerance * jnp.array([1.0, 1.0, 1.0, jnp.sqrt(2 * carry[8])])
-                y1, norm = _embedded_step(rhs_of(carry), y, h_try, scale)
+                y1, norm = _embedded_step(rhs_of(carry), y, h_try, scale, method)
                 ok = jnp.isfinite(norm) & (norm <= 1.0)
                 safe = jnp.where(jnp.isfinite(norm) & (norm > 0), norm, jnp.where(ok, 0.0, 1e10))
-                grow = jnp.clip(0.9 * safe ** -0.2, 0.1, 5.0)
+                grow = jnp.clip(0.9 * safe ** (-1 / order), 0.1, 5.0)
                 stepped = finish(carry, y1, h_try)
                 carry = jax.tree.map(lambda a, b: jnp.where(ok, a, b), stepped, carry)
                 h_next = h_try * grow
@@ -340,11 +342,11 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             return carry[:3] + (carry[3] & ~stuck, carry[4], carry[5],
                                 jnp.where(stuck, carry[2], carry[6]), jnp.where(stuck, jnp.inf, carry[7])) + carry[8:]
 
-        if method == "adaptive":
+        if method.startswith("adaptive"):
             carry = carry[:9] + (jnp.where(carry[9] > 0, carry[9], dt), carry[10])
 
         def interval(carry, i):
-            if method == "adaptive":
+            if method.startswith("adaptive"):
                 carry = adaptive(carry, (i + 1) * n_sub * dt)
             else:
                 carry = jax.lax.fori_loop(0, n_sub, lambda k, state: fixed(state), carry)
@@ -377,12 +379,12 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     synchronization and extra compiled batch size.
     Fixed explicit methods are ``"rk4"`` (default), ``"dopri5"`` and
     ``"dopri8"``. Refine timestep and modes to check loss labels and bounce phase.
-    ``"adaptive"`` controls each particle's Dopri5 step so the embedded error
+    ``"adaptive"`` (Dopri5) and ``"adaptive8"`` (Dopri8) control each particle's step so the embedded error
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.
     """
-    if method not in ("rk4", "dopri5", "dopri8", "adaptive"):
-        raise ValueError("method must be 'rk4', 'dopri5', 'dopri8' or 'adaptive'")
+    if method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
+        raise ValueError("method must be 'rk4', 'dopri5', 'dopri8', 'adaptive' or 'adaptive8'")
     if not (np.isfinite(tolerance) and tolerance > 0):
         raise ValueError("tolerance must be positive and finite")
     inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
