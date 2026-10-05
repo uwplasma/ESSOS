@@ -6,7 +6,11 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
-from pyqsc_jax.near_axis import near_axis
+try:
+    from pyqsc_jax.near_axis import near_axis
+except ImportError:  # not on PyPI, so not an ESSOS dependency
+    print("Skipping: needs pip install git+https://github.com/uwplasma/pyQSC_JAX.git")
+    raise SystemExit(0)
 from essos.dynamics import Tracing
 from essos.optimization import optimize_loss_function
 from jax import vmap, jit

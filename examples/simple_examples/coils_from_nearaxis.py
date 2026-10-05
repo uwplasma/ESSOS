@@ -5,7 +5,11 @@ import jax.numpy as jnp
 from jax import block_until_ready, vmap
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart_from_gamma, BiotSavart
-from pyqsc_jax.near_axis import near_axis
+try:
+    from pyqsc_jax.near_axis import near_axis
+except ImportError:  # not on PyPI, so not an ESSOS dependency
+    print("Skipping: needs pip install git+https://github.com/uwplasma/pyQSC_JAX.git")
+    raise SystemExit(0)
 
 import plotly.graph_objects as go
 from essos.dynamics import Tracing

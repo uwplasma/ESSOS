@@ -1,4 +1,3 @@
-from pyexpat import model
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -909,7 +908,7 @@ def _place_on_devices(x, target):
 ## This is important for correct sampling of Brownian motion
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
-                 field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
+                 field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: float = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
                  solver=None, stopping_criteria=None, progress=False, devices=None,
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
