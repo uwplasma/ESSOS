@@ -186,15 +186,29 @@ Availability refers to documented orbit models; unbenchmarked devices imply no s
 - **VMEC magnetic axis.** VMEC guiding centres are integrated in
   `sqrt(s) (cos theta, sin theta)`, which is regular on the axis, so orbits
   cross it; trajectories are returned in `(s, theta, phi, ...)` with `theta`
-  in `[0, 2 pi)`. A trace stops at `s >= 1` and reports it through
-  `tracing.boundary_hits`. Supplying `condition` replaces that event; it is
-  evaluated on `(s, theta, phi, ...)`.
+  in `[0, 2 pi)`.
+- **LCFS and wall.** A VMEC guiding-centre trace stops at the exact LCFS
+  crossing (`tracing.lcfs_times`, `lcfs_positions`, `lcfs_energies`), found by
+  root finding. Pass `exterior_field=` (ESSOS coils, a VMEX `VmecExtender` or
+  `MgridField`, or any batched `xyz -> B`) and `wall=` (a `SurfaceClassifier`
+  or a signed-distance callable, positive inside) to follow the orbit outside
+  in Cartesian coordinates until it strikes the wall (`wall_times`,
+  `wall_positions`, `wall_energies`) or comes back inside, where it returns to
+  flux coordinates (`returns`). `tracing.status` gives each outcome
+  (`essos.dynamics.VMEC_STATUS`); `trajectories_xyz` and `region` hold the
+  whole orbit. A non-finite step ends that orbit as `failed`, with its time.
+  Loss fractions use the exact wall, or LCFS, times. Collisions are switched
+  off outside the LCFS. Supplying `condition` replaces these events; it is
+  evaluated on `(s, theta, phi, ...)`. See
+  [`examples/particle_tracing/trace_particles_vmec_to_wall.py`](examples/particle_tracing/trace_particles_vmec_to_wall.py).
 - **Stopping coil-field traces.** Pass `stopping_criteria=LevelsetStoppingCriterion(...)`
   to end Cartesian traces once they leave a prescribed distance from a surface,
   and read the per-line mask from `tracing.boundary_hits`.
 - **Step budget.** `max_steps` (default `1_000_000`) bounds every Diffrax solve,
   so a trace that cannot finish returns instead of running unbounded.
 - **Progress bars** are off by default; pass `progress=True` when interactive.
+  With `particle_batch_size=n` particles are traced `n` at a time and the bar
+  counts completed particles (batches are bypassed under `jax.jit`/`grad`).
 - **Model choice.** `FieldLineArclength` traces a fixed physical length so
   rescaling `B` does not change the run; `FieldLineToroidal` sets coverage
   directly in toroidal angle for flux-coordinate fields.
