@@ -18,39 +18,41 @@ EV_PER_JOULE = 1 / JOULE_PER_EV
 
 
 class BackgroundSpecies():
-    def __init__(self, number_species, mass_array, charge_array, n_array, T_array):
+    """Maxwellian background species for the collision operators.
+
+    ``n_array`` [m^-3] and ``T_array`` [eV] hold one value per species, or,
+    with ``radial_grid``, one profile per species sampled on that grid of the
+    first coordinate of the traced points (``s`` for a VMEC field), shape
+    ``(number_species, len(radial_grid))``. Profiles are interpolated
+    linearly and held constant beyond the ends of the grid.
+    """
+    def __init__(self, number_species, mass_array, charge_array, n_array, T_array, radial_grid=None):
         self.number_species = number_species
         self.species_indeces = jnp.arange(number_species)
-        self.temperature = T_array   #Array of lambdas for now
-        self.density = n_array         #Array of lambdas for now 
+        self.temperature = T_array
+        self.density = n_array
+        self.radial_grid = None if radial_grid is None else jnp.asarray(radial_grid)
         self.mass=mass_array*PROTON_MASS
         self.charge=charge_array*ELEMENTARY_CHARGE
 
+    def _profile(self, values, species_index, points):
+        if self.radial_grid is None:
+            return values[species_index]
+        return jnp.interp(points[0], self.radial_grid, values[species_index])
+
     @partial(jit, static_argnames=['self'])
     def get_temperature(self,species_index, points):
-        x=points[0]
-        y=points[1]
-        z=points[2]
-        return self.temperature[species_index]#(x,y,z)
-    
+        return self._profile(self.temperature, species_index, points)
 
     @partial(jit, static_argnames=['self'])
     def get_density(self,species_index, points):
-        x=points[0]
-        y=points[1]
-        z=points[2]
-        return self.density[species_index]#self.density[species_index](x,y,z)
-    
+        return self._profile(self.density, species_index, points)
 
     @partial(jit, static_argnames=['self'])
     def get_v_thermal(self,species_index, points):
         m=self.mass[species_index]
-        x=points[0]
-        y=points[1]
-        z=points[2]
-        T=self.temperature[species_index]#(x,y,z)
+        T=self.get_temperature(species_index, points)
         return jnp.sqrt(2*T * JOULE_PER_EV/m)
- 
 
 
 @partial(jit, static_argnames=['species'])
@@ -62,22 +64,22 @@ def gamma_ab(ma: float, ea: float, species_b: int,vth_a: float, points, species:
 
 @partial(jit, static_argnames=['species'])
 def nu_D_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
-    """Deflection collision frequency"""
+    """Decay rate of the l=1 pitch moment; the angular operator is nu_D L/2."""
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     prefactor = gamma_ab(ma,ea, species_b, v,points,species) * nb 
     erf_part = (jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb))/ v**3
-    return prefactor * erf_part*2.
+    return prefactor * erf_part
 
 
 @partial(jit, static_argnames=['species'])
 def d_nu_D_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
-    """Deflection collision frequency"""
+    """Speed derivative of the l=1 deflection rate."""
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     prefactor = gamma_ab(ma,ea, species_b, v,points,species) * nb 
     erf_part = (d_erf(v/vtb)-d_chandrasekhar(v/vtb))/vtb/v**3-3.*(jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb))/ v**4
-    return 2.*prefactor*erf_part
+    return prefactor*erf_part
 
 @partial(jit, static_argnames=['species'])
 def nu_par_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
@@ -125,7 +127,10 @@ def coulomb_logarithm(ma:float, ea: float, species_b: int, vth_a: float, points,
     ##bmin, bmax =   impact_parameter(ma, ea, species_b, vth_a, points, species)
     ##return jnp.log(bmax / bmin)
     #lnL = 25.3 + 1.15*jnp.log10(species.temperature[0,r_index]**2/species.density[0,r_index])  
-    lnL = 32.2 + 1.15*jnp.log10(species.get_temperature(0,points)**2/species.get_density(0,points)) 
+    density = species.get_density(0, points)
+    # Zero-density rates vanish; keep their logarithm finite to avoid 0 * inf.
+    density = jnp.where(density == 0, 1.0, density)
+    lnL = 32.2 + 1.15*jnp.log10(species.get_temperature(0,points)**2/density)
     #32.2+1.15*alog10(temp(1)**2/density(1))
     return lnL
 
@@ -167,12 +172,19 @@ def debye_length(points, species: BackgroundSpecies ) -> float:
 
 def chandrasekhar(x: jax.Array) -> jax.Array:
     """Chandrasekhar function."""
-    return (
+    small = jnp.abs(x) < 0.25
+    denominator = jnp.where(small, 1.0, x)
+    xs = jnp.where(small, x, 0.0)
+    series = 2*xs/jnp.sqrt(jnp.pi)*(1/3 + xs*xs*(-1/5 + xs*xs*(1/14 + xs*xs*(-1/54 + xs*xs*(1/264 + xs*xs*(-1/1560 + xs*xs/10800))))))
+    direct = (
         jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))
-    ) / (2 * x**2)
+    ) / (2 * denominator**2)
+    return jnp.where(small, series, direct)
 
 def d_chandrasekhar(x: jax.Array) -> jax.Array:
-    return 2 / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2)) - 2 / x * chandrasekhar(x)
+    denominator = jnp.where(x == 0, 1.0, x)
+    return jnp.where(x == 0, 2/(3*jnp.sqrt(jnp.pi)),
+                     2/jnp.sqrt(jnp.pi)*jnp.exp(-(x**2)) - 2/denominator*chandrasekhar(x))
     
     
 def d_erf(x: jax.Array) -> jax.Array:
