@@ -193,10 +193,17 @@ class BoozerTrace:
     """Result of :func:`trace_boozer` (NumPy arrays).
 
     ``states`` is ``(particles, n_save, 5)``: ``s, theta, zeta, v_par`` and the
-    speed ``v``, held at the loss or thermalisation point afterwards.
+    speed ``v``. Every saved state lies inside the plasma: after a loss it is
+    held at the last interior state, and after thermalisation at that point.
     ``loss_times`` is ``-1`` for particles that were not lost;
     ``thermalized_times`` and ``failed_times`` likewise. A failed orbit
     is frozen at its last finite state and is not counted as confined.
+
+    ``energy_error`` covers interior steps only. The step that crosses the
+    LCFS ends outside the field tables, where ``|B|`` is an extrapolation, so
+    its end point and energy error are kept apart in ``terminal_states``
+    (``(particles, 5)``, as ``states``) and ``terminal_energy_error``; both are
+    NaN for particles that were not lost and neither is a physical diagnostic.
     """
 
     times: np.ndarray
@@ -205,6 +212,8 @@ class BoozerTrace:
     thermalized_times: np.ndarray
     energy_error: np.ndarray  # max |E/E0 - 1| per particle (collisionless drift only)
     failed_times: np.ndarray | None = None
+    terminal_states: np.ndarray | None = None
+    terminal_energy_error: np.ndarray | None = None
 
     @property
     def lost(self):
@@ -246,7 +255,8 @@ def _start(field, y0, mu0):
         s, r, theta, *_ = _chart(y)
         e0 = 0.5 * y[3] ** 2 + mu * field.modB_derivatives(r, theta, y[2])[0]
         first = jnp.array([s, theta, y[2], y[3], jnp.sqrt(2 * e0)])
-        return (y, mu, 0.0, jnp.asarray(True), -1.0, -1.0, -1.0, 0.0, e0), first
+        nan = jnp.full(5, jnp.nan)
+        return (y, mu, 0.0, jnp.asarray(True), -1.0, -1.0, -1.0, 0.0, e0, nan, jnp.nan), first
 
     return jax.vmap(one)(y0, mu0)
 
@@ -255,13 +265,14 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
              carry, keys, first_interval, count, method="rk4"):
     def one(carry, key):
         def step(carry, k):
-            y, mu, t, alive, t_loss, t_therm, t_fail, err, e0 = carry
+            y, mu, t, alive, t_loss, t_therm, t_fail, err, e0, terminal, terminal_err = carry
             rhs = lambda state: guiding_center_rhs(field, state, mu, mass, charge)
             y1 = _rk_step(rhs, y, dt, method)
             s1, r1, th1, *_ = _chart(y1)
             B1 = field.modB_derivatives(r1, th1, y1[2])[0]
             e_orbit = 0.5 * y1[3] ** 2 + mu * B1
-            err = jnp.where(alive, jnp.maximum(err, jnp.abs(e_orbit / e0 - 1)), err)
+            step_err = jnp.abs(e_orbit / e0 - 1)
+            exterior = jnp.array([s1, th1, y1[2], y1[3], jnp.sqrt(2 * e_orbit)])
             thermal = jnp.asarray(False)
             if species is not None:
                 v = jnp.sqrt(2 * e_orbit)
@@ -281,15 +292,19 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             lost = alive & finite & (s1 >= 1.0)
             failed = alive & ~lost & ~finite
             t_fail = jnp.where(failed, t + dt, t_fail)
+            err = jnp.where(alive & finite & ~lost, jnp.maximum(err, step_err), err)
             err = jnp.where(alive & ~finite, jnp.inf, err)
+            terminal = jnp.where(lost, exterior, terminal)
+            terminal_err = jnp.where(lost, step_err, terminal_err)
             therm = alive & ~lost & finite & thermal
             t_loss = jnp.where(lost, t + dt, t_loss)
             t_therm = jnp.where(therm, t + dt, t_therm)
             keep = alive & ~therm & finite
-            y = jnp.where(keep | lost, y1, y)
-            mu = jnp.where(keep, mu1, mu)
-            e0 = jnp.where(keep, e0_new, e0)
-            return (y, mu, t + dt, keep & ~lost, t_loss, t_therm, t_fail, err, e0), None
+            y = jnp.where(keep & ~lost, y1, y)
+            mu = jnp.where(keep & ~lost, mu1, mu)
+            e0 = jnp.where(keep & ~lost, e0_new, e0)
+            return (y, mu, t + dt, keep & ~lost, t_loss, t_therm, t_fail, err, e0,
+                    terminal, terminal_err), None
 
         def interval(carry, i):
             carry = jax.lax.fori_loop(0, n_sub, lambda k, state: step(state, i * n_sub + k)[0], carry)
@@ -389,13 +404,11 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
                 if progress is not None:
                     progress(stop, n_int)
                 first_interval = stop
-            status = [np.asarray(carry[i])[:n].copy() for i in (4, 5, 6, 7)]
+            status = [np.asarray(carry[i])[:n].copy() for i in _STATUS]
             if selected.size:
-                for result, i in zip(status, (4, 5, 6, 7)):
+                for result, i in zip(status, _STATUS):
                     result[selected] = np.asarray(running[i])[:selected.size]
-            t_loss, t_therm, t_fail, err = status
-            return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states,
-                               t_loss, t_therm, err, t_fail)
+            return _result(tmax, n_int, states, *status)
         carry = initial
     saved = []
     for first_interval in range(0, n_int, chunk):
@@ -407,5 +420,14 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
             jax.block_until_ready(part)
             progress(first_interval + count, n_int)
     states = np.concatenate([np.asarray(first)[:, None]] + [np.asarray(p) for p in saved], axis=1)[:n]
-    t_loss, t_therm, t_fail, err = (np.asarray(x)[:n] for x in (carry[4], carry[5], carry[6], carry[7]))
-    return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm, err, t_fail)
+    return _result(tmax, n_int, states, *(np.asarray(carry[i])[:n] for i in _STATUS))
+
+
+# Carry slots: loss, thermalisation and failure times, interior energy error,
+# terminal (exterior) state and its energy error.
+_STATUS = (4, 5, 6, 7, 9, 10)
+
+
+def _result(tmax, n_int, states, t_loss, t_therm, t_fail, err, terminal, terminal_err):
+    return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm, err,
+                       t_fail, terminal, terminal_err)
