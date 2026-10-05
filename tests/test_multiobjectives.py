@@ -121,3 +121,26 @@ def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn)
     normB_axis=objf.loss_normB_axis(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
 
     optimizer.run()
+
+
+def test_weighted_loss_then_jitted_loss_keeps_static_currents_scale():
+    # Regression: coils rebuilt inside the jitted weighted_loss used to recompute
+    # currents_scale as a tracer, which then leaked into later jitted losses.
+    from jax import jit
+    import jax
+
+    @jit
+    def loss_coil_length_sum(coils):
+        return jnp.sum(coils.length)
+
+    optimizer = MultiObjectiveOptimizer(
+        loss_functions=[loss_coil_length_sum],
+        vmec=mock_vmec(),
+        opt_config={"order_Fourier": 2, "num_coils": 2},
+    )
+    x = optimizer.initial_coils.x
+    weighted = optimizer.weighted_loss(x, [1.0])
+    jax.grad(lambda y: optimizer.weighted_loss(y, [1.0]))(x)
+    direct = optimizer._call_loss_fn(loss_coil_length_sum, optimizer._build_available_inputs(x))
+    assert jnp.isfinite(weighted)
+    assert jnp.allclose(weighted, direct)

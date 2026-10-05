@@ -31,7 +31,7 @@ shift_surface_plot_for_phi = jnp.pi
 plot_fieldlines_constant_phi = False
 show_coils_fitted_to_Fourier = False
 
-input_dir = os.path.join(os.path.dirname(__file__), 'input_files')
+input_dir = os.path.join(os.path.dirname(__file__), '..', 'input_files')
 output_dir = os.path.join(os.path.dirname(__file__), 'output_files')
 os.makedirs(output_dir, exist_ok=True)
 
