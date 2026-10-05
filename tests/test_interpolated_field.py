@@ -38,6 +38,21 @@ def linear_cartesian_field(xyz: jnp.ndarray) -> jnp.ndarray:
     ])
 
 
+def cyl_linear_field_cart(xyz: jnp.ndarray) -> jnp.ndarray:
+    """Cartesian field whose cylindrical components are affine in (r, z) and independent
+    of phi, so a degree-1 tensor interpolant in (r, phi, z) reproduces it exactly.
+    (A field that is linear in Cartesian coordinates is *not* trilinear in (r, phi, z).)
+    It is also stellarator symmetric: B_r is odd in z, B_phi and B_z are even.
+    """
+    x, y, z = xyz
+    r = jnp.sqrt(x * x + y * y)
+    c, s = x / r, y / r
+    Br = 0.7 * z
+    Bphi = 1.0 + 0.5 * r
+    Bz = 2.0 + 0.3 * r
+    return jnp.array([c * Br - s * Bphi, s * Br + c * Bphi, Bz])
+
+
 def quadratic_cartesian_field(xyz: jnp.ndarray) -> jnp.ndarray:
     """Smooth non-linear field to exercise higher-degree rules."""
     x, y, z = xyz
@@ -95,15 +110,9 @@ def test_regular_grid_build_and_eval_linear_exact(deg_cls):
     grid = make_grid()
     interp = RegularGridInterpolant3D(rule, grid, extrapolate=False, skip_fn=None)
 
-    # fbatch maps (rvec, phivec, zvec) -> (Nd, 3); here use linear field in Cartesian projected to cyl
+    # Values affine in (r, phi, z) are reproduced exactly by a degree-1 tensor interpolant.
     def fbatch(r, phi, z):
-        # build N x 3 xyz and evaluate linear field, then rotate to cylindrical
-        x = r * jnp.cos(phi)
-        y = r * jnp.sin(phi)
-        pts = jnp.stack([x, y, z], axis=1)
-        Bxyz = jax.vmap(linear_cartesian_field)(pts)
-        Bcyl = _cart_to_cyl_vectors(phi, Bxyz)
-        return Bcyl
+        return jnp.stack([2.0 * r - phi + 0.5 * z, -r + 3.0 * phi + 0.25 * z, 0.3 * r + 2.0 * z], axis=1)
 
     interp = interp.build(fbatch)
 
@@ -118,13 +127,9 @@ def test_regular_grid_build_and_eval_linear_exact(deg_cls):
     z = zmin + (zmax - zmin) * u[:, 2]
     rphiz = jnp.stack([r, phi, z], axis=1)
 
-    Bcyl = interp.evaluate_batch(rphiz)            # (N,3)
-    Bxyz_pred = _cyl_to_cart_vectors(phi, Bcyl)    # (N,3)
-
-    xyz = jnp.stack([r * jnp.cos(phi), r * jnp.sin(phi), z], axis=1)
-    Bxyz_true = jax.vmap(linear_cartesian_field)(xyz)
-
-    assert jnp.allclose(Bxyz_pred, Bxyz_true, atol=1e-11, rtol=1e-11)
+    pred = interp.evaluate_batch(rphiz)            # (N,3)
+    true = fbatch(r, phi, z)
+    assert jnp.allclose(pred, true, atol=1e-11, rtol=1e-11)
 
 
 def test_regular_grid_skip_fn_masks_inner_core():
@@ -153,11 +158,11 @@ def test_regular_grid_skip_fn_masks_inner_core():
 
 @pytest.mark.parametrize("deg_cls", [UniformInterpolationRule, ChebyshevInterpolationRule])
 def test_interpolated_field_linear_exact_and_jittable(deg_cls):
-    # Build with linear base field: degree=1 interpolant should be exact
+    # Build with a field affine in (r, z): degree=1 interpolant should be exact
     degree = 1
     grid = make_grid()
     field = InterpolatedField(
-        base_field_cart=linear_cartesian_field,
+        base_field_cart=cyl_linear_field_cart,
         degree=degree,
         rrange=grid.r_range,
         phirange=grid.phi_range,
@@ -182,13 +187,14 @@ def test_interpolated_field_linear_exact_and_jittable(deg_cls):
     z = zmin + (zmax - zmin) * u[:, 2]
     xyz = jnp.stack([r * jnp.cos(phi), r * jnp.sin(phi), z], axis=1)
 
-    # Exactness for linear field
+    # Exactness for a field affine in (r, z)
     B_pred = field.B_xyz(xyz)
-    B_true = jax.vmap(linear_cartesian_field)(xyz)
+    B_true = jax.vmap(cyl_linear_field_cart)(xyz)
     assert jnp.allclose(B_pred, B_true, atol=1e-11, rtol=1e-11)
 
     # JIT smoke test: the jitted function should run & match
-    jit_fun = jax.jit(field.B_xyz)
+    # (jax.jit hashes its callable; wrap the bound method of the array-holding module)
+    jit_fun = jax.jit(lambda pts: field.B_xyz(pts))
     B_jit = jit_fun(xyz)
     assert jnp.allclose(B_jit, B_true, atol=1e-11, rtol=1e-11)
 
@@ -218,11 +224,11 @@ def test_interpolated_field_quadratic_uniform_vs_chebyshev_agree_on_grid_nodes()
 
         # sample the *dof nodes* of the underlying grid to guarantee exactness
         interp_grid = field.interp_B
-        r_nodes = interp_grid.r_dofs
-        p_nodes = interp_grid.phi_dofs
-        z_nodes = interp_grid.z_dofs
-        R, P, Z = jnp.meshgrid(r_nodes, p_nodes, z_nodes, indexing="ij")
-        xyz = jnp.stack([R * jnp.cos(P), R * jnp.sin(P), Z], axis=-1).reshape(-1, 3)
+        # r_dofs/phi_dofs/z_dofs are already the flattened tensor grid of nodes
+        R = interp_grid.r_dofs
+        P = interp_grid.phi_dofs
+        Z = interp_grid.z_dofs
+        xyz = jnp.stack([R * jnp.cos(P), R * jnp.sin(P), Z], axis=-1)
 
         B_true = jax.vmap(quadratic_cartesian_field)(xyz)
         B_pred = field.B_xyz(xyz)
@@ -305,7 +311,7 @@ def test_build_gradabsb_and_shapes():
 def test_error_estimator_small_for_linear():
     grid = make_grid()
     field = InterpolatedField(
-        base_field_cart=linear_cartesian_field,
+        base_field_cart=cyl_linear_field_cart,
         degree=1,
         rrange=grid.r_range,
         phirange=grid.phi_range,
@@ -510,11 +516,11 @@ def test_vmec_native_jit_smoke():
     vm = MockVmec()
     interp = InterpolatedVmecNative(vm).build_all()
 
-    f1 = jax.jit(interp.B_covariant)
-    f2 = jax.jit(interp.B_contravariant)
-    f3 = jax.jit(interp.sqrtg)
-    f4 = jax.jit(interp.to_xyz)
-    f5 = jax.jit(interp.AbsB)
+    f1 = jax.jit(lambda q: interp.B_covariant(q))
+    f2 = jax.jit(lambda q: interp.B_contravariant(q))
+    f3 = jax.jit(lambda q: interp.sqrtg(q))
+    f4 = jax.jit(lambda q: interp.to_xyz(q))
+    f5 = jax.jit(lambda q: interp.AbsB(q))
 
     p = jnp.array([0.25, 0.5, 0.1])
     # They should run and match non-jitted outputs
@@ -574,3 +580,19 @@ def test_vmec_native_to_xyz_roundtrip_shapes():
     # plausible radii near R0..R0+1
     R = jnp.linalg.norm(xyz[:, :2], axis=1)
     assert jnp.all((R >= vm.R0 - 1.01) & (R <= vm.R0 + 1.01))
+
+
+def test_vmec_native_bad_last_dim_and_factory():
+    from essos.interpolated_field import build_vmec_native_interpolant
+
+    vm = MockVmec()
+    interp = build_vmec_native_interpolant(vm, srange=(0.0, 1.0, 4),
+                                           thetarange=(0.0, 2 * math.pi, 5),
+                                           phirange=(0.0, None, 6))
+    # phirange upper bound defaults to one field period
+    assert math.isclose(float(interp.phirange[1]), 2 * math.pi / vm.nfp)
+    bad = jnp.ones((2, 4))
+    with pytest.raises(ValueError):
+        interp.AbsB(bad)
+    with pytest.raises(ValueError):
+        interp.to_xyz(bad)

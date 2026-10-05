@@ -28,7 +28,6 @@ import jax.numpy as jnp
 import equinox as eqx
 from jax import lax
 
-from functools import partial
 from jax import block_until_ready
 from jax.scipy.interpolate import RegularGridInterpolator as JaxRGI
 import time
@@ -49,40 +48,15 @@ class InterpolationRule(eqx.Module):
         Note: x is in the *cell local* [0,1] coordinate.
         """
         d = self.degree
-        # Evaluate all (x - nodes[k]) for broadcasting: (d+1, *xshape)
-        diffs = x[None, ...] - self.nodes[:, None]
-        # For each i, product over k!=i. We compute total product then divide by (x - nodes[i]).
-        prod_all = jnp.prod(diffs, axis=0)  # (*xshape,)
-        # Guard division by zero when x equals a node: use polynomial limit via L'Hôpital with one‑hot mask
-        def single_pi(i):
-            di = diffs[i]
-            # Where di==0, p_i(x) should be 1 and others 0. Implement stable selection:
-            # base formula (prod_all / di) * scalings[i]
-            base = (prod_all / di) * self.scalings[i]
-            # exact node selection
-            at_node = (di == 0)
-            return jnp.where(at_node, jnp.ones_like(base), base)
-
-        pis = jax.vmap(single_pi)(jnp.arange(d + 1))  # (d+1,*xshape)
-        # When x equals nodes[j], *only* j‑th basis should be 1; others 0.
-        # Enforce explicitly:
-        # Find any node hit
-        hits = (diffs == 0)
-        any_hit = jnp.any(hits, axis=0)
-        if pis.ndim == 1:
-            # scalar x
-            if any_hit:  # type: ignore
-                j = jnp.argmax(hits)
-                pis = jax.nn.one_hot(j, d + 1)
-        else:
-            # broadcasted x
-            j = jnp.argmax(jnp.where(hits, 1, 0), axis=0)
-            pis = jnp.where(
-                any_hit[None, ...],
-                jax.nn.one_hot(j, d + 1)[...].swapaxes(0, -1).reshape((d + 1,) + x.shape),
-                pis,
-            )
-        return pis
+        x = jnp.asarray(x)
+        # (x - nodes[k]) for every node, shape (d+1, *xshape)
+        diffs = x[None, ...] - self.nodes.reshape((d + 1,) + (1,) * x.ndim)
+        # p_i(x) = scalings[i] * prod_{k != i} (x - nodes[k]); replacing the k == i factor
+        # by 1 avoids dividing by zero at the nodes and is exact there.
+        eye = jnp.eye(d + 1, dtype=bool).reshape((d + 1, d + 1) + (1,) * x.ndim)
+        factors = jnp.where(eye, 1.0, diffs[None, ...])  # (i, k, *xshape)
+        scal = self.scalings.reshape((d + 1,) + (1,) * x.ndim)
+        return scal * jnp.prod(factors, axis=1)
 
 
 class UniformInterpolationRule(InterpolationRule):
@@ -109,7 +83,7 @@ class ChebyshevInterpolationRule(InterpolationRule):
 # --------------------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class GridSpec:
     r_range: Tuple[float, float, int]  # (rmin, rmax, nr_cells)
     phi_range: Tuple[float, float, int]  # (phimin, phimax, nphi_cells)
@@ -550,7 +524,7 @@ class InterpolatedVmecNative(eqx.Module):
     srange: Tuple[float, float, int]
     thetarange: Tuple[float, float, int]
     phirange: Tuple[float, float, int]
-    _rgis: dict = eqx.static_field()
+    _rgis: dict
 
     def __init__(
         self,
@@ -646,7 +620,7 @@ class InterpolatedVmecNative(eqx.Module):
         return _unbatch(g, single)              # () or (N,)
 
     # ---------- convenience passthroughs ----------
-    @partial(jax.jit, static_argnames=("self",))
+    @eqx.filter_jit
     def AbsB(self, pts_stp):
         """Accept (..., 3) or (3,) and return (...,). Works for any batch rank."""
         pts = jnp.asarray(pts_stp)
@@ -659,7 +633,7 @@ class InterpolatedVmecNative(eqx.Module):
         out = jax.vmap(self.vmec.AbsB)(flat)            # (N,)
         return out.reshape(leading)
 
-    @partial(jax.jit, static_argnames=("self",))
+    @eqx.filter_jit
     def to_xyz(self, pts_stp):
         """Accept (..., 3) or (3,) and return (..., 3). Works for any batch rank."""
         pts = jnp.asarray(pts_stp)
