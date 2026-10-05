@@ -58,10 +58,10 @@ def near_axis_coil_targets(solution, formal_radius, subtract_plasma_field=True):
     jet (``pyqsc_jax.plasma``), leaving the external vacuum field; otherwise the total jet is
     returned, which is only correct in vacuum. Returns ``(points, B, dB/dx, d2B/dx2)``.
     """
-    from pyqsc_jax.plasma import plasma_hessian_on_axis
     points = solution.geometry.position_cartesian
     if not subtract_plasma_field:
         return points, solution.B_axis, solution.grad_B_axis, solution.grad_grad_B_axis
+    from pyqsc_jax.plasma import plasma_hessian_on_axis
     target = plasma_hessian_on_axis(solution, formal_radius=formal_radius)
     return points, target.field.external_field, target.field.external_gradient, target.external_hessian
 
