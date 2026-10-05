@@ -649,30 +649,37 @@ class SurfaceRZFourier:
     def x(self, new_dofs):
         self.dofs = new_dofs
 
+    def _surface_mean(self, values):
+        """Average of ``values`` (on the ``(nphi, ntheta)`` grid) over the whole torus.
+
+        Theta is periodic, so a duplicated ``close=True`` end column is dropped.
+        Over a full torus phi is treated the same way; over a half period with
+        ``close=True`` both ends are sampled and the trapezoid rule is used.
+        A half period with ``close=False`` misses the end at ``pi/nfp`` and is
+        only first-order accurate in ``1/nphi``.
+        Integrals over the torus are this mean times ``(2 pi)**2``, because the
+        normal is taken with respect to theta and phi in radians and a
+        half-period integrand repeats over the ``2 nfp`` half periods.
+        """
+        if self.close:
+            values = values[:, :-1]
+        if self.range_torus == "full torus" or not self.close:
+            if self.close:
+                values = values[:-1]
+            return jnp.mean(values)
+        weights = jnp.ones(values.shape[0]).at[jnp.array([0, -1])].set(0.5)
+        return jnp.sum(weights @ values) / (jnp.sum(weights) * values.shape[1])
+
     @property
     def volume(self):
-
-        xyz = self.gamma  # shape: (nphi, ntheta, 3)
-        n = self.normal    # shape: (nphi, ntheta, 3)
-
-        integrand = jnp.sum(xyz * n, axis=2)  # dot(x, n), shape: (nphi, ntheta)
-        volume = jnp.mean(integrand) / 3.0
-        return volume
+        """Enclosed volume, ``(1/3) |integral of x . n dtheta dphi|``."""
+        integrand = jnp.sum(self.gamma * self.normal, axis=2)
+        return jnp.abs(self._surface_mean(integrand)) * (2 * jnp.pi)**2 / 3.0
 
     @property
     def area(self):
-        #n = self.normal  # (nphi, ntheta, 3)
-        #norm_n = jnp.linalg.norm(n, axis=2)  # shape: (nphi, ntheta)
-        #avg_area = jnp.mean(norm_n)
-        #return avg_area
-        n = self.normal  # shape: (nphi, ntheta, 3)
-        norm_n = jnp.linalg.norm(n, axis=2)  
-
-        dphi = 2 * jnp.pi / self.nphi
-        dtheta = 2 * jnp.pi / self.ntheta
-
-        area = jnp.sum(norm_n) * dphi * dtheta
-        return area
+        """Surface area, ``integral of |n| dtheta dphi``."""
+        return self._surface_mean(jnp.linalg.norm(self.normal, axis=2)) * (2 * jnp.pi)**2
 
     # def change_resolution(self, mpol: int, ntor: int, ntheta=None, nphi=None,close=True):
     #     """
