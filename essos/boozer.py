@@ -240,24 +240,40 @@ def _rk_step(rhs, y, dt, method):
     return y + dt * sum(b * k for b, k in zip(tableau.b_sol, stages) if b)
 
 
+# attempted adaptive steps allowed per saved interval before a particle is failed
+MAX_ATTEMPTS = 1_000_000
+
+
+def _embedded_step(rhs, y, dt, scale):
+    """Dopri5 solution and its error norm (<= 1 accepts) against ``scale``."""
+    from diffrax import Dopri5
+
+    tableau = Dopri5.tableau
+    stages = [rhs(y)]
+    for weights in tableau.a_lower:
+        stages.append(rhs(y + dt * sum(a * k for a, k in zip(weights, stages) if a)))
+    y1 = y + dt * sum(b * k for b, k in zip(tableau.b_sol, stages) if b)
+    error = dt * sum(e * k for e, k in zip(tableau.b_error, stages) if e)
+    return y1, jnp.sqrt(jnp.mean((error / scale) ** 2))
+
+
 @jax.jit
 def _start(field, y0, mu0):
     def one(y, mu):
         s, r, theta, *_ = _chart(y)
         e0 = 0.5 * y[3] ** 2 + mu * field.modB_derivatives(r, theta, y[2])[0]
         first = jnp.array([s, theta, y[2], y[3], jnp.sqrt(2 * e0)])
-        return (y, mu, 0.0, jnp.asarray(True), -1.0, -1.0, -1.0, 0.0, e0), first
+        return (y, mu, 0.0, jnp.asarray(True), -1.0, -1.0, -1.0, 0.0, e0, -1.0, 0), first
 
     return jax.vmap(one)(y0, mu0)
 
 @partial(jax.jit, static_argnames=("count", "species", "method"))
 def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-             carry, keys, first_interval, count, method="rk4"):
+             carry, keys, first_interval, count, method="rk4", tolerance=1e-8):
     def one(carry, key):
-        def step(carry, k):
-            y, mu, t, alive, t_loss, t_therm, t_fail, err, e0 = carry
-            rhs = lambda state: guiding_center_rhs(field, state, mu, mass, charge)
-            y1 = _rk_step(rhs, y, dt, method)
+        def finish(carry, y1, h):
+            """Accept ``y1`` after a step of ``h``: energy, collisions, loss and failure."""
+            y, mu, t, alive, t_loss, t_therm, t_fail, err, e0, h_next, k = carry
             s1, r1, th1, *_ = _chart(y1)
             B1 = field.modB_derivatives(r1, th1, y1[2])[0]
             e_orbit = 0.5 * y1[3] ** 2 + mu * B1
@@ -266,7 +282,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             if species is not None:
                 v = jnp.sqrt(2 * e_orbit)
                 point = jnp.array([s1, th1, y1[2]])
-                v, lam = collision_kick(species, mass, charge, v, y1[3] / v, point, dt,
+                v, lam = collision_kick(species, mass, charge, v, y1[3] / v, point, h,
                                         jax.random.normal(jax.random.fold_in(key, k), (2,)))
                 y1 = y1.at[3].set(lam * v)
                 mu1 = v * v * (1 - lam * lam) / (2 * B1)
@@ -280,19 +296,58 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
                       jnp.isfinite(B1) & (B1 > 0))
             lost = alive & finite & (s1 >= 1.0)
             failed = alive & ~lost & ~finite
-            t_fail = jnp.where(failed, t + dt, t_fail)
+            t_fail = jnp.where(failed, t + h, t_fail)
             err = jnp.where(alive & ~finite, jnp.inf, err)
             therm = alive & ~lost & finite & thermal
-            t_loss = jnp.where(lost, t + dt, t_loss)
-            t_therm = jnp.where(therm, t + dt, t_therm)
+            t_loss = jnp.where(lost, t + h, t_loss)
+            t_therm = jnp.where(therm, t + h, t_therm)
             keep = alive & ~therm & finite
             y = jnp.where(keep | lost, y1, y)
             mu = jnp.where(keep, mu1, mu)
             e0 = jnp.where(keep, e0_new, e0)
-            return (y, mu, t + dt, keep & ~lost, t_loss, t_therm, t_fail, err, e0), None
+            return (y, mu, t + h, keep & ~lost, t_loss, t_therm, t_fail, err, e0, h_next, k + 1)
+
+        def rhs_of(carry):
+            mu = carry[1]
+            return lambda state: guiding_center_rhs(field, state, mu, mass, charge)
+
+        def fixed(carry):
+            return finish(carry, _rk_step(rhs_of(carry), carry[0], dt, method), dt)
+
+        def adaptive(carry, t_end):
+            """Error-controlled Dopri5 steps that land exactly on ``t_end``."""
+            def attempt(state):
+                carry, attempts = state
+                y, t, h = carry[0], carry[2], carry[9]
+                h_try = jnp.minimum(h, t_end - t)
+                scale = tolerance * jnp.array([1.0, 1.0, 1.0, jnp.sqrt(2 * carry[8])])
+                y1, norm = _embedded_step(rhs_of(carry), y, h_try, scale)
+                ok = jnp.isfinite(norm) & (norm <= 1.0)
+                safe = jnp.where(jnp.isfinite(norm) & (norm > 0), norm, jnp.where(ok, 0.0, 1e10))
+                grow = jnp.clip(0.9 * safe ** -0.2, 0.1, 5.0)
+                stepped = finish(carry, y1, h_try)
+                carry = jax.tree.map(lambda a, b: jnp.where(ok, a, b), stepped, carry)
+                h_next = h_try * grow
+                return carry[:9] + (h_next, carry[10]), attempts + 1
+
+            def busy(state):
+                carry, attempts = state
+                return carry[3] & (carry[2] < t_end * (1 - 1e-12)) & (attempts < MAX_ATTEMPTS)
+
+            carry, attempts = jax.lax.while_loop(busy, attempt, (carry, 0))
+            # a particle still short of t_end has run out of attempts: report it as failed
+            stuck = carry[3] & (carry[2] < t_end * (1 - 1e-12))
+            return carry[:3] + (carry[3] & ~stuck, carry[4], carry[5],
+                                jnp.where(stuck, carry[2], carry[6]), jnp.where(stuck, jnp.inf, carry[7])) + carry[8:]
+
+        if method == "adaptive":
+            carry = carry[:9] + (jnp.where(carry[9] > 0, carry[9], dt), carry[10])
 
         def interval(carry, i):
-            carry = jax.lax.fori_loop(0, n_sub, lambda k, state: step(state, i * n_sub + k)[0], carry)
+            if method == "adaptive":
+                carry = adaptive(carry, (i + 1) * n_sub * dt)
+            else:
+                carry = jax.lax.fori_loop(0, n_sub, lambda k, state: fixed(state), carry)
             y, mu = carry[0], carry[1]
             s1, r1, th1, *_ = _chart(y)
             B1 = field.modB_derivatives(r1, th1, y[2])[0]
@@ -306,7 +361,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=None, compact=True, method="rk4"):
+                 progress=None, compact=True, method="rk4", tolerance=1e-8):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The step is shortened so that a whole number of steps fits between the
@@ -322,9 +377,14 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     synchronization and extra compiled batch size.
     Fixed explicit methods are ``"rk4"`` (default), ``"dopri5"`` and
     ``"dopri8"``. Refine timestep and modes to check loss labels and bounce phase.
+    ``"adaptive"`` controls each particle's Dopri5 step so the embedded error
+    stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
+    speed for ``v_par``); ``timestep`` is then only the first trial step.
     """
-    if method not in ("rk4", "dopri5", "dopri8"):
-        raise ValueError("method must be 'rk4', 'dopri5' or 'dopri8'")
+    if method not in ("rk4", "dopri5", "dopri8", "adaptive"):
+        raise ValueError("method must be 'rk4', 'dopri5', 'dopri8' or 'adaptive'")
+    if not (np.isfinite(tolerance) and tolerance > 0):
+        raise ValueError("tolerance must be positive and finite")
     inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
     n = inputs[0].size
     if n < 1 or any(a.ndim != 1 or a.size != n or not np.isfinite(a).all() for a in inputs):
@@ -365,7 +425,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     if compact and n_int > 1 and ndev == 1:
         initial = carry
         carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-                               carry, keys, 0, 1, method)
+                               carry, keys, 0, 1, method, tolerance)
         active = np.flatnonzero(np.asarray(carry[3])[:n])
         padded = 1 << (active.size - 1).bit_length() if active.size else 0
         if padded <= n // 2:
@@ -384,7 +444,8 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
                 if stop > first_interval and selected.size:
                     running, next_part = _advance(field, dt, n_sub, mass, charge, species,
                                                   thermal_cutoff, running, running_keys,
-                                                  first_interval, stop - first_interval, method)
+                                                  first_interval, stop - first_interval, method,
+                                                  tolerance)
                     states[selected, first_interval + 1:stop + 1] = np.asarray(next_part)[:selected.size]
                 if progress is not None:
                     progress(stop, n_int)
@@ -401,7 +462,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     for first_interval in range(0, n_int, chunk):
         count = min(chunk, n_int - first_interval)
         carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-                               carry, keys, first_interval, count, method)
+                               carry, keys, first_interval, count, method, tolerance)
         saved.append(part)
         if progress is not None:
             jax.block_until_ready(part)
