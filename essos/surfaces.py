@@ -3,13 +3,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.scipy.interpolate import RegularGridInterpolator
-from jax import tree_util, jit, vmap, devices, device_put
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax import tree_util, jit, vmap, device_put
 from essos.plot import fix_matplotlib_3d
 import jaxkd
 
-mesh = Mesh(devices(), ("dev",))
-sharding = NamedSharding(mesh, PartitionSpec("dev"))
 
 
 def _cacheable(*values):
@@ -47,7 +44,7 @@ def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
     return tf
 
 # @jit
-@partial(jit, in_shardings=(sharding, None), out_shardings=sharding)
+@jit
 def B_on_surface(surface, field):
     ntheta = surface.ntheta
     nphi = surface.nphi
