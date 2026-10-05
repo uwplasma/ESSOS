@@ -768,6 +768,40 @@ def test_vmec_lost_energies_come_from_the_last_finite_state():
     assert jnp.allclose(tracing.lost_positions[lost, 0], 1.0, atol=1e-9)
 
 
+def test_particle_batches_report_completed_particles_and_match_one_batch(capsys):
+    """Batches of 6 (the last one padded) give the orbits, events and losses of one batch."""
+    whole = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9)
+    capsys.readouterr()
+    batched = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9,
+                            particle_batch_size=6, progress=True)
+    progress = capsys.readouterr().err
+    assert "Tracing particles" in progress and "16/16" in progress
+    # The adaptive steps of a vmapped solve depend on the batch in the last bits.
+    both = jnp.isfinite(batched.trajectories) & jnp.isfinite(whole.trajectories)
+    assert both[:, :2].all()
+    np.testing.assert_allclose(batched.trajectories[both], whole.trajectories[both], rtol=1e-6, atol=1e-7)
+    assert jnp.array_equal(batched.boundary_hits, whole.boundary_hits)
+    assert np.array_equal(batched.status, whole.status)
+    np.testing.assert_allclose(batched.lost_times, whole.lost_times, rtol=1e-6)
+    assert jnp.array_equal(batched.loss_fractions, whole.loss_fractions)
+
+
+@pytest.mark.parametrize("batch_size", [0, -2, 1.5, True])
+def test_particle_batch_size_is_validated(batch_size):
+    with pytest.raises(ValueError, match="particle_batch_size"):
+        Tracing(field=MockField(), model="FieldLineAdaptative", initial_conditions=jnp.array([[1.0, 0.0, 0.0]]),
+                maxtime=1.0, timestep=0.01, particle_batch_size=batch_size)
+
+
+def test_particle_batches_are_bypassed_under_jit():
+    def final(y0, batch):
+        return Tracing(field=MockField(), model="FieldLineAdaptative", initial_conditions=y0, maxtime=1.0,
+                       timestep=0.01, times_to_trace=3, particle_batch_size=batch).trajectories
+    y0 = jnp.array([[1.0, 0.0, 0.0], [1.1, 0.0, 0.1], [0.9, 0.1, 0.0]])
+    np.testing.assert_allclose(jax.jit(final, static_argnums=1)(y0, 2), final(y0, None), rtol=1e-12)
+    np.testing.assert_allclose(final(y0, 2), final(y0, None), rtol=1e-12)
+
+
 def test_custom_loss_grad_through_adaptive_guiding_center_matches_finite_difference():
     # custom_loss jits its value and gradient, so Tracing.trace sees tracer
     # initial conditions and must not pull them back to the host.
