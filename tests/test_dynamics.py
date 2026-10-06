@@ -578,6 +578,44 @@ class _UniformField:
     def B_contravariant(self, xyz):
         return self.vector
 
+    B = B_contravariant
+
+    def to_xyz(self, xyz):
+        return xyz
+
+
+@pytest.mark.parametrize("stop", [False, True])
+def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypatch, stop):
+    """FullOrbitCollisions passed a four-element args tuple to drift and
+    diffusion terms that unpack three, and energy()/v_perp() rejected it."""
+    import essos.dynamics as dynamics
+
+    controller = dynamics.PIDController
+    def checked_controller(**kwargs):
+        assert kwargs["rtol"] == 1e-6
+        assert kwargs["atol"] == 1e-7
+        return controller(**kwargs)
+    monkeypatch.setattr(dynamics, "PIDController", checked_controller)
+    field = _UniformField((0., 0., 1.), magnitude=1e-3)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]),
+                                jnp.array([1e18]), jnp.array([1e3]))
+    ceiling = 0.75 * float(particles.initial_vparallel[0]) * 1e-5
+    def below_ceiling(t, y, args, **kwargs):
+        return ceiling - y[2]
+    trace = Tracing(field=field, particles=particles, species=species,
+                    model="FullOrbitCollisions", maxtime=1e-5, timestep=1e-7,
+                    times_to_trace=3, rtol=1e-6, atol=1e-7,
+                    stopping_criteria=below_ceiling if stop else None)
+    assert trace.trajectories.shape == (1, 3, 6)
+    assert jnp.all(jnp.isfinite(trace.trajectories))
+    np.testing.assert_allclose(trace.energy()[0, 0], particles.energy, rtol=1e-12)
+    np.testing.assert_allclose(trace.v_perp()[0, 0], particles.initial_vperpendicular[0], rtol=1e-12)
+    if stop:
+        assert bool(trace.boundary_hits[0])
+        assert float(jnp.max(trace.trajectories[0, :, 2])) < ceiling
+        np.testing.assert_array_equal(trace.trajectories[0, -1], trace.trajectories[0, -2])
+
 
 def _legacy_positive_charge_start(field, xyz, vpar, total_speed, mass, charge, phase):
     """The pre-fix construction, correct for a positive charge and B not along z."""
