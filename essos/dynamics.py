@@ -650,7 +650,14 @@ def LorentzCollisionsDrift(t,
     indeces_species=species.species_indeces
     nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
     dxdt = jnp.array([vx, vy, vz])
-    dvdt =  q / m * jnp.cross(dxdt, B_contravariant)-nu_s*dxdt#*0.00000
+    # Noise-induced drift. The Fokker-Planck operator d_i(nu_s v_i f + D_ij d_j f),
+    # D = sigma sigma^T / 2, has Ito drift -nu_s v + d_j D_ij; the Stratonovich
+    # solver (SPaRK) needs that minus sigma_jk d_j sigma_ik / 2, i.e.
+    # -nu_s v + sigma_ik d_j sigma_jk / 2.
+    def sigma(velocity):
+        return LorentzCollisionsDiffusion(t, jnp.append(points, velocity), args)[3:, 3:]
+    noise_drift = 0.5*jnp.einsum('ik,jkj->i', sigma(dxdt), jax.jacfwd(sigma)(dxdt))
+    dvdt =  q / m * jnp.cross(dxdt, B_contravariant)-nu_s*dxdt+noise_drift
     return jnp.append(dxdt, dvdt)
     # def zero_derivatives(_):
     #     return jnp.zeros(6, dtype=float)

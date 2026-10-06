@@ -417,6 +417,27 @@ def _near_axis_particles():
     return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([0.9, 0.9, 0.9, -0.9, 0.9]))
 
 
+def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature():
+    """Without the noise-induced drift sigma_ik d_j sigma_jk / 2 a thermal
+    ensemble heated to <E> ~ 1.35 (3T/2) within two slowing-down times."""
+    from essos.background_species import nu_s_ab
+    from essos.constants import ELEMENTARY_CHARGE
+    temperature = 1e3 * ELEMENTARY_CHARGE
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e20]), jnp.array([1e3]))
+    vth = np.sqrt(temperature / PROTON_MASS)
+    nu = float(nu_s_ab(PROTON_MASS, ELEMENTARY_CHARGE, 0, vth, jnp.zeros(3), species))
+    n = 200
+    xyz = jnp.tile(jnp.array([1., 0., 0.]), (n, 1))
+    particles = Particles(initial_xyz=xyz, initial_xyz_fullorbit=xyz, mass=PROTON_MASS, charge=ELEMENTARY_CHARGE,
+                          initial_vxvyvz=vth * jax.random.normal(jax.random.key(0), (n, 3)))
+    trace = Tracing(field=_UniformField((0., 0., 1.), magnitude=1e-6), particles=particles, species=species,
+                    model="FullOrbitCollisions", maxtime=2 / nu, timestep=1e-2 / nu, times_to_trace=6,
+                    rtol=1e-4, atol=1e-4)
+    energy = 0.5 * PROTON_MASS * jnp.sum(trace.trajectories[:, :, 3:]**2, axis=-1) / (1.5 * temperature)
+    error = np.sqrt(2 / 3 / n)
+    assert np.all(np.abs(energy.mean(axis=0) - 1) < 4 * error)
+
+
 def test_vmec_guiding_centers_cross_the_magnetic_axis():
     """The orbit born at s = 1e-7 used to stop at once, at s <= axis_threshold = 1e-6."""
     particles = _near_axis_particles()
