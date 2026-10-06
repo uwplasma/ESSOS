@@ -132,6 +132,87 @@ class BoozerField(eqx.Module):
         return self.modB_derivatives(jnp.sqrt(s), theta, zeta)[0]
 
 
+
+def _lagrange4(u):
+    """Weights of the 4-point Lagrange stencil at nodes -1, 0, 1, 2 for 0 <= u < 1."""
+    return jnp.stack([-u * (u - 1) * (u - 2) / 6, (u + 1) * (u - 1) * (u - 2) / 2,
+                      -(u + 1) * u * (u - 2) / 2, (u + 1) * u * (u - 1) / 6])
+
+
+class TabulatedBoozerField(eqx.Module):
+    """A :class:`BoozerField` evaluated from tables instead of its Fourier sum.
+
+    ``|B|``, ``d|B|/dr``, ``(d|B|/dtheta)/r`` and ``d|B|/dzeta`` are tabulated on
+    an angular grid over one field period, each as the exact quartic in ``r``
+    the cubic radial splines give within every knot interval, and interpolated
+    in ``theta`` and ``zeta`` with 4-point periodic Lagrange stencils.  One
+    evaluation costs a 4 x 4 stencil of quartics whatever the number of modes,
+    so it pays off for large spectra; the angular grid is set from the retained
+    modes (``points_per_wavelength`` nodes per shortest wavelength).
+    """
+
+    r_knots: jax.Array
+    table: jax.Array  # (nint, ntheta, nzeta, 4 quantities, 5 radial powers)
+    s_knots: jax.Array
+    profile_coef: jax.Array
+    xm: jax.Array
+    xn: jax.Array
+    psi0: float
+    nfp: int = eqx.field(static=True)
+    sine_coef: None = None
+
+    @classmethod
+    def from_field(cls, field, points_per_wavelength=8, ntheta=None, nzeta=None):
+        xm, xn = np.asarray(field.xm), np.asarray(field.xn) // field.nfp
+        ntheta = ntheta or max(16, int(points_per_wavelength * max(1, np.abs(xm).max())))
+        nzeta = nzeta or max(16, int(points_per_wavelength * max(1, np.abs(xn).max())))
+        knots = np.asarray(field.r_knots)
+        theta = 2 * np.pi * np.arange(ntheta) / ntheta
+        zeta = 2 * np.pi * np.arange(nzeta) / (nzeta * field.nfp)
+        phase = xm[:, None, None] * theta[None, :, None] - (xn * field.nfp)[:, None, None] * zeta[None, None, :]
+        cos, sin = np.cos(phase), np.sin(phase)
+
+        def quartics(coef):
+            """Per interval and mode: coefficients of f, df/dr, m a, n f as quartics in d = r - r_i."""
+            a = np.flip(np.asarray(coef), axis=-1)            # (nint, modes, 4) in powers d^0..d^3
+            a = np.concatenate([a, np.zeros(a.shape[:-1] + (1,))], axis=-1)
+            r0 = knots[:-1, None, None]
+            ra = np.roll(a, 1, axis=-1) + r0 * a                # (r0 + d) a(d)
+            f = np.where((xm > 0)[None, :, None], ra, a)
+            df = np.concatenate([f[..., 1:] * np.arange(1, 5), np.zeros(f.shape[:-1] + (1,))], axis=-1)
+            return f, df, xm[None, :, None] * a, (xn * field.nfp)[None, :, None] * f
+
+        f, df, ma, nf = quartics(field.b_coef)
+        table = np.stack([np.einsum("imp,mtz->itzp", f, cos), np.einsum("imp,mtz->itzp", df, cos),
+                          -np.einsum("imp,mtz->itzp", ma, sin), np.einsum("imp,mtz->itzp", nf, sin)], axis=3)
+        if field.sine_coef is not None:
+            f, df, ma, nf = quartics(field.sine_coef)
+            table += np.stack([np.einsum("imp,mtz->itzp", f, sin), np.einsum("imp,mtz->itzp", df, sin),
+                               np.einsum("imp,mtz->itzp", ma, cos), -np.einsum("imp,mtz->itzp", nf, cos)], axis=3)
+        return cls(field.r_knots, jnp.asarray(table), field.s_knots, field.profile_coef,
+                   field.xm, field.xn, field.psi0, field.nfp)
+
+    def profiles(self, s):
+        return _evaluate(self.s_knots, self.profile_coef, s)
+
+    def modB_derivatives(self, r, theta, zeta):
+        nint, nt, nz = self.table.shape[:3]
+        i = jnp.clip(jnp.searchsorted(self.r_knots, r, side="right", method="compare_all") - 1, 0, nint - 1)
+        d = r - self.r_knots[i]
+        x = jnp.mod(theta, 2 * np.pi) * nt / (2 * np.pi)
+        y = jnp.mod(zeta, 2 * np.pi / self.nfp) * nz * self.nfp / (2 * np.pi)
+        j, k = jnp.floor(x).astype(int), jnp.floor(y).astype(int)
+        jj = jnp.mod(j - 1 + jnp.arange(4), nt)
+        kk = jnp.mod(k - 1 + jnp.arange(4), nz)
+        block = self.table[i][jj][:, kk]                                   # (4, 4, 4, 5)
+        weights = jnp.outer(_lagrange4(x - j), _lagrange4(y - k))          # (4, 4)
+        powers = d ** jnp.arange(5)
+        values = jnp.einsum("ab,abqp,p->q", weights, block, powers)
+        return values[0], values[1], values[2], values[3]
+
+    def modB(self, s, theta, zeta):
+        return self.modB_derivatives(jnp.sqrt(s), theta, zeta)[0]
+
 def _chart(y):
     u, w = y[0], y[1]
     s = u * u + w * w
