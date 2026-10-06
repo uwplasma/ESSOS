@@ -619,7 +619,7 @@ def LorentzCollisionsDiffusion(t,
     v_vector=jnp.array([vx, vy, vz])
     v=jnp.sqrt(vx**2+vy**2+vz**2)
     p=m*v
-    I_vv_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(v_vector,jnp.reshape(v_vector,(3,1))))/v**2
+    P_v=jnp.outer(v_vector,v_vector)/v**2  # projector on the velocity direction
     indeces_species=species.species_indeces
     nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
     nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
@@ -628,7 +628,7 @@ def LorentzCollisionsDiffusion(t,
     Dpar=jnp.sqrt(2.*Diffusion_par)#*0.0000
     Dperp=jnp.sqrt(2.*Diffusion_perp)#*0.0000
     dxdt = jnp.zeros((3,3))
-    dvdt=Dpar/m*jnp.identity(3)-Dperp/m*I_vv_tensor
+    dvdt=Dpar/m*P_v+Dperp/m*(jnp.identity(3)-P_v)
     #Off diagonals between position an dvelocity are zero at zeroth order
     Dxv=jnp.zeros((3,3))
     Dvx=jnp.zeros((3,3))
@@ -1049,8 +1049,8 @@ class Tracing():
             #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))
             self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
             #x,y,z=self.particles.initial_xyz[]
-            B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
-            mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*particles.mass)          
+            B_particle=jax.vmap(self.field.AbsB,in_axes=0)(self.particles.initial_xyz)
+            mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*self.particles.mass)          
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,self.particles.initial_vparallel[:, None]/SPEED_OF_LIGHT,mu[:, None]],axis=1)        
         elif model == 'FullOrbit' or model == 'FullOrbit_Boris' or model == 'FullOrbitAdaptative':
             self.ODE_term = ODETerm(Lorentz)
@@ -1459,9 +1459,7 @@ class Tracing():
             v_perp = vmap(compute_vperp)(self.trajectories)           
         elif self.model == 'GuidingCenterCollisions':
             def compute_vperp(trajectory):
-                vpar=trajectory[:, 3]*trajectory[:, 4]
-                v=trajectory[:, 4]*SPEED_OF_LIGHT
-                return jnp.sqrt(v**2-vpar**2)
+                return trajectory[:, 3]*jnp.sqrt(jnp.maximum(1-trajectory[:, 4]**2, 0.))
             v_perp = vmap(compute_vperp)(self.trajectories)
 
         else:  # the full-orbit models: FullOrbit, FullOrbit_Boris, FullOrbitAdaptative, FullOrbitCollisions

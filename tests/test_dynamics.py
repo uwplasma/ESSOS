@@ -989,3 +989,37 @@ def test_guiding_center_mu_matches_guiding_center():
     args = (field, particles, Electric_field_zero())
     assert jnp.allclose(GuidingCenterMu(0.0, jnp.append(y, mu), args)[:4], GuidingCenter(0.0, y, args))
     assert GuidingCenterMu(0.0, jnp.append(y, mu), args)[4] == 0.0
+
+
+def test_full_orbit_collision_noise_is_parallel_plus_perpendicular():
+    """Velocity noise amplitude sqrt(2 D_par) v v^T/v^2 + sqrt(2 D_perp) (I - v v^T/v^2)."""
+    from essos.dynamics import LorentzCollisionsDiffusion
+    from essos.background_species import nu_D_ab, nu_par_ab
+    field = _UniformField((0., 0., 1.), magnitude=1.)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e20]), jnp.array([1e3]))
+    v = jnp.array([3e6, -1e6, 2e6])
+    block = LorentzCollisionsDiffusion(0., jnp.concatenate([jnp.ones(3), v]), (field, particles, species))[3:, 3:]
+    m, q, speed = particles.mass, particles.charge, jnp.linalg.norm(v)
+    nu_D = nu_D_ab(m, q, 0, speed, jnp.ones(3), species)
+    nu_par = nu_par_ab(m, q, 0, speed, jnp.ones(3), species)
+    P = jnp.outer(v, v) / speed**2
+    np.testing.assert_allclose(block, speed * (jnp.sqrt(nu_par) * P + jnp.sqrt(nu_D) * (jnp.eye(3) - P)), rtol=1e-12)
+
+
+def test_collisional_guiding_center_v_perp_uses_speed_and_pitch():
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+    particles = _near_axis_particles()
+    trace = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterCollisions", particles=particles,
+                    maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
+    np.testing.assert_allclose(trace.v_perp()[:, 0], particles.initial_vperpendicular, rtol=1e-10)
+
+
+def test_mu_collision_models_accept_coils_as_the_field():
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    coils = Coils(CreateEquallySpacedCurves(4, 1, 1.0, 0.4, 40, 2, True), [1e6] * 4)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+    particles = Particles([[1.05, 0., 0.]], [.5])
+    trace = Tracing(field=coils, model="GuidingCenterCollisionsMuFixed", particles=particles,
+                    maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
+    assert jnp.isfinite(trace.trajectories).all()
