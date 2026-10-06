@@ -388,3 +388,27 @@ def test_lorentz_force_loss_is_independent_of_quadrature_resolution():
 def test_lorentz_force_loss_requires_a_conductor_radius():
     with pytest.raises(ValueError, match="conductor_radius"):
         objf.loss_lorentz_force_coils(_two_distant_loops(16)[0])
+
+
+def test_particle_iota_uses_the_poloidal_angle_gradient(monkeypatch):
+    import types
+    import essos.objective_functions as of
+    B = jnp.array([.3, 1.1, .4])
+    xyz = jnp.array([[[1.3, .4, .2], [.9, -.5, -.1]]])
+    field = types.SimpleNamespace(r_axis=1.0, z_axis=0.0, B_covariant=lambda x: B)
+    monkeypatch.setattr(of, "Tracing", lambda **kw: types.SimpleNamespace(trajectories=xyz, field=field))
+    theta = lambda x: jnp.arctan2(x[2], jnp.hypot(x[0], x[1]) - 1.0)
+    phi = lambda x: jnp.arctan2(x[1], x[0])
+    iota = jnp.array([jax.grad(theta)(x) @ B / (jax.grad(phi)(x) @ B) for x in xyz[0]])
+    loss = of.loss_particle_iota(field, None, target_iota=10.)
+    np.testing.assert_allclose(loss, jnp.sum(10. - iota), rtol=1e-9)
+
+
+def test_bdotn_constraint_gradient_is_zero_not_nan_when_satisfied(monkeypatch):
+    import essos.objective_functions as of
+    monkeypatch.setattr(of, "BdotN_over_B", lambda surface, field: field)
+    g = jax.grad(lambda b: of.loss_BdotN_constraint(b, None, target_tol=1e-6))(jnp.array([1e-4, 2e-4]))
+    np.testing.assert_array_equal(g, 0.)
+    g = jax.grad(lambda b: of.loss_BdotN_constraint(b, None, target_tol=1e-6))(jnp.array([1e-2, 2e-4]))
+    assert jnp.isfinite(g).all() and g[0] > 0
+

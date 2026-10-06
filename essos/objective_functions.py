@@ -153,8 +153,8 @@ def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps
     Z_axis=tracing.field.z_axis
     #theta=jnp.arctan2(xyz[:,:,2]-Z_axis+1.e-12, jnp.sqrt(xyz[:,:,0]**2+xyz[:,:,1]**2)-R_axis+1.e-12)    
     fac_xy=jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))
-    dtheta_dx=-(xyz[:,:,2]-Z_axis+1.e-12)*xyz[:,:,0]/(jnp.square(fac_xy-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12)+1.e-12)
-    dtheta_dy=-(xyz[:,:,2]-Z_axis+1.e-12)*xyz[:,:,1]/(jnp.square(fac_xy-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12)+1.e-12)    
+    dtheta_dx=-(xyz[:,:,2]-Z_axis+1.e-12)*xyz[:,:,0]/(fac_xy+1.e-12)/(jnp.square(fac_xy-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12)+1.e-12)
+    dtheta_dy=-(xyz[:,:,2]-Z_axis+1.e-12)*xyz[:,:,1]/(fac_xy+1.e-12)/(jnp.square(fac_xy-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12)+1.e-12)    
     dtheta_dz=(fac_xy-R_axis+1.e-12)/(jnp.square(fac_xy-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12)+1.e-12)      
     dphi_dx=-(xyz[:,:,1])/(fac_xy**2+1.e-12)
     dphi_dy=xyz[:,:,0]/(fac_xy**2+1.e-12)    
@@ -187,11 +187,15 @@ def loss_normB_axis_average(field,npoints=15, target_B=5.7):
 def loss_BdotN(field,surface):
     return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
 
+def _sqrt_sum_positive(u):
+    """sqrt(sum(max(u, 0))) with a zero (not NaN) gradient where the constraint is met."""
+    total = jnp.sum(jnp.maximum(u, 0.0))
+    return jnp.where(total > 0, jnp.sqrt(jnp.where(total > 0, total, 1.0)), 0.0)
+
 @partial(jit, static_argnames=['target_tol'])
 def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
     bdotn_over_b = BdotN_over_B(surface, field)
-    bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
-    return bdotn_over_b_loss
+    return _sqrt_sum_positive(jnp.square(bdotn_over_b)-target_tol)
 
 
 ###########################  B ON SURAFCE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
@@ -225,7 +229,7 @@ def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6
         return jnp.square(BdotN_over_B(surface, perturbed_field))
 
     expected_square = jnp.mean(jax.vmap(perturbed_square)(keys), axis=0)
-    return jnp.sqrt(jnp.sum(jnp.maximum(expected_square - target_tol, 0.0)))
+    return _sqrt_sum_positive(expected_square - target_tol)
 
 
 
