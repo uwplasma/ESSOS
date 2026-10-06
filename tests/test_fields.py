@@ -544,3 +544,77 @@ def test_vmec_partner_cutoff_is_phase_invariant():
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0, 1])
     arrays['bmns'] = jnp.zeros_like(arrays['bmns'])
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0])
+
+
+def _coil_field():
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.3, n_segments=20, nfp=2, stellsym=True)
+    return BiotSavart(Coils(curves=curves, currents=[1e5] * 2))
+
+
+def test_field_algebra_and_comparison():
+    from essos.fields import CombinedField, DipoleField
+    coils = _coil_field()
+    dipoles = DipoleField(jnp.array([[1.2, 0., 0.], [0., 1.3, 0.1]]), jnp.array([[0., 0., 1e3], [1e3, 0., 0.]]))
+    p = jnp.array([[0.9, 0.2, 0.1], [0.1, 1.1, -0.05]])
+    B = vmap(coils.B)(p) + vmap(dipoles.B)(p)
+    total = sum([coils, dipoles])
+    assert isinstance(total, CombinedField) and len(total.fields) == 2
+    assert jnp.allclose(vmap(total.B)(p), B)
+    assert jnp.allclose(vmap((2. * coils - dipoles + coils).B)(p), 3 * vmap(coils.B)(p) - vmap(dipoles.B)(p))
+    assert len((coils + dipoles + coils).fields) == 3  # nested sums are flattened
+    assert jnp.allclose(jax.jit(vmap((0.5 * total).B))(p), 0.5 * B)  # weights survive the pytree round trip
+    assert jnp.allclose(coils.compare(coils, p), 0.)
+    assert jnp.allclose(total.compare(coils, p), jnp.linalg.norm(vmap(dipoles.B)(p), axis=1) / jnp.linalg.norm(B, axis=1))
+
+
+def test_dipole_field_matches_the_axis_formula_and_is_curl_and_divergence_free():
+    from essos.fields import DipoleField
+    m = 2.0e3
+    field = DipoleField(jnp.zeros((1, 3)), jnp.array([[0., 0., m]]))
+    assert jnp.allclose(field.B(jnp.array([0., 0., 0.5])), jnp.array([0., 0., 1e-7 * 2 * m / 0.5**3]))
+    J = field.dB_by_dX(jnp.array([0.3, -0.2, 0.4]))
+    assert jnp.abs(jnp.trace(J)) < 1e-12 * jnp.abs(J).max() and jnp.allclose(J, J.T, atol=1e-12 * jnp.abs(J).max())
+    assert jnp.allclose(jax.grad(lambda d: field.__class__(field.positions, d).B(jnp.array([0., 0., 0.5]))[2])(field.dofs),
+                        jnp.array([[0., 0., 1e-7 * 2 / 0.5**3]]))
+
+
+def test_toroidal_boundary_from_to_xyz_matches_the_vmec_series():
+    from essos.fields import ToroidalField
+    vmec = Vmec(WOUT_FILE)
+    theta = jnp.linspace(0, 2 * jnp.pi, 7)
+    for generic, analytic in zip(ToroidalField._boundary_rz(vmec, theta, 0.3), vmec._boundary_rz(theta, 0.3)):
+        assert jnp.allclose(generic, analytic, rtol=1e-10, atol=1e-10)
+
+
+class _TorusBasis:
+    """A stand-in for an MRX 2-form basis: Bhat(x) is a smooth function of the logical point."""
+    def contract(self, raw, x):
+        r, t, z = x
+        return raw * jnp.array([0.1 * r * jnp.sin(2 * jnp.pi * (t - z)), 0.4 + r * jnp.cos(2 * jnp.pi * t), 1. + 0.2 * r**2])
+
+
+def _torus_map(x, R0=1.0, a=0.3, nfp=3):
+    r, t, z = x
+    R = R0 + a * r * jnp.cos(2 * jnp.pi * t) + 0.05 * r * jnp.cos(2 * jnp.pi * (t - z))
+    return jnp.array([R * jnp.cos(2 * jnp.pi * z / nfp), R * jnp.sin(2 * jnp.pi * z / nfp), a * r * jnp.sin(2 * jnp.pi * t)])
+
+
+def test_mrx_field_components_are_consistent_with_its_map():
+    from essos.fields import MRXField, is_toroidal
+    field = MRXField(jnp.array([1., 1., 1.]), _TorusBasis(), jax.tree_util.Partial(_torus_map), nfp=3)
+    assert jnp.isclose(field.Aminor_p, 0.3, rtol=1e-2)
+    p = jnp.array([[0.4, 0.7, 0.3], [0.8, 4.0, 5.9], [0.1, 2.5, 3.1]])  # phi beyond the first period
+    e = vmap(jax.jacfwd(field.to_xyz))(p)
+    B = vmap(field.B)(p)
+    assert jnp.allclose(jnp.einsum("nij,nj->ni", e, vmap(field.B_contravariant)(p)), B, rtol=1e-12)
+    assert jnp.allclose(jnp.einsum("nij,ni->nj", e, B), vmap(field.B_covariant)(p), rtol=1e-12)
+    assert jnp.allclose(jnp.linalg.det(e), vmap(field.sqrtg)(p), rtol=1e-12)
+    assert jnp.allclose(vmap(field.B_xyz)(vmap(field.to_xyz)(p)), B, rtol=1e-8)
+    shifted = p.at[:, 2].add(2 * jnp.pi / 3)  # the next field period is the rotation of this one
+    c, s = jnp.cos(2 * jnp.pi / 3), jnp.sin(2 * jnp.pi / 3)
+    rotation = jnp.array([[c, -s, 0.], [s, c, 0.], [0., 0., 1.]])
+    assert jnp.allclose(vmap(field.B)(shifted), B @ rotation.T, rtol=1e-12)
+    assert is_toroidal(2. * field) and jnp.allclose(jax.jit(vmap(field.B))(p), B)
+    assert jnp.allclose(jax.grad(lambda raw: MRXField(raw, field.basis, field.Phi, 3, 0.3).AbsB(p[0]))(field.raw),
+                        jax.jacfwd(lambda raw: MRXField(raw, field.basis, field.Phi, 3, 0.3).AbsB(p[0]))(field.raw))

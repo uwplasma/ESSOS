@@ -30,9 +30,12 @@ pip install essos
   `|B|` spectrum and flux functions `iota`, `G` and `I`, with optional collisions.
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
-- **Fields.** Biot-Savart from coils, VMEC equilibria (analytic derivatives,
-  optional `mode_tolerance` truncation), near-axis expansions, and
-  `CombinedField` to trace a sum of fields as one.
+- **Fields.** Biot-Savart from coils, point dipoles (permanent magnets), VMEC
+  equilibria (analytic derivatives, optional `mode_tolerance` truncation),
+  near-axis expansions, and [MRX](https://github.com/ToBlick/mrx) relaxed or
+  vacuum states. Fields combine as vectors (`coils + dipoles`, `2.0 * field`),
+  and `field.compare(other, points)` measures two fields at the same physical
+  points, whatever coordinates each one uses.
 - **VMEC MGRID.** Export coil fields and load MGRID files as JAX-compatible
   three-dimensional magnetic fields.
 - **Surfaces.** Fourier-represented toroidal surfaces, from a VMEC `wout` or
