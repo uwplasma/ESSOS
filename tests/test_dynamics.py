@@ -647,11 +647,18 @@ def _mu_collision_setup(v, xi):
     return state, scale, (_MuField(), particles, Electric_field_zero(), species, 1.0)
 
 
+def _enable_x64():
+    try:
+        from jax import enable_x64
+    except ImportError:  # jax < 0.7
+        from jax.experimental import enable_x64
+    return enable_x64
+
 @pytest.mark.parametrize("v,xi", [(1e5, 0.0), (1e6, 0.0), (1e5, 0.3), (1e5, 1.0), (1e6, -1.0)])
 def test_mu_collision_noise_is_finite_and_matches_the_diffusion_tensor(v, xi):
     """The eigenvectors were 0/0 at xi = 0, and jnp.select returned zero noise
     when rounding put |xi| just above 1."""
-    from jax import enable_x64
+    enable_x64 = _enable_x64()
     from essos.dynamics import GuidingCenterCollisionsDiffusionMu, GuidingCenterCollisionsDriftMuStratonovich
     from essos.background_species import nu_D_ab, nu_par_ab
     with enable_x64():
@@ -673,7 +680,7 @@ def test_mu_collision_noise_is_finite_and_matches_the_diffusion_tensor(v, xi):
 def test_mu_collision_stratonovich_correction_matches_noise_derivative(v, xi):
     """Stratonovich minus Ito drift is -1/2 sigma_jk d_j sigma_ik; the hand-coded
     derivatives disagreed with the noise at generic xi."""
-    from jax import enable_x64
+    enable_x64 = _enable_x64()
     from essos.dynamics import (GuidingCenterCollisionsDiffusionMu, GuidingCenterCollisionsDriftMuIto,
                                 GuidingCenterCollisionsDriftMuStratonovich)
     with enable_x64():
