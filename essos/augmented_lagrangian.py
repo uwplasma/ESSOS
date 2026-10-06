@@ -357,8 +357,9 @@ def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,omega=1.0,eta=
 
 
 def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1.,omega=1.0,eta=1.0, sq_grad=0.,weight=1., reduction=jnp.sum):
-    """Represents an inequality constraint, h(x) >= 0, which uses a slack
-    variable internally to convert it to an equality constraint.
+    """Represents an inequality constraint, h(x) >= 0. The slack variable
+    s^2 >= 0 of h(x) - s^2 = 0 is eliminated in closed form (Powell-Hestenes-
+    Rockafellar), giving the residual min(h(x), lambda/mu).
 
     Args:
         fun: The constraint function, a differentiable function of your
@@ -377,16 +378,15 @@ def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1.,omega=1.0,et
 
     def init_fn(*args, **kwargs):
         out = fun(*args, **kwargs)
-        return {'lambda': _multiplier_like(out, multiplier, penalty, omega, eta, sq_grad),
-                                            'slack': jax.nn.relu(out) ** 0.5}
+        return {'lambda': _multiplier_like(out, multiplier, penalty, omega, eta, sq_grad)}
 
     if model_lagrangian=='Standard':
         def loss_fn(params, *args, **kwargs):
-            inf = fun(*args, **kwargs) - params['slack'] ** 2
+            inf = jnp.minimum(fun(*args, **kwargs), params['lambda'].value / params['lambda'].penalty)
             return weight * reduction(-params['lambda'].value * inf + params['lambda'].penalty * inf ** 2 / 2), inf
     elif model_lagrangian=='Squared':
         def loss_fn(params, *args, **kwargs):
-            inf = fun(*args, **kwargs) - params['slack'] ** 2
+            inf = jnp.minimum(fun(*args, **kwargs), params['lambda'].value / params['lambda'].penalty)
             return weight * reduction(-params['lambda'].value * inf + params['lambda'].penalty * inf ** 2 / 2+ params['lambda'].value**2 /(2.*params['lambda'].penalty)), inf
 
     return BaseConstraint(init_fn, loss_fn)
@@ -772,6 +772,7 @@ def ALM_model_jaxopt_lbfgsb(constraints: BaseConstraint,#List of constraints
     epsilon=1.e-8,
     eta_tol=1.e-4,
     omega_tol=1.e-6,
+    bounds=None,               #(lower, upper) box for main params; None = unbounded
     **kargs,                   #Extra key arguments for loss
 ):
 
@@ -809,7 +810,7 @@ def ALM_model_jaxopt_lbfgsb(constraints: BaseConstraint,#List of constraints
         omega_min = jnp.min(omega_flat)
         old_info=info[2]
         minimization_loop=jaxopt.LBFGSB(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega_min)
-        state=minimization_loop.run(main_params,bounds=(-100.*jnp.ones_like(main_params),jnp.ones_like(main_params)*100.),lagrange_params=lagrange_params,**kargs)
+        state=minimization_loop.run(main_params,bounds=bounds,lagrange_params=lagrange_params,**kargs)
         main_params=state.params
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
         
