@@ -1061,8 +1061,7 @@ class Tracing():
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
         elif model == 'FullOrbitCollisions':
-            self.args = (self.field, self.particles,self.species,self.tag_gc)
-            print(self.args)
+            self.args = (self.field, self.particles, self.species)
             if self.particles.initial_xyz_fullorbit is None:
                 raise ValueError("Initial full orbit positions require field input to Particles")
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
@@ -1426,7 +1425,7 @@ class Tracing():
                 return 0.5 * mass * trajectory[:, 3]**2
             energy = vmap(compute_energy)(self.trajectories)
 
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris' or self.model == 'FullOrbitAdaptative':
+        else:  # the full-orbit models: FullOrbit, FullOrbit_Boris, FullOrbitAdaptative, FullOrbitCollisions
             def compute_energy(trajectory):
                 vxvyvz = trajectory[:, 3:]
                 v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)
@@ -1465,7 +1464,7 @@ class Tracing():
                 return jnp.sqrt(v**2-vpar**2)
             v_perp = vmap(compute_vperp)(self.trajectories)
 
-        elif self.model == 'FullOrbit' or self.model == 'FullOrbit_Boris' or self.model == 'FullOrbitAdaptative':
+        else:  # the full-orbit models: FullOrbit, FullOrbit_Boris, FullOrbitAdaptative, FullOrbitCollisions
             def compute_vperp(trajectory):
                 xyz = trajectory[:, :3]
                 vxvyvz = trajectory[:, 3:]
