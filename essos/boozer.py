@@ -204,7 +204,7 @@ class TabulatedBoozerField(eqx.Module):
         j, k = jnp.floor(x).astype(int), jnp.floor(y).astype(int)
         jj = jnp.mod(j - 1 + jnp.arange(4), nt)
         kk = jnp.mod(k - 1 + jnp.arange(4), nz)
-        block = self.table[i][jj][:, kk]                                   # (4, 4, 4, 5)
+        block = self.table[i, jj[:, None], kk[None, :]]                    # (4, 4, 4, 5)
         weights = jnp.outer(_lagrange4(x - j), _lagrange4(y - k))          # (4, 4)
         powers = d ** jnp.arange(5)
         values = jnp.einsum("ab,abqp,p->q", weights, block, powers)
