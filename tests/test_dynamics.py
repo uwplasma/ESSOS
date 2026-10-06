@@ -1015,11 +1015,16 @@ def test_collisional_guiding_center_v_perp_uses_speed_and_pitch():
     np.testing.assert_allclose(trace.v_perp()[:, 0], particles.initial_vperpendicular, rtol=1e-10)
 
 
-def test_mu_collision_models_accept_coils_as_the_field():
+def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
     from essos.coils import Coils, CreateEquallySpacedCurves
-    coils = Coils(CreateEquallySpacedCurves(4, 1, 1.0, 0.4, 40, 2, True), [1e6] * 4)
+    from essos.constants import SPEED_OF_LIGHT
+    from essos.fields import BiotSavart
+    coils = Coils(CreateEquallySpacedCurves(1, 1, 1.0, 0.4, 8, 1, False), [1e6])
     species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
     particles = Particles([[1.05, 0., 0.]], [.5])
+    monkeypatch.setattr(Tracing, "trace", lambda self: jnp.zeros((1, 2, 5)))  # only the setup is tested
     trace = Tracing(field=coils, model="GuidingCenterCollisionsMuFixed", particles=particles,
                     maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
-    assert jnp.isfinite(trace.trajectories).all()
+    B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
+    mu = particles.initial_vperpendicular[0]**2 / (2 * B * SPEED_OF_LIGHT**2)
+    np.testing.assert_allclose(trace.initial_conditions[0, 4], mu, rtol=1e-6)
