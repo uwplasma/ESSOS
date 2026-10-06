@@ -185,7 +185,7 @@ class PerturbationSample():
     def __init__(self, sampler, key=0, sample=None):
         self.sampler = sampler
         self.key = key   # If not None, most likely fail with serialization
-        if sample:
+        if sample is not None:
             self._sample = sample
         else:
             self.resample()
