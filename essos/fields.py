@@ -133,12 +133,14 @@ class BiotSavart(MagneticField):
         curvature = -jnp.cross(field, curl_unit) / magnitude
         return field, field, magnitude, grad_magnitude, curl_unit, curvature, 1.0
 
+
     @jit
     def B(self, points):
         dif_R = (jnp.array(points) - self.coils.gamma).T
         dB = jnp.cross(self.coils.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif_R, axis=0)**3
         dB_sum = jnp.einsum("i,bai", self.coils.currents*1e-7, dB, optimize="greedy")
         return jnp.mean(dB_sum, axis=0)
+
 
     @jit
     def b_cyl(self, R, phi, Z):
@@ -433,7 +435,6 @@ class Vmec():
     def surface(self):
         return self._surface
 
-<<<<<<< HEAD
     @property
     def maxis_xyz(self):
         """
@@ -467,7 +468,6 @@ class Vmec():
 
         return jnp.stack( [ R_axis * jnp.cos(phi_R1) , R_axis * jnp.sin(phi_R1) , Z_axis ],  axis=1 )
     
-=======
     def _bsubs_axis_m1(self, sine=False):
         """Axis limit of sqrt(s) B_s for the m = 1 modes, from B_theta.
 
@@ -530,7 +530,6 @@ class Vmec():
     def _geometry_series(self, points):
         return self._series(points, {'rmnc': (False, {}, True), 'zmns': (False, {}, False)}, self.xm, self.xn)
 
->>>>>>> origin/main
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
         series = self._nyquist_series(points)

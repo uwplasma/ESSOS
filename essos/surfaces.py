@@ -892,8 +892,7 @@ class SurfaceRZFourier:
             lines.append(', '.join(f'{name}({n},{int(m)}) = {float(table[i]):.15e}'
                                    for name, table in families.items() if table is not None))
         with open(filename, 'w') as f:
-<<<<<<< HEAD
-            f.write(nml)
+            f.write('\n'.join(lines) + '\n/\n')
 
     def area_section_by_phi(self):
         """
@@ -902,11 +901,6 @@ class SurfaceRZFourier:
         Returns an array with shape (nphi,).
         """
         # Extract the surface coordinates (x, y, z) from the gamma property. The shape of xyz is (nphi, ntheta, 3).
-=======
-            f.write('\n'.join(lines) + '\n/\n')
-            
-    def mean_cross_sectional_area(self):
->>>>>>> origin/main
         xyz = self.gamma
 
         # Cylindrical radius R = sqrt(x^2 + y^2).

@@ -29,6 +29,11 @@ from scipy.optimize import least_squares, minimize
 # ====================================================================================
 # ====================================================================================
 
+# Exporting results and the folder name
+EXPORT = True
+output_filepath = os.path.join(os.path.dirname(__file__), "output_single_stage/test_QS_01")
+os.makedirs(output_filepath, exist_ok=True) # Make the path
+
 # True -> skip optimization, load saved dofs
 LOAD_RESULT = False
 
@@ -42,28 +47,25 @@ ntheta = 26; nphi = 26; Npoints = ntheta * nphi
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
-N_COILS = 3; FOURIER_ORDER = 3; LARGE_R = 10;
+N_COILS = 3; FOURIER_ORDER = 4; LARGE_R = 10;
 SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 40; STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 #  CONTROL PARAMETERS FOR THE OPTIMIZATION -------------------------------------------
-# There are two different controls:
-# x_scale  → controls how easily variables move
-SCALE_FIELD = 2.18
-SCALE_SURFACE = 1.
+# There are two different controls (A and B):
 
-# Losses weights and targets  → control what results the optimizer considers important
+# A) Losses weights and targets  → control what results the optimizer considers important
 
 # General Geometry ~~~~~~~~~
-MAJOR_RADIUS_WEIGHT = 1 # The target will be calculated from the initial surface
+MAJOR_RADIUS_WEIGHT = 0 # The target will be calculated from the initial surface
 
 # Coils ~~~~~~~~~~~~~~~~~~~~
 LENGTH_WEIGHT = 10.; LENGTH_TARGET = 40.;
 CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 0.5
 
 # Field ~~~~~~~~~~~~~~~~~~~~
-NORMAL_FIELD_WEIGHT = 1e4;
-QS_WEIGHT = 30.
+NORMAL_FIELD_WEIGHT = 1e5;
+QS_WEIGHT = 1e3
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e3
@@ -71,7 +73,6 @@ AREA_UNIFORMITY_WEIGHT = 1e3
 AREA_UNIFORMITY_TOLERANCE = 0.05     # |A(phi)/<A> - 1| allowed without penalty (~ Amax/Amin <= 1.1)
 
 NORMAL_DISPLACEMENT_WEIGHT = 0. # 1e4      # Importance of this constraint in the total loss
-
 
 # Surface-parametrization control: prevent qq = ||dc_phi/dtheta|| from approaching zero.
 QQ_WEIGHT = 0. # 1e5;
@@ -94,8 +95,13 @@ SLOPE_MIN = 0.05
 PHI_FLOOR_FRACTION = 0.1
 POLOIDAL_SLOPE_WEIGHT = 0.
 
+# B) x_scale  → controls how easily variables move
+SCALE_FIELD = 2.18
+SCALE_SURFACE = 1.
+
 # Numerical method parameters --------------------------------------------------------
 MAXITER=3000
+
 
 # ====================================================================================
 # ====================================================================================
@@ -303,18 +309,16 @@ t_start = time()
 
 if LOAD_RESULT:
     from types import SimpleNamespace
-    x_opt = jnp.load(os.path.join(os.path.dirname(__file__), "output", "res_x.npy"))
+    x_opt = jnp.load(os.path.join( output_filepath , "res_x.npy"))
     res = SimpleNamespace(x=x_opt, nfev=0)
 else:
     res = minimize(L_total, L_total.starting_dofs, jac=L_total.grad, method="L-BFGS-B",
                    callback=loss_callback, options={'maxiter': MAXITER})
-    jnp.save(os.path.join(os.path.dirname(__file__), "output", "res_x.npy"), res.x)
+    jnp.save(os.path.join(output_filepath, "res_x.npy"), res.x)
 
 # res = minimize(L_total, L_total.starting_dofs, jac = L_total.grad, method = "L-BFGS-B", callback=loss_callback ,
 #                  options={'maxiter': MAXITER} )
 
-
-jnp.save(os.path.join(os.path.dirname(__file__), "output", "res_x.npy"), res.x)
 
 # res = least_squares(L_total, L_total.starting_dofs, L_total.grad, x_scale=x_scale_optimization,
 #                      verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=300)
@@ -722,21 +726,23 @@ plt.tight_layout(); plt.show()
 
 """ Exporting results """
 
-EXPORT = True
 if EXPORT:
-    output_filepath = os.path.join(os.path.dirname(__file__), "output")
-
-    os.makedirs(output_filepath , exist_ok=True)
 
     """ Save the coils to a json file """
-    init_coils.to_json(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
-    opt_coils.to_json(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
+    init_coils.to_json(os.path.join(output_filepath, "init_coils_single_stage.json"))
+    opt_coils.to_json(os.path.join(output_filepath, "opt_coils_single_stage.json"))
 
     """ Save results in vtk format to analyze in Paraview """
-    surface_init.to_vtk(os.path.join(output_filepath, "init_surface_vmec_surface.json"), field=field_init)
-    surface_opt.to_vtk(os.path.join(output_filepath, "final_surface_vmec_surface.json"), field=field_opt)
-    surface_opt.to_vmec(os.path.join(output_filepath, "input.final_surface"))
-    init_coils.to_vtk(os.path.join(output_filepath, "init_coils_vmec_surface.json"))
-    opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_vmec_surface.json"))
- 
-    
+    surface_init.to_vtk(os.path.join(output_filepath, "init_surface_single_stage"), field=field_init)
+    surface_opt.to_vtk(os.path.join(output_filepath, "opt_surface_single_stage"), field=field_opt)
+    init_coils.to_vtk(os.path.join(output_filepath, "init_coils_single_stage"))
+    opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_single_stage"))
+
+    """ Save the optimized boundary as a VMEC input file for VMEX """
+    # NCURR = 1 -> VMEX holds the toroidal current at zero and computes iota (default 0 prescribes iota = 0).
+    vmec_input_file = os.path.join(output_filepath, "input.single_stage")
+    surface_opt.to_vmec(vmec_input_file)
+    with open(vmec_input_file) as f:
+        vmec_input = f.read().replace("\nNTOR", "\nNCURR = 1\nNTOR", 1)
+    with open(vmec_input_file, "w") as f:
+        f.write(vmec_input)
