@@ -195,6 +195,19 @@ def test_vmec_analytic_derivatives_match_automatic_differentiation():
         assert jnp.allclose(vmec.grad_B_covariant(point), jax.jacfwd(vmec.B_covariant)(point), rtol=1e-12, atol=1e-12)
 
 
+def test_vmec_cartesian_field_derivatives_match_the_spectral_field():
+    from essos.fields import Vmec
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    for point in (jnp.array([0.5, 0.7, 0.3]), jnp.array([0.37, 2.0, 0.3])):
+        jacobian = jax.jacfwd(vmec.to_xyz)(point)
+        B = vmec.B(point)
+        np.testing.assert_allclose(jnp.linalg.solve(jacobian, B)[0], 0, atol=1e-12)  # B.grad s
+        grad_absB = jax.grad(lambda x: jnp.linalg.norm(vmec.B(x)))(point)
+        np.testing.assert_allclose(grad_absB[0], vmec.dAbsB_by_dX(point)[0], rtol=5e-3)
+        div_B = jnp.trace(jax.jacfwd(vmec.B)(point) @ jnp.linalg.inv(jacobian))
+        assert abs(div_B) * vmec.r_axis < 1e-2 * jnp.linalg.norm(B)
+
+
 def test_vmec_mode_tolerance_keeps_the_field():
     from essos.fields import Vmec
 
@@ -317,7 +330,8 @@ def test_asymmetric_vmec_cartesian_field_and_coordinate_derivatives(ntor):
         original = point.at[1].add(-0.37)
         for name in ('to_xyz', 'B', 'AbsB', 'B_covariant', 'B_contravariant', 'sqrtg', 'curl_B'):
             np.testing.assert_allclose(getattr(shifted, name)(point), getattr(symmetric, name)(original), rtol=2e-11, atol=2e-11)
-        np.testing.assert_allclose(shifted.B(point), [-np.sin(point[2]), np.cos(point[2]), 0.06], rtol=2e-11, atol=2e-11)
+        np.testing.assert_allclose(shifted.B(point), jax.jacfwd(shifted.to_xyz)(point) @ shifted.B_contravariant(point),
+                                   rtol=2e-11, atol=2e-11)
         np.testing.assert_allclose(shifted.dAbsB_by_dX(point), jax.grad(shifted.AbsB)(point), rtol=1e-11, atol=1e-11)
         np.testing.assert_allclose(shifted.grad_B_covariant(point), jax.jacfwd(shifted.B_covariant)(point), rtol=1e-11, atol=1e-11)
 
