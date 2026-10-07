@@ -423,10 +423,11 @@ class ToroidalField(MagneticField):
         """Invert :meth:`to_xyz`: a Cartesian point to (s, theta, phi), and the residual [m].
 
         Newton iterations in (sqrt(s) cos theta, sqrt(s) sin theta), which is
-        regular on the axis, from the nearest of 12 x 32 nodes of the
-        cross-section at the point's phi. Points outside the LCFS return
-        s > 1 only as far as the extrapolated geometry allows; check the
-        residual.
+        regular on the axis. They start from the point's angle about the axis
+        (measured from theta = 0, in the sense theta turns) and its distance
+        from the axis relative to the boundary's in that direction. Points
+        outside the LCFS return s > 1 only as far as the extrapolated geometry
+        allows; check the residual.
         """
         R, Z = jnp.hypot(xyz[0], xyz[1]), xyz[2]
         phi = jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2 * jnp.pi)
@@ -436,18 +437,21 @@ class ToroidalField(MagneticField):
             p = self.to_xyz(jnp.array([x[0]**2 + x[1]**2, jnp.arctan2(x[1], x[0]), phi]))
             return jnp.array([jnp.hypot(p[0], p[1]), p[2]])
 
-        rho, theta = [a.ravel() for a in jnp.meshgrid(jnp.linspace(0.08, 1.0, 12),
-                                                     jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False))]
-        seeds = jnp.stack([rho * jnp.cos(theta), rho * jnp.sin(theta)], 1)
-        x = seeds[jnp.argmin(jnp.sum((vmap(rz)(seeds) - target)**2, 1))]
+        def angle(v):
+            return jnp.arctan2(v[1], v[0])
+        axis, start, quarter = rz(jnp.zeros(2)), rz(jnp.array([0.5, 0.])), rz(jnp.array([0., 0.5]))
+        sense = jnp.sign(jnp.sin(angle(quarter - axis) - angle(start - axis)))
+        theta = sense * (angle(target - axis) - angle(start - axis))
+        direction = jnp.array([jnp.cos(theta), jnp.sin(theta)])
+        x = direction * jnp.clip(jnp.linalg.norm(target - axis) / jnp.linalg.norm(rz(direction) - axis), 0.0, 1.0)
 
         def newton(x, _):
             dx = jnp.linalg.solve(jacfwd(rz)(x), rz(x) - target)
-            x = x - dx * jnp.minimum(1.0, 0.1 / (jnp.linalg.norm(dx) + 1e-300))
+            x = x - dx * jnp.minimum(1.0, 0.3 / (jnp.linalg.norm(dx) + 1e-300))
             # Stay in s <= 1: beyond it the extrapolated map can fold back over the plasma.
             return x / jnp.maximum(1.0, jnp.linalg.norm(x)), None
 
-        x, _ = lax.scan(newton, x, None, length=40)
+        x, _ = lax.scan(newton, x, None, length=12)
         s = x[0]**2 + x[1]**2
         return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), jnp.linalg.norm(rz(x) - target)
 
