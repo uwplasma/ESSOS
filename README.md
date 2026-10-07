@@ -110,9 +110,10 @@ section of each field. [Movie](docs/readme_mrx_islands.mp4), made by
 [`docs/make_mrx_islands_movie.py`](docs/make_mrx_islands_movie.py).
 
 ```python
+import jax.numpy as jnp
 from essos.fields import MRXField
 field = MRXField.from_mrx("wout_li383_low_res_reference.nc", "state_000005.h5")  # an MRX checkpoint
-field = (1.0 / field.AbsB([1e-6, 0., 0.])) * field                                # 1 T on the axis
+field = (1.0 / field.AbsB(jnp.array([1e-6, 0., 0.]))) * field                     # 1 T on the axis
 ```
 
 ## VMEC MGRID fields
