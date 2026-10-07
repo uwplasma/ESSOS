@@ -13,6 +13,9 @@ import numpy as np
 from jax.experimental import pallas as pl
 
 
+_NO_TRIG = False  # timing experiment only: cheap stand-ins for cos/sin
+
+
 def _pow2(n):
     return 1 << max(int(n) - 1, 1).bit_length()
 
@@ -70,7 +73,7 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
             a = ((c[0] * d + c[1]) * d + c[2]) * d + c[3]
             da = (3 * c[0] * d + 2 * c[1]) * d + c[2]
             phase = xm[None, :] * theta[:, None] - xn[None, :] * zeta[:, None]
-            cs, sn = jnp.cos(phase), jnp.sin(phase)
+            cs, sn = (jnp.cos(phase), jnp.sin(phase)) if not _NO_TRIG else (1 - 0.5 * phase * phase, phase)
             f = jnp.where(has_m, r[:, None] * a, a)
             df = jnp.where(has_m, a + r[:, None] * da, da)
             return (jnp.sum(f * cs, 1), jnp.sum(df * cs, 1), -jnp.sum(xm[None, :] * a * sn, 1),
