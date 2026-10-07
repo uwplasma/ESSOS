@@ -49,7 +49,7 @@ def test_vmec_flux_sign_sets_the_analytic_radial_drift():
     assert sdot == pytest.approx(expected, rel=1e-12)
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
 def test_orbits_conserve_energy_and_toroidal_canonical_momentum(method):
     """Axisymmetry: E and P_zeta = m v_par G / B - q iota psi0 s are invariants (White 2014)."""
     field = tokamak()
@@ -58,7 +58,7 @@ def test_orbits_conserve_energy_and_toroidal_canonical_momentum(method):
     theta = jnp.linspace(0, 2 * np.pi, n, endpoint=False)
     out = trace_boozer(field, jnp.full(n, 0.3), theta, jnp.zeros(n), pitch, speed=V0, mass=M,
                        charge=Q, tmax=2e-4, timestep=2e-8, n_save=5,
-                       devices=jax.devices()[:1], method=method)
+                       devices=jax.devices()[:1], method=method, tolerance=1e-11)
     assert not out.lost.any() and np.all(out.energy_error < 1e-8)
     s, th, ze, vpar, v = np.moveaxis(out.states, -1, 0)
     B = B0 * (1 - EPS * np.sqrt(s) * np.cos(th))
@@ -272,7 +272,7 @@ def test_pitch_angle_scattering_decays_the_mean_pitch_at_nu_D():
     assert float(jnp.mean(lam)) == pytest.approx(0.6 * np.exp(-0.5), abs=4 * 0.8 / np.sqrt(n) + 1e-2)
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
 def test_progress_chunks_reproduce_the_unchunked_trace(method):
     """Host-side chunks for progress carry the whole state: the trace is bit-identical."""
     field, n = tokamak(), 6
@@ -292,7 +292,7 @@ def test_progress_chunks_reproduce_the_unchunked_trace(method):
     (4, 2, False), (4, 23, True),
 ])
 @pytest.mark.parametrize("with_progress", [False, True])
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
 def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, with_progress, method):
     field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
     s = np.array([0.999] * edge_births + [0.3] * (6 - edge_births))
@@ -311,7 +311,7 @@ def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, 
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
 def test_survivor_compaction_preserves_failures(method):
     singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.0)
     args = ([0.3] * 4, [0.0] * 4, [0.0] * 4, [0.2] * 4)
@@ -406,3 +406,24 @@ def test_substep_counts_reuse_compilation_and_preserve_static_outputs(collisions
             np.testing.assert_array_equal(x, y)
         assert np.count_nonzero(np.asarray(b[0][4]) >= 0) == 2
     assert static._cache_size() == 2 and dynamic._cache_size() == 1
+
+
+@pytest.mark.parametrize("method", ["adaptive", "adaptive8"])
+def test_adaptive_error_follows_the_tolerance(method):
+    """A tighter tolerance gives a smaller energy error, whatever the first trial step."""
+    field, n = tokamak(), 8
+    args = (jnp.full(n, 0.3), jnp.linspace(0, 6, n), jnp.zeros(n), jnp.linspace(-0.9, 0.9, n))
+    errors = []
+    for tolerance, first in ((1e-6, 1e-9), (1e-9, 1e-6), (1e-11, 1e-8)):
+        out = trace_boozer(field, *args, speed=V0, mass=M, charge=Q, tmax=1e-4, timestep=first,
+                           n_save=5, method=method, tolerance=tolerance, devices=jax.devices()[:1])
+        assert not out.lost.any() and not out.failed.any()
+        errors.append(out.energy_error.max())
+    assert errors[0] > errors[1] > errors[2] and errors[2] < 1e-8
+
+
+def test_adaptive_tolerance_is_validated():
+    with pytest.raises(ValueError, match="tolerance"):
+        trace_boozer(tokamak(), [0.3], [0.0], [0.0], [0.2], speed=V0, mass=M, charge=Q,
+                     tmax=1e-6, timestep=1e-8, method="adaptive", tolerance=0.0)
+
