@@ -1,4 +1,4 @@
-# ESSOS single-stage run parameters (2026-10-07 10:20)
+# ESSOS single-stage run parameters (2026-10-07 10:33)
 VMEC_INPUT = 'input.toroidal_surface_02'
 
 # Run control
