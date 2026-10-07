@@ -573,3 +573,39 @@ def test_field_algebra_and_comparison():
     assert jnp.allclose(jax.jit(vmap((0.5 * total).B))(p), 1.5 * B)  # weights survive the pytree round trip
     assert jnp.allclose(coils.compare(coils, p), 0.)
     assert jnp.allclose(total.compare(coils, p), 2. / 3.)  # |3B - B| / |3B|
+
+
+def test_fourier_zernike_radial_polynomials_match_closed_forms():
+    from essos.fields import _fourier_zernike
+    rho = jnp.linspace(0.05, 1.0, 7)
+    for l, m, closed in ((4, 2, lambda r: 4 * r**4 - 3 * r**2), (5, -1, lambda r: 10 * r**5 - 12 * r**3 + 3 * r),
+                         (6, 0, lambda r: 20 * r**6 - 30 * r**4 + 12 * r**2 - 1)):
+        value = vmap(lambda r: _fourier_zernike(jnp.ones(1), [[l, m, 0]], r, 0.3, 0.0, 1))(rho)
+        angle = jnp.cos(abs(m) * 0.3) if m >= 0 else jnp.sin(abs(m) * 0.3)
+        assert jnp.allclose(value, closed(rho) * angle, rtol=1e-12)
+
+
+def _synthetic_desc(tmp_path=None):
+    from essos.fields import DescField
+    R_modes, R = [[0, 0, 0], [1, 1, 0], [2, 2, 1]], [1.0, 0.2, 0.02]
+    Z_modes, Z = [[1, -1, 0], [2, -2, -1]], [0.25, 0.02]
+    L_modes, L = [[2, 2, 1], [3, -1, -1]], [0.01, -0.005]
+    iota = 0.4 + 0.1 * jnp.linspace(0, 1, 65)**2
+    return DescField(R, Z, L, R_modes, Z_modes, L_modes, Psi=0.1, nfp=3, iota=iota)
+
+
+def test_desc_field_components_are_consistent_and_divergence_free(tmp_path):
+    from essos.fields import DescField, _hermite, is_toroidal
+    field = _synthetic_desc()
+    p = jnp.array([[0.3, 0.4, 0.2], [0.7, 2.0, 1.5], [0.05, 5.0, 4.0]])
+    e = vmap(jax.jacfwd(field.to_xyz))(p)
+    B = vmap(field.B)(p)
+    assert jnp.allclose(jnp.einsum("nij,nj->ni", e, vmap(field.B_contravariant)(p)), B, rtol=1e-12)
+    assert jnp.allclose(jnp.einsum("nij,ni->nj", e, B), vmap(field.B_covariant)(p), rtol=1e-12)
+    divergence = vmap(lambda q: jnp.trace(jax.jacfwd(lambda x: field.sqrtg(x) * field.B_contravariant(x))(q)))(p)
+    assert jnp.max(jnp.abs(divergence)) < 1e-12 * jnp.max(jnp.abs(vmap(field.sqrtg)(p) * B[:, 0]))
+    assert jnp.isclose(_hermite(jnp.sqrt(0.49), field.iota), 0.4 + 0.1 * 0.49, rtol=1e-6)
+    assert is_toroidal(field) and jnp.isclose(field.Aminor_p, 0.25 * jnp.sqrt(0.2 / 0.25), rtol=0.1)
+    field.save(tmp_path / "desc.npz")
+    again = DescField.from_desc(str(tmp_path / "desc.npz"))
+    assert jnp.allclose(vmap(again.B)(p), B)
