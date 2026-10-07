@@ -631,3 +631,65 @@ def test_sum_of_coils_and_dipoles_traces_field_lines():
     tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=jnp.array([[1.0, 0., 0.]]),
                       maxtime=1e-6, times_to_trace=5)
     assert jnp.all(jnp.isfinite(tracing.trajectories))
+
+
+def test_fourier_zernike_radial_polynomials_match_closed_forms():
+    from essos.fields import _fourier_zernike
+    rho = jnp.linspace(0.05, 1.0, 7)
+    for l, m, closed in ((4, 2, lambda r: 4 * r**4 - 3 * r**2), (5, -1, lambda r: 10 * r**5 - 12 * r**3 + 3 * r),
+                         (6, 0, lambda r: 20 * r**6 - 30 * r**4 + 12 * r**2 - 1)):
+        value = vmap(lambda r: _fourier_zernike(jnp.ones(1), [[l, m, 0]], r, 0.3, 0.0, 1))(rho)
+        angle = jnp.cos(abs(m) * 0.3) if m >= 0 else jnp.sin(abs(m) * 0.3)
+        assert jnp.allclose(value, closed(rho) * angle, rtol=1e-12)
+
+
+def _synthetic_desc(tmp_path=None):
+    from essos.fields import DescField
+    R_modes, R = [[0, 0, 0], [1, 1, 0], [2, 2, 1]], [1.0, 0.2, 0.02]
+    Z_modes, Z = [[1, -1, 0], [2, -2, -1]], [0.25, 0.02]
+    L_modes, L = [[2, 2, 1], [3, -1, -1]], [0.01, -0.005]
+    iota = 0.4 + 0.1 * jnp.linspace(0, 1, 65)**2
+    return DescField(R, Z, L, R_modes, Z_modes, L_modes, Psi=0.1, nfp=3, iota=iota)
+
+
+def test_desc_field_components_are_consistent_and_divergence_free(tmp_path):
+    from essos.fields import DescField, _hermite, is_toroidal
+    field = _synthetic_desc()
+    p = jnp.array([[0.3, 0.4, 0.2], [0.7, 2.0, 1.5], [0.05, 5.0, 4.0]])
+    e = vmap(jax.jacfwd(field.to_xyz))(p)
+    B = vmap(field.B)(p)
+    assert jnp.allclose(jnp.einsum("nij,nj->ni", e, vmap(field.B_contravariant)(p)), B, rtol=1e-12)
+    assert jnp.allclose(jnp.einsum("nij,ni->nj", e, B), vmap(field.B_covariant)(p), rtol=1e-12)
+    divergence = vmap(lambda q: jnp.trace(jax.jacfwd(lambda x: field.sqrtg(x) * field.B_contravariant(x))(q)))(p)
+    assert jnp.max(jnp.abs(divergence)) < 1e-12 * jnp.max(jnp.abs(vmap(field.sqrtg)(p) * B[:, 0]))
+    assert jnp.isclose(_hermite(jnp.sqrt(0.49), field.iota), 0.4 + 0.1 * 0.49, rtol=1e-6)
+    assert is_toroidal(field) and jnp.isclose(field.Aminor_p, 0.25 * jnp.sqrt(0.2 / 0.25), rtol=0.1)
+    field.save(tmp_path / "desc.npz")
+    again = DescField.from_desc(str(tmp_path / "desc.npz"))
+    assert jnp.allclose(vmap(again.B)(p), B)
+
+
+def test_full_orbits_in_toroidal_fields_trace_in_the_cartesian_view():
+    from essos.dynamics import Tracing, Particles
+    vmec = Vmec(WOUT_FILE)
+    x0 = jnp.array([[0.3, 0.2, 0.1], [0.5, 1.0, 0.4]])
+    particles = Particles(initial_xyz=x0, field=vmec)
+    tracing = Tracing(field=vmec, model="FullOrbit_Boris", particles=particles, maxtime=1e-7, timestep=1e-10,
+                      times_to_trace=10)
+    xyz = tracing.trajectories[:, :, :3]
+    # The orbits start one gyroradius off their guiding centers, given in (s, theta, phi), and stay near them.
+    assert jnp.all(jnp.linalg.norm(xyz[:, 0] - vmap(vmec.to_xyz)(x0), axis=1) < 0.2)
+    energy = tracing.energy()
+    assert jnp.allclose(energy[:, -1], energy[:, 0], rtol=1e-6)
+
+
+def test_near_axis_field_is_consistent_to_first_order():
+    pytest.importorskip("pyqsc_jax")
+    from pyqsc_jax.near_axis import near_axis
+    from essos.fields import NearAxisField
+    field = NearAxisField(near_axis(rc=[1, 0.155, 0.0102], zs=[0, 0.154, 0.0111], etabar=0.64, nfp=2, nphi=61))
+    errors = []
+    for r in (0.02, 0.08):
+        p = jnp.stack([jnp.full(32, r), jnp.linspace(0, 6.28, 32), jnp.linspace(0, 6.28, 32)], 1)
+        errors.append(jnp.max(jnp.abs(jnp.linalg.norm(vmap(field.B)(p), axis=1) / vmap(field.AbsB)(p) - 1)))
+    assert errors[1] < 0.1 and errors[1] > errors[0]  # first order: the mismatch grows with r

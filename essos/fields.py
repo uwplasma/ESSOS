@@ -112,6 +112,10 @@ class MagneticField():
             return jnp.linalg.norm(B - other.B_xyz(self.to_xyz(point))) / jnp.linalg.norm(B)
         return vmap(difference)(points)
 
+    def cartesian(self):
+        """This field in Cartesian coordinates, B(x) = :meth:`B_xyz`: the field full orbits move in."""
+        return ExternalField(lambda xyz: vmap(self.B_xyz)(xyz))
+
     def __add__(self, other):
         return CombinedField(self, other)
 
@@ -388,6 +392,13 @@ class ToroidalField(MagneticField):
             return lambda t: jax.jvp(f, (t,), (jnp.ones_like(t),))[1]
         values = vmap(lambda t: jnp.stack([rz(t), d(rz)(t), d(d(rz))(t)]))(jnp.ravel(theta))
         return tuple(values[:, i, j].reshape(jnp.shape(theta)) for i in range(3) for j in range(2))
+
+    def _minor_radius(self):
+        """Radius of the circle with the mean area of the boundary cross-sections of one field period."""
+        theta = jnp.linspace(0, 2 * jnp.pi, 128, endpoint=False)
+        R, Z, dR, dZ = vmap(lambda phi: jnp.stack(self._boundary_rz(theta, phi)[:4]), out_axes=1)(
+            jnp.linspace(0, 2 * jnp.pi / self.nfp, 8, endpoint=False))
+        return jnp.sqrt(jnp.abs(jnp.mean(R * dZ - Z * dR)))
 
     @jit
     def boundary_distance(self, xyz):
@@ -718,11 +729,8 @@ class MRXField(ToroidalField):
 
     def __init__(self, raw, basis, Phi, nfp, Aminor_p=None):
         self.raw, self.basis, self.Phi, self.nfp, self.Aminor_p = raw, basis, Phi, int(nfp), Aminor_p
-        if Aminor_p is None:  # radius of the circle with the mean boundary cross-section area
-            theta = jnp.linspace(0, 2 * jnp.pi, 128, endpoint=False)
-            R, Z, dR, dZ = vmap(lambda phi: jnp.stack(self._boundary_rz(theta, phi)[:4]), out_axes=1)(
-                jnp.linspace(0, 2 * jnp.pi / self.nfp, 8, endpoint=False))
-            self.Aminor_p = jnp.sqrt(jnp.abs(jnp.mean(R * dZ - Z * dR)))
+        if Aminor_p is None:
+            self.Aminor_p = self._minor_radius()
 
     @classmethod
     def from_mrx(cls, geometry, checkpoint=None, resolution=(12, 16, 16), degree=3):
@@ -810,6 +818,123 @@ class MRXField(ToroidalField):
 tree_util.register_pytree_node(MRXField, MRXField._tree_flatten, MRXField._tree_unflatten)
 
 
+def _hermite(x, values):
+    """Cubic Hermite interpolation of ``values`` given on a uniform grid of [0, 1], with centred-difference slopes."""
+    n = len(values) - 1
+    slope = jnp.gradient(values)
+    i = jnp.clip(jnp.floor(x * n).astype(int), 0, n - 1)
+    t = x * n - i
+    return ((1 + 2 * t) * (1 - t)**2 * values[i] + t * (1 - t)**2 * slope[i]
+            + t * t * (3 - 2 * t) * values[i + 1] + t * t * (t - 1) * slope[i + 1])
+
+
+def _fourier_zernike(c, modes, rho, theta, zeta, nfp):
+    """sum_k c_k R_k(rho) F(m_k theta) F(n_k nfp zeta) of a DESC Fourier-Zernike series with modes (l, m, n).
+
+    R_k = (-1)^j rho^|m| P_j^(|m|, 0)(1 - 2 rho^2), j = (l - |m|) / 2, with the
+    Jacobi polynomial from its three-term recurrence (stable at high l), and
+    F(k x) = cos(k x) for k >= 0, sin(|k| x) for k < 0, as in DESC.
+    """
+    l, m, n = (np.asarray(modes)[:, i] for i in range(3))
+    a, j = np.abs(m), (l - np.abs(m)) // 2
+    x = 1 - 2 * rho**2
+    P_prev, P = 0. * a, 1. + 0. * a
+    radial = jnp.where(j == 0, P, 0.)
+    for k in range(int(j.max(initial=0))):
+        if k == 0:
+            P_prev, P = P, (a + 1) + (a + 2) * (x - 1) / 2
+        else:
+            b = 2 * k + a
+            P_prev, P = P, ((b + 1) * (b * (b + 2) * x + a**2) * P - 2 * k * (k + a) * (b + 2) * P_prev) / (
+                2 * (k + 1) * (k + a + 1) * b)
+        radial = jnp.where(j == k + 1, P, radial)
+    angle = lambda k, x: jnp.where(k >= 0, jnp.cos(np.abs(k) * x), jnp.sin(np.abs(k) * x))
+    return jnp.sum(c * (-1.)**j * rho**a * radial * angle(m, theta) * angle(n, nfp * zeta))
+
+
+@tree_util.register_static
+class DescField(ToroidalField):
+    """A DESC equilibrium (https://github.com/PlasmaControl/DESC) in the coordinates of :class:`ToroidalField`.
+
+    DESC writes R, Z and the stream function lambda as Fourier-Zernike
+    series in (rho, theta, zeta), with zeta the cylindrical angle. Here
+    (s, theta, phi) = (rho^2, theta, zeta). With the toroidal flux ``Psi`` and
+    sqrt(g) the Jacobian of ``to_xyz`` in (s, theta, phi),
+
+        B^s = 0,  B^theta = Psi (iota - d_phi lambda) / (2 pi sqrt(g)),
+        B^phi = Psi (1 + d_theta lambda) / (2 pi sqrt(g)).
+
+    The series are evaluated as DESC writes them, so the field is exact on
+    the axis. ``iota`` holds the rotational transform on a uniform grid in rho
+    from 0 to 1, interpolated by cubic Hermite polynomials (continuous
+    derivative, as guiding centers need). :meth:`from_desc` builds the field from a DESC
+    equilibrium or file, or from the ``.npz`` that :meth:`save` writes, which
+    needs no DESC install.
+    """
+
+    def __init__(self, R_lmn, Z_lmn, L_lmn, R_modes, Z_modes, L_modes, Psi, nfp, iota):
+        self.coefficients = tuple(jnp.asarray(c) for c in (R_lmn, Z_lmn, L_lmn))
+        self.modes = tuple(np.asarray(m, dtype=int) for m in (R_modes, Z_modes, L_modes))
+        self.Psi, self.nfp, self.iota = float(Psi), int(nfp), jnp.asarray(iota)
+        self.Aminor_p = self._minor_radius()
+
+    @classmethod
+    def from_desc(cls, source):
+        """The field of a DESC ``Equilibrium``, of a DESC output file (both need DESC), or of an ``.npz`` from :meth:`save`."""
+        if isinstance(source, str) and source.endswith(".npz"):
+            data = np.load(source)
+            return cls(*(data[k] for k in ("R_lmn", "Z_lmn", "L_lmn", "R_modes", "Z_modes", "L_modes", "Psi", "nfp", "iota")))
+        if isinstance(source, str):
+            import desc.io
+            source = desc.io.load(source)
+            source = source[-1] if hasattr(source, "__len__") else source  # the last of a solve sequence
+        from desc.grid import LinearGrid
+        grid = LinearGrid(rho=np.linspace(0, 1, 1025), M=source.M_grid, N=source.N_grid, NFP=source.NFP)
+        iota = grid.compress(source.compute("iota", grid=grid)["iota"])
+        return cls(source.R_lmn, source.Z_lmn, source.L_lmn, source.R_basis.modes, source.Z_basis.modes,
+                   source.L_basis.modes, source.Psi, source.NFP, iota)
+
+    def save(self, path):
+        """Write the field to an ``.npz`` that :meth:`from_desc` reads without DESC."""
+        np.savez(path, **dict(zip(("R_lmn", "Z_lmn", "L_lmn"), self.coefficients)),
+                 **dict(zip(("R_modes", "Z_modes", "L_modes"), self.modes)), Psi=self.Psi, nfp=self.nfp, iota=self.iota)
+
+    def _series(self, i, points):
+        s, theta, phi = points
+        return _fourier_zernike(self.coefficients[i], self.modes[i], jnp.sqrt(s), theta, phi, self.nfp)
+
+    @jit
+    def to_xyz(self, points):
+        R, Z = self._series(0, points), self._series(1, points)
+        return jnp.array([R * jnp.cos(points[2]), R * jnp.sin(points[2]), Z])
+
+    def _frame(self, points):
+        e = jacfwd(self.to_xyz)(points)
+        sqrtg = jnp.linalg.det(e)
+        dlambda = jax.grad(lambda p: self._series(2, p))(points)
+        iota = _hermite(jnp.sqrt(points[0]), self.iota)
+        B_con = self.Psi / (2 * jnp.pi * sqrtg) * jnp.array([0., iota - dlambda[2], 1 + dlambda[1]])
+        return e, sqrtg, B_con
+
+    @jit
+    def sqrtg(self, points):
+        return self._frame(points)[1]
+
+    @jit
+    def B_contravariant(self, points):
+        return self._frame(points)[2]
+
+    @jit
+    def B(self, points):
+        e, _, B_con = self._frame(points)
+        return e @ B_con
+
+    @jit
+    def B_covariant(self, points):
+        e, _, B_con = self._frame(points)
+        return e.T @ (e @ B_con)
+
+
 class PointDipoleField(MagneticField):
     """Point dipoles, such as permanent magnets, in Cartesian coordinates.
 
@@ -844,6 +969,61 @@ def _unflatten_dipoles(_, children):  # without __init__: transforms put non-arr
 
 
 tree_util.register_pytree_node(PointDipoleField, lambda f: ((f.positions, f.moments), None), _unflatten_dipoles)
+
+
+@tree_util.register_static
+class NearAxisField(MagneticField):
+    """A first-order near-axis field from pyQSC_JAX, in its Boozer coordinates (r, theta, varphi).
+
+    ``qsc`` is a ``pyqsc_jax.near_axis.near_axis``. Its covariant and
+    contravariant components, |B| and Jacobian are used as they are, so
+    guiding centers and field lines follow the expansion exactly. ``to_xyz``
+    places a point at r X n + r Y b off the axis in its Frenet frame at the
+    axis angle phi0(varphi); it is first order in r like the field, so the
+    Cartesian ``B`` agrees with the components to O(r). (r, theta) is
+    singular on the axis, so orbits must stay off it, and full orbits, which
+    need B at Cartesian points, are not available.
+    """
+
+    def __init__(self, qsc):
+        self.qsc, self.nfp = qsc, int(qsc.nfp)
+
+    @jit
+    def B_covariant(self, points):
+        return self.qsc.B_covariant(points)
+
+    @jit
+    def B_contravariant(self, points):
+        return self.qsc.B_contravariant(points)
+
+    @jit
+    def AbsB(self, points):
+        return self.qsc.AbsB(points)
+
+    @jit
+    def sqrtg(self, points):
+        return self.qsc.jacobian(points)
+
+    @jit
+    def to_xyz(self, points):
+        r, theta, varphi = points
+        q, period = self.qsc, 2 * jnp.pi / self.nfp
+
+        def at(a, x):  # periodic linear interpolation of a quantity on the axis grid
+            return jnp.interp(x, jnp.append(q.phi, period), jnp.append(a, a[0]), period=period)
+        shift = period * jnp.floor(varphi / period)  # phi0 - varphi is periodic, phi0 itself is not
+        phi0 = shift + jnp.interp(varphi - shift, jnp.append(q.varphi, period), jnp.append(q.phi, period))
+        X, Y = (r * (at(c1, phi0) * jnp.cos(theta) + at(s1, phi0) * jnp.sin(theta))
+                for c1, s1 in ((q.X1c_untwisted, q.X1s_untwisted), (q.Y1c_untwisted, q.Y1s_untwisted)))
+        R = at(q.R0, phi0) + X * at(q.normal_R, phi0) + Y * at(q.binormal_R, phi0)
+        P = X * at(q.normal_phi, phi0) + Y * at(q.binormal_phi, phi0)          # displacement along phi-hat
+        Z = at(q.Z0, phi0) + X * at(q.normal_z, phi0) + Y * at(q.binormal_z, phi0)
+        c, s = jnp.cos(phi0), jnp.sin(phi0)
+        return jnp.array([R * c - P * s, R * s + P * c, Z])
+
+    @jit
+    def B(self, points):
+        return jacfwd(self.to_xyz)(points) @ self.B_contravariant(points)
 
 
 class near_axis:
