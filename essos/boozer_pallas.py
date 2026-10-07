@@ -65,7 +65,7 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
 
         def field_at(r, theta, zeta):
             i = _interval(knots, r, nint)
-            d = (r - knots[i])[:, None]
+            d = (r - knots_ref[i])[:, None]
             c = [coef_ref[k, i[:, None], modes[None, :]] for k in range(4)]
             a = ((c[0] * d + c[1]) * d + c[2]) * d + c[3]
             da = (3 * c[0] * d + 2 * c[1]) * d + c[2]
@@ -78,7 +78,7 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
 
         def profiles(s):
             j = _interval(sknots, s, pint)
-            d = s - sknots[j]
+            d = s - sknots_ref[j]
             out = []
             for q in range(3):
                 c = [pcoef_ref[q, j, k] for k in range(4)]
