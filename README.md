@@ -100,13 +100,13 @@ More in [`examples/fieldline_tracing`](examples/fieldline_tracing).
 
 ## Particles through magnetic islands
 
-![Protons in an MRX state with islands and in VMEX](docs/readme_mrx_islands.png)
+![Protons in an MRX state with islands and in VMEX](docs/readme_mrx_islands.gif)
 
 Six 10 keV protons, started across the (6,1) island chain of li383. On the
 left, the state [MRX](https://github.com/ToBlick/mrx) relaxed after seeding
 island chains; on the right, the VMEX equilibrium, which has nested surfaces.
 The bottom panels show where the protons cross phi = 0, over the Poincare
-section of each field. [Movie](docs/readme_mrx_islands.mp4), made by
+section of each field. Made by
 [`docs/make_mrx_islands_movie.py`](docs/make_mrx_islands_movie.py).
 
 ```python
