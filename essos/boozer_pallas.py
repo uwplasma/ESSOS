@@ -40,8 +40,8 @@ def pack(field, dtype=jnp.float64):
 
 def _interval(knots, x, n):
     """Index of the cubic piece holding ``x`` (end pieces extrapolate), per lane."""
-    count = jnp.sum((x[:, None] >= knots[None, 1:]).astype(jnp.int32), axis=1)
-    return jnp.clip(count, 0, n - 1)
+    count = jnp.sum((x[:, None] >= knots[None, :]).astype(jnp.int32), axis=1)
+    return jnp.clip(count - 1, 0, n - 1)
 
 
 def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.float64):
@@ -54,11 +54,11 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
     mu = jnp.pad(jnp.asarray(mu, dtype), (0, npad - n), mode="edge")
     mp, kp, sp = p["xm"].size, p["knots"].size, p["sknots"].size
 
-    def kernel(y_ref, mu_ref, coef_ref, knots_ref, xm_ref, xn_ref, pcoef_ref, sknots_ref,
-               yo_ref, tl_ref, err_ref):
-        coef, knots = coef_ref[...], knots_ref[...]
+    def kernel(u_ref, w_ref, z_ref, v_ref, mu_ref, coef_ref, knots_ref, xm_ref, xn_ref, pcoef_ref, sknots_ref,
+               uo_ref, wo_ref, zo_ref, vo_ref, tl_ref, err_ref):
+        knots = knots_ref[...]
         xm, xn = xm_ref[...], xn_ref[...]
-        pcoef, sknots = pcoef_ref[...], sknots_ref[...]
+        sknots = sknots_ref[...]
         mu = mu_ref[...]
         modes = jnp.arange(mp)
         has_m = xm[None, :] > 0
@@ -66,7 +66,7 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
         def field_at(r, theta, zeta):
             i = _interval(knots, r, nint)
             d = (r - knots[i])[:, None]
-            c = [coef[k][i[:, None], modes[None, :]] for k in range(4)]
+            c = [coef_ref[k, i[:, None], modes[None, :]] for k in range(4)]
             a = ((c[0] * d + c[1]) * d + c[2]) * d + c[3]
             da = (3 * c[0] * d + 2 * c[1]) * d + c[2]
             phase = xm[None, :] * theta[:, None] - xn[None, :] * zeta[:, None]
@@ -81,7 +81,7 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
             d = s - sknots[j]
             out = []
             for q in range(3):
-                c = [pcoef[q][j, k] for k in range(4)]
+                c = [pcoef_ref[q, j, k] for k in range(4)]
                 out.append((((c[0] * d + c[1]) * d + c[2]) * d + c[3],
                             (3 * c[0] * d + 2 * c[1]) * d + c[2]))
             return out
@@ -111,8 +111,7 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
             _, r, theta, *_ = chart(u, w)
             return 0.5 * vpar * vpar + mu * field_at(r, theta, zeta)[0]
 
-        y = y_ref[...]
-        state = (y[:, 0], y[:, 1], y[:, 2], y[:, 3])
+        state = (u_ref[...], w_ref[...], z_ref[...], v_ref[...])
         e0 = energy(*state)
         alive = jnp.ones_like(mu, dtype=jnp.bool_)
 
@@ -132,18 +131,17 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
 
         state, alive, t_loss, err = jax.lax.fori_loop(
             0, n_steps, step, (state, alive, jnp.full_like(mu, -1.0), jnp.zeros_like(mu)))
-        yo_ref[...] = jnp.stack(state, axis=1)
+        uo_ref[...], wo_ref[...], zo_ref[...], vo_ref[...] = state
         tl_ref[...] = t_loss
         err_ref[...] = err
 
     whole = lambda shape: pl.BlockSpec(shape, lambda g: (0,) * len(shape))
     call = pl.pallas_call(
         kernel, grid=(npad // block,),
-        in_specs=[pl.BlockSpec((block, 4), lambda g: (g, 0)), pl.BlockSpec((block,), lambda g: (g,)),
+        in_specs=[pl.BlockSpec((block,), lambda g: (g,))] * 5 + [
                   whole((4, kp, mp)), whole((kp,)), whole((mp,)), whole((mp,)), whole((4, sp, 4)), whole((sp,))],
-        out_specs=[pl.BlockSpec((block, 4), lambda g: (g, 0)), pl.BlockSpec((block,), lambda g: (g,)),
-                   pl.BlockSpec((block,), lambda g: (g,))],
-        out_shape=[jax.ShapeDtypeStruct((npad, 4), dtype), jax.ShapeDtypeStruct((npad,), dtype),
-                   jax.ShapeDtypeStruct((npad,), dtype)])
-    yo, tl, err = jax.jit(call)(y0, mu, p["coef"], p["knots"], p["xm"], p["xn"], p["pcoef"], p["sknots"])
-    return yo[:n], tl[:n], err[:n]
+        out_specs=[pl.BlockSpec((block,), lambda g: (g,))] * 6,
+        out_shape=[jax.ShapeDtypeStruct((npad,), dtype)] * 6)
+    *yo, tl, err = jax.jit(call)(*(y0[:, k] for k in range(4)), mu, p["coef"], p["knots"], p["xm"], p["xn"],
+                                 p["pcoef"], p["sknots"])
+    return jnp.stack(yo, axis=1)[:n], tl[:n], err[:n]
