@@ -837,8 +837,13 @@ class PointDipoleField(MagneticField):
         return 1e-7 * jnp.sum((3 * mr * r - r2 * self.moments) / r2**2.5, axis=0)
 
 
-tree_util.register_pytree_node(PointDipoleField, lambda f: ((f.positions, f.moments), None),
-                               lambda _, children: PointDipoleField(*children))
+def _unflatten_dipoles(_, children):  # without __init__: transforms put non-array leaves here
+    field = PointDipoleField.__new__(PointDipoleField)
+    field.positions, field.moments = children
+    return field
+
+
+tree_util.register_pytree_node(PointDipoleField, lambda f: ((f.positions, f.moments), None), _unflatten_dipoles)
 
 
 class near_axis:

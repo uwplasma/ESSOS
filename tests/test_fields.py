@@ -622,3 +622,12 @@ def test_mrx_field_components_are_consistent_with_its_map():
     assert is_toroidal(2. * field) and jnp.allclose(jax.jit(vmap(field.B))(p), B)
     assert jnp.allclose(jax.grad(lambda raw: MRXField(raw, field.basis, field.Phi, 3, 0.3).AbsB(p[0]))(field.raw),
                         jax.jacfwd(lambda raw: MRXField(raw, field.basis, field.Phi, 3, 0.3).AbsB(p[0]))(field.raw))
+
+
+def test_sum_of_coils_and_dipoles_traces_field_lines():
+    from essos.dynamics import Tracing
+    from essos.fields import PointDipoleField
+    field = _coil_field() + PointDipoleField(jnp.array([[2.0, 0., 0.]]), jnp.array([[0., 0., 1e2]]))
+    tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=jnp.array([[1.0, 0., 0.]]),
+                      maxtime=1e-6, times_to_trace=5)
+    assert jnp.all(jnp.isfinite(tracing.trajectories))
