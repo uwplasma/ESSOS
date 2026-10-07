@@ -773,6 +773,8 @@ def ALM_model_jaxopt_lbfgsb(constraints: BaseConstraint,#List of constraints
     eta_tol=1.e-4,
     omega_tol=1.e-6,
     bounds=None,               #(lower, upper) box for main params; None = unbounded
+    inner_maxiter=50,          #maximum iterations of each inner L-BFGS-B solve
+    history_size=10,           #L-BFGS memory of the inner solve
     **kargs,                   #Extra key arguments for loss
 ):
 
@@ -809,7 +811,7 @@ def ALM_model_jaxopt_lbfgsb(constraints: BaseConstraint,#List of constraints
         omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
         omega_min = jnp.min(omega_flat)
         old_info=info[2]
-        minimization_loop=jaxopt.LBFGSB(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega_min)
+        minimization_loop=jaxopt.LBFGSB(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega_min,maxiter=inner_maxiter,history_size=history_size)
         state=minimization_loop.run(main_params,bounds=bounds,lagrange_params=lagrange_params,**kargs)
         main_params=state.params
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
