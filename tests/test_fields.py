@@ -573,3 +573,17 @@ def test_field_algebra_and_comparison():
     assert jnp.allclose(jax.jit(vmap((0.5 * total).B))(p), 1.5 * B)  # weights survive the pytree round trip
     assert jnp.allclose(coils.compare(coils, p), 0.)
     assert jnp.allclose(total.compare(coils, p), 2. / 3.)  # |3B - B| / |3B|
+
+
+def test_full_orbits_in_toroidal_fields_trace_in_the_cartesian_view():
+    from essos.dynamics import Tracing, Particles
+    vmec = Vmec(WOUT_FILE)
+    x0 = jnp.array([[0.3, 0.2, 0.1], [0.5, 1.0, 0.4]])
+    particles = Particles(initial_xyz=x0, field=vmec)
+    tracing = Tracing(field=vmec, model="FullOrbit_Boris", particles=particles, maxtime=1e-7, timestep=1e-10,
+                      times_to_trace=10)
+    xyz = tracing.trajectories[:, :, :3]
+    # The orbits start one gyroradius off their guiding centers, given in (s, theta, phi), and stay near them.
+    assert jnp.all(jnp.linalg.norm(xyz[:, 0] - vmap(vmec.to_xyz)(x0), axis=1) < 0.2)
+    energy = tracing.energy()
+    assert jnp.allclose(energy[:, -1], energy[:, 0], rtol=1e-6)
