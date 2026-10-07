@@ -31,7 +31,8 @@ pip install essos
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria (analytic derivatives,
-  optional `mode_tolerance` truncation) and near-axis expansions. Fields
+  optional `mode_tolerance` truncation), near-axis expansions, and
+  [MRX](https://github.com/ToBlick/mrx) relaxed or vacuum states. Fields
   combine as vectors (`coils + other`, `2.0 * field`), and
   `field.compare(other, points)` measures two fields at the same physical
   points, whatever coordinates each one uses.
@@ -96,6 +97,24 @@ tracing.poincare_plot(shifts=[0.0])
 ```
 
 More in [`examples/fieldline_tracing`](examples/fieldline_tracing).
+
+## Particles through magnetic islands
+
+![Protons in an MRX state with islands and in VMEX](docs/readme_mrx_islands.png)
+
+Six 10 keV protons, started across the (6,1) island chain of li383. On the
+left, the state [MRX](https://github.com/ToBlick/mrx) relaxed after seeding
+island chains; on the right, the VMEX equilibrium, which has nested surfaces.
+The bottom panels show where the protons cross phi = 0, over the Poincare
+section of each field. [Movie](docs/readme_mrx_islands.mp4), made by
+[`docs/make_mrx_islands_movie.py`](docs/make_mrx_islands_movie.py).
+
+```python
+import jax.numpy as jnp
+from essos.fields import MRXField
+field = MRXField.from_mrx("wout_li383_low_res_reference.nc", "state_000005.h5")  # an MRX checkpoint
+field = (1.0 / field.AbsB(jnp.array([1e-6, 0., 0.]))) * field                     # 1 T on the axis
+```
 
 ## VMEC MGRID fields
 
