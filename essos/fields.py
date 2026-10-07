@@ -506,6 +506,7 @@ class Vmec():
 
     @partial(jit, static_argnames=['self'])
     def B(self, points):
+        """Cartesian B = B^theta e_theta + B^phi e_phi, so that B.grad s = 0 exactly."""
         geometry = self._geometry_series(points)
         R, dR = geometry['rmnc']
         _, dZ = geometry['zmns']
@@ -513,10 +514,7 @@ class Vmec():
         sin, cos = jnp.sin(phi), jnp.cos(phi)
         basis = jnp.stack([cos * dR, sin * dR, dZ])
         basis = basis.at[:, 2].add(jnp.array([-R * sin, R * cos, 0]))
-        reciprocal = jnp.stack([jnp.cross(basis[:, 1], basis[:, 2]),
-                                jnp.cross(basis[:, 2], basis[:, 0]),
-                                jnp.cross(basis[:, 0], basis[:, 1])]) / self.sqrtg(points)
-        return self.B_covariant(points) @ reciprocal
+        return basis[:, 1:] @ self.B_contravariant(points)[1:]
 
     @partial(jit, static_argnames=['self'])
     def AbsB(self, points):
