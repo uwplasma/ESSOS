@@ -36,6 +36,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install flake8 pytest coverage pytest-cov
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        # pyQSC_JAX (near-axis fields) needs Python >= 3.11; on 3.10 its tests are skipped.
+        if python -c "import sys; sys.exit(sys.version_info < (3, 11))"; then
+          pip install "git+https://github.com/uwplasma/pyQSC_JAX.git"
+        fi
     - name: Lint with flake8
       run: |
         # stop the build if there are Python syntax errors or undefined names
