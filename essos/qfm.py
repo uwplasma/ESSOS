@@ -1,3 +1,4 @@
+import copy
 import jax
 from jax import vmap, grad, device_get
 import jax.numpy as jnp
@@ -42,6 +43,8 @@ class QfmSurface:
             rc=rc_safe,
             zs=zs_safe,
             nfp=int(surface.nfp),
+            mpol=int(surface.mpol),
+            ntor=int(surface.ntor),
             ntheta=int(surface.ntheta),
             nphi=int(surface.nphi),
             range_torus=surface.range_torus,
@@ -50,10 +53,14 @@ class QfmSurface:
         s.x = x_safe
         return s
 
+    def _surface_at(self, x):
+        # A shallow copy keeps traced dofs and geometry caches off the shared surface.
+        surf = copy.copy(self.surface_optimize)
+        surf.x = x
+        return surf
+
     def objective(self, x):
-        surf = self.surface_optimize
-        x_old = surf.x          
-        surf.x = x              
+        surf = self._surface_at(x)
         N = surf.unitnormal
         norm_N = jnp.linalg.norm(surf.normal, axis=2)
         points = surf.gamma.reshape(-1, 3)
@@ -61,13 +68,10 @@ class QfmSurface:
         B_n = jnp.sum(B * N, axis=2)
         norm_B = jnp.linalg.norm(B, axis=2)
         value = jnp.sum(B_n**2 * norm_N) / jnp.sum(norm_B**2 * norm_N)
-        surf.x = x_old
         return value
 
     def constraint(self, x):
-        surf = self.surface_optimize
-        x_old = surf.x
-        surf.x = x
+        surf = self._surface_at(x)
 
         raw_c = {
             "volume": surf.volume - self.targetlabel,
@@ -76,8 +80,6 @@ class QfmSurface:
         }[self.label]
 
         c = raw_c / jnp.abs(self.targetlabel)
-
-        surf.x = x_old
         return c
 
     def penalty_objective(self, x, constraint_weight=1.0):

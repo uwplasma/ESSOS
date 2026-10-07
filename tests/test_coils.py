@@ -1,5 +1,7 @@
 import pytest
-from essos.coils import Curves
+import jax
+from essos.coils import Coils, Curves
+from essos.surfaces import surfacerzfourier_from_boundary
 import jax.numpy as jnp
 import random
 
@@ -14,6 +16,67 @@ def test_curves_initialization():
     assert curves.curves.shape == (4, 3, 5)
     assert curves.gamma.shape == (4, 100, 3)
     assert curves.gamma_dash.shape == (4, 100, 3)
+
+def test_curve_and_coil_dof_names_follow_flattened_dofs():
+    curves = Curves(jnp.zeros((2, 3, 5)), stellsym=False)
+    assert curves.dof_names[:7] == (
+        "coil[0].x0", "coil[0].xs(1)", "coil[0].xc(1)",
+        "coil[0].xs(2)", "coil[0].xc(2)", "coil[0].y0", "coil[0].ys(1)")
+    assert len(curves.dof_names) == curves.dofs.size
+    coils = Coils(curves, jnp.array([1.0, 2.0]))
+    assert coils.dof_names[-2:] == ("coil[0].current", "coil[1].current")
+    assert len(coils.dof_names) == coils.dofs.size
+    updated = coils.with_dofs(coils.dofs + 1.0)
+    assert jnp.allclose(updated.dofs, coils.dofs + 1.0)
+    assert not jnp.allclose(coils.dofs, updated.dofs)
+    gradient = jax.grad(lambda dofs: jnp.sum(coils.with_dofs(dofs).gamma))(coils.dofs)
+    assert gradient.shape == coils.dofs.shape and jnp.all(jnp.isfinite(gradient))
+    updated_curves = curves.with_dofs(curves.dofs + 2.0)
+    assert jnp.allclose(updated_curves.dofs, curves.dofs + 2.0)
+    assert not jnp.allclose(curves.dofs, updated_curves.dofs)
+
+def test_surface_from_vmec_boundary_preserves_modes_and_is_differentiable():
+    rbc = jnp.arange(15.0).reshape(5, 3); zbs = -rbc
+    surface = surfacerzfourier_from_boundary(
+        rbc, zbs, nfp=2, nphi=8, ntheta=10)
+    expected_r = jnp.concatenate((rbc[2:, 0], rbc[:, 1:].T.ravel()))
+    expected_z = jnp.concatenate((zbs[2:, 0], zbs[:, 1:].T.ravel()))
+    assert surface.mpol == 2 and surface.ntor == 2
+    assert jnp.array_equal(surface.rc, expected_r)
+    assert jnp.array_equal(surface.zs, expected_z)
+    gradient = jax.grad(lambda values: jnp.sum(
+        surfacerzfourier_from_boundary(values, zbs, 2, nphi=8, ntheta=10).gamma))(rbc)
+    assert jnp.all(jnp.isfinite(gradient))
+
+    with pytest.raises(ValueError, match="equal shape"):
+        surfacerzfourier_from_boundary(jnp.zeros((4, 3)), jnp.zeros((4, 3)), 2)
+
+def _small_surface():
+    rbc = jnp.zeros((5, 3)); zbs = jnp.zeros((5, 3))
+    rbc = rbc.at[2, 0].set(1.0).at[2, 1].set(0.2)
+    zbs = zbs.at[2, 1].set(0.2)
+    return surfacerzfourier_from_boundary(rbc, zbs, 2, nphi=8, ntheta=10)
+
+@pytest.mark.parametrize("name, caches", (
+    ("theta2d", ("_theta2d", "_phi2d")),
+    ("phi2d", ("_theta2d", "_phi2d")),
+    ("angles", ("_angles",)),
+    ("gamma", ("_gamma", "_gammadash_theta", "_gammadash_phi")),
+    ("gammadash_theta", ("_gamma", "_gammadash_theta", "_gammadash_phi")),
+    ("gammadash_phi", ("_gamma", "_gammadash_theta", "_gammadash_phi")),
+    ("normal", ("_normal", "_unitnormal", "_area_element")),
+    ("unitnormal", ("_normal", "_unitnormal", "_area_element")),
+    ("area_element", ("_normal", "_unitnormal", "_area_element")),
+))
+def test_surface_cache_is_concrete_and_does_not_retain_tracers(name, caches):
+    surface = _small_surface()
+    value = jax.jit(lambda scale: scale * jnp.sum(getattr(surface, name)))(1.0)
+    assert jnp.isfinite(value)
+    # Access after the transform must recompute concrete values, not retrieve a
+    # DynamicJaxprTracer that escaped from the compiled objective.
+    assert jnp.all(jnp.isfinite(getattr(surface, name)))
+    cached = [getattr(surface, cache) for cache in caches]
+    assert all(item is not None and not isinstance(item, jax.core.Tracer) for item in cached)
 
 def test_curves_initialization_with_params():
     dofs = jnp.zeros((2, 3, 5))
@@ -46,6 +109,15 @@ def test_curves_property_setters():
     assert curves.nfp == 2
     curves.stellsym = False
     assert curves.stellsym == False
+
+def test_curves_pytree_preserves_scaling_metadata():
+    dofs = jnp.ones((2, 3, 5))
+    curves = Curves(dofs, scaling_type=2, scaling_factor=0.3, scale_fixed=7.0)
+    curves_copy = jax.tree_util.tree_map(lambda x: x, curves)
+
+    assert curves_copy.scaling_type == curves.scaling_type
+    assert curves_copy.scaling_factor == curves.scaling_factor
+    assert curves_copy.scale_fixed == curves.scale_fixed
 
 def test_curves_str_repr():
     dofs = jnp.zeros((2, 3, 5))
@@ -117,3 +189,47 @@ def test_curves_iter():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_two_coil_fields_share_jit_caches():
+    """Coils carried its current scale as an array in pytree metadata, so the
+    second BiotSavart traced under jit failed comparing it with the first."""
+    from pathlib import Path
+    from essos.fields import BiotSavart
+
+    path = str(Path(__file__).resolve().parents[1] / "examples" / "input_files" / "ESSOS_biot_savart_LandremanPaulQA.json")
+    first, second = BiotSavart(Coils.from_json(path)), BiotSavart(Coils.from_json(path))
+    x = jnp.array([1.0, 0.1, 0.05])
+    assert jnp.allclose(jax.jit(lambda p: first.AbsB(p))(x), jax.jit(lambda p: second.AbsB(p))(x))
+    assert isinstance(first.coils._tree_flatten()[1]["currents_scale"], float)
+
+
+def test_curves_pytree_round_trips_placeholder_leaves():
+    """diffrax's implicit solvers unflatten the field with jax.ShapeDtypeStruct
+    leaves; unflatten used to divide them by the mode scaling and failed."""
+    from pathlib import Path
+
+    path = str(Path(__file__).resolve().parents[1] / "examples" / "input_files" / "ESSOS_biot_savart_LandremanPaulQA.json")
+    coils = Coils.from_json(path)
+    leaves, treedef = jax.tree_util.tree_flatten(coils)
+    structs = [jax.ShapeDtypeStruct(jnp.shape(leaf), jnp.result_type(leaf)) for leaf in leaves]
+    assert jax.tree_util.tree_leaves(jax.tree_util.tree_unflatten(treedef, structs)) == structs
+    rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+    assert jnp.allclose(rebuilt.dofs_curves, coils.dofs_curves)
+    assert jnp.allclose(rebuilt.gamma, coils.gamma)
+
+
+def test_coil_tracer_unflatten_preserves_physical_scales():
+    curves = Curves(jnp.arange(18.).reshape(2, 3, 3), stellsym=False,
+                    scale_fixed=3., scaling_factor=0.4)
+    coils = Coils(curves, jnp.array([3., 6.]), currents_scale=3.)
+    leaves, tree = jax.tree_util.tree_flatten(coils)
+    weights = jnp.arange(1., 19.).reshape(2, 3, 3)
+    def physical_value(coefficients, currents):
+        rebuilt = jax.tree_util.tree_unflatten(tree, [coefficients, currents])
+        return jnp.sum(rebuilt.curves._dofs * weights) + jnp.sum(rebuilt.dofs_currents_raw**2)
+    value, (geometry_grad, current_grad) = jax.jit(jax.value_and_grad(
+        physical_value, argnums=(0, 1)))(*leaves)
+    assert jnp.allclose(value, jnp.sum(curves._dofs * weights) + 45.)
+    assert jnp.allclose(geometry_grad, weights / curves.scaling[None, None, :])
+    assert jnp.allclose(current_grad, jnp.array([18., 36.]))

@@ -9,13 +9,12 @@ from essos.fields import BiotSavart
 
 class MockSurface:
     def __init__(self):
-        self.rc = jnp.array([[1., 2., 3.],
-                             [1., 2., 3.],
-                             [1., 2., 3.]])
-        self.zs = jnp.array([[0.5, 1.5, 2.5],
-                             [0.5, 1.5, 2.5],
-                             [0.5, 1.5, 2.5]])
+        # flat (m, n) coefficients for mpol=2, ntor=1: (mpol+1)*(2*ntor+1)-ntor = 8 modes
+        self.rc = jnp.array([2., 3., 1., 2., 3., 1., 2., 3.])
+        self.zs = jnp.array([1.5, 2.5, 0.5, 1.5, 2.5, 0.5, 1.5, 2.5])
         self.nfp = 2
+        self.mpol = 2
+        self.ntor = 1
         self.ntheta = 3
         self.nphi = 3
         self.range_torus = "half period"
