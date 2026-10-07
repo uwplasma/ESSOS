@@ -112,6 +112,10 @@ class MagneticField():
             return jnp.linalg.norm(B - other.B_xyz(self.to_xyz(point))) / jnp.linalg.norm(B)
         return vmap(difference)(points)
 
+    def cartesian(self):
+        """This field in Cartesian coordinates, B(x) = :meth:`B_xyz`: the field full orbits move in."""
+        return ExternalField(lambda xyz: vmap(self.B_xyz)(xyz))
+
     def __add__(self, other):
         return CombinedField(self, other)
 
