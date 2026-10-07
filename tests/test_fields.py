@@ -573,3 +573,23 @@ def test_field_algebra_and_comparison():
     assert jnp.allclose(jax.jit(vmap((0.5 * total).B))(p), 1.5 * B)  # weights survive the pytree round trip
     assert jnp.allclose(coils.compare(coils, p), 0.)
     assert jnp.allclose(total.compare(coils, p), 2. / 3.)  # |3B - B| / |3B|
+
+
+def test_dipole_field_matches_the_axis_formula_and_is_curl_and_divergence_free():
+    from essos.fields import PointDipoleField
+    m = 2.0e3
+    field = PointDipoleField(jnp.zeros((1, 3)), jnp.array([[0., 0., m]]))
+    assert jnp.allclose(field.B(jnp.array([0., 0., 0.5])), jnp.array([0., 0., 1e-7 * 2 * m / 0.5**3]))
+    J = field.dB_by_dX(jnp.array([0.3, -0.2, 0.4]))
+    assert jnp.abs(jnp.trace(J)) < 1e-12 * jnp.abs(J).max() and jnp.allclose(J, J.T, atol=1e-12 * jnp.abs(J).max())
+    assert jnp.allclose(jax.grad(lambda d: field.__class__(field.positions, d).B(jnp.array([0., 0., 0.5]))[2])(field.dofs),
+                        jnp.array([[0., 0., 1e-7 * 2 / 0.5**3]]))
+
+
+def test_sum_of_coils_and_dipoles_traces_field_lines():
+    from essos.dynamics import Tracing
+    from essos.fields import PointDipoleField
+    field = _coil_field() + PointDipoleField(jnp.array([[2.0, 0., 0.]]), jnp.array([[0., 0., 1e2]]))
+    tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=jnp.array([[1.0, 0., 0.]]),
+                      maxtime=1e-6, times_to_trace=5)
+    assert jnp.all(jnp.isfinite(tracing.trajectories))
