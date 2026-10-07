@@ -557,9 +557,9 @@ def _coil_field():
 
 
 def test_field_algebra_and_comparison():
-    from essos.fields import CombinedField, DipoleField
+    from essos.fields import CombinedField, PointDipoleField
     coils = _coil_field()
-    dipoles = DipoleField(jnp.array([[1.2, 0., 0.], [0., 1.3, 0.1]]), jnp.array([[0., 0., 1e3], [1e3, 0., 0.]]))
+    dipoles = PointDipoleField(jnp.array([[1.2, 0., 0.], [0., 1.3, 0.1]]), jnp.array([[0., 0., 1e3], [1e3, 0., 0.]]))
     p = jnp.array([[0.9, 0.2, 0.1], [0.1, 1.1, -0.05]])
     B = vmap(coils.B)(p) + vmap(dipoles.B)(p)
     total = sum([coils, dipoles])
@@ -573,9 +573,9 @@ def test_field_algebra_and_comparison():
 
 
 def test_dipole_field_matches_the_axis_formula_and_is_curl_and_divergence_free():
-    from essos.fields import DipoleField
+    from essos.fields import PointDipoleField
     m = 2.0e3
-    field = DipoleField(jnp.zeros((1, 3)), jnp.array([[0., 0., m]]))
+    field = PointDipoleField(jnp.zeros((1, 3)), jnp.array([[0., 0., m]]))
     assert jnp.allclose(field.B(jnp.array([0., 0., 0.5])), jnp.array([0., 0., 1e-7 * 2 * m / 0.5**3]))
     J = field.dB_by_dX(jnp.array([0.3, -0.2, 0.4]))
     assert jnp.abs(jnp.trace(J)) < 1e-12 * jnp.abs(J).max() and jnp.allclose(J, J.T, atol=1e-12 * jnp.abs(J).max())

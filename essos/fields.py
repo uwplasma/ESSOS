@@ -806,7 +806,7 @@ class MRXField(ToroidalField):
 tree_util.register_pytree_node(MRXField, MRXField._tree_flatten, MRXField._tree_unflatten)
 
 
-class DipoleField(MagneticField):
+class PointDipoleField(MagneticField):
     """Point dipoles, such as permanent magnets, in Cartesian coordinates.
 
     B(x) = mu0 / (4 pi) sum_j [3 (m_j . r_j) r_j / |r_j|^5 - m_j / |r_j|^3],
@@ -833,8 +833,8 @@ class DipoleField(MagneticField):
         return 1e-7 * jnp.sum((3 * mr * r - r2 * self.moments) / r2**2.5, axis=0)
 
 
-tree_util.register_pytree_node(DipoleField, lambda f: ((f.positions, f.moments), None),
-                               lambda _, children: DipoleField(*children))
+tree_util.register_pytree_node(PointDipoleField, lambda f: ((f.positions, f.moments), None),
+                               lambda _, children: PointDipoleField(*children))
 
 
 class near_axis:
