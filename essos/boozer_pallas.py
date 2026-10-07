@@ -29,7 +29,7 @@ def pack(field, dtype=jnp.float64):
     xn = np.zeros(mp); xn[:modes] = np.asarray(field.xn)
     pint = np.asarray(field.profile_coef).shape[0]
     sp = _pow2(pint + 1)
-    pcoef = np.zeros((3, sp, 4))
+    pcoef = np.zeros((4, sp, 4))  # iota, G, I and a zero pad row
     pcoef[:, :pint] = np.moveaxis(np.asarray(field.profile_coef), 1, 0)
     sknots = np.full(sp, np.inf)
     sknots[:pint + 1] = np.asarray(field.s_knots)
@@ -140,7 +140,7 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
     call = pl.pallas_call(
         kernel, grid=(npad // block,),
         in_specs=[pl.BlockSpec((block, 4), lambda g: (g, 0)), pl.BlockSpec((block,), lambda g: (g,)),
-                  whole((4, kp, mp)), whole((kp,)), whole((mp,)), whole((mp,)), whole((3, sp, 4)), whole((sp,))],
+                  whole((4, kp, mp)), whole((kp,)), whole((mp,)), whole((mp,)), whole((4, sp, 4)), whole((sp,))],
         out_specs=[pl.BlockSpec((block, 4), lambda g: (g, 0)), pl.BlockSpec((block,), lambda g: (g,)),
                    pl.BlockSpec((block,), lambda g: (g,))],
         out_shape=[jax.ShapeDtypeStruct((npad, 4), dtype), jax.ShapeDtypeStruct((npad,), dtype),
