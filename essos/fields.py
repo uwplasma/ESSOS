@@ -687,6 +687,61 @@ class Vmec(ToroidalField):
         (R, dR, d2R), (Z, dZ, d2Z) = series(rc, rs), series(zc, zs)
         return R, Z, dR, dZ, d2R, d2Z
 
+@tree_util.register_static
+class NearAxisField(MagneticField):
+    """A first-order near-axis field from pyQSC_JAX, in its Boozer coordinates (r, theta, varphi).
+
+    ``qsc`` is a ``pyqsc_jax.near_axis.near_axis``. Its covariant and
+    contravariant components, |B| and Jacobian are used as they are, so
+    guiding centers and field lines follow the expansion exactly. ``to_xyz``
+    places a point at r X n + r Y b off the axis in its Frenet frame at the
+    axis angle phi0(varphi); it is first order in r like the field, so the
+    Cartesian ``B`` agrees with the components to O(r). (r, theta) is
+    singular on the axis, so orbits must stay off it, and full orbits, which
+    need B at Cartesian points, are not available.
+    """
+
+    def __init__(self, qsc):
+        self.qsc, self.nfp = qsc, int(qsc.nfp)
+
+    @jit
+    def B_covariant(self, points):
+        return self.qsc.B_covariant(points)
+
+    @jit
+    def B_contravariant(self, points):
+        return self.qsc.B_contravariant(points)
+
+    @jit
+    def AbsB(self, points):
+        return self.qsc.AbsB(points)
+
+    @jit
+    def sqrtg(self, points):
+        return self.qsc.jacobian(points)
+
+    @jit
+    def to_xyz(self, points):
+        r, theta, varphi = points
+        q, period = self.qsc, 2 * jnp.pi / self.nfp
+
+        def at(a, x):  # periodic linear interpolation of a quantity on the axis grid
+            return jnp.interp(x, jnp.append(q.phi, period), jnp.append(a, a[0]), period=period)
+        shift = period * jnp.floor(varphi / period)  # phi0 - varphi is periodic, phi0 itself is not
+        phi0 = shift + jnp.interp(varphi - shift, jnp.append(q.varphi, period), jnp.append(q.phi, period))
+        X, Y = (r * (at(c1, phi0) * jnp.cos(theta) + at(s1, phi0) * jnp.sin(theta))
+                for c1, s1 in ((q.X1c_untwisted, q.X1s_untwisted), (q.Y1c_untwisted, q.Y1s_untwisted)))
+        R = at(q.R0, phi0) + X * at(q.normal_R, phi0) + Y * at(q.binormal_R, phi0)
+        P = X * at(q.normal_phi, phi0) + Y * at(q.binormal_phi, phi0)          # displacement along phi-hat
+        Z = at(q.Z0, phi0) + X * at(q.normal_z, phi0) + Y * at(q.binormal_z, phi0)
+        c, s = jnp.cos(phi0), jnp.sin(phi0)
+        return jnp.array([R * c - P * s, R * s + P * c, Z])
+
+    @jit
+    def B(self, points):
+        return jacfwd(self.to_xyz)(points) @ self.B_contravariant(points)
+
+
 class near_axis:
     def __init__(self, *args, **kwargs):
         raise ImportError(

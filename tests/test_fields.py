@@ -573,3 +573,15 @@ def test_field_algebra_and_comparison():
     assert jnp.allclose(jax.jit(vmap((0.5 * total).B))(p), 1.5 * B)  # weights survive the pytree round trip
     assert jnp.allclose(coils.compare(coils, p), 0.)
     assert jnp.allclose(total.compare(coils, p), 2. / 3.)  # |3B - B| / |3B|
+
+
+def test_near_axis_field_is_consistent_to_first_order():
+    pytest.importorskip("pyqsc_jax")
+    from pyqsc_jax.near_axis import near_axis
+    from essos.fields import NearAxisField
+    field = NearAxisField(near_axis(rc=[1, 0.155, 0.0102], zs=[0, 0.154, 0.0111], etabar=0.64, nfp=2, nphi=61))
+    errors = []
+    for r in (0.02, 0.08):
+        p = jnp.stack([jnp.full(32, r), jnp.linspace(0, 6.28, 32), jnp.linspace(0, 6.28, 32)], 1)
+        errors.append(jnp.max(jnp.abs(jnp.linalg.norm(vmap(field.B)(p), axis=1) / vmap(field.AbsB)(p) - 1)))
+    assert errors[1] < 0.1 and errors[1] > errors[0]  # first order: the mismatch grows with r
