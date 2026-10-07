@@ -14,7 +14,7 @@ from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipSte
 import diffrax
 import optimistix as optx
 from essos.coils import Coils
-from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
+from essos.fields import BiotSavart, ExternalField, MagneticField, is_toroidal
 from essos.surfaces import SurfaceClassifier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
@@ -957,7 +957,7 @@ class Tracing():
         self.tag_gc=tag_gc
         # VMEC guiding centers are traced in a chart that is regular on the
         # magnetic axis; see _axis_regular.
-        self._axis_regular = isinstance(field, Vmec) and model in _VMEC_GUIDING_CENTER_MODELS
+        self._axis_regular = is_toroidal(field) and model in _VMEC_GUIDING_CENTER_MODELS
         # Without a user condition, VMEC guiding centers stop at the exact LCFS
         # crossing, report non-finite steps, and continue outside in
         # exterior_field up to the wall when one is given; see _vmec_orbit.
@@ -1002,7 +1002,7 @@ class Tracing():
         self.solver = solver
         if condition is None:
             self.condition = lambda t, y, args, **kwargs: False
-            if isinstance(field, Vmec):
+            if is_toroidal(field):
                 if model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
                     def condition_Vmec(t, y, args, **kwargs):
                         s, _, _ = y
@@ -1114,7 +1114,7 @@ class Tracing():
                 lambda xyz: vmap(lambda point: self.field.to_xyz(point))(xyz)
             )(trajectory_points)
         
-        if isinstance(field, Vmec):
+        if is_toroidal(field):
             if self.model in _GUIDING_CENTER_COLLISION_MODELS:
                 self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_collisions()                    
             else:                

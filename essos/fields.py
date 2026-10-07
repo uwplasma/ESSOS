@@ -11,12 +11,23 @@ from essos.plot import fix_matplotlib_3d
 from essos.util import newton
 
 class MagneticField():
-    def __init__(self):
-        pass
+    """Base class of the magnetic fields.
+
+    A field is evaluated one point at a time in its own coordinates (vmap
+    over points). The defaults describe Cartesian coordinates: ``to_xyz`` is
+    the identity, ``sqrtg = 1`` and ``B`` is the Cartesian vector, so a
+    Cartesian field only defines ``B``. Fields in other coordinates override
+    ``to_xyz``, ``sqrtg``, ``B_covariant`` and ``B_contravariant`` and keep
+    ``B`` Cartesian; derivatives and guiding-center quantities follow here.
+
+    Fields combine as vectors: ``f + g``, ``f - g`` and ``2.0 * f`` are
+    :class:`CombinedField`. :meth:`B_xyz` evaluates any field at a Cartesian
+    point and :meth:`compare` measures two fields at the same physical points.
+    """
 
     @jit
     def sqrtg(self, points):
-        raise NotImplementedError("sqrtg method not implemented")
+        return 1.
 
     @jit
     def B(self, points):
@@ -82,7 +93,41 @@ class MagneticField():
 
     @jit
     def to_xyz(self, points):
-        raise NotImplementedError("to_xyz method not implemented")
+        return points
+
+    @jit
+    def B_xyz(self, xyz):
+        """Cartesian B at the Cartesian point ``xyz``."""
+        return self.B(xyz)
+
+    @jit
+    def compare(self, other, points):
+        """Relative difference ``|B - B_other| / |B|`` at ``points`` (n, 3) in this field's coordinates.
+
+        ``other`` is evaluated with :meth:`B_xyz` at the same physical points,
+        so the two fields may use different coordinates.
+        """
+        def difference(point):
+            B = self.B(point)
+            return jnp.linalg.norm(B - other.B_xyz(self.to_xyz(point))) / jnp.linalg.norm(B)
+        return vmap(difference)(points)
+
+    def __add__(self, other):
+        return CombinedField(self, other)
+
+    def __radd__(self, other):  # sum() starts from 0
+        return self if isinstance(other, (int, float)) and other == 0 else CombinedField(other, self)
+
+    def __mul__(self, scale):
+        return CombinedField(self, weights=(scale,))
+
+    __rmul__ = __mul__
+
+    def __neg__(self):
+        return -1. * self
+
+    def __sub__(self, other):
+        return self + (-other)
 
 class BiotSavart(MagneticField):
     def __init__(self, coils):
@@ -98,10 +143,6 @@ class BiotSavart(MagneticField):
     def dofs(self, new_dofs):
         self.coils.dofs = new_dofs
 
-    @jit
-    def sqrtg(self, points):
-        return 1.
-    
     @jit
     def gc_quantities(self, points):
         """Guiding-center field quantities from one pass over the coils.
@@ -160,9 +201,6 @@ class BiotSavart(MagneticField):
             self._z_axis = jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
         return self._z_axis    
 
-    @jit
-    def to_xyz(self, points):
-        return points
     
     def _tree_flatten(self):
         children = (self.coils,)
@@ -312,7 +350,106 @@ VMEC_WOUT_PARTNERS = {'rmnc': 'rmns', 'zmns': 'zmnc', 'bmnc': 'bmns', 'gmnc': 'g
                       'bsubsmns': 'bsubsmnc', 'bsubumnc': 'bsubumns', 'bsubvmnc': 'bsubvmns',
                       'bsupumnc': 'bsupumns', 'bsupvmnc': 'bsupvmns'}
 
-class Vmec():
+class ToroidalField(MagneticField):
+    """A field in the toroidal coordinates (s, theta, phi) of a bounded plasma.
+
+    s in [0, 1] labels the surfaces, zero on the magnetic axis and one on the
+    boundary, theta is a poloidal angle and phi the cylindrical toroidal
+    angle, both in radians. Subclasses give ``to_xyz``, ``sqrtg``, ``B``,
+    ``B_covariant``, ``B_contravariant`` and the minor radius ``Aminor_p``.
+    This class inverts ``to_xyz`` and measures the distance to the boundary,
+    which the tracer uses to stop or continue orbits there.
+    """
+
+    @jit
+    def B_xyz(self, xyz):
+        return self.B(self.flux_coordinates(xyz)[0])
+
+    def _boundary_rz(self, theta, phi):
+        """R, Z of the boundary and their first two theta derivatives, on a theta array."""
+        def rz(t):
+            p = self.to_xyz(jnp.array([1., t, phi]))
+            return jnp.array([jnp.hypot(p[0], p[1]), p[2]])
+        def d(f):
+            return lambda t: jax.jvp(f, (t,), (jnp.ones_like(t),))[1]
+        values = vmap(lambda t: jnp.stack([rz(t), d(rz)(t), d(d(rz))(t)]))(jnp.ravel(theta))
+        return tuple(values[:, i, j].reshape(jnp.shape(theta)) for i in range(3) for j in range(2))
+
+    def _minor_radius(self):
+        """Radius of the circle with the mean area of the boundary cross-sections of one field period."""
+        theta = jnp.linspace(0, 2 * jnp.pi, 128, endpoint=False)
+        R, Z, dR, dZ = vmap(lambda phi: jnp.stack(self._boundary_rz(theta, phi)[:4]), out_axes=1)(
+            jnp.linspace(0, 2 * jnp.pi / self.nfp, 8, endpoint=False))
+        return jnp.sqrt(jnp.abs(jnp.mean(R * dZ - Z * dR)))
+
+    @jit
+    def boundary_distance(self, xyz):
+        """Signed distance [m] from a Cartesian point to the LCFS, in its phi = const plane.
+
+        Positive inside. The nearest point of the LCFS cross-section is found
+        on 64 poloidal nodes and refined by Newton iterations in theta, so the
+        distance is smooth and exact to rounding near the surface: its zero
+        is the LCFS of :meth:`to_xyz` at s = 1.
+        """
+        R, Z, phi = jnp.hypot(xyz[0], xyz[1]), xyz[2], jnp.arctan2(xyz[1], xyz[0])
+        grid = jnp.linspace(0, 2 * jnp.pi, 64, endpoint=False)
+        Rb, Zb = self._boundary_rz(grid, phi)[:2]
+        theta = grid[jnp.argmin((R - Rb)**2 + (Z - Zb)**2)]
+
+        def newton(theta, _):
+            Rb, Zb, dR, dZ, d2R, d2Z = self._boundary_rz(theta, phi)
+            slope = -(R - Rb) * dR - (Z - Zb) * dZ
+            curvature = dR**2 + dZ**2 - (R - Rb) * d2R - (Z - Zb) * d2Z
+            return theta - slope / jnp.where(curvature > 0, curvature, dR**2 + dZ**2), None
+
+        theta, _ = lax.scan(newton, theta, None, length=4)
+        Rb, Zb, dR, dZ = self._boundary_rz(theta, phi)[:4]
+        # VMEC's theta runs either way round; the sign of the enclosed area fixes the outward normal.
+        with jax.ensure_compile_time_eval():
+            Rc, _, _, dZc = self._boundary_rz(grid, 0.0)[:4]
+            orientation = jnp.sign(jnp.sum(Rc * dZc))
+        outward = orientation * ((R - Rb) * dZ - (Z - Zb) * dR)
+        return -jnp.sign(outward) * jnp.hypot(R - Rb, Z - Zb)
+
+    @jit
+    def flux_coordinates(self, xyz):
+        """Invert :meth:`to_xyz`: a Cartesian point to (s, theta, phi), and the residual [m].
+
+        Newton iterations in (sqrt(s) cos theta, sqrt(s) sin theta), which is
+        regular on the axis. They start from the point's angle about the axis
+        (measured from theta = 0, in the sense theta turns) and its distance
+        from the axis relative to the boundary's in that direction. Points
+        outside the LCFS return s > 1 only as far as the extrapolated geometry
+        allows; check the residual.
+        """
+        R, Z = jnp.hypot(xyz[0], xyz[1]), xyz[2]
+        phi = jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2 * jnp.pi)
+        target = jnp.array([R, Z])
+
+        def rz(x):
+            p = self.to_xyz(jnp.array([x[0]**2 + x[1]**2, jnp.arctan2(x[1], x[0]), phi]))
+            return jnp.array([jnp.hypot(p[0], p[1]), p[2]])
+
+        def angle(v):
+            return jnp.arctan2(v[1], v[0])
+        axis, start, quarter = rz(jnp.zeros(2)), rz(jnp.array([0.5, 0.])), rz(jnp.array([0., 0.5]))
+        sense = jnp.sign(jnp.sin(angle(quarter - axis) - angle(start - axis)))
+        theta = sense * (angle(target - axis) - angle(start - axis))
+        direction = jnp.array([jnp.cos(theta), jnp.sin(theta)])
+        x = direction * jnp.clip(jnp.linalg.norm(target - axis) / jnp.linalg.norm(rz(direction) - axis), 0.0, 1.0)
+
+        def newton(x, _):
+            dx = jnp.linalg.solve(jacfwd(rz)(x), rz(x) - target)
+            x = x - dx * jnp.minimum(1.0, 0.3 / (jnp.linalg.norm(dx) + 1e-300))
+            # Stay in s <= 1: beyond it the extrapolated map can fold back over the plasma.
+            return x / jnp.maximum(1.0, jnp.linalg.norm(x)), None
+
+        x, _ = lax.scan(newton, x, None, length=12)
+        s = x[0]**2 + x[1]**2
+        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), jnp.linalg.norm(rz(x) - target)
+
+@tree_util.register_static
+class Vmec(ToroidalField):
     """VMEC equilibrium, including asymmetric Fourier partners, from wout or live arrays.
 
     ``mode_tolerance`` drops a Fourier mode when, in every table of its set,
@@ -521,12 +658,6 @@ class Vmec():
         return self._nyquist_series(points)['bmnc'][0]
     
     @partial(jit, static_argnames=['self'])
-    def dB_by_dX(self, points):
-        return jacfwd(self.B)(points)
-
-
-    
-    @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
         return self._nyquist_series(points)['bmnc'][1]
     
@@ -535,22 +666,6 @@ class Vmec():
         series = self._nyquist_series(points)
         return jnp.stack([series[name][1] for name in ('bsubsmns', 'bsubumnc', 'bsubvmnc')])
  
-    @partial(jit, static_argnames=['self'])
-    def curl_B(self, points):
-        grad_B_cov=self.grad_B_covariant(points)
-        return jnp.array([grad_B_cov[2][1] -grad_B_cov[1][2],
-                          grad_B_cov[0][2] -grad_B_cov[2][0],
-                          grad_B_cov[1][0] -grad_B_cov[0][1]])/self.sqrtg(points)
-    
-    
-    @partial(jit, static_argnames=['self'])
-    def curl_b(self, points):
-        return self.curl_B(points)/self.AbsB(points)+jnp.cross(self.B_covariant(points),jnp.array(self.dAbsB_by_dX(points)))/self.AbsB(points)**2/self.sqrtg(points)
-
-    @partial(jit, static_argnames=['self'])
-    def kappa(self, points):
-        return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
-
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
         geometry = self._geometry_series(points)
@@ -571,68 +686,6 @@ class Vmec():
 
         (R, dR, d2R), (Z, dZ, d2Z) = series(rc, rs), series(zc, zs)
         return R, Z, dR, dZ, d2R, d2Z
-
-    @partial(jit, static_argnames=['self'])
-    def boundary_distance(self, xyz):
-        """Signed distance [m] from a Cartesian point to the LCFS, in its phi = const plane.
-
-        Positive inside. The nearest point of the LCFS cross-section is found
-        on 64 poloidal nodes and refined by Newton iterations in theta, so the
-        distance is smooth and exact to rounding near the surface: its zero
-        is the LCFS of :meth:`to_xyz` at s = 1.
-        """
-        R, Z, phi = jnp.hypot(xyz[0], xyz[1]), xyz[2], jnp.arctan2(xyz[1], xyz[0])
-        grid = jnp.linspace(0, 2 * jnp.pi, 64, endpoint=False)
-        Rb, Zb = self._boundary_rz(grid, phi)[:2]
-        theta = grid[jnp.argmin((R - Rb)**2 + (Z - Zb)**2)]
-
-        def newton(theta, _):
-            Rb, Zb, dR, dZ, d2R, d2Z = self._boundary_rz(theta, phi)
-            slope = -(R - Rb) * dR - (Z - Zb) * dZ
-            curvature = dR**2 + dZ**2 - (R - Rb) * d2R - (Z - Zb) * d2Z
-            return theta - slope / jnp.where(curvature > 0, curvature, dR**2 + dZ**2), None
-
-        theta, _ = lax.scan(newton, theta, None, length=4)
-        Rb, Zb, dR, dZ = self._boundary_rz(theta, phi)[:4]
-        # VMEC's theta runs either way round; the sign of the enclosed area fixes the outward normal.
-        with jax.ensure_compile_time_eval():
-            Rc, _, _, dZc = self._boundary_rz(grid, 0.0)[:4]
-            orientation = jnp.sign(jnp.sum(Rc * dZc))
-        outward = orientation * ((R - Rb) * dZ - (Z - Zb) * dR)
-        return -jnp.sign(outward) * jnp.hypot(R - Rb, Z - Zb)
-
-    @partial(jit, static_argnames=['self'])
-    def flux_coordinates(self, xyz):
-        """Invert :meth:`to_xyz`: a Cartesian point to (s, theta, phi), and the residual [m].
-
-        Newton iterations in (sqrt(s) cos theta, sqrt(s) sin theta), which is
-        regular on the axis, from the nearest of 12 x 32 nodes of the
-        cross-section at the point's phi. Points outside the LCFS return
-        s > 1 only as far as the extrapolated geometry allows; check the
-        residual.
-        """
-        R, Z = jnp.hypot(xyz[0], xyz[1]), xyz[2]
-        phi = jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2 * jnp.pi)
-        target = jnp.array([R, Z])
-
-        def rz(x):
-            p = self.to_xyz(jnp.array([x[0]**2 + x[1]**2, jnp.arctan2(x[1], x[0]), phi]))
-            return jnp.array([jnp.hypot(p[0], p[1]), p[2]])
-
-        rho, theta = [a.ravel() for a in jnp.meshgrid(jnp.linspace(0.08, 1.0, 12),
-                                                     jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False))]
-        seeds = jnp.stack([rho * jnp.cos(theta), rho * jnp.sin(theta)], 1)
-        x = seeds[jnp.argmin(jnp.sum((vmap(rz)(seeds) - target)**2, 1))]
-
-        def newton(x, _):
-            dx = jnp.linalg.solve(jacfwd(rz)(x), rz(x) - target)
-            x = x - dx * jnp.minimum(1.0, 0.1 / (jnp.linalg.norm(dx) + 1e-300))
-            # Stay in s <= 1: beyond it the extrapolated map can fold back over the plasma.
-            return x / jnp.maximum(1.0, jnp.linalg.norm(x)), None
-
-        x, _ = lax.scan(newton, x, None, length=40)
-        s = x[0]**2 + x[1]**2
-        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), jnp.linalg.norm(rz(x) - target)
 
 class near_axis:
     def __init__(self, *args, **kwargs):
@@ -658,10 +711,6 @@ class ExternalField(MagneticField):
         self.source = source
 
     @jit
-    def sqrtg(self, points):
-        return 1.
-
-    @jit
     def B(self, points):
         if hasattr(self.source, "b_cyl"):
             R, phi = jnp.hypot(points[0], points[1]), jnp.arctan2(points[1], points[0])
@@ -673,24 +722,48 @@ class ExternalField(MagneticField):
 class CombinedField(MagneticField):
     """Sum of several magnetic fields, traced as one.
 
-    The usual case is a coil field plus a plasma contribution: ``B`` and
-    ``B_contravariant`` add over the fields, while the geometry helpers
-    ``sqrtg`` and ``to_xyz`` come from the first field, which is the one that
-    carries the coordinate system.
+    ``sum_i weights[i] * fields[i]``, usually built as ``f + g``, ``f - g`` or
+    ``a * f``. The components add over the fields in the coordinates of the
+    first, which supplies ``sqrtg`` and ``to_xyz``, so the fields must share
+    coordinates (a coil field plus a Cartesian plasma contribution, say).
+    :meth:`B_xyz` adds Cartesian vectors and is valid for any fields.
     """
 
-    def __init__(self, *fields):
+    def __init__(self, *fields, weights=None):
         if len(fields) < 1:
             raise ValueError("CombinedField needs at least one field")
-        self.fields = fields
+        # Nested sums are flattened, so f + g + h is one sum of three fields.
+        weights = (1.,) * len(fields) if weights is None else tuple(weights)
+        self.fields, self.weights = (), ()
+        for field, weight in zip(fields, weights, strict=True):
+            parts = (field.fields, field.weights) if isinstance(field, CombinedField) else ((field,), (1.,))
+            self.fields += parts[0]
+            self.weights += tuple(float(weight * w) for w in parts[1])  # static: one compile per weight set
+
+    def __getattr__(self, name):
+        # Coordinate helpers (flux_coordinates, Aminor_p, nfp, ...) come from the first field.
+        if name == "fields":
+            raise AttributeError(name)
+        return getattr(self.fields[0], name)
+
+    def _sum(self, method, *args):
+        return sum(w * getattr(field, method)(*args) for field, w in zip(self.fields, self.weights))
 
     @jit
     def B(self, points):
-        return sum(field.B(points) for field in self.fields)
+        return self._sum("B", points)
+
+    @jit
+    def B_covariant(self, points):
+        return self._sum("B_covariant", points)
 
     @jit
     def B_contravariant(self, points):
-        return sum(field.B_contravariant(points) for field in self.fields)
+        return self._sum("B_contravariant", points)
+
+    @jit
+    def B_xyz(self, xyz):
+        return self._sum("B_xyz", xyz)
 
     @jit
     def sqrtg(self, points):
@@ -701,13 +774,20 @@ class CombinedField(MagneticField):
         return self.fields[0].to_xyz(points)
 
     def _tree_flatten(self):
-        return (self.fields,), {}
+        return (self.fields,), self.weights
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        return cls(*children[0], **aux_data)
+        self = cls.__new__(cls)
+        self.fields, self.weights = children[0], aux_data
+        return self
 
 
 tree_util.register_pytree_node(CombinedField,
                                CombinedField._tree_flatten,
                                CombinedField._tree_unflatten)
+
+
+def is_toroidal(field):
+    """Whether ``field`` works in the (s, theta, phi) of :class:`ToroidalField`, alone or as the first of a sum."""
+    return isinstance(getattr(field, "fields", (field,))[0], ToroidalField)

@@ -544,3 +544,32 @@ def test_vmec_partner_cutoff_is_phase_invariant():
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0, 1])
     arrays['bmns'] = jnp.zeros_like(arrays['bmns'])
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0])
+
+
+def _coil_field():
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.3, n_segments=20, nfp=2, stellsym=True)
+    return BiotSavart(Coils(curves=curves, currents=[1e5] * 2))
+
+
+def test_toroidal_boundary_from_to_xyz_matches_the_vmec_series():
+    from essos.fields import ToroidalField
+    vmec = Vmec(WOUT_FILE)
+    theta = jnp.linspace(0, 2 * jnp.pi, 7)
+    for generic, analytic in zip(ToroidalField._boundary_rz(vmec, theta, 0.3), vmec._boundary_rz(theta, 0.3)):
+        assert jnp.allclose(generic, analytic, rtol=1e-10, atol=1e-10)
+
+
+def test_field_algebra_and_comparison():
+    from essos.fields import CombinedField
+    coils = _coil_field()
+    p = jnp.array([[0.9, 0.2, 0.1], [0.1, 1.1, -0.05]])
+    B = vmap(coils.B)(p)
+    total = sum([coils, 2. * coils])
+    assert isinstance(total, CombinedField) and len(total.fields) == 2
+    assert jnp.allclose(vmap(total.B)(p), 3 * B)
+    assert jnp.allclose(vmap((2. * coils - coils + coils).B)(p), 2 * B)
+    assert len((coils + coils + coils).fields) == 3  # nested sums are flattened
+    assert jnp.allclose(jax.jit(vmap((0.5 * total).B))(p), 1.5 * B)  # weights survive the pytree round trip
+    assert jnp.allclose(coils.compare(coils, p), 0.)
+    assert jnp.allclose(total.compare(coils, p), 2. / 3.)  # |3B - B| / |3B|
