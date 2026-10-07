@@ -1,6 +1,14 @@
 from pyexpat import model
+import os
 import jax
 jax.config.update("jax_enable_x64", True)
+# Every Tracing compiles a new solve, since maxtime and the save times are constants of it: about 4 s on a CPU
+# and 20 s on a GPU. XLA's persistent cache, keyed by the compiled program, serves a repeated trace (an
+# optimization loop, a rerun) from disk instead. ESSOS_XLA_CACHE names the directory; an empty value disables it.
+_XLA_CACHE = os.environ.get("ESSOS_XLA_CACHE", os.path.join(os.path.expanduser("~"), ".cache", "essos", "xla"))
+if _XLA_CACHE and not jax.config.jax_compilation_cache_dir:
+    jax.config.update("jax_compilation_cache_dir", _XLA_CACHE)
+    jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from matplotlib.colors import is_color_like
@@ -1187,9 +1195,10 @@ class Tracing():
         n = len(y0)
         traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys)))
         batch = n if self.particle_batch_size is None or traced else min(self.particle_batch_size, n)
-        count = min(len(self.devices), batch)
-        while count > 1 and batch % count:
-            count -= 1
+        # Sharding pays off for plain traces. A differentiated trace stays on one device: XLA 0.6 aborts compiling
+        # a gradient through a while loop sharded over several CPU devices.
+        count = 1 if traced else min(len(self.devices), batch)
+        batch = -(-batch // count) * count  # padded below so every device traces equally many particles
         if count > 1:
             place = NamedSharding(Mesh(np.asarray(self.devices[:count], dtype=object), ("dev",)), PartitionSpec("dev"))
             solve = jit(vmap(compute_trajectory), in_shardings=place, out_shardings=place)
