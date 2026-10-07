@@ -22,6 +22,11 @@ from essos.objective_functions import ( loss_BdotN_mean, loss_coil_curvature_fro
 #  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares, minimize
 
+# Imports to run VMEX after the optimization is obtained.
+from dataclasses import replace
+import vmex as vj
+
+import datetime
 
 # ====================================================================================
 # ====================================================================================
@@ -34,8 +39,11 @@ EXPORT = True
 output_filepath = os.path.join(os.path.dirname(__file__), "output_single_stage/test_QS_01")
 os.makedirs(output_filepath, exist_ok=True) # Make the path
 
+# True -> run a fixed-boundary VMEX equilibrium on the exported surface
+RUN_VMEX = True
+
 # True -> skip optimization, load saved dofs
-LOAD_RESULT = False
+LOAD_RESULT = True
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -47,7 +55,7 @@ ntheta = 26; nphi = 26; Npoints = ntheta * nphi
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
-N_COILS = 3; FOURIER_ORDER = 4; LARGE_R = 10;
+N_COILS = 4; FOURIER_ORDER = 3; LARGE_R = 10;
 SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 40; STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
@@ -64,8 +72,8 @@ LENGTH_WEIGHT = 10.; LENGTH_TARGET = 40.;
 CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 0.5
 
 # Field ~~~~~~~~~~~~~~~~~~~~
-NORMAL_FIELD_WEIGHT = 1e5;
-QS_WEIGHT = 1e3
+NORMAL_FIELD_WEIGHT = 1e4;
+QS_WEIGHT = 50
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e3
@@ -739,10 +747,57 @@ if EXPORT:
     opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_single_stage"))
 
     """ Save the optimized boundary as a VMEC input file for VMEX """
-    # NCURR = 1 -> VMEX holds the toroidal current at zero and computes iota (default 0 prescribes iota = 0).
+    # to_vmec writes only the boundary. VMEX reads it back, sets the run controls, and rewrites a complete input:
+    # NCURR = 1 holds the toroidal current at zero, so iota is computed (default 0 prescribes iota = 0).
     vmec_input_file = os.path.join(output_filepath, "input.single_stage")
     surface_opt.to_vmec(vmec_input_file)
-    with open(vmec_input_file) as f:
-        vmec_input = f.read().replace("\nNTOR", "\nNCURR = 1\nNTOR", 1)
-    with open(vmec_input_file, "w") as f:
-        f.write(vmec_input)
+    vmec_inp = replace(vj.VmecInput.from_file(vmec_input_file), ncurr=1, niter_array=[20000])
+    vmec_inp.to_indata(vmec_input_file)
+
+
+    """ Fixed-boundary VMEX equilibrium of the optimized surface """
+    if RUN_VMEX:
+        vmec_result = vj.solve_multigrid(vmec_inp, verbose=False)
+
+        # The equilibrium is saved as a wout file, and VMEX's diagnostic figures are written next to it.
+        wout = vj.wout_from_result(vmec_inp, vmec_result)
+        wout_file = vj.write_wout(os.path.join(output_filepath, "wout_single_stage.nc"), wout)
+        vj.plot_wout(wout_file, output_filepath)
+
+        # The Boozer transform shows how quasisymmetric |B| is.
+        boozmn_file = vj.run_booz_xform(wout_file, outdir=output_filepath)
+        vj.plot_boozmn(boozmn_file, output_filepath)
+
+        print("\nVMEX (fixed boundary):")
+        print("  converged:", bool(vmec_result.converged), "after", int(vmec_result.iterations), "iterations")
+        print("  iota (axis, edge):", float(wout.iotaf[0]), float(wout.iotaf[-1]))
+        print("  aspect ratio:", float(wout.aspect))
+
+
+
+    """ Record of the run parameters """
+# The input parameters are grouped as in the INPUT DATA section and written as "NAME = value" lines,
+# so the file can later be read back to set up a run.
+RUN_PARAMETERS = {
+    "Run control":          ["EXPORT", "RUN_VMEX", "LOAD_RESULT", "MAXITER"],
+    "Initial surface":      ["ntheta", "nphi"],
+    "Coils":                ["N_COILS", "FOURIER_ORDER", "LARGE_R", "SMALL_R", "NFP", "N_SEGMENTS",
+                             "STELLSYM", "COIL_CURRENT"],
+    "Geometry losses":      ["MAJOR_RADIUS_WEIGHT"],
+    "Coil losses":          ["LENGTH_WEIGHT", "LENGTH_TARGET", "CURVATURE_WEIGHT", "CURVATURE_TARGET"],
+    "Field losses":         ["NORMAL_FIELD_WEIGHT", "QS_WEIGHT"],
+    "Surface losses":       ["CROSS_SECTIONAL_AREA_WEIGHT", "AREA_UNIFORMITY_WEIGHT", "AREA_UNIFORMITY_TOLERANCE",
+                             "NORMAL_DISPLACEMENT_WEIGHT", "QQ_WEIGHT", "ALPHA_QQ", "KAPPA_WEIGHT", "ALPHA_KAPPA",
+                             "A3D_MIN", "A3D_WEIGHT"],
+    "Rotational transform": ["IOTA_APPROX_WEIGHT", "IOTA_APPROX_TARGET",
+                             "SLOPE_MIN", "PHI_FLOOR_FRACTION", "POLOIDAL_SLOPE_WEIGHT"],
+    "x_scale":              ["SCALE_FIELD", "SCALE_SURFACE"],
+}
+
+with open(os.path.join(output_filepath, "essos_surf_coils.in"), "w") as f:
+    f.write(f"# ESSOS single-stage run parameters ({datetime.datetime.now():%Y-%m-%d %H:%M})\n")
+    f.write(f"VMEC_INPUT = {os.path.basename(vmec_input)!r}\n")
+    for section, names in RUN_PARAMETERS.items():
+        f.write(f"\n# {section}\n")
+        for name in names:
+            f.write(f"{name} = {globals()[name]!r}\n")
