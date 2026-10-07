@@ -112,6 +112,10 @@ class MagneticField():
             return jnp.linalg.norm(B - other.B_xyz(self.to_xyz(point))) / jnp.linalg.norm(B)
         return vmap(difference)(points)
 
+    def cartesian(self):
+        """This field in Cartesian coordinates, B(x) = :meth:`B_xyz`: the field full orbits move in."""
+        return ExternalField(lambda xyz: vmap(self.B_xyz)(xyz))
+
     def __add__(self, other):
         return CombinedField(self, other)
 
@@ -641,6 +645,7 @@ class Vmec(ToroidalField):
 
     @partial(jit, static_argnames=['self'])
     def B(self, points):
+        """Cartesian B = B^theta e_theta + B^phi e_phi, so that B.grad s = 0 exactly."""
         geometry = self._geometry_series(points)
         R, dR = geometry['rmnc']
         _, dZ = geometry['zmns']
@@ -648,10 +653,7 @@ class Vmec(ToroidalField):
         sin, cos = jnp.sin(phi), jnp.cos(phi)
         basis = jnp.stack([cos * dR, sin * dR, dZ])
         basis = basis.at[:, 2].add(jnp.array([-R * sin, R * cos, 0]))
-        reciprocal = jnp.stack([jnp.cross(basis[:, 1], basis[:, 2]),
-                                jnp.cross(basis[:, 2], basis[:, 0]),
-                                jnp.cross(basis[:, 0], basis[:, 1])]) / self.sqrtg(points)
-        return self.B_covariant(points) @ reciprocal
+        return basis[:, 1:] @ self.B_contravariant(points)[1:]
 
     @partial(jit, static_argnames=['self'])
     def AbsB(self, points):

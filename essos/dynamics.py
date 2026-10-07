@@ -1,4 +1,5 @@
 from pyexpat import model
+import copy
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -935,6 +936,15 @@ class Tracing():
         else:
             self.electric_field=electric_field
 
+        if model is not None and model.startswith('FullOrbit') and is_toroidal(field):
+            # Full orbits move in Cartesian space: trace them in the Cartesian view of the field, from the
+            # Cartesian position of each guiding center given in (s, theta, phi), up to the boundary s = 1.
+            toroidal, particles = field, copy.copy(particles)
+            particles.initial_xyz = vmap(field.to_xyz)(particles.initial_xyz)
+            field = field.cartesian()
+            particles.to_full_orbit(field)
+            if condition is None and stopping_criteria is None:
+                condition = lambda t, y, args, **kwargs: 1.0 - toroidal.flux_coordinates(y[:3])[0][0]
         if isinstance(field, Coils):
             self.field = BiotSavart(field)
         else:
