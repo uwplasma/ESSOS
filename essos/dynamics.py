@@ -1,6 +1,14 @@
 from pyexpat import model
+import os
 import jax
 jax.config.update("jax_enable_x64", True)
+# Every Tracing compiles a new solve, since maxtime and the save times are constants of it: about 4 s on a CPU
+# and 20 s on a GPU. XLA's persistent cache, keyed by the compiled program, serves a repeated trace (an
+# optimization loop, a rerun) from disk instead. ESSOS_XLA_CACHE names the directory; an empty value disables it.
+_XLA_CACHE = os.environ.get("ESSOS_XLA_CACHE", os.path.join(os.path.expanduser("~"), ".cache", "essos", "xla"))
+if _XLA_CACHE and not jax.config.jax_compilation_cache_dir:
+    jax.config.update("jax_compilation_cache_dir", _XLA_CACHE)
+    jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from matplotlib.colors import is_color_like
