@@ -47,9 +47,10 @@ def _interval(knots, x, n):
     return jnp.clip(count - 1, 0, n - 1)
 
 
-def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.float64):
+def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.float64, field_dtype=None):
     """Final states, loss times and max energy errors after ``n_steps`` RK4 steps."""
-    p = pack(field, dtype)
+    field_dtype = dtype if field_dtype is None else field_dtype
+    p = pack(field, field_dtype)
     nint, pint, psi0 = p["nint"], p["pint"], p["psi0"]
     n = y0.shape[0]
     npad = -(-n // block) * block
@@ -67,6 +68,8 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
         has_m = xm[None, :] > 0
 
         def field_at(r, theta, zeta):
+            out_dtype = r.dtype
+            r, theta, zeta = (x.astype(field_dtype) for x in (r, theta, zeta))
             i = _interval(knots, r, nint)
             d = (r - knots_ref[i])[:, None]
             c = [coef_ref[k, i[:, None], modes[None, :]] for k in range(4)]
@@ -76,17 +79,20 @@ def trace_rk4(field, y0, mu, *, mass, charge, dt, n_steps, block=32, dtype=jnp.f
             cs, sn = (jnp.cos(phase), jnp.sin(phase)) if not _NO_TRIG else (1 - 0.5 * phase * phase, phase)
             f = jnp.where(has_m, r[:, None] * a, a)
             df = jnp.where(has_m, a + r[:, None] * da, da)
-            return (jnp.sum(f * cs, 1), jnp.sum(df * cs, 1), -jnp.sum(xm[None, :] * a * sn, 1),
-                    jnp.sum(xn[None, :] * f * sn, 1))
+            return tuple(x.astype(out_dtype) for x in (
+                jnp.sum(f * cs, 1), jnp.sum(df * cs, 1), -jnp.sum(xm[None, :] * a * sn, 1),
+                jnp.sum(xn[None, :] * f * sn, 1)))
 
         def profiles(s):
+            out_dtype = s.dtype
+            s = s.astype(field_dtype)
             j = _interval(sknots, s, pint)
             d = s - sknots_ref[j]
             out = []
             for q in range(3):
                 c = [pcoef_ref[q, j, k] for k in range(4)]
-                out.append((((c[0] * d + c[1]) * d + c[2]) * d + c[3],
-                            (3 * c[0] * d + 2 * c[1]) * d + c[2]))
+                out.append(((((c[0] * d + c[1]) * d + c[2]) * d + c[3]).astype(out_dtype),
+                            ((3 * c[0] * d + 2 * c[1]) * d + c[2]).astype(out_dtype)))
             return out
 
         def chart(u, w):
