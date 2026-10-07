@@ -43,7 +43,7 @@ os.makedirs(output_filepath, exist_ok=True) # Make the path
 RUN_VMEX = True
 
 # True -> skip optimization, load saved dofs
-LOAD_RESULT = True
+LOAD_RESULT = False
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -754,19 +754,22 @@ if EXPORT:
     vmec_inp = replace(vj.VmecInput.from_file(vmec_input_file), ncurr=1, niter_array=[20000])
     vmec_inp.to_indata(vmec_input_file)
 
-
     """ Fixed-boundary VMEX equilibrium of the optimized surface """
     if RUN_VMEX:
+        # All VMEX results (wout, boozmn and figures) go to their own subfolder inside the run folder.
+        vmex_output_filepath = os.path.join(output_filepath, "vmex_output")
+        os.makedirs(vmex_output_filepath, exist_ok=True)
+
         vmec_result = vj.solve_multigrid(vmec_inp, verbose=False)
 
         # The equilibrium is saved as a wout file, and VMEX's diagnostic figures are written next to it.
         wout = vj.wout_from_result(vmec_inp, vmec_result)
-        wout_file = vj.write_wout(os.path.join(output_filepath, "wout_single_stage.nc"), wout)
-        vj.plot_wout(wout_file, output_filepath)
+        wout_file = vj.write_wout(os.path.join(vmex_output_filepath, "wout_single_stage.nc"), wout)
+        vj.plot_wout(wout_file, vmex_output_filepath)
 
         # The Boozer transform shows how quasisymmetric |B| is.
-        boozmn_file = vj.run_booz_xform(wout_file, outdir=output_filepath)
-        vj.plot_boozmn(boozmn_file, output_filepath)
+        boozmn_file = vj.run_booz_xform(wout_file, outdir=vmex_output_filepath)
+        vj.plot_boozmn(boozmn_file, vmex_output_filepath)
 
         print("\nVMEX (fixed boundary):")
         print("  converged:", bool(vmec_result.converged), "after", int(vmec_result.iterations), "iterations")
@@ -774,8 +777,7 @@ if EXPORT:
         print("  aspect ratio:", float(wout.aspect))
 
 
-
-    """ Record of the run parameters """
+""" Record of the run parameters """
 # The input parameters are grouped as in the INPUT DATA section and written as "NAME = value" lines,
 # so the file can later be read back to set up a run.
 RUN_PARAMETERS = {
