@@ -573,3 +573,36 @@ def test_field_algebra_and_comparison():
     assert jnp.allclose(jax.jit(vmap((0.5 * total).B))(p), 1.5 * B)  # weights survive the pytree round trip
     assert jnp.allclose(coils.compare(coils, p), 0.)
     assert jnp.allclose(total.compare(coils, p), 2. / 3.)  # |3B - B| / |3B|
+
+
+class _TorusBasis:
+    """A stand-in for an MRX 2-form basis: Bhat(x) is a smooth function of the logical point."""
+    def contract(self, raw, x):
+        r, t, z = x
+        return raw * jnp.array([0.1 * r * jnp.sin(2 * jnp.pi * (t - z)), 0.4 + r * jnp.cos(2 * jnp.pi * t), 1. + 0.2 * r**2])
+
+
+def _torus_map(x, R0=1.0, a=0.3, nfp=3):
+    r, t, z = x
+    R = R0 + a * r * jnp.cos(2 * jnp.pi * t) + 0.05 * r * jnp.cos(2 * jnp.pi * (t - z))
+    return jnp.array([R * jnp.cos(2 * jnp.pi * z / nfp), R * jnp.sin(2 * jnp.pi * z / nfp), a * r * jnp.sin(2 * jnp.pi * t)])
+
+
+def test_mrx_field_components_are_consistent_with_its_map():
+    from essos.fields import MRXField, is_toroidal
+    field = MRXField(jnp.array([1., 1., 1.]), _TorusBasis(), jax.tree_util.Partial(_torus_map), nfp=3)
+    assert jnp.isclose(field.Aminor_p, 0.3, rtol=1e-2)
+    p = jnp.array([[0.4, 0.7, 0.3], [0.8, 4.0, 5.9], [0.1, 2.5, 3.1]])  # phi beyond the first period
+    e = vmap(jax.jacfwd(field.to_xyz))(p)
+    B = vmap(field.B)(p)
+    assert jnp.allclose(jnp.einsum("nij,nj->ni", e, vmap(field.B_contravariant)(p)), B, rtol=1e-12)
+    assert jnp.allclose(jnp.einsum("nij,ni->nj", e, B), vmap(field.B_covariant)(p), rtol=1e-12)
+    assert jnp.allclose(jnp.linalg.det(e), vmap(field.sqrtg)(p), rtol=1e-12)
+    assert jnp.allclose(vmap(field.B_xyz)(vmap(field.to_xyz)(p)), B, rtol=1e-8)
+    shifted = p.at[:, 2].add(2 * jnp.pi / 3)  # the next field period is the rotation of this one
+    c, s = jnp.cos(2 * jnp.pi / 3), jnp.sin(2 * jnp.pi / 3)
+    rotation = jnp.array([[c, -s, 0.], [s, c, 0.], [0., 0., 1.]])
+    assert jnp.allclose(vmap(field.B)(shifted), B @ rotation.T, rtol=1e-12)
+    assert is_toroidal(2. * field) and jnp.allclose(jax.jit(vmap(field.B))(p), B)
+    assert jnp.allclose(jax.grad(lambda raw: MRXField(raw, field.basis, field.Phi, 3, 0.3).AbsB(p[0]))(field.raw),
+                        jax.jacfwd(lambda raw: MRXField(raw, field.basis, field.Phi, 3, 0.3).AbsB(p[0]))(field.raw))
