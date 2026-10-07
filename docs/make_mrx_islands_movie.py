@@ -91,5 +91,13 @@ with writer.saving(fig, f"{HERE}/readme_mrx_islands_full.mp4", dpi=110):
     for f in range(FRAMES):
         draw(f)
         writer.grab_frame()
-fig.savefig(f"{HERE}/readme_mrx_islands.png", dpi=110)
-print("wrote readme_mrx_islands_full.mp4; compress it to readme_mrx_islands.mp4 with ffmpeg -crf 30")
+# The README shows a GIF, which GitHub plays inline: cropped to the panels, 10 frames per second, 64 colors.
+import subprocess
+crop = "crop=1040:1020:270:14,fps=10,scale=640:-1:flags=lanczos"
+movie, palette = f"{HERE}/readme_mrx_islands_full.mp4", f"{HERE}/palette.png"
+subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", movie, "-vf", f"{crop},palettegen=max_colors=64:stats_mode=diff",
+                palette], check=True)
+subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", movie, "-i", palette, "-lavfi",
+                f"{crop}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+                f"{HERE}/readme_mrx_islands.gif"], check=True)
+print("wrote readme_mrx_islands.gif")
