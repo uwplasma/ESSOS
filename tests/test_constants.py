@@ -17,8 +17,14 @@ def test_one_ev():
     assert ONE_EV == 1.602176634e-19
 
 def test_alpha_particle_mass():
-    expected_mass = 2 * PROTON_MASS + 2 * NEUTRON_MASS
-    assert ALPHA_PARTICLE_MASS == expected_mass
+    assert ALPHA_PARTICLE_MASS == 6.6446573450e-27
+
+def test_fusion_alpha_birth_speed():
+    from essos.dynamics import Particles
+
+    particles = Particles(initial_xyz=[[1.0, 0.0, 0.0]], initial_vparallel_over_v=[0.5])
+    assert float(particles.total_speed) == pytest.approx(1.302882442052182e7, rel=1e-12)
+    assert float(particles.initial_vparallel[0]) == pytest.approx(6.514412210260910e6, rel=1e-12)
 
 def test_alpha_particle_charge():
     expected_charge = 2 * ELEMENTARY_CHARGE
