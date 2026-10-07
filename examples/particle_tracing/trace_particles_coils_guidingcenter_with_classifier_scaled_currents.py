@@ -71,8 +71,9 @@ vmec.surface.plot(ax=ax1, show=False, alpha=0.4)
 coils.plot(ax=ax1, show=False)
 tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 
+energy = tracing.energy()
 for i, trajectory in enumerate(trajectories):
-    ax2.plot(tracing.times, jnp.abs(tracing.energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
+    ax2.plot(tracing.times, jnp.abs(energy[i]-particles.energy)/particles.energy, label=f'Particle {i+1}')
     ax3.plot(tracing.times, trajectory[:, 3]/particles.total_speed, label=f'Particle {i+1}')
     #ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')
     ax4.plot(jnp.sqrt(trajectory[:,0]**2+trajectory[:,1]**2), trajectory[:, 2], label=f'Particle {i+1}')

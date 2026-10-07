@@ -306,8 +306,14 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
     return (powers @ (k == np.arange(-1, 4)[:, None])) * ((1 - t) * scaled[i] + t * scaled[i + 1])
 
+VMEC_WOUT_ARRAYS = ('bmnc', 'xm', 'xn', 'rmnc', 'zmns', 'bsubsmns', 'bsubumnc', 'bsubvmnc',
+                    'bsupumnc', 'bsupvmnc', 'gmnc', 'xm_nyq', 'xn_nyq', 'Aminor_p')
+VMEC_WOUT_PARTNERS = {'rmnc': 'rmns', 'zmns': 'zmnc', 'bmnc': 'bmns', 'gmnc': 'gmns',
+                      'bsubsmns': 'bsubsmnc', 'bsubumnc': 'bsubumns', 'bsubvmnc': 'bsubvmns',
+                      'bsupumnc': 'bsupumns', 'bsupvmnc': 'bsupvmns'}
+
 class Vmec():
-    """VMEC equilibrium from a wout file.
+    """VMEC equilibrium, including asymmetric Fourier partners, from wout or live arrays.
 
     ``mode_tolerance`` drops a Fourier mode when, in every table of its set,
     its largest amplitude over the radial grid is below that fraction of the
@@ -319,41 +325,98 @@ class Vmec():
         self.wout_filename = wout_filename
         from netCDF4 import Dataset
         self.nc = Dataset(self.wout_filename)
-        self.nfp = int(self.nc.variables["nfp"][0])
-        self.bmnc = jnp.array(self.nc.variables["bmnc"][:])
-        self.xm = jnp.array(self.nc.variables["xm"][:])
-        self.xn = jnp.array(self.nc.variables["xn"][:])
-        self.rmnc = jnp.array(self.nc.variables["rmnc"][:])
-        self.zmns = jnp.array(self.nc.variables["zmns"][:])
-        self.bsubsmns = jnp.array(self.nc.variables["bsubsmns"][:])
-        self.bsubumnc = jnp.array(self.nc.variables["bsubumnc"][:])
-        self.bsubvmnc = jnp.array(self.nc.variables["bsubvmnc"][:])
-        self.bsupumnc = jnp.array(self.nc.variables["bsupumnc"][:])
-        self.bsupvmnc = jnp.array(self.nc.variables["bsupvmnc"][:])
-        self.gmnc = jnp.array(self.nc.variables["gmnc"][:])
-        self.xm_nyq = jnp.array(self.nc.variables["xm_nyq"][:])
-        self.xn_nyq = jnp.array(self.nc.variables["xn_nyq"][:])
+        try:
+            variables = self.nc.variables
+            lasym = any(bool(np.asarray(variables[name][:]).item())
+                        for name in ('lasym__logical__', 'lasym') if name in variables)
+            if lasym and any(name not in variables for name in VMEC_WOUT_PARTNERS.values()):
+                raise ValueError("Asymmetric wout is missing Fourier partner tables")
+            partners = {name: jnp.array(variables[name][:]) for name in VMEC_WOUT_PARTNERS.values()
+                        if name in variables and np.any(variables[name][:])}
+            self._set_state(nfp=int(self.nc.variables["nfp"][0]), ns=int(self.nc.variables["ns"][0]),
+                            ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,
+                            mode_tolerance=mode_tolerance,
+                            **{name: jnp.array(self.nc.variables[name][:]) for name in VMEC_WOUT_ARRAYS}, **partners)
+        except BaseException:
+            self.nc.close()
+            raise
+
+    @classmethod
+    def from_arrays(cls, nfp, ns, bmnc, xm, xn, rmnc, zmns, bsubsmns, bsubumnc, bsubvmnc,
+                    bsupumnc, bsupvmnc, gmnc, xm_nyq, xn_nyq, Aminor_p,
+                    ntheta=50, nphi=50, close=True, range_torus='full torus', mode_tolerance=0.0, **partners):
+        """Build a differentiable VMEC field from in-memory wout arrays.
+
+        Metadata and mode numbers must be concrete. Positive ``mode_tolerance``
+        also requires concrete coefficient tables to select modes by amplitude.
+        Optional sine/cosine partner tables use their wout names (e.g. ``bmns``).
+        """
+        self = cls.__new__(cls)
+        self.wout_filename = None
+        self.nc = None
+        self._set_state(nfp=int(nfp), ns=int(ns), bmnc=bmnc, xm=xm, xn=xn, rmnc=rmnc, zmns=zmns,
+                        bsubsmns=bsubsmns, bsubumnc=bsubumnc, bsubvmnc=bsubvmnc,
+                        bsupumnc=bsupumnc, bsupvmnc=bsupvmnc, gmnc=gmnc, xm_nyq=xm_nyq,
+                        xn_nyq=xn_nyq, Aminor_p=Aminor_p, ntheta=ntheta, nphi=nphi,
+                        close=close, range_torus=range_torus, mode_tolerance=mode_tolerance, **partners)
+        return self
+
+    def _set_state(self, nfp, ns, bmnc, xm, xn, rmnc, zmns, bsubsmns, bsubumnc, bsubvmnc,
+                   bsupumnc, bsupvmnc, gmnc, xm_nyq, xn_nyq, Aminor_p,
+                   ntheta, nphi, close, range_torus, mode_tolerance=0.0, **partners):
+        if ns < 3 or not 0 <= mode_tolerance < 1:
+            raise ValueError("Require ns >= 3 and 0 <= mode_tolerance < 1")
+        unknown = partners.keys() - VMEC_WOUT_PARTNERS.values()
+        if unknown:
+            raise TypeError(f"Unknown Fourier partner tables: {sorted(unknown)}")
+        self.nfp = nfp
+        self.bmnc = bmnc
+        self.xm = xm
+        self.xn = xn
+        self.rmnc = rmnc
+        self.zmns = zmns
+        self.bsubsmns = bsubsmns
+        self.bsubumnc = bsubumnc
+        self.bsubvmnc = bsubvmnc
+        self.bsupumnc = bsupumnc
+        self.bsupvmnc = bsupvmnc
+        self.gmnc = gmnc
+        self.xm_nyq = xm_nyq
+        self.xn_nyq = xn_nyq
+        for name, partner in VMEC_WOUT_PARTNERS.items():
+            table = partners.get(partner)
+            if table is not None:
+                table = jnp.asarray(table)
+                if table.shape != getattr(self, name).shape:
+                    raise ValueError(f"{partner} must match {name}.shape")
+            setattr(self, partner, table)
         if mode_tolerance > 0:
             self._drop_small_modes(mode_tolerance)
         self.len_xm_nyq = len(self.xm_nyq)
-        self.ns = self.nc.variables["ns"][0]
+        self.ns = ns
         self.s_full_grid = jnp.linspace(0, 1, self.ns)
         self.ds = self.s_full_grid[1] - self.s_full_grid[0]
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
         self.r_axis = self.rmnc[0, 0]
-        self.z_axis=self.zmns[0,0]
-        self.mpol = int(jnp.max(self.xm))
-        self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
+        self.z_axis = self.zmns[0, 0] if self.zmnc is None else self.zmnc[0, 0]
+        with jax.ensure_compile_time_eval():
+            self.mpol = int(jnp.max(self.xm))
+            self.ntor = int(jnp.max(jnp.abs(self.xn)) / self.nfp)
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier.from_vmec(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
-        self.Aminor_p = jnp.array(self.nc.variables["Aminor_p"][:])
+        self.Aminor_p = Aminor_p
         #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
-        
+
     def _drop_small_modes(self, tolerance):
         for tables, numbers in ((('rmnc', 'zmns'), ('xm', 'xn')),
                                 (('bmnc', 'gmnc', 'bsubsmns', 'bsubumnc', 'bsubvmnc', 'bsupumnc', 'bsupvmnc'),
                                  ('xm_nyq', 'xn_nyq'))):
-            amplitude = [np.abs(np.asarray(getattr(self, name))).max(axis=0) for name in tables]
+            amplitude = [np.abs(np.asarray(getattr(self, name))) if getattr(self, VMEC_WOUT_PARTNERS[name]) is None
+                         else np.hypot(np.asarray(getattr(self, name)), np.asarray(getattr(self, VMEC_WOUT_PARTNERS[name])))
+                         for name in tables]
+            amplitude = [a.max(axis=0) for a in amplitude]
+            tables += tuple(VMEC_WOUT_PARTNERS[name] for name in tables
+                            if getattr(self, VMEC_WOUT_PARTNERS[name]) is not None)
             keep = np.any([a > tolerance * a.max() for a in amplitude], axis=0)
             for name in tables + numbers:
                 setattr(self, name, getattr(self, name)[..., keep])
@@ -362,7 +425,7 @@ class Vmec():
     def surface(self):
         return self._surface
 
-    def _bsubs_axis_m1(self):
+    def _bsubs_axis_m1(self, sine=False):
         """Axis limit of sqrt(s) B_s for the m = 1 modes, from B_theta.
 
         Near the axis the leading m = 1 parts of B_s and B_theta are the
@@ -372,9 +435,11 @@ class Vmec():
         an HSX wout), and extrapolating it gave curl B a toroidal component
         that grew as 1/sqrt(s) on the axis.
         """
-        with jax.ensure_compile_time_eval():
-            b_theta = self.bsubumnc[1:3] / jnp.sqrt(self.s_half_grid[:2])[:, None]
-            return (1.5 * b_theta[0] - 0.5 * b_theta[1]) / 2
+        table = self.bsubumns if sine else self.bsubumnc
+        if table is None:
+            return None
+        b_theta = table[1:3] / jnp.sqrt(self.s_half_grid[:2])[:, None]
+        return (1.5 * b_theta[0] - 0.5 * b_theta[1]) * (-0.5 if sine else 0.5)
         
     # Nyquist tables: (on the half grid, _radial_interp options, cosine series).
     _NYQUIST = {'bmnc': (True, {}, True), 'gmnc': (True, {}, True),
@@ -391,21 +456,36 @@ class Vmec():
         and their derivatives cost one evaluation between them when traced
         together, and curl b and the curvature need no automatic differentiation.
         """
+        return self._series(points, self._NYQUIST, self.xm_nyq, self.xn_nyq)
+
+    def _series(self, points, tables, xm, xn):
         s, theta, phi = points
-        angle = self.xm_nyq * theta - self.xn_nyq * phi
+        angle = xm * theta - xn * phi
         cos, sin = jnp.cos(angle), jnp.sin(angle)
         series = {}
-        for name, (half_grid, options, is_cos) in self._NYQUIST.items():
+        for name, (half_grid, options, is_cos) in tables.items():
             grid = self.s_half_grid if half_grid else self.s_full_grid
-            if name == 'bsubsmns':
-                options = dict(options, axis_m1=self._bsubs_axis_m1())
-            f, df = jax.jvp(lambda s: _radial_interp(s, grid, getattr(self, name), self.xm_nyq,
-                                                     half_grid=half_grid, **options), (s,), (jnp.ones_like(s),))
-            if is_cos:
-                series[name] = (f @ cos, jnp.array([df @ cos, -(self.xm_nyq * f) @ sin, (self.xn_nyq * f) @ sin]))
-            else:
-                series[name] = (f @ sin, jnp.array([df @ sin, (self.xm_nyq * f) @ cos, -(self.xn_nyq * f) @ cos]))
+            total = None
+            for partner, cosine in ((name, is_cos), (VMEC_WOUT_PARTNERS[name], not is_cos)):
+                table = getattr(self, partner)
+                if table is None:
+                    continue
+                radial_options = options
+                if name == 'bsubsmns':
+                    radial_options = dict(options, axis_m1=self._bsubs_axis_m1(partner != name))
+                f, df = jax.jvp(lambda s: _radial_interp(s, grid, table, xm,
+                                                        half_grid=half_grid, **radial_options),
+                               (s,), (jnp.ones_like(s),))
+                if cosine:
+                    value = (f @ cos, jnp.array([df @ cos, -(xm * f) @ sin, (xn * f) @ sin]))
+                else:
+                    value = (f @ sin, jnp.array([df @ sin, (xm * f) @ cos, -(xn * f) @ cos]))
+                total = value if total is None else tuple(a + b for a, b in zip(total, value))
+            series[name] = total
         return series
+
+    def _geometry_series(self, points):
+        return self._series(points, {'rmnc': (False, {}, True), 'zmns': (False, {}, False)}, self.xm, self.xn)
 
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
@@ -424,60 +504,16 @@ class Vmec():
 
     @partial(jit, static_argnames=['self'])
     def B(self, points):
-        s, theta, phi = points
-        gmnc_interp = _radial_interp(s, self.s_half_grid, self.gmnc, self.xm_nyq, half_grid=True)
-        rmnc_interp = _radial_interp(s, self.s_full_grid, self.rmnc, self.xm)
-        zmns_interp = _radial_interp(s, self.s_full_grid, self.zmns, self.xm)
-        d_rmnc_d_s_interp = jacfwd(_radial_interp)(s, self.s_full_grid, self.rmnc, self.xm)
-        d_zmns_d_s_interp = jacfwd(_radial_interp)(s, self.s_full_grid, self.zmns, self.xm)
-        
-        cosangle_nyq = jnp.cos(self.xm_nyq * theta - self.xn_nyq * phi)
-        B_sub_s, B_sub_theta, B_sub_phi = self.B_covariant(points)
-        sqrt_g_vmec = jnp.dot(gmnc_interp, cosangle_nyq)
-        
-        cosangle  = jnp.cos(self.xm * theta - self.xn * phi)
-        sinangle  = jnp.sin(self.xm * theta - self.xn * phi)
-        msinangle = self.xm * sinangle
-        nsinangle = self.xn * sinangle
-        mcosangle = self.xm * cosangle
-        ncosangle = self.xn * cosangle
-        
-        sinphi = jnp.sin(phi)
-        cosphi = jnp.cos(phi)
-        
-        R = jnp.dot(rmnc_interp, cosangle)
-        d_R_d_theta = jnp.dot(rmnc_interp, -msinangle)
-        d_R_d_phi   = jnp.dot(rmnc_interp, nsinangle)
-        d_R_d_s     = jnp.dot(d_rmnc_d_s_interp, cosangle)
-        
-        d_X_d_theta = d_R_d_theta * cosphi
-        d_X_d_phi = d_R_d_phi * cosphi - R * sinphi
-        d_X_d_s = d_R_d_s * cosphi
+        """Cartesian B = B^theta e_theta + B^phi e_phi, so that B.grad s = 0 exactly."""
+        geometry = self._geometry_series(points)
+        R, dR = geometry['rmnc']
+        _, dZ = geometry['zmns']
+        phi = points[2]
+        sin, cos = jnp.sin(phi), jnp.cos(phi)
+        basis = jnp.stack([cos * dR, sin * dR, dZ])
+        basis = basis.at[:, 2].add(jnp.array([-R * sin, R * cos, 0]))
+        return basis[:, 1:] @ self.B_contravariant(points)[1:]
 
-        d_Y_d_theta = d_R_d_theta * sinphi
-        d_Y_d_phi = d_R_d_phi * sinphi + R * cosphi
-        d_Y_d_s = d_R_d_s * sinphi
-        
-        d_Z_d_s = jnp.dot(d_zmns_d_s_interp, sinangle)
-        d_Z_d_theta = jnp.dot(zmns_interp, mcosangle)
-        d_Z_d_phi = jnp.dot(zmns_interp, -ncosangle)
-
-        grad_s_X = (d_Y_d_theta * d_Z_d_phi - d_Z_d_theta * d_Y_d_phi) / sqrt_g_vmec
-        grad_s_Y = (d_Z_d_theta * d_X_d_phi - d_X_d_theta * d_Z_d_phi) / sqrt_g_vmec
-        grad_s_Z = (d_X_d_theta * d_Y_d_phi - d_Y_d_theta * d_X_d_phi) / sqrt_g_vmec
-
-        grad_theta_X = (d_Y_d_phi * d_Z_d_s - d_Z_d_phi * d_Y_d_s) / sqrt_g_vmec
-        grad_theta_Y = (d_Z_d_phi * d_X_d_s - d_X_d_phi * d_Z_d_s) / sqrt_g_vmec
-        grad_theta_Z = (d_X_d_phi * d_Y_d_s - d_Y_d_phi * d_X_d_s) / sqrt_g_vmec
-
-        grad_phi_X = (d_Y_d_s * d_Z_d_theta - d_Z_d_s * d_Y_d_theta) / sqrt_g_vmec
-        grad_phi_Y = (d_Z_d_s * d_X_d_theta - d_X_d_s * d_Z_d_theta) / sqrt_g_vmec
-        grad_phi_Z = (d_X_d_s * d_Y_d_theta - d_Y_d_s * d_X_d_theta) / sqrt_g_vmec
-        
-        return jnp.array([B_sub_s * grad_s_X + B_sub_theta * grad_theta_X + B_sub_phi * grad_phi_X,
-                          B_sub_s * grad_s_Y + B_sub_theta * grad_theta_Y + B_sub_phi * grad_phi_Y,
-                          B_sub_s * grad_s_Z + B_sub_theta * grad_theta_Z + B_sub_phi * grad_phi_Z])
-        
     @partial(jit, static_argnames=['self'])
     def AbsB(self, points):
         return self._nyquist_series(points)['bmnc'][0]
@@ -515,16 +551,86 @@ class Vmec():
 
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
-        s, theta, phi = points
-        rmnc_interp = _radial_interp(s, self.s_full_grid, self.rmnc, self.xm)
-        zmns_interp = _radial_interp(s, self.s_full_grid, self.zmns, self.xm)
-        cosangle = jnp.cos(self.xm * theta - self.xn * phi)
-        sinangle = jnp.sin(self.xm * theta - self.xn * phi)
-        R = jnp.dot(rmnc_interp, cosangle)
-        Z = jnp.dot(zmns_interp, sinangle)
-        X = R * jnp.cos(phi)
-        Y = R * jnp.sin(phi)
-        return jnp.array([X, Y, Z])
+        geometry = self._geometry_series(points)
+        R, Z = geometry['rmnc'][0], geometry['zmns'][0]
+        return jnp.array([R * jnp.cos(points[2]), R * jnp.sin(points[2]), Z])
+
+    def _boundary_rz(self, theta, phi):
+        """R, Z of the LCFS and their first two theta derivatives, on a theta array."""
+        angle = self.xm * theta[..., None] - self.xn * phi
+        cos, sin = jnp.cos(angle), jnp.sin(angle)
+        m, zero = self.xm, jnp.zeros_like(self.xm, dtype=float)
+        rc, zs = self.rmnc[-1], self.zmns[-1]
+        rs = zero if self.rmns is None else self.rmns[-1]
+        zc = zero if self.zmnc is None else self.zmnc[-1]
+
+        def series(c, s):  # sum c cos + s sin, and its first two theta derivatives
+            return cos @ c + sin @ s, cos @ (m * s) - sin @ (m * c), -(cos @ (m * m * c) + sin @ (m * m * s))
+
+        (R, dR, d2R), (Z, dZ, d2Z) = series(rc, rs), series(zc, zs)
+        return R, Z, dR, dZ, d2R, d2Z
+
+    @partial(jit, static_argnames=['self'])
+    def boundary_distance(self, xyz):
+        """Signed distance [m] from a Cartesian point to the LCFS, in its phi = const plane.
+
+        Positive inside. The nearest point of the LCFS cross-section is found
+        on 64 poloidal nodes and refined by Newton iterations in theta, so the
+        distance is smooth and exact to rounding near the surface: its zero
+        is the LCFS of :meth:`to_xyz` at s = 1.
+        """
+        R, Z, phi = jnp.hypot(xyz[0], xyz[1]), xyz[2], jnp.arctan2(xyz[1], xyz[0])
+        grid = jnp.linspace(0, 2 * jnp.pi, 64, endpoint=False)
+        Rb, Zb = self._boundary_rz(grid, phi)[:2]
+        theta = grid[jnp.argmin((R - Rb)**2 + (Z - Zb)**2)]
+
+        def newton(theta, _):
+            Rb, Zb, dR, dZ, d2R, d2Z = self._boundary_rz(theta, phi)
+            slope = -(R - Rb) * dR - (Z - Zb) * dZ
+            curvature = dR**2 + dZ**2 - (R - Rb) * d2R - (Z - Zb) * d2Z
+            return theta - slope / jnp.where(curvature > 0, curvature, dR**2 + dZ**2), None
+
+        theta, _ = lax.scan(newton, theta, None, length=4)
+        Rb, Zb, dR, dZ = self._boundary_rz(theta, phi)[:4]
+        # VMEC's theta runs either way round; the sign of the enclosed area fixes the outward normal.
+        with jax.ensure_compile_time_eval():
+            Rc, _, _, dZc = self._boundary_rz(grid, 0.0)[:4]
+            orientation = jnp.sign(jnp.sum(Rc * dZc))
+        outward = orientation * ((R - Rb) * dZ - (Z - Zb) * dR)
+        return -jnp.sign(outward) * jnp.hypot(R - Rb, Z - Zb)
+
+    @partial(jit, static_argnames=['self'])
+    def flux_coordinates(self, xyz):
+        """Invert :meth:`to_xyz`: a Cartesian point to (s, theta, phi), and the residual [m].
+
+        Newton iterations in (sqrt(s) cos theta, sqrt(s) sin theta), which is
+        regular on the axis, from the nearest of 12 x 32 nodes of the
+        cross-section at the point's phi. Points outside the LCFS return
+        s > 1 only as far as the extrapolated geometry allows; check the
+        residual.
+        """
+        R, Z = jnp.hypot(xyz[0], xyz[1]), xyz[2]
+        phi = jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2 * jnp.pi)
+        target = jnp.array([R, Z])
+
+        def rz(x):
+            p = self.to_xyz(jnp.array([x[0]**2 + x[1]**2, jnp.arctan2(x[1], x[0]), phi]))
+            return jnp.array([jnp.hypot(p[0], p[1]), p[2]])
+
+        rho, theta = [a.ravel() for a in jnp.meshgrid(jnp.linspace(0.08, 1.0, 12),
+                                                     jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False))]
+        seeds = jnp.stack([rho * jnp.cos(theta), rho * jnp.sin(theta)], 1)
+        x = seeds[jnp.argmin(jnp.sum((vmap(rz)(seeds) - target)**2, 1))]
+
+        def newton(x, _):
+            dx = jnp.linalg.solve(jacfwd(rz)(x), rz(x) - target)
+            x = x - dx * jnp.minimum(1.0, 0.1 / (jnp.linalg.norm(dx) + 1e-300))
+            # Stay in s <= 1: beyond it the extrapolated map can fold back over the plasma.
+            return x / jnp.maximum(1.0, jnp.linalg.norm(x)), None
+
+        x, _ = lax.scan(newton, x, None, length=40)
+        s = x[0]**2 + x[1]**2
+        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), jnp.linalg.norm(rz(x) - target)
 
 class near_axis:
     def __init__(self, *args, **kwargs):
@@ -533,6 +639,33 @@ class near_axis:
             "Please run 'pip install git+https://github.com/uwplasma/pyQSC_JAX.git' "
             "and import it via 'from pyqsc_jax.near_axis import near_axis'."
         )
+
+
+@tree_util.register_static
+class ExternalField(MagneticField):
+    """A Cartesian field from a batched source, traced one point at a time.
+
+    ``source`` has ``b_cyl(R, phi, Z) -> (B_R, B_phi, B_Z)`` (a VMEX
+    ``MgridField``), a batched ``B(points)`` for points of shape ``(n, 3)`` (a
+    VMEX ``VmecExtender``), or is a callable ``xyz (n, 3) -> B (n, 3)``, in
+    metres and tesla, traceable by JAX. The derivatives come from automatic
+    differentiation (:class:`MagneticField`).
+    """
+
+    def __init__(self, source):
+        self.source = source
+
+    @jit
+    def sqrtg(self, points):
+        return 1.
+
+    @jit
+    def B(self, points):
+        if hasattr(self.source, "b_cyl"):
+            R, phi = jnp.hypot(points[0], points[1]), jnp.arctan2(points[1], points[0])
+            BR, Bphi, BZ = (jnp.ravel(b)[0] for b in self.source.b_cyl(R[None], phi[None], points[2][None]))
+            return jnp.array([BR * jnp.cos(phi) - Bphi * jnp.sin(phi), BR * jnp.sin(phi) + Bphi * jnp.cos(phi), BZ])
+        return getattr(self.source, "B", self.source)(points[None])[0]
 
 
 class CombinedField(MagneticField):
@@ -576,4 +709,3 @@ class CombinedField(MagneticField):
 tree_util.register_pytree_node(CombinedField,
                                CombinedField._tree_flatten,
                                CombinedField._tree_unflatten)
-

@@ -1,10 +1,16 @@
+import os
+import numpy as np
 import pytest
+import numpy as np
 from pathlib import Path
 from essos.coils import Coils, Curves
-from essos.fields import BiotSavart
+from essos.fields import BiotSavart, Vmec, VMEC_WOUT_ARRAYS
 import jax
 import jax.numpy as jnp
-from jax import random
+from jax import random, vmap
+
+WOUT_FILE = os.path.join(os.path.dirname(__file__), "..", "examples", "input_files",
+                         "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 
 class MockCoils:
     def __init__(self):
@@ -81,6 +87,35 @@ def test_biot_savart_cylindrical_interface_matches_cartesian_and_differentiates(
 #     points = jnp.array([0.5, 0.5, 0.5])
 #     dAbsB_by_dX = biot_savart.dAbsB_by_dX(points)
 #     assert jnp.allclose(dAbsB_by_dX, jnp.array([7.16688661e-05, 3.82872752e-05, 1.01490560e-04]))
+
+def test_vmec_from_arrays_matches_wout_file():
+    vmec = Vmec(WOUT_FILE)
+    rebuilt = Vmec.from_arrays(nfp=np.int64(vmec.nfp), ns=jnp.asarray(vmec.ns),
+                               **{name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS})
+    points = jnp.array([[0.3, 0.4, 0.5], [0.7, 1.2, 0.2], [0.9, 3.0, 1.1]])
+
+    assert (rebuilt.nfp, rebuilt.ns, rebuilt.mpol, rebuilt.ntor) == (vmec.nfp, vmec.ns, vmec.mpol, vmec.ntor)
+    assert jnp.array_equal(vmap(rebuilt.B)(points), vmap(vmec.B)(points))
+    assert jnp.array_equal(vmap(rebuilt.AbsB)(points), vmap(vmec.AbsB)(points))
+    assert jnp.array_equal(rebuilt.surface.gamma, vmec.surface.gamma)
+
+def test_vmec_from_arrays_is_differentiable_in_the_coefficients():
+    vmec = Vmec(WOUT_FILE)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    point = jnp.array([0.7, 1.2, 0.2])
+
+    traced = []
+
+    def AbsB_of_scale(scale):
+        traced.append(scale)
+        return Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **{**arrays, 'bmnc': arrays['bmnc']*scale}).AbsB(point)
+
+    evaluate = jax.jit(jax.value_and_grad(AbsB_of_scale))
+    for scale in (1.0, 1.1):
+        value, gradient = evaluate(scale)
+        assert jnp.isclose(value, scale * vmec.AbsB(point))
+        assert jnp.isclose(gradient, vmec.AbsB(point))
+    assert len(traced) == 1
 
 if __name__ == "__main__":
     pytest.main()
@@ -160,6 +195,19 @@ def test_vmec_analytic_derivatives_match_automatic_differentiation():
         assert jnp.allclose(vmec.grad_B_covariant(point), jax.jacfwd(vmec.B_covariant)(point), rtol=1e-12, atol=1e-12)
 
 
+def test_vmec_cartesian_field_derivatives_match_the_spectral_field():
+    from essos.fields import Vmec
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    for point in (jnp.array([0.5, 0.7, 0.3]), jnp.array([0.37, 2.0, 0.3])):
+        jacobian = jax.jacfwd(vmec.to_xyz)(point)
+        B = vmec.B(point)
+        np.testing.assert_allclose(jnp.linalg.solve(jacobian, B)[0], 0, atol=1e-12)  # B.grad s
+        grad_absB = jax.grad(lambda x: jnp.linalg.norm(vmec.B(x)))(point)
+        np.testing.assert_allclose(grad_absB[0], vmec.dAbsB_by_dX(point)[0], rtol=5e-3)
+        div_B = jnp.trace(jax.jacfwd(vmec.B)(point) @ jnp.linalg.inv(jacobian))
+        assert abs(div_B) * vmec.r_axis < 1e-2 * jnp.linalg.norm(B)
+
+
 def test_vmec_mode_tolerance_keeps_the_field():
     from essos.fields import Vmec
 
@@ -171,6 +219,56 @@ def test_vmec_mode_tolerance_keeps_the_field():
     for name in ("AbsB", "B_contravariant", "to_xyz"):
         a, b = jax.vmap(getattr(full, name))(points), jax.vmap(getattr(truncated, name))(points)
         assert jnp.abs(a - b).max() < 5e-3 * jnp.abs(a).max()
+    rebuilt = Vmec.from_arrays(nfp=full.nfp, ns=full.ns, ntheta=8, nphi=8, mode_tolerance=1e-3,
+                               **{name: getattr(full, name) for name in VMEC_WOUT_ARRAYS})
+    assert jnp.array_equal(rebuilt.xm_nyq, truncated.xm_nyq) and jnp.array_equal(rebuilt.xm, truncated.xm)
+    assert jnp.array_equal(jax.vmap(rebuilt.AbsB)(points), jax.vmap(truncated.AbsB)(points))
+
+
+def test_vmec_flux_coordinates_invert_to_xyz_and_boundary_distance_is_signed():
+    from essos.fields import Vmec
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    rng = np.random.default_rng(0)
+    points = jnp.asarray(np.c_[rng.uniform(1e-3, 1, 40)**2, rng.uniform(0, 2 * np.pi, 40), rng.uniform(0, 2 * np.pi, 40)])
+    xyz = jax.vmap(vmec.to_xyz)(points)
+    flux, residual = jax.vmap(vmec.flux_coordinates)(xyz)
+    assert residual.max() < 1e-10
+    assert jnp.allclose(flux[:, 0], points[:, 0], atol=1e-10)
+    assert jnp.allclose(jax.vmap(vmec.to_xyz)(flux), xyz, atol=1e-10)
+    lcfs = jax.vmap(vmec.to_xyz)(points.at[:, 0].set(1.0))
+    axis = jax.vmap(vmec.to_xyz)(points.at[:, 0].set(0.0))
+    distance = jax.vmap(vmec.boundary_distance)
+    assert jnp.abs(distance(lcfs)).max() < 1e-10
+    assert (distance(jax.vmap(vmec.to_xyz)(points.at[:, 0].set(0.8))) > 0).all()
+    outward = (lcfs - axis) / jnp.linalg.norm(lcfs - axis, axis=1)[:, None]
+    assert (distance(lcfs + 0.05 * outward) < 0).all()
+
+
+def test_external_field_wraps_batched_sources():
+    from essos.coils import Coils
+    from essos.fields import ExternalField
+
+    coils = BiotSavart(Coils.from_json(str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+                                           / "ESSOS_biot_savart_LandremanPaulQA.json")))
+    batched = lambda xyz: jax.vmap(coils.B)(xyz)  # noqa: E731
+
+    class Cylindrical:
+        def b_cyl(self, R, phi, Z):
+            B = batched(jnp.stack([R * jnp.cos(phi), R * jnp.sin(phi), Z], axis=-1))
+            return (B[:, 0] * jnp.cos(phi) + B[:, 1] * jnp.sin(phi),
+                    -B[:, 0] * jnp.sin(phi) + B[:, 1] * jnp.cos(phi), B[:, 2])
+
+    class Batched:
+        B = staticmethod(batched)
+
+    x = jnp.array([1.1, 0.2, 0.05])
+    for source in (batched, Batched(), Cylindrical()):
+        field = ExternalField(source)
+        assert jnp.allclose(field.B(x), coils.B(x), rtol=1e-12)
+        assert jnp.allclose(field.dAbsB_by_dX(x), jax.grad(coils.AbsB)(x), rtol=1e-9)
+        assert jnp.allclose(field.curl_b(x), coils.curl_b(x), rtol=1e-8, atol=1e-12)
+        assert jnp.allclose(field.kappa(x), coils.kappa(x), rtol=1e-8, atol=1e-12)
 
 
 def test_fused_guiding_center_quantities_match_the_separate_methods():
@@ -198,6 +296,278 @@ def test_surface_from_input_file_matches_the_wout_boundary():
                                  "input.LandremanPaul2021_QA_reactorScale_lowres")
     surface = SurfaceRZFourier.from_input_file(input_file, ntheta=8, nphi=8, close=False)
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8, close=False)
-    assert (surface.nfp, surface.mpol, surface.ntor) == (2, 5, 5)
-    # VMEC keeps the prescribed boundary up to its own mode truncation (mpol 5 -> 4)
+    # MPOL = 5 in the input means poloidal modes m = 0..4, as in VMEC
+    assert (surface.nfp, surface.mpol, surface.ntor) == (2, 4, 5)
     assert jnp.abs(surface.gamma - vmec.surface.gamma).max() < 2e-3
+
+
+def _asymmetric_vmec_arrays(phase=0.0, ntor=0):
+    """Circular surfaces and a covariant field equal to e_phi + 0.06 e_Z."""
+    s = jnp.linspace(0, 1, 5)
+    half = jnp.r_[0.0, s[1:] - 0.125]
+    r, rh = jnp.sqrt(s), jnp.sqrt(half)
+    table = lambda constant, mode: jnp.stack([jnp.full_like(s, constant), mode], axis=1)
+    arrays = dict(nfp=1, ns=5, xm=np.array([0, 1]), xn=np.array([0, ntor]),
+                  xm_nyq=np.array([0, 1]), xn_nyq=np.array([0, ntor]), Aminor_p=1.0,
+                  rmnc=table(3.0, r), zmns=table(0.0, r), bmnc=table(5.0, 0.2 * rh),
+                  gmnc=table(-1.5, -0.5 * rh), bsubsmns=table(0.0, 0.03 / jnp.sqrt(jnp.where(s > 0, s, 1))),
+                  bsubumnc=table(0.0, 0.06 * rh), bsubvmnc=table(3.0, (1 - 0.06 * ntor) * rh),
+                  bsupumnc=table(0.1, 0.05 * rh), bsupvmnc=table(0.8, 0.1 * rh))
+    from essos.fields import VMEC_WOUT_PARTNERS
+    for name, partner in VMEC_WOUT_PARTNERS.items():
+        cosine = name not in ('zmns', 'bsubsmns')
+        coefficient = arrays[name][:, 1]
+        arrays[partner] = table(0.0, coefficient * jnp.sin(phase) * (1 if cosine else -1))
+        arrays[name] = arrays[name].at[:, 1].set(coefficient * jnp.cos(phase))
+    return arrays
+
+
+@pytest.mark.parametrize('ntor', [0, 2])
+def test_asymmetric_vmec_cartesian_field_and_coordinate_derivatives(ntor):
+    symmetric = Vmec.from_arrays(**_asymmetric_vmec_arrays(ntor=ntor), ntheta=8, nphi=8)
+    shifted = Vmec.from_arrays(**_asymmetric_vmec_arrays(0.37, ntor), ntheta=8, nphi=8)
+    for point in (jnp.array([0.35, 0.7, 0.25]), jnp.array([1e-8, 0.8, 0.3])):
+        original = point.at[1].add(-0.37)
+        for name in ('to_xyz', 'B', 'AbsB', 'B_covariant', 'B_contravariant', 'sqrtg', 'curl_B'):
+            np.testing.assert_allclose(getattr(shifted, name)(point), getattr(symmetric, name)(original), rtol=2e-11, atol=2e-11)
+        np.testing.assert_allclose(shifted.B(point), jax.jacfwd(shifted.to_xyz)(point) @ shifted.B_contravariant(point),
+                                   rtol=2e-11, atol=2e-11)
+        np.testing.assert_allclose(shifted.dAbsB_by_dX(point), jax.grad(shifted.AbsB)(point), rtol=1e-11, atol=1e-11)
+        np.testing.assert_allclose(shifted.grad_B_covariant(point), jax.jacfwd(shifted.B_covariant)(point), rtol=1e-11, atol=1e-11)
+
+
+def test_asymmetric_vmec_boundary_distance_and_flux_coordinates():
+    vmec = Vmec.from_arrays(**_asymmetric_vmec_arrays(0.37), ntheta=8, nphi=8)
+    points = jnp.array([[0.25, 0.4, 0.3], [0.25, 2.9, 1.1]])
+    xyz = jax.vmap(vmec.to_xyz)(points)
+    np.testing.assert_allclose(jax.vmap(vmec.boundary_distance)(xyz), 0.5, atol=1e-12)
+    np.testing.assert_allclose(jax.vmap(vmec.boundary_distance)(jax.vmap(vmec.to_xyz)(points.at[:, 0].set(1.0))), 0,
+                               atol=1e-12)
+    np.testing.assert_allclose(jax.vmap(vmec.flux_coordinates)(xyz)[0], points, atol=1e-10)
+
+
+def test_asymmetric_vmec_partner_gradients_and_sine_only_cutoff():
+    point = jnp.array([0.35, 0.7, 0.25])
+    def evaluate(phase):
+        field = Vmec.from_arrays(**_asymmetric_vmec_arrays(phase, 2), ntheta=4, nphi=4)
+        return jnp.r_[field.B(point), field.AbsB(point), field.to_xyz(point)]
+    derivative = jax.jit(jax.jacfwd(evaluate))
+    for phase in (0.0, 0.37):
+        finite_difference = (evaluate(phase + 1e-5) - evaluate(phase - 1e-5)) / 2e-5
+        np.testing.assert_allclose(derivative(phase), finite_difference, rtol=2e-8, atol=2e-9)
+    arrays = _asymmetric_vmec_arrays(ntor=2)
+    from essos.fields import VMEC_WOUT_PARTNERS
+    plain = Vmec.from_arrays(**{k: v for k, v in arrays.items() if k not in VMEC_WOUT_PARTNERS.values()}, ntheta=4, nphi=4)
+    assert all(getattr(plain, k) is None for k in VMEC_WOUT_PARTNERS.values())
+    assert len(jax.tree_util.tree_leaves(plain.surface)) == 2 and plain.surface.dofs.size == 4
+    np.testing.assert_allclose(plain.B(point), evaluate(0.0)[:3], atol=2e-14)
+    for name in (*Vmec._NYQUIST, *[VMEC_WOUT_PARTNERS[name] for name in Vmec._NYQUIST]):
+        arrays[name] = arrays[name].at[:, 1].set(0.0)
+    arrays['bmns'] = arrays['bmns'].at[1:, 1].set(0.75)
+    field = Vmec.from_arrays(**arrays, ntheta=4, nphi=4, mode_tolerance=0.1)
+    assert len(field.xm_nyq) == 2
+    assert float(field.AbsB(point)) > 5.0
+    with pytest.raises(ValueError, match='bmns must match'):
+        Vmec.from_arrays(**{**arrays, 'bmns': jnp.zeros((2, 2))})
+    with pytest.raises(TypeError, match='Unknown Fourier partner'):
+        Vmec.from_arrays(**arrays, wrong_name=jnp.zeros((5, 2)))
+    with pytest.raises(ValueError, match='bmns must match'):
+        Vmec.from_arrays(**{**arrays, 'bmns': jnp.array([])})
+    for invalid in ({'ns': 2}, {'mode_tolerance': 1.0}):
+        with pytest.raises(ValueError, match='Require ns'):
+            Vmec.from_arrays(**{**arrays, **invalid})
+
+
+def test_asymmetric_surface_geometry_dofs_and_pytree():
+    arrays = _asymmetric_vmec_arrays(0.37, 2)
+    surface = Vmec.from_arrays(**arrays, ntheta=9, nphi=7, close=False).surface
+    angle = surface.theta2d - 2 * surface.phi2d - 0.37
+    R, Z = 3 + jnp.cos(angle), jnp.sin(angle)
+    expected = jnp.stack([R * jnp.cos(surface.phi2d), R * jnp.sin(surface.phi2d), Z], axis=-1)
+    np.testing.assert_allclose(surface.gamma, expected, atol=2e-14)
+    np.testing.assert_allclose(surface.gammadash_theta[..., 2], jnp.cos(angle), atol=2e-14)
+    np.testing.assert_allclose(surface.gammadash_phi[..., 2], -2 * jnp.cos(angle), atol=2e-14)
+    rebuilt = jax.tree_util.tree_unflatten(*reversed(jax.tree_util.tree_flatten(surface)))
+    np.testing.assert_allclose(rebuilt.gamma, expected, atol=2e-14)
+    dofs = surface.dofs
+    surface.dofs = dofs
+    np.testing.assert_allclose(surface.gamma, expected, atol=2e-14)
+    assert dofs.size == 8
+    np.testing.assert_allclose(jax.jit(lambda value: value.gamma)(surface), expected, atol=2e-14)
+    gradient = jax.grad(lambda value: value.gamma[2, 3, 2])(surface)
+    np.testing.assert_allclose(gradient.zc, jnp.cos(surface.angles[:, 2, 3]), atol=2e-13)
+    np.testing.assert_allclose(gradient.zs, jnp.sin(surface.angles[:, 2, 3]), atol=2e-13)
+    placeholders = jax.tree_util.tree_map(lambda _: object(), surface)
+    assert len(jax.tree_util.tree_leaves(placeholders)) == 4
+    with pytest.raises(ValueError, match='dofs must contain'):
+        surface.dofs = dofs[:-1]
+
+
+def test_asymmetric_vmec_wout_and_surface_loading(tmp_path, monkeypatch):
+    from netCDF4 import Dataset
+    from essos.fields import VMEC_WOUT_PARTNERS
+    from essos.surfaces import SurfaceRZFourier
+    arrays = _asymmetric_vmec_arrays(0.37)
+    for missing in (False, True):
+        filename = tmp_path / f'wout_asymmetric_{missing}.nc'
+        with Dataset(filename, 'w') as nc:
+            for dim, size in (('scalar', 1), ('s', 5), ('mn', 2)):
+                nc.createDimension(dim, size)
+            for name, array in {**arrays, 'lasym__logical__': 1}.items():
+                if missing and name in ('bmns', 'rmns'):
+                    continue
+                array = np.asarray(array)
+                dims = ('s', 'mn') if array.ndim == 2 else ('mn',) if array.ndim == 1 else ('scalar',)
+                nc.createVariable(name, 'f8', dims)[:] = array
+        if missing:
+            handles = []
+            def open_dataset(*args, **kwargs):
+                handles.append(Dataset(*args, **kwargs))
+                return handles[-1]
+            monkeypatch.setattr('netCDF4.Dataset', open_dataset)
+            with pytest.raises(ValueError, match='missing Fourier partner'):
+                Vmec(filename)
+            assert not handles[-1].isopen()
+            with pytest.raises(ValueError, match='missing geometry partner'):
+                SurfaceRZFourier.from_wout_file(filename)
+            assert not handles[-1].isopen()
+        else:
+            field = Vmec(filename, ntheta=8, nphi=8)
+            surface = SurfaceRZFourier.from_wout_file(filename, ntheta=8, nphi=8)
+            reference = Vmec.from_arrays(**arrays, ntheta=8, nphi=8)
+            for name in VMEC_WOUT_PARTNERS.values():
+                np.testing.assert_array_equal(getattr(field, name), arrays[name])
+            np.testing.assert_allclose(field.B(jnp.array([0.3, 0.4, 0.5])), reference.B(jnp.array([0.3, 0.4, 0.5])))
+            np.testing.assert_allclose(surface.gamma, field.surface.gamma)
+            for radial in (0.35, 1e-8):
+                interior = SurfaceRZFourier.from_wout_file(filename, s=radial, ntheta=8, nphi=8)
+                points = jnp.stack([jnp.full_like(interior.theta2d, radial), interior.theta2d, interior.phi2d], axis=-1)
+                expected = vmap(reference.to_xyz)(points.reshape(-1, 3)).reshape(interior.gamma.shape)
+                np.testing.assert_allclose(interior.gamma, expected, rtol=1e-12, atol=1e-12)
+
+
+    from shutil import copyfile
+    for malformed in ('shape', 'ns'):
+        filename = tmp_path / f'wout_invalid_{malformed}.nc'
+        copyfile(tmp_path / 'wout_asymmetric_False.nc', filename)
+        with Dataset(filename, 'a') as nc:
+            if malformed == 'shape':
+                nc.renameVariable('bmns', 'old_bmns')
+                nc.createDimension('short', 1)
+                nc.createVariable('bmns', 'f8', ('s', 'short'))[:] = 1
+            else:
+                nc['ns'][:] = 2
+        with pytest.raises(ValueError, match='must match|ns >= 3'):
+            Vmec(filename)
+        assert not handles[-1].isopen()
+        if malformed == 'ns':
+            with pytest.raises(ValueError, match='ns >= 3'):
+                SurfaceRZFourier.from_wout_file(filename)
+            assert not handles[-1].isopen()
+
+
+
+def test_asymmetric_surface_sparse_input_coefficients(tmp_path):
+    from essos.surfaces import SurfaceRZFourier
+    filename = tmp_path / 'input.asymmetric'
+    filename.write_text('&INDATA NFP=2, MPOL=2, NTOR=1, LASYM=.true., '
+                        'RBC(0,0)=3, RBC(1,1)=.7, RBC(-1,0)=.1, RBC(1,0)=.2, RBC(2,1)=99, RBC(0,2)=88, '
+                        'ZBS(0,1)=.8, ZBS(-1,0)=-.1, ZBS(1,0)=.2, '
+                        'RBS(-1,1)=.2, RBS(-1,0)=.4, RBS(1,0)=.5, '
+                        'ZBC(0,0)=.1, ZBC(-1,0)=.2, ZBC(1,0)=.1 /')
+    surface = SurfaceRZFourier.from_input_file(filename, ntheta=5, nphi=7, close=False)
+    np.testing.assert_allclose(surface.rc, [3, .3, 0, 0, .7], atol=1e-14)
+    np.testing.assert_allclose(surface.zs, [0, .3, 0, .8, 0], atol=1e-14)
+    np.testing.assert_allclose(surface.rs, [0, .1, .2, 0, 0], atol=1e-14)
+    np.testing.assert_allclose(surface.zc, [.1, .3, 0, 0, 0], atol=1e-14)
+    theta, phi = surface.theta2d, surface.phi2d
+    R = 3 + .3 * jnp.cos(2 * phi) - .1 * jnp.sin(2 * phi) + .7 * jnp.cos(theta - 2 * phi) + .2 * jnp.sin(theta + 2 * phi)
+    expected = jnp.stack([R * jnp.cos(phi), R * jnp.sin(phi), .8 * jnp.sin(theta) + .1 + .3 * jnp.cos(2 * phi) - .3 * jnp.sin(2 * phi)], axis=-1)
+    np.testing.assert_allclose(surface.gamma, expected, atol=2e-14)
+
+    filename.write_text('&INDATA MPOL=2, LASYM=.false., RBC(0,0)=3, RBC(0,1)=.7, '
+                        'ZBS(0,1)=.8, RBS(0,1)=.2, ZBC(0,0)=.1 /')
+    class DerivedSurface(SurfaceRZFourier):
+        pass
+    symmetric = DerivedSurface.from_input_file(filename)
+    assert isinstance(symmetric, DerivedSurface)
+    np.testing.assert_array_equal(symmetric.rc, [3, .7])
+    np.testing.assert_array_equal(symmetric.zs, [0, .8])
+    assert symmetric.rs is None and symmetric.zc is None
+    assert (symmetric.nfp, symmetric.mpol, symmetric.ntor) == (1, 1, 0)
+    filename.write_text('&INDATA RBC(0,0)=3 /')
+    default = SurfaceRZFourier.from_input_file(filename)
+    assert (default.nfp, default.mpol, default.ntor) == (1, 5, 0)
+    np.testing.assert_array_equal(default.zs, np.zeros(6))
+    filename.write_text('&INDATA MPOL=0, NTOR=0 /')
+    with pytest.raises(ValueError, match='MPOL >= 1'):
+        SurfaceRZFourier.from_input_file(filename)
+
+
+@pytest.mark.parametrize('phase', [0.0, 0.37])
+def test_vmec_interior_surfaces_share_radial_interpolation_and_gradients(phase):
+    from essos.fields import VMEC_WOUT_PARTNERS
+    from essos.surfaces import SurfaceRZFourier
+    arrays = _asymmetric_vmec_arrays(phase, 2)
+    if phase == 0.0:
+        arrays = {k: v for k, v in arrays.items() if k not in VMEC_WOUT_PARTNERS.values()}
+    field = Vmec.from_arrays(**arrays, ntheta=9, nphi=7, close=False)
+    def height(radial):
+        return SurfaceRZFourier.from_vmec(field, s=radial, ntheta=9, nphi=7, close=False).gamma[2, 3, 2]
+    evaluate = jax.jit(jax.value_and_grad(height))
+    for radial in (1.0, 0.35, 1e-8):
+        surface = SurfaceRZFourier.from_vmec(field, s=radial, ntheta=9, nphi=7, close=False)
+        angle = surface.theta2d - 2 * surface.phi2d - phase
+        R, Z = 3 + jnp.sqrt(radial) * jnp.cos(angle), jnp.sqrt(radial) * jnp.sin(angle)
+        expected = jnp.stack([R * jnp.cos(surface.phi2d), R * jnp.sin(surface.phi2d), Z], axis=-1)
+        np.testing.assert_allclose(surface.gamma, expected, rtol=1e-12, atol=1e-12)
+        value, derivative = evaluate(radial)
+        np.testing.assert_allclose(value, Z[2, 3], rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(derivative, jnp.sin(angle[2, 3]) / (2 * jnp.sqrt(radial)), rtol=1e-12)
+
+
+@pytest.mark.parametrize('asymmetric', [False, True])
+def test_surface_vmec_export_preserves_multimode_geometry(tmp_path, asymmetric):
+    from essos.surfaces import SurfaceRZFourier
+    # Independent phases and m=0,1,2 modes make a genuinely 3D boundary.
+    rc = jnp.array([3., .12, .03, .6, .07, .02, -.08, .04])
+    zs = jnp.array([0., .09, -.02, .65, .06, .01, .07, -.03])
+    partners = {'rs': jnp.array([0., .04, .01, -.08, .03, -.02, .01, .02]),
+                'zc': jnp.array([.05, -.03, .02, .06, -.01, .01, .02, .04])} if asymmetric else {}
+    surface = SurfaceRZFourier(rc, zs, nfp=2, mpol=2, ntor=1, ntheta=8, nphi=9, close=False, **partners)
+    filename = tmp_path / 'input.surface'
+    surface.to_vmec(filename)
+    text = filename.read_text()
+    assert f'LASYM = .{str(asymmetric).upper()}.' in text
+    assert 'MPOL = 3' in text and 'NTOR = 1' in text and 'RBC(1,1)' in text
+    rebuilt = SurfaceRZFourier.from_input_file(filename, ntheta=8, nphi=9, close=False)
+    for name in ('rc', 'zs', 'rs', 'zc'):
+        value = getattr(surface, name)
+        if value is None:
+            assert getattr(rebuilt, name) is None
+        else:
+            np.testing.assert_allclose(getattr(rebuilt, name), value, atol=1e-15)
+    np.testing.assert_allclose(rebuilt.gamma, surface.gamma, atol=2e-14)
+    np.testing.assert_allclose(rebuilt.gammadash_phi, surface.gammadash_phi, atol=2e-14)
+
+
+def test_vmec_partner_cutoff_is_phase_invariant():
+    from essos.fields import VMEC_WOUT_PARTNERS
+    arrays = _asymmetric_vmec_arrays(.37)
+    for name in Vmec._NYQUIST:
+        arrays[name] = arrays[name].at[:, 1].set(0.)
+        arrays[VMEC_WOUT_PARTNERS[name]] = jnp.zeros_like(arrays[name])
+    arrays['bmnc'] = arrays['bmnc'].at[:, 0].set(5.).at[:, 1].set(.005)
+    arrays['bmns'] = arrays['bmns'].at[:, 1].set(.005)
+    for phase in (0., .71, 1.13):
+        rotated = dict(arrays)
+        c, q = arrays['bmnc'][:, 1], arrays['bmns'][:, 1]
+        rotated['bmnc'] = arrays['bmnc'].at[:, 1].set(c * np.cos(phase) - q * np.sin(phase))
+        rotated['bmns'] = arrays['bmns'].at[:, 1].set(c * np.sin(phase) + q * np.cos(phase))
+        field = Vmec.from_arrays(**rotated, mode_tolerance=.01)
+        np.testing.assert_array_equal(field.xm_nyq, [0])
+    arrays['bmnc'] = arrays['bmnc'].at[:, 1].set(0.)
+    arrays['bmns'] = arrays['bmns'].at[:, 1].set(.4)
+    np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0, 1])
+    arrays['bmns'] = jnp.zeros_like(arrays['bmns'])
+    np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0])
