@@ -1196,8 +1196,11 @@ class Tracing():
         traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys)))
         batch = n if self.particle_batch_size is None or traced else min(self.particle_batch_size, n)
         count = min(len(self.devices), batch)
-        while count > 1 and batch % count:
-            count -= 1
+        if traced:
+            while count > 1 and batch % count:
+                count -= 1
+        else:  # pad the batch, below, so every device traces equally many particles
+            batch = -(-batch // count) * count
         if count > 1:
             place = NamedSharding(Mesh(np.asarray(self.devices[:count], dtype=object), ("dev",)), PartitionSpec("dev"))
             solve = jit(vmap(compute_trajectory), in_shardings=place, out_shardings=place)
