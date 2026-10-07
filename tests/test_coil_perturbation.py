@@ -2,6 +2,7 @@ import unittest
 import jax
 import jax.numpy as jnp
 import numpy as np
+from essos.coils import Curves
 
 from essos.coil_perturbation import (
     #ldl_decomposition,
@@ -12,16 +13,6 @@ from essos.coil_perturbation import (
     perturb_curves_statistic,
 )
 
-# Dummy Curves and apply_symmetries_to_gammas for testing
-class DummyCurves:
-    def __init__(self, n_base_curves=2, nfp=1, stellsym=True, n_points=5, n_derivs=2):
-        self.n_base_curves = n_base_curves
-        self.nfp = nfp
-        self.stellsym = stellsym
-        self.gamma = jnp.zeros((n_base_curves, n_points, 3))
-        self.gamma_dash = jnp.zeros((n_base_curves, n_points, 3))
-        self.gamma_dashdash = jnp.zeros((n_base_curves, n_points, 3))
-
 def dummy_apply_symmetries_to_gammas(gamma, nfp, stellsym):
     # Just return the input for testing
     return gamma
@@ -31,6 +22,11 @@ import essos.coil_perturbation
 essos.coil_perturbation.apply_symmetries_to_gammas = dummy_apply_symmetries_to_gammas
 
 class TestCoilPerturbation(unittest.TestCase):
+    @staticmethod
+    def make_curves(n_base_curves=2, n_segments=5, nfp=1, stellsym=True, order=1):
+        dofs = jnp.zeros((n_base_curves, 3, 2 * order + 1))
+        return Curves(dofs, n_segments=n_segments, nfp=nfp, stellsym=stellsym)
+
     #def test_ldl_decomposition(self):
     #    A = jnp.array([[4.0, 2.0], [2.0, 3.0]])
     #    L, D = ldl_decomposition(A)
@@ -107,10 +103,10 @@ class TestCoilPerturbation(unittest.TestCase):
         sampler2 = GaussianSampler(points, sigma=1.0, length_scale=0.5, n_derivs=2)
         key = jax.random.PRNGKey(0)
         for sampler in [sampler0, sampler1, sampler2]:
-            curves = DummyCurves(n_base_curves=2, nfp=1, stellsym=True, n_points=5)
-            perturb_curves_systematic(curves, sampler, key)
-            # Just check that gamma arrays are still the right shape
-            self.assertEqual(curves.gamma.shape, (2, 5, 3))
+            curves = self.make_curves(n_base_curves=2, n_segments=5, nfp=1, stellsym=True)
+            curves = perturb_curves_systematic(curves, sampler, key)
+            self.assertIsInstance(curves, Curves)
+            self.assertEqual(curves.gamma.shape, (4, 5, 3))
 
     def test_perturb_curves_statistic(self):
         points = jnp.linspace(0, 1, 5)
@@ -119,9 +115,10 @@ class TestCoilPerturbation(unittest.TestCase):
         sampler2 = GaussianSampler(points, sigma=1.0, length_scale=0.5, n_derivs=2)
         key = jax.random.PRNGKey(0)
         for sampler in [sampler0, sampler1, sampler2]:
-            curves = DummyCurves(n_base_curves=2, nfp=1, stellsym=True, n_points=5)
-            perturb_curves_statistic(curves, sampler, key)
-            self.assertEqual(curves.gamma.shape, (2, 5, 3))
+            curves = self.make_curves(n_base_curves=2, n_segments=5, nfp=1, stellsym=True)
+            curves = perturb_curves_statistic(curves, sampler, key)
+            self.assertIsInstance(curves, Curves)
+            self.assertEqual(curves.gamma.shape, (4, 5, 3))
 
 if __name__ == "__main__":
     unittest.main()

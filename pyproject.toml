@@ -27,8 +27,20 @@ keywords = ["Plasma",
      "Simulation",
      "JAX"]
  
-dependencies = [ "jax", "jaxlib", "tqdm", "matplotlib", "diffrax", "optax", "jaxopt", "optimistix", "scipy", "jaxkd", "netcdf4"]
- 
+dependencies = [ 
+    "jax", 
+    "jaxlib", 
+    "tqdm", 
+    "matplotlib", 
+    "diffrax", 
+    "optax", 
+    "jaxopt", 
+    "optimistix", 
+    "scipy", 
+    "jaxkd", 
+    "netcdf4",
+    "pyqsc_jax @ git+https://github.com/uwplasma/pyQSC_JAX.git"
+] 
 requires-python = ">=3.10"
 
 [project.urls]

@@ -1,4 +1,5 @@
 import pytest
+import jax
 from essos.coils import Curves
 import jax.numpy as jnp
 import random
@@ -46,6 +47,15 @@ def test_curves_property_setters():
     assert curves.nfp == 2
     curves.stellsym = False
     assert curves.stellsym == False
+
+def test_curves_pytree_preserves_scaling_metadata():
+    dofs = jnp.ones((2, 3, 5))
+    curves = Curves(dofs, scaling_type=2, scaling_factor=0.3, scale_fixed=7.0)
+    curves_copy = jax.tree_util.tree_map(lambda x: x, curves)
+
+    assert curves_copy.scaling_type == curves.scaling_type
+    assert curves_copy.scaling_factor == curves.scaling_factor
+    assert curves_copy.scale_fixed == curves.scale_fixed
 
 def test_curves_str_repr():
     dofs = jnp.zeros((2, 3, 5))

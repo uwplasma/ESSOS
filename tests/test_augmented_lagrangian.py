@@ -2,68 +2,31 @@ import unittest
 import pytest
 import jax
 import jax.numpy as jnp
-import optax
 
 from essos.augmented_lagrangian import (
     LagrangeMultiplier,
-    update_method,
-    update_method_squared,
     eq,
     ineq,
     combine,
+    SelectiveConstraint,
     total_infeasibility,
     norm_constraints,
     infty_norm_constraints,
     penalty_average,
-    Constraint,
+    BaseConstraint,
     ALM,
-    lagrange_update,
-    ALM_model_optax,
     ALM_model_jaxopt_lbfgsb,
-    ALM_model_jaxopt_LevenbergMarquardt,
-    ALM_model_jaxopt_lbfgs,
-    ALM_model_optimistix_LevenbergMarquardt,
 )
 
 class TestAugmentedLagrangian(unittest.TestCase):
 
     def test_lagrange_multiplier(self):
-        lm = LagrangeMultiplier(value=1.0, penalty=2.0, sq_grad=3.0)
+        lm = LagrangeMultiplier(value=1.0, penalty=2.0, omega=4.0, eta=5.0, sq_grad=3.0)
         self.assertEqual(lm.value, 1.0)
         self.assertEqual(lm.penalty, 2.0)
+        self.assertEqual(lm.omega, 4.0)
+        self.assertEqual(lm.eta, 5.0)
         self.assertEqual(lm.sq_grad, 3.0)
-
-    def test_update_method_all_modes(self):
-        params = LagrangeMultiplier(jnp.array([1.]), jnp.array([2.]), jnp.array([0.]))
-        updates = LagrangeMultiplier(jnp.array([0.5]), jnp.array([0.]), jnp.array([0.]))
-        for mode in [
-            'Constant', 'Mu_Monotonic', 'Mu_Conditional_True', 'Mu_Conditional_False',
-            'Mu_Tolerance_True', 'Mu_Tolerance_False', 'Mu_Adaptative'
-        ]:
-            if 'Tolerance' in mode:
-                result, eta, omega = update_method(params, updates, 1.0, 1.0, model_mu=mode)
-                self.assertIsInstance(result, LagrangeMultiplier)
-                self.assertIsInstance(eta, jnp.ndarray)
-                self.assertIsInstance(omega, jnp.ndarray)
-            else:
-                result = update_method(params, updates, 1.0, 1.0, model_mu=mode)
-                self.assertIsInstance(result, LagrangeMultiplier)
-
-    def test_update_method_squared_all_modes(self):
-        params = LagrangeMultiplier(jnp.array([1.]), jnp.array([2.]), jnp.array([0.]))
-        updates = LagrangeMultiplier(jnp.array([0.5]), jnp.array([0.]), jnp.array([0.]))
-        for mode in [
-            'Constant', 'Mu_Monotonic', 'Mu_Conditional_True', 'Mu_Conditional_False',
-            'Mu_Tolerance_True', 'Mu_Tolerance_False', 'Mu_Adaptative'
-        ]:
-            if 'Tolerance' in mode:
-                result, eta, omega = update_method_squared(params, updates, 1.0, 1.0, model_mu=mode)
-                self.assertIsInstance(result, LagrangeMultiplier)
-                self.assertIsInstance(eta, jnp.ndarray)
-                self.assertIsInstance(omega, jnp.ndarray)
-            else:
-                result = update_method_squared(params, updates, 1.0, 1.0, model_mu=mode)
-                self.assertIsInstance(result, LagrangeMultiplier)
 
     def test_eq_and_ineq_constraint(self):
         def fun(x): return x - 2
@@ -103,6 +66,51 @@ class TestAugmentedLagrangian(unittest.TestCase):
         params = combined.init(jnp.array([2.]))
         combined.loss(params, jnp.array([2.]))
 
+    def test_selective_constraint_dependencies_reset_cached_dofs(self):
+        selective = SelectiveConstraint(eq(lambda field: field - 1), 'field')
+        selective.dependencies = {'field': jnp.array([1.0, 2.0])}
+        first = selective.starting_dofs
+
+        selective.dependencies = {'field': jnp.array([3.0, 4.0, 5.0])}
+        second = selective.starting_dofs
+
+        self.assertEqual(first.shape[0], 2)
+        self.assertEqual(second.shape[0], 3)
+        self.assertTrue(jnp.allclose(second, jnp.array([3.0, 4.0, 5.0])))
+
+    def test_composite_constraint_dependencies_reset_cached_dofs(self):
+        c1 = SelectiveConstraint(eq(lambda field: field - 1), 'field')
+        c2 = SelectiveConstraint(eq(lambda surface: surface + 1), 'surface')
+        combined = combine(c1, c2)
+        combined.dependencies = {
+            'field': jnp.array([1.0, 2.0]),
+            'surface': jnp.array([10.0]),
+        }
+        first = combined.starting_dofs
+
+        combined.dependencies = {
+            'field': jnp.array([3.0]),
+            'surface': jnp.array([20.0, 30.0]),
+        }
+        second = combined.starting_dofs
+
+        self.assertEqual(first.shape[0], 3)
+        self.assertEqual(second.shape[0], 3)
+        self.assertTrue(jnp.allclose(second, jnp.array([3.0, 20.0, 30.0])))
+
+    def test_composite_constraint_set_dependencies_resets_cached_dofs(self):
+        c1 = SelectiveConstraint(eq(lambda field: field - 1), 'field')
+        combined = combine(c1)
+        combined.set_dependencies({'field': jnp.array([1.0, 2.0])})
+        first = combined.starting_dofs
+
+        combined.set_dependencies({'field': jnp.array([7.0])})
+        second = combined.starting_dofs
+
+        self.assertEqual(first.shape[0], 2)
+        self.assertEqual(second.shape[0], 1)
+        self.assertTrue(jnp.allclose(second, jnp.array([7.0])))
+
     def test_total_infeasibility(self):
         tree = {'a': jnp.array([1.0, -2.0]), 'b': jnp.array([3.0])}
         result = total_infeasibility(tree)
@@ -119,14 +127,14 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertAlmostEqual(float(result), 3.0)
 
     def test_penalty_average(self):
-        tree = {'a': LagrangeMultiplier(jnp.array([1.0]), jnp.array([2.0]), jnp.array([0.0]))}
+        tree = {'a': LagrangeMultiplier(value=jnp.array([1.0]), penalty=jnp.array([2.0]), omega=jnp.array([0.0]), eta=jnp.array([0.0]), sq_grad=jnp.array([0.0]))}
         result = penalty_average(tree)
         self.assertAlmostEqual(float(result), 2.0)
 
     def test_constraint_namedtuple(self):
         def fun(x): return x - 1
         c = eq(fun)
-        self.assertIsInstance(c, Constraint)
+        self.assertIsInstance(c, BaseConstraint)
         params = c.init(jnp.array([2.]))
         c.loss(params, jnp.array([2.]))
 
@@ -137,23 +145,6 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertIsInstance(alm, ALM)
         self.assertTrue(callable(alm.init))
         self.assertTrue(callable(alm.update))
-
-    def test_lagrange_update_gradient_transformation_and_update(self):
-        gt = lagrange_update('Standard')
-        self.assertTrue(hasattr(gt, 'init'))
-        self.assertTrue(hasattr(gt, 'update'))
-        # Call init and update with dummy data
-        params = {'x': jnp.array([1.0])}
-        lagrange_params = LagrangeMultiplier(jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.0]))
-        updates = LagrangeMultiplier(jnp.array([-0.5]), jnp.array([1.0]), jnp.array([1.0]))
-        state = gt.init(params)
-        # eta, omega, etc. are required by update_fn signature
-        eta = {'x': jnp.array([0.0])}
-        omega = {'x': jnp.array([0.0])}
-        gt.update(lagrange_params, updates, state, eta, omega, params=params)
-        gt2 = lagrange_update('Squared')
-        state2 = gt2.init(params)
-        gt2.update(lagrange_params, updates, state2, eta, omega, params=params)
 
     def test_eq_constraint_init_kwargs(self):
         def fun(x, y=0): return x + y - 2
@@ -170,22 +161,6 @@ class TestAugmentedLagrangian(unittest.TestCase):
 
     # ---- ALM model tests ----
 
-    def test_ALM_model_optax_init_and_update(self):
-        optimizer = optax.sgd(1e-3)
-        def fun(x): return x - 1
-        constraint = eq(fun)
-        main_params = jnp.array([6.0,2.0])        
-        lagrange_params = constraint.init(main_params)
-        params = main_params,lagrange_params            
-        alm = ALM_model_optax(optimizer, constraint,model_mu='Mu_Conditional')
-        self.assertIsInstance(alm, ALM)
-        # Call init and update
-        state,grad,info = alm.init(params)
-        # Simulate a gradient step
-        eta = jnp.array(1.0)
-        omega = jnp.array(1.0) 
-        alm.update(params, state,grad,info,eta,omega)
-
     def test_ALM_model_jaxopt_lbfgsb_init_and_update(self):
         def fun(x): return x - 1
         constraint = eq(fun)
@@ -195,52 +170,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         alm = ALM_model_jaxopt_lbfgsb(constraint)
         self.assertIsInstance(alm, ALM)
         state,grad,info = alm.init(params)
-        eta = jnp.array(1.0)
-        omega = jnp.array(1.0)  
-        alm.update(params, state,grad,info,eta,omega)
-
-
-    def test_ALM_model_jaxopt_LevenbergMarquardt_init_and_update(self):
-        def fun(x): return x - 1
-        constraint = eq(fun)
-        main_params = jnp.array([6.0,2.0])        
-        lagrange_params = constraint.init(main_params)
-        params = main_params,lagrange_params        
-        alm = ALM_model_jaxopt_LevenbergMarquardt(constraint)
-        self.assertIsInstance(alm, ALM)
-        state,grad,info = alm.init(params)
-        eta = jnp.array(1.0)
-        omega =  jnp.array(1.0)
-        alm.update(params, state,grad,info,eta,omega)
-
-
-
-    def test_ALM_model_jaxopt_lbfgs_init_and_update(self):
-        def fun(x): return x - 1
-        constraint = eq(fun)
-        main_params = jnp.array([6.0,2.0])        
-        lagrange_params = constraint.init(main_params)
-        params = main_params,lagrange_params            
-        alm = ALM_model_jaxopt_lbfgs(constraint)
-        self.assertIsInstance(alm, ALM)
-        state,grad,info = alm.init(params)
-        eta =  jnp.array(1.0)
-        omega =  jnp.array(1.0)
-        alm.update(params, state,grad,info,eta,omega)
-
-
-#    def test_ALM_model_optimistix_LevenbergMarquardt_init_and_update(self):
-#        def fun(x): return x - 1
-#        constraint = eq(fun)
-#        main_params = jnp.array([6.0,2.0])        
-#        lagrange_params = constraint.init(main_params)
-#        params = main_params,lagrange_params            
-#        alm = ALM_model_optimistix_LevenbergMarquardt(constraint)
-#        self.assertIsInstance(alm, ALM)
-#        state,grad,info = alm.init(params)
-#        eta = jnp.array(1.0)
-#        omega =  jnp.array(1.0)
-#        alm.update(params, state,grad,info,eta,omega)
+        alm.update(params, state,grad,info)
 
 
 if __name__ == "__main__":
