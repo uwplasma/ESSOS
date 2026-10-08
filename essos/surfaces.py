@@ -48,30 +48,28 @@ def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
 # @jit
 @partial(jit, in_shardings=(sharding, None), out_shardings=sharding)
 def B_on_surface(surface, field):
-    ntheta = surface.ntheta
-    nphi = surface.nphi
     gamma = surface.gamma
-    gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
+    gamma_reshaped = gamma.reshape(-1, 3)
 
     # Map field.B over all positions
     B_on_surface = vmap(field.B)(gamma_reshaped)
 
-    return B_on_surface.reshape(nphi, ntheta, 3)
+    return B_on_surface.reshape(gamma.shape)
     
 
 @jit
 def BdotN(surface, field):
     B_surface = B_on_surface(surface, field)
-    B_dot_n = jnp.sum(B_surface * surface.unitnormal, axis=2)
+    B_dot_n = jnp.sum(B_surface * surface.unitnormal, axis=-1)
     return B_dot_n
 
 @jit
 def BdotN_over_B(surface, field, **kwargs):
-    return BdotN(surface, field) / jnp.linalg.norm(B_on_surface(surface, field), axis=2)
+    return BdotN(surface, field) / jnp.linalg.norm(B_on_surface(surface, field), axis=-1)
 
 @jit
 def _squared_flux_local(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
+    return 0.5 * jnp.mean(BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=-1)
                           * surface.area_element)
 
 @jit
@@ -81,7 +79,7 @@ def _squared_flux_global(surface, field):
 @jit
 def _squared_flux_normalized(surface, field):
     return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element) / \
-                 jnp.mean(jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
+                 jnp.mean(jnp.sum(B_on_surface(surface, field)**2, axis=-1) * surface.area_element)
 
 def SquaredFlux(surface, field, definition='local'):
     if definition == 'local':
