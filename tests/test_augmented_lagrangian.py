@@ -177,7 +177,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = ineq(fun)
         params = constraint.init(jnp.array([3.]), y=1)
         self.assertIn('lambda', params)
-        self.assertIn('slack', params)
+        self.assertNotIn('slack', params)
 
     # ---- ALM model tests ----
 
@@ -191,6 +191,45 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertIsInstance(alm, ALM)
         state,grad,info = alm.init(params)
         alm.update(params, state,grad,info)
+
+    def _solve_ineq(self, h, model_lagrangian, iters=20):
+        def loss(x):
+            return x - 2.0  # main loss ||x - 2||
+        constraint = ineq(h, model_lagrangian=model_lagrangian)
+        main_params = jnp.array([0.0])
+        params = main_params, constraint.init(main_params)
+        alm = ALM_model_jaxopt_lbfgsb(
+            constraint, loss=loss, model_lagrangian=model_lagrangian)
+        state, grad, info = alm.init(params)
+        for _ in range(iters):
+            params, state, grad, info = alm.update(params, state, grad, info)
+        return params
+
+    def test_ALM_ineq_active_constraint(self):
+        # min |x-2| s.t. 1 - x >= 0  ->  x = 1
+        for model in ('Standard', 'Squared'):
+            x, lag = self._solve_ineq(lambda x: 1.0 - x, model)
+            self.assertAlmostEqual(float(x[0]), 1.0, places=3)
+            self.assertGreater(float(lag['lambda'].value[0]), 0.0)
+
+    def test_ALM_ineq_inactive_constraint(self):
+        # min |x-2| s.t. 3 - x >= 0  ->  x = 2, multiplier 0
+        for model in ('Standard', 'Squared'):
+            x, lag = self._solve_ineq(lambda x: 3.0 - x, model)
+            self.assertAlmostEqual(float(x[0]), 2.0, places=3)
+            lam = float(lag['lambda'].value[0])
+            self.assertAlmostEqual(lam, 0.0, places=6)
+
+    def test_ALM_lbfgsb_unbounded_by_default(self):
+        # eq constraint x = 150 must not be clipped by a hidden box
+        constraint = eq(lambda x: x - 150.0)
+        main_params = jnp.array([0.0])
+        params = main_params, constraint.init(main_params)
+        alm = ALM_model_jaxopt_lbfgsb(constraint)
+        state, grad, info = alm.init(params)
+        for _ in range(10):
+            params, state, grad, info = alm.update(params, state, grad, info)
+        self.assertAlmostEqual(float(params[0][0]), 150.0, places=3)
 
 
 if __name__ == "__main__":
