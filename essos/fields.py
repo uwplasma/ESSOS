@@ -282,12 +282,20 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     first row (``half_grid=True``); both grids are uniform. Near the magnetic
     axis the modes of a regular scalar vanish as ``s**(m/2)``, and those of
     B_s (``covariant_s=True``) one power of ``sqrt(s)`` lower. Each mode is
-    therefore divided by ``s**p``, interpolated linearly and multiplied back,
+    therefore divided by ``s**p``, interpolated and multiplied back,
     with ``p = min(m, 2 + m % 2) / 2`` (less 1 for B_s, at least -1/2; 0 for
     m = 0). For m > 0 the axis row of a full-grid table is replaced by the
     extrapolation of the next two rows, or, for m = 1, by ``axis_m1`` when it
     is given. Interpolating the modes themselves leaves the m > 0 terms
     finite on the axis, where |B| then depends on theta.
+
+    The interpolation is cubic Hermite with centred-difference slopes (linear
+    in the first interval): it keeps the grid values and its s derivative is
+    continuous. With linear
+    interpolation grad|B| jumps at every grid point, and a guiding center
+    whose radial drift changes sign there chatters across it while the
+    adaptive step shrinks to nothing; under vmap the whole batch then runs to
+    max_steps.
     """
     m = np.asarray(xm).astype(int)
     k = np.minimum(m, 2 + m % 2)  # 2 p
@@ -301,12 +309,18 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
             scaled = scaled.at[0].set(jnp.where(m > 0, 2 * scaled[1] - scaled[2], scaled[0]))
             if axis_m1 is not None:
                 scaled = scaled.at[0].set(jnp.where(m == 1, axis_m1, scaled[0]))
+        # Slopes per grid interval. Hermite interpolation is C1 for any nodal slopes; the first interval
+        # keeps the linear form that the axis rows above are extrapolated with.
+        slope = jnp.gradient(scaled, axis=0)
+        slope = slope.at[:2].set(scaled[1] - scaled[0])
     ds = grid[1] - grid[0]
     i = jnp.clip(jnp.floor((s - grid[0]) / ds).astype(int), 0, len(grid) - 2)
     t = jnp.where(s > grid[-1], 1.0, (s - grid[i]) / ds)
     q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
     powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
-    return (powers @ (k == np.arange(-1, 4)[:, None])) * ((1 - t) * scaled[i] + t * scaled[i + 1])
+    h = jnp.stack([(1 + 2 * t) * (1 - t)**2, t * (1 - t)**2, t * t * (3 - 2 * t), t * t * (t - 1)])
+    return (powers @ (k == np.arange(-1, 4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
+                                                          + h[2] * scaled[i + 1] + h[3] * slope[i + 1])
 
 VMEC_WOUT_ARRAYS = ('bmnc', 'xm', 'xn', 'rmnc', 'zmns', 'bsubsmns', 'bsubumnc', 'bsubvmnc',
                     'bsupumnc', 'bsupvmnc', 'gmnc', 'xm_nyq', 'xn_nyq', 'Aminor_p')
