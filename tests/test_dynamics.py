@@ -674,6 +674,8 @@ def test_mu_collision_noise_is_finite_and_matches_the_diffusion_tensor(v, xi):
         D = J @ Dv @ J.T
         np.testing.assert_allclose(sigma @ sigma.T / 2, D, rtol=1e-9, atol=1e-12 * float(jnp.abs(D).max()))
         assert jnp.all(jnp.isfinite(GuidingCenterCollisionsDriftMuStratonovich(0., state, args)))
+        # Milstein differentiates the noise; sqrt(mu) must not give an infinite slope at |xi| = 1
+        assert jnp.all(jnp.isfinite(jax.jvp(lambda y: GuidingCenterCollisionsDiffusionMu(0., y, args), (state,), (jnp.ones(5),))[1]))
 
 
 @pytest.mark.parametrize("v,xi", [(1e5, 0.3), (1e6, 0.3), (1e5, 1e-3), (1e6, 0.9)])
@@ -689,7 +691,7 @@ def test_mu_collision_stratonovich_correction_matches_noise_derivative(v, xi):
 
         def sigma(z):
             return GuidingCenterCollisionsDiffusionMu(0., jnp.concatenate([state[:3], z / scale]), args)[3:, 3:] * scale[:, None]
-        steps = 1e-6 * jnp.array([v, args[1].mass * v**2 / 4.0])
+        steps = 1e-4 * jnp.array([v, args[1].mass * v**2 / 4.0])
         dsigma = jnp.stack([(sigma(z + e) - sigma(z - e)) / (2 * e.sum()) for e in jnp.diag(steps)], axis=-1)
         expected = -0.5 * jnp.einsum('jk,ikj->i', sigma(z), dsigma)
         drift = (GuidingCenterCollisionsDriftMuStratonovich(0., state, args)

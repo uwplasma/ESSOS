@@ -313,11 +313,13 @@ def _mu_collision_noise(vpar, mu, points, field, particles, species):
     Ymumu = 2.*(1.-xi**2)*(nu_par*(1.-xi**2)+nu_D*xi**2)
     root = jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2)
     lambda_p = 0.5*(Yvv+Ymumu+root)
-    lambda_m = jnp.maximum(0.5*(Yvv+Ymumu-root), 0.)
+    lambda_m = (1.-xi**2)*nu_par*nu_D/lambda_p  # det(Y)/lambda_p, free of cancellation
     theta = 0.5*jnp.arctan2(2.*Yvmu, Yvv-Ymumu)
     rotation = jnp.array([[jnp.cos(theta), -jnp.sin(theta)], [jnp.sin(theta), jnp.cos(theta)]])
     scale = jnp.array([v, 0.5*m*v**2/B])
-    return scale[:, None]*rotation*jnp.sqrt(2.*jnp.array([lambda_p, lambda_m]))[None, :]
+    # sqrt(lambda_m) ~ sqrt(mu) has an infinite slope at |xi| = 1; keep its jvp finite for Milstein
+    root_m = jnp.where(lambda_m > 0, jnp.sqrt(2.*jnp.where(lambda_m > 0, lambda_m, 1.)), 0.)
+    return scale[:, None]*rotation*jnp.array([jnp.sqrt(2.*lambda_p), root_m])[None, :]
 
 @partial(jit, static_argnums=(2))
 def GuidingCenterCollisionsDiffusionMu(t,
