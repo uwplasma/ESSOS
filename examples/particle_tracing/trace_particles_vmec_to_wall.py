@@ -8,8 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import vmex
 from essos.coils import Coils
-from essos.fields import ExternalField
-from essos.surfaces import SurfaceRZFourier, SurfaceClassifier
+from essos.surfaces import SurfaceRZFourier
 from essos.constants import PROTON_MASS, ELEMENTARY_CHARGE, ONE_EV
 from essos.dynamics import Tracing, Particles
 
@@ -47,17 +46,12 @@ wout = vmex.wout_from_state(inp=inp, state=result.state, fsqr=float(result.fsqr)
                             vacuum_output=result.vacuum)
 print(f"VMEX free-boundary solve took {time()-time0:.1f} seconds, converged: {bool(result.converged)}")
 
-# Fields: VMEC inside; outside, the tricubic (C1) coil table through VmecExtender
-vmec = vmex.essos_vmec_field(wout)
-outside = ExternalField(vmex.VmecExtender.from_wout(wout, external_field=dataclasses.replace(coil_grid, order=3),
-                                                    plasma="vacuum"))
-
+# Fields: VMEC inside; outside, the tricubic (C1) coil table through VmecExtender.
 # Wall: the LCFS with its m = 1 modes grown by wall_gap
+vmec = vmex.essos_vmec_field(wout)
+outside = vmex.VmecExtender.from_wout(wout, external_field=dataclasses.replace(coil_grid, order=3), plasma="vacuum")
 lcfs = SurfaceRZFourier.from_vmec(vmec, ntheta=64, nphi=128)
 wall = SurfaceRZFourier.from_vmec(vmec, ntheta=64, nphi=128, offset=wall_gap)
-time0 = time()
-wall_classifier = SurfaceClassifier(wall, h=0.02, padding=0.05)
-print(f"Wall classifier took {time()-time0:.1f} seconds")
 
 # Initialize particles inside the LCFS
 key_s, key_theta, key_phi, key_pitch = jax.random.split(jax.random.key(0), 4)
@@ -70,7 +64,7 @@ particles = Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=jax.rand
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=vmec, model='GuidingCenterAdaptative', particles=particles, maxtime=tmax, timestep=timestep,
-                  times_to_trace=times_to_trace, atol=atol, rtol=rtol, exterior_field=outside, wall=wall_classifier)
+                  times_to_trace=times_to_trace, atol=atol, rtol=rtol, exterior_field=outside, wall=wall)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 crossed = np.isfinite(tracing.lcfs_times)
 print(f"Stayed inside the LCFS:        {np.mean(~crossed)*100:.1f}%")
