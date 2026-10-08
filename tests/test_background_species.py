@@ -135,9 +135,10 @@ def test_deflection_matches_maxwellian_integral_across_species_and_speeds(mass, 
                                 jnp.full(3, n), jnp.full(3, T))
     point = jnp.zeros(3)
     vth = np.sqrt(2*T*JOULE_PER_EV/masses[background])
-    ln = float(coulomb_logarithm(mass, z*ELEMENTARY_CHARGE, background, vth, point, species))
-    prefactor = n*(z*charges[background]*ELEMENTARY_CHARGE**2)**2*ln/(4*np.pi*EPSILON_0**2*mass**2)
     for x in (1e-3, .02, .5, 2., 8., 100.):
+        lnl = lambda v: float(coulomb_logarithm(mass, z*ELEMENTARY_CHARGE, background, v, point, species))
+        ln, dlog = lnl(x*vth), (lnl(x*vth*(1+1e-6)) - lnl(x*vth*(1-1e-6)))/(2e-6*x*vth)/lnl(x*vth)
+        prefactor = n*(z*charges[background]*ELEMENTARY_CHARGE**2)**2*ln/(4*np.pi*EPSILON_0**2*mass**2)
         h = 2*x/np.sqrt(np.pi)*quad(lambda t: (1-t*t)*np.exp(-x*x*t*t), 0, 1, epsabs=1e-13)[0]
         dh = 2/np.sqrt(np.pi)*quad(lambda t: (1-t*t)*(1-2*x*x*t*t)*np.exp(-x*x*t*t),
                                  0, 1, epsabs=1e-13)[0]
@@ -145,8 +146,9 @@ def test_deflection_matches_maxwellian_integral_across_species_and_speeds(mass, 
         rate = nu_D_ab(mass, z*ELEMENTARY_CHARGE, background, v, point, species)
         derivative = d_nu_D_ab(mass, z*ELEMENTARY_CHARGE, background, v, point, species)
         assert rate == pytest.approx(prefactor*h/v**3, rel=1e-9)
-        assert derivative == pytest.approx(prefactor*(x*dh-3*h)/v**4, rel=1e-9)
-        assert nu_D_ab(mass, -z*ELEMENTARY_CHARGE, background, v, point, species) == rate
+        assert derivative == pytest.approx(prefactor*(x*dh-3*h)/v**4 + prefactor*h/v**3*dlog, rel=1e-8)
+        if mass != masses[background]:  # a like-charge test particle also screens (NRL eq. c)
+            assert nu_D_ab(mass, -z*ELEMENTARY_CHARGE, background, v, point, species) == rate
 
 
 @pytest.mark.parametrize("densities", [(0., 0.), (1e19, 0.), (0., 1e19)])
@@ -156,3 +158,35 @@ def test_absent_background_species_have_zero_deflection_and_derivative(densities
         if density == 0:
             assert nu_D_ab(PROTON_MASS, ELEMENTARY_CHARGE, b, 1e6, jnp.zeros(3), species) == 0
             assert d_nu_D_ab(PROTON_MASS, ELEMENTARY_CHARGE, b, 1e6, jnp.zeros(3), species) == 0
+
+
+def test_coulomb_logarithm_follows_the_nrl_formulary_per_pair():
+    """NRL Plasma Formulary (2019) p. 34, eqs. (a)-(d); n in cm^-3, T in eV."""
+    from essos.background_species import JOULE_PER_EV
+    from essos.constants import ALPHA_PARTICLE_MASS, SPEED_OF_LIGHT
+    assert JOULE_PER_EV == ELEMENTARY_CHARGE
+    md = 2.01410177811*PROTON_MASS
+    species = BackgroundSpecies(3, jnp.array([ELECTRON_MASS, PROTON_MASS, md])/PROTON_MASS, jnp.array([-1., 1., 1.]),
+                                jnp.array([1.5e20, 1e20, 5e19]), jnp.array([1e4, 1e3, 2e3]))
+    ln = lambda m, z, b, v: float(coulomb_logarithm(m, z*ELEMENTARY_CHARGE, b, v, jnp.zeros(3), species))
+    ve = np.sqrt(3e4*ELEMENTARY_CHARGE/ELECTRON_MASS)
+    # (a) electron-electron and (b) electron-ion with T_e > 10 Z^2 eV, both ways round
+    assert ln(ELECTRON_MASS, -1, 0, ve) == pytest.approx(
+        23.5 - np.log(1.5e14**0.5*1e4**-1.25) - np.sqrt(1e-5 + (np.log(1e4) - 2)**2/16), rel=1e-12)
+    assert ln(ELECTRON_MASS, -1, 1, ve) == pytest.approx(24 - np.log(1.5e14**0.5/1e4), rel=1e-12)
+    assert ln(md, 1, 0, 1e5) == pytest.approx(24 - np.log(1.5e14**0.5/1e4), rel=1e-12)
+    # (c) thermal deuteron (T_a = m v^2/3 = 500 eV, n_a = 5e13) on protons
+    vd = np.sqrt(3*500*ELEMENTARY_CHARGE/md)
+    mu = md/PROTON_MASS
+    assert ln(md, 1, 1, vd) == pytest.approx(
+        23 - np.log((mu + 1)/(mu*1e3 + 500)*np.sqrt(5e13/500 + 1e14/1e3)), rel=1e-9)
+    # (d) 3.5 MeV alpha beam on deuterons, screened by electrons
+    va = np.sqrt(2*3.5e6*ELEMENTARY_CHARGE/ALPHA_PARTICLE_MASS)
+    mua = ALPHA_PARTICLE_MASS/PROTON_MASS
+    assert ln(ALPHA_PARTICLE_MASS, 2, 2, va) == pytest.approx(
+        43 - np.log(2*(mua + mu)/(mua*mu*(va/SPEED_OF_LIGHT)**2)*np.sqrt(1.5e14/1e4)), rel=1e-9)
+    # (b) cold electrons, T_e < 10 Z^2 eV
+    cold = BackgroundSpecies(2, jnp.array([ELECTRON_MASS/PROTON_MASS, 1.]), jnp.array([-1., 1.]),
+                             jnp.array([1e20, 1e20]), jnp.array([5., 5.]))
+    assert float(coulomb_logarithm(PROTON_MASS, ELEMENTARY_CHARGE, 0, 1e4, jnp.zeros(3), cold)) == pytest.approx(
+        23 - np.log(1e7*5**-1.5), rel=1e-12)
