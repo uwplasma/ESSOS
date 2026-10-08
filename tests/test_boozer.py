@@ -208,7 +208,7 @@ def test_coulomb_logarithm_preserves_positive_and_invalid_densities(density):
     if density == 0:
         assert np.isfinite(value)
     elif density > 0:
-        assert value == pytest.approx(32.2 + 1.15 * np.log10(1e8 / density), rel=1e-14)
+        assert value == pytest.approx(24 - np.log((density * 1e-6) ** 0.5 / 1e4), rel=1e-14)
     else:
         assert np.isnan(value)
 
