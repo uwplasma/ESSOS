@@ -676,6 +676,10 @@ class ExternalField(MagneticField):
         return 1.
 
     @jit
+    def to_xyz(self, points):
+        return points
+
+    @jit
     def B(self, points):
         if hasattr(self.source, "b_cyl"):
             R, phi = jnp.hypot(points[0], points[1]), jnp.arctan2(points[1], points[0])

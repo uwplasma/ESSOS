@@ -269,7 +269,7 @@ def test_external_field_wraps_batched_sources():
     x = jnp.array([1.1, 0.2, 0.05])
     for source in (batched, Batched(), Cylindrical()):
         field = ExternalField(source)
-        assert jnp.allclose(field.B(x), coils.B(x), rtol=1e-12)
+        assert jnp.allclose(field.B(x), coils.B(x), rtol=1e-12) and jnp.array_equal(field.to_xyz(x), x)
         assert jnp.allclose(field.dAbsB_by_dX(x), jax.grad(coils.AbsB)(x), rtol=1e-9)
         assert jnp.allclose(field.curl_b(x), coils.curl_b(x), rtol=1e-8, atol=1e-12)
         assert jnp.allclose(field.kappa(x), coils.kappa(x), rtol=1e-8, atol=1e-12)
