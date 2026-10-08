@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 from essos.surfaces import (surfacerzfourier_from_boundary, B_on_surface,
-                            BdotN, BdotN_over_B, SquaredFlux)
+                            BdotN, BdotN_over_B, SquaredFlux, PointCloudSurface)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -65,21 +65,9 @@ def test_SquaredFlux_rejects_unknown_definition():
         SquaredFlux(_small_surface(), _uniform_z(), definition="bogus")
 
 
-@jax.tree_util.register_pytree_node_class
-class _PointCloud:
-    """Flat (N, 3) point-cloud stand-in for a surface: no (nphi, ntheta) grid."""
-    def __init__(self, gamma, unitnormal, area_element):
-        self.gamma, self.unitnormal, self.area_element = gamma, unitnormal, area_element
-    def tree_flatten(self):
-        return (self.gamma, self.unitnormal, self.area_element), None
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        return cls(*children)
-
-
 def _small_cloud():
     s = _small_surface()
-    return s, _PointCloud(s.gamma.reshape(-1, 3), s.unitnormal.reshape(-1, 3),
+    return s, PointCloudSurface(s.gamma.reshape(-1, 3), s.unitnormal.reshape(-1, 3),
                           s.area_element.reshape(-1))
 
 
@@ -104,3 +92,34 @@ def test_point_cloud_SquaredFlux_matches_grid_surface(definition):
     field = _position()
     assert jnp.allclose(SquaredFlux(cloud, field, definition=definition),
                         SquaredFlux(s, field, definition=definition))
+
+
+def test_point_cloud_default_weights_are_uniform():
+    s, cloud = _small_cloud()
+    uniform = PointCloudSurface(cloud.gamma, cloud.unitnormal)
+    assert jnp.array_equal(uniform.area_element, jnp.ones(80))
+    assert uniform.npoints == 80
+
+
+def test_point_cloud_validates_shapes():
+    with pytest.raises(ValueError, match="shape"):
+        PointCloudSurface(jnp.zeros((5, 2)), jnp.zeros((5, 2)))
+    with pytest.raises(ValueError, match="shape"):
+        PointCloudSurface(jnp.zeros((5, 3)), jnp.zeros((4, 3)))
+    with pytest.raises(ValueError, match="area_element"):
+        PointCloudSurface(jnp.zeros((5, 3)), jnp.zeros((5, 3)), jnp.ones(4))
+
+
+def test_point_cloud_from_csv_roundtrip(tmp_path):
+    import numpy as np
+    s, cloud = _small_cloud()
+    np.savetxt(tmp_path / "p.csv", np.asarray(cloud.gamma), delimiter=",", header="x,y,z")
+    np.savetxt(tmp_path / "n.csv", np.asarray(cloud.unitnormal), delimiter=",", header="nx,ny,nz")
+    np.savetxt(tmp_path / "w.csv", np.asarray(cloud.area_element), delimiter=",", header="w")
+    loaded = PointCloudSurface.from_csv(tmp_path / "p.csv", tmp_path / "n.csv", tmp_path / "w.csv")
+    assert jnp.allclose(loaded.gamma, cloud.gamma)
+    assert jnp.allclose(loaded.unitnormal, cloud.unitnormal)
+    assert jnp.allclose(loaded.area_element, cloud.area_element)
+    assert jnp.allclose(SquaredFlux(loaded, _position()), SquaredFlux(cloud, _position()))
+    no_weights = PointCloudSurface.from_csv(tmp_path / "p.csv", tmp_path / "n.csv")
+    assert jnp.array_equal(no_weights.area_element, jnp.ones(80))

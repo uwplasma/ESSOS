@@ -821,6 +821,55 @@ tree_util.register_pytree_node(SurfaceRZFourier,
                                SurfaceRZFourier._tree_flatten,
                                SurfaceRZFourier._tree_unflatten)
 
+
+class PointCloudSurface:
+    """A surface given as ``N`` points with unit normals and per-point area weights.
+
+    It provides the attributes ``gamma``, ``unitnormal`` and ``area_element`` that
+    ``B_on_surface``, ``BdotN``, ``BdotN_over_B`` and ``SquaredFlux`` use, so those
+    work without an (nphi, ntheta) grid. ``area_element`` defaults to ones (uniform
+    weights); pass weights if the points are not evenly spread over the surface.
+
+    Args:
+        gamma: (N, 3) points.
+        unitnormal: (N, 3) unit normals.
+        area_element: (N,) weights, or None for uniform.
+    """
+    def __init__(self, gamma, unitnormal, area_element=None):
+        gamma, unitnormal = jnp.asarray(gamma), jnp.asarray(unitnormal)
+        if gamma.ndim != 2 or gamma.shape[1] != 3 or unitnormal.shape != gamma.shape:
+            raise ValueError("gamma and unitnormal must both have shape (N, 3)")
+        area_element = jnp.ones(gamma.shape[0]) if area_element is None else jnp.asarray(area_element)
+        if area_element.shape != (gamma.shape[0],):
+            raise ValueError("area_element must have shape (N,)")
+        self.gamma, self.unitnormal, self.area_element = gamma, unitnormal, area_element
+
+    @property
+    def npoints(self):
+        return self.gamma.shape[0]
+
+    @classmethod
+    def from_csv(cls, points_file, normals_file, weights_file=None):
+        """Load points and normals (and optionally area weights) from CSV files,
+        such as the ones written by ``wave_mesh/mesh_script_remesh.py``."""
+        import numpy as np
+        weights = None if weights_file is None else np.loadtxt(weights_file, delimiter=",")
+        return cls(np.loadtxt(points_file, delimiter=","),
+                   np.loadtxt(normals_file, delimiter=","), weights)
+
+    def _tree_flatten(self):
+        return (self.gamma, self.unitnormal, self.area_element), None
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        obj = object.__new__(cls)
+        obj.gamma, obj.unitnormal, obj.area_element = children
+        return obj
+
+tree_util.register_pytree_node(PointCloudSurface,
+                               PointCloudSurface._tree_flatten,
+                               PointCloudSurface._tree_unflatten)
+
 #This class is based on simsopt classifier but translated to fit jax    
 class SurfaceClassifier():
     """
