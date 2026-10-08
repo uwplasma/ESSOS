@@ -63,3 +63,44 @@ def test_SquaredFlux_finite_and_nonnegative(definition):
 def test_SquaredFlux_rejects_unknown_definition():
     with pytest.raises(ValueError, match="Unknown definition"):
         SquaredFlux(_small_surface(), _uniform_z(), definition="bogus")
+
+
+@jax.tree_util.register_pytree_node_class
+class _PointCloud:
+    """Flat (N, 3) point-cloud stand-in for a surface: no (nphi, ntheta) grid."""
+    def __init__(self, gamma, unitnormal, area_element):
+        self.gamma, self.unitnormal, self.area_element = gamma, unitnormal, area_element
+    def tree_flatten(self):
+        return (self.gamma, self.unitnormal, self.area_element), None
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*children)
+
+
+def _small_cloud():
+    s = _small_surface()
+    return s, _PointCloud(s.gamma.reshape(-1, 3), s.unitnormal.reshape(-1, 3),
+                          s.area_element.reshape(-1))
+
+
+def test_point_cloud_B_on_surface_shape_and_values():
+    s, cloud = _small_cloud()
+    out = B_on_surface(cloud, _position())
+    assert out.shape == cloud.gamma.shape == (80, 3)
+    assert jnp.allclose(out, cloud.gamma)
+
+
+def test_point_cloud_BdotN_matches_grid_surface():
+    s, cloud = _small_cloud()
+    field = _position()
+    result = BdotN(cloud, field)
+    assert result.shape == (80,)
+    assert jnp.allclose(result, BdotN(s, field).reshape(-1))
+
+
+@pytest.mark.parametrize("definition", ("local", "quadratic flux", "normalized"))
+def test_point_cloud_SquaredFlux_matches_grid_surface(definition):
+    s, cloud = _small_cloud()
+    field = _position()
+    assert jnp.allclose(SquaredFlux(cloud, field, definition=definition),
+                        SquaredFlux(s, field, definition=definition))
