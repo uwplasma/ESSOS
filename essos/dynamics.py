@@ -369,7 +369,7 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
     Diffusion_par=p**2*nu_par/2.
     Diffusion_perp=p**2*nu_D/2.
     d_Diffusion_par_dp=p*nu_par+p**2*dnu_par_dv/(2.*m)
-    d_Diffusion_perp_dp=p*nu_par+p**2*dnu_D_dv/(2.*m)    
+    d_Diffusion_perp_dp=p*nu_D+p**2*dnu_D_dv/(2.*m)    
     Yvv=(Diffusion_par*xi**2+Diffusion_perp*(1.-xi**2))/p**2
     Yvmu=2.*xi*(1.-xi**2)*(Diffusion_par-Diffusion_perp)/p**2
     Ymumu=4.*(1.-xi**2)*(Diffusion_par*(1.-xi**2)+Diffusion_perp*xi**2)/p**2 
@@ -482,7 +482,7 @@ def GuidingCenterCollisionsDriftMuIto(t,
     Diffusion_par=p**2*nu_par/2.
     Diffusion_perp=p**2*nu_D/2.
     d_Diffusion_par_dp=p*nu_par+p**2*dnu_par_dv/(2.*m)
-    d_Diffusion_perp_dp=p*nu_par+p**2*dnu_D_dv/(2.*m)    
+    d_Diffusion_perp_dp=p*nu_D+p**2*dnu_D_dv/(2.*m)    
 
     d_Dmuv_dvpar=2.*mu/p**2*((Diffusion_par-Diffusion_perp)+xi**2*p*(d_Diffusion_par_dp-d_Diffusion_perp_dp)-2.*xi**2*(Diffusion_par-Diffusion_perp))
     d_Dmuv_dmu=2.*vpar/p**2*((Diffusion_par-Diffusion_perp)+(1.-xi**2)*p/2.*(d_Diffusion_par_dp-d_Diffusion_perp_dp)-(1.-xi**2)*(Diffusion_par-Diffusion_perp))
