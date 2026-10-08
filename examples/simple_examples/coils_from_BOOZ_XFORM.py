@@ -1,7 +1,6 @@
 #!/usr/bin/env python3.11
 import os
 number_of_processors_to_use = 6 # Parallelization, this should divide nfieldlines
-os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 import numpy as np
 from time import time
 import booz_xform as bx
