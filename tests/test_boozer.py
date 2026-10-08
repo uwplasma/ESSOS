@@ -276,8 +276,9 @@ def test_pitch_angle_scattering_decays_the_mean_pitch_at_nu_D():
 def test_progress_chunks_reproduce_the_unchunked_trace(method):
     """Host-side chunks for progress carry the whole state: the trace is bit-identical."""
     field, n = tokamak(), 6
+    # One device: sharded over many CPU devices, the chunked and whole programs round differently in the last bit.
     kwargs = dict(speed=V0, mass=M, charge=Q, tmax=1e-4, timestep=2e-8, n_save=23,
-                  species=electron_background(), seed=3, method=method)
+                  species=electron_background(), seed=3, method=method, devices=jax.devices()[:1])
     args = (jnp.full(n, 0.5), jnp.linspace(0, 6, n), jnp.zeros(n), jnp.linspace(-0.9, 0.9, n))
     calls = []
     chunked = trace_boozer(field, *args, **kwargs, progress=lambda d, t: calls.append((d, t)))
