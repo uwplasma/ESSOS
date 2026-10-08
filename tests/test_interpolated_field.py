@@ -84,3 +84,9 @@ def test_vmec_wall_offset_and_box_around_it(field):
     assert interpolated.table.shape == (16, 8, 8, 3) and interpolated.nfp == vmec.nfp
     np.testing.assert_allclose([interpolated.rmin, interpolated.rmax, interpolated.zmax],
                                [R.min() - 0.1, R.max() + 0.1, np.abs(g[..., 2]).max() + 0.1])
+
+
+def test_a_batched_source_is_wrapped(field):
+    batched = lambda xyz: jax.vmap(field.B)(xyz)  # xyz (n, 3) -> B (n, 3), e.g. a VMEX VmecExtender
+    kwargs = dict(R=(1.5, 2.0), Z=(-0.2, 0.2), nr=6, nz=6, nphi=8)
+    np.testing.assert_allclose(InterpolatedField(batched, **kwargs).table, InterpolatedField(field, **kwargs).table)

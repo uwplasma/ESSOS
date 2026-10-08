@@ -23,7 +23,7 @@ import diffrax
 import optimistix as optx
 from essos.coils import Coils
 from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
-from essos.surfaces import SurfaceClassifier
+from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
 from essos.plot import fix_matplotlib_3d
@@ -979,6 +979,10 @@ class Tracing():
         elif exterior_field is not None and not hasattr(exterior_field, "curl_b"):
             exterior_field = ExternalField(exterior_field)
         self.exterior_field, self.max_returns = exterior_field, int(max_returns)
+        if isinstance(wall, (int, float)):  # a gap [m]: the LCFS grown that far
+            wall = SurfaceRZFourier.from_vmec(field, ntheta=64, nphi=128, offset=wall)
+        if hasattr(wall, "gamma"):  # a surface
+            wall = SurfaceClassifier(wall, h=0.02, padding=0.05)
         self.wall = getattr(wall, "evaluate_xyz", wall)
         # An orbit outside is back inside once it is reentry_depth [m] inside
         # the LCFS (default 1e-3 minor radii), so an orbit skimming the surface,

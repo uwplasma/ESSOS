@@ -1,3 +1,4 @@
+import os
 import jax
 jax.config.update("jax_enable_x64", True)
 from jax import vmap
@@ -329,7 +330,9 @@ VMEC_WOUT_PARTNERS = {'rmnc': 'rmns', 'zmns': 'zmnc', 'bmnc': 'bmns', 'gmnc': 'g
                       'bsupumnc': 'bsupumns', 'bsupvmnc': 'bsupvmns'}
 
 class Vmec():
-    """VMEC equilibrium, including asymmetric Fourier partners, from wout or live arrays.
+    """VMEC equilibrium, including asymmetric Fourier partners, from a wout file, an
+    in-memory wout object with the wout variable names (e.g. a VMEX ``WoutData``;
+    no file is written and gradients flow) or live arrays (:meth:`from_arrays`).
 
     ``mode_tolerance`` drops a Fourier mode when, in every table of its set,
     its largest amplitude over the radial grid is below that fraction of the
@@ -338,6 +341,15 @@ class Vmec():
     number of modes kept.
     """
     def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus', mode_tolerance=0.0):
+        if not isinstance(wout_filename, (str, os.PathLike)):  # an in-memory wout, e.g. a VMEX WoutData
+            w, kwargs = wout_filename, dict(ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,
+                                            mode_tolerance=mode_tolerance)
+            if bool(np.asarray(getattr(w, 'lasym', False))):
+                kwargs.update({name: getattr(w, name) for name in VMEC_WOUT_PARTNERS.values()
+                               if getattr(w, name, None) is not None})
+            self.__dict__.update(Vmec.from_arrays(w.nfp, w.ns, *(getattr(w, name) for name in VMEC_WOUT_ARRAYS),
+                                                  **kwargs).__dict__)
+            return
         self.wout_filename = wout_filename
         from netCDF4 import Dataset
         self.nc = Dataset(self.wout_filename)
@@ -771,6 +783,8 @@ class InterpolatedField(MagneticField):
     def __init__(self, field=None, R=(1.0, 2.0), Z=(-0.5, 0.5), nr=32, nz=32, nphi=32, nfp=1,
                  stellsym=False, chunk_size=None, table=None):
         (self.rmin, self.rmax), (self.zmin, self.zmax), self.nfp = map(float, R), map(float, Z), int(nfp)
+        if field is not None and not isinstance(field, MagneticField):
+            field = ExternalField(field)  # a batched source, e.g. a VMEX VmecExtender or MgridField
         if table is None:
             if stellsym and (nphi % 2 or not np.isclose(self.zmin, -self.zmax)):
                 raise ValueError("stellsym needs an even nphi and Z = (-zmax, zmax)")

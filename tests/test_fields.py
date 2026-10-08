@@ -99,6 +99,17 @@ def test_vmec_from_arrays_matches_wout_file():
     assert jnp.array_equal(vmap(rebuilt.AbsB)(points), vmap(vmec.AbsB)(points))
     assert jnp.array_equal(rebuilt.surface.gamma, vmec.surface.gamma)
 
+def test_vmec_from_an_in_memory_wout_matches_the_file():
+    from types import SimpleNamespace
+    vmec = Vmec(WOUT_FILE)
+    wout = SimpleNamespace(nfp=vmec.nfp, ns=vmec.ns, lasym=False, rmns=jnp.ones(1),
+                           **{name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS})
+    memory = Vmec(wout)
+    assert memory.wout_filename is None and memory.rmns is None
+    point = jnp.array([0.5, 0.3, 0.2])
+    np.testing.assert_allclose(memory.B_contravariant(point), vmec.B_contravariant(point), rtol=1e-14)
+
+
 def test_vmec_from_arrays_is_differentiable_in_the_coefficients():
     vmec = Vmec(WOUT_FILE)
     arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}

@@ -905,6 +905,15 @@ STRIKING = ([[0.9732, 2.2941, 5.0876], [0.9821, 0.6628, 3.5216], [0.9554, 0.7221
             [-0.9872, 0.5453, 0.747, -0.8145])
 
 
+def test_wall_given_as_a_gap_or_a_surface():
+    from essos.surfaces import SurfaceRZFourier
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    surface = SurfaceRZFourier.from_vmec(vmec, ntheta=64, nphi=128, offset=0.3)
+    point = jnp.asarray(surface.gamma[0, 0]) * 1.001
+    walls = [_exterior_tracing(STRIKING[0][:1], STRIKING[1][:1], 1e-9, wall=w).wall for w in (0.3, surface)]
+    assert walls[0](point) == walls[1](point) and abs(walls[0](point)) < 0.05
+
+
 def test_vmec_lcfs_crossings_are_exact():
     tracing = _edge_tracing("GuidingCenterAdaptative", 0.975, 50, atol=1e-9, rtol=1e-9)
     crossed = jnp.isfinite(tracing.lcfs_times)
