@@ -247,8 +247,12 @@ def test_vmec_radial_interpolation_keeps_grid_values_and_m0_modes():
                         vmec.rmnc[k])
     s = 0.3141
     m0 = vmec.xm == 0
-    expected = jax.vmap(lambda row: jnp.interp(s, vmec.s_full_grid, row))(vmec.rmnc[:, m0].T)
-    assert jnp.allclose(_radial_interp(s, vmec.s_full_grid, vmec.rmnc, vmec.xm)[m0], expected)
+    linear = jax.vmap(lambda row: jnp.interp(s, vmec.s_full_grid, row))(vmec.rmnc[:, m0].T)
+    assert jnp.allclose(_radial_interp(s, vmec.s_full_grid, vmec.rmnc, vmec.xm)[m0], linear, rtol=1e-4, atol=1e-6)
+    # The s derivative is continuous across a grid point (a jump there traps adaptive guiding-center steps).
+    d = jax.jacfwd(lambda s: _radial_interp(s, vmec.s_full_grid, vmec.rmnc, vmec.xm))
+    node = vmec.s_full_grid[k]
+    assert jnp.allclose(d(node - 1e-9), d(node + 1e-9), rtol=1e-6, atol=1e-9)
 
 
 def test_vmec_analytic_derivatives_match_automatic_differentiation():
