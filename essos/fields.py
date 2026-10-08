@@ -787,6 +787,14 @@ class InterpolatedField(MagneticField):
                                        _bspline_prefilter(nz, False), _bspline_prefilter(nr, False), self.table)
 
     @classmethod
+    def around(cls, field, surface, margin=0.05, n=48, **kwargs):
+        """Tabulate ``field`` on ``n`` x ``n`` x ``2n`` nodes in the R, Z box of ``surface`` (e.g. a wall) plus ``margin`` [m]."""
+        g = np.asarray(surface.gamma)
+        R, z = np.hypot(g[..., 0], g[..., 1]), np.abs(g[..., 2]).max() + margin
+        return cls(field, R=(R.min() - margin, R.max() + margin), Z=(-z, z),
+                   **{"nr": n, "nz": n, "nphi": 2 * n, "nfp": surface.nfp, **kwargs})
+
+    @classmethod
     def load(cls, filename):
         """Read a table written by :meth:`save` (``.npz``) or a VMEC mgrid file (``.nc``)."""
         if str(filename).endswith(".nc"):

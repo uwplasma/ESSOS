@@ -54,10 +54,7 @@ outside = ExternalField(vmex.VmecExtender.from_wout(wout, external_field=datacla
 
 # Wall: the LCFS with its m = 1 modes grown by wall_gap
 lcfs = SurfaceRZFourier.from_vmec(vmec, ntheta=64, nphi=128)
-m1 = (lcfs.xm == 1) & (lcfs.xn == 0)
-wall = SurfaceRZFourier(lcfs.rc + wall_gap * m1, lcfs.zs + wall_gap * jnp.sign(lcfs.zs[m1][0]) * m1, lcfs.nfp,
-                        lcfs.mpol, lcfs.ntor, ntheta=64, nphi=128)
-wall._xm, wall._xn = lcfs.xm, lcfs.xn
+wall = SurfaceRZFourier.from_vmec(vmec, ntheta=64, nphi=128, offset=wall_gap)
 time0 = time()
 wall_classifier = SurfaceClassifier(wall, h=0.02, padding=0.05)
 print(f"Wall classifier took {time()-time0:.1f} seconds")

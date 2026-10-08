@@ -65,3 +65,19 @@ def test_pytree_grad_and_tracing(field):
     runs = [Tracing(field=g, model="GuidingCenterAdaptative", particles=particles, maxtime=2e-6, times_to_trace=20,
                     atol=1e-9, rtol=1e-9).trajectories for g in (field, f)]
     np.testing.assert_allclose(runs[1][..., :3], runs[0][..., :3], atol=1e-4)
+
+
+def test_vmec_wall_offset_and_box_around_it(field):
+    from pathlib import Path
+    from essos.fields import Vmec
+    from essos.surfaces import SurfaceRZFourier
+    inputs = Path(__file__).parents[1] / "examples" / "input_files"
+    vmec = Vmec(str(inputs / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"))
+    lcfs, wall = (SurfaceRZFourier.from_vmec(vmec, ntheta=16, nphi=8, offset=gap) for gap in (0.0, 0.3))
+    np.testing.assert_allclose(np.linalg.norm(wall.gamma[0, 0] - lcfs.gamma[0, 0]), 0.3, rtol=1e-12)
+    interpolated = InterpolatedField.around(field, wall, margin=0.1, n=8)
+    g = np.asarray(wall.gamma)
+    R = np.hypot(g[..., 0], g[..., 1])
+    assert interpolated.table.shape == (16, 8, 8, 3) and interpolated.nfp == vmec.nfp
+    np.testing.assert_allclose([interpolated.rmin, interpolated.rmax, interpolated.zmax],
+                               [R.min() - 0.1, R.max() + 0.1, np.abs(g[..., 2]).max() + 0.1])
