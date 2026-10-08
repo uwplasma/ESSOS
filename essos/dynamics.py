@@ -1412,8 +1412,8 @@ class Tracing():
         mass = self.particles.mass
 
         if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
-            initial_xyz = self.initial_conditions[:, :3]
-            initial_vparallel = self.initial_conditions[:, 3]
+            initial_xyz = self.trajectories[:, 0, :3]  # t = 0, on the trajectories' devices
+            initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
             def compute_energy(trajectory, mu):
@@ -1450,8 +1450,8 @@ class Tracing():
         mass = self.particles.mass
 
         if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
-            initial_xyz = self.initial_conditions[:, :3]
-            initial_vparallel = self.initial_conditions[:, 3]
+            initial_xyz = self.trajectories[:, 0, :3]  # t = 0, on the trajectories' devices
+            initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
             def compute_vperp(trajectory, mu):
