@@ -75,17 +75,17 @@ def BdotN_over_B(surface, field, **kwargs):
 
 @jit
 def _squared_flux_local(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
-                          * surface.area_element)
+    return 0.5 * surface._surface_mean(BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
+                                       * surface.area_element)
 
 @jit
 def _squared_flux_global(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element)
+    return 0.5 * surface._surface_mean(BdotN(surface, field)**2 * surface.area_element)
 
 @jit
 def _squared_flux_normalized(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element) / \
-                 jnp.mean(jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
+    return 0.5 * surface._surface_mean(BdotN(surface, field)**2 * surface.area_element) / \
+                 surface._surface_mean(jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
 
 def SquaredFlux(surface, field, definition='local'):
     if definition == 'local':
@@ -465,6 +465,9 @@ class SurfaceRZFourier:
             div, end_val = self.nfp, 0.5
         quadpoints_theta = jnp.linspace(0, 2 * jnp.pi, num=self.ntheta, endpoint=self.close)
         quadpoints_phi   = jnp.linspace(0, 2 * jnp.pi * end_val / div, num=self.nphi, endpoint=self.close)
+        if self.range_torus == "half period" and not self.close:
+            # Midpoint grid (as in simsopt): spectrally accurate for stellarator-symmetric integrands.
+            quadpoints_phi = quadpoints_phi + jnp.pi * end_val / div / self.nphi
         theta2d, phi2d = jnp.meshgrid(quadpoints_theta, quadpoints_phi)
         return quadpoints_theta, quadpoints_phi, theta2d, phi2d
 
@@ -658,8 +661,7 @@ class SurfaceRZFourier:
         Theta is periodic, so a duplicated ``close=True`` end column is dropped.
         Over a full torus phi is treated the same way; over a half period with
         ``close=True`` both ends are sampled and the trapezoid rule is used.
-        A half period with ``close=False`` misses the end at ``pi/nfp`` and is
-        only first-order accurate in ``1/nphi``.
+        A half period with ``close=False`` is a midpoint grid.
         Integrals over the torus are this mean times ``(2 pi)**2``, because the
         normal is taken with respect to theta and phi in radians and a
         half-period integrand repeats over the ``2 nfp`` half periods.

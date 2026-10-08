@@ -20,7 +20,7 @@ def test_circular_torus_volume_and_area(close):
 
 
 @pytest.mark.parametrize("range_torus,close", [("full torus", False), ("full torus", True),
-                                               ("half period", True)])
+                                               ("half period", True), ("half period", False)])
 def test_shaped_surface_integrals_do_not_depend_on_the_grid(range_torus, close):
     # Volume from fine constant-phi sections integrated over phi.
     nfp = 3
@@ -39,3 +39,19 @@ def test_shaped_surface_integrals_do_not_depend_on_the_grid(range_torus, close):
     np.testing.assert_allclose(s.volume, volume, rtol=1e-8)
     fine = SurfaceRZFourier(RC, ZS, nfp=nfp, mpol=1, ntor=2, ntheta=128, nphi=256, close=False)
     np.testing.assert_allclose(s.area, fine.area, rtol=1e-10)
+
+
+@pytest.mark.parametrize("definition", ["local", "quadratic flux", "normalized"])
+def test_squared_flux_does_not_count_duplicated_end_points(definition):
+    import equinox as eqx
+    from essos.surfaces import SquaredFlux
+
+    class Field(eqx.Module):  # stellarator-symmetric: toroidal plus vertical
+        def B(self, x):
+            return jnp.array([-x[1], x[0], 0.]) / (x[0]**2 + x[1]**2) + jnp.array([0., 0., .3])
+
+    flux = [SquaredFlux(SurfaceRZFourier(RC, ZS, nfp=3, mpol=1, ntor=2, ntheta=32, nphi=n, close=close,
+                                         range_torus=r), Field(), definition)
+            for r, n, close in [("full torus", 96, False), ("full torus", 97, True),
+                                ("half period", 48, False), ("half period", 49, True)]]
+    np.testing.assert_allclose(flux[1:], flux[0], rtol=1e-6)
