@@ -49,10 +49,6 @@ def B_on_surface(surface, field):
     nphi = surface.nphi
     gamma = surface.gamma
     gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
-    # Spread the points over the devices when they divide evenly (sharding the
-    # surface pytree itself failed whenever its leaves did not).
-    if len(gamma_reshaped) % sharding.num_devices == 0:
-        gamma_reshaped = jax.lax.with_sharding_constraint(gamma_reshaped, sharding)
 
     # Map field.B over all positions
     B_on_surface = vmap(field.B)(gamma_reshaped)
