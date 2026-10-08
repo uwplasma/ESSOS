@@ -334,7 +334,10 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
 
             def busy(state):
                 carry, attempts = state
-                return carry[3] & (carry[2] < t_end * (1 - 1e-12)) & (attempts < MAX_ATTEMPTS)
+                # A step shrunk below 1e-12 of the interval cannot advance the orbit (a singular or non-finite
+                # field rejects every step): stop and report it as failed instead of retrying MAX_ATTEMPTS times.
+                return (carry[3] & (carry[2] < t_end * (1 - 1e-12)) & (attempts < MAX_ATTEMPTS)
+                        & (carry[9] > 1e-12 * t_end))
 
             carry, attempts = jax.lax.while_loop(busy, attempt, (carry, 0))
             # a particle still short of t_end has run out of attempts: report it as failed
