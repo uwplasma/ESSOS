@@ -1,6 +1,5 @@
 import os
 number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
-os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 import jax
 print(jax.devices())
 from time import time
