@@ -30,7 +30,7 @@ pip install essos
   `|B|` spectrum and flux functions `iota`, `G` and `I`, with optional collisions.
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
-- **Fields.** Biot-Savart from coils, VMEC equilibria (analytic derivatives,
+- **Fields.** Biot-Savart from coils, point dipoles (permanent magnets), VMEC equilibria (analytic derivatives,
   optional `mode_tolerance` truncation) and near-axis expansions. Fields
   combine as vectors (`coils + other`, `2.0 * field`), and
   `field.compare(other, points)` measures two fields at the same physical

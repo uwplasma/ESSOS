@@ -705,6 +705,42 @@ class Vmec(ToroidalField):
         (R, dR, d2R), (Z, dZ, d2Z) = series(rc, rs), series(zc, zs)
         return R, Z, dR, dZ, d2R, d2Z
 
+class PointDipoleField(MagneticField):
+    """Point dipoles, such as permanent magnets, in Cartesian coordinates.
+
+    B(x) = mu0 / (4 pi) sum_j [3 (m_j . r_j) r_j / |r_j|^5 - m_j / |r_j|^3],
+    r_j = x - x_j, for dipoles at ``positions`` (n, 3) [m] with ``moments``
+    (n, 3) [A m^2]. The moments are the optimization ``dofs``.
+    """
+
+    def __init__(self, positions, moments):
+        self.positions, self.moments = jnp.asarray(positions), jnp.asarray(moments)
+
+    @property
+    def dofs(self):
+        return self.moments
+
+    @dofs.setter
+    def dofs(self, moments):
+        self.moments = jnp.asarray(moments)
+
+    @jit
+    def B(self, points):
+        r = points - self.positions
+        r2 = jnp.sum(r * r, axis=1, keepdims=True)
+        mr = jnp.sum(self.moments * r, axis=1, keepdims=True)
+        return 1e-7 * jnp.sum((3 * mr * r - r2 * self.moments) / r2**2.5, axis=0)
+
+
+def _unflatten_dipoles(_, children):  # without __init__: transforms put non-array leaves here
+    field = PointDipoleField.__new__(PointDipoleField)
+    field.positions, field.moments = children
+    return field
+
+
+tree_util.register_pytree_node(PointDipoleField, lambda f: ((f.positions, f.moments), None), _unflatten_dipoles)
+
+
 class near_axis:
     def __init__(self, *args, **kwargs):
         raise ImportError(
