@@ -638,6 +638,88 @@ def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypat
         np.testing.assert_array_equal(trace.trajectories[0, -1], trace.trajectories[0, -2])
 
 
+class _MuField:
+    def AbsB(self, x):
+        return 2.0
+
+    def B_contravariant(self, x):
+        return jnp.array([0.0, 0.0, 2.0])
+
+    B_covariant = B_contravariant
+
+    def dAbsB_by_dX(self, x):
+        return jnp.zeros(3)
+
+    kappa = curl_b = dAbsB_by_dX
+
+    def sqrtg(self, x):
+        return 1.0
+
+
+def _mu_collision_setup(v, xi):
+    from essos.constants import SPEED_OF_LIGHT
+    from essos.dynamics import Electric_field_zero
+    m = PROTON_MASS
+    particles = type("P", (), {"mass": m, "charge": 1.602176634e-19})()
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e20]), jnp.array([1e3]))
+    scale = jnp.array([SPEED_OF_LIGHT, SPEED_OF_LIGHT**2 * m])
+    z = jnp.array([xi * v, m * v**2 * (1 - xi**2) / 4.0])
+    state = jnp.concatenate([jnp.array([1., 0., 0.]), z / scale])
+    return state, scale, (_MuField(), particles, Electric_field_zero(), species, 1.0)
+
+
+def _enable_x64():
+    try:
+        from jax import enable_x64
+    except ImportError:  # jax < 0.7
+        from jax.experimental import enable_x64
+    return enable_x64
+
+@pytest.mark.parametrize("v,xi", [(1e5, 0.0), (1e6, 0.0), (1e5, 0.3), (1e5, 1.0), (1e6, -1.0)])
+def test_mu_collision_noise_is_finite_and_matches_the_diffusion_tensor(v, xi):
+    """The eigenvectors were 0/0 at xi = 0, and jnp.select returned zero noise
+    when rounding put |xi| just above 1."""
+    enable_x64 = _enable_x64()
+    from essos.dynamics import GuidingCenterCollisionsDiffusionMu, GuidingCenterCollisionsDriftMuStratonovich
+    from essos.background_species import nu_D_ab, nu_par_ab
+    with enable_x64():
+        state, scale, args = _mu_collision_setup(v, xi)
+        sigma = GuidingCenterCollisionsDiffusionMu(0., state, args)[3:, 3:] * scale[:, None]
+        m, species = args[1].mass, args[3]
+        speed = jnp.sqrt((state[3] * scale[0])**2 + 4 * state[4] * scale[1] / m)
+        nus = [f(m, args[1].charge, 0, speed, state[:3], species) for f in (nu_par_ab, nu_D_ab)]
+        vvec = jnp.array([speed * jnp.sqrt(jnp.maximum(1 - xi**2, 0.)), 0., xi * speed])
+        P = jnp.outer(vvec, vvec) / speed**2
+        Dv = speed**2 / 2 * (nus[0] * P + nus[1] * (jnp.eye(3) - P))
+        J = jnp.array([[0., 0., 1.], [m * vvec[0] / 2.0, 0., 0.]])  # d(vpar, mu)/dv
+        D = J @ Dv @ J.T
+        np.testing.assert_allclose(sigma @ sigma.T / 2, D, rtol=1e-9, atol=1e-12 * float(jnp.abs(D).max()))
+        assert jnp.all(jnp.isfinite(GuidingCenterCollisionsDriftMuStratonovich(0., state, args)))
+        # Milstein differentiates the noise; sqrt(mu) must not give an infinite slope at |xi| = 1
+        assert jnp.all(jnp.isfinite(jax.jvp(lambda y: GuidingCenterCollisionsDiffusionMu(0., y, args), (state,), (jnp.ones(5),))[1]))
+
+
+@pytest.mark.parametrize("v,xi", [(1e5, 0.3), (1e6, 0.3), (1e5, 1e-3), (1e6, 0.9)])
+def test_mu_collision_stratonovich_correction_matches_noise_derivative(v, xi):
+    """Stratonovich minus Ito drift is -1/2 sigma_jk d_j sigma_ik; the hand-coded
+    derivatives disagreed with the noise at generic xi."""
+    enable_x64 = _enable_x64()
+    from essos.dynamics import (GuidingCenterCollisionsDiffusionMu, GuidingCenterCollisionsDriftMuIto,
+                                GuidingCenterCollisionsDriftMuStratonovich)
+    with enable_x64():
+        state, scale, args = _mu_collision_setup(v, xi)
+        z = state[3:] * scale
+
+        def sigma(z):
+            return GuidingCenterCollisionsDiffusionMu(0., jnp.concatenate([state[:3], z / scale]), args)[3:, 3:] * scale[:, None]
+        steps = 1e-4 * jnp.array([v, args[1].mass * v**2 / 4.0])
+        dsigma = jnp.stack([(sigma(z + e) - sigma(z - e)) / (2 * e.sum()) for e in jnp.diag(steps)], axis=-1)
+        expected = -0.5 * jnp.einsum('jk,ikj->i', sigma(z), dsigma)
+        drift = (GuidingCenterCollisionsDriftMuStratonovich(0., state, args)
+                 - GuidingCenterCollisionsDriftMuIto(0., state, args))[3:] * scale
+        np.testing.assert_allclose(drift, expected, rtol=1e-5, atol=1e-8 * float(jnp.abs(expected).max()))
+
+
 def _legacy_positive_charge_start(field, xyz, vpar, total_speed, mass, charge, phase):
     """The pre-fix construction, correct for a positive charge and B not along z."""
     b = field.B_contravariant(xyz) / jnp.linalg.norm(field.B_contravariant(xyz))
