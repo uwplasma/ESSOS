@@ -11,7 +11,6 @@ these same calls, so the pictures and the snippets cannot drift apart.
 import os
 from pathlib import Path
 
-os.environ.setdefault("XLA_FLAGS", "--xla_force_host_platform_device_count=1")
 
 import jax.numpy as jnp
 import matplotlib
