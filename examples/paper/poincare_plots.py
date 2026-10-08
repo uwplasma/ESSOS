@@ -1,7 +1,6 @@
 import os
 from functools import partial
 number_of_processors_to_use = 1 # Parallelization, this should divide ntheta*nphi
-os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 from jax import jit, grad, block_until_ready
 import jax.numpy as jnp
