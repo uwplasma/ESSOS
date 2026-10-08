@@ -562,3 +562,14 @@ def test_vmec_partner_cutoff_is_phase_invariant():
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0, 1])
     arrays['bmns'] = jnp.zeros_like(arrays['bmns'])
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0])
+
+
+def test_half_grid_interpolation_keeps_its_slope_up_to_the_lcfs():
+    """Issue #111: the half grid ends at s = 1 - ds/2; beyond it the scaled table must not freeze."""
+    from essos.fields import _radial_interp
+    grid = (jnp.arange(100) + 0.5) / 100
+    table = jnp.concatenate([jnp.zeros(1), 1 + grid])[:, None]   # the linear field 1 + s
+    def f(s):
+        return _radial_interp(s, grid, table, jnp.array([0]), half_grid=True)[0]
+    for s in (0.994, 0.996, 0.999, 1.0):
+        assert jnp.isclose(f(s), 1 + s, rtol=1e-12) and jnp.isclose(jax.grad(f)(s), 1.0, rtol=1e-9)

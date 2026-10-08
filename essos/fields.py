@@ -315,12 +315,16 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
         slope = slope.at[:2].set(scaled[1] - scaled[0])
     ds = grid[1] - grid[0]
     i = jnp.clip(jnp.floor((s - grid[0]) / ds).astype(int), 0, len(grid) - 2)
-    t = jnp.where(s > grid[-1], 1.0, (s - grid[i]) / ds)
+    u = (s - grid[i]) / ds
+    t = jnp.minimum(u, 1.0)
     q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
     powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
     h = jnp.stack([(1 + 2 * t) * (1 - t)**2, t * (1 - t)**2, t * t * (3 - 2 * t), t * t * (t - 1)])
+    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue linearly with the end slope,
+    # so value and s derivative stay continuous up to the LCFS instead of freezing there.
+    beyond = jnp.maximum(u - 1.0, 0.0) * slope[i + 1]
     return (powers @ (k == np.arange(-1, 4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
-                                                          + h[2] * scaled[i + 1] + h[3] * slope[i + 1])
+                                                          + h[2] * scaled[i + 1] + h[3] * slope[i + 1] + beyond)
 
 VMEC_WOUT_ARRAYS = ('bmnc', 'xm', 'xn', 'rmnc', 'zmns', 'bsubsmns', 'bsubumnc', 'bsubvmnc',
                     'bsupumnc', 'bsupvmnc', 'gmnc', 'xm_nyq', 'xn_nyq', 'Aminor_p')
