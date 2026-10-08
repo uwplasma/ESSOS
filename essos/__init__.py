@@ -9,6 +9,8 @@ if "xla_force_host_platform_device_count" not in _os.environ.get("XLA_FLAGS", ""
     import jax as _jax
     try:
         if _jax.config.jax_num_cpu_devices < 0:
-            _jax.config.update("jax_num_cpu_devices", int(_os.environ.get("ESSOS_CPU_DEVICES", _os.cpu_count() or 1)))
+            _requested = _os.environ.get("ESSOS_CPU_DEVICES", "")
+            _count = int(_requested) if _requested.strip().isdigit() else (_os.cpu_count() or 1)
+            _jax.config.update("jax_num_cpu_devices", max(1, _count))
     except RuntimeError:  # backends already initialized: keep their device count
         pass

@@ -1198,6 +1198,7 @@ class Tracing():
         # Sharding pays off for plain traces. A differentiated trace stays on one device: XLA 0.6 aborts compiling
         # a gradient through a while loop sharded over several CPU devices.
         count = 1 if traced else min(len(self.devices), batch)
+        count = -(-batch // -(-batch // count))  # as many devices as the per-device share needs: 37 on 36 -> 19 x 2
         batch = -(-batch // count) * count  # padded below so every device traces equally many particles
         if count > 1:
             place = NamedSharding(Mesh(np.asarray(self.devices[:count], dtype=object), ("dev",)), PartitionSpec("dev"))
