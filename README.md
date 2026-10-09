@@ -22,25 +22,39 @@ pip install essos
   separation, coil-surface-distance and force constraints, with `least_squares`,
   an augmented Lagrangian, multi-objective (Pareto) search, or stochastic
   optimization over Gaussian coil perturbations. Coils can also target a
-  near-axis field, particle confinement, or a finite-beta (VMEX) boundary.
+  near-axis field, particle confinement, or a finite-beta boundary (VMEX, or
+  the plasma field from [virtual_casing_jax](https://github.com/uwplasma/virtual_casing_jax)
+  in [`optimize_coils_virtual_casing.py`](examples/coil_optimization/optimize_coils_virtual_casing.py)).
 - **Particle tracing.** Guiding-centre and full-orbit (Boris) models, with
   Monte Carlo collisions on background species with density and temperature
-  profiles, electric fields and alpha-loss diagnostics.
+  profiles (NRL Coulomb logarithm per species pair), electric fields and
+  alpha-loss diagnostics.
 - **Boozer-coordinate tracing.** Guiding-centre diagnostics from the Boozer
-  `|B|` spectrum and flux functions `iota`, `G` and `I`, with optional collisions.
+  `|B|` spectrum and flux functions `iota`, `G` and `I`, with fixed-step
+  (RK4, Dopri5, Dopri8) or adaptive Dormand-Prince stepping and optional collisions.
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
-- **Fields.** Biot-Savart from coils, VMEC equilibria (analytic derivatives,
-  optional `mode_tolerance` truncation), near-axis expansions, and
-  `CombinedField` to trace a sum of fields as one.
+- **Fields.** Biot-Savart from coils, VMEC equilibria (stellarator-symmetric or
+  not, analytic derivatives, optional `mode_tolerance` truncation), near-axis
+  expansions, and `CombinedField` to trace a sum of fields as one.
+- **Interpolated fields.** `InterpolatedField(source, R=..., Z=..., nr, nz, nphi, nfp)`
+  tabulates any Cartesian field (coils, dipoles, MGRID, combined) on a
+  cylindrical grid and evaluates `B`, `dB/dX` and guiding-centre terms from a
+  tricubic spline; it saves to `.npz` or MGRID and works under `jit` and
+  `grad`. See [`trace_particles_interpolated_dipoles.py`](examples/particle_tracing/trace_particles_interpolated_dipoles.py).
 - **VMEC MGRID.** Export coil fields and load MGRID files as JAX-compatible
   three-dimensional magnetic fields.
 - **Surfaces.** Fourier-represented toroidal surfaces, from a VMEC `wout` or
   built directly.
-- **Parallel.** JAX sharding across the visible devices; pass `devices=` to pick.
+- **Parallel by default.** ESSOS asks JAX for one device per CPU core and
+  shards particles over every CPU core or GPU (`ESSOS_CPU_DEVICES` overrides
+  the count; `devices=` picks). Compiled traces are cached on disk
+  (`ESSOS_XLA_CACHE`, default `~/.cache/essos/xla`).
 - **Checked against SIMSOPT.** [`examples/comparisons_simsopt`](examples/comparisons_simsopt)
   compares coils, surfaces, VMEC import, field lines, guiding-centre and
-  full-orbit tracing, and losses with SIMSOPT on the same inputs.
+  full-orbit tracing, and losses with SIMSOPT on the same inputs. Alpha
+  losses are also compared with SIMSOPT, FIRM3D, SIMPLE and DESC
+  ([below](#comparison-with-other-codes)).
 
 ## Coil optimization
 
@@ -130,8 +144,10 @@ full-orbit, collisional and electric-field variants.
 ## Boozer-coordinate tracing
 
 Transform a VMEC equilibrium with [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax),
-then trace guiding centres in an axis-regular chart with fixed-step RK4 and
-optional Monte Carlo collisions. This tracer provides forward diagnostics.
+then trace guiding centres in an axis-regular chart with optional Monte Carlo
+collisions. `method="rk4"` (default), `"dopri5"` or `"dopri8"` take fixed
+steps; `"adaptive"` (Dopri5) and `"adaptive8"` (Dopri8) control each
+particle's step to `tolerance`. This tracer provides forward diagnostics.
 
 ```python
 import numpy as np
@@ -176,6 +192,27 @@ Redraw the figure with `python docs/make_readme_boozer_figure.py`.
 
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
 and its derivatives, together with the flux functions `G`, `I` and `iota`.
+
+## Comparison with other codes
+
+256 collisionless 3.5 MeV alphas in the Landreman-Paul QA reactor-scale
+equilibrium, started at `s = 0.255` with uniform Boozer angles and pitch,
+traced for 10 ms and lost at `s = 1`. Apple M4, 8 CPU cores per code;
+compilation and field set-up excluded. Run with
+[`examples/cross_code_benchmark/benchmark.py`](examples/cross_code_benchmark/benchmark.py).
+
+| Code | Method | Run time | Lost | Same fate as ESSOS | max \|E/E0 - 1\| |
+|---|---|---|---|---|---|
+| ESSOS `trace_boozer` | RK4, `dt = 1e-7 s` | 11.1 s | 0.4% | - | 8e-5 |
+| SIMSOPT | RK45, tol 1e-9, `gc_noK` | 22.7 s | 0.8% | 98.8% | 1e-3 |
+| FIRM3D | RK45, tol 1e-9, `gc_noK` | 55.3 s | 0.4% | 100% | 6e-5 |
+| SIMPLE | symplectic, defaults | 22.9 s | 0.4% | 100% | not reported |
+| DESC 0.17.3 (32 alphas) | Tsit5, tol 1e-7, vacuum GC | 909 s | 12.5% | 87.5% | not reported |
+
+ESSOS, SIMSOPT and FIRM3D use the same 32x32 `booz_xform` spectrum (ESSOS
+drops modes below `1e-4` of `B00`); SIMPLE and DESC read the `wout`
+directly. ESSOS, FIRM3D and SIMPLE lose the same alpha; ESSOS and SIMPLE both
+lose it at 0.255 ms. DESC traces in its own fit of the low-resolution `wout`.
 
 ## Tracing notes
 
@@ -230,6 +267,7 @@ command if it is missing.
 | [`particle_tracing`](examples/particle_tracing) | Guiding-centre and full-orbit tracing, classifiers, electric fields, Boozer vs VMEC |
 | [`particle_tracing_collisions`](examples/particle_tracing_collisions) | Collisional tracing and velocity-distribution statistics |
 | [`comparisons_simsopt`](examples/comparisons_simsopt) | Side-by-side runs with SIMSOPT |
+| [`cross_code_benchmark`](examples/cross_code_benchmark) | Alpha losses against SIMSOPT, FIRM3D, SIMPLE and DESC |
 | [`simple_examples`](examples/simple_examples) | Coils from near-axis or BOOZ_XFORM, perturbed coils, combined fields, MGRID |
 | [`paper`](examples/paper) | Integrator, gradient and Poincare figures |
 
