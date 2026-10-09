@@ -687,8 +687,8 @@ class ExternalField(MagneticField):
 class CombinedField(MagneticField):
     """Sum of several magnetic fields, traced as one.
 
-    The usual case is a coil field plus a plasma contribution: ``B`` and
-    ``B_contravariant`` add over the fields, while the geometry helpers
+    The usual case is a coil field plus a plasma contribution: ``B``,
+    ``B_covariant`` and ``B_contravariant`` add over the fields, while the geometry helpers
     ``sqrtg`` and ``to_xyz`` come from the first field, which is the one that
     carries the coordinate system.
     """
@@ -703,6 +703,15 @@ class CombinedField(MagneticField):
         return sum(field.B(points) for field in self.fields)
 
     @jit
+    def B_covariant(self, points):
+        return sum(field.B_covariant(points) for field in self.fields)
+
+    @jit
+    def AbsB(self, points):
+        """``sqrt(B_i B^i)``: valid in the coordinates of the fields, Cartesian or not."""
+        return jnp.sqrt(self.B_covariant(points) @ self.B_contravariant(points))
+
+    @jit
     def B_contravariant(self, points):
         return sum(field.B_contravariant(points) for field in self.fields)
 
@@ -715,11 +724,14 @@ class CombinedField(MagneticField):
         return self.fields[0].to_xyz(points)
 
     def _tree_flatten(self):
-        return (self.fields,), {}
+        # Fields that are not pytrees (e.g. Vmec, static in its own methods) stay static.
+        static = tuple(tree_util.tree_leaves(f) == [f] for f in self.fields)
+        return (tuple(None if st else f for f, st in zip(self.fields, static)),), \
+            tuple(f if st else None for f, st in zip(self.fields, static))
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        return cls(*children[0], **aux_data)
+        return cls(*(f if a is None else a for f, a in zip(children[0], aux_data)))
 
 
 tree_util.register_pytree_node(CombinedField,

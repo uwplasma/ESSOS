@@ -2,13 +2,13 @@ import pytest
 from essos.constants import PROTON_MASS, NEUTRON_MASS, ELEMENTARY_CHARGE, ONE_EV, ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY, ELECTRON_MASS
 
 def test_proton_mass():
-    assert PROTON_MASS == 1.67262192369e-27
+    assert PROTON_MASS == 1.67262192595e-27
 
 def test_electron_mass():
     assert ELECTRON_MASS == 9.1093837139e-31
 
 def test_neutron_mass():
-    assert NEUTRON_MASS == 1.67492749804e-27
+    assert NEUTRON_MASS == 1.67492750056e-27
 
 def test_elementary_charge():
     assert ELEMENTARY_CHARGE == 1.602176634e-19

@@ -62,3 +62,7 @@ Homepage = "https://github.com/uwplasma/ESSOS"
 
 [project.scripts]
 essos = "essos.__main__:main"
+
+[project.optional-dependencies]
+# Examples that build VMEX equilibria, mgrid fields or free-boundary (virtual-casing) fields.
+vmex = ["vmex[freeb]>=0.11.3"]  # 0.11.3: MgridField interpolation order

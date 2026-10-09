@@ -562,3 +562,16 @@ def test_vmec_partner_cutoff_is_phase_invariant():
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0, 1])
     arrays['bmns'] = jnp.zeros_like(arrays['bmns'])
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0])
+
+
+def test_combined_vmec_fields_sum_covariant_and_contravariant_components():
+    from essos.fields import CombinedField
+
+    vmec = Vmec(WOUT_FILE)
+    combined, point = CombinedField(vmec, vmec), jnp.array([0.5, 0.3, 0.2])
+    for name in ("B_covariant", "B_contravariant", "B", "curl_B"):
+        np.testing.assert_allclose(getattr(combined, name)(point), 2 * getattr(vmec, name)(point), rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(combined.AbsB(point), 2 * vmec.AbsB(point), rtol=1e-3)
+    # |B| from the B_i, B^i series vs VMEC's own bmnc series: same to the wout's spectral accuracy
+    np.testing.assert_allclose(combined.dAbsB_by_dX(point), 2 * vmec.dAbsB_by_dX(point), rtol=1e-2, atol=5e-3)
+    np.testing.assert_allclose(combined.kappa(point), vmec.kappa(point), rtol=2e-2, atol=2e-3)
