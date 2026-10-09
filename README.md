@@ -133,6 +133,8 @@ Transform a VMEC equilibrium with [booz_xform_jax](https://github.com/uwplasma/b
 then trace guiding centres in an axis-regular chart with fixed-step RK4 and
 optional Monte Carlo collisions. This tracer provides forward diagnostics.
 
+Install the transform extra with `pip install 'essos[booz]'` (Python 3.11+).
+
 ```python
 import numpy as np
 from netCDF4 import Dataset
