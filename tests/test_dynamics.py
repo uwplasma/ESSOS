@@ -417,6 +417,27 @@ def _near_axis_particles():
     return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([0.9, 0.9, 0.9, -0.9, 0.9]))
 
 
+def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature():
+    """Without the noise-induced drift sigma_ik d_j sigma_jk / 2 a thermal
+    ensemble heated to <E> ~ 1.35 (3T/2) within two slowing-down times."""
+    from essos.background_species import nu_s_ab
+    from essos.constants import ELEMENTARY_CHARGE
+    temperature = 1e3 * ELEMENTARY_CHARGE
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e20]), jnp.array([1e3]))
+    vth = np.sqrt(temperature / PROTON_MASS)
+    nu = float(nu_s_ab(PROTON_MASS, ELEMENTARY_CHARGE, 0, vth, jnp.zeros(3), species))
+    n = 200
+    xyz = jnp.tile(jnp.array([1., 0., 0.]), (n, 1))
+    particles = Particles(initial_xyz=xyz, initial_xyz_fullorbit=xyz, mass=PROTON_MASS, charge=ELEMENTARY_CHARGE,
+                          initial_vxvyvz=vth * jax.random.normal(jax.random.key(0), (n, 3)))
+    trace = Tracing(field=_UniformField((0., 0., 1.), magnitude=1e-6), particles=particles, species=species,
+                    model="FullOrbitCollisions", maxtime=2 / nu, timestep=1e-2 / nu, times_to_trace=6,
+                    rtol=1e-4, atol=1e-4)
+    energy = 0.5 * PROTON_MASS * jnp.sum(trace.trajectories[:, :, 3:]**2, axis=-1) / (1.5 * temperature)
+    error = np.sqrt(2 / 3 / n)
+    assert np.all(np.abs(energy.mean(axis=0) - 1) < 4 * error)
+
+
 def test_vmec_guiding_centers_cross_the_magnetic_axis():
     """The orbit born at s = 1e-7 used to stop at once, at s <= axis_threshold = 1e-6."""
     particles = _near_axis_particles()
@@ -1071,3 +1092,42 @@ def test_guiding_center_mu_matches_guiding_center():
     args = (field, particles, Electric_field_zero())
     assert jnp.allclose(GuidingCenterMu(0.0, jnp.append(y, mu), args)[:4], GuidingCenter(0.0, y, args))
     assert GuidingCenterMu(0.0, jnp.append(y, mu), args)[4] == 0.0
+
+
+def test_full_orbit_collision_noise_is_parallel_plus_perpendicular():
+    """Velocity noise amplitude sqrt(2 D_par) v v^T/v^2 + sqrt(2 D_perp) (I - v v^T/v^2)."""
+    from essos.dynamics import LorentzCollisionsDiffusion
+    from essos.background_species import nu_D_ab, nu_par_ab
+    field = _UniformField((0., 0., 1.), magnitude=1.)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e20]), jnp.array([1e3]))
+    v = jnp.array([3e6, -1e6, 2e6])
+    block = LorentzCollisionsDiffusion(0., jnp.concatenate([jnp.ones(3), v]), (field, particles, species))[3:, 3:]
+    m, q, speed = particles.mass, particles.charge, jnp.linalg.norm(v)
+    nu_D = nu_D_ab(m, q, 0, speed, jnp.ones(3), species)
+    nu_par = nu_par_ab(m, q, 0, speed, jnp.ones(3), species)
+    P = jnp.outer(v, v) / speed**2
+    np.testing.assert_allclose(block, speed * (jnp.sqrt(nu_par) * P + jnp.sqrt(nu_D) * (jnp.eye(3) - P)), rtol=1e-12)
+
+
+def test_collisional_guiding_center_v_perp_uses_speed_and_pitch():
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+    particles = _near_axis_particles()
+    trace = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterCollisions", particles=particles,
+                    maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
+    np.testing.assert_allclose(trace.v_perp()[:, 0], particles.initial_vperpendicular, rtol=1e-10)
+
+
+def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.constants import SPEED_OF_LIGHT
+    from essos.fields import BiotSavart
+    coils = Coils(CreateEquallySpacedCurves(1, 1, 1.0, 0.4, 8, 1, False), [1e6])
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+    particles = Particles([[1.05, 0., 0.]], [.5])
+    monkeypatch.setattr(Tracing, "trace", lambda self: jnp.zeros((1, 2, 5)))  # only the setup is tested
+    trace = Tracing(field=coils, model="GuidingCenterCollisionsMuFixed", particles=particles,
+                    maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
+    B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
+    mu = particles.initial_vperpendicular[0]**2 / (2 * B * SPEED_OF_LIGHT**2)
+    np.testing.assert_allclose(trace.initial_conditions[0, 4], mu, rtol=1e-6)
