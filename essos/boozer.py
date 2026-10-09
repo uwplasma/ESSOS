@@ -10,6 +10,7 @@ slowing down and energy diffusion (Boozer & Kuo-Petravic, 1981).
 from __future__ import annotations
 
 import dataclasses
+import os
 from functools import partial
 
 import equinox as eqx
@@ -366,22 +367,24 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=None, compact=True, method="rk4", tolerance=1e-8):
+                 progress=True, compact=True, method="dopri8", tolerance=1e-8):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The step is shortened so that a whole number of steps fits between the
     ``n_save`` saved times (``t = 0`` included).  Particles are sharded over
     ``devices`` (default: every local device).
 
-    ``progress``, if given, is called as ``progress(done, total)`` in saved
-    intervals: the horizon then runs as up to ten host-side chunks of the same
+    ``progress`` (default ``True``, a terminal bar; off with ``False`` or
+    ``ESSOS_PROGRESS=0``) may be a callable ``progress(done, total)`` in saved
+    intervals. With progress the horizon runs as up to ten host-side chunks of the same
     compiled program, with the whole state carried between them, so the orbits
     are those of an unchunked trace.
     Stopped particles are compacted after the first saved interval on one
     device when at least half have stopped. ``compact=False`` skips the host
     synchronization and extra compiled batch size.
-    Fixed explicit methods are ``"rk4"`` (default), ``"dopri5"`` and
-    ``"dopri8"``. Refine timestep and modes to check loss labels and bounce phase.
+    Fixed explicit methods are ``"dopri8"`` (default), ``"dopri5"`` and
+    ``"rk4"``; ``"dopri8"`` matches RK4 in cost and energy error at 3x its
+    step and is far more accurate at smaller steps. Refine timestep and modes to check loss labels and bounce phase.
     ``"adaptive"`` (Dopri5) and ``"adaptive8"`` (Dopri8) control each particle's step so the embedded error
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.
@@ -403,6 +406,12 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     if (not all(np.ndim(x) == 0 and np.isfinite(x) for x in (speed, mass, charge))
             or speed <= 0 or mass <= 0 or charge == 0):
         raise ValueError("speed and mass must be positive; charge must be nonzero and finite")
+    if progress is True and os.environ.get("ESSOS_PROGRESS", "1") != "0":
+        from tqdm.auto import tqdm
+        bar = tqdm(total=max(int(n_save) - 1, 1), desc="Tracing", unit="interval")
+        progress = lambda done, total: (bar.update(done - bar.n), done == total and bar.close())
+    elif not callable(progress):
+        progress = None
     s, theta, zeta, pitch = map(jnp.asarray, inputs)
     n_int = max(int(n_save) - 1, 1)
     n_sub = max(1, int(np.ceil(float(tmax) / n_int / float(timestep) - 1e-9)))
