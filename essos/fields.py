@@ -135,6 +135,13 @@ class BiotSavart(MagneticField):
         return jnp.mean(dB_sum, axis=0)
 
     @jit
+    def A(self, points):
+        """Vector potential mu0/(4 pi) sum_i I_i (closed integral of dl_i / abs(x - gamma_i))."""
+        dif_R = jnp.array(points) - self.coils.gamma
+        dA = self.coils.gamma_dash / jnp.linalg.norm(dif_R, axis=-1, keepdims=True)
+        return jnp.sum(jnp.mean(self.coils.currents[:, None, None] * dA * 1e-7, axis=1), axis=0)
+
+    @jit
     def b_cyl(self, R, phi, Z):
         """Return ``(B_R, B_phi, B_Z)`` on broadcast cylindrical arrays.
 
