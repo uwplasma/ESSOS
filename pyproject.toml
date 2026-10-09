@@ -21,6 +21,9 @@ classifiers = [
     "Operating System :: OS Independent",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 keywords = ["Plasma", 
      "Physics", 
@@ -30,19 +33,22 @@ keywords = ["Plasma",
 # Floors matter when ESSOS is installed into an environment that already has
 # older packages: pip keeps anything that satisfies the requirement. equinox
 # 0.13.3 is the first release whose primitives trace under jax 0.10/0.11, and
-# diffrax 0.7.0 is the first with ClipStepSizeController (essos.dynamics).
-# jax 0.6.2 is the newest JAX for Python 3.10, which the 3.10 CI lane tests.
+# diffrax 0.7.2 is required: under 0.7.0 every FullOrbitCollisions (SPaRK)
+# solve runs into max_steps. diffrax 0.7.2, lineax and optimistix 0.1 all
+# need Python 3.11. jaxtyping 0.2.33 is the oldest whose array types
+# equinox 0.13.3 can build. The floor stack (jax 0.6.2, equinox 0.13.3,
+# diffrax 0.7.2, optimistix 0.1.0, jaxtyping 0.2.33) passes the test suite.
 dependencies = [
     "jax>=0.6.2",
     "jaxlib>=0.6.2",
     "equinox>=0.13.3",
-    "jaxtyping>=0.2.24",
+    "jaxtyping>=0.2.33",
     "tqdm",
     "matplotlib",
-    "diffrax>=0.7.0",
+    "diffrax>=0.7.2",
     "optax",
     "jaxopt",
-    "optimistix",
+    "optimistix>=0.1.0",
     "scipy",
     "jaxkd",
     "netcdf4",
@@ -55,10 +61,15 @@ dependencies = [
 # The near-axis entry points import it lazily and raise with the install
 # command; see "Optional: near-axis fields" in the README.
 #   pip install git+https://github.com/uwplasma/pyQSC_JAX.git 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 [project.urls]
 Homepage = "https://github.com/uwplasma/ESSOS"
 
 [project.scripts]
 essos = "essos.__main__:main"
+
+[project.optional-dependencies]
+# Examples that build VMEX equilibria, mgrid fields or free-boundary
+# (virtual-casing) fields. 0.11.3 is the first VMEX with MgridField(order=...).
+vmex = ["vmex[freeb]>=0.11.3"]
