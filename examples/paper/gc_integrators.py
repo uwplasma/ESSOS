@@ -1,7 +1,6 @@
 import os
 import gc
 number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
-os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 from jax import block_until_ready
 import jax.numpy as jnp
@@ -53,7 +52,7 @@ for (method, solver_class), marker in zip(solvers, markers):
     tolerances = [1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16]
     for tolerance in tolerances:
         time0 = time()
-        tracing = Tracing(field=field, model='GuidingCenter', particles=particles,
+        tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
                           maxtime=tmax, timestep=1e-7,
                           atol=tolerance, rtol=tolerance,
                           solver=solver_class())
