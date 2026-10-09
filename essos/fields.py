@@ -705,6 +705,119 @@ class Vmec(ToroidalField):
         (R, dR, d2R), (Z, dZ, d2Z) = series(rc, rs), series(zc, zs)
         return R, Z, dR, dZ, d2R, d2Z
 
+class MRXField(ToroidalField):
+    """The field of an MRX state (https://github.com/ToBlick/mrx), in the coordinates of :class:`ToroidalField`.
+
+    MRX holds B as a 2-form: tensor-product spline coefficients of
+    Bhat = J DPhi^-1 B, the contravariant components of B in the logical
+    coordinates x = (r, theta_l, zeta) of the unit cube, where Phi is the
+    spline map to Cartesian space and J = det DPhi > 0. Here
+    (s, theta, phi) = (r^2, 2 pi theta_l, 2 pi zeta / nfp), so with the scale
+    factors c = (2 r, 2 pi, 2 pi / nfp) of this change of coordinates
+
+        B = DPhi Bhat / J,  B^i = c_i Bhat^i / J,  B_i = (G Bhat)_i / (J c_i),
+        sqrt(g) = J / (c_1 c_2 c_3),  G = DPhi^T DPhi.
+
+    MRX describes one field period, zeta in [0, 1); the others are its
+    rotations about the z axis. Arguments: the coefficients ``raw`` and the
+    ``basis`` of the 2-form (``basis.contract(raw, x) = Bhat(x)``), the map
+    ``Phi`` (a pytree, such as MRX's map or a :class:`jax.tree_util.Partial`)
+    and ``nfp``. :meth:`from_mrx` builds it from an MRX checkpoint or
+    computes the vacuum field of a VMEC or DESC domain. The field is a pytree, so it can be traced and differentiated
+    with respect to ``raw``.
+    """
+
+    def __init__(self, raw, basis, Phi, nfp, Aminor_p=None):
+        self.raw, self.basis, self.Phi, self.nfp, self.Aminor_p = raw, basis, Phi, int(nfp), Aminor_p
+        if Aminor_p is None:
+            self.Aminor_p = self._minor_radius()
+
+    @classmethod
+    def from_mrx(cls, geometry, checkpoint=None, resolution=(12, 16, 16), degree=3):
+        """The MRX field in the domain of the VMEC or DESC file ``geometry``.
+
+        With ``checkpoint`` (an MRX ``state_*.h5``) it is the relaxed state
+        stored there, on the mesh of the checkpoint. Without, it is the vacuum
+        field of the domain, the harmonic 2-form with B.n = 0 on the boundary,
+        on the given mesh, scaled to unit L2 norm. Degree 3 makes grad|B|
+        continuously differentiable, so adaptive guiding-center steps do not
+        shrink at every knot; on QA they trace about 3x faster than degree 2.
+        Needs the ``mrx`` package. Unless ``MRX_DTYPE`` is set, MRX is
+        imported in float64.
+        """
+        import os
+        os.environ.setdefault("MRX_DTYPE", "float64")
+        from mrx.geometry import build_sequence
+        if checkpoint is None:
+            from mrx.nullspace import compute_nullspaces
+            seq, _ = build_sequence(geometry, tuple(resolution), degree)
+            compute_nullspaces(seq)
+            dof = seq.odd.nullspace(2)[0]
+            dof = dof / seq.odd.l2_norm(dof, 2)
+        else:
+            import h5py
+            from mrx.relaxation.loop import checkpoint_attrs
+            a = checkpoint_attrs(checkpoint)
+            seq, _ = build_sequence(geometry, a["ns"], a["p"], nfp=a["nfp"], knots=a["knots"], symmetry=a["symmetry"])
+            with h5py.File(checkpoint, "r") as f:
+                dof = jnp.asarray(f["B_n"][...])
+        basis = seq.odd.basis_2
+        return cls(basis.raw_blocks(seq.odd.E(2).T @ dof), basis, seq.map, seq.nfp)
+
+    def _logical(self, points):
+        """The logical point in the first field period, the rotation to the period of ``points``, and c."""
+        s, theta, phi = points
+        r = jnp.sqrt(s)
+        zeta = phi * self.nfp / (2 * jnp.pi)
+        period = jnp.floor(zeta)
+        cos, sin = jnp.cos(2 * jnp.pi * period / self.nfp), jnp.sin(2 * jnp.pi * period / self.nfp)
+        rotation = jnp.array([[cos, -sin, 0.], [sin, cos, 0.], [0., 0., 1.]])
+        x = jnp.array([r, jnp.mod(theta / (2 * jnp.pi), 1.), zeta - period])
+        return x, rotation, jnp.array([2 * r, 2 * jnp.pi, 2 * jnp.pi / self.nfp])
+
+    def _frame(self, points):
+        x, rotation, scale = self._logical(points)
+        DPhi = jacfwd(self.Phi)(x)
+        return rotation @ DPhi, jnp.linalg.det(DPhi), self.basis.contract(self.raw, x), scale
+
+    @jit
+    def to_xyz(self, points):
+        x, rotation, _ = self._logical(points)
+        return rotation @ self.Phi(x)
+
+    @jit
+    def B(self, points):
+        DPhi, J, Bhat, _ = self._frame(points)
+        return DPhi @ Bhat / J
+
+    @jit
+    def B_contravariant(self, points):
+        _, J, Bhat, scale = self._frame(points)
+        return scale * Bhat / J
+
+    @jit
+    def B_covariant(self, points):
+        DPhi, J, Bhat, scale = self._frame(points)
+        return DPhi.T @ (DPhi @ Bhat) / (J * scale)
+
+    @jit
+    def sqrtg(self, points):
+        _, J, _, scale = self._frame(points)
+        return J / jnp.prod(scale)
+
+    def _tree_flatten(self):
+        return (self.raw, self.Phi, self.Aminor_p), (self.basis, self.nfp)
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        self = cls.__new__(cls)
+        (self.raw, self.Phi, self.Aminor_p), (self.basis, self.nfp) = children, aux_data
+        return self
+
+
+tree_util.register_pytree_node(MRXField, MRXField._tree_flatten, MRXField._tree_unflatten)
+
+
 class near_axis:
     def __init__(self, *args, **kwargs):
         raise ImportError(
