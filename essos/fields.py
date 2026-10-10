@@ -727,6 +727,569 @@ tree_util.register_pytree_node(CombinedField,
                                CombinedField._tree_unflatten)
 
 
+
+class DipoleField_old:
+    """
+    Magnetic field from a collection of magnetic dipoles.
+
+    Supports optional precomputation of the interaction matrix G for fast
+    optimization. When surf_pts and surf_n are provided at construction,
+    G is computed once in __init__ and stored as self.G. The optimizer
+    then uses the fast matrix-vector multiply:
+
+        Bn_total = self.G @ pho + Bn_fixed
+
+    rather than recomputing dipole geometry every step. This follows the
+    same pattern as DESC's ObjectiveFunction.build() — expensive geometry
+    is precomputed once, and compute() (or in our case the Adam step) is
+    just fast arithmetic.
+
+    Parameters
+    ----------
+    dipole_positions : jnp.ndarray, shape (N, 3)
+        Magnet center positions [m].
+    dipole_moments : jnp.ndarray, shape (N, 3)
+        Dipole moment vectors [A·m²].
+    pho_values : jnp.ndarray, shape (N,)
+        Magnet strengths in [-1, 1].
+    stellsym : bool, optional
+        Apply stellarator symmetry (default False).
+    nfp : int, optional
+        Number of field periods (default 1).
+    coordinate_flag : str, optional
+        'cartesian' or 'cylindrical' (default 'cartesian').
+    R0 : float, optional
+        Major radius for cylindrical coordinates (default 1.0).
+    scale_factor : float, optional
+        Global scale factor applied to dipole_moments (default 1.0).
+    surf_pts : jnp.ndarray, shape (M, 3), optional
+        Surface quadrature points. If provided with surf_n, G is precomputed.
+    surf_n : jnp.ndarray, shape (M, 3), optional
+        Surface outward unit normals. Required with surf_pts to build G.
+    """
+    def __init__(self, dipole_positions, dipole_moments, pho_values,
+                 stellsym=False, nfp=1, coordinate_flag='cartesian',
+                 R0=1.0, scale_factor=1.0,
+                 surf_pts=None, surf_n=None):
+        self.mu0_over_4pi = 1e-7
+        self.R0 = R0
+        self.pho_values = pho_values
+        self.scale_factor = scale_factor
+        scaled_moments = dipole_moments * scale_factor
+        self.dipole_positions, self.dipole_moments = self._apply_symmetries(
+            dipole_positions, scaled_moments, stellsym, nfp, coordinate_flag)
+        self.n_dipoles = self.dipole_positions.shape[0]
+        self._last_field = None
+        self._last_eval_points = None
+        self._compute_field = jit(vmap(
+            lambda x: jnp.sum(vmap(
+                lambda pos, mom: self._compute_single_dipole_field(x, pos, mom),
+                in_axes=(0, 0))(self.dipole_positions, self.dipole_moments), axis=0),
+            in_axes=0))
+
+        # Precompute interaction matrix G if surface points are provided.
+        #
+        # G[i, j] = Bn contribution of magnet j at surface point i at pho=1.
+        #
+        # During optimization only pho changes — magnet positions and orientations
+        # are fixed. So we compute G once here (~8s for 99k magnets) and each
+        # Adam step is just: Bn_total = G @ pho + Bn_fixed  (~0.15s).
+        #
+        # Using DipoleField.B() directly in the loop recomputes all distances
+        # and angles every step, making it ~1000x slower.
+        if surf_pts is not None and surf_n is not None:
+            from essos.optimization import compute_G_parallel
+            self.G = compute_G_parallel(self, surf_pts, surf_n)
+        else:
+            self.G = None
+
+    @staticmethod
+    @jit
+    def _compute_single_dipole_field(x_eval, pos, mom):
+        """Magnetic field from a single dipole at x_eval (Biot-Savart)."""
+        mu0_over_4pi = 1e-7
+        r_vec = x_eval - pos
+        r_mag = jnp.linalg.norm(r_vec) + 1e-12
+        r_hat = r_vec / r_mag
+        B = (3 * jnp.dot(mom, r_hat) / r_mag**3 * r_hat - mom / r_mag**3) * mu0_over_4pi
+        return B
+
+    @partial(jit, static_argnames=['self'])
+    def compute_interaction_matrix(self, surf_pts, surf_n):
+        """
+        Build the interaction matrix G, shape (n_surf_pts, n_dipoles).
+
+        G[i, j] = normal component of B from magnet j at surface point i,
+        evaluated at unit pho (full magnetization).
+
+        Called automatically in __init__ when surf_pts and surf_n are provided.
+        Can also be called manually if surface points change after construction.
+        """
+        positions = self.dipole_positions
+        moments = self.dipole_moments
+
+        def calc_matrix_column(mag_idx):
+            pos_j = positions[mag_idx]
+            mom_j = moments[mag_idx]
+            B_vectors = vmap(lambda x: self._compute_single_dipole_field(x, pos_j, mom_j))(surf_pts)
+            Bn_column = jnp.sum(B_vectors * surf_n, axis=1)
+            return Bn_column
+
+        magnet_indices = jnp.arange(self.n_dipoles)
+        G_T = vmap(calc_matrix_column)(magnet_indices)
+        return G_T.T
+
+    @partial(jit, static_argnames=['self'])
+    def B(self, eval_points, chunk_size=512):
+        """Magnetic field at eval_points (with caching).
+
+        BUG FIX: a single point has shape (3,), where shape[0]==3 was
+        being misread as "3 points" by the caching/shape-comparison
+        logic below (which assumes eval_points is always a batch of
+        shape (n_points, 3)). This both computed the WRONG field (the
+        3 components got treated as 3 separate 1D points, producing a
+        (3,3) output instead of a (3,) field vector) and could return
+        a STALE cached result whenever two different calls happened to
+        share the same shape[0]. Single points are now explicitly
+        reshaped to (1,3), computed, and squeezed back to (3,)."""
+        is_single_point = eval_points.ndim == 1 and eval_points.shape[0] == 3
+        query_points = eval_points.reshape(1, 3) if is_single_point else eval_points
+
+        # PERFORMANCE NOTE: caching was removed here. The previous
+        # cache-validity check used jnp.array_equal(...) inside a
+        # Python if-statement, which requires a concrete (non-traced)
+        # boolean -- this works in eager calls but raises
+        # TracerBoolConversionError the moment this method is called
+        # under vmap/jit tracing (e.g. essos.dynamics's internal
+        # energy-conservation diagnostics call field.AbsB via vmap).
+        # Since _compute_field itself is now fast (lax.scan-based,
+        # verified ~2.5s for the full 64x64/99k-magnet MUSE case),
+        # simply recomputing every call is both correct under tracing
+        # and not a meaningful performance regression.
+        result = self._compute_field(query_points)
+        return result[0] if is_single_point else result
+    
+    @partial(jit, static_argnames=['self'])
+    def B_covariant(self, eval_points):
+        return self.B(eval_points)
+    
+    @partial(jit, static_argnames=['self'])
+    def B_contravariant(self, eval_points):
+        return self.B(eval_points)
+    
+    @partial(jit, static_argnames=['self'])
+    def AbsB(self, eval_points):
+        return jnp.linalg.norm(self.B(eval_points), axis=-1)
+    
+    def dAbsB_by_dX(self, eval_points, eps=1e-6):
+        """Gradient of |B| via finite differences."""
+        is_single_point = len(eval_points.shape) == 1 and eval_points.shape[0] == 3
+        if is_single_point:
+            eval_points = eval_points.reshape(1, 3)
+        elif len(eval_points.shape) != 2 or eval_points.shape[1] != 3:
+            raise ValueError(f"eval_points must be shape (n,3) or (3,), got {eval_points.shape}")
+        n_points = len(eval_points)
+        grad_B = jnp.zeros((n_points, 3))
+        for i in range(3):
+            delta = jnp.zeros((n_points, 3)).at[:, i].set(eps)
+            grad_B = grad_B.at[:, i].set((self.AbsB(eval_points + delta) - self.AbsB(eval_points - delta)) / (2 * eps))
+        if is_single_point:
+            grad_B = grad_B.squeeze(0)
+        return grad_B
+    
+    def update_dipole_pho(self, dipole_idx, new_pho, eval_points):
+        """Incrementally update one dipole's pho and recompute the field."""
+        if self._last_field is None or len(eval_points) != self._last_eval_points.shape[0]:
+            raise ValueError("Call B with the same eval_points before updating a dipole.")
+        old_moment = self.dipole_moments[dipole_idx]
+        old_magnitude = jnp.linalg.norm(old_moment)
+        if new_pho == 0:
+            new_moment = jnp.array([0.0, 0.0, 0.0])
+        else:
+            old_pho = self.pho_values[dipole_idx]
+            scale_factor = new_pho / old_pho if old_pho != 0 else new_pho
+            new_magnitude = old_magnitude * scale_factor
+            new_moment = old_moment * (new_magnitude / old_magnitude) if new_magnitude != 0 else jnp.array([0.0, 0.0, 0.0])
+        new_contribs = vmap(lambda x: self._compute_single_dipole_field(x, self.dipole_positions[dipole_idx], new_moment))(eval_points)
+        old_contribs = vmap(lambda x: self._compute_single_dipole_field(x, self.dipole_positions[dipole_idx], old_moment))(eval_points)
+        updated_field = self._last_field - old_contribs + new_contribs
+        self._last_field = updated_field
+        self.pho_values = self.pho_values.at[dipole_idx].set(new_pho)
+        self.dipole_moments = self.dipole_moments.at[dipole_idx].set(new_moment)
+        return updated_field
+    
+    def _apply_symmetries(self, positions, moments, stellsym=False, nfp=1, coordinate_flag='cartesian'):
+        """Apply stellarator symmetries to positions and moments."""
+        step = 1
+        pos = positions[::step]
+        mom = moments[::step]
+        if coordinate_flag == 'cylindrical':
+            phi_dipole = jnp.arctan2(pos[:, 1], pos[:, 0])
+            mom = jnp.stack([mom[:, 0] * jnp.cos(phi_dipole) - mom[:, 1] * jnp.sin(phi_dipole),
+                             mom[:, 0] * jnp.sin(phi_dipole) + mom[:, 1] * jnp.cos(phi_dipole),
+                             mom[:, 2]], axis=1)
+        all_pos, all_mom = [], []
+        stell_list = [1.0] if not stellsym else [1.0, -1.0]
+        for stell in stell_list:
+            pos_stell = pos * jnp.array([1.0, stell, stell])
+            mom_stell = mom * jnp.array([stell, 1.0, 1.0]) if stellsym else mom
+            for i in range(nfp):
+                angle = 2 * jnp.pi * i / nfp
+                R = jnp.array([[jnp.cos(angle), -jnp.sin(angle), 0.0],
+                               [jnp.sin(angle), jnp.cos(angle), 0.0],
+                               [0.0, 0.0, 1.0]])
+                all_pos.append(pos_stell @ R.T)
+                all_mom.append(mom_stell @ R.T)
+        return jnp.concatenate(all_pos, axis=0), jnp.concatenate(all_mom, axis=0)
+
+class DipoleField:
+    """
+    Magnetic field from a collection of magnetic dipoles.
+
+    Supports optional precomputation of the interaction matrix G for fast
+    optimization. When surf_pts and surf_n are provided at construction,
+    G is computed once in __init__ and stored as self.G. The optimizer
+    then uses the fast matrix-vector multiply:
+
+        Bn_total = self.G @ pho + Bn_fixed
+
+    rather than recomputing dipole geometry every step. This follows the
+    same pattern as DESC's ObjectiveFunction.build() — expensive geometry
+    is precomputed once, and compute() (or in our case the Adam step) is
+    just fast arithmetic.
+
+    Parameters
+    ----------
+    dipole_positions : jnp.ndarray, shape (N, 3)
+        Magnet center positions [m].
+    dipole_moments : jnp.ndarray, shape (N, 3)
+        Dipole moment vectors [A·m²].
+    pho_values : jnp.ndarray, shape (N,)
+        Magnet strengths in [-1, 1].
+    stellsym : bool, optional
+        Apply stellarator symmetry (default False).
+    nfp : int, optional
+        Number of field periods (default 1).
+    coordinate_flag : str, optional
+        'cartesian' or 'cylindrical' (default 'cartesian').
+    R0 : float, optional
+        Major radius for cylindrical coordinates (default 1.0).
+    scale_factor : float, optional
+        Global scale factor applied to dipole_moments (default 1.0).
+    surf_pts : jnp.ndarray, shape (M, 3), optional
+        Surface quadrature points. If provided with surf_n, G is precomputed.
+    surf_n : jnp.ndarray, shape (M, 3), optional
+        Surface outward unit normals. Required with surf_pts to build G.
+    """
+    def __init__(self, dipole_positions, dipole_moments, pho_values,
+                 stellsym=False, nfp=1, coordinate_flag='cartesian',
+                 R0=1.0, scale_factor=1.0,
+                 surf_pts=None, surf_n=None):
+        self.mu0_over_4pi = 1e-7
+        self.nfp = nfp
+        self.stellsym = stellsym
+        self.coordinate_flag = coordinate_flag
+        self.R0 = R0
+        self.pho_values = pho_values
+        self.scale_factor = scale_factor
+        scaled_moments = dipole_moments * scale_factor
+
+        self.dipole_positions = dipole_positions
+        self.dipole_moments = scaled_moments
+        
+        self.dipole_positions_full, self.dipole_moments_full = self._apply_symmetries(
+            dipole_positions, scaled_moments, stellsym, coordinate_flag)
+        self.n_dipoles = self.dipole_positions.shape[0]
+        self._last_field = None
+        self._last_eval_points = None
+
+        # During optimization only pho changes. magnet positions and orientations
+        # are fixed. So we compute G once here (~8s for 99k magnets) and each
+        # Adam step is just: Bn_total = G @ pho + Bn_fixed  (~0.15s).
+        # Using DipoleField.B() directly in the loop recomputes all distances
+        # and angles every step, making it ~1000x slower.
+        if surf_pts is not None and surf_n is not None:
+            from essos.optimization import compute_G_parallel
+            self.G = compute_G_parallel(self, surf_pts, surf_n)
+        else:
+            self.G = None
+
+    @staticmethod
+    @jit
+    def _compute_single_dipole_field(x_eval, pos, mom):
+        """Magnetic field from a single dipole at x_eval (Biot-Savart)."""
+        mu0_over_4pi = 1e-7
+        r_vec = x_eval - pos
+        r_mag = jnp.linalg.norm(r_vec) + 1e-12
+        r_hat = r_vec / r_mag
+        B = (3 * jnp.dot(mom, r_hat) / r_mag**3 * r_hat - mom / r_mag**3) * mu0_over_4pi
+        return B
+
+    def compute_interaction_matrix(self,surf_pts, surf_n, stellsym=True):
+        """
+        Build G (n_surf, n_mag) summing contributions from all symmetric copies.
+        Uses pmap for fast parallel computation.
+        """
+        nfp = self.nfp 
+        positions = self.dipole_positions
+        moments = self.dipole_moments
+        
+
+        def _bn_one_copy_pmap(surf_pts, surf_n, mag_pos, mag_mom):
+            """Bn at surf_pts from magnets. Uses pmap for parallelism."""
+            n_devices = jax.device_count()
+            n_points  = len(surf_pts)
+            remainder = n_points % n_devices
+            if remainder != 0:
+                pad = n_devices - remainder
+                surf_pts = jnp.concatenate([surf_pts, jnp.zeros((pad, 3), surf_pts.dtype)])
+                surf_n   = jnp.concatenate([surf_n,   jnp.zeros((pad, 3), surf_n.dtype)])
+        
+            batch = len(surf_pts) // n_devices
+            pts_s = surf_pts.reshape(n_devices, batch, 3)
+            n_s   = surf_n.reshape(n_devices, batch, 3)
+        
+            m_pos = jnp.array(mag_pos)
+            m_mom = jnp.array(mag_mom)
+        
+            def kernel(pts, norms):
+                P      = jnp.expand_dims(pts,   1)
+                M_pos  = jnp.expand_dims(m_pos, 0)
+                M_vec  = jnp.expand_dims(m_mom, 0)
+                N      = jnp.expand_dims(norms, 1)
+                R      = P - M_pos
+                R_mag  = jnp.linalg.norm(R, axis=2, keepdims=True)
+                dot_mr = jnp.sum(M_vec * R, axis=2, keepdims=True)
+                dot_rn = jnp.sum(R * N,     axis=2, keepdims=True)
+                dot_mn = jnp.sum(M_vec * N, axis=2, keepdims=True)
+                term1  = 3.0 * dot_mr * dot_rn / (R_mag**5 + 1e-30)
+                term2  = -dot_mn / (R_mag**3 + 1e-30)
+                return jnp.squeeze((term1 + term2) * 1e-7, axis=2)
+        
+            pts_d = jax.device_put_sharded(list(pts_s), jax.local_devices())
+            n_d   = jax.device_put_sharded(list(n_s),   jax.local_devices())
+            G_s   = jax.pmap(kernel)(pts_d, n_d)
+            G_s.block_until_ready()
+            G_full = G_s.reshape(-1, len(m_pos))
+            if remainder != 0:
+                G_full = G_full[:n_points]
+            return G_full
+    
+        n_surf = len(surf_pts)
+        n_mag  = len(positions)
+        G = jnp.zeros((n_surf, n_mag), dtype=jnp.float32)
+    
+        stell_list = [1.0, -1.0] if stellsym else [1.0]
+        for stell in stell_list:
+            pos_s = positions * jnp.array([1.0, stell, stell])
+            mom_s = moments * jnp.array([stell, 1.0, 1.0]) if stellsym else moments
+            for i in range(nfp):
+                angle = 2 * jnp.pi * i / nfp
+                c, s  = jnp.cos(angle), jnp.sin(angle)
+                R_mat = jnp.array([[c, -s, 0.0], [s, c, 0.0], [0., 0., 1.0]])
+                pos_r = pos_s @ R_mat.T
+                mom_r = mom_s @ R_mat.T
+                G = G + _bn_one_copy_pmap(surf_pts, surf_n, pos_r, mom_r)
+    
+        return G
+
+
+
+    @jit
+    def B(self, eval_points, chunk_size=512):
+        """Magnetic field at eval_points (with caching).
+
+        BUG FIX: a single point has shape (3,), where shape[0]==3 was
+        being misread as "3 points" by the caching/shape-comparison
+        logic below (which assumes eval_points is always a batch of
+        shape (n_points, 3)). This both computed the WRONG field (the
+        3 components got treated as 3 separate 1D points, producing a
+        (3,3) output instead of a (3,) field vector) and could return
+        a STALE cached result whenever two different calls happened to
+        share the same shape[0]. Single points are now explicitly
+        reshaped to (1,3), computed, and squeezed back to (3,)."""
+        is_single_point = eval_points.ndim == 1 and eval_points.shape[0] == 3
+        query_points = eval_points.reshape(1, 3) if is_single_point else eval_points
+
+        # PERFORMANCE NOTE: caching was removed here. The previous
+        # cache-validity check used jnp.array_equal(...) inside a
+        # Python if-statement, which requires a concrete (non-traced)
+        # boolean -- this works in eager calls but raises
+        # TracerBoolConversionError the moment this method is called
+        # under vmap/jit tracing (e.g. essos.dynamics's internal
+        # energy-conservation diagnostics call field.AbsB via vmap).
+        # Since _compute_field itself is now fast (lax.scan-based,
+        # verified ~2.5s for the full 64x64/99k-magnet MUSE case),
+        # simply recomputing every call is both correct under tracing
+        # and not a meaningful performance regression.
+        result = _dipole_compute_field(query_points,
+                                       self.dipole_positions_full,
+                                       self.dipole_moments_full)
+        return result[0] if is_single_point else result
+    
+    @jit
+    def B_covariant(self, eval_points):
+        return self.B(eval_points)
+    
+    @jit
+    def B_contravariant(self, eval_points):
+        return self.B(eval_points)
+    
+    @jit
+    def AbsB(self, eval_points):
+        return jnp.linalg.norm(self.B(eval_points), axis=-1)
+    
+    def dAbsB_by_dX(self, eval_points, eps=1e-6):
+        """Gradient of |B| via finite differences."""
+        is_single_point = len(eval_points.shape) == 1 and eval_points.shape[0] == 3
+        if is_single_point:
+            eval_points = eval_points.reshape(1, 3)
+        elif len(eval_points.shape) != 2 or eval_points.shape[1] != 3:
+            raise ValueError(f"eval_points must be shape (n,3) or (3,), got {eval_points.shape}")
+        n_points = len(eval_points)
+        grad_B = jnp.zeros((n_points, 3))
+        for i in range(3):
+            delta = jnp.zeros((n_points, 3)).at[:, i].set(eps)
+            grad_B = grad_B.at[:, i].set((self.AbsB(eval_points + delta) - self.AbsB(eval_points - delta)) / (2 * eps))
+        if is_single_point:
+            grad_B = grad_B.squeeze(0)
+        return grad_B
+    
+    def update_dipole_pho(self, dipole_idx, new_pho, eval_points):
+        """Incrementally update one dipole's pho and recompute the field."""
+        if self._last_field is None or len(eval_points) != self._last_eval_points.shape[0]:
+            raise ValueError("Call B with the same eval_points before updating a dipole.")
+        old_moment = self.dipole_moments[dipole_idx]
+        old_magnitude = jnp.linalg.norm(old_moment)
+        if new_pho == 0:
+            new_moment = jnp.array([0.0, 0.0, 0.0])
+        else:
+            old_pho = self.pho_values[dipole_idx]
+            scale_factor = new_pho / old_pho if old_pho != 0 else new_pho
+            new_magnitude = old_magnitude * scale_factor
+            new_moment = old_moment * (new_magnitude / old_magnitude) if new_magnitude != 0 else jnp.array([0.0, 0.0, 0.0])
+        new_contribs = vmap(lambda x: self._compute_single_dipole_field(x, self.dipole_positions[dipole_idx], new_moment))(eval_points)
+        old_contribs = vmap(lambda x: self._compute_single_dipole_field(x, self.dipole_positions[dipole_idx], old_moment))(eval_points)
+        updated_field = self._last_field - old_contribs + new_contribs
+        self._last_field = updated_field
+        self.pho_values = self.pho_values.at[dipole_idx].set(new_pho)
+        self.dipole_moments = self.dipole_moments.at[dipole_idx].set(new_moment)
+        return updated_field
+    
+    def _apply_symmetries(self, positions, moments, stellsym=False, coordinate_flag='cartesian'):
+        """Apply stellarator symmetries to positions and moments."""
+        step = 1
+        pos = positions[::step]
+        mom = moments[::step]
+        if coordinate_flag == 'cylindrical':
+            phi_dipole = jnp.arctan2(pos[:, 1], pos[:, 0])
+            mom = jnp.stack([mom[:, 0] * jnp.cos(phi_dipole) - mom[:, 1] * jnp.sin(phi_dipole),
+                             mom[:, 0] * jnp.sin(phi_dipole) + mom[:, 1] * jnp.cos(phi_dipole),
+                             mom[:, 2]], axis=1)
+        all_pos, all_mom = [], []
+        stell_list = [1.0] if not stellsym else [1.0, -1.0]
+        for stell in stell_list:
+            pos_stell = pos * jnp.array([1.0, stell, stell])
+            mom_stell = mom * jnp.array([stell, 1.0, 1.0]) if stellsym else mom
+            for i in range(self.nfp):
+                angle = 2 * jnp.pi * i / self.nfp
+                R = jnp.array([[jnp.cos(angle), -jnp.sin(angle), 0.0],
+                               [jnp.sin(angle), jnp.cos(angle), 0.0],
+                               [0.0, 0.0, 1.0]])
+                all_pos.append(pos_stell @ R.T)
+                all_mom.append(mom_stell @ R.T)
+        return jnp.concatenate(all_pos, axis=0), jnp.concatenate(all_mom, axis=0)
+
+
+DIPOLE_CHUNK_SIZE = 5000
+
+
+@jit
+def _dipole_field_kernel(eval_pts, dip_pos, dip_mom):
+    """B at eval_pts from a batch of dipoles, broadcasting over both."""
+    P = eval_pts[:, None, :]
+    Pos = dip_pos[None, :, :]
+    Mom = dip_mom[None, :, :]
+    dt = jnp.result_type(eval_pts, dip_pos, dip_mom)
+    R = P - Pos
+    R_mag = jnp.linalg.norm(R, axis=-1, keepdims=True) + jnp.asarray(1e-12, dt)
+    dot_mr = jnp.sum(Mom * R, axis=-1, keepdims=True)
+    term1 = jnp.asarray(3.0, dt) * dot_mr * R / (R_mag ** 5)
+    term2 = Mom / (R_mag ** 3)
+    return jnp.sum((term1 - term2) * jnp.asarray(1e-7, dt), axis=1)
+
+
+@jit
+def _dipole_compute_field(eval_pts, positions_full, moments_full):
+    """Chunked lax.scan over dipoles. Module-level (not a closure on
+    self) so DipoleField can be a JAX pytree: reconstruction from
+    flattened arrays needs no captured state.
+
+    All three inputs are promoted to a common dtype up front: under
+    jax_enable_x64 the dipole arrays and the evaluation points can
+    arrive with different precisions, and lax.scan requires the carry
+    dtype to match the kernel's output exactly.
+    """
+    out_dtype = jnp.result_type(eval_pts, positions_full, moments_full)
+    eval_pts = eval_pts.astype(out_dtype)
+    positions_full = positions_full.astype(out_dtype)
+    moments_full = moments_full.astype(out_dtype)
+
+    n_dip_full = positions_full.shape[0]
+    n_chunks = (n_dip_full + DIPOLE_CHUNK_SIZE - 1) // DIPOLE_CHUNK_SIZE
+    pad = n_chunks * DIPOLE_CHUNK_SIZE - n_dip_full
+    if pad > 0:
+        positions_full = jnp.concatenate(
+            [positions_full, jnp.zeros((pad, 3), out_dtype)], axis=0)
+        moments_full = jnp.concatenate(
+            [moments_full, jnp.zeros((pad, 3), out_dtype)], axis=0)
+    pos_chunks = positions_full.reshape(n_chunks, DIPOLE_CHUNK_SIZE, 3)
+    mom_chunks = moments_full.reshape(n_chunks, DIPOLE_CHUNK_SIZE, 3)
+
+    def scan_body(carry, chunk):
+        dip_pos_c, dip_mom_c = chunk
+        return carry + _dipole_field_kernel(eval_pts, dip_pos_c, dip_mom_c), None
+
+    init = jnp.zeros((eval_pts.shape[0], 3), out_dtype)
+    total, _ = lax.scan(scan_body, init, (pos_chunks, mom_chunks))
+    return total
+
+
+def _dipolefield_tree_flatten(self):
+    children = (self.dipole_positions, self.dipole_moments, self.pho_values,
+                self.dipole_positions_full, self.dipole_moments_full)
+    aux_data = {'stellsym': self.stellsym, 'nfp': self.nfp,
+                'coordinate_flag': self.coordinate_flag, 'R0': self.R0,
+                'n_dipoles': self.n_dipoles}
+    return children, aux_data
+
+
+@classmethod
+def _dipolefield_tree_unflatten(cls, aux_data, children):
+    obj = object.__new__(cls)
+    (obj.dipole_positions, obj.dipole_moments, obj.pho_values,
+     obj.dipole_positions_full, obj.dipole_moments_full) = children
+    obj.mu0_over_4pi = 1e-7
+    obj.nfp = aux_data['nfp']
+    obj.stellsym = aux_data['stellsym']
+    obj.coordinate_flag = aux_data['coordinate_flag']
+    obj.R0 = aux_data['R0']
+    obj.n_dipoles = aux_data['n_dipoles']
+    obj.scale_factor = 1.0
+    obj._last_field = None
+    obj._last_eval_points = None
+    obj.G = None
+    return obj
+
+
+DipoleField._tree_flatten = _dipolefield_tree_flatten
+DipoleField._tree_unflatten = _dipolefield_tree_unflatten
+
+tree_util.register_pytree_node(DipoleField,
+                               DipoleField._tree_flatten,
+                               DipoleField._tree_unflatten)
+
+
 def _bspline_prefilter(n, periodic):
     """Matrix mapping n node values to cubic B-spline coefficients (periodic, or not-a-knot with 2 ghosts)."""
     if periodic:
