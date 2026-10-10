@@ -78,6 +78,14 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertEqual(second.shape[0], 3)
         self.assertTrue(jnp.allclose(second, jnp.array([3.0, 4.0, 5.0])))
 
+    def test_selective_constraint_freezes_dofs_in_unraveler(self):
+        selective = SelectiveConstraint(eq(lambda field: field - 1), 'field')
+        selective.dependencies = {'field': jnp.array([1.0, 2.0])}
+        selective.freeze_dofs(jnp.array([False, True]))
+
+        field, = selective.dofs_to_pytree(jnp.array([3.0, 4.0]))
+        self.assertTrue(jnp.allclose(field, jnp.array([3.0, 2.0])))
+
     def test_composite_constraint_dependencies_reset_cached_dofs(self):
         c1 = SelectiveConstraint(eq(lambda field: field - 1), 'field')
         c2 = SelectiveConstraint(eq(lambda surface: surface + 1), 'surface')
@@ -97,6 +105,18 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertEqual(first.shape[0], 3)
         self.assertEqual(second.shape[0], 3)
         self.assertTrue(jnp.allclose(second, jnp.array([3.0, 20.0, 30.0])))
+
+    def test_composite_constraint_freezes_dofs_in_unraveler(self):
+        c1 = SelectiveConstraint(eq(lambda field: field - 1), 'field')
+        combined = combine(c1)
+        combined.dependencies = {'field': jnp.array([1.0, 2.0])}
+        combined.freeze_dofs(jnp.array([True, False]))
+
+        field, = combined.dofs_to_pytree(jnp.array([3.0, 4.0]))
+        self.assertTrue(jnp.allclose(field, jnp.array([1.0, 4.0])))
+        params = combined.init(combined.starting_dofs)
+        _, infeasibility = combined.loss(params, jnp.array([3.0, 4.0]))
+        self.assertTrue(jnp.allclose(infeasibility[0], jnp.array([0.0, 3.0])))
 
     def test_composite_constraint_set_dependencies_resets_cached_dofs(self):
         c1 = SelectiveConstraint(eq(lambda field: field - 1), 'field')
