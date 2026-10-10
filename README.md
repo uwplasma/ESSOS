@@ -206,22 +206,22 @@ and field set-up excluded. Run with
 
 | Equilibrium | Code | Method | Run time | Lost | Same fate as ESSOS | max \|E/E0 - 1\| |
 |---|---|---|---|---|---|---|
-| QA | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 173 s | 6.6 ± 1.6% | - | 2e-10 |
-| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 17 s | 8.2% | 85.2% | 5e-5 |
-| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 50 s | 7.4% | 99.2% | 4e-5 |
-| | SIMPLE | symplectic, defaults | 17 s | 7.0% | 99.6% | not reported |
-| ARIES-CS | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 586 s | 23.0 ± 2.6% | - | 3e-5 |
-| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 64 s | 23.8% | 89.1% | 1e-4 |
-| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 154 s | 21.5% | 94.5% | 5e-3 |
-| | SIMPLE | symplectic, defaults | 24 s | 23.4% | 94.9% | not reported |
-| W7-X | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 714 s | 27.7 ± 2.8% | - | 9e-5 |
-| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 111 s | 28.9% | 97.3% | 1e-3 |
-| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 195 s | 27.0% | 96.1% | 3e-3 |
-| | SIMPLE | symplectic, defaults | 194 s | 27.3% | 96.5% | not reported |
+| QA | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 42 s | 7.4 ± 1.6% | - | 1e-5 |
+| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 19 s | 8.2% | 85.2% | 5e-5 |
+| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 53 s | 7.4% | 99.2% | 4e-5 |
+| | SIMPLE | symplectic, defaults | 18 s | 7.0% | 98.8% | not reported |
+| ARIES-CS | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 44 s | 23.0 ± 2.6% | - | 1e-5 |
+| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 69 s | 23.8% | 90.6% | 1e-4 |
+| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 163 s | 21.5% | 94.5% | 5e-3 |
+| | SIMPLE | symplectic, defaults | 25 s | 23.4% | 95.7% | not reported |
+| W7-X | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 44 s | 26.6 ± 2.8% | - | 9e-5 |
+| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 118 s | 28.9% | 95.3% | 1e-3 |
+| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 212 s | 27.0% | 95.7% | 3e-3 |
+| | SIMPLE | symplectic, defaults | 205 s | 27.3% | 94.5% | not reported |
 
 ESSOS, SIMSOPT and FIRM3D use the same 32x32 `booz_xform` spectrum (ESSOS
-keeps modes above its default `1e-6` of `B00`); SIMPLE reads the `wout`
-directly. ± is the binomial standard error.
+keeps modes above its default `1e-6` of `B00` and evaluates them from a
+table in the Boozer angles); SIMPLE reads the `wout` directly. ± is the binomial standard error.
 
 ## Tracing notes
 
