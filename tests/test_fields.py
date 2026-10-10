@@ -562,3 +562,17 @@ def test_vmec_partner_cutoff_is_phase_invariant():
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0, 1])
     arrays['bmns'] = jnp.zeros_like(arrays['bmns'])
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0])
+
+
+def test_surface_field_runs_on_multiple_devices():
+    """B on a surface whose grid does not divide the device count (example sweep, 8 CPU devices)."""
+    import subprocess, sys
+    code = ("from essos.surfaces import SurfaceRZFourier, BdotN_over_B; from essos.fields import BiotSavart;"
+            "from essos.coils import Coils, CreateEquallySpacedCurves;"
+            f"s = SurfaceRZFourier.from_wout_file(r'{WOUT_FILE}', ntheta=30, nphi=30);"
+            "c = Coils(CreateEquallySpacedCurves(2, 1, 1.0, 0.3, 20, 2, True), [1e5] * 2);"
+            "print(float(abs(BdotN_over_B(s, BiotSavart(c))).max()))")
+    env = dict(os.environ, XLA_FLAGS="--xla_force_host_platform_device_count=8", JAX_PLATFORMS="cpu")
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    assert out.returncode == 0, out.stderr[-2000:]

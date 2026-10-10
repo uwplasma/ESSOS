@@ -3,13 +3,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.scipy.interpolate import RegularGridInterpolator
-from jax import tree_util, jit, vmap, devices, device_put
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax import tree_util, jit, vmap, device_put
 from essos.plot import fix_matplotlib_3d
 import jaxkd
 
-mesh = Mesh(devices(), ("dev",))
-sharding = NamedSharding(mesh, PartitionSpec("dev"))
 
 
 def _cacheable(*values):
@@ -52,10 +49,6 @@ def B_on_surface(surface, field):
     nphi = surface.nphi
     gamma = surface.gamma
     gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
-    # Spread the points over the devices when they divide evenly (sharding the
-    # surface pytree itself failed whenever its leaves did not).
-    if len(gamma_reshaped) % sharding.num_devices == 0:
-        gamma_reshaped = jax.lax.with_sharding_constraint(gamma_reshaped, sharding)
 
     # Map field.B over all positions
     B_on_surface = vmap(field.B)(gamma_reshaped)
