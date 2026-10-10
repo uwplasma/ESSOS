@@ -161,20 +161,23 @@ def wall_tracing() -> None:
     xyz = np.asarray(tracing.trajectories_xyz)
     hits = np.asarray(tracing.wall_positions)
 
-    fig = plt.figure(figsize=(9.6, 4.4))
-    ax = fig.add_subplot(1, 2, 1, projection="3d")
+    fig = plt.figure(figsize=(10.0, 4.6))
+    grid_spec = fig.add_gridspec(1, 2, width_ratios=(1.5, 1.0), wspace=0.02)
+    ax = fig.add_subplot(grid_spec[0], projection="3d")
     g = np.asarray(lcfs.gamma)
     ax.plot_surface(g[..., 0], g[..., 1], g[..., 2], color="0.75", alpha=0.25, linewidth=0)
     for label, mask in fates.items():
         for i in np.flatnonzero(mask)[:WALL_SHOW]:
-            ax.plot(*xyz[i].T, lw=0.8, color=colors[label])
-    ax.scatter(*hits[struck].T, color="k", marker="x", s=28, depthshade=False, label="wall strikes")
+            ax.plot(*xyz[i].T, lw=1.0, color=colors[label])
+    ax.scatter(*hits[struck].T, color="k", marker="x", s=22, depthshade=False, label="wall strikes")
+    lim = np.abs(g[..., :2]).max()
+    ax.set(xlim=(-lim, lim), ylim=(-lim, lim), zlim=(-0.5 * lim, 0.5 * lim))
+    ax.set_box_aspect((1, 1, 0.5), zoom=1.45)
     ax.set_axis_off()
-    ax.set_box_aspect((1, 1, 0.45))
-    ax.view_init(elev=32, azim=-60)
+    ax.view_init(elev=38, azim=-60)
     ax.legend(loc="upper left", fontsize=8, frameon=False)
 
-    ax = fig.add_subplot(1, 2, 2)
+    ax = fig.add_subplot(grid_spec[1])
     for surface, style, label in ((lcfs, "-", "LCFS"), (wall, "--", f"wall, {gap * 100:.0f} cm out")):
         c = np.asarray(surface.gamma)[0]
         c = np.vstack([c, c[:1]])
@@ -189,16 +192,16 @@ def wall_tracing() -> None:
     ax.set_xlabel("R [m]")
     ax.set_ylabel("Z [m]")
     ax.set_aspect("equal")
-    ax.set_title(f"{n} protons, {WALL_ENERGY_EV / 1e3:.0f} keV, 40 $\\mu$s, near $\\phi = 0$ (mod period)",
+    ax.set_title(f"{n} protons, {WALL_ENERGY_EV / 1e3:.0f} keV, 40 $\\mu$s; points near $\\phi = 0$",
                  fontsize=9)
     ax.legend(fontsize=7, loc="center left", bbox_to_anchor=(1.0, 0.5), markerscale=5, frameon=False)
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.0, right=0.84, top=0.92, bottom=0.11)
     fig.savefig(HERE / "readme_wall.png", dpi=DPI)
     plt.close(fig)
     print("wall: wrote tracing to the wall")
 
 
-WALL_GAP, WALL_N, WALL_SEED, WALL_ENERGY_EV, WALL_SHOW = 0.03, 64, 0, 3e3, 4
+WALL_GAP, WALL_N, WALL_SEED, WALL_ENERGY_EV, WALL_SHOW = 0.03, 64, 0, 3e3, 5
 
 
 PANELS = {"coils": coil_optimization,
