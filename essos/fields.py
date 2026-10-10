@@ -135,6 +135,19 @@ class BiotSavart(MagneticField):
         return jnp.mean(dB_sum, axis=0)
 
     @jit
+    def A(self, points):
+        """Cartesian filament vector potential in tesla metres, away from coils.
+
+        Uses the same periodic coil quadrature as ``B``. Open-path integrals
+        depend on this gauge; only closed contractible loops have the usual
+        gauge-independent Stokes interpretation. Refine coil quadrature as
+        well as any path or surface quadrature before using a flux derivative.
+        """
+        distance = jnp.linalg.norm(jnp.asarray(points) - self.coils.gamma, axis=-1)
+        potential = self.coils.gamma_dash / distance[..., None]
+        return jnp.mean(jnp.einsum("c,cqi->qi", self.coils.currents * 1e-7, potential), axis=0)
+
+    @jit
     def b_cyl(self, R, phi, Z):
         """Return ``(B_R, B_phi, B_Z)`` on broadcast cylindrical arrays.
 
@@ -178,6 +191,43 @@ class BiotSavart(MagneticField):
 tree_util.register_pytree_node(BiotSavart,
                                BiotSavart._tree_flatten,
                                BiotSavart._tree_unflatten)
+
+
+def section_flux(field, vertices, phi=0.0, *, order=4):
+    """Integrate physical ``B_phi dR dZ`` over a simple section polygon.
+
+    ``field.B(xyz)`` must return Cartesian components in tesla; ``vertices``
+    is an unclosed ``(n, 2)`` array of physical ``(R, Z)`` coordinates in
+    metres. Counterclockwise vertex order gives the positive planar integral;
+    reversing it changes the sign. For a +e_phi section normal, the equivalent
+    vector-potential circulation follows the *clockwise* boundary in R,Z.
+    There is no extra R in this surface integral.
+
+    Signed fan triangles and a tensor Gauss rule on each Duffy-transformed
+    triangle include both field and vertex derivatives. ``order`` is static.
+    The polygon must be simple, and the field must be regular on its entire
+    fan, including any signed triangles outside a concave polygon. Boundary
+    resolution, self-intersections and lobe/branch identity are caller-owned
+    gates; this quadrature does not locate or qualify a turnstile.
+    """
+    vertices = jnp.asarray(vertices)
+    if vertices.ndim != 2 or vertices.shape[1] != 2 or vertices.shape[0] < 3:
+        raise ValueError("vertices must have shape (n, 2), with n >= 3")
+    if not isinstance(order, int) or order < 1:
+        raise ValueError("order must be a positive integer")
+    nodes, weights = np.polynomial.legendre.leggauss(order)
+    nodes, weights = jnp.asarray((nodes + 1) / 2), jnp.asarray(weights / 2)
+    center = jnp.mean(vertices, axis=0)
+    first, second = vertices - center, jnp.roll(vertices, -1, axis=0) - center
+    cross = first[:, 0] * second[:, 1] - first[:, 1] * second[:, 0]
+    points = center + nodes[None, :, None, None] * (
+        first[:, None, None, :] + nodes[None, None, :, None] * (second - first)[:, None, None, :]
+    )
+    R, Z = points[..., 0], points[..., 1]
+    xyz = jnp.stack((R * jnp.cos(phi), R * jnp.sin(phi), Z), axis=-1)
+    magnetic = vmap(field.B)(xyz.reshape((-1, 3))).reshape(xyz.shape)
+    toroidal = -magnetic[..., 0] * jnp.sin(phi) + magnetic[..., 1] * jnp.cos(phi)
+    return jnp.einsum("e,euv,u,u,v->", cross, toroidal, nodes, weights, weights)
     
 @jit
 def d_dtheta_fft(f_theta):

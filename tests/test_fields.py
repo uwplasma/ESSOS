@@ -46,6 +46,71 @@ def test_biot_savart_cylindrical_interface_matches_cartesian_and_differentiates(
     derivative = jax.grad(lambda radius: jnp.sum(field.b_cyl(radius, phi, Z)[0]))(R)
     assert jnp.all(jnp.isfinite(derivative))
 
+
+def test_section_flux_physical_measure_orientation_and_shape_derivative():
+    from essos.fields import section_flux
+
+    class Toroidal:
+        def B(self, xyz):
+            return 2.3 * jnp.array([-xyz[1], xyz[0], 0.0]) / (xyz[0]**2 + xyz[1]**2)
+
+    polygon = jnp.array([[0.8, -0.2], [1.4, -0.2], [1.4, 0.5], [0.8, 0.5]])
+    expected = 2.3 * np.log(1.4 / 0.8) * 0.7
+    evaluate = jax.jit(lambda vertices: section_flux(Toroidal(), vertices, 0.37, order=12))
+    np.testing.assert_allclose(evaluate(polygon), expected, rtol=2e-13)
+    np.testing.assert_allclose(evaluate(polygon[::-1]), -expected, rtol=2e-13)
+    # Move the two right vertices: the shape term is B_phi(R2) * height.
+    direction = jnp.array([[0.0, 0.0], [1.0, 0.0], [1.0, 0.0], [0.0, 0.0]])
+    _, derivative = jax.jvp(evaluate, (polygon,), (direction,))
+    np.testing.assert_allclose(derivative, 2.3 * 0.7 / 1.4, rtol=2e-12)
+    np.testing.assert_allclose(jnp.sum(jax.grad(evaluate)(polygon) * direction), derivative, rtol=2e-12)
+    np.testing.assert_allclose(jax.vmap(evaluate)(jnp.stack([polygon, polygon[::-1]])), [expected, -expected], rtol=2e-13)
+    for invalid in (jnp.zeros((2, 2)), jnp.zeros((3, 3))):
+        with pytest.raises(ValueError, match='vertices'):
+            section_flux(Toroidal(), invalid)
+    with pytest.raises(ValueError, match='order'):
+        section_flux(Toroidal(), polygon, order=0)
+
+
+def test_section_flux_concave_polygon_and_field_scaling():
+    from essos.fields import section_flux
+
+    polygon = jnp.array([[1., 0.], [3., 0.], [3., 1.], [2., 1.], [2., 2.], [1., 2.]])
+
+    def flux(scale):
+        class ConstantToroidal:
+            def B(self, xyz):
+                phi = jnp.arctan2(xyz[1], xyz[0])
+                return scale * jnp.array([-jnp.sin(phi), jnp.cos(phi), 0.0])
+        return section_flux(ConstantToroidal(), polygon, 0.63)
+
+    np.testing.assert_allclose(jax.jit(jax.value_and_grad(flux))(2.0), [6.0, 3.0], atol=1e-13)
+    np.testing.assert_allclose(flux(-2.0), -6.0, atol=1e-13)
+
+
+def test_filament_potential_curl_and_closed_section_stokes():
+    from essos.fields import section_flux
+    # A tilted circular coil, away from the entire section polygon.
+    dofs = jnp.zeros((1, 3, 3)).at[0, 0, 2].set(2.0).at[0, 2, 1].set(2.0)
+    field = BiotSavart(Coils(Curves(dofs, n_segments=128, stellsym=False), jnp.array([1.0e5])))
+    point = jnp.array([0.8, 0.2, 0.1])
+    da = jax.jacfwd(field.A)(point)
+    curl = jnp.array([da[2, 1]-da[1, 2], da[0, 2]-da[2, 0], da[1, 0]-da[0, 1]])
+    np.testing.assert_allclose(curl, field.B(point), rtol=2e-13, atol=1e-14)
+    polygon = jnp.array([[0.6, -0.2], [1.0, -0.2], [1.0, 0.2], [0.6, 0.2]])
+    nodes, weights = np.polynomial.legendre.leggauss(16)
+    first, delta = polygon, jnp.roll(polygon, -1, axis=0)-polygon
+    locations = first[:, None, :] + (jnp.asarray(nodes)+1)[None, :, None] * delta[:, None, :] / 2
+    xyz = jnp.stack([locations[..., 0], jnp.zeros_like(locations[..., 0]), locations[..., 1]], -1)
+    potential = jax.vmap(field.A)(xyz.reshape(-1, 3)).reshape(xyz.shape)
+    # CCW in R,Z has physical normal -e_phi, so the action has opposite sign.
+    circulation = jnp.einsum('eqi,ei,q->', potential[..., jnp.array([0, 2])], delta, jnp.asarray(weights)/2)
+    np.testing.assert_allclose(section_flux(field, polygon, order=12), -circulation, rtol=2e-12, atol=1e-14)
+    # A smooth single-valued gauge chi=x^2*z+0.7*y^2 has zero closed circulation.
+    gauge = jnp.stack([2*xyz[..., 0]*xyz[..., 2], 1.4*xyz[..., 1], xyz[..., 0]**2], -1)
+    gauged = jnp.einsum('eqi,ei,q->', (potential+gauge)[..., jnp.array([0, 2])], delta, jnp.asarray(weights)/2)
+    np.testing.assert_allclose(gauged, circulation, atol=1e-14)
+
 # def test_biot_savart_B():
 #     coils = MockCoils()
 #     biot_savart = BiotSavart(coils)

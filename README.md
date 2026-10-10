@@ -95,6 +95,16 @@ tracing.poincare_plot(shifts=[0.0])
 
 More in [`examples/fieldline_tracing`](examples/fieldline_tracing).
 
+For a resolved polygon on a fixed toroidal section,
+`essos.fields.section_flux(field, vertices, phi, order=4)` integrates the
+physical measure `B_phi dR dZ` using Cartesian `field.B`, without an extra
+radius factor. Its derivatives include the field and polygon vertices.
+`BiotSavart.A(xyz)` supplies the filament vector potential for independent
+closed-loop Stokes checks. Counterclockwise vertices give positive planar
+flux; the corresponding action for the `+e_phi` normal follows the clockwise
+boundary in `(R,Z)`. These primitives require separate boundary, quadrature,
+branch and transversality checks before use as a turnstile objective.
+
 ## VMEC MGRID fields
 
 Run [`examples/simple_examples/mgrid_from_coils.py`](examples/simple_examples/mgrid_from_coils.py)
