@@ -41,11 +41,11 @@ def test_angle_table_matches_the_mode_sum():
             0.1 * s, PSI0, 4)
     table = BoozerField.from_booz(*args, bmns=0.5 * bmnc)
     exact = BoozerField.from_booz(*args, bmns=0.5 * bmnc, angle_grid=None)
-    assert table.table.shape[1:3] == (19, 19)
+    assert table.table.shape[1:3] == (21, 21)
     points = np.random.default_rng(0).uniform(-7, 7, (3, 20))
     points[0] = np.abs(points[0]) / 7
     np.testing.assert_allclose(jax.vmap(table.modB_derivatives)(*points),
-                               jax.vmap(exact.modB_derivatives)(*points), atol=2e-3 * B0)
+                               jax.vmap(exact.modB_derivatives)(*points), atol=1e-4 * B0)
 
 
 def test_vmec_flux_sign_sets_the_analytic_radial_drift():
