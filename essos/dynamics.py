@@ -23,7 +23,7 @@ import diffrax
 import optimistix as optx
 from essos.coils import Coils
 from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
-from essos.surfaces import SurfaceClassifier
+from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
 from essos.plot import fix_matplotlib_3d
@@ -876,6 +876,21 @@ def _place_on_devices(x, target):
 ## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
 ## !!!!  Here particle_key was added to compute_trajectories (E. Neto collisions modifications)
 ## This is important for correct sampling of Brownian motion
+def _wall_function(field, wall):
+    """``Tracing``'s wall as ``xyz -> signed distance`` (positive inside), or None.
+
+    ``wall`` is a gap [m] (the LCFS of ``field`` grown that far), a surface
+    (classified on a grid of 2% of its major radius, at least 2 cm), an object
+    with ``evaluate_xyz`` or a callable.
+    """
+    if isinstance(wall, (int, float)):
+        wall = SurfaceRZFourier.from_vmec(field, ntheta=64, nphi=128, offset=wall)
+    if hasattr(wall, "gamma"):
+        scale = max(1.0, float(jnp.mean(jnp.linalg.norm(jnp.asarray(wall.gamma)[..., :2], axis=-1))))
+        wall = SurfaceClassifier(wall, h=0.02 * scale, padding=0.05 * scale)
+    return getattr(wall, "evaluate_xyz", wall)
+
+
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
@@ -940,7 +955,7 @@ class Tracing():
         elif exterior_field is not None and not hasattr(exterior_field, "curl_b"):
             exterior_field = ExternalField(exterior_field)
         self.exterior_field, self.max_returns = exterior_field, int(max_returns)
-        self.wall = getattr(wall, "evaluate_xyz", wall)
+        self.wall = _wall_function(field, wall)
         # An orbit outside is back inside once it is reentry_depth [m] inside
         # the LCFS (default 1e-3 minor radii), so an orbit skimming the surface,
         # where the two fields differ slightly, does not bounce between them.
@@ -1373,8 +1388,8 @@ class Tracing():
         mass = self.particles.mass
 
         if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
-            initial_xyz = self.initial_conditions[:, :3]
-            initial_vparallel = self.initial_conditions[:, 3]
+            initial_xyz = self.trajectories[:, 0, :3]  # t = 0, on the trajectories' devices
+            initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
             def compute_energy(trajectory, mu):
@@ -1411,8 +1426,8 @@ class Tracing():
         mass = self.particles.mass
 
         if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
-            initial_xyz = self.initial_conditions[:, :3]
-            initial_vparallel = self.initial_conditions[:, 3]
+            initial_xyz = self.trajectories[:, 0, :3]  # t = 0, on the trajectories' devices
+            initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
             def compute_vperp(trajectory, mu):
