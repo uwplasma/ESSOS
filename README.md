@@ -127,11 +127,9 @@ print(tracing.loss_fractions)
 More in [`examples/particle_tracing`](examples/particle_tracing), including
 full-orbit, collisional and electric-field variants.
 
-## Boozer-coordinate tracing
+## Boozer tracing
 
-Transform a VMEC equilibrium with [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax),
-then trace guiding centres in an axis-regular chart with fixed-step RK4 and
-optional Monte Carlo collisions. This tracer provides forward diagnostics.
+Transform a VMEC WOUT with [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax), then trace guiding centres from cosine/sine Boozer spectra with RK4 and optional collisions.
 
 ```python
 import numpy as np
@@ -144,38 +142,44 @@ booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout("wout.nc", flux=False)
 booz.run()
 with Dataset("wout.nc") as wout:
-    phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
+    phi_edge = float(wout.variables["phi"][-1])
 field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi),
-                                    mode_tolerance=1e-3)
+                                    mode_tolerance=1e-4)
 
 n = 1000
+rng = np.random.default_rng(42)
 speed = np.sqrt(2 * 3.5e6 * ONE_EV / ALPHA_PARTICLE_MASS)
-result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np.pi, n),
-                      zeta=np.random.uniform(0, 2*np.pi, n), pitch=np.random.uniform(-1, 1, n),
-                      speed=speed, mass=ALPHA_PARTICLE_MASS, charge=ALPHA_PARTICLE_CHARGE,
-                      tmax=1e-2, timestep=1e-7)      # species=BackgroundSpecies(...) adds collisions
+result = trace_boozer(field, s=np.full(n, 0.25), theta=rng.uniform(0, 2*np.pi, n),
+                      zeta=rng.uniform(0, 2*np.pi / field.nfp, n),
+                      pitch=rng.uniform(-1, 1, n), speed=speed,
+                      mass=ALPHA_PARTICLE_MASS, charge=ALPHA_PARTICLE_CHARGE,
+                      tmax=1e-2, timestep=1e-7)
 print(result.lost.mean(), result.loss_fractions())
 ```
 
-`psi0` is minus VMEC's boundary toroidal flux over `2 pi`. A particle
-is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
+VMEC's flux convention requires `psi0 = -phi_edge / (2*pi)`. A loss occurs at `s >= 1`; inspect `result.energy_error` and converge the timestep and spectrum for each equilibrium.
 
-![Boozer vs VMEC-coordinate and cross-code tracing times](docs/readme_boozer_speed.png)
+### Matched tracing
 
-| Case (8 CPU cores, compile excluded) | Tracer | Lost | Wall time |
-|---|---|---|---|
-| 128 ARIES-CS alphas, 0.1 ms | ESSOS Boozer (RK4) | 14.8% ± 3.1% | 0.91 s |
-| | ESSOS VMEC coordinates (adaptive) | 13.3% ± 3.0% | 60.5 s |
-| 1000 alphas, 10 ms (VMEX benchmark) | ESSOS Boozer | 12.8% | 146 s |
-| | SIMPLE | 12.4% | 556 s |
-| | SIMSOPT | 11.9% | 1079 s |
+8,192 common 3.52 MeV alpha births are traced for 20 ms through a reactor-scale vacuum equilibrium without collisions.
 
-The first case is [`examples/particle_tracing/trace_particles_boozer_vs_vmec.py`](examples/particle_tracing/trace_particles_boozer_vs_vmec.py).
-Its ± values are one-sigma binomial standard errors, `sqrt(p (1-p) / N)`.
-Redraw the figure with `python docs/make_readme_boozer_figure.py`.
+![Loss agreement and cold/warm GPU tracing runtimes](docs/readme_boozer_speed.png)
 
-Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
-and its derivatives, together with the flux functions `G`, `I` and `iota`.
+ESSOS and CATAPULT lose 6,572 and 6,573 particles; 8,191 labels agree. Alpha mass is `6.6446573450e-27 kg`; timings use an RTX A4000 and exclude field setup. Energy drift is `2.14e-5` at every ESSOS step and `1.36e-5` at saved confined CATAPULT states. [Controls, source revisions and CPU/DESC/SIMPLE/SIMSOPT comparisons](https://github.com/uwplasma/vmex/blob/045db9f6/docs/explanation/validation.md#cross-code-alpha-tracing).
+
+Shaded loss bands use `f(t) ± sqrt(f(t)[1-f(t)]/N)`, the pointwise binomial sampling error. Timestep and spectrum convergence are checked separately. Collisional cross-code benchmarks are not yet available.
+
+### Tracing capabilities
+
+| Code | CPU | GPU | Guiding centre | Full orbit | Collisions | Differentiable trajectories |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| ESSOS | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| [DESC](https://desc-docs.readthedocs.io/en/latest/_api/particles/desc.particles.trace_particles.html) | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| [FIRM3D / CATAPULT](https://firm3d.readthedocs.io/) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| [SIMSOPT](https://simsopt.readthedocs.io/v0.9.4/tracing.html) | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| [SIMPLE](https://github.com/itpplasma/SIMPLE) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+
+Availability refers to documented orbit models; unbenchmarked devices imply no speed ranking. ESSOS JAX orbit models support derivatives; the fast Boozer diagnostic API returns NumPy arrays. SIMPLE's CUDA backend is unbenchmarked here; collisions and full orbits use its CPU backend.
 
 ## Tracing notes
 
