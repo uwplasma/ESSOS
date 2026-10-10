@@ -409,6 +409,52 @@ def test_substep_counts_reuse_compilation_and_preserve_static_outputs(collisions
     assert static._cache_size() == 2 and dynamic._cache_size() == 1
 
 
+def _bundled_wout_field():
+    """Boozer-like field from the bundled n3are WOUT's half-mesh |B| spectrum.
+
+    VMEC angles are not Boozer angles, but the tables have the shape and
+    scale of a real device, which is all the loss bookkeeping needs.
+    """
+    from pathlib import Path
+    from netCDF4 import Dataset
+    wout = Path(__file__).parents[1] / "examples" / "input_files" / "wout_n3are_R7.75B5.7.nc"
+    with Dataset(wout) as d:
+        v = {k: np.asarray(d.variables[k][:]) for k in
+             ("bmnc", "xm_nyq", "xn_nyq", "iotas", "bvco", "buco", "phi", "nfp")}
+    ns = v["iotas"].size
+    s = (np.arange(1, ns) - 0.5) / (ns - 1)
+    keep = (v["xm_nyq"] <= 6) & (np.abs(v["xn_nyq"]) <= 6 * v["nfp"])
+    return BoozerField.from_booz(s, v["bmnc"][1:, keep].T, v["xm_nyq"][keep], v["xn_nyq"][keep],
+                                 v["iotas"][1:], v["bvco"][1:], v["buco"][1:],
+                                 psi0_from_vmec(v["phi"][-1]), int(v["nfp"]))
+
+
+@pytest.mark.parametrize("compact", [True, False])
+def test_lost_orbits_keep_exterior_terminal_diagnostics_apart(compact):
+    """Issue #115: coarse steps that leave the tables must not pollute interior diagnostics."""
+    field = _bundled_wout_field()
+    n = 16
+    rng = np.random.default_rng(0)
+    out = trace_boozer(field, np.full(n, .5), rng.uniform(0, 2 * np.pi, n), rng.uniform(0, 2 * np.pi, n),
+                       rng.uniform(-1, 1, n), speed=V0, mass=300 * M, charge=Q, tmax=1e-6,
+                       timestep=1e-7, n_save=11, compact=compact)
+    lost = out.lost
+    assert lost.any() and lost.sum() + out.failed.sum() + (~lost & ~out.failed).sum() == n
+    assert not (lost & out.failed).any()
+    # Saved states stay inside the plasma and finite, including after the loss.
+    assert np.all(out.states[~out.failed, :, 0] < 1)
+    assert np.isfinite(out.states).all()
+    # The exterior extrapolation is reported separately, only for lost orbits.
+    assert out.terminal_states.shape == (n, 5)
+    assert np.all(out.terminal_states[lost, 0] >= 1)
+    assert np.isnan(out.terminal_states[~lost]).all() and np.isnan(out.terminal_energy_error[~lost]).all()
+    assert np.nanmax(out.terminal_energy_error[lost]) > 1  # the extrapolated step is garbage...
+    assert np.all(out.energy_error[lost] < 0.5)  # ...and stays out of the interior error
+    # The held state is the start of the crossing step: its energy matches the birth energy.
+    v_end = out.states[lost, -1, 4]
+    np.testing.assert_allclose(v_end / V0, 1, atol=0.3)
+
+
 @pytest.mark.parametrize("method", ["adaptive", "adaptive8"])
 def test_adaptive_error_follows_the_tolerance(method):
     """A tighter tolerance gives a smaller energy error, whatever the first trial step."""
