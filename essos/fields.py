@@ -10,6 +10,25 @@ from essos.surfaces import SurfaceRZFourier, BdotN_over_B, SurfaceClassifier
 from essos.plot import fix_matplotlib_3d
 from essos.util import newton
 
+def evaluate(field, points, quantity="B"):
+    """Evaluate a single-point field method on an array of points.
+
+    ``points`` has shape ``(..., 3)`` in the field's own coordinates
+    (Cartesian for coil fields, ``(s, theta, phi)`` for :class:`Vmec`), and
+    ``quantity`` names any method that takes one point, such as ``"B"``,
+    ``"AbsB"``, ``"dB_by_dX"`` or ``"B_contravariant"``. The method is mapped
+    with ``jax.vmap`` over the flattened leading axes, so the result has shape
+    ``points.shape[:-1] + single_point_result.shape``. It works with any field
+    object, including :class:`Vmec`, and is differentiable and jittable.
+    """
+    points = jnp.asarray(points)
+    if points.ndim < 1 or points.shape[-1] != 3:
+        raise ValueError(f"points must have shape (..., 3); got {points.shape}")
+    method = getattr(field, quantity)
+    flat = vmap(method)(points.reshape((-1, 3)))
+    return flat.reshape(points.shape[:-1] + flat.shape[1:])
+
+
 class MagneticField():
     def __init__(self):
         pass
@@ -83,6 +102,11 @@ class MagneticField():
     @jit
     def to_xyz(self, points):
         raise NotImplementedError("to_xyz method not implemented")
+
+    def evaluate(self, points, quantity="B"):
+        """``quantity`` at every point of a ``(..., 3)`` array; see :func:`evaluate`."""
+        return evaluate(self, points, quantity)
+
 
 def _gc_from_jacobian(field, jacobian):
     """Guiding-center quantities from B and dB/dX in Cartesian coordinates (sqrtg = 1)."""

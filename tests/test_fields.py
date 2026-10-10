@@ -562,3 +562,23 @@ def test_vmec_partner_cutoff_is_phase_invariant():
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0, 1])
     arrays['bmns'] = jnp.zeros_like(arrays['bmns'])
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0])
+
+
+def test_evaluate_maps_single_point_methods_over_point_arrays():
+    from essos.coils import CreateEquallySpacedCurves
+    from essos.fields import CombinedField, evaluate
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.3, n_segments=20, nfp=2, stellsym=True)
+    coils = BiotSavart(Coils(curves=curves, currents=[1e5] * 2))
+    xyz = random.uniform(random.PRNGKey(1), (2, 4, 3), minval=-0.4, maxval=0.4) + jnp.array([0.8, 0.1, 0.0])
+    looped = jnp.array([[coils.B(p) for p in row] for row in xyz])
+    np.testing.assert_allclose(coils.evaluate(xyz), looped, rtol=1e-12)
+    assert coils.evaluate(xyz, "dB_by_dX").shape == (2, 4, 3, 3)
+    np.testing.assert_allclose(CombinedField(coils, coils).evaluate(xyz[0]), 2 * looped[0], rtol=1e-12)
+
+    vmec = Vmec(WOUT_FILE)  # not a MagneticField subclass: use the function
+    points = jnp.array([[0.3, 0.4, 0.5], [0.7, 1.2, 0.2], [0.9, 3.0, 1.1]])
+    np.testing.assert_allclose(evaluate(vmec, points, "AbsB"), jnp.array([vmec.AbsB(p) for p in points]),
+                               rtol=1e-12)
+    with pytest.raises(ValueError, match="shape"):
+        evaluate(coils, jnp.zeros((4, 2)))
