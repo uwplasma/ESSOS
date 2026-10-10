@@ -53,7 +53,7 @@ pip install essos
 - **Checked against SIMSOPT.** [`examples/comparisons_simsopt`](examples/comparisons_simsopt)
   compares coils, surfaces, VMEC import, field lines, guiding-centre and
   full-orbit tracing, and losses with SIMSOPT on the same inputs. Alpha
-  losses are also compared with SIMSOPT, FIRM3D, SIMPLE and DESC
+  losses are also compared with SIMSOPT, FIRM3D and SIMPLE
   ([below](#comparison-with-other-codes)).
 
 ## Coil optimization
@@ -161,8 +161,7 @@ booz.read_wout("wout.nc", flux=False)
 booz.run()
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
-field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi),
-                                    mode_tolerance=1e-3)
+field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi))
 
 n = 1000
 speed = np.sqrt(2 * 3.5e6 * ONE_EV / ALPHA_PARTICLE_MASS)
@@ -195,24 +194,34 @@ and its derivatives, together with the flux functions `G`, `I` and `iota`.
 
 ## Comparison with other codes
 
-256 collisionless 3.5 MeV alphas in the Landreman-Paul QA reactor-scale
-equilibrium, started at `s = 0.255` with uniform Boozer angles and pitch,
-traced for 10 ms and lost at `s = 1`. Apple M4, 8 CPU cores per code;
-compilation and field set-up excluded. Run with
+256 collisionless 3.5 MeV alphas per equilibrium, started at `s = 0.5` with
+uniform Boozer angles and pitch, traced for 10 ms and lost at `s = 1`, in the
+Landreman-Paul QA reactor-scale `wout`, the ARIES-CS `n3are` `wout`, and the
+W7-X standard configuration scaled to the same minor radius (1.70 m) and
+volume-averaged `|B|` (5.86 T). Apple M4, 8 CPU cores per code; compilation
+and field set-up excluded. Run with
 [`examples/cross_code_benchmark/benchmark.py`](examples/cross_code_benchmark/benchmark.py).
 
-| Code | Method | Run time | Lost | Same fate as ESSOS | max \|E/E0 - 1\| |
-|---|---|---|---|---|---|
-| ESSOS `trace_boozer` | RK4, `dt = 1e-7 s` | 11.1 s | 0.4% | - | 8e-5 |
-| SIMSOPT | RK45, tol 1e-9, `gc_noK` | 22.7 s | 0.8% | 98.8% | 1e-3 |
-| FIRM3D | RK45, tol 1e-9, `gc_noK` | 55.3 s | 0.4% | 100% | 6e-5 |
-| SIMPLE | symplectic, defaults | 22.9 s | 0.4% | 100% | not reported |
-| DESC 0.17.3 (32 alphas) | Tsit5, tol 1e-7, vacuum GC | 909 s | 12.5% | 87.5% | not reported |
+![Alpha losses against time in three equilibria](docs/cross_code_losses.png)
+
+| Equilibrium | Code | Method | Run time | Lost | Same fate as ESSOS | max \|E/E0 - 1\| |
+|---|---|---|---|---|---|---|
+| QA | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 173 s | 6.6 ± 1.6% | - | 2e-10 |
+| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 17 s | 8.2% | 85.2% | 5e-5 |
+| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 50 s | 7.4% | 99.2% | 4e-5 |
+| | SIMPLE | symplectic, defaults | 17 s | 7.0% | 99.6% | not reported |
+| ARIES-CS | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 586 s | 23.0 ± 2.6% | - | 3e-5 |
+| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 64 s | 23.8% | 89.1% | 1e-4 |
+| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 154 s | 21.5% | 94.5% | 5e-3 |
+| | SIMPLE | symplectic, defaults | 24 s | 23.4% | 94.9% | not reported |
+| W7-X | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 714 s | 27.7 ± 2.8% | - | 9e-5 |
+| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 111 s | 28.9% | 97.3% | 1e-3 |
+| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 195 s | 27.0% | 96.1% | 3e-3 |
+| | SIMPLE | symplectic, defaults | 194 s | 27.3% | 96.5% | not reported |
 
 ESSOS, SIMSOPT and FIRM3D use the same 32x32 `booz_xform` spectrum (ESSOS
-drops modes below `1e-4` of `B00`); SIMPLE and DESC read the `wout`
-directly. ESSOS, FIRM3D and SIMPLE lose the same alpha; ESSOS and SIMPLE both
-lose it at 0.255 ms. DESC traces in its own fit of the low-resolution `wout`.
+keeps modes above its default `1e-6` of `B00`); SIMPLE reads the `wout`
+directly. ± is the binomial standard error.
 
 ## Tracing notes
 
@@ -267,7 +276,7 @@ command if it is missing.
 | [`particle_tracing`](examples/particle_tracing) | Guiding-centre and full-orbit tracing, classifiers, electric fields, Boozer vs VMEC |
 | [`particle_tracing_collisions`](examples/particle_tracing_collisions) | Collisional tracing and velocity-distribution statistics |
 | [`comparisons_simsopt`](examples/comparisons_simsopt) | Side-by-side runs with SIMSOPT |
-| [`cross_code_benchmark`](examples/cross_code_benchmark) | Alpha losses against SIMSOPT, FIRM3D, SIMPLE and DESC |
+| [`cross_code_benchmark`](examples/cross_code_benchmark) | Alpha losses against SIMSOPT, FIRM3D and SIMPLE |
 | [`simple_examples`](examples/simple_examples) | Coils from near-axis or BOOZ_XFORM, perturbed coils, combined fields, MGRID |
 | [`paper`](examples/paper) | Integrator, gradient and Poincare figures |
 
