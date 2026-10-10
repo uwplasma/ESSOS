@@ -1548,6 +1548,27 @@ class Tracing():
         total_particles_lost = loss_fractions[-1] * len(self.trajectories)
         return loss_fractions, total_particles_lost, lost_times
 
+    def soft_loss_fraction(self, r_max=0.99, width=0.02):
+        """Soft peak-flux crossing score for VMEC guiding centres.
+
+        Boundary stops (``boundary_hits``) count as exits; unrelated failures
+        return NaN. A smaller positive width sharpens the score. Hard losses
+        remain the diagnostic. To differentiate it, trace with a stopping
+        criterion on s rather than the default LCFS crossing, whose outputs
+        are host arrays.
+        """
+        if not isinstance(self.field, Vmec) or self.model not in _VMEC_GUIDING_CENTER_MODELS:
+            raise ValueError("soft_loss_fraction requires VMEC guiding centres")
+        if not np.isfinite(width) or width <= 0:
+            raise ValueError("width must be finite and positive")
+        radial = self.trajectories[:, :, 0]
+        finite = jnp.all(jnp.isfinite(self.trajectories), axis=-1)
+        stopped = jnp.asarray(self.boundary_hits)[:, None]
+        radial = jnp.where(finite, radial, jnp.where(stopped, 1.0, jnp.nan))
+        peak = jnp.sum(radial * jax.nn.softmax(radial / width, axis=1), axis=1)
+        peak = jnp.where(stopped[:, 0], jnp.maximum(peak, 1.0), peak)
+        return jnp.mean(jax.nn.sigmoid((peak - r_max) / width))
+
 
 
     @partial(jit, static_argnums=(0,1))
