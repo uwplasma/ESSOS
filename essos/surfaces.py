@@ -813,10 +813,19 @@ class SurfaceRZFourier:
             f.write('\n'.join(lines) + '\n/\n')
             
     def mean_cross_sectional_area(self):
+        """Mean over the toroidal grid of the area of the constant-phi cross sections.
+
+        The cross-section area is ``A = int R dZ/dtheta dtheta`` over
+        ``theta in [0, 2 pi)``, i.e. ``2 pi`` times the theta-average of the
+        integrand. With ``close=True`` the duplicated end points are dropped so
+        the average remains a periodic rectangle rule.
+        """
         xyz = self.gamma
-        x2y2 = xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2
         dgamma1 = self.gammadash_phi
         dgamma2 = self.gammadash_theta
+        if self.close:
+            xyz, dgamma1, dgamma2 = (a[:-1, :-1] for a in (xyz, dgamma1, dgamma2))
+        x2y2 = xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2
         J = jnp.zeros((xyz.shape[0], xyz.shape[1], 2, 2))
         J = J.at[:, :, 0, 0].set((xyz[:, :, 0] * dgamma1[:, :, 1] - xyz[:, :, 1] * dgamma1[:, :, 0]) / x2y2)
         J = J.at[:, :, 0, 1].set((xyz[:, :, 0] * dgamma2[:, :, 1] - xyz[:, :, 1] * dgamma2[:, :, 0]) / x2y2)
@@ -825,7 +834,7 @@ class SurfaceRZFourier:
         detJ = jnp.linalg.det(J)
         Jinv = jnp.linalg.inv(J)
         dZ_dtheta = dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
-        mean_cross_sectional_area = jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))/(2 * jnp.pi)
+        mean_cross_sectional_area = 2 * jnp.pi * jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))
         return mean_cross_sectional_area
     
     def _tree_flatten(self):
