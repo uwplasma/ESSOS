@@ -273,7 +273,7 @@ def test_pitch_angle_scattering_decays_the_mean_pitch_at_nu_D():
 
 
 @pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
-def test_progress_chunks_reproduce_the_unchunked_trace(method):
+def test_progress_chunks_reproduce_the_unchunked_trace(method, monkeypatch, capsys):
     """Host-side chunks for progress carry the whole state: the trace is bit-identical."""
     field, n = tokamak(), 6
     # One device: sharded over many CPU devices, the chunked and whole programs round differently in the last bit.
@@ -282,8 +282,11 @@ def test_progress_chunks_reproduce_the_unchunked_trace(method):
     args = (jnp.full(n, 0.5), jnp.linspace(0, 6, n), jnp.zeros(n), jnp.linspace(-0.9, 0.9, n))
     calls = []
     chunked = trace_boozer(field, *args, **kwargs, progress=lambda d, t: calls.append((d, t)))
-    whole = trace_boozer(field, *args, **kwargs)
+    whole = trace_boozer(field, *args, **kwargs, progress=False)
     assert calls == [(k, 22) for k in (3, 6, 9, 12, 15, 18, 21, 22)]
+    monkeypatch.delenv("ESSOS_PROGRESS")
+    np.testing.assert_array_equal(trace_boozer(field, *args, **kwargs).states, whole.states)
+    assert "22/22" in capsys.readouterr().err
     for name in ("states", "loss_times", "thermalized_times", "energy_error"):
         np.testing.assert_array_equal(getattr(chunked, name), getattr(whole, name))
 
