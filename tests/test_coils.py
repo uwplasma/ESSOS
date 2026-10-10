@@ -119,6 +119,40 @@ def test_curves_pytree_preserves_scaling_metadata():
     assert curves_copy.scaling_factor == curves.scaling_factor
     assert curves_copy.scale_fixed == curves.scale_fixed
 
+def _fake_simsopt(monkeypatch):
+    import sys
+    import types
+    import numpy as np
+
+    class CurveXYZFourier:
+        def __init__(self, n_segments, order):
+            self.x = np.zeros(3 * (2 * order + 1))
+
+    geo = types.SimpleNamespace(CurveXYZFourier=CurveXYZFourier)
+    field = types.SimpleNamespace(
+        Current=lambda value: value,
+        coils_via_symmetries=lambda curves, currents, nfp, stellsym: [
+            types.SimpleNamespace(curve=c, current=i) for c, i in zip(curves, currents)])
+    monkeypatch.setitem(sys.modules, "simsopt", types.ModuleType("simsopt"))
+    monkeypatch.setitem(sys.modules, "simsopt.geo", geo)
+    monkeypatch.setitem(sys.modules, "simsopt.field", field)
+
+
+def test_scaled_curves_convert_with_physical_coefficients(monkeypatch):
+    from essos.coils import DiscretizedCoils
+    _fake_simsopt(monkeypatch)
+    dofs = jnp.zeros((1, 3, 5)).at[0, 0, 2].set(2.0).at[0, 1, 1].set(2.0).at[0, 2, 3].set(0.3)
+    curves = Curves(dofs, 32, 1, False, scaling_factor=0.3, scale_fixed=7.0)
+    coils = Coils(curves, jnp.array([2.0e5]), currents_scale=1.0e5)
+    assert not jnp.allclose(curves.dofs, dofs)  # public dofs are scaled
+
+    assert jnp.allclose(curves.to_simsopt()[0].x, dofs[0].ravel())
+    simsopt_coil = coils.to_simsopt()[0]
+    assert jnp.allclose(simsopt_coil.curve.x, dofs[0].ravel())
+    assert jnp.isclose(simsopt_coil.current, 2.0e5)
+    assert jnp.allclose(DiscretizedCoils.from_Coils(coils).gamma, coils.gamma, atol=1e-12)
+
+
 def test_curves_str_repr():
     dofs = jnp.zeros((2, 3, 5))
     curves = Curves(dofs)
