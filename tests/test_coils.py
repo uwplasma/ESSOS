@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import jax
 from essos.coils import Coils, Curves
@@ -233,3 +234,27 @@ def test_coil_tracer_unflatten_preserves_physical_scales():
     assert jnp.allclose(value, jnp.sum(curves._dofs * weights) + 45.)
     assert jnp.allclose(geometry_grad, weights / curves.scaling[None, None, :])
     assert jnp.allclose(current_grad, jnp.array([18., 36.]))
+
+
+def test_coils_indexing_addition_and_exclusion():
+    from essos.coils import CreateEquallySpacedCurves
+    coils = Coils(CreateEquallySpacedCurves(2, 2, 1.0, 0.3, 32, 2, True), jnp.array([1e5, 2e5]))
+    one, part = coils[3], coils[1:5]
+    np.testing.assert_allclose(one.gamma[0], coils.gamma[3], atol=1e-14)
+    np.testing.assert_allclose(one.currents, coils.currents[3:4])
+    np.testing.assert_allclose(part.currents, coils.currents[1:5])
+    both = coils + coils
+    np.testing.assert_allclose(both.gamma, jnp.concatenate([coils.gamma] * 2), atol=1e-14)
+    fewer = coils.__exclude_coil__(2)
+    np.testing.assert_allclose(fewer.gamma, jnp.delete(coils.gamma, 2, axis=0), atol=1e-14)
+
+
+def test_discretized_coils_copy_and_json_round_trip(tmp_path):
+    from essos.coils import DiscretizedCoils
+    t = jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False)
+    base = jnp.stack([jnp.stack([3 + .5 * jnp.cos(t), .2 * k + 0 * t, .5 * jnp.sin(t)], axis=1) for k in range(4)])
+    coils = DiscretizedCoils(base, jnp.arange(1., 5.) * 1e5, nfp=2, stellsym=True)
+    np.testing.assert_allclose(coils.copy().gamma, coils.gamma, atol=1e-12)
+    coils.to_json(str(tmp_path / "c.json"))
+    loaded = DiscretizedCoils.from_json(str(tmp_path / "c.json"))
+    np.testing.assert_allclose(loaded.gamma, coils.gamma, atol=1e-12)

@@ -122,3 +122,26 @@ class TestCoilPerturbation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_gaussian_sampler_derivatives_are_derivatives_of_the_sample():
+    import jax.numpy as jnp, numpy as np
+    from essos.coil_perturbation import GaussianSampler
+    n = 32
+    sampler = GaussianSampler(jnp.linspace(0, 1, n, endpoint=False), sigma=0.01, length_scale=0.2, n_derivs=2)
+    f, df, ddf = np.asarray(sampler.draw_sample(jax.random.PRNGKey(1)))
+    k = 2j * np.pi * np.fft.fftfreq(n, 1 / n)[:, None]
+    scale = np.abs(df).max()
+    np.testing.assert_allclose(np.fft.ifft(k * np.fft.fft(f, axis=0), axis=0).real, df, atol=1e-3 * scale)
+    np.testing.assert_allclose(np.fft.ifft(k**2 * np.fft.fft(f, axis=0), axis=0).real, ddf, atol=1e-3 * np.abs(ddf).max())
+
+
+def test_zero_systematic_perturbation_keeps_discretized_coils_and_default_key():
+    import jax.numpy as jnp, numpy as np
+    from essos.coils import DiscretizedCoils
+    from essos.coil_perturbation import GaussianSampler, perturb_curves
+    t = jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False)
+    coils = DiscretizedCoils(jnp.stack([jnp.stack([3 + .5 * jnp.cos(t), 0 * t, .5 * jnp.sin(t)], axis=1)]),
+                             jnp.array([1e5]), nfp=2, stellsym=True)
+    sampler = GaussianSampler(jnp.linspace(0, 1, 32, endpoint=False), sigma=0., length_scale=0.2)
+    np.testing.assert_allclose(perturb_curves(coils, sampler).gamma, coils.gamma, atol=1e-12)
