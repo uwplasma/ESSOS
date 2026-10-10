@@ -65,7 +65,8 @@ class MultiObjectiveOptimizer:
         dofs_curves = jnp.reshape(x[:dofs_len], self.initial_coils.dofs_curves.shape)
         dofs_currents = x[dofs_len:]
         curves = Curves(dofs_curves, self.num_points, self.initial_coils.nfp, self.initial_coils.stellsym)
-        coils = Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale)
+        coils = Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale,
+                      currents_scale=self.initial_coils.currents_scale)
         field = BiotSavart(coils)
         inputs = {
             "field": field,
@@ -132,7 +133,8 @@ class MultiObjectiveOptimizer:
         dofs_curves = jnp.reshape(x[:dofs_len], self.initial_coils.dofs_curves.shape)
         dofs_currents = x[dofs_len:]
         curves = Curves(dofs_curves, self.num_points, self.initial_coils.nfp, self.initial_coils.stellsym)
-        return Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale)
+        return Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale,
+                     currents_scale=self.initial_coils.currents_scale)
 
     def run(self, seed: int = 42):
         sampler = optuna.samplers.NSGAIISampler(seed=seed)
