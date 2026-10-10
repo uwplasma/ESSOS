@@ -35,6 +35,30 @@ def _spline(x, y):
     return jnp.asarray(sp.x), jnp.asarray(np.moveaxis(sp.c, 0, -1))  # (nint, ..., 4)
 
 
+def _spline_jax(x, y):
+    """Differentiable not-a-knot cubic, in the same layout as SciPy CubicSpline."""
+    x, y = jnp.asarray(x), jnp.asarray(y)
+    n = x.size
+    if n < 2:
+        raise ValueError('A spline needs at least two knots')
+    h = jnp.diff(x)
+    expand = h.reshape((-1,) + (1,) * (y.ndim - 1))
+    sec = jnp.diff(y, axis=0) / expand
+    if n == 2:
+        second = jnp.zeros_like(y)
+    elif n == 3:
+        second = jnp.broadcast_to(2 * (sec[1] - sec[0]) / (x[2] - x[0]), y.shape)
+    else:
+        matrix = jnp.diag(jnp.concatenate((jnp.zeros(1), 2 * (h[:-1] + h[1:]), jnp.zeros(1))))
+        matrix = matrix + jnp.diag(h, 1) + jnp.diag(h, -1)
+        matrix = matrix.at[0, :3].set(jnp.array([-h[1], h[0] + h[1], -h[0]]))
+        matrix = matrix.at[-1, -3:].set(jnp.array([-h[-1], h[-2] + h[-1], -h[-2]]))
+        rhs = jnp.concatenate((jnp.zeros_like(y[:1]), 6 * jnp.diff(sec, axis=0), jnp.zeros_like(y[:1])))
+        second = jnp.linalg.solve(matrix, rhs)
+    return x, jnp.stack(((second[1:] - second[:-1]) / (6 * expand), second[:-1] / 2,
+                         sec - expand * (2 * second[:-1] + second[1:]) / 6, y[:-1]), axis=-1)
+
+
 def _evaluate(knots, coef, x):
     """Value and derivative of a piecewise cubic (end pieces extrapolate)."""
     i = jnp.clip(jnp.searchsorted(knots, x, side="right", method="compare_all") - 1, 0, knots.size - 2)
@@ -94,6 +118,30 @@ class BoozerField(eqx.Module):
         s_knots, profile_coef = _spline(s_prof, profiles)
         return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
                    float(psi0), int(nfp), sine_coef)
+
+    @classmethod
+    def from_arrays(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, *, bmns=None):
+        """Live half-mesh tables with fixed mode topology; layout matches ``from_booz``."""
+        s, xm, xn, bmnc = jnp.asarray(s), jnp.asarray(xm, int), jnp.asarray(xn, int), jnp.asarray(bmnc)
+        if s.ndim != 1 or s.size < 2 or bmnc.shape != (xm.size, s.size):
+            raise ValueError('bmnc must have shape (modes, len(s)), with at least two surfaces')
+        if xm.ndim != 1 or xn.shape != xm.shape:
+            raise ValueError('xm and xn must have the same one-dimensional shape')
+        if any(jnp.shape(profile) != s.shape for profile in (iota, G, I)):
+            raise ValueError('iota, G and I must have the same shape as s')
+        if bmns is not None and jnp.shape(bmns) != bmnc.shape:
+            raise ValueError('bmns must match bmnc.shape')
+        s = eqx.error_if(s, jnp.any(~jnp.isfinite(s)) | jnp.any(s <= 0) | jnp.any(jnp.diff(s) <= 0),
+                         's must be finite, positive and strictly increasing', on_error='raise')
+        r = jnp.sqrt(s)
+        def coefficients(table):
+            scaled = jnp.where(xm[:, None] > 0, jnp.asarray(table) / r, table)
+            return _spline_jax(r, scaled.T)[1]
+        profiles = jnp.stack((iota, G, I), axis=1)
+        axis = (profiles[0] - s[0] * (profiles[1] - profiles[0]) / (s[1] - s[0])).at[2].set(0.)
+        knots, coef = _spline_jax(jnp.concatenate((jnp.zeros(1), s)), jnp.vstack((axis, profiles)))
+        return cls(r, coefficients(bmnc), knots, coef, xm, xn, psi0, int(nfp),
+                   None if bmns is None else coefficients(bmns))
 
     @classmethod
     def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6):
