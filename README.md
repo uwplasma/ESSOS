@@ -108,6 +108,18 @@ The cylindrical grid covers one field period in phi. The field repeats across
 periods, and R and Z queries are clamped to the grid bounds, so set the bounds
 to cover the region you intend to evaluate.
 
+## VMEC equilibria with VMEX
+
+[VMEX](https://github.com/uwplasma/VMEX) solves a free-boundary equilibrium from
+ESSOS coils; ESSOS reads its wout file and traces field lines through it.
+
+```sh
+pip install vmex
+python examples/simple_examples/equilibrium_from_coils_vmex.py
+```
+
+[Example source](examples/simple_examples/equilibrium_from_coils_vmex.py).
+
 ## Particle tracing
 
 ![Guiding-centre alpha orbits](docs/readme_particles.png)

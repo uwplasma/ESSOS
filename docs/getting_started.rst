@@ -51,3 +51,14 @@ Existing SIMSOPT coil files can be loaded directly:
 The JAX-native ``loss_coil_separation`` and ``loss_coil_surface_distance``
 functions in ``essos.objective_functions`` provide blockwise, differentiable
 coil-clearance penalties; ``block_size`` bounds their temporary memory.
+
+VMEC equilibria with VMEX
+-------------------------
+
+`VMEX <https://github.com/uwplasma/VMEX>`_ solves a free-boundary equilibrium
+from ESSOS coils; ESSOS reads its wout file and traces field lines through it.
+
+.. code-block:: console
+
+    pip install vmex
+    python examples/simple_examples/equilibrium_from_coils_vmex.py
