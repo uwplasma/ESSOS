@@ -34,6 +34,81 @@ def test_field_reproduces_the_spectrum_and_is_regular_on_the_axis():
     assert (iota, G_s, I_s) == pytest.approx((IOTA, G, 0.0))
 
 
+@pytest.mark.parametrize('surfaces', [2, 3, 8])
+def test_live_boozer_constructor_matches_host_spline_and_gradients(surfaces):
+    from essos.boozer import _spline, _spline_jax
+    s = jnp.linspace(.02, .98, surfaces)
+    y = jnp.stack((jnp.exp(s), jnp.sin(3 * s), s**3), axis=1)
+    _, expected = _spline(s, y)
+    np.testing.assert_allclose(_spline_jax(s, y)[1], expected, atol=2e-12, rtol=2e-11)
+    xm, xn = jnp.array([0, 1]), jnp.array([0, 2])
+    bmnc = jnp.stack((5 + .1 * s, .2 * jnp.sqrt(s)))
+    bmns = jnp.stack((.03 * s, -.07 * jnp.sqrt(s)))
+    args = (s, bmnc, xm, xn, .4 + .01 * s, 20 + .2 * s, .01 * s, -.5, 2)
+    host = BoozerField.from_booz(*args, mode_tolerance=0., bmns=bmns)
+    live = BoozerField.from_arrays(*args, bmns=bmns)
+    for radial in (.001, .3, .999):
+        point = jnp.array([radial, .71, .23])
+        np.testing.assert_allclose(live.modB(*point), host.modB(*point), atol=2e-13)
+        np.testing.assert_allclose(live.profiles(radial), host.profiles(radial), atol=2e-13)
+    def value(cosine, sine):
+        field = BoozerField.from_arrays(s, cosine, xm, xn, *args[4:], bmns=sine)
+        return field.modB(.3, .71, .23)
+    direction = jnp.ones_like(bmnc)
+    gradient = jax.jit(jax.grad(value, argnums=(0, 1)))(bmnc, bmns)
+    h = 1e-5
+    fd = (value(bmnc + h * direction, bmns - h * direction) -
+          value(bmnc - h * direction, bmns + h * direction)) / (2 * h)
+    np.testing.assert_allclose(jnp.sum(gradient[0] - gradient[1]), fd, rtol=2e-9)
+    assert BoozerField.from_arrays(*args).sine_coef is None
+
+@pytest.mark.parametrize('position', [2, 3, 4, 5, 6])
+def test_live_boozer_constructor_rejects_misaligned_modes_and_profiles(position):
+    s = jnp.array([.1, .9])
+    args = [s, jnp.ones((2, 2)), jnp.array([0, 1]), jnp.array([0, 2]),
+            jnp.ones(2), jnp.ones(2), jnp.zeros(2), -.5, 2]
+    args[position] = jnp.ones(3)
+    with pytest.raises(ValueError, match='shape'):
+        BoozerField.from_arrays(*args)
+
+@pytest.mark.parametrize('s', [[.1, .1, .9], [.1, .9, .5], [.1, np.nan, .9], [-.1, .4, .9], [0., .4, .9]])
+def test_live_boozer_constructor_rejects_invalid_radial_knots(s):
+    def value(knots):
+        field = BoozerField.from_arrays(knots, jnp.ones((1, 3)), jnp.array([0]), jnp.array([0]),
+                                        jnp.ones(3), jnp.ones(3), jnp.zeros(3), -.5, 2)
+        return field.modB(.3, .7, .2)
+    for evaluate in (value, jax.jit(value)):
+        with pytest.raises(RuntimeError, match='finite, positive and strictly increasing'):
+            evaluate(jnp.array(s)).block_until_ready()
+
+
+@pytest.mark.parametrize('s,shape', [([], (1, 2)), ([.1], (1, 2)),
+                                   ([[.1, .9]], (1, 2)), ([.1, .9], (1, 3))])
+def test_live_boozer_constructor_rejects_short_grids_and_sine_shapes(s, shape):
+    with pytest.raises(ValueError, match='shape'):
+        BoozerField.from_arrays(jnp.asarray(s), jnp.ones((1, 2)), jnp.array([0]), jnp.array([0]),
+                               jnp.ones(2), jnp.ones(2), jnp.zeros(2), -.5, 2, bmns=jnp.ones(shape))
+
+
+def test_live_boozer_profiles_and_flux_preserve_rhs_derivatives():
+    from essos import constants as c
+    from essos.boozer import guiding_center_rhs
+    s = jnp.array([.02, .3, .6, .98])
+    profiles = jnp.stack((.4 + .1*s, 20 + .2*s, .01*s))
+    bmnc = jnp.stack((5 + .1*s, .2*jnp.sqrt(s)))
+    def loss(profiles, psi):
+        field = BoozerField.from_arrays(s, bmnc, jnp.array([0, 1]), jnp.array([0, 2]),
+                                        *profiles, psi, 2)
+        rhs = guiding_center_rhs(field, jnp.array([.3, .4, .7, 1e6]), 1e12,
+                                 c.ALPHA_PARTICLE_MASS, c.ALPHA_PARTICLE_CHARGE)
+        return jnp.vdot(rhs, jnp.array([1., 2., 3., 1e-3]))
+    gradient, flux_gradient = jax.jit(jax.grad(loss, argnums=(0, 1)))(profiles, -.5)
+    assert np.all(np.linalg.norm(gradient, axis=1) > 0) and abs(flux_gradient) > 0
+    h = 1e-5
+    fd = (loss(profiles + h, -.5 + .05*h) - loss(profiles - h, -.5 - .05*h))/(2*h)
+    np.testing.assert_allclose(jnp.sum(gradient) + .05*flux_gradient, fd, rtol=2e-8)
+
+
 def test_vmec_flux_sign_sets_the_analytic_radial_drift():
     """For B=B0(1-eps*r*cos theta), positive ions at theta=pi/2 drift outward."""
     import equinox as eqx
