@@ -638,6 +638,26 @@ def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypat
         np.testing.assert_array_equal(trace.trajectories[0, -1], trace.trajectories[0, -2])
 
 
+def test_tracing_pytree_round_trip_and_jit():
+    """Unflatten re-ran __init__ with times as times_to_trace, passed both
+    condition and stopping_criteria, and dropped species and boundary."""
+    field = _UniformField((0., 0., 1.), magnitude=1e-3)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+
+    def below_ceiling(t, y, args, **kwargs):
+        return 1.0 - y[2]
+    trace = Tracing(field=field, particles=particles, species=species, model="FullOrbitCollisions",
+                    maxtime=1e-6, timestep=1e-7, times_to_trace=3, stopping_criteria=below_ceiling)
+    leaves, treedef = jax.tree_util.tree_flatten(trace)
+    rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+    assert rebuilt.species is species and rebuilt.times_to_trace == 3
+    assert rebuilt.stopping_criteria == trace.stopping_criteria and rebuilt.condition is trace.condition
+    np.testing.assert_array_equal(rebuilt.times, trace.times)
+    np.testing.assert_array_equal(rebuilt.trajectories, trace.trajectories)
+    np.testing.assert_allclose(jax.jit(lambda tr: tr.energy())(trace), trace.energy(), rtol=1e-12)
+
+
 class _MuField:
     def AbsB(self, x):
         return 2.0
