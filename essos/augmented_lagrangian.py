@@ -565,7 +565,7 @@ def norm_constraints(tree):
 
 def infty_norm_constraints(tree):
     flat=jax.flatten_util.ravel_pytree(tree)[0]
-    return jnp.max(flat)
+    return jnp.max(jnp.abs(flat))
 
 def penalty_average(tree):
     pred = lambda x: isinstance(x, LagrangeMultiplier)
