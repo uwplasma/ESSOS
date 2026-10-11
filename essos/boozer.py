@@ -445,12 +445,15 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
     return jax.vmap(one)(carry, keys)
 
 
-def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
+def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep=None,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
                  progress=True, compact=True, method="dopri8", tolerance=1e-8):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
-    The step is shortened so that a whole number of steps fits between the
+    The default ``timestep`` is ``R0 / (2 nfp speed)``, with ``R0 = |G| / |B|`` on the
+    axis: about 12 steps per field period along the axis at full speed, which
+    keeps the Dopri8 energy error of 3.5 MeV alphas below about 1e-3 in QA, ARIES-CS
+    and W7-X fields of reactor size. The step is shortened so that a whole number of steps fits between the
     ``n_save`` saved times (``t = 0`` included).  Particles are sharded over
     ``devices`` (default: every local device).
 
@@ -459,9 +462,10 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     intervals. With progress the horizon runs as up to ten host-side chunks of the same
     compiled program, with the whole state carried between them, so the orbits
     are those of an unchunked trace.
-    Stopped particles are compacted after the first saved interval on one
-    device when at least half have stopped. ``compact=False`` skips the host
-    synchronization and extra compiled batch size.
+    With ``compact`` (default) the horizon runs in ten chunks; after each one the
+    stopped particles are dropped and the survivors rebalanced over the devices
+    whenever that shrinks the batch (sizes rounded up to 3 significant bits). ``compact=False`` skips the host
+    synchronizations and extra compiled batch sizes.
     Fixed explicit methods are ``"dopri8"`` (default), ``"dopri5"`` and
     ``"rk4"``; ``"dopri8"`` matches RK4 in cost and energy error at 3x its
     step and is far more accurate at smaller steps. Refine timestep and modes to check loss labels and bounce phase.
@@ -479,6 +483,9 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         raise ValueError("Boozer births must be nonempty, one-dimensional, equally sized and finite")
     if np.any((inputs[0] < 0) | (inputs[0] >= 1)) or np.any(np.abs(inputs[3]) > 1):
         raise ValueError("Boozer births require 0 <= s < 1 and |pitch| <= 1")
+    if timestep is None and np.ndim(speed) == 0 and speed > 0:
+        G = float(field.profiles(0.0)[0][1])
+        timestep = 0.5 * abs(G / float(field.modB(0.0, 0.0, 0.0))) / (field.nfp * float(speed))
     if not (np.isfinite(tmax) and tmax > 0 and np.isfinite(timestep) and timestep > 0
             and np.ndim(n_save) == 0 and np.isfinite(n_save)
             and n_save >= 2 and n_save == int(n_save)):
@@ -515,52 +522,38 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         args = [jax.device_put(a, sharding) for a in args]
     y0, mu0, keys = args
     carry, first = _start(field, y0, mu0)
-    chunk = n_int if progress is None else -(-n_int // 10)
-    if compact and n_int > 1 and ndev == 1:
-        initial = carry
+    chunk = n_int if progress is None and not compact else -(-n_int // 10)
+    states = np.empty((n, n_int + 1, 5), dtype=np.asarray(first).dtype)
+    states[:, 0] = np.asarray(first)[:n]
+    status = [np.full(n, -1.0), np.full(n, -1.0), np.full(n, -1.0), np.zeros(n)]
+    selected = np.arange(n)
+    for start in range(0, n_int, chunk):
+        count = min(chunk, n_int - start)
         carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-                               carry, keys, 0, 1, method, tolerance)
-        active = np.flatnonzero(np.asarray(carry[3])[:n])
-        padded = 1 << (active.size - 1).bit_length() if active.size else 0
-        if padded <= n // 2:
-            selected = active
-            if active.size:
-                indices = np.pad(active, (0, padded - active.size), mode="edge")
-                running = tuple(x[indices] for x in carry)
-                running_keys = keys[indices]
-            states = np.empty((n, n_int + 1, 5), dtype=np.asarray(part).dtype)
-            states[:, 0] = np.asarray(first)[:n]
-            states[:, 1:] = np.asarray(part)[:n]
-            boundaries = (list(range(chunk, n_int, chunk)) + [n_int]
-                          if progress is not None else [n_int])
-            first_interval = 1
-            for stop in boundaries:
-                if stop > first_interval and selected.size:
-                    running, next_part = _advance(field, dt, n_sub, mass, charge, species,
-                                                  thermal_cutoff, running, running_keys,
-                                                  first_interval, stop - first_interval, method,
-                                                  tolerance)
-                    states[selected, first_interval + 1:stop + 1] = np.asarray(next_part)[:selected.size]
-                if progress is not None:
-                    progress(stop, n_int)
-                first_interval = stop
-            status = [np.asarray(carry[i])[:n].copy() for i in (4, 5, 6, 7)]
-            if selected.size:
-                for result, i in zip(status, (4, 5, 6, 7)):
-                    result[selected] = np.asarray(running[i])[:selected.size]
-            t_loss, t_therm, t_fail, err = status
-            return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states,
-                               t_loss, t_therm, err, t_fail)
-        carry = initial
-    saved = []
-    for first_interval in range(0, n_int, chunk):
-        count = min(chunk, n_int - first_interval)
-        carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-                               carry, keys, first_interval, count, method, tolerance)
-        saved.append(part)
+                               carry, keys, start, count, method, tolerance)
+        states[selected, start + 1:start + count + 1] = np.asarray(part)[:selected.size]
         if progress is not None:
-            jax.block_until_ready(part)
-            progress(first_interval + count, n_int)
-    states = np.concatenate([np.asarray(first)[:, None]] + [np.asarray(p) for p in saved], axis=1)[:n]
-    t_loss, t_therm, t_fail, err = (np.asarray(x)[:n] for x in (carry[4], carry[5], carry[6], carry[7]))
+            progress(start + count, n_int)
+        alive = np.asarray(carry[3])[:selected.size]
+        # per-device batch rounded up to 3 significant bits: few distinct compiled sizes
+        per_device = max(-(-int(alive.sum()) // ndev), 1)
+        step = 1 << max(per_device.bit_length() - 3, 0)
+        size = ndev * -(-per_device // step) * step
+        last = start + count == n_int
+        if last or (compact and size < carry[3].shape[0]):
+            done = slice(None) if last else ~alive
+            for result, i in zip(status, (4, 5, 6, 7)):
+                result[selected[done]] = np.asarray(carry[i])[:selected.size][done]
+        if not last and compact and size < carry[3].shape[0]:
+            # drop stopped particles and rebalance the survivors over the devices
+            states[selected[~alive], start + count + 1:] = np.asarray(part)[:selected.size][~alive, -1:]
+            active = np.flatnonzero(alive)
+            if not active.size:
+                break
+            selected = selected[active]
+            rows = np.pad(active, (0, size - active.size), mode="edge")
+            carry, keys = jax.tree.map(lambda x: x[rows], (carry, keys))
+            if ndev > 1:
+                carry, keys = jax.device_put((carry, keys), sharding)
+    t_loss, t_therm, t_fail, err = status
     return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm, err, t_fail)

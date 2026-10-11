@@ -305,6 +305,14 @@ def test_progress_chunks_reproduce_the_unchunked_trace(method, monkeypatch, caps
         np.testing.assert_array_equal(getattr(chunked, name), getattr(whole, name))
 
 
+def test_default_timestep_is_tied_to_the_field_period():
+    args = ([0.3], [0.0], [0.0], [0.2])
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=4e-6, n_save=3, progress=False)
+    dt = 0.5 * G / B0 / (2 * V0)
+    np.testing.assert_array_equal(trace_boozer(tokamak(2), *args, **kwargs).states,
+                                  trace_boozer(tokamak(2), *args, **kwargs, timestep=dt).states)
+
+
 @pytest.mark.parametrize("edge_births,n_save,collisions", [
     (0, 3, False), (4, 3, False), (6, 3, False),
     (4, 2, False), (4, 23, True),
