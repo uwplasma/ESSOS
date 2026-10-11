@@ -1,6 +1,7 @@
-"""Matched alpha-loss benchmark of ESSOS against SIMSOPT, FIRM3D and SIMPLE.
+"""Matched alpha-loss benchmark of ESSOS against SIMSOPT, FIRM3D, SIMPLE and DESC.
 
     python benchmark.py alphas --simple PATH/simple.x [--firm3d-python PATH] \
+        [--desc-python PATH] [--desc-particles 32] [--codes ESSOS,DESC] \
         [--w7x PATH/wout_w7x_standardConfig.nc] [--particles 256] [--tmax 1e-2] [--cores 8]
     python benchmark.py figure
 
@@ -11,23 +12,28 @@ collisionless) in the Landreman-Paul QA reactor-scale ``wout``, the ARIES-CS
 (``equilibria/wout_w7x_standardConfig.nc`` of github.com/landreman/sfincs)
 scaled to the minor radius and volume-averaged ``|B|`` of the QA, with
 
-* ESSOS ``trace_boozer`` (default Dopri8, ``dt = 1e-7 s``),
+* ESSOS ``trace_boozer`` (defaults: Dopri8, ``dt = R0 / (2 nfp v)``),
 * SIMSOPT ``trace_particles_boozer`` (``gc_noK``, RK45, ``tol = 1e-9``),
 * FIRM3D ``trace_particles_boozer`` (same settings; run with
   ``--firm3d-python``, a Python with ``firm3d`` installed, since FIRM3D and
   SIMSOPT ship overlapping compiled modules),
 * SIMPLE ``simple.x`` (its default symplectic integrator; starts are mapped
-  from Boozer to VMEC angles).
+  from Boozer to VMEC angles),
+* DESC ``trace_particles`` (vacuum guiding centre in the flux frame, Tsit5,
+  ``tol = 1e-7``) on ``VMECIO.load(wout, L=24, M=8, N=8)``; run with
+  ``--desc-python`` (a DESC with the half-mesh lambda fix of DESC PR 2352) on
+  the first ``--desc-particles`` particles only, as it is slow on CPU.
 
 The three Boozer codes use the same ``booz_xform`` resolution.  Each code runs
 on ``--cores`` CPU cores (JAX devices, OpenMP threads, or forked processes);
 compilation and field set-up are excluded.  The energy error is
 ``max |E/E0 - 1|`` over the horizon (SIMSOPT and FIRM3D: first 32 particles,
-traced again with their paths kept; SIMPLE not reported).
-``same_fate_as_essos`` is the fraction of particles lost or confined in both.
+traced again with their paths kept; SIMPLE not reported).  ``--codes`` reruns
+only the listed codes and keeps the others' records.
 
 Results go to ``cross_code_benchmark.json``; ``figure`` draws
-``docs/cross_code_losses.png`` from it.
+``docs/cross_code_losses.png`` and ``docs/cross_code_bars.png`` from it, with
+the fate agreement taken over the particles on which SIMPLE and FIRM3D agree.
 """
 
 import argparse
@@ -138,13 +144,14 @@ def run_essos(births, speed, tmax, consts):
         psi0 = -float(ds["phi"][-1]) / (2 * np.pi)
     field = BoozerField.from_booz_xform(booz, psi0=psi0)
     mass, charge, _ = consts
-    kw = dict(speed=speed, mass=mass, charge=charge, tmax=tmax, timestep=1e-7, n_save=N_TIMES)
+    kw = dict(speed=speed, mass=mass, charge=charge, tmax=tmax, n_save=N_TIMES)
     trace_boozer(field, *births.T, **kw, progress=False)  # compile
     start = time.perf_counter()
     res = trace_boozer(field, *births.T, **kw)
     run = time.perf_counter() - start
     t_loss = np.where(res.lost, res.loss_times, np.inf)
-    return t_loss, run, float(res.energy_error.max()), "Dopri8 (default), dt = 1e-7 s"
+    dt = 0.5 * abs(float(field.profiles(0.0)[0][1] / field.modB(0.0, 0.0, 0.0))) / (field.nfp * speed)
+    return t_loss, run, float(res.energy_error.max()), f"Dopri8, dt = {dt:.1e} s (defaults)"
 
 
 _FIELD = {}
@@ -275,30 +282,63 @@ def alphas(args):
         n = args.particles
         births = np.column_stack([np.full(n, s), rng.uniform(0, 2 * np.pi, n),
                                   rng.uniform(0, 2 * np.pi, n), rng.uniform(-1, 1, n)])
-        results = {"ESSOS": run_essos(births, speed, args.tmax, consts)}
-        results["SIMSOPT"] = run_boozer_code("simsopt", births, speed, args.tmax, consts, args.cores)
-        if args.firm3d_python:
+        codes = (args.codes or "ESSOS,SIMSOPT,FIRM3D,SIMPLE,DESC").split(",")
+        results = {}
+        if "ESSOS" in codes:
+            results["ESSOS"] = run_essos(births, speed, args.tmax, consts)
+        if "SIMSOPT" in codes:
+            results["SIMSOPT"] = run_boozer_code("simsopt", births, speed, args.tmax, consts, args.cores)
+        if args.firm3d_python and "FIRM3D" in codes:
             np.savez(tmp / "in.npz", births=births, speed=speed, tmax=args.tmax, consts=consts,
                      cores=args.cores, wout=str(WOUT))
             subprocess.run([args.firm3d_python, __file__, "_firm3d", str(tmp)], check=True)
             out = np.load(tmp / "out.npz")
             results["FIRM3D"] = (out["t_loss"], float(out["run"]), float(out["energy"]),
                                  f"RK45, tol = {TOL:g} (gc_noK)")
-        if args.simple:
-            theta_v, phi_v = vmec_angles(WOUT, _booz_xform(WOUT), j, s, births[:, 1], births[:, 2])
+        theta_v, phi_v = vmec_angles(WOUT, _booz_xform(WOUT), j, s, births[:, 1], births[:, 2])
+        if args.simple and "SIMPLE" in codes:
             results["SIMPLE"] = run_simple(args.simple, births, theta_v, phi_v, args.tmax,
                                            args.cores, consts)
+        if args.desc_python and "DESC" in codes:
+            k = slice(0, args.desc_particles)
+            np.savez(tmp / "in.npz", births=births[k], theta_v=theta_v[k], phi_v=phi_v[k],
+                     speed=speed, tmax=args.tmax, consts=consts, wout=str(WOUT))
+            subprocess.run([args.desc_python, __file__, "_desc", str(tmp)], check=True)
+            out = np.load(tmp / "out.npz")
+            results["DESC"] = (out["t_loss"], float(out["run"]), float(out["energy"]),
+                               f"Tsit5, tol = 1e-7, L = 24, M = N = 8, first {args.desc_particles}")
         times = np.linspace(0, args.tmax, N_TIMES)
-        codes = {}
-        ref = np.isfinite(results["ESSOS"][0])
+        old = json.loads(RECORD.read_text()).get(label, {}) if RECORD.exists() else {}
+        record = old.get("codes", {})
         for name, (t_loss, run, energy, method) in results.items():
             f = float(np.isfinite(t_loss).mean())
-            codes[name] = dict(method=method, loss_fraction=f, sigma=float(np.sqrt(f * (1 - f) / n)),
-                               run_s=float(run), same_fate_as_essos=float((np.isfinite(t_loss) == ref).mean()),
-                               energy_error=energy, curve=[float((t_loss <= t).mean()) for t in times])
+            record[name] = dict(method=method, loss_fraction=f, particles=len(t_loss),
+                                sigma=float(np.sqrt(f * (1 - f) / len(t_loss))), run_s=float(run),
+                                energy_error=energy, curve=[float((t_loss <= t).mean()) for t in times],
+                                loss_times=[float(t) if np.isfinite(t) else None for t in t_loss])
             print(f"{label:8s} {name:8s} lost {100 * f:5.1f}%  run {run:8.2f} s  dE/E {energy}", flush=True)
         _record(label, dict(wout=Path(WOUT).name, s=s, particles=n, tmax=args.tmax,
-                            times=times.tolist(), codes=codes, host=_host(args.cores)))
+                            times=times.tolist(), codes=record, host=_host(args.cores)))
+
+
+def agreement(rec):
+    """Per code: fraction of particles whose fate matches SIMPLE and FIRM3D where those two agree."""
+    lost = {k: np.array([t is not None for t in c["loss_times"]]) for k, c in rec["codes"].items()}
+    ref, other = lost["SIMPLE"], lost["FIRM3D"]
+    agree = ref == other
+    return {k: float((v == ref[:v.size])[agree[:v.size]].mean()) for k, v in lost.items()}
+
+
+ORDER = ("ESSOS", "SIMPLE", "FIRM3D", "SIMSOPT", "DESC")
+COLORS = dict(zip(ORDER, ("#2a6fdb", "#e0803a", "#3a9e5c", "#8a5cc2", "#c94f6d")))
+
+
+def _save(fig, name):
+    from PIL import Image
+
+    fig.canvas.draw()
+    Image.fromarray(np.asarray(fig.canvas.buffer_rgba())[..., :3]).quantize(32).save(
+        HERE.parents[1] / "docs" / name, optimize=True)
 
 
 def figure():
@@ -308,17 +348,73 @@ def figure():
     fig, axes = plt.subplots(1, len(data), figsize=(3.2 * len(data), 2.6), sharey=True,
                              constrained_layout=True)
     for ax, (label, rec) in zip(np.atleast_1d(axes), data.items()):
-        for name, code in rec["codes"].items():
-            ax.plot(1e3 * np.asarray(rec["times"]), 100 * np.asarray(code["curve"]), label=name,
-                    lw=1.2, ls="--" if name == "ESSOS" else "-", zorder=3 if name == "ESSOS" else 2)
+        for name in (k for k in ORDER if k in rec["codes"]):
+            code = rec["codes"][name]
+            tag = f"{name} ({code['particles']})" if code["particles"] < rec["particles"] else name
+            ax.plot(1e3 * np.asarray(rec["times"]), 100 * np.asarray(code["curve"]), label=tag,
+                    color=COLORS[name], lw=1.2, ls="--" if name == "ESSOS" else "-",
+                    zorder=3 if name == "ESSOS" else 2)
         ax.set(title=label, xlabel="t [ms]", xscale="log", xlim=(1e3 * rec["times"][1], 1e3 * rec["tmax"]))
+        ax.legend(frameon=False, fontsize=7)
     axes[0].set_ylabel("alphas lost [%]")
-    axes[0].legend(frameon=False, fontsize=8)
-    out = HERE.parents[1] / "docs" / "cross_code_losses.png"
-    fig.canvas.draw()
-    from PIL import Image
+    _save(fig, "cross_code_losses.png")
 
-    Image.fromarray(np.asarray(fig.canvas.buffer_rgba())[..., :3]).quantize(32).save(out, optimize=True)
+    fig, axes = plt.subplots(1, 3, figsize=(9.6, 2.6), constrained_layout=True)
+    width = 0.8 / len(ORDER)
+    for i, (label, rec) in enumerate(data.items()):
+        fates = agreement(rec)
+        for k, name in enumerate(ORDER):
+            code = rec["codes"].get(name)
+            if code is None:
+                continue
+            x = i + (k - (len(ORDER) - 1) / 2) * width
+            # DESC runs fewer particles: its time is scaled to the full ensemble
+            values = (code["run_s"] * rec["particles"] / code["particles"], code["energy_error"],
+                      None if name in ("SIMPLE", "FIRM3D") else 100 * fates[name])
+            for ax, v in zip(axes, values):
+                if v is not None:
+                    ax.bar(x, v, width, color=COLORS[name], label=name if i == 0 else None)
+    for ax, title, scale in zip(axes, ("run time [s]", "max |E/E0 - 1|", "fate agreement [%]"),
+                                ("log", "log", "linear")):
+        ax.set(title=title, yscale=scale, xticks=range(len(data)), xticklabels=list(data))
+    axes[2].set_ylim(80, 100)
+    axes[0].legend(frameon=False, fontsize=7, ncol=2)
+    _save(fig, "cross_code_bars.png")
+
+
+def _desc_worker(tmp):
+    """DESC ``trace_particles`` (vacuum guiding centre, flux frame, Tsit5)."""
+    import jax
+
+    jax.config.update("jax_enable_x64", True)
+    from desc.grid import Grid
+    from desc.particles import (ManualParticleInitializerFlux, VacuumGuidingCenterTrajectory,
+                                trace_particles)
+    from desc.vmec import VMECIO
+
+    d = np.load(Path(tmp) / "in.npz")
+    eq = VMECIO.load(str(d["wout"]), L=24, M=8, N=8)
+    b, mass, speed = d["births"], float(d["consts"][0]), float(d["speed"])
+    # VMECIO.load reverses the poloidal angle.
+    ini = ManualParticleInitializerFlux(np.sqrt(b[:, 0]), -d["theta_v"], d["phi_v"], b[:, 3],
+                                        E=3.5e6, m=mass / 1.67262192595e-27, q=2)
+    ts = np.linspace(0, float(d["tmax"]), N_TIMES)
+    model = VacuumGuidingCenterTrajectory(frame="flux")
+    kw = dict(rtol=1e-7, atol=1e-7, throw=False, max_steps=10**7)
+    trace_particles(eq, ini, model, ts * 1e-6, **kw)  # compile
+    start = time.perf_counter()
+    x, v = trace_particles(eq, ini, model, ts, **kw)
+    x, v = np.asarray(x), np.asarray(v)
+    run = time.perf_counter() - start
+    gone = ~np.isfinite(x[:, :, 0]) | (x[:, :, 0] >= 1)
+    t_loss = np.where(gone.any(1), ts[gone.argmax(1)], np.inf)
+    # energy from the saved points while confined, with mu fixed at the start
+    inside = ~np.maximum.accumulate(gone, axis=1)
+    nodes = np.where(inside[..., None], x[..., :3], x[:, :1, :3]).reshape(-1, 3)
+    B = eq.compute("|B|", grid=Grid(nodes, sort=False))["|B|"].reshape(x.shape[:2])
+    w = speed**2 * (1 - b[:, 3:4] ** 2)
+    e = (v[..., 0] ** 2 + w * B / B[:, :1]) / (v[:, :1, 0] ** 2 + w) - 1
+    np.savez(Path(tmp) / "out.npz", t_loss=t_loss, run=run, energy=float(np.abs(e[inside]).max()))
 
 
 def _firm3d_worker(tmp):
@@ -332,13 +428,16 @@ def _firm3d_worker(tmp):
 
 
 def main():
-    if len(sys.argv) == 3 and sys.argv[1] == "_firm3d":
-        return _firm3d_worker(sys.argv[2])
+    if len(sys.argv) == 3 and sys.argv[1] in ("_firm3d", "_desc"):
+        return {"_firm3d": _firm3d_worker, "_desc": _desc_worker}[sys.argv[1]](sys.argv[2])
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="command", required=True)
     a = sub.add_parser("alphas")
     a.add_argument("--simple", help="path to SIMPLE's simple.x")
     a.add_argument("--firm3d-python", help="Python interpreter with firm3d installed")
+    a.add_argument("--desc-python", help="Python interpreter with DESC installed")
+    a.add_argument("--desc-particles", type=int, default=32)
+    a.add_argument("--codes", help="comma-separated subset of codes to rerun")
     a.add_argument("--w7x", help="wout_w7x_standardConfig.nc (github.com/landreman/sfincs)")
     a.add_argument("--particles", type=int, default=256)
     a.add_argument("--tmax", type=float, default=1e-2)

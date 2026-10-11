@@ -198,30 +198,41 @@ and its derivatives, together with the flux functions `G`, `I` and `iota`.
 uniform Boozer angles and pitch, traced for 10 ms and lost at `s = 1`, in the
 Landreman-Paul QA reactor-scale `wout`, the ARIES-CS `n3are` `wout`, and the
 W7-X standard configuration scaled to the same minor radius (1.70 m) and
-volume-averaged `|B|` (5.86 T). Apple M4, 8 CPU cores per code; compilation
-and field set-up excluded. Run with
+volume-averaged `|B|` (5.86 T). Apple M4 (load about 3 from other processes), 8 CPU
+cores per code; compilation and field set-up excluded. DESC traces the first 32
+alphas only, on `VMECIO.load(wout, L=24, M=8, N=8)` with the half-mesh lambda fix of
+PlasmaControl/DESC#2352, and its times were taken with other DESC runs sharing the
+machine. Run with
 [`examples/cross_code_benchmark/benchmark.py`](examples/cross_code_benchmark/benchmark.py).
 
 ![Alpha losses against time in three equilibria](docs/cross_code_losses.png)
 
-| Equilibrium | Code | Method | Run time | Lost | Same fate as ESSOS | max \|E/E0 - 1\| |
-|---|---|---|---|---|---|---|
-| QA | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 42 s | 7.4 ± 1.6% | - | 1e-5 |
-| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 19 s | 8.2% | 85.2% | 5e-5 |
-| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 53 s | 7.4% | 99.2% | 4e-5 |
-| | SIMPLE | symplectic, defaults | 18 s | 7.0% | 98.8% | not reported |
-| ARIES-CS | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 44 s | 23.0 ± 2.6% | - | 1e-5 |
-| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 69 s | 23.8% | 90.6% | 1e-4 |
-| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 163 s | 21.5% | 94.5% | 5e-3 |
-| | SIMPLE | symplectic, defaults | 25 s | 23.4% | 95.7% | not reported |
-| W7-X | ESSOS `trace_boozer` | Dopri8, `dt = 1e-7 s` | 44 s | 26.6 ± 2.8% | - | 9e-5 |
-| | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 118 s | 28.9% | 95.3% | 1e-3 |
-| | FIRM3D | RK45, tol 1e-9, `gc_noK` | 212 s | 27.0% | 95.7% | 3e-3 |
-| | SIMPLE | symplectic, defaults | 205 s | 27.3% | 94.5% | not reported |
+![Run time, energy error and fate agreement per code](docs/cross_code_bars.png)
 
-ESSOS, SIMSOPT and FIRM3D use the same 32x32 `booz_xform` spectrum (ESSOS
-keeps modes above its default `1e-6` of `B00` and evaluates them from a
-table in the Boozer angles); SIMPLE reads the `wout` directly. ± is the binomial standard error.
+| Equilibrium | Code | Method | Run time | Lost | Same fate as SIMPLE and FIRM3D | max \|E/E0 - 1\| |
+|---|---|---|---|---|---|---|
+| QA | ESSOS `trace_boozer` | Dopri8, `dt = 2.1e-07 s` (default) | 19 s | 7.0 ± 1.6% | 100.0% | 1e-05 |
+|  | SIMPLE | symplectic, defaults | 17 s | 7.0 ± 1.6% | - | not reported |
+|  | FIRM3D | RK45, tol 1e-9, `gc_noK` | 48 s | 7.4 ± 1.6% | - | 4e-05 |
+|  | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 17 s | 8.2 ± 1.7% | 85.4% | 5e-05 |
+|  | DESC | Tsit5, tol 1e-7, `L = 24, M = N = 8` | 3859 s | 6.2 ± 4.3% (32) | 100.0% | 2e-05 |
+| ARIES-CS | ESSOS `trace_boozer` | Dopri8, `dt = 1.1e-07 s` (default) | 36 s | 22.7 ± 2.6% | 98.3% | 1e-05 |
+|  | SIMPLE | symplectic, defaults | 24 s | 23.4 ± 2.6% | - | not reported |
+|  | FIRM3D | RK45, tol 1e-9, `gc_noK` | 146 s | 21.5 ± 2.6% | - | 5e-03 |
+|  | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 64 s | 23.8 ± 2.7% | 93.7% | 1e-04 |
+|  | DESC | Tsit5, tol 1e-7, `L = 24, M = N = 8` | 23150 s | 34.4 ± 8.4% (32) | 90.3% | 7e-05 |
+| W7-X | ESSOS `trace_boozer` | Dopri8, `dt = 1.4e-07 s` (default) | 26 s | 25.8 ± 2.7% | 97.1% | 7e-04 |
+|  | SIMPLE | symplectic, defaults | 191 s | 27.3 ± 2.8% | - | not reported |
+|  | FIRM3D | RK45, tol 1e-9, `gc_noK` | 191 s | 27.0 ± 2.8% | - | 3e-03 |
+|  | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 111 s | 28.9 ± 2.8% | 99.6% | 1e-03 |
+|  | DESC | Tsit5, tol 1e-7, `L = 24, M = N = 8` | 21807 s | 40.6 ± 8.7% (32) | 89.7% | 2e-04 |
+
+The fate agreement is the share of particles lost or confined as in SIMPLE and
+FIRM3D, over the particles on which those two agree. The bar plot scales DESC's
+time from 32 to 256 particles. ESSOS, SIMSOPT and FIRM3D use the same 32x32
+`booz_xform` spectrum (ESSOS keeps modes above its default `1e-6` of `B00` and,
+above 48 modes, evaluates them from a table in the Boozer angles); SIMPLE reads
+the `wout` directly and DESC fits it. ± is the binomial standard error.
 
 ## Tracing notes
 
