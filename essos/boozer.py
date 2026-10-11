@@ -47,6 +47,9 @@ def _evaluate(knots, coef, x):
     return value, slope
 
 
+TABLE_MODES = 48  # below about 48 modes the direct sum is cheaper than the table
+
+
 class BoozerField(eqx.Module):
     """``|B|`` spectrum and ``iota, G, I`` profiles in Boozer coordinates."""
 
@@ -76,7 +79,8 @@ class BoozerField(eqx.Module):
         ``(ntheta, nzeta)`` pair) the spectrum is summed once on a uniform grid in
         ``theta`` and one field period of ``zeta``, and evaluated by periodic
         quintic B-splines in the angles, keeping the radial splines exact. A step
-        then costs the same for any number of modes. ``angle_grid=None``, or a
+        then costs the same for any number of modes; a scalar ``angle_grid`` is
+        used only above ``TABLE_MODES`` modes, below which the sum is cheaper. ``angle_grid=None``, or a
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
         every evaluation.
         """
@@ -97,7 +101,8 @@ class BoozerField(eqx.Module):
             scaled_sine = np.where(xm[:, None] > 0, sine[keep] / r, sine[keep])
             _, sine_coef = _spline(r, scaled_sine.T)
         table = None
-        if angle_grid is not None and np.all(xn % int(nfp) == 0):
+        if (angle_grid is not None and np.all(xn % int(nfp) == 0)
+                and (np.ndim(angle_grid) or xm.size > TABLE_MODES)):
             nt, nz = ((max(16, angle_grid * int(np.abs(xm).max())),
                        max(16, angle_grid * int(np.abs(xn).max()) // int(nfp)))
                       if np.ndim(angle_grid) == 0 else map(int, angle_grid))

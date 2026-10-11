@@ -39,7 +39,8 @@ def test_angle_table_matches_the_mode_sum():
     bmnc = np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s), 0.1 * s, 0.05 * s])
     args = (s, bmnc, [0, 1, 0, 2], [0, 0, 4, -8], np.full_like(s, IOTA), np.full_like(s, G),
             0.1 * s, PSI0, 4)
-    table = BoozerField.from_booz(*args, bmns=0.5 * bmnc)
+    table = BoozerField.from_booz(*args, bmns=0.5 * bmnc, angle_grid=(16, 16))
+    assert BoozerField.from_booz(*args).table is None  # four modes: summed directly
     exact = BoozerField.from_booz(*args, bmns=0.5 * bmnc, angle_grid=None)
     assert table.table.shape[1:3] == (21, 21)
     points = np.random.default_rng(0).uniform(-7, 7, (3, 20))
