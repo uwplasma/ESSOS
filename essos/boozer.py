@@ -554,6 +554,8 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
             states[selected[~alive], start + count + 1:] = np.asarray(part)[:selected.size][~alive, -1:]
             active = np.flatnonzero(alive)
             if not active.size:
+                if progress is not None:
+                    progress(n_int, n_int)
                 break
             selected = selected[active]
             rows = np.pad(active, (0, size - active.size), mode="edge")
