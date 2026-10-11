@@ -45,6 +45,14 @@ RUN_VMEX = True
 # True -> skip optimization, load saved dofs
 LOAD_RESULT = False
 
+# CONTINUATION -----------------------------------------------------------------------
+# False -> start from the initial torus (vmec_input) and equally spaced coils.
+# True -> start from an already optimized surface and coils, at a higher surface resolution (select the folder).
+RESTART_FROM = True
+restart_filepath = os.path.join(os.path.dirname(__file__), "output_single_stage/test_QS_no_islands_02")
+SURFACE_MPOL = 2; SURFACE_NTOR = 3   # maximum m and n of the surface (ESSOS convention)
+
+
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 # vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
@@ -55,8 +63,9 @@ ntheta = 26; nphi = 26; Npoints = ntheta * nphi
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
-N_COILS = 4; FOURIER_ORDER = 3; LARGE_R = 10;
-SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 40; STELLSYM = True
+N_COILS = 4; FOURIER_ORDER = 3;
+LARGE_R = 10; SMALL_R = 5.6; NFP = 2;
+N_SEGMENTS = 40; STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 #  CONTROL PARAMETERS FOR THE OPTIMIZATION -------------------------------------------
@@ -69,11 +78,11 @@ MAJOR_RADIUS_WEIGHT = 0 # The target will be calculated from the initial surface
 
 # Coils ~~~~~~~~~~~~~~~~~~~~
 LENGTH_WEIGHT = 10.; LENGTH_TARGET = 40.;
-CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 0.5
+CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 0.6
 
 # Field ~~~~~~~~~~~~~~~~~~~~
 NORMAL_FIELD_WEIGHT = 1e4;
-QS_WEIGHT = 50
+QS_WEIGHT = 250
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e3
@@ -151,17 +160,27 @@ def diagnostic_gradient(loss_total, dofs, field, surface, scale_field, scale_sur
 # ====================================================================================
 
 # ------------------------------------------------------------------------------------
-# Define the initial coils and their corresponding field.
+# Define the initial surface, coils, and their corresponding field.
 
-init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
-init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
+if not RESTART_FROM:
+    # Initial torus from vmec_input and equally spaced coils.
+    init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
+    init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
+    surface_init = SurfaceRZFourier.from_input_file(vmec_input, ntheta=ntheta, nphi=nphi, close=True, range_torus='half period')
+else:
+    # The optimized coils of the previous run are the initial coils of this one.
+    init_coils = Coils.from_json(os.path.join(restart_filepath, "opt_coils_single_stage.json"))
+
+    # The previous optimized boundary is read with VMEX and padded with zero modes up to the new resolution
+    # (VMEC's MPOL counts poloidal modes, so MPOL = mpol + 1). It is saved as the initial surface of this run.
+    restart_input_file = os.path.join(output_filepath, "input.restart_surface")
+    vj.VmecInput.from_file(os.path.join(restart_filepath, "input.single_stage")).change_resolution(
+        mpol=SURFACE_MPOL + 1, ntor=SURFACE_NTOR).to_indata(restart_input_file)
+    surface_init = SurfaceRZFourier.from_input_file(restart_input_file, ntheta=ntheta, nphi=nphi, close=True, range_torus='half period')
+
+
 field_init = BiotSavart(init_coils)
 
-# ------------------------------------------------------------------------------------
-# Initialize the surface from a VMEC output file.
-# surface_init = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=ntheta, nphi=nphi, range_torus='half period')
-surface_init = SurfaceRZFourier.from_input_file( vmec_input, ntheta=ntheta, nphi=nphi, close=True, range_torus='half period')
-# from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus')
 
 # ------------------------------------------------------------------------------------
 # Initialize reference values for the surface geometry. These will be used to compute the surface normal displacement loss. 
@@ -632,12 +651,10 @@ if CURVATURE_WEIGHT != 0.0:
     print("Curvature loss (optimized):", loss_coil_curvature_from_field(field_opt, max_coil_curvature=CURVATURE_TARGET))
 
 
-
 print("\n---------------------------------------------------------------------------")
 print("Coil currents:")
 print("Base-coil currents (initial):", init_coils.dofs_currents_raw)
 print("Base-coil currents (optimized):", opt_coils.dofs_currents_raw)
-
 
 
 # ====================================================================================
@@ -645,6 +662,9 @@ print("Base-coil currents (optimized):", opt_coils.dofs_currents_raw)
 """ Plotting the initial and optimized coils """
 # ====================================================================================
 # ====================================================================================
+
+essos_plots_filepath = os.path.join(output_filepath, "ESSOS_plots")
+os.makedirs(essos_plots_filepath, exist_ok=True)
 
 surface_init.range_torus = "full torus"
 surface_opt.range_torus = "full torus"
@@ -663,6 +683,7 @@ opt_coils.plot(ax=ax2, show=False)
 surface_opt.plot(ax=ax2, show=False)
 
 plt.tight_layout()
+plt.savefig(os.path.join(essos_plots_filepath, "coils_surface_init_opt.png"), dpi=200)
 plt.show()
 
 
@@ -729,8 +750,10 @@ for ax, phi0, title in zip(axes, [PHI_NARROW, PHI_WIDE], ["Narrowest section", "
     ax.set_title(f"{title}, phi = {phi0:.3f}")
     ax.set_xlabel('R'); ax.set_ylabel('Z'); ax.set_aspect('equal')
 axes[0].legend()
-plt.tight_layout(); plt.show()
 
+plt.tight_layout()
+plt.savefig(os.path.join(essos_plots_filepath, "poincare_narrow_wide.png"), dpi=200)
+plt.show()
 
 """ Exporting results """
 
@@ -782,6 +805,7 @@ if EXPORT:
 # so the file can later be read back to set up a run.
 RUN_PARAMETERS = {
     "Run control":          ["EXPORT", "RUN_VMEX", "LOAD_RESULT", "MAXITER"],
+    "Continuation":         ["RESTART_FROM", "restart_filepath", "SURFACE_MPOL", "SURFACE_NTOR"],
     "Initial surface":      ["ntheta", "nphi"],
     "Coils":                ["N_COILS", "FOURIER_ORDER", "LARGE_R", "SMALL_R", "NFP", "N_SEGMENTS",
                              "STELLSYM", "COIL_CURRENT"],
