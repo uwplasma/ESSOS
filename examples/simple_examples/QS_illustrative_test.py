@@ -16,7 +16,7 @@ import jax.numpy as jnp
 from essos.fields import BiotSavart, Vmec
 from essos.objective_functions import quasi_symmetry_residual_on_surface
 from essos.plot import fix_matplotlib_3d
-from essos.coils import Curves, Coils
+from essos.coils import Curves, Coils, circular_coil_dofs
 from essos.surfaces import ( SurfaceRZFourier , BdotN_over_B )
 
 # Plotting libraries ----------------------------------------
@@ -170,94 +170,33 @@ unitnormal_xyz_sampled = unitnormal_pt_sampled.reshape(-1, 3)
 
 
 # ============================================================================================
-# Coil definitions
+# Coil definitions: circular coils centered on the magnetic axis, normal = axis tangent
 # ============================================================================================
-# Circular coils are defined by their Fourier coefficients.
-
 number_of_coils = 4
-order = 1  # (2*order + 1) = Fourier coefficients for each of the x, y, z coordinates
+rminor_coils = 2.3 * rminor if flag_surface == "vmec" else 2.0 * rminor
 
-if flag_surface == "torus_simple":
-    # Coils in the x-z plane: coil 0 and coil 1
-    Rmajor01_coils = 1.0 * Rmajor
-    rminor01_coils = 2.0 * rminor
+# Tangent of the closed axis by central differences (periodic -> jnp.roll)
+axis_tangent = jnp.roll(maxis_xyz, -1, axis=0) - jnp.roll(maxis_xyz, 1, axis=0)
+axis_tangent = axis_tangent / jnp.linalg.norm(axis_tangent, axis=1, keepdims=True)
 
-    # Coils in the y-z plane: coil 2 and coil 3
-    Rmajor02_coils = 1.0 * Rmajor
-    rminor02_coils = 2.0 * rminor
+# Pick equally spaced points on the axis grid
+idx = jnp.arange(number_of_coils) * maxis_xyz.shape[0] // number_of_coils
+centers  = maxis_xyz[idx]
+normals  = axis_tangent[idx]
 
-    Icoils_direction = jnp.array([-1.0, 1.0, -1.0, 1.0])
+# Reference = radial direction R_hat -> every coil starts at its outboard point
+radial = centers.at[:, 2].set(0.0)
+radial = radial / jnp.linalg.norm(radial, axis=1, keepdims=True)
 
-elif flag_surface == "vmec":
-    # Coils in the x-z plane: coil 0 and coil 1
-    Rmajor01_coils = 1.0 * Rmajor
-    rminor01_coils = 2.3 * rminor
+coil_dofs = jax.vmap(circular_coil_dofs)( centers, jnp.full(number_of_coils, rminor_coils), normals, radial )
 
-    # Coils in the y-z plane: coil 2 and coil 3
-    Rmajor02_coils = 0.7 * Rmajor
-    rminor02_coils = 2.3 * rminor
-    
-    Icoils_direction = jnp.array([-1.0, 1.0, -1.0, 1.0])
+# Same sign for all coils (negative -> B along -phi_hat, as in your original setup)
+Icoils = -Ifactor * jnp.ones(number_of_coils)
 
-else:
-    raise ValueError(f"Unknown flag_surface: {flag_surface}")
+coil_curves = Curves(coil_dofs, n_segments=80, nfp=1, stellsym=False)
+coils = Coils(curves=coil_curves, currents=Icoils)
 
 
-Icoils = Ifactor * Icoils_direction
-
-"""
-# Attributes:
-#         dofs (jnp.ndarray - shape (n_indcurves, 3, 2*order+1)): Fourier Coefficients of the independent curves
-#         n_segments (int): Number of segments to discretize the curves
-#         nfp (int): Number of field periods
-#         stellsym (bool): Stellarator symmetry
-#         order (int): Order of the Fourier series
-#         curves jnp.ndarray - shape (n_indcurves*nfp*(1+stellsym), 3, 2*order+1)): Curves obtained by applying rotations and flipping corresponding to nfp fold rotational symmetry and optionally stellarator symmetry
-#         gamma (jnp.array - shape (n_coils, n_segments, 3)): Discretized curves
-#         gamma_dash (jnp.array - shape (n_coils, n_segments, 3)): Discretized curves derivatives
-"""
-
-# Shape = (number_of_coils, 3, 2*order + 1)
-# Here order = 1, so the last dimension has size 3:
-#   index 0 -> constant term
-#   index 1 -> sine term
-#   index 2 -> cosine term
-# \[ # x(\theta) = a_0 + a_1 \sin(\theta) + a_2 \cos(\theta) \]
-# \[ y(\theta) = b_0 + b_1 \sin(\theta) + b_2 \cos(\theta) \]
-# \[ z(\theta) = c_0 + c_1 \sin(\theta) + c_2 \cos(\theta) \]
-
-coil_dofs = jnp.zeros(( number_of_coils, 3 , 2*order+1 ))
-
-# -----------------------------------------------------------------------------
-# Coil 0: centered at (Rmajor, 0, 0), in the x-z plane
-# -----------------------------------------------------------------------------
-coil_dofs = coil_dofs.at[0, 0, 0].set(Rmajor01_coils)    # x constant
-coil_dofs = coil_dofs.at[0, 0, 2].set(rminor01_coils)    # x cosine term
-coil_dofs = coil_dofs.at[0, 2, 1].set(-rminor01_coils)   # z sine term
-
-# -----------------------------------------------------------------------------
-# Coil 1: centered at (-Rmajor, 0, 0), in the x-z plane
-# -----------------------------------------------------------------------------
-coil_dofs = coil_dofs.at[1, 0, 0].set(-Rmajor01_coils)   # x constant
-coil_dofs = coil_dofs.at[1, 0, 2].set(rminor01_coils)    # x cosine term
-coil_dofs = coil_dofs.at[1, 2, 1].set(-rminor01_coils)   # z sine term
-
-# -----------------------------------------------------------------------------
-# Coil 2: centered at (0, Rmajor, 0), in the y-z plane
-# -----------------------------------------------------------------------------
-coil_dofs = coil_dofs.at[2, 1, 0].set(Rmajor02_coils)    # y constant
-coil_dofs = coil_dofs.at[2, 1, 2].set(rminor02_coils)    # y cosine term
-coil_dofs = coil_dofs.at[2, 2, 1].set(-rminor02_coils)   # z sine term
-
-# -----------------------------------------------------------------------------
-# Coil 3: centered at (0, -Rmajor, 0), in the y-z plane
-# -----------------------------------------------------------------------------
-coil_dofs = coil_dofs.at[3, 1, 0].set(-Rmajor02_coils)   # y constant
-coil_dofs = coil_dofs.at[3, 1, 2].set(rminor02_coils)    # y cosine term
-coil_dofs = coil_dofs.at[3, 2, 1].set(-rminor02_coils)   # z sine term
-
-coil_curves = Curves( coil_dofs , n_segments=80 , nfp=1 , stellsym=False )
-coils = Coils( curves=coil_curves , currents=Icoils )
 
 # ============================================================================================
 # Magnetic field from the coils

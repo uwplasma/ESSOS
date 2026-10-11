@@ -1030,6 +1030,31 @@ def CreateEquallySpacedCurves(n_curves:   int,
     curves = curves.at[:, 2, 1].set(-r)                   # z[1] (constant for all)
     return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym, scaling_type=scaling_type, scaling_factor=scaling_factor, scale_fixed=scale_fixed)
 
+@jit
+def circular_coil_dofs(center, radius, normal, reference=None):
+    """
+    Fourier DOFs (shape (3, 3), order=1) of a circular coil.
+    gamma(t) = center + radius*(cos t * e1 + sin t * e2),  e1 x e2 = n.
+    Positive current -> B along +normal at the center.
+    """
+    # One coil: Curves(circular_coil_dofs(c, r, n)[None], n_segments=80, nfp=1, stellsym=False)
+    # Many coils along the axis: jax.vmap(circular_coil_dofs)(centers, radii, tangents, radial_dirs) returns DOFs of shape (N, 3, 3).
+    center = jnp.asarray(center, dtype=float)
+    n = jnp.asarray(normal, dtype=float)
+    n = n / jnp.linalg.norm(n)
+
+    # Default reference: the Cartesian axis least aligned with n (always safe)
+    if reference is None:
+        reference = jnp.eye(3)[jnp.argmin(jnp.abs(n))]
+    reference = jnp.asarray(reference, dtype=float)
+
+    # Gram-Schmidt: project reference onto the plane perpendicular to n
+    e1 = reference - jnp.dot(reference, n) * n
+    e1 = e1 / jnp.linalg.norm(e1)
+    e2 = jnp.cross(n, e1)
+
+    # Columns: [constant, sin, cos]
+    return jnp.stack([center, radius * e2, radius * e1], axis=1)
 
 
 
