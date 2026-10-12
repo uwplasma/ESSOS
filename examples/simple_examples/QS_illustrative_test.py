@@ -46,6 +46,7 @@ flag_surface = "vmec"
 # Discretization
 ntheta = 50
 nphi = 64
+number_of_coils = 8
 
 # Current running through the coils
 Ifactor = 1.e7 
@@ -136,7 +137,6 @@ unitnormal_pt_full = surface.unitnormal
 # ============================================================================================
 # Coil definitions: circular coils centered on the magnetic axis, normal = axis tangent
 # ============================================================================================
-number_of_coils = 8
 
 if flag_surface == "torus_simple":
     rminor_coils = 2.0 * rminor
