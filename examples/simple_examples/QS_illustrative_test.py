@@ -15,8 +15,8 @@ import jax.numpy as jnp
 # ESSOS libraries --------------------------------------------
 from essos.fields import BiotSavart, Vmec
 from essos.objective_functions import quasi_symmetry_residual_on_surface
-from essos.plot import fix_matplotlib_3d
-from essos.coils import Curves, Coils, circular_coil_dofs
+from essos.plot import plot_scalar_map_2d, plot_scalar_on_surface_3d, plot_vector_field_on_surface_3d, plot_coil_currents_3d
+from essos.coils import Curves, Coils, circular_coil_dofs, CreateCurvesAlongAxis
 from essos.surfaces import ( SurfaceRZFourier , BdotN_over_B )
 
 # Plotting libraries ----------------------------------------
@@ -26,8 +26,6 @@ import matplotlib.pyplot as plt
 
 # Other libraries ------------------------------------------
 import os
-import sys
-import time
 
 # ============================================================================================
 # INPUT DATA =================================================================================
@@ -44,6 +42,11 @@ flag_surface = "vmec"
 # -----------------------------------------------------------------------------
 # General input
 # -----------------------------------------------------------------------------
+
+# Discretization
+ntheta = 50
+nphi = 64
+
 # Current running through the coils
 Ifactor = 1.e7 
 
@@ -65,9 +68,8 @@ rminor = 2.0 # only valid for wout_LandremanPaul2021_QA_reactorScale_low
 # -----------------------------------------------------------------------------
 # step_sample chooses how many surface points you skip when sampling.
 # step_sample = 4 means: take one point every 4 points in both directions (phi and theta).
-step_sample = 5
+step_sample = 4
 output_folder = os.path.join( os.path.dirname(__file__) , "output_QS_test" )
-
 
 # ============================================================================================
 # ============================================================================================
@@ -91,28 +93,13 @@ if flag_surface == "torus_simple":
     rc = jnp.array([Rmajor, rminor])
     zs = jnp.array([0.0, rminor])
 
-    surface = SurfaceRZFourier(
-        rc=rc,
-        zs=zs,
-        nfp=3,
-        mpol=1,
-        ntor=0,
-        ntheta=50,
-        nphi=60,
-        close=True,
-        range_torus="full torus",
-    )
+    surface = SurfaceRZFourier( rc=rc, zs=zs, nfp=3, mpol=1, ntor=0, ntheta=ntheta, nphi=nphi, close=True, range_torus="full torus" )
 
 elif flag_surface == "vmec":
 
     # Equilibrium is loaded from a VMEC output file.
-    # `Vmec` class reads the file and constructs the surface representation based on the Fourier coefficients.
-    # Parameters `ntheta` and `nphi` specify the number of grid points
-    # `range_torus` indicates that we want to consider the full torus for our calculations.
-    vmec = Vmec(wout_file, ntheta=50, nphi=60, range_torus="full torus")
-
-    # We extract the outermost surface from the VMEC equilibrium
-    surface = vmec.surface
+    vmec = Vmec(wout_file, ntheta=ntheta, nphi=nphi, range_torus="full torus")
+    surface = vmec.surface # We extract the outermost surface from the VMEC equilibrium
 
 else:
     raise ValueError(f"Unknown flag_surface: {flag_surface}") 
@@ -133,100 +120,44 @@ if flag_surface == "torus_simple":
 elif flag_surface == "vmec":
     maxis_xyz = vmec.maxis_xyz
 
-
 # ============================================================================================
-# Storing the surface points.
+# Storing the surface points and surface-related quantities.
 # ============================================================================================
 
 # gamma has shape roughly like:(nphi, ntheta, 3). The last index 3 means:x y z
 # gamma is a function that gives the 3D coordinates of the surface points for each (phi, theta) pair.
-# The first index is phi, the second index is theta, and the last index is the 3D coordinates.
 surf_pt_full = surface.gamma
-# Converting the 2D grid of sampled points into one long list of 3D points.
-# The -1 tells Python to infer the number of rows automatically. After this, each row is one point:[x, y, z]
+# Converting the 2D grid of sampled points into one long list of 3D points. After this, each row is one point:[x, y, z]
 surf_xyz_full = surf_pt_full.reshape(-1, 3)
 
 # Unit normal vectors at the surface points. unitnormal has shape roughly like:(nphi, ntheta, 3).
-# Unit-Normal vectors at the (phi, theta) grid points on the surface. The last index 3 gives the direction components.
 unitnormal_pt_full = surface.unitnormal
-unitnormal_xyz_full = unitnormal_pt_full.reshape(-1, 3)
-
-# Normal vectors at the (phi, theta) grid points on the surface.
-normal_pt_full = surface.normal
-normal_xyz_full = normal_pt_full.reshape(-1, 3)
-
-
-# ============================================================================================
-# Test points on the surface
-# ============================================================================================
-
-# These are the same surface points where the arrows are sampled. ::step means “take every step-th value”.
-surf_pt_sampled = surf_pt_full[::step_sample, ::step_sample, :]
-surf_xyz_sampled = surf_pt_sampled.reshape(-1, 3)
-
-# Same sampling for the unit normal vectors.
-unitnormal_pt_sampled = unitnormal_pt_full[::step_sample, ::step_sample, :]
-unitnormal_xyz_sampled = unitnormal_pt_sampled.reshape(-1, 3)
-
 
 # ============================================================================================
 # Coil definitions: circular coils centered on the magnetic axis, normal = axis tangent
 # ============================================================================================
-number_of_coils = 4
-rminor_coils = 2.3 * rminor if flag_surface == "vmec" else 2.0 * rminor
+number_of_coils = 8
 
-# Tangent of the closed axis by central differences (periodic -> jnp.roll)
-axis_tangent = jnp.roll(maxis_xyz, -1, axis=0) - jnp.roll(maxis_xyz, 1, axis=0)
-axis_tangent = axis_tangent / jnp.linalg.norm(axis_tangent, axis=1, keepdims=True)
+if flag_surface == "torus_simple":
+    rminor_coils = 2.0 * rminor
+elif flag_surface == "vmec":
+    rminor_coils = 2.3 * rminor
 
-# Pick equally spaced points on the axis grid
-idx = jnp.arange(number_of_coils) * maxis_xyz.shape[0] // number_of_coils
-centers  = maxis_xyz[idx]
-normals  = axis_tangent[idx]
+coil_curves = CreateCurvesAlongAxis(maxis_xyz, n_curves=number_of_coils, r=rminor_coils,
+                                    n_segments=80, nfp=1, stellsym=False)
+coils = Coils(curves=coil_curves, currents=-Ifactor * jnp.ones(number_of_coils))
 
-# Reference = radial direction R_hat -> every coil starts at its outboard point
-radial = centers.at[:, 2].set(0.0)
-radial = radial / jnp.linalg.norm(radial, axis=1, keepdims=True)
-
-coil_dofs = jax.vmap(circular_coil_dofs)( centers, jnp.full(number_of_coils, rminor_coils), normals, radial )
-
-# Same sign for all coils (negative -> B along -phi_hat, as in your original setup)
-Icoils = -Ifactor * jnp.ones(number_of_coils)
-
-coil_curves = Curves(coil_dofs, n_segments=80, nfp=1, stellsym=False)
-coils = Coils(curves=coil_curves, currents=Icoils)
-
-
+centers = coil_curves.curves[:, :, 0]   # coil centers (all coils), used for phi_coils
 
 # ============================================================================================
 # Magnetic field from the coils
 # ============================================================================================
 # Magnetic field from the coils using Biot-Savart law
 BB_coils = BiotSavart(coils)
-
-# -----------------------------------------------------------------------------
-# Magnetic field data at every full surface grid point
+B_vector_xyz_full = jax.vmap( BB_coils.B )( surf_xyz_full ) # Magnetic-field vector
 
 # Normal magnetic field, normalized by |B|, on the full surface grid.
 B_dot_n_pt_full = BdotN_over_B( surface, BB_coils )
-
-# Other interesting data 
-# B_vector_xyz_full = jax.vmap( BB_coils.B )( surf_xyz_full ) # Magnetic-field vector
-# B_modulus_xyz_full = jax.vmap( BB_coils.AbsB )( surf_xyz_full ) # Magnetic-field modulus
-# Bmod_grad_xyz_full = jax.vmap( BB_coils.dAbsB_by_dX )( surf_xyz_full ) # Gradient of |B|
-# # Other usefull operations on the full surface grid
-# B_dot_n_xyz_full = jnp.sum( B_vector_xyz_full * unitnormal_xyz_full, axis=1)
-
-# ------------------------------------------------------------------------------
-# Magnetic field data at every sampled surface grid point
-
-B_vector_xyz_sampled = jax.vmap( BB_coils.B )( surf_xyz_sampled ) # Magnetic-field vector
-
-# Other interesting data 
-# B_modulus_xyz_sampled = jax.vmap( BB_coils.AbsB )( surf_xyz_sampled ) # Magnetic-field modulus
-# Bmod_grad_xyz_sampled = jax.vmap( BB_coils.dAbsB_by_dX )( surf_xyz_sampled ) # Gradient of |B|
-# # Other usefull operations on the sampled surface grid
-# B_dot_n_xyz_sampled = jnp.sum( B_vector_xyz_sampled * unitnormal_xyz_sampled, axis=1)
 
 # ============================================================================================
 # Calculus of the scale length
@@ -236,28 +167,11 @@ L_B_xyz_full = jax.vmap(BB_coils.L_gradB)(surf_xyz_full)
 # Reshape the scale length back to the surface grid shape for plotting.
 L_B_pt_full = L_B_xyz_full.reshape(surf_pt_full.shape[:2])
 
-print("L_B minimum =", jnp.min(L_B_xyz_full))
-print("L_B maximum =", jnp.max(L_B_xyz_full))
-print("L_B average =", jnp.mean(L_B_xyz_full))
-
-
 # ============================================================================================
 # Residual of the Quasi-Symmetry condition
 # ============================================================================================
-# ( \nabla \psi \times \nabla |B| ) \cdot \nabla ( \mathbf{B} \cdot \nabla |B| )
-# For optimization purposes, \nabla \psi is replaced by the unit normal vector to the surface. 
 # (n × grad(B)) · grad(B · grad(B)) = 0?
-
-# -----------------------------------------------------------------------------
-# Full surface grid
 QS_condition_xyz_full = quasi_symmetry_residual_on_surface( BB_coils , surface )
-
-print("QS_condition_xyz_full.shape =", QS_condition_xyz_full.shape)
-print("QS_condition_xyz_full min =", jnp.min(QS_condition_xyz_full))
-print("QS_condition_xyz_full max =", jnp.max(QS_condition_xyz_full))
-
-# ==============================================================================
-# Sampled surface grid
 
 # ============================================================================================
 # ============================================================================================
@@ -273,49 +187,17 @@ fig = plt.figure(figsize=(7, 6))
 ax = fig.add_subplot(111, projection="3d")
 
 # Plot the magnetic axis
-ax.plot( maxis_xyz[:, 0], maxis_xyz[:, 1], maxis_xyz[:, 2],
-    color="black", linewidth=2.5,
-    label="magnetic axis",
-)
+ax.plot( maxis_xyz[:, 0], maxis_xyz[:, 1], maxis_xyz[:, 2], color="black", linewidth=2.5, label="magnetic axis" )
 
 # Plotting the surface
 surface.plot(ax=ax, show=False, axis_equal=True, alpha=0.25)
 
-# Plotting the coils
+# Plotting the coils and the current direction on each coil. The current direction follows the coil tangent. If the current is negative, we reverse that tangent.
 coils.plot(ax=ax, show=False, close=False, color="brown", linewidth=2)
+plot_coil_currents_3d(coils, ax, n_arrows=2, label="current direction")
 
-# Show the current direction on each coil. The current direction follows the coil tangent. If the current is negative, we reverse that tangent.
-
-for coil_index, (gamma_curve, gamma_dash_curve) in enumerate(zip(coils.gamma, coils.gamma_dash)):
-    current_sign = 1.0 if float(coils.currents[coil_index]) >= 0.0 else -1.0
-
-    # Pick one representative point on the coil, here the midpoint
-    midpoint_index = gamma_curve.shape[0] // 2
-    point = gamma_curve[midpoint_index]
-
-    # Tangent direction of the curve, corrected by the current sign
-    tangent = current_sign * gamma_dash_curve[midpoint_index]
-
-    # Normalize the arrow direction so the length is controlled by `length`
-    tangent_norm = jnp.linalg.norm(tangent)
-    if tangent_norm > 0:
-        tangent = tangent / tangent_norm
-
-    ax.quiver(
-        point[0], point[1], point[2],
-        tangent[0], tangent[1], tangent[2],
-        length=4.,
-        normalize=True,
-        color="blue",
-        arrow_length_ratio=0.25,
-        linewidth=2,
-    )
-
-ax.set_xlabel("x")
-ax.set_ylabel("y")
-ax.set_zlabel("z")
+ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("z")
 ax.set_title("Surface and coils")
-
 
 fig.savefig( os.path.join(output_folder, "01_surface_coils_axis.png"), dpi=300 , bbox_inches="tight" )
 plt.show()
@@ -325,226 +207,71 @@ plt.close(fig)
 # Plotting surface + coils + unit-normal vectors + B vectors
 # ========================================
 
-fig2 = plt.figure(figsize=(7, 6))
-ax2 = fig2.add_subplot(111, projection="3d")
+fig2, ax2 = plot_vector_field_on_surface_3d(surface, -unitnormal_pt_full, coils=coils, step=step_sample,
+                                            color="darkgreen", label="unit normal")
+plot_vector_field_on_surface_3d(surface, B_vector_xyz_full, ax=ax2, step=step_sample, draw_surface=False,
+                                color="royalblue", label="B", title="Surface with unit-normal vectors and B vectors")
 
-# Plot the surface again
-surface.plot(ax=ax2, show=False, axis_equal=True, alpha=0.35)
-
-# Plot the coils too
-coils.plot(
-    ax=ax2,
-    show=False,
-    close=False,
-    color="brown",
-    linewidth=2,
-    label="coils",
-)
-
-ax2.set_xlabel("x")
-ax2.set_ylabel("y")
-ax2.set_zlabel("z")
-
-# surf_pt_sampled[..., 0] means: “take all the first two indices” and then take component 0 of the last axis
-x = surf_pt_sampled[..., 0]
-y = surf_pt_sampled[..., 1]
-z = surf_pt_sampled[..., 2]
-
-# Unit-normal vectors at the sampled points
-u = (-unitnormal_pt_sampled)[..., 0]
-v = (-unitnormal_pt_sampled)[..., 1]
-w = (-unitnormal_pt_sampled)[..., 2]
-
-# Magnetic-field vectors at the sampled points
-B_vectors_pt_sampled = B_vector_xyz_sampled.reshape(surf_pt_sampled.shape)
-bx = B_vectors_pt_sampled[..., 0]
-by = B_vectors_pt_sampled[..., 1]
-bz = B_vectors_pt_sampled[..., 2]
-
-ax2.quiver(
-    x, y, z,
-    u, v, w,
-    length=1.,
-    normalize=True,
-    color="darkgreen",
-    label="unit normal",
-)
-
-ax2.quiver(
-    x, y, z,
-    bx, by, bz,
-    length=1.,
-    normalize=True,
-    color="royalblue",
-    label="B",
-)
-
-ax2.set_title("Surface with unit-normal vectors and B vectors")
-ax2.legend()
-
-fig2.savefig( os.path.join(output_folder, "02_surface_normals_B_vectors.png"), dpi=300, bbox_inches="tight" )
+fig2.savefig(os.path.join(output_folder, "02_surface_normals_B_vectors.png"), dpi=300, bbox_inches="tight")
 plt.show()
 plt.close(fig2)
 
-
 # ========================================
-# Plotting the surface colored by B · n
+# Scalar fields on the surface: one 3D figure + one 2D (phi, theta) map each
 # ========================================
 
-fig3 = plt.figure(figsize=(7, 6))
-ax3 = fig3.add_subplot(111, projection="3d")
+# Toroidal position of each coil center (dashed lines on the 2D maps)
+phi_coils = jnp.mod(jnp.arctan2(centers[:, 1], centers[:, 0]), 2 * jnp.pi)
 
-# Coordinates of the full surface
-x = surf_pt_full[..., 0]
-y = surf_pt_full[..., 1]
-z = surf_pt_full[..., 2]
-
-# Symmetric color scale around zero
-abs_max = jnp.max(jnp.abs(B_dot_n_pt_full))
-norm = plt.Normalize(vmin=-abs_max, vmax=abs_max)
-
-# Plot the smooth colored surface
-ax3.plot_surface(
-    x, y, z,
-    facecolors=plt.cm.coolwarm(norm(B_dot_n_pt_full)),
-    rstride=1,
-    cstride=1,
-    linewidth=0,
-    antialiased=True,
-    shade=False,
-)
-
-# Plot the coils too
-coils.plot(
-    ax=ax3,
-    show=False,
-    close=False,
-    color="brown",
-    linewidth=2,
-    label="coils",
-)
-
-fix_matplotlib_3d(ax3)
-
-# Add colorbar
-sm = plt.cm.ScalarMappable(cmap="coolwarm", norm=norm)
-sm.set_array(B_dot_n_pt_full)
-fig3.colorbar(sm, ax=ax3, shrink=0.7, pad=0.1, label="B · n")
-
-ax3.set_title("Surface colored by B · n")
-ax3.set_xlabel("x")
-ax3.set_ylabel("y")
-ax3.set_zlabel("z")
-
-fig3.savefig( os.path.join(output_folder, "03_B_dot_n.png") , dpi=300 , bbox_inches="tight" )
+# ----------------------------------------
+# B · n / |B|
+# ----------------------------------------
+fig3, ax3 = plot_scalar_on_surface_3d(surface, B_dot_n_pt_full, coils=coils,
+                                      label=r"$B\cdot n/|B|$", title=r"$B\cdot n/|B|$ on the surface", symmetric=True)
+fig3.savefig(os.path.join(output_folder, "03_B_dot_n_3d.png"), dpi=300, bbox_inches="tight")
 plt.show()
 plt.close(fig3)
 
-# ========================================
-# Plotting the magnetic-gradient scale length L_B
-# ========================================
+fig3m, ax3m = plot_scalar_map_2d(surface, B_dot_n_pt_full,
+                                 label=r"$B\cdot n/|B|$", title=r"$B\cdot n/|B|$ in $(\phi,\theta)$", symmetric=True, contours=10)
+for phi_c in phi_coils:
+    ax3m.axvline(float(phi_c), color="brown", linestyle="--", linewidth=1)
+fig3m.savefig(os.path.join(output_folder, "03_B_dot_n_map.png"), dpi=300, bbox_inches="tight")
+plt.show()
+plt.close(fig3m)
 
-x = surf_pt_full[..., 0]
-y = surf_pt_full[..., 1]
-z = surf_pt_full[..., 2]
-
-fig_LB = plt.figure(figsize=(7, 6))
-ax_LB = fig_LB.add_subplot(111, projection="3d")
-
-# Color normalization based on the range of L_B
-L_B_min = float(jnp.min(L_B_pt_full))
-L_B_max = float(jnp.max(L_B_pt_full))
-color_norm = plt.Normalize(vmin=L_B_min, vmax=L_B_max)
-
-surface_colors = plt.cm.coolwarm( color_norm(L_B_pt_full) )
-
-ax_LB.plot_surface(
-    x,
-    y,
-    z,
-    facecolors=surface_colors,
-    linewidth=0,
-    antialiased=True,
-    alpha=0.9,
-)
-
-fix_matplotlib_3d(ax_LB)
-
-# Colorbar
-colorbar_map = plt.cm.ScalarMappable(norm=color_norm, cmap="coolwarm")
-colorbar_map.set_array(L_B_pt_full)
-
-fig_LB.colorbar(
-    colorbar_map,
-    ax=ax_LB,
-    shrink=0.7,
-    label=r"$L_B = |B| / ||\nabla |B|||$",
-)
-
-ax_LB.set_xlabel("x")
-ax_LB.set_ylabel("y")
-ax_LB.set_zlabel("z")
-ax_LB.set_title("Magnetic-gradient scale length on the surface")
-
-fig_LB.savefig( os.path.join(output_folder, "04_magnetic_scale_length.png") , dpi=300 , bbox_inches="tight" )
+# ----------------------------------------
+# Magnetic-gradient scale length L_B
+# ----------------------------------------
+fig_LB, ax_LB = plot_scalar_on_surface_3d(surface, L_B_pt_full, coils=coils,
+                                          label=r"$L_{\nabla B} = \sqrt{2}\,|B| / \|\nabla \mathbf{B}\|_F$",
+                                          title="Magnetic-gradient scale length on the surface")
+fig_LB.savefig(os.path.join(output_folder, "04_magnetic_scale_length_3d.png"), dpi=300, bbox_inches="tight")
 plt.show()
 plt.close(fig_LB)
 
+fig_LBm, ax_LBm = plot_scalar_map_2d(surface, L_B_pt_full,
+                                     label=r"$L_{\nabla B}$", title=r"Magnetic-gradient scale length in $(\phi,\theta)$",
+                                     contours=10)
+for phi_c in phi_coils:
+    ax_LBm.axvline(float(phi_c), color="brown", linestyle="--", linewidth=1)
+fig_LBm.savefig(os.path.join(output_folder, "04_magnetic_scale_length_map.png"), dpi=300, bbox_inches="tight")
+plt.show()
+plt.close(fig_LBm)
 
-
-# ========================================
-# Plotting the surface colored by QS_condition_xyz_full
-# ========================================
-
-fig4 = plt.figure(figsize=(7, 6))
-ax4 = fig4.add_subplot(111, projection="3d")
-
-# Reshape the scalar residual back to the full surface grid
-QS_condition_pt_full = QS_condition_xyz_full.reshape(surf_pt_full.shape[:2])
-
-# Coordinates of the full surface
-x = surf_pt_full[..., 0]
-y = surf_pt_full[..., 1]
-z = surf_pt_full[..., 2]
-
-# Symmetric color scale around zero
-abs_max = jnp.max(jnp.abs(QS_condition_pt_full))
-norm = plt.Normalize(vmin=-abs_max, vmax=abs_max)
-
-# Plot the colored surface
-ax4.plot_surface(
-    x, y, z,
-    facecolors=plt.cm.coolwarm(norm(QS_condition_pt_full)),
-    rstride=1,
-    cstride=1,
-    linewidth=0,
-    antialiased=True,
-    shade=False,
-)
-
-# Plot the coils too
-coils.plot(
-    ax=ax4,
-    show=False,
-    close=False,
-    color="brown",
-    linewidth=2,
-    label="coils",
-)
-
-fix_matplotlib_3d(ax4)
-
-# Add colorbar
-sm = plt.cm.ScalarMappable(cmap="coolwarm", norm=norm)
-sm.set_array(QS_condition_pt_full)
-fig4.colorbar(sm, ax=ax4, shrink=0.7, pad=0.1, label="QS condition")
-
-ax4.set_title("Surface colored by QS condition")
-ax4.set_xlabel("x")
-ax4.set_ylabel("y")
-ax4.set_zlabel("z")
-
-fig4.savefig( os.path.join(output_folder, "05_QS_condition.png") , dpi=300 , bbox_inches="tight" )
+# ----------------------------------------
+# Quasi-symmetry residual
+# ----------------------------------------
+fig4, ax4 = plot_scalar_on_surface_3d(surface, QS_condition_xyz_full, coils=coils,
+                                      label="QS residual", title="Quasi-symmetry residual on the surface", symmetric=True)
+fig4.savefig(os.path.join(output_folder, "05_QS_condition_3d.png"), dpi=300, bbox_inches="tight")
 plt.show()
 plt.close(fig4)
 
+fig4m, ax4m = plot_scalar_map_2d(surface, QS_condition_xyz_full,
+                                 label="QS residual", title=r"Quasi-symmetry residual in $(\phi,\theta)$", symmetric=True, contours=10)
+for phi_c in phi_coils:
+    ax4m.axvline(float(phi_c), color="brown", linestyle="--", linewidth=1)
+fig4m.savefig(os.path.join(output_folder, "05_QS_condition_map.png"), dpi=300, bbox_inches="tight")
+plt.show()
+plt.close(fig4m)

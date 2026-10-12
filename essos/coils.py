@@ -1056,7 +1056,85 @@ def circular_coil_dofs(center, radius, normal, reference=None):
     # Columns: [constant, sin, cos]
     return jnp.stack([center, radius * e2, radius * e1], axis=1)
 
+def CreateCurvesAlongAxis(axis_xyz,
+                          n_curves:   int,
+                          r:          float,
+                          order:      int = 1,
+                          n_segments: int = 100,
+                          nfp:        int = 1,
+                          stellsym:   bool = False,
+                          scaling_type: int = 2,
+                          scaling_factor: float = 0,
+                          scale_fixed: float = 1.0) -> Curves:
+    """
+    Create n_curves circular coils of radius r, centered on a closed curve (e.g. a
+    magnetic-axis guess) and oriented so that each coil normal is the curve tangent.
 
+    It is the analogue of CreateEquallySpacedCurves, with the circular axis of
+    radius R replaced by an arbitrary closed curve. For a circular axis of radius R
+    both functions return the same DOFs.
+
+    How it works
+    ------------
+    1. The curve points are written in cylindrical coordinates R(phi), Z(phi).
+    2. The base coils are placed at the same toroidal angles as in
+       CreateEquallySpacedCurves:
+           phi_i = (i + 1/2) * 2*pi / ((1 + stellsym) * nfp * n_curves)
+       i.e. only in the first half field period (stellsym) or field period.
+       R, Z and their phi-derivatives are linearly interpolated at phi_i.
+    3. Center  : c = R R_hat + Z z_hat
+       Tangent : t = dR/dphi R_hat + R phi_hat + dZ/dphi z_hat   (coil normal)
+       Start   : R_hat projected on the coil plane (coil starts at its outboard point)
+    4. circular_coil_dofs gives the order-1 DOFs; higher orders are zero, so an
+       optimizer can later deform the circles.
+    5. Curves(nfp, stellsym) replicates the base coils over the full torus.
+
+    Args:
+        axis_xyz : (N, 3) points of the closed curve over the FULL torus, any order.
+                   The curve must be single-valued in phi (true for a magnetic axis).
+        n_curves : number of base (independent) coils.
+        r        : coil radius.
+        order, n_segments, nfp, stellsym, scaling_* , scale_fixed : as in
+                   CreateEquallySpacedCurves.
+
+    A positive current gives B along +t, i.e. along increasing phi.
+    """
+    axis_xyz = jnp.asarray(axis_xyz, dtype=float)
+    two_pi = 2 * jnp.pi
+
+    # 1) Cylindrical coordinates of the curve, sorted by phi
+    phi_ax = jnp.mod(jnp.arctan2(axis_xyz[:, 1], axis_xyz[:, 0]), two_pi)
+    sort   = jnp.argsort(phi_ax)
+    phi_ax = phi_ax[sort]
+    R_ax   = jnp.hypot(axis_xyz[sort, 0], axis_xyz[sort, 1])
+    Z_ax   = axis_xyz[sort, 2]
+
+    # Periodic central differences: dR/dphi, dZ/dphi
+    dphi  = jnp.mod(jnp.roll(phi_ax, -1) - jnp.roll(phi_ax, 1), two_pi)
+    dR_ax = (jnp.roll(R_ax, -1) - jnp.roll(R_ax, 1)) / dphi
+    dZ_ax = (jnp.roll(Z_ax, -1) - jnp.roll(Z_ax, 1)) / dphi
+
+    # 2) Toroidal angles of the base coils (same as CreateEquallySpacedCurves)
+    angles = (jnp.arange(n_curves) + 0.5) * two_pi / ((1 + int(stellsym)) * nfp * n_curves)
+    interp = lambda f: jnp.interp(angles, phi_ax, f, period=two_pi)
+    R_c, Z_c, dR_c, dZ_c = interp(R_ax), interp(Z_ax), interp(dR_ax), interp(dZ_ax)
+
+    # 3) Local cylindrical unit vectors at each coil
+    zeros   = jnp.zeros_like(angles)
+    R_hat   = jnp.stack([jnp.cos(angles), jnp.sin(angles), zeros], axis=1)
+    phi_hat = jnp.stack([-jnp.sin(angles), jnp.cos(angles), zeros], axis=1)
+    z_hat   = jnp.stack([zeros, zeros, zeros + 1.0], axis=1)
+
+    centers  = R_c[:, None] * R_hat + Z_c[:, None] * z_hat
+    tangents = dR_c[:, None] * R_hat + R_c[:, None] * phi_hat + dZ_c[:, None] * z_hat
+
+    # 4) Order-1 DOFs of each circle, padded with zeros up to `order`
+    dofs_order1 = vmap(circular_coil_dofs)(centers, jnp.full(n_curves, r), tangents, R_hat)
+    curves = jnp.zeros((n_curves, 3, 1 + 2 * order)).at[:, :, :3].set(dofs_order1)
+
+    # 5) Symmetries are applied by Curves
+    return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym,
+                  scaling_type=scaling_type, scaling_factor=scaling_factor, scale_fixed=scale_fixed)
 
 @partial(jit, static_argnames=["flip"])
 def RotatedCurve(curve, phi, flip):
