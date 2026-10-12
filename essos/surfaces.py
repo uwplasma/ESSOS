@@ -855,6 +855,7 @@ class SurfaceRZFourier:
         if show:
             plt.show()
     
+    
     def to_vtk(self, filename, extra_data=None, field=None):
         try: import numpy as np
         except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
