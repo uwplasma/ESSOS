@@ -44,6 +44,9 @@ import jax
 import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
+
+print(f"JAX backend: {jax.default_backend()}  devices: {jax.devices()}")
+
 from essos.fields import DipoleField
 from essos.losses import custom_loss
 
