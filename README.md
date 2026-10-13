@@ -174,21 +174,6 @@ print(result.lost.mean(), result.loss_fractions())
 
 `psi0` is minus VMEC's boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
-
-![Boozer vs VMEC-coordinate and cross-code tracing times](docs/readme_boozer_speed.png)
-
-| Case (8 CPU cores, compile excluded) | Tracer | Lost | Wall time |
-|---|---|---|---|
-| 128 ARIES-CS alphas, 0.1 ms | ESSOS Boozer (RK4) | 14.8% ± 3.1% | 0.91 s |
-| | ESSOS VMEC coordinates (adaptive) | 13.3% ± 3.0% | 60.5 s |
-| 1000 alphas, 10 ms (VMEX benchmark) | ESSOS Boozer | 12.8% | 146 s |
-| | SIMPLE | 12.4% | 556 s |
-| | SIMSOPT | 11.9% | 1079 s |
-
-The first case is [`examples/particle_tracing/trace_particles_boozer_vs_vmec.py`](examples/particle_tracing/trace_particles_boozer_vs_vmec.py).
-Its ± values are one-sigma binomial standard errors, `sqrt(p (1-p) / N)`.
-Redraw the figure with `python docs/make_readme_boozer_figure.py`.
-
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
 and its derivatives, together with the flux functions `G`, `I` and `iota`.
 
