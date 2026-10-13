@@ -127,6 +127,29 @@ print(tracing.loss_fractions)
 More in [`examples/particle_tracing`](examples/particle_tracing), including
 full-orbit, collisional and electric-field variants.
 
+## Tracing to the wall
+
+Inside the last closed flux surface (LCFS), guiding centres move in VMEC
+coordinates. An orbit that crosses the LCFS continues in Cartesian coordinates
+in a field you supply for the outside (coils, an mgrid, or a VMEX
+`VmecExtender`) until it strikes the wall or comes back in. Below, 3 keV
+protons in a VMEX free-boundary equilibrium of the Landreman-Paul QA coils,
+with a wall 3 cm outside the LCFS.
+
+![Guiding centres traced through the LCFS to a wall](docs/readme_wall.png)
+
+```python
+vmec = vmex.essos_vmec_field(wout)                     # or Vmec("wout_*.nc")
+outside = vmex.VmecExtender.from_wout(wout, external_field=coil_grid)
+tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
+                  maxtime=4e-5, exterior_field=outside, wall=0.03)  # gap [m] or a surface
+print(tracing.wall_hits.mean(), tracing.wall_positions[tracing.wall_hits])
+```
+
+The full script is
+[`trace_particles_vmec_to_wall.py`](examples/particle_tracing/trace_particles_vmec_to_wall.py);
+the figure comes from `python docs/make_readme_figures.py wall`.
+
 ## Boozer-coordinate tracing
 
 Transform a VMEC equilibrium with [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax),
