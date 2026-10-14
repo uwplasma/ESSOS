@@ -320,7 +320,7 @@ def test_levelset_stopping_criterion_stops_and_fills_field_line():
     )
 
     assert tracing.boundary_hits.tolist() == [True]
-    assert tracing.progress is False
+    assert tracing.progress is False  # ESSOS_PROGRESS=0 in conftest
     assert jnp.isfinite(tracing.trajectories).all()
     assert jnp.max(tracing.trajectories[0, :, 0]) <= 1.7 + 1e-8
     assert jnp.allclose(tracing.trajectories[0, -1], tracing.trajectories[0, -2])
@@ -438,8 +438,9 @@ def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature()
     assert np.all(np.abs(energy.mean(axis=0) - 1) < 4 * error)
 
 
-def test_vmec_guiding_centers_cross_the_magnetic_axis():
+def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch):
     """The orbit born at s = 1e-7 used to stop at once, at s <= axis_threshold = 1e-6."""
+    monkeypatch.delenv("ESSOS_PROGRESS")  # default progress must not break the vmapped segment loop
     particles = _near_axis_particles()
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
                       particles=particles, maxtime=2e-5, timestep=1e-9, times_to_trace=200,
@@ -909,12 +910,13 @@ def test_vmec_lost_energies_come_from_the_last_finite_state():
     assert jnp.allclose(tracing.lost_positions[lost, 0], 1.0, atol=1e-9)
 
 
-def test_particle_batches_report_completed_particles_and_match_one_batch(capsys):
+def test_particle_batches_report_completed_particles_and_match_one_batch(capsys, monkeypatch):
     """Batches of 6 (the last one padded) give the orbits, events and losses of one batch."""
     whole = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9)
     capsys.readouterr()
+    monkeypatch.delenv("ESSOS_PROGRESS")
     batched = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9,
-                            particle_batch_size=6, progress=True)
+                            particle_batch_size=6)
     progress = capsys.readouterr().err
     assert "Tracing particles" in progress and "16/16" in progress
     # The adaptive steps of a vmapped solve depend on the batch in the last bits.

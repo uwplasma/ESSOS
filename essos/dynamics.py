@@ -895,7 +895,7 @@ class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
-                 solver=None, stopping_criteria=None, progress=False, devices=None,
+                 solver=None, stopping_criteria=None, progress=True, devices=None,
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None):
 
@@ -965,7 +965,8 @@ class Tracing():
         # Diffrax's ceiling was effectively unbounded, so a trace that could not
         # finish ran until the process was killed rather than returning.
         self.max_steps = max_steps
-        self.progress = bool(progress)
+        # ESSOS_PROGRESS=0 turns every default progress bar off (the test suite does).
+        self.progress = bool(progress) and os.environ.get("ESSOS_PROGRESS", "1") != "0"
         # With particle_batch_size, particles are traced in batches of that
         # size and progress counts completed particles instead of Diffrax
         # steps. Under a JAX transformation the batches are bypassed.
@@ -974,8 +975,10 @@ class Tracing():
                 or particle_batch_size <= 0):
             raise ValueError("particle_batch_size must be a positive integer or None")
         self.particle_batch_size = None if particle_batch_size is None else int(particle_batch_size)
+        # Diffrax's meter is an unordered callback, which the vmapped while loop of
+        # the VMEC segment path rejects; that path reports progress by batches only.
         self.progress_meter = (TqdmProgressMeter() if self.progress and self.particle_batch_size is None
-                               else NoProgressMeter())
+                               and not self._vmec_default else NoProgressMeter())
         # Diffrax solver to use for the adaptive integrators. If left as None,
         # each integrator falls back to its previous default (Dopri8), so
         # existing call sites are unaffected. Selecting the solver here (rather
