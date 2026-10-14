@@ -176,7 +176,7 @@ speed = np.sqrt(2 * 3.5e6 * ONE_EV / ALPHA_PARTICLE_MASS)
 result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np.pi, n),
                       zeta=np.random.uniform(0, 2*np.pi, n), pitch=np.random.uniform(-1, 1, n),
                       speed=speed, mass=ALPHA_PARTICLE_MASS, charge=ALPHA_PARTICLE_CHARGE,
-                      tmax=1e-2, timestep=1e-7)      # species=BackgroundSpecies(...) adds collisions
+                      tmax=1e-2)      # species=BackgroundSpecies(...) adds collisions
 print(result.lost.mean(), result.loss_fractions())
 ```
 

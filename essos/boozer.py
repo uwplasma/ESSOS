@@ -47,6 +47,9 @@ def _evaluate(knots, coef, x):
     return value, slope
 
 
+TABLE_MODES = 48  # below about 48 modes the direct sum is cheaper than the table
+
+
 class BoozerField(eqx.Module):
     """``|B|`` spectrum and ``iota, G, I`` profiles in Boozer coordinates."""
 
@@ -59,9 +62,11 @@ class BoozerField(eqx.Module):
     psi0: float
     nfp: int = eqx.field(static=True)
     sine_coef: jax.Array | None = None
+    table: jax.Array | None = None  # (nint, ntheta + DEGREE, nzeta + DEGREE, 2, 4)
 
     @classmethod
-    def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6, *, bmns=None):
+    def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6, *, bmns=None,
+                  angle_grid=6):
         """Build from half-mesh Boozer tables.
 
         ``bmnc`` and optional sine coefficients ``bmns`` are ``(modes, len(s))``;
@@ -69,6 +74,15 @@ class BoozerField(eqx.Module):
         includes the ``nfp`` factor; ``psi0`` uses the Boozer convention
         (``-VMEC phi[-1]/(2 pi)``).  Modes whose amplitude never exceeds
         ``mode_tolerance`` times the largest amplitude are dropped.
+
+        With ``angle_grid`` (default 6 points per shortest wavelength, or a
+        ``(ntheta, nzeta)`` pair) the spectrum is summed once on a uniform grid in
+        ``theta`` and one field period of ``zeta``, and evaluated by periodic
+        quintic B-splines in the angles, keeping the radial splines exact. A step
+        then costs the same for any number of modes; a scalar ``angle_grid`` is
+        used only above ``TABLE_MODES`` modes, below which the sum is cheaper. ``angle_grid=None``, or a
+        toroidal mode number that is not a multiple of ``nfp``, sums the modes at
+        every evaluation.
         """
         s = np.asarray(s, float)
         bmnc = np.asarray(bmnc, float)
@@ -86,6 +100,14 @@ class BoozerField(eqx.Module):
         if sine is not None and np.any(sine[keep]):
             scaled_sine = np.where(xm[:, None] > 0, sine[keep] / r, sine[keep])
             _, sine_coef = _spline(r, scaled_sine.T)
+        table = None
+        if (angle_grid is not None and np.all(xn % int(nfp) == 0)
+                and (np.ndim(angle_grid) or xm.size > TABLE_MODES)):
+            nt, nz = ((max(16, angle_grid * int(np.abs(xm).max())),
+                       max(16, angle_grid * int(np.abs(xn).max()) // int(nfp)))
+                      if np.ndim(angle_grid) == 0 else map(int, angle_grid))
+            table = _angle_table(np.asarray(b_coef), None if sine_coef is None else np.asarray(sine_coef),
+                                 xm, xn, int(nfp), nt, nz)
         profiles = np.stack([iota, G, np.asarray(I, float)], axis=1)
         # Axis row: iota and G extrapolated linearly, I(0) = 0.
         axis = profiles[0] - s[0] * (profiles[1] - profiles[0]) / (s[1] - s[0])
@@ -94,17 +116,17 @@ class BoozerField(eqx.Module):
         profiles = np.vstack([axis, profiles])
         s_knots, profile_coef = _spline(s_prof, profiles)
         return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
-                   float(psi0), int(nfp), sine_coef)
+                   float(psi0), int(nfp), sine_coef, table)
 
     @classmethod
-    def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6):
+    def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6, angle_grid=6):
         """Build from a run ``Booz_xform`` (every surface computed)."""
         sine = getattr(booz, "bmns_b", None)
         if bool(getattr(booz, "asym", False)) and sine is None:
             raise ValueError("Asymmetric Boozer transform requires bmns_b")
         return cls.from_booz(booz.s_b, booz.bmnc_b, booz.xm_b, booz.xn_b, booz.iota,
                              booz.Boozer_G, booz.Boozer_I, psi0, int(booz.nfp), mode_tolerance,
-                             bmns=sine)
+                             bmns=sine, angle_grid=angle_grid)
 
     def profiles(self, s):
         """``(iota, G, I)`` and their ``s`` derivatives."""
@@ -112,6 +134,8 @@ class BoozerField(eqx.Module):
 
     def modB_derivatives(self, r, theta, zeta):
         """``|B|``, ``d|B|/dr``, ``(d|B|/dtheta)/r`` and ``d|B|/dzeta``."""
+        if self.table is not None:
+            return _table_derivatives(self.r_knots, self.table, self.nfp, r, theta, zeta)
         a, da = _evaluate(self.r_knots, self.b_coef, r)
         phase = self.xm * theta - self.xn * zeta
         c, s = jnp.cos(phase), jnp.sin(phase)
@@ -131,6 +155,67 @@ class BoozerField(eqx.Module):
 
     def modB(self, s, theta, zeta):
         return self.modB_derivatives(jnp.sqrt(s), theta, zeta)[0]
+
+
+DEGREE = 5  # angular B-spline degree: cubic (C2) breaks Dopri8's order at the cell edges
+
+
+def _angle_table(b_coef, sine_coef, xm, xn, nfp, nt, nz):
+    """Periodic B-spline coefficients in the angles of the radial spline
+    coefficients, split into ``m = 0`` and ``m > 0`` (still divided by ``r``)."""
+    from scipy.ndimage import spline_filter1d
+
+    phase = (xm[:, None, None] * np.linspace(0, 2 * np.pi, nt, endpoint=False)[:, None]
+             - xn[:, None, None] * np.linspace(0, 2 * np.pi / nfp, nz, endpoint=False))
+    basis = np.cos(phase)
+    coef = b_coef
+    if sine_coef is not None:
+        basis, coef = np.concatenate([basis, np.sin(phase)]), np.concatenate([b_coef, sine_coef], axis=1)
+    m0 = np.concatenate([xm == 0] * (len(basis) // len(xm)))
+    table = np.stack([np.moveaxis(np.moveaxis(coef[:, sel], 1, 2) @ basis[sel].reshape(sel.sum(), nt * nz), 1, 2)
+                      .reshape(len(coef), nt, nz, 4) for sel in (m0, ~m0)], -2)
+    for axis in (1, 2):
+        table = spline_filter1d(table, DEGREE, axis=axis, mode="grid-wrap")
+    pad = ((DEGREE - 1) // 2, (DEGREE + 1) // 2)
+    # float32 halves the per-device copy; its rounding is far below the interpolation error
+    return jnp.asarray(np.pad(table, ((0, 0), pad, pad, (0, 0), (0, 0)), mode="wrap"), jnp.float32)
+
+
+def _bspline_matrix():
+    """Rows: power coefficients in ``t`` of the B-spline weights on one cell."""
+    from scipy.interpolate import BSpline
+
+    beta = BSpline.basis_element(np.arange(DEGREE + 2) - (DEGREE + 1) / 2, extrapolate=False)
+    t = np.linspace(0, 1, DEGREE + 1, endpoint=False) + 0.5 / (DEGREE + 1)
+    return np.array([np.polyfit(t, beta(t - o), DEGREE) for o in range(-(DEGREE - 1) // 2, (DEGREE + 3) // 2)])
+
+
+_WEIGHTS = _bspline_matrix()
+
+
+def _bspline(t):
+    """Uniform B-spline weights and their derivatives at offset ``t`` in a cell."""
+    powers = t ** np.arange(DEGREE, -1, -1)
+    return _WEIGHTS @ powers, (_WEIGHTS[:, :-1] * np.arange(DEGREE, 0, -1)) @ powers[1:]
+
+
+def _table_derivatives(knots, table, nfp, r, theta, zeta):
+    k = jnp.clip(jnp.searchsorted(knots, r, side="right", method="compare_all") - 1, 0, knots.size - 2)
+    d = r - knots[k]
+    n = jnp.array(table.shape[1:3]) - DEGREE
+    h = jnp.array([2 * np.pi, 2 * np.pi / nfp]) / n
+    x = jnp.mod(jnp.stack([theta, zeta]), n * h) / h
+    i = jnp.minimum(jnp.floor(x), n - 1).astype(k.dtype)
+    (wt, dt), (wz, dz) = _bspline(x[0] - i[0]), _bspline(x[1] - i[1])
+    block = jax.lax.dynamic_slice(table, (k, i[0], i[1], 0 * k, 0 * k),
+                                  (1, DEGREE + 1, DEGREE + 1, 2, 4))[0].astype(d.dtype)
+    one = jnp.ones_like(d)
+    value = block @ jnp.stack([d**3, d**2, d, one])  # radial sums: (theta, zeta, channel)
+    slope = block @ jnp.stack([3 * d**2, 2 * d, one, 0 * d])
+    z_value, z_slope = jnp.einsum("bcq,c->bq", value, wz), jnp.einsum("bcq,c->bq", slope, wz)
+    v, vr, vt = wt @ z_value, wt @ z_slope, dt @ z_value / h[0]
+    vz = wt @ jnp.einsum("bcq,c->bq", value, dz) / h[1]
+    return v[0] + r * v[1], vr[0] + v[1] + r * vr[1], vt[1], vz[0] + r * vz[1]
 
 
 def _chart(y):
@@ -365,12 +450,15 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
     return jax.vmap(one)(carry, keys)
 
 
-def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep,
+def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep=None,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
                  progress=True, compact=True, method="dopri8", tolerance=1e-8):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
-    The step is shortened so that a whole number of steps fits between the
+    The default ``timestep`` is ``R0 / (2 nfp speed)``, with ``R0 = |G| / |B|`` on the
+    axis: about 12 steps per field period along the axis at full speed, which
+    keeps the Dopri8 energy error of 3.5 MeV alphas below about 1e-3 in QA, ARIES-CS
+    and W7-X fields of reactor size. The step is shortened so that a whole number of steps fits between the
     ``n_save`` saved times (``t = 0`` included).  Particles are sharded over
     ``devices`` (default: every local device).
 
@@ -379,9 +467,10 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     intervals. With progress the horizon runs as up to ten host-side chunks of the same
     compiled program, with the whole state carried between them, so the orbits
     are those of an unchunked trace.
-    Stopped particles are compacted after the first saved interval on one
-    device when at least half have stopped. ``compact=False`` skips the host
-    synchronization and extra compiled batch size.
+    With ``compact`` (default) the horizon runs in ten chunks; after each one the
+    stopped particles are dropped and the survivors rebalanced over the devices
+    whenever that shrinks the batch (sizes rounded up to 3 significant bits). ``compact=False`` skips the host
+    synchronizations and extra compiled batch sizes.
     Fixed explicit methods are ``"dopri8"`` (default), ``"dopri5"`` and
     ``"rk4"``; ``"dopri8"`` matches RK4 in cost and energy error at 3x its
     step and is far more accurate at smaller steps. Refine timestep and modes to check loss labels and bounce phase.
@@ -399,6 +488,9 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         raise ValueError("Boozer births must be nonempty, one-dimensional, equally sized and finite")
     if np.any((inputs[0] < 0) | (inputs[0] >= 1)) or np.any(np.abs(inputs[3]) > 1):
         raise ValueError("Boozer births require 0 <= s < 1 and |pitch| <= 1")
+    if timestep is None and np.ndim(speed) == 0 and speed > 0:
+        G = float(field.profiles(0.0)[0][1])
+        timestep = 0.5 * abs(G / float(field.modB(0.0, 0.0, 0.0))) / (field.nfp * float(speed))
     if not (np.isfinite(tmax) and tmax > 0 and np.isfinite(timestep) and timestep > 0
             and np.ndim(n_save) == 0 and np.isfinite(n_save)
             and n_save >= 2 and n_save == int(n_save)):
@@ -435,52 +527,40 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         args = [jax.device_put(a, sharding) for a in args]
     y0, mu0, keys = args
     carry, first = _start(field, y0, mu0)
-    chunk = n_int if progress is None else -(-n_int // 10)
-    if compact and n_int > 1 and ndev == 1:
-        initial = carry
+    chunk = n_int if progress is None and not compact else -(-n_int // 10)
+    states = np.empty((n, n_int + 1, 5), dtype=np.asarray(first).dtype)
+    states[:, 0] = np.asarray(first)[:n]
+    status = [np.full(n, -1.0), np.full(n, -1.0), np.full(n, -1.0), np.zeros(n)]
+    selected = np.arange(n)
+    for start in range(0, n_int, chunk):
+        count = min(chunk, n_int - start)
         carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-                               carry, keys, 0, 1, method, tolerance)
-        active = np.flatnonzero(np.asarray(carry[3])[:n])
-        padded = 1 << (active.size - 1).bit_length() if active.size else 0
-        if padded <= n // 2:
-            selected = active
-            if active.size:
-                indices = np.pad(active, (0, padded - active.size), mode="edge")
-                running = tuple(x[indices] for x in carry)
-                running_keys = keys[indices]
-            states = np.empty((n, n_int + 1, 5), dtype=np.asarray(part).dtype)
-            states[:, 0] = np.asarray(first)[:n]
-            states[:, 1:] = np.asarray(part)[:n]
-            boundaries = (list(range(chunk, n_int, chunk)) + [n_int]
-                          if progress is not None else [n_int])
-            first_interval = 1
-            for stop in boundaries:
-                if stop > first_interval and selected.size:
-                    running, next_part = _advance(field, dt, n_sub, mass, charge, species,
-                                                  thermal_cutoff, running, running_keys,
-                                                  first_interval, stop - first_interval, method,
-                                                  tolerance)
-                    states[selected, first_interval + 1:stop + 1] = np.asarray(next_part)[:selected.size]
-                if progress is not None:
-                    progress(stop, n_int)
-                first_interval = stop
-            status = [np.asarray(carry[i])[:n].copy() for i in (4, 5, 6, 7)]
-            if selected.size:
-                for result, i in zip(status, (4, 5, 6, 7)):
-                    result[selected] = np.asarray(running[i])[:selected.size]
-            t_loss, t_therm, t_fail, err = status
-            return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states,
-                               t_loss, t_therm, err, t_fail)
-        carry = initial
-    saved = []
-    for first_interval in range(0, n_int, chunk):
-        count = min(chunk, n_int - first_interval)
-        carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-                               carry, keys, first_interval, count, method, tolerance)
-        saved.append(part)
+                               carry, keys, start, count, method, tolerance)
+        states[selected, start + 1:start + count + 1] = np.asarray(part)[:selected.size]
         if progress is not None:
-            jax.block_until_ready(part)
-            progress(first_interval + count, n_int)
-    states = np.concatenate([np.asarray(first)[:, None]] + [np.asarray(p) for p in saved], axis=1)[:n]
-    t_loss, t_therm, t_fail, err = (np.asarray(x)[:n] for x in (carry[4], carry[5], carry[6], carry[7]))
+            progress(start + count, n_int)
+        alive = np.asarray(carry[3])[:selected.size]
+        # per-device batch rounded up to 3 significant bits: few distinct compiled sizes
+        per_device = max(-(-int(alive.sum()) // ndev), 1)
+        step = 1 << max(per_device.bit_length() - 3, 0)
+        size = ndev * -(-per_device // step) * step
+        last = start + count == n_int
+        if last or (compact and size < carry[3].shape[0]):
+            done = slice(None) if last else ~alive
+            for result, i in zip(status, (4, 5, 6, 7)):
+                result[selected[done]] = np.asarray(carry[i])[:selected.size][done]
+        if not last and compact and size < carry[3].shape[0]:
+            # drop stopped particles and rebalance the survivors over the devices
+            states[selected[~alive], start + count + 1:] = np.asarray(part)[:selected.size][~alive, -1:]
+            active = np.flatnonzero(alive)
+            if not active.size:
+                if progress is not None:
+                    progress(n_int, n_int)
+                break
+            selected = selected[active]
+            rows = np.pad(active, (0, size - active.size), mode="edge")
+            carry, keys = jax.tree.map(lambda x: x[rows], (carry, keys))
+            if ndev > 1:
+                carry, keys = jax.device_put((carry, keys), sharding)
+    t_loss, t_therm, t_fail, err = status
     return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm, err, t_fail)
