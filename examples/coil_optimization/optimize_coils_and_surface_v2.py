@@ -4,6 +4,10 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
+import netCDF4
+import numpy as np
+
+# ESSOS imports
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 from essos.surfaces import ( SurfaceRZFourier, BdotN_over_B, B_on_surface, B_contravariant_theta_phi_on_surface,
@@ -49,7 +53,7 @@ LOAD_RESULT = False
 # False -> start from the initial torus (vmec_input) and equally spaced coils.
 # True -> start from an already optimized surface and coils, at a higher surface resolution (select the folder).
 RESTART_FROM = True
-restart_filepath = os.path.join(os.path.dirname(__file__), "output_single_stage/test_QS_no_islands_02")
+restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface/test_QS_no_islands_02")
 SURFACE_MPOL = 2; SURFACE_NTOR = 3   # maximum m and n of the surface (ESSOS convention)
 
 
@@ -798,6 +802,16 @@ if EXPORT:
         print("  converged:", bool(vmec_result.converged), "after", int(vmec_result.iterations), "iterations")
         print("  iota (axis, edge):", float(wout.iotaf[0]), float(wout.iotaf[-1]))
         print("  aspect ratio:", float(wout.aspect))
+
+        # Quasi-axisymmetry check from the Boozer spectrum: every mode with n != 0 breaks QA.
+        # The breaking is measured as the norm of those modes relative to the average field B00, on three surfaces.
+        with netCDF4.Dataset(boozmn_file) as booz:
+            bmnc = np.asarray(booz["bmnc_b"][:]); xm_b = np.asarray(booz["ixm_b"][:]); xn_b = np.asarray(booz["ixn_b"][:])
+        B00 = bmnc[:, (xm_b == 0) & (xn_b == 0)][:, 0]
+        symmetry_breaking = np.sqrt(np.sum(bmnc[:, xn_b != 0]**2, axis=1)) / B00
+        print("  QA symmetry breaking (n != 0 modes / B00):")
+        for s_index in [bmnc.shape[0] // 4, bmnc.shape[0] // 2, bmnc.shape[0] - 1]:
+        print(f"    s = {(s_index + 0.5) / bmnc.shape[0]:.2f}: {100 * symmetry_breaking[s_index]:.2f} %")
 
 
 """ Record of the run parameters """
