@@ -52,6 +52,7 @@ dependencies = [
     "scipy",
     "jaxkd",
     "netcdf4",
+    "solvax",
     # Used internally by SurfaceRZFourier.to_vtk() and Coils.to_vtk().
     "pyevtk",
 ]

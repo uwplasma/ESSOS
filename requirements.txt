@@ -9,6 +9,7 @@ optimistix
 scipy
 jaxkd
 netcdf4
+solvax
 f90nml
 pyevtk
 optuna
