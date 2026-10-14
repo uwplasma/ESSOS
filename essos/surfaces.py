@@ -46,13 +46,16 @@ def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
     #tf = jnp.sum(Adl)    
     return tf
 
-# @jit
-@partial(jit, in_shardings=(sharding, None), out_shardings=sharding)
+@jit
 def B_on_surface(surface, field):
     ntheta = surface.ntheta
     nphi = surface.nphi
     gamma = surface.gamma
     gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
+    # Spread the points over the devices when they divide evenly (sharding the
+    # surface pytree itself failed whenever its leaves did not).
+    if len(gamma_reshaped) % sharding.num_devices == 0:
+        gamma_reshaped = jax.lax.with_sharding_constraint(gamma_reshaped, sharding)
 
     # Map field.B over all positions
     B_on_surface = vmap(field.B)(gamma_reshaped)
@@ -328,7 +331,8 @@ class SurfaceRZFourier:
                                              ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus, _cls=cls, **partners)
     
     @classmethod
-    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus'):
+    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus', offset=0.):
+        """Flux surface ``s`` of a VMEC field; ``offset`` [m] grows its m = 1, n = 0 modes, e.g. a wall that far outside the LCFS."""
         from essos.fields import _radial_interp
         nfp = vmec.nfp
         mpol = vmec.mpol
@@ -337,6 +341,8 @@ class SurfaceRZFourier:
         s_full_grid = vmec.s_full_grid
         rc = _radial_interp(s, s_full_grid, vmec.rmnc, vmec.xm)
         zs = _radial_interp(s, s_full_grid, vmec.zmns, vmec.xm)
+        m1 = (vmec.xm == 1) & (vmec.xn == 0)
+        rc, zs = rc + offset * m1, zs + offset * jnp.sign(jnp.sum(zs * m1)) * m1
 
         partners = {target: _radial_interp(s, s_full_grid, table, vmec.xm)
                     for target, table in (('rs', getattr(vmec, 'rmns', None)), ('zc', getattr(vmec, 'zmnc', None)))

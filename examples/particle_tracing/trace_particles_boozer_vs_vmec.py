@@ -1,6 +1,5 @@
 import os
 number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
-os.environ["XLA_FLAGS"] = f'--xla_force_host_platform_device_count={number_of_processors_to_use}'
 from time import time
 import jax
 import jax.numpy as jnp
@@ -37,7 +36,7 @@ vmec.nc.set_auto_mask(False)
 booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout(wout_file, flux=False)
 booz.run()
-boozer_field = BoozerField.from_booz_xform(booz, psi0=psi0_from_vmec(vmec.nc.variables["phi"][-1]), mode_tolerance=1e-3)
+boozer_field = BoozerField.from_booz_xform(booz, psi0=psi0_from_vmec(vmec.nc.variables["phi"][-1]), )
 
 # Births: uniform Boozer angles and pitch on one surface, mapped to VMEC angles
 # with zeta_B = phi + nu and theta_B - iota nu = theta + lambda(theta, phi)
