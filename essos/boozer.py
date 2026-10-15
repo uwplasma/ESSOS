@@ -78,7 +78,8 @@ class BoozerField(eqx.Module):
         With ``angle_grid`` (default 6 points per shortest wavelength, or a
         ``(ntheta, nzeta)`` pair) the spectrum is summed once on a uniform grid in
         ``theta`` and one field period of ``zeta``, and evaluated by periodic
-        quintic B-splines in the angles, keeping the radial splines exact. A step
+        quintic B-splines in the angles, retaining the radial spline precision
+        so adjacent polynomial pieces remain continuous to roundoff. A step
         then costs the same for any number of modes; a scalar ``angle_grid`` is
         used only above ``TABLE_MODES`` modes, below which the sum is cheaper. ``angle_grid=None``, or a
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
@@ -177,8 +178,9 @@ def _angle_table(b_coef, sine_coef, xm, xn, nfp, nt, nz):
     for axis in (1, 2):
         table = spline_filter1d(table, DEGREE, axis=axis, mode="grid-wrap")
     pad = ((DEGREE - 1) // 2, (DEGREE + 1) // 2)
-    # float32 halves the per-device copy; its rounding is far below the interpolation error
-    return jnp.asarray(np.pad(table, ((0, 0), pad, pad, (0, 0), (0, 0)), mode="wrap"), jnp.float32)
+    # Rounding each radial polynomial independently can break continuity at
+    # shared knots, imposing an orbit-energy error floor even with tight steps.
+    return jnp.asarray(np.pad(table, ((0, 0), pad, pad, (0, 0), (0, 0)), mode="wrap"))
 
 
 def _bspline_matrix():
