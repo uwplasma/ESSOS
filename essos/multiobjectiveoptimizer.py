@@ -8,9 +8,6 @@ from jax import jit
 from functools import partial
 from essos.coils import Coils, Curves, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
-import numpy as np
-from pandas.plotting import parallel_coordinates
-import pandas as pd
 
 
 class MultiObjectiveOptimizer:
