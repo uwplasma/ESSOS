@@ -63,6 +63,35 @@ class DummyField:
                    iota=iota, elongation=elongation, r_axis=r_axis, z_axis=z_axis)
 
 
+
+def _circular_coils(radii, n_segments=64):
+    from essos.coils import Coils, Curves
+    dofs = jnp.zeros((len(radii), 3, 3))
+    dofs = dofs.at[:, 0, 2].set(jnp.array(radii)).at[:, 1, 1].set(jnp.array(radii))
+    return Coils(Curves(dofs, n_segments, nfp=1, stellsym=False), jnp.ones(len(radii)))
+
+
+def test_coil_length_loss_is_a_one_sided_cap():
+    coils = _circular_coils([1.0, 2.0])
+    lengths = 2 * jnp.pi * jnp.array([1.0, 2.0])
+    loss = objf.loss_coil_length(coils, max_coil_length=float(lengths[0]) * 1.5)
+    np.testing.assert_allclose(loss, (lengths[1] / (lengths[0] * 1.5) - 1) ** 2, rtol=1e-6)
+    assert objf.loss_coil_length(coils, max_coil_length=100.0) == 0.0
+    with pytest.raises(ValueError):
+        objf.loss_coil_length(coils)
+
+
+def test_coil_curvature_loss_is_scalar():
+    loss = objf.loss_coil_curvature(_circular_coils([1.0, 2.0]), max_coil_curvature=0.75)
+    assert loss.shape == ()
+    np.testing.assert_allclose(loss, 0.25 ** 2 * 2 * jnp.pi, rtol=1e-5)
+
+
+def test_normB_axis_samples_one_full_period_without_duplicates():
+    field = DummyField(r_axis=1.0)
+    np.testing.assert_allclose(objf.loss_normB_axis_average(field, npoints=4, target_B=5.7), 0.0, atol=1e-12)
+
+
 class DummyParticles:
     def __init__(self):
         self.energy = 1.0

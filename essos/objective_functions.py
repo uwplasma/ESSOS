@@ -174,7 +174,7 @@ def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps
 @partial(jit, static_argnames=['npoints'])
 def normB_axis(field, npoints=15):
     R_axis=field.r_axis
-    phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
+    phi_array = jnp.linspace(0, 2 * jnp.pi, npoints, endpoint=False)
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
     return B_axis
 
@@ -233,13 +233,15 @@ def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6
 ######################### COIL GEOMETRY LOSSES #################################
 
 @partial(jit, static_argnames=['max_coil_length'])
-def loss_coil_length(coils, max_coil_length=0):
-    return jnp.square(coils.length/max_coil_length - 1)
+def loss_coil_length(coils, max_coil_length=None):
+    if max_coil_length is None or max_coil_length <= 0:
+        raise ValueError("max_coil_length must be a positive length.")
+    return jnp.sum(jnp.square(jnp.maximum(coils.length/max_coil_length - 1, 0)))
 
 @partial(jit, static_argnames=['max_coil_curvature'])
 def loss_coil_curvature(coils, max_coil_curvature=0):
     pointwise_curvature_loss = jnp.square(jnp.maximum(coils.curvature-max_coil_curvature, 0))
-    return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
+    return jnp.sum(jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1))
 
 def compute_candidates(coils, min_separation):
     centers = coils.curves.curves[:, :, 0]
