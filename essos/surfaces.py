@@ -266,7 +266,8 @@ class SurfaceRZFourier:
                                              ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus, _cls=cls, **partners)
     
     @classmethod
-    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus'):
+    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus', offset=0.):
+        """Flux surface ``s`` of a VMEC field; ``offset`` [m] grows its m = 1, n = 0 modes, e.g. a wall that far outside the LCFS."""
         from essos.fields import _radial_interp
         nfp = vmec.nfp
         mpol = vmec.mpol
@@ -275,6 +276,8 @@ class SurfaceRZFourier:
         s_full_grid = vmec.s_full_grid
         rc = _radial_interp(s, s_full_grid, vmec.rmnc, vmec.xm)
         zs = _radial_interp(s, s_full_grid, vmec.zmns, vmec.xm)
+        m1 = (vmec.xm == 1) & (vmec.xn == 0)
+        rc, zs = rc + offset * m1, zs + offset * jnp.sign(jnp.sum(zs * m1)) * m1
 
         partners = {target: _radial_interp(s, s_full_grid, table, vmec.xm)
                     for target, table in (('rs', getattr(vmec, 'rmns', None)), ('zc', getattr(vmec, 'zmnc', None)))
