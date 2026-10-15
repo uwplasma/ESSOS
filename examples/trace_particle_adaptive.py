@@ -105,7 +105,10 @@ def load_surface(surf_file):
 
 def load_coils_essos(coil_file):
     from simsopt.field import Coil, Current
-    from simsopt.util.permanent_magnet_helper_functions import read_focus_coils
+    try:
+        from simsopt.util.permanent_magnet_helper_functions import read_focus_coils
+    except ImportError:
+        from simsopt.util.coil_optimization_helper_functions import read_focus_coils
 
     base_curves, base_currents0, ncoils = read_focus_coils(str(coil_file))
     total_current = float(np.sum([c.get_value() for c in base_currents0]))
