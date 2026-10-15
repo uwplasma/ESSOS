@@ -194,3 +194,36 @@ def test_explicit_coefficient_wout_example_and_provenance(tmp_path):
     bundle.write_text(json.dumps(dict(coefficients=coefficients, metadata=metadata)))
     with pytest.raises(ValueError, match='hash'):
         example.load_response(bundle, wout)
+
+
+def test_huge_finite_marker_weights_are_normalized_without_overflow():
+    huge = jnp.asarray([1.e308, 1.e308])
+    r = jax.jit(lambda w: restricted_residence(jnp.array([1., 2.]), 3., weights=w))(huge)
+    assert bool(r.valid)
+    np.testing.assert_allclose(r.restricted_mean_s, 1.5)
+    np.testing.assert_allclose(r.escaped_fraction, 1.)
+    np.testing.assert_allclose(r.standard_error_s, .5)
+    np.testing.assert_allclose(r.effective_sample_size, 2.)
+    # Large integer counts are converted before reduction, avoiding wraparound.
+    counts = jnp.asarray([9_000_000_000_000_000_000]*3, dtype=jnp.int64)
+    integer_result = restricted_residence([1., 2., 3.], 4., weights=counts)
+    assert bool(integer_result.valid)
+    np.testing.assert_allclose(integer_result.restricted_mean_s, 2.)
+    np.testing.assert_allclose(integer_result.escaped_fraction, 1.)
+    np.testing.assert_allclose(integer_result.effective_sample_size, 3.)
+
+
+def test_overflowing_inventory_invalidates_otherwise_accurate_weighted_solve():
+    # Tiny cost weights keep occupation/cost finite while ordinary inventory
+    # overflows. Residual/duality/balance checks alone cannot detect this.
+    r = jax.jit(lambda: evaluate_helium_residence(
+        jnp.array([0., .5, 1.]), jnp.array([1.e200, 1.e200]),
+        jnp.ones(3), jnp.ones(3), jnp.zeros(3), jnp.ones(2),
+        boundary_kappa_m_s=jnp.inf, core_cost=jnp.array([1.e-200, 1.e-200])))()
+    assert not bool(r.valid)
+    assert np.isnan(r.inventory) and np.isnan(r.mean_residence_s)
+    assert np.isnan(r.mean_occupation_s)
+    assert float(r.forward_residual) == 0.
+    assert float(r.duality_relative_error) == 0.
+    with pytest.raises(ArithmeticError):
+        check_helium_residence(r)

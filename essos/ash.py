@@ -128,15 +128,18 @@ def evaluate_helium_residence(
     flux = escape*density[-1]
     duality = jnp.abs(cost-dual)/jnp.maximum(jnp.abs(cost), jnp.finfo(diag.dtype).tiny)
     balance = jnp.abs(flux-rate)/rate
+    mean_occupation, mean_residence = cost/rate, inventory/rate
+    physical_scalars = jnp.stack((rate, inventory, cost, mean_occupation, mean_residence, flux))
     tolerance = 2.e-8
-    valid = (input_ok & jnp.all(jnp.isfinite(density)) & jnp.all(jnp.isfinite(occupation)) &
+    valid = (input_ok & jnp.all(jnp.isfinite(physical_scalars)) &
+             jnp.all(jnp.isfinite(density)) & jnp.all(jnp.isfinite(occupation)) &
              jnp.all(density >= 0) & jnp.all(occupation >= 0) &
              (rf <= tolerance) & (rb <= tolerance) &
              (duality <= tolerance) & (balance <= tolerance))
     mask = lambda x: jnp.where(valid, x, jnp.nan)
     return HeliumResidence(
         mask(density), mask(occupation), mask(rate), mask(inventory), mask(cost),
-        mask(cost/rate), mask(inventory/rate), mask(flux), rf, rb, duality, balance,
+        mask(mean_occupation), mask(mean_residence), mask(flux), rf, rb, duality, balance,
         jnp.minimum(forward.diagnostics.minimum_relative_pivot,
                     backward.diagnostics.minimum_relative_pivot),
         jnp.maximum(jnp.max(jnp.abs(pe)), jnp.abs(pb)), valid)
@@ -171,14 +174,23 @@ def restricted_residence(exit_times_s, horizon_s, *, weights=None, failed=None):
     if t.ndim != 1 or t.size == 0:
         raise ValueError("Require a nonempty vector of first-exit times")
     h = jnp.asarray(horizon_s)
-    w = jnp.ones_like(t) if weights is None else jnp.asarray(weights)
+    w = jnp.ones_like(t) if weights is None else jnp.asarray(weights, dtype=float)
     f = jnp.zeros_like(t, dtype=bool) if failed is None else jnp.asarray(failed, dtype=bool)
     if w.shape != t.shape or f.shape != t.shape or h.ndim != 0:
         raise ValueError("Times, weights and failures must match; horizon must be scalar")
+    # Scaling before summation preserves normalized weights even when their
+    # finite raw sum overflows. Invalid weights are still rejected below.
+    largest_weight = jnp.max(w)
+    safe_largest = jnp.where(jnp.isfinite(largest_weight) & (largest_weight > 0), largest_weight, 1.)
+    # Use a power-of-two scale: direct division by a huge maximum may be
+    # lowered to a reciprocal that underflows/flushes to zero under XLA.
+    exponent = jnp.frexp(safe_largest)[1]
+    scaled_weights = jnp.ldexp(w, -exponent)
+    total = jnp.sum(scaled_weights)
     valid = (jnp.isfinite(h) & (h > 0) & jnp.all(t >= 0) &
              jnp.all(~jnp.isnan(t)) & jnp.all((t <= h) | jnp.isposinf(t)) &
-             jnp.all(jnp.isfinite(w)) & jnp.all(w >= 0) & (jnp.sum(w) > 0) & ~jnp.any(f))
-    w = w/jnp.sum(w)
+             jnp.all(jnp.isfinite(w)) & jnp.all(w >= 0) & jnp.isfinite(total) & (total > 0) & ~jnp.any(f))
+    w = scaled_weights/jnp.where(jnp.isfinite(total) & (total > 0), total, 1.)
     x = jnp.minimum(t, h)
     mean = w @ x
     sumsq = w @ w
