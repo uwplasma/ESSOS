@@ -99,6 +99,17 @@ def test_vmec_from_arrays_matches_wout_file():
     assert jnp.array_equal(vmap(rebuilt.AbsB)(points), vmap(vmec.AbsB)(points))
     assert jnp.array_equal(rebuilt.surface.gamma, vmec.surface.gamma)
 
+def test_vmec_from_an_in_memory_wout_matches_the_file():
+    from types import SimpleNamespace
+    vmec = Vmec(WOUT_FILE)
+    wout = SimpleNamespace(nfp=vmec.nfp, ns=vmec.ns, lasym=False, rmns=jnp.ones(1),
+                           **{name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS})
+    memory = Vmec(wout)
+    assert memory.wout_filename is None and memory.rmns is None
+    point = jnp.array([0.5, 0.3, 0.2])
+    np.testing.assert_allclose(memory.B_contravariant(point), vmec.B_contravariant(point), rtol=1e-14)
+
+
 def test_vmec_from_arrays_is_differentiable_in_the_coefficients():
     vmec = Vmec(WOUT_FILE)
     arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
@@ -269,7 +280,7 @@ def test_external_field_wraps_batched_sources():
     x = jnp.array([1.1, 0.2, 0.05])
     for source in (batched, Batched(), Cylindrical()):
         field = ExternalField(source)
-        assert jnp.allclose(field.B(x), coils.B(x), rtol=1e-12)
+        assert jnp.allclose(field.B(x), coils.B(x), rtol=1e-12) and jnp.array_equal(field.to_xyz(x), x)
         assert jnp.allclose(field.dAbsB_by_dX(x), jax.grad(coils.AbsB)(x), rtol=1e-9)
         assert jnp.allclose(field.curl_b(x), coils.curl_b(x), rtol=1e-8, atol=1e-12)
         assert jnp.allclose(field.kappa(x), coils.kappa(x), rtol=1e-8, atol=1e-12)
@@ -562,3 +573,14 @@ def test_vmec_partner_cutoff_is_phase_invariant():
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0, 1])
     arrays['bmns'] = jnp.zeros_like(arrays['bmns'])
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0])
+
+
+def test_half_grid_interpolation_keeps_its_slope_up_to_the_lcfs():
+    """Issue #111: the half grid ends at s = 1 - ds/2; beyond it the scaled table must not freeze."""
+    from essos.fields import _radial_interp
+    grid = (jnp.arange(100) + 0.5) / 100
+    table = jnp.concatenate([jnp.zeros(1), 1 + grid])[:, None]   # the linear field 1 + s
+    def f(s):
+        return _radial_interp(s, grid, table, jnp.array([0]), half_grid=True)[0]
+    for s in (0.994, 0.996, 0.999, 1.0):
+        assert jnp.isclose(f(s), 1 + s, rtol=1e-12) and jnp.isclose(jax.grad(f)(s), 1.0, rtol=1e-9)
