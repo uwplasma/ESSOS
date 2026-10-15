@@ -96,6 +96,12 @@ class TestCoilPerturbation(unittest.TestCase):
         with self.assertRaises(ValueError):
             ps.get_sample(2)
 
+    def test_perturbation_sample_accepts_array_sample(self):
+        sampler = GaussianSampler(jnp.linspace(0, 1, 5), sigma=1.0, length_scale=0.5, n_derivs=1)
+        sample = jnp.ones((2, 5, 3))
+        ps = PerturbationSample(sampler, jax.random.PRNGKey(0), sample=sample)
+        self.assertTrue(jnp.array_equal(ps.get_sample(1), sample[1]))
+
     def test_perturb_curves_systematic(self):
         points = jnp.linspace(0, 1, 5)
         sampler0 = GaussianSampler(points, sigma=1.0, length_scale=0.5, n_derivs=0)

@@ -403,7 +403,7 @@ class Curves:
 
         cuves_simsopt = []
         currents_simsopt = []
-        for dofs in self.dofs:
+        for dofs in self._dofs:
             curve = CurveXYZFourier(self.n_segments, self.order)
             curve.x = jnp.reshape(dofs, (curve.x.shape))
             cuves_simsopt.append(curve)
@@ -851,7 +851,7 @@ class Coils:
         from simsopt.geo import CurveXYZFourier
         cuves_simsopt = []
         currents_simsopt = []
-        for dofs, current in zip(self.dofs_curves, self.dofs_currents*self.currents_scale):
+        for dofs, current in zip(self.curves._dofs, self.dofs_currents_raw):
             curve = CurveXYZFourier(self.n_segments, self.order)
             curve.x = jnp.reshape(dofs, (curve.x.shape))
             cuves_simsopt.append(curve)
@@ -1715,7 +1715,7 @@ class DiscretizedCoils:
     @classmethod
     def from_Coils(cls, coils: Coils):
         """Create from a standard Coils object"""
-        base_gamma = Curves(coils.dofs_curves, coils.n_segments, nfp=1, stellsym=False).gamma
+        base_gamma = Curves(coils.curves._dofs, coils.n_segments, nfp=1, stellsym=False).gamma
         currents = coils.dofs_currents_raw
         return cls(base_gamma, currents, nfp=coils.nfp, stellsym=coils.stellsym)
     
