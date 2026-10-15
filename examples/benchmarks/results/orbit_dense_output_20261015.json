@@ -1,0 +1,1306 @@
+{
+  "metadata": {
+    "utc": "2026-10-15T17:15:04.666506+00:00",
+    "cpu": "AMD Ryzen 7 250 w/ Radeon 780M Graphics",
+    "platform": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+    "source_sha256": {
+      "essos/rk.py": "730717446b79122f7df2c6fd65e6dcd57f292c6179cf568b4d0fb44cc73d24c0",
+      "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+      "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+      "essos/dynamics.py": "c2bb0fd247e190d35ad3b288501168c953e71f84b747a827779035862b646cf7",
+      "examples/benchmarks/benchmark_orbit_integrators.py": "51d1a05a0075511ade76c10a2d1f722f331f89574c58fdde7eacf61addcade54",
+      "examples/benchmarks/compare_orbit_controllers.py": "f90bf19f642eda20024bab3fbb9c60616e1d07f454c0ccab484d23b9ae95f72f",
+      "essos/rk_dense.py": "865922e75a78b6a51c0f325222ebe5c66aba081a83401526adf8346b58a03600",
+      "examples/benchmarks/derive_rk_dense_output.py": "b4663c75d552ebf4d83ff4a41fa09212fd7679e80a8ff06f9200741b73565dbc"
+    },
+    "devices": [
+      "cpu:0"
+    ],
+    "x64": true,
+    "persistent_compilation_cache": false,
+    "versions": {
+      "jax": "0.11.2",
+      "jaxlib": "0.11.2",
+      "diffrax": "0.7.2"
+    },
+    "particles": 8,
+    "field": "qa",
+    "repeats": 9,
+    "scope": "compiled vmapped ESSOS RHS integration; excludes Tracing construction/postprocessing and events",
+    "adaptive_controllers": {
+      "native_i": "original I",
+      "native_pi": "PI",
+      "diffrax_pi": "PI"
+    },
+    "tolerance": 1e-09,
+    "reference_tolerance": null,
+    "error_control": "physics",
+    "reference_length_m": 1.0,
+    "accuracy_limit": 1e-06,
+    "units": "SI; velocity error also normalized by total speed",
+    "field_geometry": "standard ESSOS field object; no geometry snapshot",
+    "pcoeff": 0.4,
+    "icoeff": 0.3,
+    "safety": 0.9,
+    "pi_accepted_factor_bounds": [
+      1.0,
+      10.0
+    ],
+    "pi_rejected_factor_bounds": [
+      0.2,
+      0.9
+    ],
+    "reference": "Diffrax Dopri8; 1024 fixed steps; identical saved times",
+    "reference_steps": 1024,
+    "native_i_extra_tolerances": [],
+    "compare_dense_output": true
+  },
+  "rows": [
+    {
+      "model": "gc",
+      "method": "dopri5",
+      "implementation": "native_i",
+      "lower_s": 0.2703509019993362,
+      "compile_s": 0.3827173439985927,
+      "first_execute_s": 0.038572505000047386,
+      "first_solve_s": 0.6916407509979763,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-06,
+      "dt0": 7.8125e-09,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          18,
+          18,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          20,
+          20,
+          0
+        ],
+        [
+          21,
+          21,
+          0
+        ],
+        [
+          22,
+          22,
+          0
+        ],
+        [
+          23,
+          23,
+          0
+        ],
+        [
+          23,
+          23,
+          0
+        ],
+        [
+          24,
+          24,
+          0
+        ]
+      ],
+      "accepted_mean": 21.25,
+      "rejected_mean": 0.0,
+      "position_error_m": 5.679133385783075e-09,
+      "velocity_error_m_s": 0.014491188921965659,
+      "velocity_error_over_speed": 1.4806339866283952e-08,
+      "warm_samples_s": [
+        0.02915742900040641,
+        0.02710759399997187,
+        0.02938504299891065,
+        0.031357522999314824,
+        0.029614020000735763,
+        0.028638620000492665,
+        0.030576475999623653,
+        0.02730972099925566,
+        0.031833932000154164
+      ],
+      "warm_median_ms": 29.38504299891065
+    },
+    {
+      "model": "gc",
+      "method": "dopri5",
+      "implementation": "native_pi",
+      "lower_s": 0.24564722200011602,
+      "compile_s": 0.41713890400023956,
+      "first_execute_s": 0.04764712399992277,
+      "first_solve_s": 0.7104332500002783,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-06,
+      "dt0": 7.8125e-09,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          25,
+          25,
+          0
+        ],
+        [
+          26,
+          26,
+          0
+        ],
+        [
+          27,
+          27,
+          0
+        ],
+        [
+          28,
+          28,
+          0
+        ],
+        [
+          30,
+          30,
+          0
+        ],
+        [
+          31,
+          31,
+          0
+        ],
+        [
+          32,
+          32,
+          0
+        ],
+        [
+          33,
+          33,
+          0
+        ]
+      ],
+      "accepted_mean": 29.0,
+      "rejected_mean": 0.0,
+      "position_error_m": 1.5566163913405262e-09,
+      "velocity_error_m_s": 0.0037677553482353687,
+      "velocity_error_over_speed": 3.849695599125122e-09,
+      "warm_samples_s": [
+        0.039923624999573804,
+        0.043321904999174876,
+        0.0391546400005609,
+        0.03957249000086449,
+        0.041145244000290404,
+        0.040058616001260816,
+        0.042260304999217624,
+        0.038543489999938174,
+        0.039730483998937416
+      ],
+      "warm_median_ms": 39.9236249995738
+    },
+    {
+      "model": "gc",
+      "method": "dopri5",
+      "implementation": "diffrax_pi",
+      "lower_s": 3.7860101770002075,
+      "compile_s": 0.5647937319990888,
+      "first_execute_s": 0.052290617999460665,
+      "first_solve_s": 4.403094526998757,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-06,
+      "dt0": 7.8125e-09,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          25,
+          25,
+          0
+        ],
+        [
+          26,
+          26,
+          0
+        ],
+        [
+          27,
+          27,
+          0
+        ],
+        [
+          28,
+          28,
+          0
+        ],
+        [
+          30,
+          30,
+          0
+        ],
+        [
+          31,
+          31,
+          0
+        ],
+        [
+          32,
+          32,
+          0
+        ],
+        [
+          33,
+          33,
+          0
+        ]
+      ],
+      "accepted_mean": 29.0,
+      "rejected_mean": 0.0,
+      "position_error_m": 1.5566167244074336e-09,
+      "velocity_error_m_s": 0.0037677549989894032,
+      "velocity_error_over_speed": 3.849695242283838e-09,
+      "warm_samples_s": [
+        0.046320448998812935,
+        0.04620722700019542,
+        0.04469375500048045,
+        0.04405205700095394,
+        0.04268169999886595,
+        0.044262369998250506,
+        0.04370646300048975,
+        0.04731185899981938,
+        0.04540901899963501
+      ],
+      "warm_median_ms": 44.69375500048045
+    },
+    {
+      "model": "gc",
+      "method": "dopri5",
+      "implementation": "native_i_optimized",
+      "lower_s": 0.28103040699897974,
+      "compile_s": 0.418066935000752,
+      "first_execute_s": 0.037050103999717976,
+      "first_solve_s": 0.7361474459994497,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "optimized",
+      "maxtime": 2e-06,
+      "dt0": 7.8125e-09,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          18,
+          18,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          20,
+          20,
+          0
+        ],
+        [
+          21,
+          21,
+          0
+        ],
+        [
+          22,
+          22,
+          0
+        ],
+        [
+          23,
+          23,
+          0
+        ],
+        [
+          23,
+          23,
+          0
+        ],
+        [
+          24,
+          24,
+          0
+        ]
+      ],
+      "accepted_mean": 21.25,
+      "rejected_mean": 0.0,
+      "position_error_m": 5.679133385783075e-09,
+      "velocity_error_m_s": 0.014491188921965659,
+      "velocity_error_over_speed": 1.4806339866283952e-08,
+      "warm_samples_s": [
+        0.029010714999458287,
+        0.02851444900079514,
+        0.02991859800022212,
+        0.027898059001017828,
+        0.030072745999859762,
+        0.02982974299993657,
+        0.030828888000542065,
+        0.02950593899913656,
+        0.028866325999842957
+      ],
+      "warm_median_ms": 29.50593899913656
+    },
+    {
+      "model": "gc",
+      "method": "dopri8",
+      "implementation": "native_i",
+      "lower_s": 0.2617432099996222,
+      "compile_s": 0.40420859400001063,
+      "first_execute_s": 0.042312342000514036,
+      "first_solve_s": 0.7082641460001469,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-06,
+      "dt0": 7.8125e-09,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          10,
+          10,
+          0
+        ],
+        [
+          11,
+          11,
+          0
+        ],
+        [
+          11,
+          11,
+          0
+        ],
+        [
+          12,
+          12,
+          0
+        ],
+        [
+          12,
+          12,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ]
+      ],
+      "accepted_mean": 11.875,
+      "rejected_mean": 0.0,
+      "position_error_m": 1.8574882743038756e-09,
+      "velocity_error_m_s": 0.0035321929026395082,
+      "velocity_error_over_speed": 3.609010197257335e-09,
+      "warm_samples_s": [
+        0.03608051499941212,
+        0.038061340999774984,
+        0.03462640100042336,
+        0.03427217200078303,
+        0.040381689001151244,
+        0.035224967999965884,
+        0.035762311999860685,
+        0.03377429200008919,
+        0.03490373899876431
+      ],
+      "warm_median_ms": 35.224967999965884
+    },
+    {
+      "model": "gc",
+      "method": "dopri8",
+      "implementation": "native_pi",
+      "lower_s": 0.24539144299887994,
+      "compile_s": 0.417675689999669,
+      "first_execute_s": 0.05922139900030743,
+      "first_solve_s": 0.7222885319988563,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-06,
+      "dt0": 7.8125e-09,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          17,
+          17,
+          0
+        ],
+        [
+          18,
+          18,
+          0
+        ],
+        [
+          18,
+          18,
+          0
+        ],
+        [
+          18,
+          18,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          20,
+          20,
+          0
+        ]
+      ],
+      "accepted_mean": 18.5,
+      "rejected_mean": 0.0,
+      "position_error_m": 3.2811209305094735e-10,
+      "velocity_error_m_s": 0.00038727419450879097,
+      "velocity_error_over_speed": 3.956965419619078e-10,
+      "warm_samples_s": [
+        0.05575270599911164,
+        0.0566603600000235,
+        0.053509522000240395,
+        0.05459092000091914,
+        0.0581683639993571,
+        0.05255875799957721,
+        0.05503603000033763,
+        0.05394813000020804,
+        0.053317043000788544
+      ],
+      "warm_median_ms": 54.59092000091914
+    },
+    {
+      "model": "gc",
+      "method": "dopri8",
+      "implementation": "diffrax_pi",
+      "lower_s": 4.364519849999851,
+      "compile_s": 0.6563957670005038,
+      "first_execute_s": 0.06474724800136755,
+      "first_solve_s": 5.085662865001723,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-06,
+      "dt0": 7.8125e-09,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          17,
+          17,
+          0
+        ],
+        [
+          18,
+          18,
+          0
+        ],
+        [
+          18,
+          18,
+          0
+        ],
+        [
+          18,
+          18,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          20,
+          20,
+          0
+        ]
+      ],
+      "accepted_mean": 18.5,
+      "rejected_mean": 0.0,
+      "position_error_m": 3.2819680306772625e-10,
+      "velocity_error_m_s": 0.0003873006207868457,
+      "velocity_error_over_speed": 3.957235429523984e-10,
+      "warm_samples_s": [
+        0.058733898998980294,
+        0.05940243700024439,
+        0.05618710799899418,
+        0.05802192000010109,
+        0.06936987199878786,
+        0.06298381899978267,
+        0.05882145200121158,
+        0.0578601979996165,
+        0.0544835590008006
+      ],
+      "warm_median_ms": 58.733898998980294
+    },
+    {
+      "model": "gc",
+      "method": "dopri8",
+      "implementation": "native_i_optimized",
+      "lower_s": 0.3153983030006202,
+      "compile_s": 0.49128052500054764,
+      "first_execute_s": 0.04639516899987939,
+      "first_solve_s": 0.8530739970010472,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "optimized",
+      "maxtime": 2e-06,
+      "dt0": 7.8125e-09,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          10,
+          10,
+          0
+        ],
+        [
+          11,
+          11,
+          0
+        ],
+        [
+          11,
+          11,
+          0
+        ],
+        [
+          12,
+          12,
+          0
+        ],
+        [
+          12,
+          12,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ]
+      ],
+      "accepted_mean": 11.875,
+      "rejected_mean": 0.0,
+      "position_error_m": 1.5917713813706769e-09,
+      "velocity_error_m_s": 0.003458673250861466,
+      "velocity_error_over_speed": 3.5338916575061543e-09,
+      "warm_samples_s": [
+        0.03543654299937771,
+        0.036064354000700405,
+        0.03358753399879788,
+        0.03362260900030378,
+        0.05391589000100794,
+        0.03638142700037861,
+        0.037964449998980854,
+        0.034613517000252614,
+        0.035576274000050034
+      ],
+      "warm_median_ms": 35.576274000050034
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri5",
+      "implementation": "native_i",
+      "lower_s": 0.2203090129987686,
+      "compile_s": 0.41103219800061197,
+      "first_execute_s": 0.032564273999014404,
+      "first_solve_s": 0.663905484998395,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-07,
+      "dt0": 7.8125e-10,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          78,
+          78,
+          0
+        ],
+        [
+          76,
+          76,
+          0
+        ],
+        [
+          75,
+          75,
+          0
+        ],
+        [
+          73,
+          73,
+          0
+        ],
+        [
+          71,
+          71,
+          0
+        ],
+        [
+          69,
+          69,
+          0
+        ],
+        [
+          67,
+          67,
+          0
+        ],
+        [
+          63,
+          63,
+          0
+        ]
+      ],
+      "accepted_mean": 71.5,
+      "rejected_mean": 0.0,
+      "position_error_m": 9.770140252385318e-11,
+      "velocity_error_m_s": 0.003053822088986635,
+      "velocity_error_over_speed": 3.1202358884551786e-09,
+      "warm_samples_s": [
+        0.029803032000927487,
+        0.03041530500013323,
+        0.029979181001181132,
+        0.030211432998839882,
+        0.029540251000071294,
+        0.02926069899876893,
+        0.028574959998877603,
+        0.029534049999710987,
+        0.028286732000196935
+      ],
+      "warm_median_ms": 29.540251000071294
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri5",
+      "implementation": "native_pi",
+      "lower_s": 0.26816230100121174,
+      "compile_s": 0.3542974710017006,
+      "first_execute_s": 0.03648849499950302,
+      "first_solve_s": 0.6589482670024154,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-07,
+      "dt0": 7.8125e-10,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          95,
+          95,
+          0
+        ],
+        [
+          94,
+          94,
+          0
+        ],
+        [
+          92,
+          92,
+          0
+        ],
+        [
+          91,
+          91,
+          0
+        ],
+        [
+          89,
+          89,
+          0
+        ],
+        [
+          87,
+          87,
+          0
+        ],
+        [
+          84,
+          84,
+          0
+        ],
+        [
+          80,
+          80,
+          0
+        ]
+      ],
+      "accepted_mean": 89.0,
+      "rejected_mean": 0.0,
+      "position_error_m": 3.650124646981112e-11,
+      "velocity_error_m_s": 0.0011547172907739878,
+      "velocity_error_over_speed": 1.1798298089095061e-09,
+      "warm_samples_s": [
+        0.03851394400044228,
+        0.03772138500062283,
+        0.03483785599928524,
+        0.03579616199931479,
+        0.03423287500118022,
+        0.03367219000028854,
+        0.03623845699985395,
+        0.035785141999440384,
+        0.03616986899942276
+      ],
+      "warm_median_ms": 35.79616199931479
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri5",
+      "implementation": "diffrax_pi",
+      "lower_s": 3.8594807839999703,
+      "compile_s": 0.4598663470005704,
+      "first_execute_s": 0.04333011000016995,
+      "first_solve_s": 4.362677241000711,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-07,
+      "dt0": 7.8125e-10,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          95,
+          95,
+          0
+        ],
+        [
+          94,
+          94,
+          0
+        ],
+        [
+          92,
+          92,
+          0
+        ],
+        [
+          91,
+          91,
+          0
+        ],
+        [
+          89,
+          89,
+          0
+        ],
+        [
+          87,
+          87,
+          0
+        ],
+        [
+          84,
+          84,
+          0
+        ],
+        [
+          80,
+          80,
+          0
+        ]
+      ],
+      "accepted_mean": 89.0,
+      "rejected_mean": 0.0,
+      "position_error_m": 3.6501912603625897e-11,
+      "velocity_error_m_s": 0.001154714380390942,
+      "velocity_error_over_speed": 1.1798268352321393e-09,
+      "warm_samples_s": [
+        0.038142692001201794,
+        0.03796656299891765,
+        0.03711114599900611,
+        0.037867828001253656,
+        0.037215400001514354,
+        0.040130377999958,
+        0.0363713850001659,
+        0.037836727999092545,
+        0.03716393499962578
+      ],
+      "warm_median_ms": 37.836727999092545
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri5",
+      "implementation": "native_i_optimized",
+      "lower_s": 0.24192579400005343,
+      "compile_s": 0.3407031980004831,
+      "first_execute_s": 0.03003475600053207,
+      "first_solve_s": 0.6126637480010686,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "optimized",
+      "maxtime": 2e-07,
+      "dt0": 7.8125e-10,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          78,
+          78,
+          0
+        ],
+        [
+          76,
+          76,
+          0
+        ],
+        [
+          75,
+          75,
+          0
+        ],
+        [
+          73,
+          73,
+          0
+        ],
+        [
+          71,
+          71,
+          0
+        ],
+        [
+          69,
+          69,
+          0
+        ],
+        [
+          67,
+          67,
+          0
+        ],
+        [
+          63,
+          63,
+          0
+        ]
+      ],
+      "accepted_mean": 71.5,
+      "rejected_mean": 0.0,
+      "position_error_m": 9.770140252385318e-11,
+      "velocity_error_m_s": 0.003053822088986635,
+      "velocity_error_over_speed": 3.1202358884551786e-09,
+      "warm_samples_s": [
+        0.030374107998795807,
+        0.0323626579993288,
+        0.02860454599976947,
+        0.031360768000013195,
+        0.031074112999704084,
+        0.02767472100094892,
+        0.028702408000754076,
+        0.03038047900008678,
+        0.028961321000679163
+      ],
+      "warm_median_ms": 30.374107998795807
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri8",
+      "implementation": "native_i",
+      "lower_s": 0.23851736500000698,
+      "compile_s": 0.3036785510012123,
+      "first_execute_s": 0.015171544000622816,
+      "first_solve_s": 0.5573674600018421,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-07,
+      "dt0": 7.8125e-10,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          15,
+          15,
+          0
+        ],
+        [
+          15,
+          15,
+          0
+        ],
+        [
+          14,
+          14,
+          0
+        ],
+        [
+          14,
+          14,
+          0
+        ],
+        [
+          14,
+          14,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ],
+        [
+          13,
+          12,
+          1
+        ]
+      ],
+      "accepted_mean": 13.75,
+      "rejected_mean": 0.125,
+      "position_error_m": 3.6612401999036592e-09,
+      "velocity_error_m_s": 0.09910007464350201,
+      "velocity_error_over_speed": 1.0125527959418571e-07,
+      "warm_samples_s": [
+        0.01371914399896923,
+        0.011888781000379822,
+        0.012800882999727037,
+        0.013605902999188402,
+        0.013266140000268933,
+        0.014074346998313558,
+        0.013227147001089179,
+        0.01189830799921765,
+        0.01333078000061505
+      ],
+      "warm_median_ms": 13.266140000268933
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri8",
+      "implementation": "native_pi",
+      "lower_s": 0.22193445599987172,
+      "compile_s": 0.32405185000061465,
+      "first_execute_s": 0.02155010400019819,
+      "first_solve_s": 0.5675364100006846,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-07,
+      "dt0": 7.8125e-10,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          22,
+          22,
+          0
+        ],
+        [
+          22,
+          22,
+          0
+        ],
+        [
+          22,
+          22,
+          0
+        ],
+        [
+          21,
+          21,
+          0
+        ],
+        [
+          21,
+          21,
+          0
+        ],
+        [
+          20,
+          20,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ]
+      ],
+      "accepted_mean": 20.75,
+      "rejected_mean": 0.0,
+      "position_error_m": 3.781366331168101e-10,
+      "velocity_error_m_s": 0.009701625487650745,
+      "velocity_error_over_speed": 9.91261414084683e-09,
+      "warm_samples_s": [
+        0.01784139499977755,
+        0.018111510000380804,
+        0.018698714000493055,
+        0.019981367999207578,
+        0.01857263999954739,
+        0.02077669199934462,
+        0.018015979998381226,
+        0.017473478999818326,
+        0.01880459200037876
+      ],
+      "warm_median_ms": 18.57263999954739
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri8",
+      "implementation": "diffrax_pi",
+      "lower_s": 4.157117257998834,
+      "compile_s": 0.439136695000343,
+      "first_execute_s": 0.021594727000774583,
+      "first_solve_s": 4.617848679999952,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "standard",
+      "maxtime": 2e-07,
+      "dt0": 7.8125e-10,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          22,
+          22,
+          0
+        ],
+        [
+          22,
+          22,
+          0
+        ],
+        [
+          22,
+          22,
+          0
+        ],
+        [
+          21,
+          21,
+          0
+        ],
+        [
+          21,
+          21,
+          0
+        ],
+        [
+          20,
+          20,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ],
+        [
+          19,
+          19,
+          0
+        ]
+      ],
+      "accepted_mean": 20.75,
+      "rejected_mean": 0.0,
+      "position_error_m": 3.7811109798724374e-10,
+      "velocity_error_m_s": 0.009700952083221637,
+      "velocity_error_over_speed": 9.911926091377699e-09,
+      "warm_samples_s": [
+        0.01811531600105809,
+        0.020629958000426996,
+        0.01939070600019477,
+        0.01919795600042562,
+        0.018041127999822493,
+        0.02061274500010768,
+        0.018802747999870917,
+        0.018536220999521902,
+        0.01843235799969989
+      ],
+      "warm_median_ms": 18.802747999870917
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri8",
+      "implementation": "native_i_optimized",
+      "lower_s": 0.2506832819999545,
+      "compile_s": 0.3139765930009162,
+      "first_execute_s": 0.015263785999195534,
+      "first_solve_s": 0.5799236610000662,
+      "rtol": 1e-09,
+      "atol": 1e-09,
+      "physical_error_budget": 2e-09,
+      "dense_output": "optimized",
+      "maxtime": 2e-07,
+      "dt0": 7.8125e-10,
+      "saves": 64,
+      "speed_m_s": 978715.1350594122,
+      "counts_per_particle": [
+        [
+          15,
+          15,
+          0
+        ],
+        [
+          15,
+          15,
+          0
+        ],
+        [
+          14,
+          14,
+          0
+        ],
+        [
+          14,
+          14,
+          0
+        ],
+        [
+          14,
+          14,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ],
+        [
+          13,
+          13,
+          0
+        ],
+        [
+          13,
+          12,
+          1
+        ]
+      ],
+      "accepted_mean": 13.75,
+      "rejected_mean": 0.125,
+      "position_error_m": 5.114335621669852e-10,
+      "velocity_error_m_s": 0.013894413597881794,
+      "velocity_error_over_speed": 1.4196586013803029e-08,
+      "warm_samples_s": [
+        0.012386108001010143,
+        0.012640060998819536,
+        0.013441376000628225,
+        0.012582424998981878,
+        0.01342575700073212,
+        0.01351801000055275,
+        0.01260516600086703,
+        0.01237582900103007,
+        0.013942321000286029
+      ],
+      "warm_median_ms": 12.640060998819536
+    }
+  ],
+  "comparisons": [
+    {
+      "model": "gc",
+      "method": "dopri5",
+      "pi_counts_match_per_particle": true,
+      "pi_max_position_difference_m": 5.551115123125783e-15,
+      "pi_max_velocity_difference_m_s": 3.958120942115784e-09
+    },
+    {
+      "model": "gc",
+      "method": "dopri8",
+      "pi_counts_match_per_particle": true,
+      "pi_max_position_difference_m": 8.020251129892131e-13,
+      "pi_max_velocity_difference_m_s": 1.0131625458598137e-06
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri5",
+      "pi_counts_match_per_particle": true,
+      "pi_max_position_difference_m": 8.43769498715119e-15,
+      "pi_max_velocity_difference_m_s": 8.149072527885437e-09
+    },
+    {
+      "model": "lorentz",
+      "method": "dopri8",
+      "pi_counts_match_per_particle": true,
+      "pi_max_position_difference_m": 9.459100169806334e-14,
+      "pi_max_velocity_difference_m_s": 2.5538611225783825e-06
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""Fixed-step K=0 Boozer guiding-centre tracing (White, 2014).
+"""K=0 Boozer guiding-centre tracing (White, 2014).
 
 Interpolate the |B| spectrum in sqrt(s), with m>=1 coefficients divided by
 sqrt(s) for axis regularity; interpolate iota, G and I in s. Explicit RK runs in
@@ -283,6 +283,8 @@ class BoozerTrace:
     ``loss_times`` is ``-1`` for particles that were not lost;
     ``thermalized_times`` and ``failed_times`` likewise. A failed orbit
     is frozen at its last finite state and is not counted as confined.
+    Native runs also return ``step_stats`` (trials, accepted, rejected) and
+    ``solver_status`` (``essos.rk.RKStatus``), each per particle.
     """
 
     times: np.ndarray
@@ -291,6 +293,8 @@ class BoozerTrace:
     thermalized_times: np.ndarray
     energy_error: np.ndarray  # max |E/E0 - 1| per particle (collisionless drift only)
     failed_times: np.ndarray | None = None
+    step_stats: np.ndarray | None = None  # native only: (particles, 3), trials/accepted/rejected
+    solver_status: np.ndarray | None = None  # native RKStatus per particle
 
     @property
     def lost(self):
@@ -450,9 +454,86 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
     return jax.vmap(one)(carry, keys)
 
 
+def _boozer_error_norm(error, speed, rtol, atol):
+    """Independent flux-radius, toroidal-radian and parallel-speed budgets."""
+    return jnp.maximum(jnp.linalg.norm(error[:2]), jnp.maximum(
+        jnp.abs(error[2]), jnp.abs(error[3])/speed)) / (rtol + atol)
+
+
+@partial(jax.jit, static_argnames=("method", "adaptive", "controller", "dense_output", "max_steps"))
+def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
+                   method, adaptive, controller, pcoeff, icoeff, dense_output, max_steps):
+    """One shared native RK solve per orbit, independent of the save grid."""
+    from essos.rk import RKStatus, solve_rk
+
+    def one(y0, mu):
+        def magnetic_field(y):
+            _, r, theta, *_ = _chart(y)
+            return field.modB_derivatives(r, theta, y[2])[0]
+
+        def rhs(t, y, args):
+            del t, args
+            value = guiding_center_rhs(field, y, mu, mass, charge)
+            B = magnetic_field(y)
+            return jnp.where(jnp.isfinite(B) & (B > 0), value, jnp.nan)
+
+        def error_norm(y0, y1, error):
+            del y0, y1
+            # This field supplies |B| and profiles, not a Cartesian embedding.
+            # Use a unit flux-radius chart, one radian for zeta and birth speed
+            # for v_parallel. No scale grows with angle winding or vanishes at
+            # a parallel turning point; these are chart errors, not metres.
+            return _boozer_error_norm(error, speed, rtol, atol)
+
+        solution = solve_rk(rhs, y0, t1=times[-1], dt0=dt0, ts=times,
+            method=method, adaptive=adaptive, rtol=rtol, atol=atol,
+            error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
+            dense_output=dense_output, max_steps=max_steps,
+            event=lambda t, y, args: 1. - y[0]**2 - y[1]**2)
+
+        def output(y):
+            s, _, theta, *_ = _chart(y)
+            B = magnetic_field(y)
+            energy = .5*y[3]**2 + mu*B
+            state = jnp.array([s, theta, y[2], y[3], jnp.sqrt(jnp.maximum(2*energy, 0.))])
+            valid = jnp.isfinite(state).all() & jnp.isfinite(energy) & (energy > 0) & (B > 0)
+            return state, energy, valid
+
+        # Hold an orbit at the root-found loss point or last accepted state
+        # after failure. The solver itself leaves unreached saves infinite.
+        sampled = jnp.where(jnp.isfinite(solution.ys).all(axis=1)[:, None], solution.ys, solution.y)
+        values, energies, valid = jax.vmap(output)(sampled)
+        _, end_energy, end_valid = output(solution.y)
+        birth, birth_energy, _ = output(y0)
+        output_failed = ~jnp.all(valid) | ~end_valid
+        failed = (solution.status > RKStatus.EVENT) | output_failed
+        lost = (solution.status == RKStatus.EVENT) & ~failed
+        first_bad = jnp.min(jnp.where(valid, jnp.inf, times))
+        failed_time = jnp.minimum(solution.t, first_bad)
+
+        def hold(carry, item):
+            previous, finite_prefix = carry
+            value, finite = item
+            finite_prefix = finite_prefix & finite
+            previous = jnp.where(finite_prefix, value, previous)
+            return (previous, finite_prefix), previous
+
+        _, values = jax.lax.scan(hold, (birth, jnp.asarray(True)), (values, valid))
+        energy_error = jnp.maximum(jnp.max(jnp.abs(energies/birth_energy - 1)),
+                                    jnp.abs(end_energy/birth_energy - 1))
+        return (values, jnp.where(lost, solution.t, -1.), jnp.where(failed, failed_time, -1.),
+                jnp.where(failed, jnp.inf, energy_error), jnp.stack(solution.stats),
+                jnp.where(output_failed, RKStatus.NONFINITE, solution.status))
+
+    return jax.vmap(one)(y0, mu0)
+
+
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep=None,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=True, compact=True, method="dopri8", tolerance=1e-8):
+                 progress=True, compact=True, method=None, tolerance=1e-8,
+                 integrator=None, adaptive=True, rtol=1e-9, atol=1e-9,
+                 native_controller="i", native_pcoeff=.4, native_icoeff=.3,
+                 native_dense_output="standard", max_steps=MAX_ATTEMPTS):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The default ``timestep`` is ``R0 / (2 nfp speed)``, with ``R0 = |G| / |B|`` on the
@@ -477,8 +558,37 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     ``"adaptive"`` (Dopri5) and ``"adaptive8"`` (Dopri8) control each particle's step so the embedded error
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.
+
+    For the shared native orbit driver, select ``integrator="essos_rk45"`` or
+    ``"essos_dopri8"`` and omit ``method``. ``adaptive=True`` (default) uses
+    the I-controller with ``rtol=atol=1e-9``; ``adaptive=False`` uses ``timestep``
+    directly, clipping only at tmax. Native controller/PI coefficients and
+    ``native_dense_output="standard"`` match the options in ``Tracing``.
+    Saves use dense output and do not constrain the orbit steps. The native
+    error budget is ``max(norm(du,dw), abs(dzeta), abs(dv_par)/speed)/(rtol+atol)``:
+    unit flux radius, radians and birth speed, rather than Cartesian metres.
+    The drift and field representation are unchanged. Native mode currently
+    supports collisionless orbits only. It solves the whole horizon, so legacy
+    interval compaction is unused and progress reports completion. Native
+    ``step_stats`` and ``solver_status`` are returned on ``BoozerTrace``;
+    energy error is measured at saved and terminal states. LCFS events are
+    root-found and subsequent saves hold that state; failures are reported.
     """
-    if method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
+    if integrator not in (None, "essos_rk45", "essos_dopri8"):
+        raise ValueError("integrator must be None, 'essos_rk45' or 'essos_dopri8'")
+    if integrator is not None:
+        if method is not None:
+            raise ValueError("method selects a legacy Boozer stepper; omit it for a native integrator")
+        if species is not None:
+            raise ValueError("native Boozer integrators currently support collisionless orbits only")
+        if not isinstance(adaptive, (bool, np.bool_)):
+            raise ValueError("adaptive must be boolean")
+        for name, value, positive in (("rtol", rtol, False), ("atol", atol, True)):
+            if np.ndim(value) or not np.isfinite(value) or (value <= 0 if positive else value < 0):
+                raise ValueError(f"{name} must be finite and {'positive' if positive else 'nonnegative'}")
+    else:
+        method = "dopri8" if method is None else method
+    if integrator is None and method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
         raise ValueError("method must be 'rk4', 'dopri5', 'dopri8', 'adaptive' or 'adaptive8'")
     if not (np.isfinite(tolerance) and tolerance > 0):
         raise ValueError("tolerance must be positive and finite")
@@ -526,6 +636,15 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         sharding = NamedSharding(Mesh(np.asarray(devices[:ndev]), ("p",)), PartitionSpec("p"))
         args = [jax.device_put(a, sharding) for a in args]
     y0, mu0, keys = args
+    if integrator is not None:
+        times = np.linspace(0., float(tmax), n_int + 1)
+        result = _native_orbits(field, y0, mu0, mass, charge, speed[0], jnp.asarray(times),
+            float(timestep), rtol, atol, "dopri5" if integrator == "essos_rk45" else "dopri8",
+            bool(adaptive), native_controller, native_pcoeff, native_icoeff, native_dense_output, max_steps)
+        states, t_loss, t_fail, err, stats, status = (np.asarray(a)[:n] for a in result)
+        if progress is not None:
+            progress(n_int, n_int)
+        return BoozerTrace(times, states, t_loss, np.full(n, -1.), err, t_fail, stats, status)
     carry, first = _start(field, y0, mu0)
     chunk = n_int if progress is None and not compact else -(-n_int // 10)
     states = np.empty((n, n_int + 1, 5), dtype=np.asarray(first).dtype)
