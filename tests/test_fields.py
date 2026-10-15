@@ -303,6 +303,19 @@ def test_fused_guiding_center_quantities_match_the_separate_methods():
         np.testing.assert_allclose(np.broadcast_to(a, np.shape(b)), b, rtol=1e-9, atol=1e-12)
 
 
+def test_surface_from_input_file_matches_the_wout_boundary():
+    from essos.fields import Vmec
+    from essos.surfaces import SurfaceRZFourier
+
+    input_file = WOUT_QA.replace("wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
+                                 "input.LandremanPaul2021_QA_reactorScale_lowres")
+    surface = SurfaceRZFourier.from_input_file(input_file, ntheta=8, nphi=8, close=False)
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8, close=False)
+    # MPOL = 5 in the input means poloidal modes m = 0..4, as in VMEC
+    assert (surface.nfp, surface.mpol, surface.ntor) == (2, 4, 5)
+    assert jnp.abs(surface.gamma - vmec.surface.gamma).max() < 2e-3
+
+
 def _asymmetric_vmec_arrays(phase=0.0, ntor=0):
     """Circular surfaces and a covariant field equal to e_phi + 0.06 e_Z."""
     s = jnp.linspace(0, 1, 5)
