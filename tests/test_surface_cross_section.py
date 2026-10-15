@@ -11,11 +11,12 @@ def _polygon_area(R, Z):
     return 0.5 * abs(np.sum(R * np.roll(Z, -1) - np.roll(R, -1) * Z))
 
 
-@pytest.mark.parametrize("close", [False, True])
-def test_mean_cross_sectional_area_elliptic_torus(close):
+@pytest.mark.parametrize("range_torus,close", [("full torus", False), ("full torus", True),
+                                               ("half period", True)])
+def test_mean_cross_sectional_area_elliptic_torus(range_torus, close):
     R0, a, b = 3.0, 0.7, 0.4
     surface = SurfaceRZFourier(jnp.array([R0, a]), jnp.array([0.0, b]), nfp=1, mpol=1, ntor=0,
-                               ntheta=40, nphi=30, close=close)
+                               ntheta=40, nphi=30, close=close, range_torus=range_torus)
     np.testing.assert_allclose(surface.mean_cross_sectional_area(), np.pi * a * b, rtol=1e-12)
 
 

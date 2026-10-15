@@ -823,30 +823,20 @@ class SurfaceRZFourier:
             f.write('\n'.join(lines) + '\n/\n')
             
     def mean_cross_sectional_area(self):
-        """Mean over the toroidal grid of the area of the constant-phi cross sections.
+        """Mean over phi of the constant-phi cross-section area ``int R dZ/dtheta dtheta``.
 
-        The cross-section area is ``A = int R dZ/dtheta dtheta`` over
-        ``theta in [0, 2 pi)``, i.e. ``2 pi`` times the theta-average of the
-        integrand. With ``close=True`` the duplicated end points are dropped so
-        the average remains a periodic rectangle rule.
+        ``dZ/dtheta`` at fixed cylindrical phi is ``Z_theta - Z_u phi_theta / phi_u``
+        (u the surface toroidal angle); the phi average uses ``_surface_mean``.
         """
-        xyz = self.gamma
-        dgamma1 = self.gammadash_phi
-        dgamma2 = self.gammadash_theta
-        if self.close:
-            xyz, dgamma1, dgamma2 = (a[:-1, :-1] for a in (xyz, dgamma1, dgamma2))
-        x2y2 = xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2
-        J = jnp.zeros((xyz.shape[0], xyz.shape[1], 2, 2))
-        J = J.at[:, :, 0, 0].set((xyz[:, :, 0] * dgamma1[:, :, 1] - xyz[:, :, 1] * dgamma1[:, :, 0]) / x2y2)
-        J = J.at[:, :, 0, 1].set((xyz[:, :, 0] * dgamma2[:, :, 1] - xyz[:, :, 1] * dgamma2[:, :, 0]) / x2y2)
-        J = J.at[:, :, 1, 0].set(0)
-        J = J.at[:, :, 1, 1].set(1)
-        detJ = jnp.linalg.det(J)
-        Jinv = jnp.linalg.inv(J)
-        dZ_dtheta = dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
-        mean_cross_sectional_area = 2 * jnp.pi * jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))
-        return mean_cross_sectional_area
-    
+        x, y = self.gamma[..., 0], self.gamma[..., 1]
+        d_phi, d_theta = self.gammadash_phi, self.gammadash_theta
+        r2 = x**2 + y**2
+        phi_u = (x * d_phi[..., 1] - y * d_phi[..., 0]) / r2
+        phi_theta = (x * d_theta[..., 1] - y * d_theta[..., 0]) / r2
+        # R dZ/dtheta times the Jacobian phi_u of the change of toroidal angle.
+        integrand = jnp.sqrt(r2) * (d_theta[..., 2] * phi_u - d_phi[..., 2] * phi_theta)
+        return 2 * jnp.pi * jnp.abs(self._surface_mean(integrand))
+
     def _tree_flatten(self):
         tables = (self._rc, self._zs, self._rs, self._zc)
         children = tuple(table * self.scaling if hasattr(table, "shape") else table for table in tables)
