@@ -320,7 +320,7 @@ def test_levelset_stopping_criterion_stops_and_fills_field_line():
     )
 
     assert tracing.boundary_hits.tolist() == [True]
-    assert tracing.progress is False
+    assert tracing.progress is False  # ESSOS_PROGRESS=0 in conftest
     assert jnp.isfinite(tracing.trajectories).all()
     assert jnp.max(tracing.trajectories[0, :, 0]) <= 1.7 + 1e-8
     assert jnp.allclose(tracing.trajectories[0, -1], tracing.trajectories[0, -2])
@@ -417,8 +417,30 @@ def _near_axis_particles():
     return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([0.9, 0.9, 0.9, -0.9, 0.9]))
 
 
-def test_vmec_guiding_centers_cross_the_magnetic_axis():
+def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature():
+    """Without the noise-induced drift sigma_ik d_j sigma_jk / 2 a thermal
+    ensemble heated to <E> ~ 1.35 (3T/2) within two slowing-down times."""
+    from essos.background_species import nu_s_ab
+    from essos.constants import ELEMENTARY_CHARGE
+    temperature = 1e3 * ELEMENTARY_CHARGE
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e20]), jnp.array([1e3]))
+    vth = np.sqrt(temperature / PROTON_MASS)
+    nu = float(nu_s_ab(PROTON_MASS, ELEMENTARY_CHARGE, 0, vth, jnp.zeros(3), species))
+    n = 200
+    xyz = jnp.tile(jnp.array([1., 0., 0.]), (n, 1))
+    particles = Particles(initial_xyz=xyz, initial_xyz_fullorbit=xyz, mass=PROTON_MASS, charge=ELEMENTARY_CHARGE,
+                          initial_vxvyvz=vth * jax.random.normal(jax.random.key(0), (n, 3)))
+    trace = Tracing(field=_UniformField((0., 0., 1.), magnitude=1e-6), particles=particles, species=species,
+                    model="FullOrbitCollisions", maxtime=2 / nu, timestep=1e-2 / nu, times_to_trace=6,
+                    rtol=1e-4, atol=1e-4)
+    energy = 0.5 * PROTON_MASS * jnp.sum(trace.trajectories[:, :, 3:]**2, axis=-1) / (1.5 * temperature)
+    error = np.sqrt(2 / 3 / n)
+    assert np.all(np.abs(energy.mean(axis=0) - 1) < 4 * error)
+
+
+def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch):
     """The orbit born at s = 1e-7 used to stop at once, at s <= axis_threshold = 1e-6."""
+    monkeypatch.delenv("ESSOS_PROGRESS")  # default progress must not break the vmapped segment loop
     particles = _near_axis_particles()
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
                       particles=particles, maxtime=2e-5, timestep=1e-9, times_to_trace=200,
@@ -615,6 +637,26 @@ def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypat
         assert bool(trace.boundary_hits[0])
         assert float(jnp.max(trace.trajectories[0, :, 2])) < ceiling
         np.testing.assert_array_equal(trace.trajectories[0, -1], trace.trajectories[0, -2])
+
+
+def test_tracing_pytree_round_trip_and_jit():
+    """Unflatten re-ran __init__ with times as times_to_trace, passed both
+    condition and stopping_criteria, and dropped species and boundary."""
+    field = _UniformField((0., 0., 1.), magnitude=1e-3)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+
+    def below_ceiling(t, y, args, **kwargs):
+        return 1.0 - y[2]
+    trace = Tracing(field=field, particles=particles, species=species, model="FullOrbitCollisions",
+                    maxtime=1e-6, timestep=1e-7, times_to_trace=3, stopping_criteria=below_ceiling)
+    leaves, treedef = jax.tree_util.tree_flatten(trace)
+    rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+    assert rebuilt.species is species and rebuilt.times_to_trace == 3
+    assert rebuilt.stopping_criteria == trace.stopping_criteria and rebuilt.condition is trace.condition
+    np.testing.assert_array_equal(rebuilt.times, trace.times)
+    np.testing.assert_array_equal(rebuilt.trajectories, trace.trajectories)
+    np.testing.assert_allclose(jax.jit(lambda tr: tr.energy())(trace), trace.energy(), rtol=1e-12)
 
 
 class _MuField:
@@ -888,12 +930,13 @@ def test_vmec_lost_energies_come_from_the_last_finite_state():
     assert jnp.allclose(tracing.lost_positions[lost, 0], 1.0, atol=1e-9)
 
 
-def test_particle_batches_report_completed_particles_and_match_one_batch(capsys):
+def test_particle_batches_report_completed_particles_and_match_one_batch(capsys, monkeypatch):
     """Batches of 6 (the last one padded) give the orbits, events and losses of one batch."""
     whole = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9)
     capsys.readouterr()
+    monkeypatch.delenv("ESSOS_PROGRESS")
     batched = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9,
-                            particle_batch_size=6, progress=True)
+                            particle_batch_size=6)
     progress = capsys.readouterr().err
     assert "Tracing particles" in progress and "16/16" in progress
     # The adaptive steps of a vmapped solve depend on the batch in the last bits.
@@ -987,6 +1030,17 @@ STRIKING = ([[0.9732, 2.2941, 5.0876], [0.9821, 0.6628, 3.5216], [0.9554, 0.7221
             [-0.9872, 0.5453, 0.747, -0.8145])
 
 
+def test_wall_given_as_a_gap_or_a_surface():
+    from essos.surfaces import SurfaceRZFourier
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    surface = SurfaceRZFourier.from_vmec(vmec, ntheta=64, nphi=128, offset=0.3)
+    point = jnp.asarray(surface.gamma[0, 0]) * 1.001
+    from essos.dynamics import _wall_function
+    walls = [_wall_function(vmec, w) for w in (0.3, surface)]
+    assert walls[0](point) == walls[1](point) and abs(walls[0](point)) < 0.05
+    assert _wall_function(vmec, None) is None
+
+
 def test_vmec_lcfs_crossings_are_exact():
     tracing = _edge_tracing("GuidingCenterAdaptative", 0.975, 50, atol=1e-9, rtol=1e-9)
     crossed = jnp.isfinite(tracing.lcfs_times)
@@ -1071,3 +1125,42 @@ def test_guiding_center_mu_matches_guiding_center():
     args = (field, particles, Electric_field_zero())
     assert jnp.allclose(GuidingCenterMu(0.0, jnp.append(y, mu), args)[:4], GuidingCenter(0.0, y, args))
     assert GuidingCenterMu(0.0, jnp.append(y, mu), args)[4] == 0.0
+
+
+def test_full_orbit_collision_noise_is_parallel_plus_perpendicular():
+    """Velocity noise amplitude sqrt(2 D_par) v v^T/v^2 + sqrt(2 D_perp) (I - v v^T/v^2)."""
+    from essos.dynamics import LorentzCollisionsDiffusion
+    from essos.background_species import nu_D_ab, nu_par_ab
+    field = _UniformField((0., 0., 1.), magnitude=1.)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e20]), jnp.array([1e3]))
+    v = jnp.array([3e6, -1e6, 2e6])
+    block = LorentzCollisionsDiffusion(0., jnp.concatenate([jnp.ones(3), v]), (field, particles, species))[3:, 3:]
+    m, q, speed = particles.mass, particles.charge, jnp.linalg.norm(v)
+    nu_D = nu_D_ab(m, q, 0, speed, jnp.ones(3), species)
+    nu_par = nu_par_ab(m, q, 0, speed, jnp.ones(3), species)
+    P = jnp.outer(v, v) / speed**2
+    np.testing.assert_allclose(block, speed * (jnp.sqrt(nu_par) * P + jnp.sqrt(nu_D) * (jnp.eye(3) - P)), rtol=1e-12)
+
+
+def test_collisional_guiding_center_v_perp_uses_speed_and_pitch():
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+    particles = _near_axis_particles()
+    trace = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterCollisions", particles=particles,
+                    maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
+    np.testing.assert_allclose(trace.v_perp()[:, 0], particles.initial_vperpendicular, rtol=1e-10)
+
+
+def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.constants import SPEED_OF_LIGHT
+    from essos.fields import BiotSavart
+    coils = Coils(CreateEquallySpacedCurves(1, 1, 1.0, 0.4, 8, 1, False), [1e6])
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+    particles = Particles([[1.05, 0., 0.]], [.5])
+    monkeypatch.setattr(Tracing, "trace", lambda self: jnp.zeros((1, 2, 5)))  # only the setup is tested
+    trace = Tracing(field=coils, model="GuidingCenterCollisionsMuFixed", particles=particles,
+                    maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
+    B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
+    mu = particles.initial_vperpendicular[0]**2 / (2 * B * SPEED_OF_LIGHT**2)
+    np.testing.assert_allclose(trace.initial_conditions[0, 4], mu, rtol=1e-6)
