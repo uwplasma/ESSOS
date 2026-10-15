@@ -32,6 +32,12 @@ pip install essos
 - **Boozer-coordinate tracing.** Guiding-centre diagnostics from the Boozer
   `|B|` spectrum and flux functions `iota`, `G` and `I`, with fixed-step
   (RK4, Dopri5, Dopri8) or adaptive Dormand-Prince stepping and optional collisions.
+- **Thermal-helium residence.** Optional `essos[ash]` coefficient-driven,
+  source-weighted residence/occupation with conservative fluxes, checked SOLVAX
+  solves and native JAX derivatives. See the [explicit-input example](examples/particle_tracing/helium_ash_removal.py)
+  and [scope/validation notes](docs/helium_residence.rst). Core residence requires
+  qualified transport coefficients, profiles and boundary conditions; it does
+  not predict pumped exhaust from a WOUT.
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria (stellarator-symmetric or
