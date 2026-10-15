@@ -124,7 +124,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
     def test_infty_norm_constraints(self):
         tree = {'a': jnp.array([1.0, -5.0, 3.0])}
         result = infty_norm_constraints(tree)
-        self.assertAlmostEqual(float(result), 3.0)
+        self.assertAlmostEqual(float(result), 5.0)  # infinity norm: largest magnitude
 
     def test_penalty_average(self):
         tree = {'a': LagrangeMultiplier(value=jnp.array([1.0]), penalty=jnp.array([2.0]), omega=jnp.array([0.0]), eta=jnp.array([0.0]), sq_grad=jnp.array([0.0]))}
