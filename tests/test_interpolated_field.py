@@ -61,7 +61,32 @@ def test_pytree_grad_and_tracing(field):
     point = jnp.array([1.7, 0.1, 0.05])
     assert jax.jit(lambda g: g.AbsB(point))(jax.tree_util.tree_unflatten(tree, leaves)) == f.AbsB(point)
     assert jnp.all(jnp.isfinite(jax.grad(lambda g: g.AbsB(point))(f).table))
-    particles = Particles(initial_xyz=jnp.array([[1.75, 0.0, 0.0], [1.8, 0.0, 0.0]]), energy=3.5e6 * 1.602e-19 / 100)
+    # births committed to one device while the orbits are split over several
+    births = jax.device_put(jnp.array([[1.75, 0.0, 0.0], [1.8, 0.0, 0.0]]), jax.devices()[0])
+    particles = Particles(initial_xyz=births, energy=3.5e6 * 1.602e-19 / 100)
     runs = [Tracing(field=g, model="GuidingCenterAdaptative", particles=particles, maxtime=2e-6, times_to_trace=20,
-                    atol=1e-9, rtol=1e-9).trajectories for g in (field, f)]
-    np.testing.assert_allclose(runs[1][..., :3], runs[0][..., :3], atol=1e-4)
+                    atol=1e-9, rtol=1e-9, devices=jax.devices()[:2]) for g in (field, f)]
+    np.testing.assert_allclose(runs[1].trajectories[..., :3], runs[0].trajectories[..., :3], atol=1e-4)
+    assert jnp.abs(runs[1].energy() / particles.energy - 1).max() < 1e-6
+
+
+def test_vmec_wall_offset_and_box_around_it(field):
+    from pathlib import Path
+    from essos.fields import Vmec
+    from essos.surfaces import SurfaceRZFourier
+    inputs = Path(__file__).parents[1] / "examples" / "input_files"
+    vmec = Vmec(str(inputs / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"))
+    lcfs, wall = (SurfaceRZFourier.from_vmec(vmec, ntheta=16, nphi=8, offset=gap) for gap in (0.0, 0.3))
+    np.testing.assert_allclose(np.linalg.norm(wall.gamma[0, 0] - lcfs.gamma[0, 0]), 0.3, rtol=1e-12)
+    interpolated = InterpolatedField.around(field, wall, margin=0.1, n=8)
+    g = np.asarray(wall.gamma)
+    R = np.hypot(g[..., 0], g[..., 1])
+    assert interpolated.table.shape == (16, 8, 8, 3) and interpolated.nfp == vmec.nfp
+    np.testing.assert_allclose([interpolated.rmin, interpolated.rmax, interpolated.zmax],
+                               [R.min() - 0.1, R.max() + 0.1, np.abs(g[..., 2]).max() + 0.1])
+
+
+def test_a_batched_source_is_wrapped(field):
+    batched = lambda xyz: jax.vmap(field.B)(xyz)  # xyz (n, 3) -> B (n, 3), e.g. a VMEX VmecExtender
+    kwargs = dict(R=(1.5, 2.0), Z=(-0.2, 0.2), nr=6, nz=6, nphi=8)
+    np.testing.assert_allclose(InterpolatedField(batched, **kwargs).table, InterpolatedField(field, **kwargs).table)
