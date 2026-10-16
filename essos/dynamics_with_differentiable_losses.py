@@ -1,0 +1,1663 @@
+from pyexpat import model
+import jax
+jax.config.update("jax_enable_x64", True)
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+from jax.sharding import Mesh, PartitionSpec, NamedSharding
+from jax import jit, vmap, tree_util, random, lax, device_put
+from functools import partial
+from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
+from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
+import diffrax
+from essos.coils import Coils
+from essos.fields import BiotSavart, Vmec
+from essos.surfaces import SurfaceClassifier
+from essos.electric_field import Electric_field_flux, Electric_field_zero
+from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
+from essos.plot import fix_matplotlib_3d
+from essos.util import roots
+from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu_D_ab
+
+USE_SHARDING = False  # Set to True to enable multi-device parallelization
+
+if USE_SHARDING:
+    _devices = jax.devices()
+    if len(_devices) > 1:
+        mesh = Mesh(_devices, ("dev",))
+        spec = PartitionSpec("dev", None)
+        spec_index = PartitionSpec("dev")
+        sharding = NamedSharding(mesh, spec)
+        sharding_index = NamedSharding(mesh, spec_index)
+    else:
+        mesh = None
+        sharding = None
+        sharding_index = None
+else:
+    mesh = None
+    sharding = None
+    sharding_index = None
+
+def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
+    """
+    Computes full orbit positions for given guiding center positions,
+    parallel speeds, and total velocities using JAX for efficiency.
+    """
+    def compute_orbit_params(xyz, vpar):
+        Bs = field.B_contravariant(xyz)
+        AbsBs = jnp.linalg.norm(Bs)
+        eB = Bs / AbsBs
+        p1 = eB
+        p2 = jnp.array([0, 0, 1])
+        p3 = -jnp.cross(p1, p2)
+        p3 /= jnp.linalg.norm(p3)
+        q1 = p1
+        q2 = p2 - jnp.dot(q1, p2) * q1
+        q2 /= jnp.linalg.norm(q2)
+        q3 = p3 - jnp.dot(q1, p3) * q1 - jnp.dot(q2, p3) * q2
+        q3 /= jnp.linalg.norm(q3)
+        speed_perp = jnp.sqrt(total_speed**2 - vpar**2)
+        rg = mass * speed_perp / (jnp.abs(charge) * AbsBs)
+        xyz_full = xyz + rg * (jnp.sin(phase_angle_full_orbit) * q2 + jnp.cos(phase_angle_full_orbit) * q3)
+        vperp = -speed_perp * jnp.cos(phase_angle_full_orbit) * q2 + speed_perp * jnp.sin(phase_angle_full_orbit) * q3
+        v_init = vpar * q1 + vperp
+        return xyz_full, v_init
+    xyz_inits_full, v_inits = vmap(compute_orbit_params)(initial_xyz, initial_vparallel)
+    return xyz_inits_full, v_inits
+
+class Particles():
+    def __init__(self, initial_xyz=None, initial_vparallel_over_v=None, charge=ALPHA_PARTICLE_CHARGE,
+                 mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY, min_vparallel_over_v=-1,
+                 max_vparallel_over_v=1, field=None, initial_vxvyvz=None, initial_xyz_fullorbit=None, phase_angle_full_orbit = 0):
+        self.charge = charge
+        self.mass = mass
+        self.energy = energy
+        self.initial_xyz = jnp.array(initial_xyz)
+        self.nparticles = len(initial_xyz)
+        self.initial_xyz_fullorbit = initial_xyz_fullorbit
+        self.initial_vxvyvz = initial_vxvyvz
+        self.phase_angle_full_orbit = 0
+        self.particle_index=jnp.arange(self.nparticles)
+        
+        key=jax.random.key(42)
+        #self.random_keys=jax.random.split(key,32)[20:22]#self.nparticles)
+        self.random_keys=jax.random.split(key,self.nparticles)        
+        
+        if initial_vparallel_over_v is not None:
+            self.initial_vparallel_over_v = jnp.array(initial_vparallel_over_v)
+        else:
+            self.initial_vparallel_over_v = random.uniform(random.PRNGKey(42), (self.nparticles,), minval=min_vparallel_over_v, maxval=max_vparallel_over_v)
+        
+        self.total_speed = jnp.sqrt(2*self.energy/self.mass)
+        
+        self.initial_vparallel = self.total_speed*self.initial_vparallel_over_v
+        self.initial_vperpendicular = jnp.sqrt(self.total_speed**2 - self.initial_vparallel**2)
+        
+        if field is not None and initial_xyz_fullorbit is None:
+            self.to_full_orbit(field)
+        
+    def to_full_orbit(self, field):
+        self.initial_xyz_fullorbit, self.initial_vxvyvz = gc_to_fullorbit(field=field, initial_xyz=self.initial_xyz, initial_vparallel=self.initial_vparallel,
+                                                                            total_speed=self.total_speed, mass=self.mass, charge=self.charge,
+                                                                            phase_angle_full_orbit=self.phase_angle_full_orbit)
+
+    def join(self, other, field=None):
+        assert isinstance(other, Particles), "Cannot join with non-Particles object"
+        assert self.charge == other.charge, "Cannot join particles with different charges"
+        assert self.mass == other.mass, "Cannot join particles with different masses"
+        assert self.energy == other.energy, "Cannot join particles with different energies"
+
+        charge = self.charge
+        mass = self.mass
+        energy = self.energy
+        initial_xyz = jnp.concatenate((self.initial_xyz, other.initial_xyz), axis=0)
+        initial_vparallel_over_v = jnp.concatenate((self.initial_vparallel_over_v, other.initial_vparallel_over_v), axis=0)
+
+        return Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=initial_vparallel_over_v, charge=charge, mass=mass, energy=energy, field=field)
+
+@partial(jit, static_argnums=(2))
+def GuidingCenterCollisionsDiffusionMu(t,
+                  initial_condition,
+                  args) -> jnp.ndarray:
+    x, y, z, vpar,mu = initial_condition
+    field, particles,_,species,_ = args
+    vpar=SPEED_OF_LIGHT*vpar
+    mu=SPEED_OF_LIGHT**2*particles.mass*mu    
+    q = particles.charge
+    m = particles.mass
+    points = jnp.array([x, y, z])
+    #I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(B_contravariant,B_contravariant))/AbsB**2
+    I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(field.B_contravariant(points),jnp.reshape(field.B_contravariant(points),(3,1))))/field.AbsB(points)**2
+    v=jnp.sqrt(2./m*(0.5*m*vpar**2+mu*field.AbsB(points)))
+    xi=vpar/v
+    p=m*v
+    indeces_species=species.species_indeces
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    Diffusion_par=p**2*nu_par/2.
+    Diffusion_perp=p**2*nu_D/2. 
+    Diffusion_x=0.0#((Diffusion_par-Diffusion_perp)*(1.-xi**2)/2.+Diffusion_perp)/(m*omega_mod)**2
+    Yvv=(Diffusion_par*xi**2+Diffusion_perp*(1.-xi**2))/p**2
+    Yvmu=2.*xi*(1.-xi**2)*(Diffusion_par-Diffusion_perp)/p**2
+    Ymumu=4.*(1.-xi**2)*(Diffusion_par*(1.-xi**2)+Diffusion_perp*xi**2)/p**2 
+    lambda_p=0.5*(Yvv+Ymumu+jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
+    lambda_m=0.5*(Yvv+Ymumu-jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
+    Q1=jnp.reshape(jnp.array([1, Yvmu/(lambda_p-Ymumu)])/jnp.sqrt(1.+(Yvmu/(lambda_p-Ymumu))**2),(2,1))
+    Q2=jnp.reshape(jnp.array([ Yvmu/(lambda_m-Yvv),1])/jnp.sqrt(1.+(Yvmu/(lambda_m-Yvv))**2),(2,1)) 
+    mat1=jnp.diag(jnp.array([v,0.5*m*v**2/field.AbsB(points)]))
+    mat2=jnp.append(Q1,Q2,axis=1)
+    mat3=jnp.diag(jnp.array([jnp.sqrt(2.*lambda_p),jnp.sqrt(2.*lambda_m)]))
+    sigma=jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[jnp.matmul(mat1,jnp.matmul(mat2,mat3)),jnp.diag(jnp.array([jnp.sqrt(2.*Diffusion_par)/m,0.]))])
+    dxdt = jnp.sqrt(2.*Diffusion_x)*I_bb_tensor
+    sigma=sigma.at[0,:].set(sigma.at[0,:].get()/SPEED_OF_LIGHT)
+    sigma=sigma.at[1,:].set(sigma.at[1,:].get()/(SPEED_OF_LIGHT**2*particles.mass) )   
+    #Off diagonals between position an dvelocity are zero at zeroth order
+    Dxv=jnp.zeros((2,3))
+    Dvx=jnp.zeros((3,2))
+    return jnp.append(jnp.append(dxdt,Dxv,axis=0),jnp.append(Dvx,sigma,axis=0),axis=1)
+
+
+@partial(jit, static_argnums=(2))
+def GuidingCenterCollisionsDriftMuStratonovich(t,
+                  initial_condition,
+                  args) -> jnp.ndarray:
+    x, y, z,vpar,mu = initial_condition
+    field, particles,electric_field,species,tag_gc = args
+    #jax.debug.print("vpar  {x}", x=vpar)
+    #jax.debug.print("mu {x}", x=mu)  
+    vpar=SPEED_OF_LIGHT*vpar
+    mu=SPEED_OF_LIGHT**2*particles.mass*mu
+    m = particles.mass
+    q=particles.charge
+    points = jnp.array([x, y, z]) 
+    v=jnp.sqrt(2./m*(0.5*m*vpar**2+mu*field.AbsB(points)))
+    p=m*v
+    xi=vpar/v
+    #xi=jnp.select(condlist=[jnp.abs(xi)<=1,jnp.abs(xi)>1],choicelist=[jnp.sign(xi)*(2.-jnp.abs(xi)),xi])
+    #vpar=xi*v
+    Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
+    Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
+    F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
+    indeces_species=species.species_indeces
+    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    dnu_par_dv=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    dnu_D_dv=jnp.sum(jax.vmap(d_nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)      
+    Diffusion_par=p**2*nu_par/2.
+    Diffusion_perp=p**2*nu_D/2.
+    d_Diffusion_par_dp=p*nu_par+p**2*dnu_par_dv/(2.*m)
+    d_Diffusion_perp_dp=p*nu_par+p**2*dnu_D_dv/(2.*m)    
+    Yvv=(Diffusion_par*xi**2+Diffusion_perp*(1.-xi**2))/p**2
+    Yvmu=2.*xi*(1.-xi**2)*(Diffusion_par-Diffusion_perp)/p**2
+    Ymumu=4.*(1.-xi**2)*(Diffusion_par*(1.-xi**2)+Diffusion_perp*xi**2)/p**2 
+    #Dmuv=2.*mu*vpar/p**2*(Diffusion_par-Diffusion_perp)
+    #Dmumu=2.*mu/(m*field.AbsB(points))*((1-xi**2)(Diffusion_par-Diffusion_perp)+Diffusion_perp)
+    #Dvv=Diffusion_perp/m**2*(1.-xi**2)+Diffusion_par/m**2*xi**2
+
+    d_Dmuv_dvpar=2.*mu/p**2*((Diffusion_par-Diffusion_perp)+xi**2*p*(d_Diffusion_par_dp-d_Diffusion_perp_dp)-2.*xi**2*(Diffusion_par-Diffusion_perp))
+    d_Dmuv_dmu=2.*vpar/p**2*((Diffusion_par-Diffusion_perp)+(1.-xi**2)*p/2.*(d_Diffusion_par_dp-d_Diffusion_perp_dp)-(1.-xi**2)*(Diffusion_par-Diffusion_perp))
+    d_Dmumu_dvpar=2.*mu*vpar/(m*v**2*field.AbsB(points))*(p*d_Diffusion_perp_dp+(1.-xi**2)*p*(d_Diffusion_par_dp-d_Diffusion_perp_dp)-2.*(1.-xi**2)*(Diffusion_par-Diffusion_perp))
+    d_Dmumu_dmu=2.*Diffusion_perp/(m*field.AbsB(points))+2.*mu/p**2*(4.*(Diffusion_par-Diffusion_perp)
+                                                                        +(1.-xi**2)*p*(d_Diffusion_par_dp-d_Diffusion_perp_dp)
+                                                                        -2.*(1.-xi**2)*(Diffusion_par-Diffusion_perp)
+                                                                        +p*d_Diffusion_perp_dp)
+    d_Dvv_dvpar=2.*vpar/p**2*(p/2.*d_Diffusion_par_dp-(1.-xi**2)*p/2.*(d_Diffusion_par_dp-d_Diffusion_perp_dp)+(1.-xi**2)*(Diffusion_par-Diffusion_perp))
+    d_Dvv_dmu=2.*field.AbsB(points)/m/p**2*(p/2*d_Diffusion_par_dp-(Diffusion_par-Diffusion_perp)
+                                            -(1.-xi**2)*p/2*(d_Diffusion_par_dp-d_Diffusion_perp_dp)+(1.-xi**2)*(Diffusion_par-Diffusion_perp))
+
+
+
+    d_Yvmu_dmu=-3.*field.AbsB(points)/(m*v**2)*Yvmu+2.*field.AbsB(points)/(m*v**3)*d_Dmuv_dmu
+    d_Yvmu_dvpar=-3./v*xi*Yvmu+2.*field.AbsB(points)/(m*v**3)*d_Dmuv_dvpar
+    d_Ymumu_dmu=-4.*field.AbsB(points)/(m*v**2)*Ymumu+4.*field.AbsB(points)**2/(m**2*v**4)*d_Dmumu_dmu
+    d_Ymumu_dvpar=-4./v*xi*Ymumu+4.*field.AbsB(points)**2/(m**2*v**4)*d_Dmumu_dvpar
+    d_Yvv_dmu=-2.*field.AbsB(points)/(m*v**2)*Yvv+d_Dvv_dmu/v**2
+    d_Yvv_dvpar=-2./v*xi*Yvv+d_Dvv_dvpar/v**2
+
+    lambda_p=0.5*(Yvv+Ymumu+jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
+    lambda_m=0.5*(Yvv+Ymumu-jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
+
+    d_lambda_p_dvpar=0.5*(d_Yvv_dvpar+d_Ymumu_dvpar+((Yvv-Ymumu)*(d_Yvv_dvpar-d_Ymumu_dvpar)+4.*Yvmu*d_Yvmu_dvpar)/jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
+    d_lambda_p_dmu=0.5*(d_Yvv_dmu+d_Ymumu_dmu+((Yvv-Ymumu)*(d_Yvv_dmu-d_Ymumu_dmu)+4.*Yvmu*d_Yvmu_dmu)/jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
+    d_lambda_m_dvpar=0.5*(d_Yvv_dvpar+d_Ymumu_dvpar-((Yvv-Ymumu)*(d_Yvv_dvpar-d_Ymumu_dvpar)+4.*Yvmu*d_Yvmu_dvpar)/jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
+    d_lambda_m_dmu=0.5*(d_Yvv_dmu+d_Ymumu_dmu-((Yvv-Ymumu)*(d_Yvv_dmu-d_Ymumu_dmu)+4.*Yvmu*d_Yvmu_dmu)/jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2))
+
+    Q1=jnp.reshape(jnp.array([1, Yvmu/(lambda_p-Ymumu)])/jnp.sqrt(1.+(Yvmu/(lambda_p-Ymumu))**2),(2,1))
+    Q2=jnp.reshape(jnp.array([ Yvmu/(lambda_m-Yvv),1])/jnp.sqrt(1.+(Yvmu/(lambda_m-Yvv))**2),(2,1))
+
+    d_Q11_dvpar=-Q1.at[1].get()*Q1.at[0].get()**2*(d_Yvmu_dvpar*(lambda_p-Ymumu)-Yvmu*(d_lambda_p_dvpar-d_Ymumu_dvpar))/(lambda_p-Ymumu)**2 
+    d_Q11_dmu=-Q1.at[1].get()*Q1.at[0].get()**2*(d_Yvmu_dmu*(lambda_p-Ymumu)-Yvmu*(d_lambda_p_dmu-d_Ymumu_dmu))/(lambda_p-Ymumu)**2 
+    d_Q21_dvpar=Q1.at[0].get()*(d_Yvmu_dvpar*(lambda_p-Ymumu)-Yvmu*(d_lambda_p_dvpar-d_Ymumu_dvpar))/(lambda_p-Ymumu)**2+d_Q11_dvpar*(Yvmu/(lambda_p-Ymumu))
+    d_Q21_dmu=Q1.at[0].get()*(d_Yvmu_dmu*(lambda_p-Ymumu)-Yvmu*(d_lambda_p_dmu-d_Ymumu_dmu))/(lambda_p-Ymumu)**2+d_Q11_dmu*(Yvmu/(lambda_p-Ymumu)) 
+    d_Q22_dvpar=-Q2.at[0].get()*Q2.at[1].get()**2*(d_Yvmu_dvpar*(lambda_m-Yvv)-Yvmu*(d_lambda_m_dvpar-d_Yvv_dvpar))/(lambda_m-Yvv)**2 
+    d_Q22_dmu=-Q2.at[0].get()*Q2.at[1].get()**2*(d_Yvmu_dmu*(lambda_m-Yvv)-Yvmu*(d_lambda_m_dmu-d_Yvv_dmu))/(lambda_m-Yvv)**2 
+    d_Q12_dvpar=Q2.at[1].get()*(d_Yvmu_dvpar*(lambda_m-Yvv)-Yvmu*(d_lambda_m_dvpar-d_Yvv_dvpar))/(lambda_m-Yvv)**2+d_Q22_dvpar*(Yvmu/(lambda_m-Yvv))
+    d_Q12_dmu=Q2.at[1].get()*(d_Yvmu_dmu*(lambda_m-Yvv)-Yvmu*(d_lambda_m_dmu-d_Yvv_dmu))/(lambda_m-Yvv)**2+d_Q22_dmu*(Yvmu/(lambda_m-Yvv)) 
+
+    #d_Q11_dvpar=-1./(1.+(Yvmu/(lambda_p-Ymumu))**2)**(1.5)*(Yvmu/(lambda_p-Ymumu))*(d_Yvmu_dvpar*(lambda_p-Ymumu)-Yvmu*(d_lambda_p_dvpar-d_Ymumu_dvpar))/(lambda_p-Ymumu)**2 
+    #d_Q11_dmu=-1./(1.+(Yvmu/(lambda_p-Ymumu))**2)**(1.5)*(Yvmu/(lambda_p-Ymumu))*(d_Yvmu_dmu*(lambda_p-Ymumu)-Yvmu*(d_lambda_p_dmu-d_Ymumu_dmu))/(lambda_p-Ymumu)**2   
+
+    #d_Q22_dvpar=-1./(1.+(Yvmu/(lambda_m-Yvv))**2)**(1.5)*(Yvmu/(lambda_m-Yvv))*(d_Yvmu_dvpar*(lambda_m-Yvv)-Yvmu*(d_lambda_m_dvpar-d_Yvv_dvpar))/(lambda_m-Yvv)**2 
+    #d_Q22_dmu=-1./(1.+(Yvmu/(lambda_m-Yvv))**2)**(1.5)*(Yvmu/(lambda_m-Yvv))*(d_Yvmu_dmu*(lambda_m-Yvv)-Yvmu*(d_lambda_m_dmu-d_Yvv_dmu))/(lambda_m-Yvv)**2  
+
+    #d_Q21_dvpar=-d_Q11_dvpar*(lambda_p-Ymumu)/Yvmu
+    #d_Q21_dmu=-d_Q11_dmu*(lambda_p-Ymumu)/Yvmu
+
+    #d_Q12_dvpar=-d_Q22_dvpar*(lambda_m-Yvv)/Yvmu 
+    #d_Q12_dmu=-d_Q22_dmu*(lambda_m-Yvv)/Yvmu 
+    sigma11=v*Q1.at[0].get()*jnp.sqrt(2.*lambda_p)
+    sigma21=0.5*v**2*m/field.AbsB(points)*Q1.at[1].get()*jnp.sqrt(2.*lambda_p)
+    sigma12=v*Q2.at[0].get()*jnp.sqrt(2.*lambda_m)
+    sigma22=0.5*v**2*m/field.AbsB(points)*Q2.at[1].get()*jnp.sqrt(2.*lambda_m) 
+
+    d_sigma11_dvpar=xi*Q1.at[0].get()*jnp.sqrt(2.*lambda_p)+v*d_Q11_dvpar*jnp.sqrt(2.*lambda_p)+v*Q1.at[0].get()*jnp.sqrt(2.)*d_lambda_p_dvpar/(2.*jnp.sqrt(lambda_p))  
+    d_sigma11_dmu=field.AbsB(points)/(m*v)*Q1.at[0].get()*jnp.sqrt(2.*lambda_p)+v*d_Q11_dmu*jnp.sqrt(2.*lambda_p)+v*Q1.at[0].get()*jnp.sqrt(2.)*d_lambda_p_dmu/(2.*jnp.sqrt(lambda_p))      
+    d_sigma12_dvpar=xi*Q2.at[0].get()*jnp.sqrt(2.*lambda_m)+v*d_Q12_dvpar*jnp.sqrt(2.*lambda_m)+v*Q2.at[0].get()*jnp.sqrt(2.)*d_lambda_m_dvpar/(2.*jnp.sqrt(lambda_m))    
+    d_sigma12_dmu=field.AbsB(points)/(m*v)*Q2.at[0].get()*jnp.sqrt(2.*lambda_m)+v*d_Q12_dmu*jnp.sqrt(2.*lambda_m)+v*Q2.at[0].get()*jnp.sqrt(2.)*d_lambda_m_dmu/(2.*jnp.sqrt(lambda_m))      
+    d_sigma21_dvpar=m*v/field.AbsB(points)*xi*Q1.at[1].get()*jnp.sqrt(2.*lambda_p)+0.5*m*v**2/field.AbsB(points)*d_Q21_dvpar*jnp.sqrt(2.*lambda_p)+0.5*m*v**2/field.AbsB(points)*Q1.at[1].get()*jnp.sqrt(2.)*d_lambda_p_dvpar/(2.*jnp.sqrt(lambda_p))    
+    d_sigma21_dmu=Q1.at[1].get()*jnp.sqrt(2.*lambda_p)+0.5*m*v**2/field.AbsB(points)*d_Q21_dmu*jnp.sqrt(2.*lambda_p)+0.5*m*v**2/field.AbsB(points)*Q1.at[1].get()*jnp.sqrt(2.)*d_lambda_p_dmu/(2.*jnp.sqrt(lambda_p))      
+    d_sigma22_dvpar=m*v/field.AbsB(points)*xi*Q2.at[1].get()*jnp.sqrt(2.*lambda_m)+0.5*m*v**2/field.AbsB(points)*d_Q22_dvpar*jnp.sqrt(2.*lambda_m)+0.5*m*v**2/field.AbsB(points)*Q2.at[1].get()*jnp.sqrt(2.)*d_lambda_m_dvpar/(2.*jnp.sqrt(lambda_m))    
+    d_sigma22_dmu=Q2.at[1].get()*jnp.sqrt(2.*lambda_m)+0.5*m*v**2/field.AbsB(points)*d_Q22_dmu*jnp.sqrt(2.*lambda_m)+0.5*m*v**2/field.AbsB(points)*Q2.at[1].get()*jnp.sqrt(2.)*d_lambda_m_dmu/(2.*jnp.sqrt(lambda_m))        
+
+    Avpar_corr=jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[-0.5*(sigma11*d_sigma11_dvpar+sigma12*d_sigma12_dvpar+sigma21*d_sigma11_dmu+sigma22*d_sigma12_dmu),-0.5*vpar/p**2*(p*d_Diffusion_par_dp)])
+    Amu_corr=jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[-0.5*(sigma11*d_sigma21_dvpar+sigma12*d_sigma22_dvpar+sigma21*d_sigma21_dmu+sigma22*d_sigma22_dmu),-0.5*(d_Dmumu_dmu+d_Dmuv_dvpar)])  
+
+    Avpar=-nu_s*vpar+d_Dvv_dvpar+d_Dmuv_dmu+Avpar_corr
+    Amu=-nu_s*2.*mu+d_Dmumu_dmu+d_Dmuv_dvpar+Amu_corr
+    dxdt =  tag_gc*(Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points))
+    dvpardt = (-jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m*tag_gc+Avpar)/SPEED_OF_LIGHT
+
+    dmudt = Amu/(SPEED_OF_LIGHT**2*particles.mass)  
+    return jnp.append(dxdt,jnp.append(dvpardt,dmudt))
+
+
+
+@partial(jit, static_argnums=(2))
+def GuidingCenterCollisionsDriftMuIto(t,
+                  initial_condition,
+                  args) -> jnp.ndarray:
+    x, y, z,vpar,mu = initial_condition
+    field, particles,electric_field,species,tag_gc = args 
+    vpar=SPEED_OF_LIGHT*vpar
+    mu=SPEED_OF_LIGHT**2*particles.mass*mu
+    m = particles.mass
+    q=particles.charge
+    points = jnp.array([x, y, z]) 
+    v=jnp.sqrt(2./m*(0.5*m*vpar**2+mu*field.AbsB(points)))
+    p=m*v
+    xi=vpar/v
+
+    Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
+    Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
+    F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
+    indeces_species=species.species_indeces
+    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    dnu_par_dv=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    dnu_D_dv=jnp.sum(jax.vmap(d_nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)      
+    Diffusion_par=p**2*nu_par/2.
+    Diffusion_perp=p**2*nu_D/2.
+    d_Diffusion_par_dp=p*nu_par+p**2*dnu_par_dv/(2.*m)
+    d_Diffusion_perp_dp=p*nu_par+p**2*dnu_D_dv/(2.*m)    
+
+    d_Dmuv_dvpar=2.*mu/p**2*((Diffusion_par-Diffusion_perp)+xi**2*p*(d_Diffusion_par_dp-d_Diffusion_perp_dp)-2.*xi**2*(Diffusion_par-Diffusion_perp))
+    d_Dmuv_dmu=2.*vpar/p**2*((Diffusion_par-Diffusion_perp)+(1.-xi**2)*p/2.*(d_Diffusion_par_dp-d_Diffusion_perp_dp)-(1.-xi**2)*(Diffusion_par-Diffusion_perp))
+    d_Dmumu_dmu=2.*Diffusion_perp/(m*field.AbsB(points))+2.*mu/p**2*(4.*(Diffusion_par-Diffusion_perp)
+                                                                        +(1.-xi**2)*p*(d_Diffusion_par_dp-d_Diffusion_perp_dp)
+                                                                        -2.*(1.-xi**2)*(Diffusion_par-Diffusion_perp)
+                                                                        +p*d_Diffusion_perp_dp)
+    d_Dvv_dvpar=2.*vpar/p**2*(p/2.*d_Diffusion_par_dp-(1.-xi**2)*p/2.*(d_Diffusion_par_dp-d_Diffusion_perp_dp)+(1.-xi**2)*(Diffusion_par-Diffusion_perp))
+
+    Avpar=-nu_s*vpar+d_Dvv_dvpar+d_Dmuv_dmu
+    Amu=-nu_s*2.*mu+d_Dmumu_dmu+d_Dmuv_dvpar
+    dxdt =  tag_gc*(Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points))
+    dvpardt = (-jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m*tag_gc+Avpar)/SPEED_OF_LIGHT
+
+    dmudt = Amu/(SPEED_OF_LIGHT**2*particles.mass) 
+    return jnp.append(dxdt,jnp.append(dvpardt,dmudt))
+
+@partial(jit, static_argnums=(2))
+def GuidingCenterCollisionsDiffusion(t,
+                  initial_condition,
+                  args) -> jnp.ndarray:
+    x, y, z, v,xi = initial_condition
+    field, particles,electric_field,species,tag_gc = args
+    q = particles.charge
+    m = particles.mass
+
+    points = jnp.array([x, y, z])
+    I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(field.B_contravariant(points),jnp.reshape(field.B_contravariant(points),(3,1))))/field.AbsB(points)**2
+    p=m*v
+    indeces_species=species.species_indeces
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    Diffusion_par=p**2/2.*nu_par
+    Diffusion_perp=p**2/2.*nu_D 
+    Diffusion_x=0.0#((Diffusion_par-Diffusion_perp)*(1.-xi**2)/2.+Diffusion_perp)/(m*omega_mod)**2
+    dxdt = jnp.sqrt(2.*Diffusion_x)*I_bb_tensor
+    dvdt=jnp.sqrt(2.*Diffusion_par)/m   #equation format was in p=m*v so we divide by m)
+    dxidt=jnp.sqrt((1.-xi**2)*2.*Diffusion_perp/p**2)
+    #jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[jnp.sqrt((1.-xi**2)*2.*Diffusion_perp/p**2),0.])
+    #Off diagonals between position an dvelocity are zero at zeroth order
+    Dxv=jnp.zeros((2,3))
+    Dvx=jnp.zeros((3,2))
+    return jnp.append(jnp.append(dxdt,Dxv,axis=0),jnp.append(Dvx,jnp.diag(jnp.append(dvdt,dxidt)),axis=0),axis=1)
+
+@partial(jit, static_argnums=(2))
+def GuidingCenterCollisionsDrift(t,
+                  initial_condition,
+                  args) -> jnp.ndarray:
+    x, y, z, v,xi = initial_condition
+    field, particles,electric_field,species,tag_gc = args
+    q = particles.charge
+    m = particles.mass
+
+    vpar=xi*v
+
+    points = jnp.array([x, y, z])
+    mu = (m*v**2/2 - m*vpar**2/2)/field.AbsB(points)
+    p=m*v
+    Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
+    Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
+    F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)    
+    indeces_species=species.species_indeces
+    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    dnu_par=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    Diffusion_par=p**2/2.*nu_par
+    Diffusion_perp=p**2/2.*nu_D 
+    d_Diffusion_par_dp=p*nu_par+p**2/2.*dnu_par/m
+    dxdt =  tag_gc*(Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points))
+
+    dvdt=(-nu_s*p+2.*Diffusion_par/p+d_Diffusion_par_dp*0.5)/m  #equation format was in p=m*v so we divide by m)
+    dxidt = -jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m/v*tag_gc-xi*2.*Diffusion_perp/p**2*0.5
+
+    return jnp.append(dxdt,jnp.append(dvdt,dxidt))
+
+
+
+
+@partial(jit, static_argnums=(2))
+def GuidingCenter(t,
+                  initial_condition,
+                  args) -> jnp.ndarray:
+    x, y, z, vpar = initial_condition
+    field, particles,electric_field = args
+    q = particles.charge
+    m = particles.mass
+    E = particles.energy
+    points = jnp.array([x, y, z])
+    mu = (E - m*vpar**2/2)/field.AbsB(points)
+    Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
+    Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
+    F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)
+    dxdt =  Ustar + jnp.cross(field.B_covariant(points), F_gc)/jnp.dot(field.B_covariant(points),Bstar)/q/field.sqrtg(points)
+    dvdt = -jnp.dot(Bstar,F_gc)/jnp.dot(field.B_covariant(points),Bstar)*field.AbsB(points)/m    
+
+    return jnp.append(dxdt,dvdt)
+    # def zero_derivatives(_):
+    #     return jnp.zeros(4, dtype=float)
+    # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
+
+
+@partial(jit, static_argnums=(2))
+def LorentzCollisionsDiffusion(t,
+            initial_condition,
+            args) -> jnp.ndarray:
+    x, y, z, vx, vy, vz = initial_condition
+    field, particles,species = args
+    q = particles.charge
+    m = particles.mass
+    #E = m/2*v**2 
+    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
+    # def dxdt_dvdt(_):
+    points = jnp.array([x, y, z])
+    v_vector=jnp.array([vx, vy, vz])
+    v=jnp.sqrt(vx**2+vy**2+vz**2)
+    p=m*v
+    I_vv_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(v_vector,jnp.reshape(v_vector,(3,1))))/v**2
+    indeces_species=species.species_indeces
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    Diffusion_par=p**2/2.*nu_par
+    Diffusion_perp=p**2/2.*nu_D 
+    Dpar=jnp.sqrt(2.*Diffusion_par)#*0.0000
+    Dperp=jnp.sqrt(2.*Diffusion_perp)#*0.0000
+    dxdt = jnp.zeros((3,3))
+    dvdt=Dpar/m*jnp.identity(3)-Dperp/m*I_vv_tensor
+    #Off diagonals between position an dvelocity are zero at zeroth order
+    Dxv=jnp.zeros((3,3))
+    Dvx=jnp.zeros((3,3))
+    return jnp.append(jnp.append(dxdt,Dxv,axis=0),jnp.append(Dvx,dvdt,axis=0),axis=1)
+
+@partial(jit, static_argnums=(2))
+def LorentzCollisionsDrift(t,
+            initial_condition,
+            args) -> jnp.ndarray:
+    x, y, z, vx, vy, vz = initial_condition
+    field, particles,species = args
+    q = particles.charge
+    m = particles.mass
+    v=jnp.sqrt(vx**2+vy**2+vz**2)
+    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
+    # def dxdt_dvdt(_):
+    points = jnp.array([x, y, z])
+    B_contravariant = field.B_contravariant(points)
+    indeces_species=species.species_indeces
+    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    dxdt = jnp.array([vx, vy, vz])
+    dvdt =  q / m * jnp.cross(dxdt, B_contravariant)-nu_s*dxdt#*0.00000
+    return jnp.append(dxdt, dvdt)
+    # def zero_derivatives(_):
+    #     return jnp.zeros(6, dtype=float)
+    # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
+
+
+
+
+
+@partial(jit, static_argnums=(2))
+def Lorentz(t,
+            initial_condition,
+            args) -> jnp.ndarray:
+    x, y, z, vx, vy, vz = initial_condition
+    field, particles = args
+    q = particles.charge
+    m = particles.mass
+    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
+    # def dxdt_dvdt(_):
+    points = jnp.array([x, y, z])
+    B_contravariant = field.B_contravariant(points)
+    dxdt = jnp.array([vx, vy, vz])
+    dvdt = q / m * jnp.cross(dxdt, B_contravariant)
+    return jnp.append(dxdt, dvdt)
+    # def zero_derivatives(_):
+    #     return jnp.zeros(6, dtype=float)
+    # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
+
+@partial(jit, static_argnums=(2))
+def FieldLine(t,
+              initial_condition,
+              field) -> jnp.ndarray:
+    x, y, z = initial_condition
+    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
+    # def compute_derivatives(_):
+    position = jnp.array([x, y, z])
+    B_contravariant = field.B_contravariant(position)
+    dxdt = B_contravariant
+    return dxdt
+    # def zero_derivatives(_):
+    #     return jnp.zeros(3, dtype=float)
+    # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
+
+
+
+## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
+## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
+## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
+## !!!!  Here particle_key was added to compute_trajectories (E. Neto collisions modifications)
+## This is important for correct sampling of Brownian motion
+class Tracing():
+    def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
+                 field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
+                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None):
+        
+        if electric_field==None:
+            self.electric_field = Electric_field_zero()
+        else:
+            self.electric_field=electric_field
+
+        if isinstance(field, Coils):
+            self.field = BiotSavart(field)
+        else:
+            self.field = field
+
+        if rejected_steps==None:
+            self.rejected_steps=100
+        else:
+            self.rejected_steps=100
+
+        self.model = model
+        self.initial_conditions = initial_conditions
+        self.times_to_trace = times_to_trace
+        self.maxtime = maxtime
+        self.timestep = timestep
+        self.rtol = rtol
+        self.atol = atol
+        self._trajectories = trajectories_input
+        self.particles = particles
+        self.species=species
+        self.tag_gc=tag_gc
+        self.progress_meter = TqdmProgressMeter() # NoProgressMeter() # TqdmProgressMeter()
+        if condition is None:
+            self.condition = lambda t, y, args, **kwargs: False
+            if isinstance(field, Vmec):
+                if model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative'  or model=='GuidingCenterCollisions':
+                    def condition_Vmec(t, y, args, **kwargs):
+                        s, _, _, _ ,_= y
+                        return s-1
+                elif model == 'FieldLine' or model== 'FieldLineAdaptative':
+                    def condition_Vmec(t, y, args, **kwargs):
+                        s, _, _ = y
+                        return s-1	 
+                else:
+                    def condition_Vmec(t, y, args, **kwargs):
+                        s, _, _, _ = y
+                        return s-1	        
+                self.condition = condition_Vmec
+            elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
+                if model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative' or model=='GuidingCenterCollisions':
+                    def condition_BioSavart(t, y, args, **kwargs):
+                        xx, yy, zz, _,_ = y
+                        return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.                      
+                else:
+                    def condition_BioSavart(t, y, args, **kwargs):                      
+                        xx, yy, zz, _ = y
+                        return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
+                self.condition = condition_BioSavart                
+        if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
+            self.ODE_term = ODETerm(GuidingCenter)
+            self.args = (self.field, self.particles,self.electric_field)
+            self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
+        elif model == 'GuidingCenterCollisions':
+            # Brownian motion
+            #t0=0.0
+            #t1=self.maxtime
+            #tol=self.maxtime / self.timesteps*0.5
+            #print('tol: ', tol)
+            #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)            
+            #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
+            self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
+            total_speed_temp=self.particles.total_speed*jnp.ones(self.particles.nparticles)
+            self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,total_speed_temp[:, None], self.particles.initial_vparallel_over_v[:, None]], axis=1)
+        elif model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative':
+            # Brownian motion
+            #t0=0.0
+            #t1=self.maxtime
+            #tol=self.maxtime / self.timesteps*0.5   
+            #print('tol: ', tol)
+            #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)
+            #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))
+            self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
+            #x,y,z=self.particles.initial_xyz[]
+            B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
+            mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*particles.mass)          
+            self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,self.particles.initial_vparallel[:, None]/SPEED_OF_LIGHT,mu[:, None]],axis=1)        
+        elif model == 'FullOrbit' or model == 'FullOrbit_Boris':
+            self.ODE_term = ODETerm(Lorentz)
+            self.args = (self.field, self.particles)
+            if self.particles.initial_xyz_fullorbit is None:
+                raise ValueError("Initial full orbit positions require field input to Particles")
+            self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
+            if field is None:
+                raise ValueError("Field parameter is required for FullOrbit model")
+        elif model == 'FullOrbitCollisions':
+            self.args = (self.field, self.particles,self.species,self.tag_gc)
+            print(self.args)
+            if self.particles.initial_xyz_fullorbit is None:
+                raise ValueError("Initial full orbit positions require field input to Particles")
+            self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
+            if field is None:
+                raise ValueError("Field parameter is required for FullOrbit model")
+        elif model == 'FieldLine' or model== 'FieldLineAdaptative':
+            self.ODE_term = ODETerm(FieldLine)
+            self.args = self.field
+        
+        if self.times_to_trace is None:
+            self.times = jnp.linspace(0, self.maxtime, 100,endpoint=True)
+        else:
+            self.times = jnp.linspace(0, self.maxtime, self.times_to_trace,endpoint=True)
+
+            
+        self._trajectories = self.trace()
+        
+        self.trajectories_xyz = vmap(lambda xyz: vmap(lambda point: self.field.to_xyz(point[:3]))(xyz))(self.trajectories)
+        
+        if isinstance(field, Vmec):
+            if self.model == 'GuidingCenterCollisions' or model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsAdaptative':
+                self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_collisions()                    
+            else:                
+                self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction()
+        elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
+            if self.model == 'GuidingCenterCollisions' or model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsAdaptative':
+                self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_BioSavart_collisions(boundary)                    
+            else:                
+                self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction_BioSavart(boundary)
+        else:
+            self.trajectories_xyz = self.trajectories
+
+    def trace(self):
+        @jit
+        def compute_trajectory(initial_condition, particle_key) -> jnp.ndarray:
+            # initial_condition = initial_condition[0]
+            if self.model == 'FullOrbit_Boris':
+                dt=self.timestep#self.maxtime / self.timesteps
+                def update_state(state, _):
+                    # def update_fn(state):
+                    x = state[:3]
+                    v = state[3:]
+                    t = self.particles.charge / self.particles.mass *  self.field.B_contravariant(x) * 0.5 * dt
+                    s = 2. * t / (1. + jnp.dot(t,t))
+                    vprime = v + jnp.cross(v, t)
+                    v += jnp.cross(vprime, s)
+                    x += v * dt
+                    new_state = jnp.concatenate((x, v))
+                    return new_state, new_state
+                    # def no_update_fn(state):
+                    #     x, v = state
+                    #     return (x, v), jnp.concatenate((x, v))
+                    # condition = (jnp.sqrt(x1**2 + x2**2) > 50) | (jnp.abs(x3) > 20)
+                    # return lax.cond(condition, no_update_fn, update_fn, state)
+                    # return update_fn(state)
+                _, trajectory = lax.scan(update_state, initial_condition, jnp.arange(len(self.times)-1))
+                trajectory = jnp.vstack([initial_condition, trajectory])
+            elif self.model == 'GuidingCenterCollisions':
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                t0=0.0
+                t1=self.maxtime
+                dt0=self.timestep#self.maxtime / self.timesteps
+                tol=dt0*0.5
+                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)            
+                self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=dt0,
+                    y0=initial_condition,
+                    #solver=diffrax.SlowRK(),
+                    solver=diffrax.StratonovichMilstein(),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=DirectAdjoint(),
+                    #stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size),
+                    max_steps=10000000000,
+                    event = Event(self.condition),
+                    progress_meter=self.progress_meter,
+                ).ys
+            elif self.model == 'GuidingCenterCollisionsMuAdaptative':
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                t0=0.0
+                t1=self.maxtime
+                dt0=self.timestep#self.maxtime / self.timesteps
+                tol=dt0*0.5
+                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
+                self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMuStratonovich),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=dt0,
+                    y0=initial_condition,
+                    solver=diffrax.SPaRK(),
+                    #solver=diffrax.HalfSolver(diffrax.GeneralShARK()),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=DirectAdjoint(),
+                    stepsize_controller=ClipStepSizeController(controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,dtmin=dt0,dtmax=1.e-4,force_dtmin=True),step_ts=self.times,store_rejected_steps=self.rejected_steps),
+                    max_steps=10000000000,
+                    event = Event(self.condition),
+                    progress_meter=self.progress_meter,
+                ).ys     
+            elif self.model == 'GuidingCenterCollisionsMuFixed':
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                t0=0.0
+                t1=self.maxtime
+                dt0=self.timestep#self.maxtime / self.timesteps
+                tol=dt0*0.5
+                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
+                self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMuStratonovich),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=dt0,
+                    y0=initial_condition,
+                    solver=diffrax.StratonovichMilstein(),                    
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=DirectAdjoint(),
+                    max_steps=10000000000,
+                    event = Event(self.condition),
+                    progress_meter=self.progress_meter,
+                ).ys       
+            elif self.model == 'GuidingCenterCollisionsMuIto':
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                t0=0.0
+                t1=self.maxtime
+                dt0=self.timestep#self.maxtime / self.timesteps
+                tol=dt0*0.5
+                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,),key=particle_key,levy_area=diffrax.SpaceTimeTimeLevyArea)            
+                self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMuIto),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))                
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=dt0,
+                    y0=initial_condition,
+                    solver=diffrax.ItoMilstein(),                    
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=DirectAdjoint(),
+                    max_steps=10000000000,
+                    event = Event(self.condition),
+                    progress_meter=self.progress_meter,
+                ).ys                                       
+            elif self.model == 'FullOrbitCollisions':
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                t0=0.0
+                t1=self.maxtime
+                dt0=self.timestep#self.maxtime / self.timesteps
+                tol=dt0*0.5
+                bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(6,), key=particle_key, levy_area=diffrax.SpaceTimeTimeLevyArea)            
+                self.ODE_term = MultiTerm(ODETerm(LorentzCollisionsDrift),ControlTerm(LorentzCollisionsDiffusion,bm))
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=dt0,
+                    y0=initial_condition,
+                    solver=diffrax.SPaRK(),
+                    #solver=diffrax.ItoMilstein(),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=DirectAdjoint(),                   
+                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.tol_step_size, atol=self.tol_step_size,dtmin=dt0),
+                    max_steps=10000000000,
+                    event = Event(self.condition),
+                    progress_meter=self.progress_meter,
+                ).ys          
+            elif self.model == 'GuidingCenterAdaptative' :  
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=self.timestep,#self.maxtime / self.timesteps,
+                    y0=initial_condition,
+                    solver=diffrax.Dopri8(),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=DirectAdjoint(),
+                    progress_meter=self.progress_meter,
+                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
+                    max_steps=10000000000,
+                    event = Event(self.condition)
+                ).ys
+            elif self.model == 'FieldLineAdaptative' :  
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=self.timestep,#self.maxtime / self.timesteps,
+                    y0=initial_condition,
+                    solver=diffrax.Dopri8(),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=False,
+                    # adjoint=DirectAdjoint(),
+                    progress_meter=self.progress_meter,
+                    stepsize_controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
+                    max_steps=10000000000,
+                    event = Event(self.condition)
+                ).ys                
+            #Fixed guiding center
+            else:
+                import warnings
+                warnings.simplefilter("ignore", category=FutureWarning) # see https://github.com/patrick-kidger/diffrax/issues/445 for explanation
+                trajectory = diffeqsolve(
+                    self.ODE_term,
+                    t0=0.0,
+                    t1=self.maxtime,
+                    dt0=self.timestep,#self.maxtime / self.timesteps,
+                    y0=initial_condition,
+                    solver=diffrax.Dopri8(),
+                    args=self.args,
+                    saveat=SaveAt(ts=self.times),
+                    throw=True,
+                    # adjoint=DirectAdjoint(),
+                    progress_meter=self.progress_meter,
+                    max_steps=10000000000,
+                    event = Event(self.condition)
+                ).ys
+            return trajectory
+        
+        if sharding is not None:
+            return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
+                        device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
+        else:
+            return jit(vmap(compute_trajectory,in_axes=(0,0)))(self.initial_conditions, self.particles.random_keys if self.particles else None)
+        #x=jax.device_put(self.initial_conditions, sharding)
+        #y=jax.device_put(self.particles.random_keys, sharding_index)        
+        #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
+        #return sharded_fun(x, y).block_until_ready()    
+
+    @property
+    def trajectories(self):
+        return self._trajectories
+    
+    @trajectories.setter
+    def trajectories(self, value):
+        self._trajectories = value
+    
+    def energy(self):
+        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
+        mass = self.particles.mass
+
+        if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative' or \
+           self.model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsMuAdaptative':
+            initial_xyz = self.initial_conditions[:, :3]
+            initial_vparallel = self.initial_conditions[:, 3]
+            initial_B = vmap(self.field.AbsB)(initial_xyz)
+            mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
+            def compute_energy(trajectory, mu):
+                xyz = trajectory[:, :3]
+                vpar = trajectory[:, 3]
+                AbsB = vmap(self.field.AbsB)(xyz)                
+                return 0.5 * mass * jnp.square(vpar) + mu * AbsB
+            
+            energy = vmap(compute_energy)(self.trajectories, mu_array)
+    
+        elif self.model == 'GuidingCenterCollisions':
+            def compute_energy(trajectory):
+                return 0.5 * mass * trajectory[:, 3]**2
+            energy = vmap(compute_energy)(self.trajectories)
+
+        elif self.model == 'FullOrbit':
+            def compute_energy(trajectory):
+                vxvyvz = trajectory[:, 3:]
+                v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)
+                return 0.5 * mass * v_squared
+            energy = vmap(compute_energy)(self.trajectories)
+
+        elif self.model == 'FieldLine' or self.model == 'FieldLineAdaptative':
+            energy = jnp.ones((len(self.initial_conditions), self.times_to_trace))
+            
+        return energy
+
+    def to_vtk(self, filename):
+        try: import numpy as np
+        except ImportError: raise ImportError("The 'numpy' library is required. Please install it using 'pip install numpy'.")
+        try: from pyevtk.hl import polyLinesToVTK
+        except ImportError: raise ImportError("The 'pyevtk' library is required. Please install it using 'pip install pyevtk'.")
+        x = np.concatenate([xyz[:, 0] for xyz in self.trajectories_xyz])
+        y = np.concatenate([xyz[:, 1] for xyz in self.trajectories_xyz])
+        z = np.concatenate([xyz[:, 2] for xyz in self.trajectories_xyz])
+        ppl = np.asarray([xyz.shape[0] for xyz in self.trajectories_xyz])
+        data = np.array(jnp.concatenate([i*jnp.ones((self.trajectories[i].shape[0], )) for i in range(len(self.trajectories))]))
+        polyLinesToVTK(filename, x, y, z, pointsPerLine=ppl, pointData={'idx': data})
+    
+    def plot(self, ax=None, show=True, axis_equal=True, n_trajectories_plot=5, **kwargs):
+        if ax is None or ax.name != "3d":
+            fig = plt.figure()
+            ax = fig.add_subplot(projection='3d')
+        trajectories_xyz = jnp.array(self.trajectories_xyz)
+        n_trajectories_plot = jnp.min(jnp.array([n_trajectories_plot, trajectories_xyz.shape[0]]))
+        for i in random.choice(random.PRNGKey(0), trajectories_xyz.shape[0], (n_trajectories_plot,), replace=False):
+            ax.plot(trajectories_xyz[i, :, 0], trajectories_xyz[i, :, 1], trajectories_xyz[i, :, 2], **kwargs)
+        ax.grid(False)
+        if axis_equal:
+            fix_matplotlib_3d(ax)
+        if show:
+            plt.show()
+            
+    @partial(jit, static_argnums=(0,1))
+    def loss_fraction_BioSavart(self,boundary):
+        trajectories_xyz = self.trajectories[:,:, :3]
+        lost_mask = jnp.transpose(vmap(vmap(boundary.evaluate_xyz,in_axes=(0)),in_axes=(1))(trajectories_xyz)) <0
+        lost_indices = jnp.argmax(lost_mask, axis=1)
+        lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
+        lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
+        safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
+        loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
+        loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
+        total_particles_lost = loss_fractions[-1] * len(self.trajectories)
+        return loss_fractions, total_particles_lost, lost_times
+
+    @partial(jit, static_argnums=(0))
+    def loss_fraction(self,r_max=0.99):
+        trajectories_r = self.trajectories[:,:, 0]
+        lost_mask = trajectories_r >= r_max
+        lost_indices = jnp.argmax(lost_mask, axis=1)
+        lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
+        lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
+        safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
+        loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
+        loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
+        total_particles_lost = loss_fractions[-1] * len(self.trajectories)
+        return loss_fractions, total_particles_lost, lost_times
+
+    @partial(jit, static_argnums=(0,1))
+    def loss_fraction_BioSavart_collisions(self,boundary):
+        trajectories_xyz = self.trajectories[:,:, :3]
+        lost_mask = jnp.transpose(vmap(vmap(boundary.evaluate_xyz,in_axes=(0)),in_axes=(1))(trajectories_xyz)) <0
+        lost_indices = jnp.argmax(lost_mask, axis=1)
+        lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
+        lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
+        lost_energies=vmap(lambda x: jnp.where(lost_indices[x-1] != -1, self.energy[x-1,lost_indices[x-1]-1], 0.))(jnp.arange(self.particles.nparticles))
+        lost_positions=vmap(lambda x: jnp.where(lost_indices[x-1] != -1, trajectories_xyz[x-1,lost_indices[x-1]-1,:], 0.))(jnp.arange(self.particles.nparticles))                          
+        safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
+        loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
+        loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
+        total_particles_lost = loss_fractions[-1] * len(self.trajectories)
+        return loss_fractions, total_particles_lost, lost_times,lost_energies,lost_positions
+
+    @partial(jit, static_argnums=(0))
+    def loss_fraction_collisions(self,r_max=0.99):
+        trajectories_rtz = self.trajectories[:,:, :3]
+        lost_mask = trajectories_rtz[:,:,0] >= r_max
+        lost_indices = jnp.argmax(lost_mask, axis=1)
+        lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
+        lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
+        lost_energies=vmap(lambda x: jnp.where(lost_indices[x-1] != -1, self.energy[x-1,lost_indices[x-1]-1], 0.))(jnp.arange(self.particles.nparticles))
+        lost_positions=vmap(lambda x: jnp.where(lost_indices[x-1] != -1, trajectories_rtz[x-1,lost_indices[x-1]-1,:], 0.))(jnp.arange(self.particles.nparticles))            
+        safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
+        loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
+        loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
+        total_particles_lost = loss_fractions[-1] * len(self.trajectories)
+        return loss_fractions, total_particles_lost, lost_times,lost_energies,lost_positions
+
+    @partial(jit, static_argnums=(0))
+    def loss_fraction_rmax_differentiable(self, r_max=0.99, softness=10.0):
+        """
+        Differentiable loss fraction using r_max criterion (radial cutoff).
+        
+        Uses smooth indicator function to replace hard r >= r_max comparison,
+        enabling gradient-based optimization of coil parameters.
+        
+        Args:
+            r_max: Critical radius threshold. Particles with r >= r_max are lost.
+            softness: Controls smoothness of transition. Higher = sharper transition.
+                     Default 10.0 provides good balance between smoothness and accuracy.
+        
+        Returns:
+            total_loss_fraction: Scalar between 0-1, differentiable w.r.t. coil parameters
+        """
+        trajectories_r = self.trajectories[:, :, 0]
+        
+        # Smooth indicator: probability of being lost at each position
+        # When r < r_max: loss_indicator ≈ 0 (safe)
+        # When r > r_max: loss_indicator ≈ 1 (lost)
+        loss_indicator = 1.0 / (1.0 + jnp.exp(-softness * (trajectories_r - r_max)))
+        
+        # Particle loss: probability of crossing r_max at any time
+        # = 1 - probability of staying inside for entire trajectory
+        per_particle_loss = 1.0 - jnp.prod(1.0 - loss_indicator, axis=1)
+        
+        # Total loss fraction is average across all particles
+        total_loss_fraction = jnp.mean(per_particle_loss)
+        
+        return total_loss_fraction
+
+    @partial(jit, static_argnums=(0))
+    def loss_fraction_rmax_differentiable_detailed(self, r_max=0.99, softness=10.0):
+        """
+        Differentiable loss fraction with per-timestep breakdown.
+        
+        Useful for analyzing loss profile over time during optimization.
+        
+        Args:
+            r_max: Critical radius threshold
+            softness: Smoothness parameter (default 10.0)
+        
+        Returns:
+            loss_fractions: Cumulative loss fraction over time (differentiable)
+            total_loss: Total fraction of particles lost (scalar)
+        """
+        trajectories_r = self.trajectories[:, :, 0]
+        
+        # Smooth indicator for loss probability at each position
+        loss_indicator = 1.0 / (1.0 + jnp.exp(-softness * (trajectories_r - r_max)))
+        
+        # Cumulative survival probability: probability of not having crossed yet
+        cumulative_safe_prob = jnp.cumprod(1.0 - loss_indicator, axis=1)
+        
+        # Loss at each timestep: 1 - average survival probability
+        loss_per_timestep = 1.0 - jnp.mean(cumulative_safe_prob, axis=0)
+        
+        # Cumulative loss fraction (normalized)
+        loss_fractions = jnp.cumsum(loss_per_timestep)
+        loss_fractions = loss_fractions / jnp.max(jnp.array([loss_fractions[-1], 1e-8]))
+        
+        # Total loss
+        total_loss = loss_per_timestep[-1]
+        
+        return loss_fractions, total_loss
+
+    @partial(jit, static_argnums=(0))
+    def loss_fraction_collisions_differentiable(self, r_max=0.99, softness=10.0):
+        """
+        Differentiable loss fraction for collision tracking with r_max criterion.
+        
+        Similar to loss_fraction_rmax_differentiable but tracks energy and position
+        information for lost particles (in differentiable form).
+        
+        Args:
+            r_max: Critical radius threshold
+            softness: Smoothness parameter (default 10.0)
+        
+        Returns:
+            loss_fractions: Cumulative loss over time (differentiable)
+            total_loss: Total fraction of particles lost (scalar)
+            weighted_lost_energies: Particle-weighted loss energies (differentiable)
+            weighted_lost_positions: Particle-weighted loss positions (differentiable)
+        """
+        trajectories_rtz = self.trajectories[:, :, :3]
+        trajectories_r = trajectories_rtz[:, :, 0]
+        
+        # Smooth loss indicator
+        loss_indicator = 1.0 / (1.0 + jnp.exp(-softness * (trajectories_r - r_max)))
+        
+        # Per-particle loss probability
+        per_particle_loss = 1.0 - jnp.prod(1.0 - loss_indicator, axis=1)
+        
+        # Weighted by loss probability (approximates energy loss accounting)
+        if hasattr(self, 'energy') and self.energy is not None:
+            # Weight position data by loss probability
+            weighted_lost_energies = jnp.sum(
+                self.energy * per_particle_loss[:, None], axis=0
+            ) / (jnp.sum(per_particle_loss) + 1e-8)
+        else:
+            weighted_lost_energies = jnp.zeros(self.trajectories.shape[1])
+        
+        # Average position weighted by loss
+        if hasattr(self, 'energy') and self.energy is not None:
+            weighted_lost_positions = jnp.sum(
+                trajectories_rtz * per_particle_loss[:, None, None], axis=0
+            ) / (jnp.sum(per_particle_loss) + 1e-8)
+        else:
+            weighted_lost_positions = jnp.zeros_like(trajectories_rtz[0])
+        
+        # Cumulative loss profile
+        loss_per_timestep = 1.0 - jnp.mean(
+            jnp.cumprod(1.0 - loss_indicator, axis=1), axis=0
+        )
+        loss_fractions = jnp.cumsum(loss_per_timestep)
+        loss_fractions = loss_fractions / jnp.max(jnp.array([loss_fractions[-1], 1e-8]))
+        
+        total_loss = jnp.mean(per_particle_loss)
+        
+        return loss_fractions, total_loss, weighted_lost_energies, weighted_lost_positions
+
+    @partial(jit, static_argnums=(0))
+    def escape_location_rmax(self, r_max=0.99, softness=10.0):
+        """
+        Differentiable computation of particle escape locations using r_max criterion.
+        
+        Returns escape positions weighted by loss probability, enabling optimization
+        to control WHERE particles escape (not just how many).
+        
+        Args:
+            r_max: Radial boundary threshold
+            softness: Smoothness of loss indicator
+        
+        Returns:
+            weighted_escape_locations: (n_timesteps, 3) array of escape positions
+            per_timestep_escape_prob: (n_timesteps,) probability of escape at each time
+        """
+        trajectories = self.trajectories  # (n_particles, n_timesteps, trajectory_dim)
+        trajectories_r = trajectories[:, :, 0]
+        
+        # Loss probability at each position
+        loss_indicator = 1.0 / (1.0 + jnp.exp(-softness * (trajectories_r - r_max)))
+        
+        # For each timestep, compute weighted average position of particles escaping
+        # Vectorized: sum over particles axis
+        total_prob_t = jnp.sum(loss_indicator, axis=0)  # (n_timesteps,)
+        
+        # Weighted position: (n_particles, n_timesteps, 3) × (n_particles, n_timesteps, 1)
+        weighted_sum = jnp.sum(
+            trajectories * loss_indicator[:, :, None], axis=0
+        )  # (n_timesteps, 3)
+        
+        # Normalize by probability
+        weighted_positions = weighted_sum / (total_prob_t[:, None] + 1e-8)
+        
+        # Escape probability per timestep (fraction of particles escaping)
+        escape_probs = total_prob_t / len(trajectories)
+        
+        return weighted_positions, escape_probs
+
+    @partial(jit, static_argnums=(0))
+    def escape_location_penalty(self, target_position, r_max=0.99, softness=10.0, 
+                                location_softness=5.0):
+        """
+        Differentiable penalty for escape locations far from target.
+        
+        Enables optimization to steer particle escapes to desired locations.
+        
+        Args:
+            target_position: Target escape location (r, theta, z) 
+                           or (x, y, z) depending on coordinate system
+            r_max: Radial boundary threshold
+            softness: Loss indicator smoothness
+            location_softness: Smoothness of distance penalty (lower = sharper penalty)
+        
+        Returns:
+            location_penalty: Scalar penalty (0 = escaping at target, >0 = far from target)
+        """
+        weighted_escape_locs, escape_probs = self.escape_location_rmax(
+            r_max=r_max, softness=softness
+        )
+        
+        # Compute distance from each escape location to target
+        distances = jnp.linalg.norm(weighted_escape_locs - target_position, axis=1)
+        
+        # Smooth penalty: emphasizes large deviations
+        # Using softmax-like penalty that grows with distance
+        penalty_per_time = distances / (1.0 + location_softness * escape_probs)
+        
+        # Weight by escape probability (only penalize when particles actually escape)
+        weighted_penalty = jnp.sum(penalty_per_time * escape_probs)
+        
+        return weighted_penalty
+
+    @partial(jit, static_argnums=(0))
+    def escape_location_classifier(self, boundary, softness=10.0):
+        """
+        Differentiable computation of particle escape locations with SurfaceClassifier.
+        
+        Args:
+            boundary: SurfaceClassifier for boundary evaluation
+            softness: Smoothness of loss indicator
+        
+        Returns:
+            weighted_escape_locations: (n_timesteps, 3) array of escape positions
+            per_timestep_escape_prob: (n_timesteps,) probability of escape at each time
+        """
+        trajectories_xyz = self.trajectories[:, :, :3]
+        
+        # Distance from boundary (positive inside, negative outside)
+        distances = vmap(vmap(boundary.evaluate_xyz, in_axes=(0)), in_axes=(1))(trajectories_xyz)
+        distances = jnp.transpose(distances)  # (n_particles, n_timesteps)
+        
+        # Loss probability using smooth indicator
+        # Flip sign: outside (negative distance) = loss
+        loss_indicator = 1.0 / (1.0 + jnp.exp(-softness * (-distances)))
+        
+        # Vectorized computation of weighted positions
+        total_prob_t = jnp.sum(loss_indicator, axis=0)  # (n_timesteps,)
+        
+        weighted_sum = jnp.sum(
+            trajectories_xyz * loss_indicator[:, :, None], axis=0
+        )  # (n_timesteps, 3)
+        
+        weighted_positions = weighted_sum / (total_prob_t[:, None] + 1e-8)
+        escape_probs = total_prob_t / len(trajectories_xyz)
+        
+        return weighted_positions, escape_probs
+
+    @partial(jit, static_argnums=(0,1))
+    def escape_location_penalty_classifier(self, target_position, boundary, softness=10.0,
+                                           location_softness=5.0):
+        """
+        Differentiable penalty for escape locations far from target (classifier version).
+        
+        Args:
+            target_position: Target escape location
+            boundary: SurfaceClassifier for boundary evaluation
+            softness: Loss indicator smoothness
+            location_softness: Distance penalty smoothness
+        
+        Returns:
+            location_penalty: Scalar penalty for location mismatch
+        """
+        weighted_escape_locs, escape_probs = self.escape_location_classifier(
+            boundary, softness=softness
+        )
+        
+        distances = jnp.linalg.norm(weighted_escape_locs - target_position, axis=1)
+        penalty_per_time = distances / (1.0 + location_softness * escape_probs)
+        weighted_penalty = jnp.sum(penalty_per_time * escape_probs)
+        
+        return weighted_penalty
+
+    @partial(jit, static_argnums=(0))
+    def escape_location_penalty_line(self, line_point, line_direction, r_max=0.99, 
+                                     softness=10.0, location_softness=5.0):
+        """
+        Penalty for escape locations far from a target LINE.
+        
+        Enables targeting escapes to a line (e.g., divertor strike line, 
+        limiter edge, or scrape-off layer centerline).
+        
+        Args:
+            line_point: Point on the line (e.g., [r, theta, z])
+            line_direction: Direction vector of the line (e.g., [dr, dtheta, dz])
+            r_max: Radial boundary threshold
+            softness: Loss indicator smoothness
+            location_softness: Distance penalty smoothness
+        
+        Returns:
+            line_penalty: Scalar penalty (0 = escaping on line, >0 = far from line)
+        """
+        weighted_escape_locs, escape_probs = self.escape_location_rmax(
+            r_max=r_max, softness=softness
+        )
+        
+        # Normalize line direction
+        line_dir_normalized = line_direction / (jnp.linalg.norm(line_direction) + 1e-8)
+        
+        # For each escape location, compute distance to line
+        # Distance from point P to line through Q with direction D:
+        # dist = ||((P-Q) - ((P-Q)·D)*D)||
+        # This is the perpendicular distance to the line
+        
+        distances_to_point = weighted_escape_locs - line_point  # (n_timesteps, 3)
+        
+        # Project onto line direction
+        projections = jnp.sum(
+            distances_to_point * line_dir_normalized[None, :], axis=1, keepdims=True
+        ) * line_dir_normalized[None, :]  # (n_timesteps, 3)
+        
+        # Perpendicular component (shortest distance to line)
+        perp_components = distances_to_point - projections
+        distances = jnp.linalg.norm(perp_components, axis=1)  # (n_timesteps,)
+        
+        # Penalty: how far from the line
+        penalty_per_time = distances / (1.0 + location_softness * escape_probs)
+        weighted_penalty = jnp.sum(penalty_per_time * escape_probs)
+        
+        return weighted_penalty
+
+    @partial(jit, static_argnums=(0))
+    def escape_location_penalty_line_classifier(self, line_point, line_direction, boundary,
+                                                softness=10.0, location_softness=5.0):
+        """
+        Penalty for escape locations far from a target LINE (classifier version).
+        
+        Args:
+            line_point: Point on the line
+            line_direction: Direction vector of the line
+            boundary: SurfaceClassifier for boundary evaluation
+            softness: Loss indicator smoothness
+            location_softness: Distance penalty smoothness
+        
+        Returns:
+            line_penalty: Scalar penalty for distance from line
+        """
+        weighted_escape_locs, escape_probs = self.escape_location_classifier(
+            boundary, softness=softness
+        )
+        
+        # Same distance-to-line calculation
+        line_dir_normalized = line_direction / (jnp.linalg.norm(line_direction) + 1e-8)
+        distances_to_point = weighted_escape_locs - line_point
+        projections = jnp.sum(
+            distances_to_point * line_dir_normalized[None, :], axis=1, keepdims=True
+        ) * line_dir_normalized[None, :]
+        
+        perp_components = distances_to_point - projections
+        distances = jnp.linalg.norm(perp_components, axis=1)
+        
+        penalty_per_time = distances / (1.0 + location_softness * escape_probs)
+        weighted_penalty = jnp.sum(penalty_per_time * escape_probs)
+        
+        return weighted_penalty
+
+    @partial(jit, static_argnums=(0))
+    def escape_location_penalty_plane(self, plane_point, plane_normal, r_max=0.99,
+                                      softness=10.0, location_softness=5.0):
+        """
+        Penalty for escape locations far from a target PLANE.
+        
+        Enables targeting escapes to a plane (e.g., horizontal midplane,
+        vertical strike plane, or toroidal section).
+        
+        Args:
+            plane_point: Any point on the plane
+            plane_normal: Normal vector to the plane
+            r_max: Radial boundary threshold
+            softness: Loss indicator smoothness
+            location_softness: Distance penalty smoothness
+        
+        Returns:
+            plane_penalty: Scalar penalty (0 = on plane, >0 = far from plane)
+        """
+        weighted_escape_locs, escape_probs = self.escape_location_rmax(
+            r_max=r_max, softness=softness
+        )
+        
+        # Normalize plane normal
+        plane_norm_normalized = plane_normal / (jnp.linalg.norm(plane_normal) + 1e-8)
+        
+        # Distance from point to plane: |((P - Q) · N)|
+        # where P is the point, Q is any point on the plane, N is the normal
+        point_to_plane = weighted_escape_locs - plane_point  # (n_timesteps, 3)
+        distances = jnp.abs(
+            jnp.sum(point_to_plane * plane_norm_normalized[None, :], axis=1)
+        )
+        
+        # Penalty
+        penalty_per_time = distances / (1.0 + location_softness * escape_probs)
+        weighted_penalty = jnp.sum(penalty_per_time * escape_probs)
+        
+        return weighted_penalty
+
+    @partial(jit, static_argnums=(0))
+    def escape_location_penalty_plane_classifier(self, plane_point, plane_normal, boundary,
+                                                 softness=10.0, location_softness=5.0):
+        """
+        Penalty for escape locations far from a target PLANE (classifier version).
+        
+        Args:
+            plane_point: Any point on the plane
+            plane_normal: Normal vector to the plane
+            boundary: SurfaceClassifier for boundary evaluation
+            softness: Loss indicator smoothness
+            location_softness: Distance penalty smoothness
+        
+        Returns:
+            plane_penalty: Scalar penalty for distance from plane
+        """
+        weighted_escape_locs, escape_probs = self.escape_location_classifier(
+            boundary, softness=softness
+        )
+        
+        plane_norm_normalized = plane_normal / (jnp.linalg.norm(plane_normal) + 1e-8)
+        point_to_plane = weighted_escape_locs - plane_point
+        distances = jnp.abs(
+            jnp.sum(point_to_plane * plane_norm_normalized[None, :], axis=1)
+        )
+        
+        penalty_per_time = distances / (1.0 + location_softness * escape_probs)
+        weighted_penalty = jnp.sum(penalty_per_time * escape_probs)
+        
+        return weighted_penalty
+
+    @partial(jit, static_argnums=(0))
+    def escape_location_penalty_band(self, band_center, band_half_width, band_direction,
+                                     r_max=0.99, softness=10.0, location_softness=5.0):
+        """
+        Penalty for escape locations outside a target BAND/STRIP.
+        
+        Enables targeting escapes within a region (e.g., divertor zone,
+        poloidal band, or acceptance window).
+        
+        The band is defined perpendicular to band_direction, centered at band_center.
+        
+        Args:
+            band_center: Center position of the band
+            band_half_width: Half-width of the acceptable region
+            band_direction: Direction perpendicular to band edges
+            r_max: Radial boundary threshold
+            softness: Loss indicator smoothness
+            location_softness: Distance penalty smoothness
+        
+        Returns:
+            band_penalty: Scalar penalty (0 = in band, >0 = outside band)
+        """
+        weighted_escape_locs, escape_probs = self.escape_location_rmax(
+            r_max=r_max, softness=softness
+        )
+        
+        # Normalize direction
+        band_dir_normalized = band_direction / (jnp.linalg.norm(band_direction) + 1e-8)
+        
+        # Distance from center along band direction
+        vec_to_escape = weighted_escape_locs - band_center  # (n_timesteps, 3)
+        distance_along_dir = jnp.sum(
+            vec_to_escape * band_dir_normalized[None, :], axis=1
+        )
+        
+        # How much outside the band?
+        # penalty = max(0, |distance| - band_half_width)
+        # Using smooth version: penalty = softplus(|distance| - band_half_width)
+        outside_amount = jnp.abs(distance_along_dir) - band_half_width
+        penalty_per_location = jnp.where(
+            outside_amount > 0,
+            outside_amount,  # Hard outside
+            -outside_amount * 0.01  # Soft reward for being inside
+        )
+        
+        # Weight by escape probability
+        penalty_per_time = penalty_per_location / (1.0 + location_softness * escape_probs)
+        weighted_penalty = jnp.sum(penalty_per_time * escape_probs)
+        
+        return weighted_penalty
+
+    @partial(jit, static_argnums=(0))
+    def escape_location_penalty_band_classifier(self, band_center, band_half_width, 
+                                                band_direction, boundary,
+                                                softness=10.0, location_softness=5.0):
+        """
+        Penalty for escape locations outside a target BAND (classifier version).
+        
+        Args:
+            band_center: Center position of the band
+            band_half_width: Half-width of the acceptable region
+            band_direction: Direction perpendicular to band edges
+            boundary: SurfaceClassifier for boundary evaluation
+            softness: Loss indicator smoothness
+            location_softness: Distance penalty smoothness
+        
+        Returns:
+            band_penalty: Scalar penalty for being outside band
+        """
+        weighted_escape_locs, escape_probs = self.escape_location_classifier(
+            boundary, softness=softness
+        )
+        
+        band_dir_normalized = band_direction / (jnp.linalg.norm(band_direction) + 1e-8)
+        vec_to_escape = weighted_escape_locs - band_center
+        distance_along_dir = jnp.sum(
+            vec_to_escape * band_dir_normalized[None, :], axis=1
+        )
+        
+        outside_amount = jnp.abs(distance_along_dir) - band_half_width
+        penalty_per_location = jnp.where(
+            outside_amount > 0,
+            outside_amount,
+            -outside_amount * 0.01
+        )
+        
+        penalty_per_time = penalty_per_location / (1.0 + location_softness * escape_probs)
+        weighted_penalty = jnp.sum(penalty_per_time * escape_probs)
+        
+        return weighted_penalty
+
+    @partial(jit, static_argnums=(0))
+    def loss_fraction_classifier_differentiable(self, boundary, softness=10.0):
+        """
+        Differentiable loss fraction computation using SurfaceClassifier boundary.
+        
+        Uses smooth indicator functions instead of hard boundary checks, enabling
+        gradient-based optimization of coil parameters.
+        
+        Args:
+            boundary: SurfaceClassifier object for boundary evaluation
+            softness: Controls smoothness of transition. Higher = sharper transition.
+                     Default 10.0 provides good balance between smoothness and accuracy.
+        
+        Returns:
+            total_loss_fraction: Scalar between 0-1, differentiable w.r.t. coil parameters
+        """
+        trajectories_xyz = self.trajectories[:, :, :3]
+        
+        # Evaluate signed distance for all trajectory points
+        # Positive inside volume, negative outside
+        distances = vmap(vmap(boundary.evaluate_xyz, in_axes=(0)), in_axes=(1))(trajectories_xyz)
+        distances = jnp.transpose(distances)  # Shape: (n_particles, n_timesteps)
+        
+        # Smooth indicator: probability of being inside (distance > 0)
+        # sigmoid(-softness * distance) gives 1.0 outside, 0.0 inside
+        # 1.0 / (1.0 + exp(-softness * distance)) gives 1.0 inside, 0.0 outside
+        inside_prob = 1.0 / (1.0 + jnp.exp(-softness * distances))
+        
+        # Particle "loss" is when it transitions from inside to outside
+        # Approximate as: 1 - probability of staying inside for entire trajectory
+        per_particle_loss = 1.0 - jnp.prod(inside_prob, axis=1)
+        
+        # Total loss fraction is average across all particles
+        total_loss_fraction = jnp.mean(per_particle_loss)
+        
+        return total_loss_fraction
+
+    @partial(jit, static_argnums=(0,1))
+    def loss_fraction_classifier_differentiable_detailed(self, boundary, softness=10.0):
+        """
+        Differentiable loss fraction with per-timestep breakdown.
+        
+        Useful for analyzing loss profile over time during optimization.
+        
+        Args:
+            boundary: SurfaceClassifier object
+            softness: Smoothness parameter (default 10.0)
+        
+        Returns:
+            loss_fractions: Cumulative loss fraction over time (differentiable)
+            total_loss: Total fraction of particles lost (scalar)
+        """
+        trajectories_xyz = self.trajectories[:, :, :3]
+        
+        # Evaluate signed distance for all trajectory points
+        distances = vmap(vmap(boundary.evaluate_xyz, in_axes=(0)), in_axes=(1))(trajectories_xyz)
+        distances = jnp.transpose(distances)  # Shape: (n_particles, n_timesteps)
+        
+        # Smooth indicator: probability of being inside
+        inside_prob = 1.0 / (1.0 + jnp.exp(-softness * distances))
+        
+        # For each timestep, compute cumulative probability of staying inside
+        # This gives smooth approximation to "first crossing time"
+        cumulative_inside_prob = jnp.cumprod(inside_prob, axis=1)
+        
+        # Loss at each timestep: 1 - cumulative survival probability
+        loss_per_timestep = 1.0 - jnp.mean(cumulative_inside_prob, axis=0)
+        
+        # Cumulative loss fraction
+        loss_fractions = jnp.cumsum(loss_per_timestep)
+        loss_fractions = loss_fractions / jnp.max(jnp.array([loss_fractions[-1], 1e-8]))  # Normalize
+        
+        # Total loss
+        total_loss = loss_per_timestep[-1]
+        
+        return loss_fractions, total_loss
+    
+    def poincare_plot(self, shifts = [jnp.pi/2], orientation = 'toroidal', length = 1, ax=None, show=True, color=None, **kwargs):
+        """
+        Plot Poincare plots using scipy to find the roots of an interpolation. Can take particle trace or field lines.
+        Args:
+            shifts (list, optional): Apply a linear shift to dependent data. Default is [pi/2].
+            orientation (str, optional): 
+                'toroidal' - find time values when toroidal angle = shift [0, 2pi].
+                'z' - find time values where z coordinate = shift. Default is 'toroidal'.
+            length (float, optional): A way to shorten data. 1 - plot full length, 0.1 - plot 1/10 of data length. Default is 1.
+            ax (matplotlib.axes._subplots.AxesSubplot, optional): Matplotlib axis to plot on. Default is None.
+            show (bool, optional): Whether to display the plot. Default is True.
+            color: Can be time, None or a color to plot Poincaré points
+            **kwargs: Additional keyword arguments for plotting.
+        Notes:
+            - If the data seem ill-behaved, there may not be enough steps in the trace for a good interpolation.
+            - This will break if there are any NaNs.
+            - Issues with toroidal interpolation: jnp.arctan2(Y, X) % (2 * jnp.pi) causes distortion in interpolation near phi = 0.
+            - Maybe determine a lower limit on resolution needed per toroidal turn for "good" results.
+        To-Do:
+            - Format colorbars.
+        """
+        kwargs.setdefault('s', 0.5)
+        if ax is None:
+            fig = plt.figure()
+            ax = fig.add_subplot()
+        shifts = jnp.array(shifts)
+        plotting_data = []
+        # from essos.util import roots_scipy
+        for shift in shifts:
+            @jit
+            def compute_trajectory_toroidal(trace):
+                X,Y,Z = trace[:,:3].T
+                R = jnp.sqrt(X**2 + Y**2)
+                phi = jnp.arctan2(Y,X)
+                phi = jnp.where(shift==0, phi, jnp.abs(phi))
+                T_slice = roots(self.times, phi, shift = shift)
+                T_slice = jnp.where(shift==0, jnp.concatenate((T_slice[1::2],T_slice[1::2])), T_slice)
+                # T_slice = roots_scipy(self.times, phi, shift = shift)
+                R_slice = jnp.interp(T_slice, self.times, R)
+                Z_slice = jnp.interp(T_slice, self.times, Z)
+                return R_slice, Z_slice, T_slice
+            @jit
+            def compute_trajectory_z(trace):
+                X,Y,Z = trace[:,:3].T
+                T_slice = roots(self.times, Z, shift = shift)
+                # T_slice = roots_scipy(self.times, Z, shift = shift)
+                X_slice = jnp.interp(T_slice, self.times, X)
+                Y_slice = jnp.interp(T_slice, self.times, Y)
+                return X_slice, Y_slice, T_slice
+            if orientation == 'toroidal':
+                # X_slice, Y_slice, T_slice = vmap(compute_trajectory_toroidal)(self.trajectories)
+                if sharding is not None:
+                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_toroidal), in_shardings=sharding, out_shardings=sharding)(
+                        device_put(self.trajectories, sharding))
+                else:
+                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_toroidal))(self.trajectories)
+            elif orientation == 'z':
+                # X_slice, Y_slice, T_slice = vmap(compute_trajectory_z)(self.trajectories)
+                if sharding is not None:
+                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_z), in_shardings=sharding, out_shardings=sharding)(
+                        device_put(self.trajectories, sharding))
+                else:
+                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_z))(self.trajectories)
+            @partial(jax.vmap, in_axes=(0, 0, 0))
+            def process_trajectory(X_i, Y_i, T_i):
+                mask = (T_i[1:] != T_i[:-1])
+                valid_idx = jnp.nonzero(mask, size=T_i.size - 1)[0] + 1
+                return X_i[valid_idx], Y_i[valid_idx], T_i[valid_idx]
+            X_s, Y_s, T_s = process_trajectory(X_slice, Y_slice, T_slice)
+            length_ = (vmap(len)(X_s) * length).astype(int)
+            colors = plt.cm.ocean(jnp.linspace(0, 0.8, len(X_s)))
+            for i in range(len(X_s)):
+                X_plot, Y_plot = X_s[i][:length_[i]], Y_s[i][:length_[i]]
+                T_plot = T_s[i][:length_[i]]
+                plotting_data.append((X_plot, Y_plot, T_plot))
+                if color == 'time':
+                    hits = ax.scatter(X_plot, Y_plot, c=T_s[i][:length_[i]], **kwargs)
+                else:
+                    if color is None: c=[colors[i]]
+                    else: c=color
+                    hits = ax.scatter(X_plot, Y_plot, c=c, **kwargs)
+                    
+        if orientation == 'toroidal':
+            plt.xlabel('R',fontsize = 18)
+            plt.ylabel('Z',fontsize = 18)
+            # plt.title(r'$\phi$ = {:.2f} $\pi$'.format(shift/jnp.pi),fontsize = 20)
+        elif orientation == 'z':
+            plt.xlabel('X',fontsize = 18)
+            plt.xlabel('Y',fontsize = 18)
+            # plt.title('Z = {:.2f}'.format(shift),fontsize = 20)
+        plt.axis('equal')
+        plt.grid()
+        plt.tight_layout()
+        if show:
+            plt.show()
+        
+        return plotting_data
+    
+    def _tree_flatten(self):
+        children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
+        aux_data = {'field': self.field, 'electric_field': self.electric_field, 'model': self.model, 'maxtime': self.maxtime, 'timestep': self.timestep,
+                    'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc}  # static values
+        return (children, aux_data)
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(*children, **aux_data)
+
+
+tree_util.register_pytree_node(Tracing,
+                               Tracing._tree_flatten,
+                               Tracing._tree_unflatten)

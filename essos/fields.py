@@ -1,6 +1,6 @@
 import jax
 jax.config.update("jax_enable_x64", True)
-from jax import vmap
+from jax import vmap, lax
 from essos.coils import Curves
 import jax.numpy as jnp
 from functools import partial
@@ -9,6 +9,40 @@ from essos.surfaces import SurfaceRZFourier, BdotN_over_B, SurfaceClassifier
 from essos.plot import fix_matplotlib_3d
 from essos.util import newton
 
+def jax_spline_interp(grid_x, grid_y, grid_z, values, points):
+    # 3D cubic spline interpolation (separable)
+    pts = jnp.atleast_2d(points)
+    ix = (pts[:,0] - grid_x[0]) / (grid_x[-1] - grid_x[0]) * (grid_x.shape[0] - 1)
+    iy = (pts[:,1] - grid_y[0]) / (grid_y[-1] - grid_y[0]) * (grid_y.shape[0] - 1)
+    iz = (pts[:,2] - grid_z[0]) / (grid_z[-1] - grid_z[0]) * (grid_z.shape[0] - 1)
+    def interp_single(idx):
+        x, y, z = idx
+        # Clamp indices
+        x = jnp.clip(x, 1, grid_x.shape[0]-3)
+        y = jnp.clip(y, 1, grid_y.shape[0]-3)
+        z = jnp.clip(z, 1, grid_z.shape[0]-3)
+        x0 = jnp.floor(x).astype(int)
+        y0 = jnp.floor(y).astype(int)
+        z0 = jnp.floor(z).astype(int)
+        xd = x - x0
+        yd = y - y0
+        zd = z - z0
+        # Cubic spline weights
+        def cubic_weights(d):
+            return jnp.array([
+                ((1-d)**3)/6,
+                (3*d**3 - 6*d**2 + 4)/6,
+                (-3*d**3 + 3*d**2 + 3*d + 1)/6,
+                d**3/6
+            ])
+        wx = cubic_weights(xd)
+        wy = cubic_weights(yd)
+        wz = cubic_weights(zd)
+        # Gather 4x4x4 neighborhood
+        vals = lax.dynamic_slice(values, (x0-1, y0-1, z0-1), (4, 4, 4))
+        # Apply separable weights
+        return jnp.tensordot(wx, jnp.tensordot(wy, jnp.tensordot(wz, vals, axes=([0],[2])), axes=([0],[1])), axes=([0],[0]))
+    return vmap(interp_single)(jnp.stack([ix, iy, iz], axis=1))
 class MagneticField():
     def __init__(self):
         pass
@@ -71,26 +105,136 @@ class MagneticField():
     @jit
     def to_xyz(self, points):
         raise NotImplementedError("to_xyz method not implemented")
+        
+class JAXGridInterpolator:
+    def __init__(self, grid_x, grid_y, grid_z, values):
+        self.grid_x = grid_x
+        self.grid_y = grid_y
+        self.grid_z = grid_z
+        self.values = values
+        self.shape = values.shape
+    def __call__(self, points):
+        pts = jnp.atleast_2d(points)
+        # Normalize coordinates to grid indices
+        ix = (pts[:,0] - self.grid_x[0]) / (self.grid_x[-1] - self.grid_x[0]) * (self.grid_x.shape[0] - 1)
+        iy = (pts[:,1] - self.grid_y[0]) / (self.grid_y[-1] - self.grid_y[0]) * (self.grid_y.shape[0] - 1)
+        iz = (pts[:,2] - self.grid_z[0]) / (self.grid_z[-1] - self.grid_z[0]) * (self.grid_z.shape[0] - 1)
+        def interp_single(idx):
+            x, y, z = idx
+            x0 = jnp.floor(x).astype(int)
+            x1 = jnp.clip(x0+1, 0, self.shape[0]-1)
+            y0 = jnp.floor(y).astype(int)
+            y1 = jnp.clip(y0+1, 0, self.shape[1]-1)
+            z0 = jnp.floor(z).astype(int)
+            z1 = jnp.clip(z0+1, 0, self.shape[2]-1)
+            xd = x - x0
+            yd = y - y0
+            zd = z - z0
+            # Trilinear interpolation
+            c000 = self.values[x0, y0, z0]
+            c100 = self.values[x1, y0, z0]
+            c010 = self.values[x0, y1, z0]
+            c001 = self.values[x0, y0, z1]
+            c101 = self.values[x1, y0, z1]
+            c011 = self.values[x0, y1, z1]
+            c110 = self.values[x1, y1, z0]
+            c111 = self.values[x1, y1, z1]
+            c00 = c000 * (1-xd) + c100 * xd
+            c01 = c001 * (1-xd) + c101 * xd
+            c10 = c010 * (1-xd) + c110 * xd
+            c11 = c011 * (1-xd) + c111 * xd
+            c0 = c00 * (1-yd) + c10 * yd
+            c1 = c01 * (1-yd) + c11 * yd
+            c = c0 * (1-zd) + c1 * zd
+            return c
+        return vmap(interp_single)(jnp.stack([ix, iy, iz], axis=1))
 
 class BiotSavart(MagneticField):
-    def __init__(self, coils):
+    def __init__(self, coils, use_interpolator=False, interp_grid=None, interp_bounds=None, interp_resolution=(20,20,20), interp_method='trilinear', build_interpolators=True):
         self.coils = coils
-        # self.r_axis=jnp.mean(jnp.sqrt(vmap(lambda dofs: dofs[0, 0]**2 + dofs[1, 0]**2)(self.coils.dofs_curves)))
-        # self.z_axis=jnp.mean(vmap(lambda dofs: dofs[2, 0])(self.coils.dofs_curves))
-    
+        # Force to Python bool
+        self.use_interpolator = bool(use_interpolator)
+        self.interp_method = interp_method
+        self.jax_interpolator = None
+        self.spline_interpolator = None
+        self.last_dofs = None
+        self.interp_grid = interp_grid
+        self.interp_bounds = interp_bounds
+        self.interp_resolution = interp_resolution
+        self._B_direct = jit(self._direct_B)
+        print(f"[BiotSavart.__init__] use_interpolator={self.use_interpolator} type={type(self.use_interpolator)} interp_method={self.interp_method} build_interpolators={build_interpolators}")
+        if build_interpolators:
+            self._build_interpolators()
+
+        # B will be a JIT-compiled method with static_argnames
+
+
+    def _build_interpolators(self):
+        # Force to Python bool again in case something changed
+        self.use_interpolator = bool(self.use_interpolator)
+        print(f"[_build_interpolators] called, self.use_interpolator={self.use_interpolator} type={type(self.use_interpolator)}")
+        if self.use_interpolator:
+            print("[_build_interpolators] Entering use_interpolator branch")
+            gamma = self.coils.gamma.reshape(-1, 3)
+            min_xyz = jnp.min(gamma, axis=0) - 0.2
+            max_xyz = jnp.max(gamma, axis=0) + 0.2
+            interp_bounds = self.interp_bounds or (min_xyz, max_xyz)
+            grid_x = jnp.linspace(interp_bounds[0][0], interp_bounds[1][0], self.interp_resolution[0])
+            grid_y = jnp.linspace(interp_bounds[0][1], interp_bounds[1][1], self.interp_resolution[1])
+            grid_z = jnp.linspace(interp_bounds[0][2], interp_bounds[1][2], self.interp_resolution[2])
+            self.grid_x, self.grid_y, self.grid_z = grid_x, grid_y, grid_z
+            grid_shape = (grid_x.shape[0], grid_y.shape[0], grid_z.shape[0])
+            grid_points = jnp.stack(jnp.meshgrid(grid_x, grid_y, grid_z, indexing='ij'), axis=-1).reshape(-1,3)
+            # Use jax.lax.map for memory-efficient batching
+            B_grid_flat = lax.map(self._direct_B, grid_points)
+            B_grid = B_grid_flat.reshape(*grid_shape, 3)
+            self.jax_interpolator = [jax.jit(JAXGridInterpolator(grid_x, grid_y, grid_z, B_grid[..., i]).__call__) for i in range(3)]
+            self.spline_interpolator = [jax.jit(lambda pts, i=i: jax_spline_interp(grid_x, grid_y, grid_z, B_grid[..., i], pts)) for i in range(3)]
+            self.last_dofs = jnp.array(self.coils.dofs)
+            # Rebuild JIT-compiled B_trilinear and B_spline to capture new interpolators
+            def B_trilinear(points):
+                jax.debug.print("[BiotSavart.B] Using trilinear interpolator for B(points), input shape: {shape}, dtype: {dt}", shape=getattr(points, 'shape', type(points)), dt=getattr(points, 'dtype', 'N/A'))
+                if self.jax_interpolator is None:
+                    raise RuntimeError("[BiotSavart] jax_interpolator is None.")
+                if points.shape[0] == 1:
+                    return jnp.stack([interp(points) for interp in self.jax_interpolator], axis=-1)[0]
+                else:
+                    return jnp.stack([interp(points) for interp in self.jax_interpolator], axis=-1)
+            self.B_trilinear = jax.jit(B_trilinear)
+            def B_spline(points):
+                jax.debug.print("[BiotSavart.B] Using spline interpolator for B(points), input shape: {shape}, dtype: {dt}", shape=getattr(points, 'shape', type(points)), dt=getattr(points, 'dtype', 'N/A'))
+                if self.spline_interpolator is None:
+                    raise RuntimeError("[BiotSavart] spline_interpolator is None.")
+                if points.shape[0] == 1:
+                    return jnp.stack([interp(points) for interp in self.spline_interpolator], axis=-1)[0]
+                else:
+                    return jnp.stack([interp(points) for interp in self.spline_interpolator], axis=-1)
+            self.B_spline = jax.jit(B_spline)
+            print("[_build_interpolators] Assigned JIT-compiled B_trilinear and B_spline")
+        else:
+            print("[_build_interpolators] Entering fallback branch (not using interpolator)")
+            def _not_built_trilinear(points):
+                raise RuntimeError("[BiotSavart] B_trilinear not built. Set use_interpolator=True and call _build_interpolators().")
+            self.B_trilinear = _not_built_trilinear
+            def _not_built_spline(points):
+                raise RuntimeError("[BiotSavart] B_spline not built. Set use_interpolator=True and call _build_interpolators().")
+            self.B_spline = _not_built_spline
+        print(f"[_build_interpolators] Done. B_trilinear: {self.B_trilinear}, B_spline: {self.B_spline}")
+
     @property
     def dofs(self):
         return self.coils.dofs
     @dofs.setter
     def dofs(self, new_dofs):
         self.coils.dofs = new_dofs
+        # Rebuild interpolators if dofs changed
+        if self.use_interpolator:
+            if self.last_dofs is None or not jnp.allclose(self.last_dofs, jnp.array(new_dofs)):
+                self._build_interpolators()
+
 
     @jit
-    def sqrtg(self, points):
-        return 1.
-    
-    @jit
-    def B(self, points):
+    def _direct_B(self, points):
         dif_R = (jnp.array(points) - self.coils.gamma).T
         dB = jnp.cross(self.coils.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif_R, axis=0)**3
         dB_sum = jnp.einsum("i,bai", self.coils.currents*1e-7, dB, optimize="greedy")
@@ -98,35 +242,116 @@ class BiotSavart(MagneticField):
 
 
 
-    @jit
-    def grad_B_dot_GradAbsB(self,points):
-        def B_dot_GradAbsB(points):
-            return jnp.sum(self.B(points) * self.dAbsB_by_dX(points), axis=-1)
-        grad_B_dot_GradAbsB=jax.grad(B_dot_GradAbsB)(points)
-        return grad_B_dot_GradAbsB
-    
+    @partial(jit, static_argnames=["use_interpolator", "interp_method"])
+    def B(self, points, use_interpolator=None, interp_method=None):
+        interp_flag = self.use_interpolator if use_interpolator is None else use_interpolator
+        interp_type = self.interp_method if interp_method is None else interp_method
+        print(f"[BiotSavart.B] CALL: self.id={id(self)} use_interpolator arg={use_interpolator} interp_method arg={interp_method}")
+        print(f"[BiotSavart.B] self.use_interpolator={self.use_interpolator} self.interp_method={self.interp_method}")
+        print(f"[BiotSavart.B] interp_flag={interp_flag} (type={type(interp_flag)}) interp_type={interp_type}")
+        print(f"[BiotSavart.B] B_trilinear: {self.B_trilinear} type: {type(self.B_trilinear)}")
+        print(f"[BiotSavart.B] B_spline: {self.B_spline} type: {type(self.B_spline)}")
+        if self.B_trilinear is None or self.B_spline is None:
+            raise RuntimeError("[BiotSavart] B_trilinear or B_spline is None. This should never happen. Please check initialization logic.")
+        if interp_flag:
+            print(f"[BiotSavart.B] BRANCH: Using interpolator '{interp_type}'")
+            if interp_type == 'trilinear':
+                return self.B_trilinear(points)
+            elif interp_type == 'spline':
+                return self.B_spline(points)
+            else:
+                raise ValueError(f"[BiotSavart.B] Unknown interp_method: {interp_type}")
+        else:
+            print(f"[BiotSavart.B] BRANCH: Using direct field computation")
+            return self._B_direct(points)
 
+    @jit
+    def AbsB(self, points):
+        return jnp.linalg.norm(self.B(points))
+
+    @jit
+    def dB_by_dX(self, points):
+        return jacfwd(lambda pts: self.B(pts))(points)
+
+    @jit
+    def dAbsB_by_dX(self, points):
+        return grad(lambda pts: self.AbsB(pts))(points)
+    
+    @jit
+    def grad_B_dot_GradAbsB(self, points):
+        def B_dot_GradAbsB(pts):
+            return jnp.sum(self.B(pts) * self.dAbsB_by_dX(pts), axis=-1)
+        return jax.grad(B_dot_GradAbsB)(points)
+    
+    @jit
+    def B_covariant(self, points):
+        return self.B(points)
+
+    @jit
+    def B_contravariant(self, points):
+        return self.B(points)
+
+
+    @jit
+    def sqrtg(self, points):
+        return 1.
+
+    #@partial(jit, static_argnames=['use_interpolator'])
     @jit
     def A(self, points):
         dif_R = (jnp.array(points)-self.coils.gamma)
         dA = self.coils.gamma_dash / jnp.linalg.norm(dif_R, axis=-1, keepdims=True)
         A_vec = jnp.sum(jnp.mean(self.coils.currents[:, None, None] * dA * 1e-7, axis=1),axis=0)
-        return A_vec    
+        return A_vec
 
+    @jit
+    def grad_B_covariant(self, points):
+        return jacfwd(lambda pts: self.B_covariant(pts))(points)
 
+    @jit
+    def curl_B(self, points):
+        grad_B_cov = self.grad_B_covariant(points)
+        return jnp.array([
+            grad_B_cov[2][1] - grad_B_cov[1][2],
+            grad_B_cov[0][2] - grad_B_cov[2][0],
+            grad_B_cov[1][0] - grad_B_cov[0][1]
+        ]) / self.sqrtg(points)
 
+    @jit
+    def curl_b(self, points):
+        return self.curl_B(points) / self.AbsB(points) + \
+            jnp.cross(self.B_covariant(points), jnp.array(self.dAbsB_by_dX(points))) / \
+            self.AbsB(points)**2 / self.sqrtg(points)
+
+    @jit
+    def kappa(self, points):
+        return -jnp.cross(self.B_contravariant(points), self.curl_b(points)) * \
+            self.sqrtg(points) / self.AbsB(points)
+    
     @jit
     def to_xyz(self, points):
         return points
     
     def _tree_flatten(self):
         children = (self.coils,)
-        aux_data = {}
+        aux_data = {
+            'use_interpolator': self.use_interpolator,
+            'interp_method': self.interp_method,
+            'interp_grid': self.interp_grid,
+            'interp_bounds': self.interp_bounds,
+            'interp_resolution': self.interp_resolution
+        }
         return (children, aux_data)
-    
+
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        return cls(*children, **aux_data)
+        return cls(*children,
+                   use_interpolator=aux_data.get('use_interpolator', False),
+                   interp_grid=aux_data.get('interp_grid', None),
+                   interp_bounds=aux_data.get('interp_bounds', None),
+                   interp_resolution=aux_data.get('interp_resolution', (20,20,20)),
+                   interp_method=aux_data.get('interp_method', 'trilinear'),
+                   build_interpolators=False)
 
 tree_util.register_pytree_node(BiotSavart,
                                BiotSavart._tree_flatten,
