@@ -12,20 +12,22 @@ import numpy as np
 # Input parameters
 tmax = 1e-4
 timestep = 1.e-8
-times_to_trace=5000
-nparticles_per_core=6
+times_to_trace=1000
+nparticles_per_core=500
 nparticles = number_of_processors_to_use*nparticles_per_core
 n_particles_to_plot = 4
-s = 0.6 # s-coordinate: flux surface label
+s = 0.5 # s-coordinate: flux surface label
 theta = jnp.linspace(0, 2*jnp.pi, nparticles)
 phi = jnp.linspace(0, 2*jnp.pi/2/4, nparticles)
-atol = 1e-8
-rtol = 1e-8
+atol = 1e-7
+rtol = 1e-7
 energy=FUSION_ALPHA_PARTICLE_ENERGY
 
 # Load coils and field
-wout_file = os.path.join(os.path.dirname(__file__), "input_files", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
-vmec = Vmec(wout_file)
+wout_file = os.path.join(os.path.dirname(__name__), "input_files", "wout_QI_nfp2_stable_Er_006_000043_hires_scaled.nc")
+vmec = Vmec(wout_file, ntheta=60, nphi=60, range_torus='full period',close=True)
+
+
 
 # Initialize particles
 Z0 = jnp.zeros(nparticles)
@@ -56,12 +58,14 @@ tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 for i in np.random.choice(nparticles, size=n_particles_to_plot, replace=False):
     trajectory = trajectories[i]
     ## Plot energy error
-    ax2.plot(tracing.times[2:], jnp.abs(tracing.energy[i][2:]-particles.energy)/particles.energy, label=f'Particle {i+1}')
+    ax2.plot(tracing.times[2:], jnp.abs(tracing.energy()[i][2:]-particles.energy)/particles.energy, label=f'Particle {i+1}')
     ## Plot velocity parallel to the magnetic field
     ax3.plot(tracing.times, trajectory[:, 3]/particles.total_speed, label=f'Particle {i+1}')
     ## Plot s-coordinate
     ax4.plot(tracing.times, trajectory[:,0], label=f'Particle {i+1}')
     # ax4.set_ylabel(r'$s=\psi/\psi_b$')
+
+
 ## Plot loss fractions
 #ax4.plot(tracing.times, tracing.loss_fractions)
 #ax4.set_ylabel('Loss Fraction');ax4.set_ylim(0, 1);ax4.set_xscale('log')
@@ -74,7 +78,7 @@ ax3.set_ylabel(r'$v_{\parallel}/v$')
 ax3.set_xlabel('Time (s)')
 ax4.set_xlabel('Time (s)')
 plt.tight_layout()
-plt.show()
+plt.savefig('tracing_results_vmec.png', dpi=300)
 
 # # Save results in vtk format to analyze in Paraview
 # vmec.surface.to_vtk('surface')
