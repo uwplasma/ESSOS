@@ -266,7 +266,8 @@ class SurfaceRZFourier:
                                              ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus, _cls=cls, **partners)
     
     @classmethod
-    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus'):
+    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus', offset=0.):
+        """Flux surface ``s`` of a VMEC field; ``offset`` [m] grows its m = 1, n = 0 modes, e.g. a wall that far outside the LCFS."""
         from essos.fields import _radial_interp
         nfp = vmec.nfp
         mpol = vmec.mpol
@@ -275,6 +276,8 @@ class SurfaceRZFourier:
         s_full_grid = vmec.s_full_grid
         rc = _radial_interp(s, s_full_grid, vmec.rmnc, vmec.xm)
         zs = _radial_interp(s, s_full_grid, vmec.zmns, vmec.xm)
+        m1 = (vmec.xm == 1) & (vmec.xn == 0)
+        rc, zs = rc + offset * m1, zs + offset * jnp.sign(jnp.sum(zs * m1)) * m1
 
         partners = {target: _radial_interp(s, s_full_grid, table, vmec.xm)
                     for target, table in (('rs', getattr(vmec, 'rmns', None)), ('zc', getattr(vmec, 'zmnc', None)))
@@ -822,21 +825,20 @@ class SurfaceRZFourier:
             f.write('\n'.join(lines) + '\n/\n')
             
     def mean_cross_sectional_area(self):
-        xyz = self.gamma
-        x2y2 = xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2
-        dgamma1 = self.gammadash_phi
-        dgamma2 = self.gammadash_theta
-        J = jnp.zeros((xyz.shape[0], xyz.shape[1], 2, 2))
-        J = J.at[:, :, 0, 0].set((xyz[:, :, 0] * dgamma1[:, :, 1] - xyz[:, :, 1] * dgamma1[:, :, 0]) / x2y2)
-        J = J.at[:, :, 0, 1].set((xyz[:, :, 0] * dgamma2[:, :, 1] - xyz[:, :, 1] * dgamma2[:, :, 0]) / x2y2)
-        J = J.at[:, :, 1, 0].set(0)
-        J = J.at[:, :, 1, 1].set(1)
-        detJ = jnp.linalg.det(J)
-        Jinv = jnp.linalg.inv(J)
-        dZ_dtheta = dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
-        mean_cross_sectional_area = jnp.abs(jnp.mean(jnp.sqrt(x2y2) * dZ_dtheta * detJ))/(2 * jnp.pi)
-        return mean_cross_sectional_area
-    
+        """Mean over phi of the constant-phi cross-section area ``int R dZ/dtheta dtheta``.
+
+        ``dZ/dtheta`` at fixed cylindrical phi is ``Z_theta - Z_u phi_theta / phi_u``
+        (u the surface toroidal angle); the phi average uses ``_surface_mean``.
+        """
+        x, y = self.gamma[..., 0], self.gamma[..., 1]
+        d_phi, d_theta = self.gammadash_phi, self.gammadash_theta
+        r2 = x**2 + y**2
+        phi_u = (x * d_phi[..., 1] - y * d_phi[..., 0]) / r2
+        phi_theta = (x * d_theta[..., 1] - y * d_theta[..., 0]) / r2
+        # R dZ/dtheta times the Jacobian phi_u of the change of toroidal angle.
+        integrand = jnp.sqrt(r2) * (d_theta[..., 2] * phi_u - d_phi[..., 2] * phi_theta)
+        return 2 * jnp.pi * jnp.abs(self._surface_mean(integrand))
+
     def _tree_flatten(self):
         tables = (self._rc, self._zs, self._rs, self._zc)
         children = tuple(table * self.scaling if hasattr(table, "shape") else table for table in tables)
