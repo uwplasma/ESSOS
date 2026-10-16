@@ -18,11 +18,24 @@ from essos.plot import fix_matplotlib_3d
 from essos.util import roots
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu_D_ab
 
-mesh = Mesh(jax.devices(), ("dev",))
-spec=PartitionSpec("dev", None)
-spec_index=PartitionSpec("dev")
-sharding = NamedSharding(mesh, spec)
-sharding_index = NamedSharding(mesh, spec_index)
+USE_SHARDING = False  # Set to True to enable multi-device parallelization
+
+if USE_SHARDING:
+    _devices = jax.devices()
+    if len(_devices) > 1:
+        mesh = Mesh(_devices, ("dev",))
+        spec = PartitionSpec("dev", None)
+        spec_index = PartitionSpec("dev")
+        sharding = NamedSharding(mesh, spec)
+        sharding_index = NamedSharding(mesh, spec_index)
+    else:
+        mesh = None
+        sharding = None
+        sharding_index = None
+else:
+    mesh = None
+    sharding = None
+    sharding_index = None
 
 def gc_to_fullorbit(field, initial_xyz, initial_vparallel, total_speed, mass, charge, phase_angle_full_orbit=0):
     """
@@ -825,8 +838,11 @@ class Tracing():
                 ).ys
             return trajectory
         
-        return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
-                    device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
+        if sharding is not None:
+            return jit(vmap(compute_trajectory,in_axes=(0,0)), in_shardings=(sharding,sharding_index), out_shardings=sharding)(
+                        device_put(self.initial_conditions, sharding), device_put(self.particles.random_keys if self.particles else None, sharding_index))
+        else:
+            return jit(vmap(compute_trajectory,in_axes=(0,0)))(self.initial_conditions, self.particles.random_keys if self.particles else None)
         #x=jax.device_put(self.initial_conditions, sharding)
         #y=jax.device_put(self.particles.random_keys, sharding_index)        
         #sharded_fun = jax.jit(jax.shard_map(jax.vmap(compute_trajectory,in_axes=(0,0)), mesh=mesh, in_specs=(spec,spec_index), out_specs=spec))
@@ -1008,12 +1024,18 @@ class Tracing():
                 return X_slice, Y_slice, T_slice
             if orientation == 'toroidal':
                 # X_slice, Y_slice, T_slice = vmap(compute_trajectory_toroidal)(self.trajectories)
-                X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_toroidal), in_shardings=sharding, out_shardings=sharding)(
-                    device_put(self.trajectories, sharding))
+                if sharding is not None:
+                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_toroidal), in_shardings=sharding, out_shardings=sharding)(
+                        device_put(self.trajectories, sharding))
+                else:
+                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_toroidal))(self.trajectories)
             elif orientation == 'z':
                 # X_slice, Y_slice, T_slice = vmap(compute_trajectory_z)(self.trajectories)
-                X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_z), in_shardings=sharding, out_shardings=sharding)(
-                    device_put(self.trajectories, sharding))
+                if sharding is not None:
+                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_z), in_shardings=sharding, out_shardings=sharding)(
+                        device_put(self.trajectories, sharding))
+                else:
+                    X_slice, Y_slice, T_slice = jit(vmap(compute_trajectory_z))(self.trajectories)
             @partial(jax.vmap, in_axes=(0, 0, 0))
             def process_trajectory(X_i, Y_i, T_i):
                 mask = (T_i[1:] != T_i[:-1])

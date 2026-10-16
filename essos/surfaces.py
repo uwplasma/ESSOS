@@ -8,8 +8,25 @@ from jax.experimental.pjit import pjit
 from essos.plot import fix_matplotlib_3d
 import jaxkd
 
-mesh = Mesh(devices(), ("dev",))
-sharding = NamedSharding(mesh, PartitionSpec("dev"))
+# mesh = Mesh(devices(), ("dev",))
+# sharding = NamedSharding(mesh, PartitionSpec("dev"))
+
+
+# Disable sharding for B_on_surface to avoid issues with frozen DOFs
+# When DOFs are frozen, array sizes may not divide evenly across devices
+USE_SHARDING = False  # Set to True to enable multi-device parallelization
+
+if USE_SHARDING:
+    _devices = devices()
+    if len(_devices) > 1:
+        mesh = Mesh(_devices, ("dev",))
+        sharding = NamedSharding(mesh, PartitionSpec("dev"))
+    else:
+        mesh = None
+        sharding = None
+else:
+    mesh = None
+    sharding = None
 
 
 @jit
@@ -108,9 +125,10 @@ def nested_lists_to_array(ll):
 
 class SurfaceRZFourier:
     def __init__(self, rc, zs, nfp, mpol, ntor, ntheta=30, nphi=30, close=True, range_torus='full torus',
-                 scaling_type=2, scaling_factor=0):
+                 scaling_type=2, scaling_factor=0, scale_fixed=1.0):
         """ rc, zs: dynamic arrays 
-            nfp, mpol, ntor: static """
+            nfp, mpol, ntor: static 
+            scale_fixed: fixed multiplier applied to all modes (default=1.0, use >1.0 for equilibration)"""
         
         assert isinstance(nfp, int) and nfp > 0, "nfp must be a positive integer."
         assert isinstance(mpol, int) and mpol >= 0, "mpol must be a non-negative integer."
@@ -129,6 +147,9 @@ class SurfaceRZFourier:
         self._gamma = None
         self._gammadash_theta = None
         self._gammadash_phi = None
+        self._gammadashdash_theta = None
+        self._gammadashdash_phi = None
+        self._gammadashdash_theta_phi = None
         self._normal = None
         self._unitnormal = None
         self._area_element = None
@@ -148,11 +169,12 @@ class SurfaceRZFourier:
 
         self._scaling_type = scaling_type # 1 for L-1 norm, 2 for L-2 norm, jnp.inf for L-infinity norm
         self._scaling_factor = scaling_factor
+        self._scale_fixed = scale_fixed
         self._scaling = None
 
 
     @classmethod
-    def from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus',scaling_type=2,scaling_factor=0.0):
+    def from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus',scaling_type=2,scaling_factor=0.0,scale_fixed=1.0):
         from f90nml import Parser
         all_namelists = Parser().read(file)
         nml = all_namelists['indata']        
@@ -165,11 +187,11 @@ class SurfaceRZFourier:
         rc = jnp.ravel(nested_lists_to_array(nml['rbc']))[2:]
         zs = jnp.ravel(nested_lists_to_array(nml['zbs']))[2:]
 
-        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,scaling_factor=scaling_factor,scaling_type=scaling_type)
+        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,scaling_factor=scaling_factor,scaling_type=scaling_type,scale_fixed=scale_fixed)
         return surface
     
     @classmethod
-    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus',scaling_type=2,scaling_factor=0.0):
+    def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus',scaling_type=2,scaling_factor=0.0,scale_fixed=1.0):
         nfp = vmec.nfp
         mpol = vmec.mpol
         ntor = vmec.ntor
@@ -178,14 +200,14 @@ class SurfaceRZFourier:
         rc = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(vmec.rmnc)
         zs = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(vmec.zmns)
 
-        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,scaling_factor=scaling_factor,scaling_type=scaling_type)
+        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,scaling_factor=scaling_factor,scaling_type=scaling_type,scale_fixed=scale_fixed)
         surface._xm = vmec.xm
         surface._xn = vmec.xn
 
         return surface
 
     @classmethod
-    def from_wout_file(cls, file, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus',scaling_type=2,scaling_factor=0.0):
+    def from_wout_file(cls, file, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus',scaling_type=2,scaling_factor=0.0,scale_fixed=1.0):
         from netCDF4 import Dataset
         nc = Dataset(file)
 
@@ -200,7 +222,7 @@ class SurfaceRZFourier:
         rc = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(jnp.array(nc.variables["rmnc"][:]))
         zs = vmap(lambda row: jnp.interp(s, s_full_grid, row, left='extrapolate'), in_axes=1)(jnp.array(nc.variables["zmns"][:]))
 
-        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,scaling_factor=scaling_factor,scaling_type=scaling_type)
+        surface = cls(rc, zs, nfp, mpol, ntor, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,scaling_factor=scaling_factor,scaling_type=scaling_type,scale_fixed=scale_fixed)
         surface._xm = xm
         surface._xn = xn
 
@@ -370,11 +392,22 @@ class SurfaceRZFourier:
         self._scaling_factor = new_factor
         self._scaling = None
 
+    # scale_fixed property and setter
+    @property
+    def scale_fixed(self):
+        return self._scale_fixed
+    
+    @scale_fixed.setter
+    def scale_fixed(self, new_scale):
+        self._scale_fixed = new_scale
+        self._scaling = None
+
     # scaling property
     @property
     def scaling(self):
         if self._scaling is None:
-            self._scaling = jnp.exp(self.scaling_factor * jnp.linalg.norm(jnp.vstack([self.xm, self.xn]), ord=self.scaling_type, axis=0))
+            mode_scaling = jnp.exp(self.scaling_factor * jnp.linalg.norm(jnp.vstack([self.xm, self.xn]), ord=self.scaling_type, axis=0))
+            self._scaling = mode_scaling * self.scale_fixed
         return self._scaling
     
     # dofs property and setter
@@ -413,12 +446,29 @@ class SurfaceRZFourier:
         dX_dtheta = dR_dtheta * cos_phi2d
         dY_dtheta = dR_dtheta * sin_phi2d
         gammadash_theta = 2.*jnp.pi*jnp.stack([dX_dtheta, dY_dtheta, dZ_dtheta], axis=-1)
+        dR_d2theta = -jnp.einsum('i,ijk->jk', xm**2 * rc, cos_angles)
+        dZ_d2theta = -jnp.einsum('i,ijk->jk', xm**2 * zs, sin_angles)
+        dX_d2theta = dR_d2theta * cos_phi2d
+        dY_d2theta = dR_d2theta * sin_phi2d
+        gammadashdash_theta = (2.*jnp.pi)**2*jnp.stack([dX_d2theta, dY_d2theta, dZ_d2theta], axis=-1)
+        dR_dthetadphi = jnp.einsum('i,ijk->jk', xn*xm * rc, cos_angles)
+        dZ_dthetadphi = jnp.einsum('i,ijk->jk', xn*xm * zs, sin_angles)
+        dX_dthetadphi = dR_dthetadphi * cos_phi2d - dR_dtheta * sin_phi2d
+        dY_dthetadphi = dR_dthetadphi * sin_phi2d + dR_dtheta * cos_phi2d
+        gammadashdash_theta_phi = (2.*jnp.pi)**2*jnp.stack([dX_dthetadphi, dY_dthetadphi, dZ_dthetadphi], axis=-1)
+
 
         dR_dphi = jnp.einsum('i,ijk->jk', xn*rc, sin_angles)
         dZ_dphi = -jnp.einsum('i,ijk->jk', xn*zs, cos_angles)
         dX_dphi = dR_dphi * cos_phi2d - R * sin_phi2d
         dY_dphi = dR_dphi * sin_phi2d + R * cos_phi2d
         gammadash_phi = 2.*jnp.pi*jnp.stack([dX_dphi, dY_dphi, dZ_dphi], axis=-1)
+        dR_d2phi = jnp.einsum('i,ijk->jk', xn**2*rc, cos_angles)
+        dZ_d2phi = -jnp.einsum('i,ijk->jk', xn**2*zs, sin_angles)
+        dX_d2phi = dR_d2phi * cos_phi2d - 2 * dR_dphi * sin_phi2d - R * cos_phi2d
+        dY_d2phi = dR_d2phi * sin_phi2d + 2 * dR_dphi * cos_phi2d - R * sin_phi2d
+        gammadashdash_phi = (2.*jnp.pi)**2*jnp.stack([dX_d2phi, dY_d2phi, dZ_d2phi], axis=-1)  
+
 
         # r_coordinate = jnp.einsum('i,ijk->jk', rmnc_interp, cos_angles)
         # z_coordinate = jnp.einsum('i,ijk->jk', zmns_interp, sin_angles)
@@ -434,26 +484,47 @@ class SurfaceRZFourier:
         # dZ_dphi = jnp.einsum('i,ijk,i->jk', -self.xn, cos_angles, zmns_interp)
         # gammadash_phi = 2*jnp.pi*jnp.transpose(jnp.array([dX_dphi, dY_dphi, dZ_dphi]), (1, 2, 0))        
         
-        return gamma, gammadash_theta, gammadash_phi
+        return gamma, gammadash_theta, gammadash_phi, gammadashdash_theta, gammadashdash_phi, gammadashdash_theta_phi
     
-    # gamma, gammadash_theta, gammadash_phi properties
+    # gamma, gammadash_theta, gammadash_phi, gammadashdash_theta properties
     @property
     def gamma(self):
         if self._gamma is None:
-            self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
+            self._gamma, self._gammadash_theta, self._gammadash_phi, self._gammadashdash_theta, self._gammadashdash_phi, self._gammadashdash_theta_phi = self._compute_gamma()
         return self._gamma
     
     @property
     def gammadash_theta(self):
         if self._gammadash_theta is None:
-            self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
+            self._gamma, self._gammadash_theta, self._gammadash_phi, self._gammadashdash_theta, self._gammadashdash_phi, self._gammadashdash_theta_phi = self._compute_gamma()
         return self._gammadash_theta
     
     @property
     def gammadash_phi(self):
         if self._gammadash_phi is None:
-            self._gamma, self._gammadash_theta, self._gammadash_phi = self._compute_gamma()
+            self._gamma, self._gammadash_theta, self._gammadash_phi, self._gammadashdash_theta, self._gammadashdash_phi, self._gammadashdash_theta_phi = self._compute_gamma()
         return self._gammadash_phi
+
+    @property
+    def gammadashdash_theta(self):
+        if self._gammadashdash_theta is None:
+            self._gamma, self._gammadash_theta, self._gammadash_phi, self._gammadashdash_theta, self._gammadashdash_phi, self._gammadashdash_theta_phi = self._compute_gamma()
+        return self._gammadashdash_theta
+
+    @property
+    def gammadashdash_phi(self):
+        if self._gammadashdash_phi is None:
+            self._gamma, self._gammadash_theta, self._gammadash_phi, self._gammadashdash_theta, self._gammadashdash_phi, self._gammadashdash_theta_phi = self._compute_gamma()
+        return self._gammadashdash_phi        
+
+    @property
+    def gammadashdash_theta_phi(self):
+        if self._gammadashdash_theta_phi is None:
+            self._gamma, self._gammadash_theta, self._gammadash_phi, self._gammadashdash_theta, self._gammadashdash_phi, self._gammadashdash_theta_phi = self._compute_gamma()
+        return self._gammadashdash_theta_phi
+
+
+        
 
     # _compute_properties method
     @jit
@@ -740,7 +811,7 @@ class SurfaceRZFourier:
         for l in range(len(self.xm)):
             rc = self.rc[l]
             zs = self.zs[l]
-            nml += f"RBC({self.xn[l]:4d},{self.xm[l]:4d}) ={rc:23.15e},    ZBS({self.xn[l]:4d},{self.xm[l]:4d}) ={zs:23.15e}\n"
+            nml += f"RBC({self.xn[l]/self.nfp:4d},{self.xm[l]:4d}) ={rc:23.15e},    ZBS({self.xn[l]/self.nfp:4d},{self.xm[l]:4d}) ={zs:23.15e}\n"
         nml += '/\n'
         
         with open(filename, 'w') as f:

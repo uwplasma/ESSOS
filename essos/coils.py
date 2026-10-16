@@ -27,7 +27,13 @@ class Curves:
                  nfp:         int = 1,
                  stellsym:    bool = True,
                  scaling_type: int = 2,
-                 scaling_factor: float = 0):
+                 scaling_factor: float = 0,
+                 scale_fixed: float = 1.0):
+        """Initialize Curves.
+        
+        Args:
+            scale_fixed: fixed multiplier applied to all modes (default=1.0, use >1.0 for equilibration)
+        """
         if hasattr(dofs, 'shape'):
             assert len(dofs.shape) == 3, "dofs must be a 3D array with shape (n_curves, 3, 2*order+1)"
             assert dofs.shape[1] == 3, "dofs must have shape (n_curves, 3, 2*order+1)"
@@ -45,6 +51,7 @@ class Curves:
 
         self._scaling_type = scaling_type  # 1 for L-1 norm, 2 for L-2 norm, jnp.inf for L-infinity norm
         self._scaling_factor = scaling_factor
+        self._scale_fixed = scale_fixed
         self._scaling = None
 
         self.quadpoints = jnp.linspace(0, 1, self._n_segments, endpoint=False)
@@ -126,6 +133,16 @@ class Curves:
         self._scaling_factor = new_factor
         self._scaling = None
 
+    # scale_fixed property and setter
+    @property
+    def scale_fixed(self):
+        return self._scale_fixed
+    
+    @scale_fixed.setter
+    def scale_fixed(self, new_scale):
+        self._scale_fixed = new_scale
+        self._scaling = None
+
     # scaling property
     @property
     def scaling(self):
@@ -137,7 +154,8 @@ class Curves:
                 jnp.array([0.0]),
                 jnp.repeat(jnp.arange(1, self.order + 1, dtype=float), 2)
             ])
-            self._scaling = jnp.exp(self.scaling_factor * mode_orders)
+            mode_scaling = jnp.exp(self.scaling_factor * mode_orders)
+            self._scaling = mode_scaling * self.scale_fixed
         return self._scaling
     
     # order property and setter
@@ -711,9 +729,14 @@ def CreateEquallySpacedCurves(n_curves:   int,
                               nfp:        int = 1,
                               stellsym:   bool = False,
                               scaling_type: int = 2,
-                              scaling_factor: float = 0) -> Curves:
+                              scaling_factor: float = 0,
+                              scale_fixed: float = 1.0) -> Curves:
     """ Creates n_curves equally spaced on a torus of major radius R and minor radius r using Fourier
-    representation up to the specified order."""
+    representation up to the specified order.
+    
+    Args:
+        scale_fixed: fixed multiplier applied to all modes (default=1.0, use >1.0 for equilibration)
+    """
     angles = (jnp.arange(n_curves) + 0.5) * (2 * jnp.pi) / ((1 + int(stellsym)) * nfp * n_curves)
     curves = jnp.zeros((n_curves, 3, 1 + 2 * order))
 
@@ -722,7 +745,7 @@ def CreateEquallySpacedCurves(n_curves:   int,
     curves = curves.at[:, 1, 0].set(jnp.sin(angles) * R)  # y[0]
     curves = curves.at[:, 1, 2].set(jnp.sin(angles) * r)  # y[2]
     curves = curves.at[:, 2, 1].set(-r)                   # z[1] (constant for all)
-    return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym, scaling_type=scaling_type, scaling_factor=scaling_factor)
+    return Curves(curves, n_segments=n_segments, nfp=nfp, stellsym=stellsym, scaling_type=scaling_type, scaling_factor=scaling_factor, scale_fixed=scale_fixed)
 
 @partial(jit, static_argnames=["flip"])
 def RotatedCurve(curve, phi, flip):
