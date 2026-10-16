@@ -10,7 +10,7 @@ from essos.dynamics import Tracing
 from essos.optimization import optimize_loss_function
 from jax import vmap, jit
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
-#  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
+#  `scipy.optimize.minimize`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
 from essos.losses import custom_loss
 

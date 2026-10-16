@@ -522,6 +522,7 @@ def test_asymmetric_surface_geometry_dofs_and_pytree():
         surface.dofs = dofs[:-1]
 
 
+@pytest.mark.filterwarnings("ignore:Setting the shape:DeprecationWarning")  # netCDF4 writer, NumPy 2.5
 def test_asymmetric_vmec_wout_and_surface_loading(tmp_path, monkeypatch):
     from netCDF4 import Dataset
     from essos.fields import VMEC_WOUT_PARTNERS

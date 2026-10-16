@@ -51,6 +51,9 @@ print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e
 
 
 manager.plot_pareto_fronts(z_thresh=3, save= True)
-manager.plot_optimization_history(z_thresh=3, save= True)
-manager.plot_param_importances(save= True)
-manager.plot_parallel_coordinates(z_thresh=3, save= True)
+try:  # the interactive figures need the optional plotly dependency
+    manager.plot_optimization_history(z_thresh=3, save=True)
+    manager.plot_param_importances(save=True)
+    manager.plot_parallel_coordinates(z_thresh=3, save=True)
+except ImportError as err:
+    print(err)
