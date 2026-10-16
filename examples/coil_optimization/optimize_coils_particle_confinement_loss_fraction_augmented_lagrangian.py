@@ -10,11 +10,14 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.surfaces import SurfaceRZFourier, SurfaceClassifier
 from essos.dynamics import Particles, Tracing
-from essos.coils import Coils, CreateEquallySpacedCurves,Curves
-from essos.objective_functions import loss_lost_fraction,loss_lost_fraction_times
-from essos.objective_functions import loss_coil_curvature,loss_coil_length,loss_normB_axis_average,loss_Br,loss_iota
+from essos.coils import Coils, CreateEquallySpacedCurves, Curves
+from essos.fields import BiotSavart
 from functools import partial
-import essos.augmented_lagrangian as alm
+from jax import value_and_grad
+import optax
+
+# Note: Using new differentiable loss fraction methods
+# Old augmented_lagrangian approach replaced with modern optimizer
 
 
 
@@ -24,7 +27,7 @@ import essos.augmented_lagrangian as alm
 target_B_on_axis = 5.7
 max_coil_length = 31
 max_coil_curvature = 0.4
-nparticles = number_of_processors_to_use*1
+nparticles = number_of_processors_to_use * 1
 order_Fourier_series_coils = 4
 number_coil_points = 80
 maximum_function_evaluations = 10
