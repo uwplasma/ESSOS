@@ -507,10 +507,65 @@ establish statistical equivalence between the collisional implementations.
 Saved [JSON](examples/benchmarks/results/qa_collision_tracing_20261017.json) and
 [CSV](examples/benchmarks/results/qa_collision_tracing_20261017.csv) include all
 five timing samples and per-particle counts. All four reported cases complete.
-An eight-particle preflight exposed an inner-orbit `MIN_STEP` failure for one
-native fixed-collision launch at `t=7.87e-5 s`, also with endpoint-only saves.
-That issue remains unresolved; the failed preflight is excluded from timing
-claims and retained outside the checkout with the cleanup recovery files.
+The original eight-particle preflight had no loss boundary. Its fourth fixed-
+collision particle escaped toward a coil; the inner orbit solve then stopped
+at `t=7.876591344455e-5 s`. Independent SciPy DOP853 and RK45 solves of that same
+interval also stop because their required timestep falls below floating-point
+time resolution. At the terminal point the particle is about **7 mm** from the
+coil polyline, the configured field gives `rho / L_B = 10.77`, and
+`Bstar_parallel / B` approaches zero. The local 75-point coil quadrature is
+strongly resolution dependent: diagnostic copies with 300/600 points remove
+the near-zero denominator at that position. Those copies are sensitivity
+checks, not a converged near-coil reference or a change to the traced field.
+This identifies a near-coil field/GC-validity problem, rather than an RK
+controller failure. Unbounded GC tracing is still expected to fail there.
+
+Use an explicit loss boundary to stop escaped particles before this region.
+The regression uses the same reference geometry as
+[`connection_length_coils.py`](examples/fieldline_tracing/connection_length_coils.py):
+the bundled QA boundary rescaled to the coils' unit major radius, with an 8 cm
+wall clearance. This reference wall is not a newly solved coil LCFS or a
+measured vessel. All launches, production Brownian sampling, collision maps,
+orbit tolerances and the 75-point coil field stay unchanged. Fixed and adaptive
+collision runs are checked with both 2 and 101 saves; a wall hit is an `EVENT`,
+while a surviving particle must reach the full horizon with `SUCCESS`.
+
+| Collision stepping | Saves | Reached 100 microseconds | Wall hits | Numerical failures |
+| --- | ---: | ---: | ---: | ---: |
+| Fixed | 2 | 1 | 7 | 0 |
+| Fixed | 101 | 1 | 7 | 0 |
+| Adaptive | 2 | 2 | 6 | 0 |
+| Adaptive | 101 | 3 | 5 | 0 |
+
+The original failing fixed launch hits the wall at `50.3321805911` microseconds
+with either save grid. Changing adaptive save anchors also changes the split
+grid and sampled paths; these eight-particle counts are regression outcomes,
+not estimates of converged loss fractions.
+
+A separate unbounded eight-particle fixed Diffrax run completes with finite
+outputs, but follows different stochastic trajectories. The corresponding
+fourth particle's nearest saved coil distance is about 156 mm, compared with
+about 7 mm at the native failure. Identical key labels do not produce identical
+paths across the two Brownian generators. Fixed Diffrax Milstein also has no
+adaptive embedded orbit-error check; its completion is not evidence of accurate
+continuation through the native particle's problematic interval.
+
+Saved [orbit-loss diagnosis and wall regressions](examples/benchmarks/results/qa_coil_orbit_loss_20261017.json)
+include the independent ODE checks, quadrature sensitivity, per-particle
+outcomes, counts and source/input hashes. Reproduce on CPU with:
+
+```bash
+python -m examples.benchmarks.validate_coil_orbit_loss --output examples/benchmarks/results/qa_coil_orbit_loss_NEW.json
+python -m pytest -q tests/test_split_coil_boundary.py
+```
+
+For a production geometry, pass its wall through `trace_split(..., event=wall)`;
+`LevelsetStoppingCriterion(classifier, maximum_distance=clearance)` accepts the
+existing positive-inside surface classifier. The tracer root-finds orbit wall
+crossings and skips the collision kick at an orbit event. It does not infer a
+wall from coils or switch automatically to full Lorentz dynamics. The original
+two-particle timing and memory runs above remain unbounded cost measurements;
+the wall regressions do not replace or extend their timing claims.
 
 Memory is measured by replaying each case once in its own fresh Linux CPU
 process. All four replays reproduce the timed run's per-particle step counts
