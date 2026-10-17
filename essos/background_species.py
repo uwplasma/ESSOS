@@ -21,8 +21,23 @@ class BackgroundSpecies():
     first coordinate of the traced points (``s`` for a VMEC field), shape
     ``(number_species, len(radial_grid))``. Profiles are interpolated
     linearly and held constant beyond the ends of the grid.
+
+    ``coulomb_log_model="nrl"`` preserves the original pairwise NRL formulas.
+    ``"impact"`` selects smooth Landau--Spitzer cutoffs at the RMS relative
+    speed, with static Debye screening (see :mod:`essos.coulomb`). Screening
+    uses these background species unless ``screening_species`` supplies a
+    separate BackgroundSpecies, e.g. electrons which screen without adding
+    electron collisions. No screening electron population is inferred for
+    the impact model. Both tracers and both time solvers use this selection.
     """
-    def __init__(self, number_species, mass_array, charge_array, n_array, T_array, radial_grid=None):
+    def __init__(self, number_species, mass_array, charge_array, n_array, T_array, radial_grid=None,
+                 *, coulomb_log_model="nrl", screening_species=None):
+        if coulomb_log_model not in ("nrl", "impact"):
+            raise ValueError("coulomb_log_model must be 'nrl' or 'impact'")
+        if screening_species is not None and coulomb_log_model != "impact":
+            raise ValueError("screening_species is only used by the impact Coulomb-log model")
+        self.coulomb_log_model = coulomb_log_model
+        self.screening_species = screening_species
         self.number_species = number_species
         self.species_indeces = jnp.arange(number_species)
         self.temperature = T_array
@@ -61,7 +76,8 @@ def gamma_ab(ma: float, ea: float, species_b: int,v: float, points, species: Bac
 def dlog_coulomb_dv(ma, ea, species_b, v, points, species):
     """d(ln lnLambda)/dv: the Coulomb logarithm depends on the test-particle speed."""
     ln, slope = jax.jvp(lambda u: coulomb_logarithm(ma, ea, species_b, u, points, species), (v,), (jnp.ones_like(v),))
-    return slope/ln
+    # The impact model returns zero in a vacuum, where all rates vanish.
+    return slope/jnp.where(ln == 0, 1., ln)
 
 
 @partial(jit, static_argnames=['species'])
@@ -117,6 +133,18 @@ def nu_s_ab(ma: float, ea: float,species_b: int,v:float, points,species: Backgro
 
 @partial(jit, static_argnames=['species'])
 def coulomb_logarithm(ma:float, ea: float, species_b: int, v: float, points, species: BackgroundSpecies) -> float:
+    """Selected pairwise Coulomb logarithm; NRL remains the default."""
+    if species.coulomb_log_model == "impact":
+        from .coulomb import impact_coulomb_logarithm
+        screening = species if species.screening_species is None else species.screening_species
+        n = jnp.stack([screening.get_density(i, points) for i in range(screening.number_species)])
+        T = jnp.stack([screening.get_temperature(i, points) for i in range(screening.number_species)])
+        return impact_coulomb_logarithm(ma, ea, species.mass[species_b], species.charge[species_b],
+            v, species.get_temperature(species_b, points), n, T, screening.charge)
+    return nrl_coulomb_logarithm(ma, ea, species_b, v, points, species)
+
+
+def nrl_coulomb_logarithm(ma:float, ea: float, species_b: int, v: float, points, species: BackgroundSpecies) -> float:
     """NRL Plasma Formulary (2019, p. 34) Coulomb logarithm of a test particle
     (mass ``ma``, charge ``ea``, speed ``v``) on background species ``species_b``.
 

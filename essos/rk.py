@@ -57,6 +57,7 @@ class RKSolution(NamedTuple):
     event_mask: object
     stats: RKStats
     step_ts: jax.Array
+    next_dt: jax.Array
 
 
 # Dormand--Prince stages, with Shampine's embedded error estimator (1986).
@@ -337,6 +338,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     uses ``dt0`` (bounded by dtmax and t1), and still supplies dense output/events.
     ``max_steps`` counts accepted and rejected trials. Failures return a status;
     no inaccurate step is forced through a minimum step-size limit.
+    ``next_dt`` returns the controller's next step-size proposal. It can seed
+    a subsequent solve after a state jump; derivatives must be recomputed.
 
     By default memory holds only the save grid and current step. Opt into an
     infinity-padded accepted-time history with ``record_steps=True``; its first
@@ -593,7 +596,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     status = jnp.where((state["t"] < t1) & (state["status"] == RKStatus.SUCCESS), RKStatus.MAX_STEPS, state["status"])
     return RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
                       tree_util.tree_unflatten(structure, state["hits"]),
-                      RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"])
+                      RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"], state["h"])
 
 
 def solve_rk45(rhs, y0, args=None, **kwargs):

@@ -160,14 +160,387 @@ Cartesian metres. Boozer guiding centers use these selections in
 equations. Flux-coordinate support here is for guiding centers; the Lorentz
 equations require a field that supplies Cartesian magnetic vectors.
 
-The native solvers currently implement forward collisionless orbits. Split
-collision updates and a custom derivative rule that replays accepted steps
-are subsequent phases. The native driver does not yet support reverse-mode
-AD. The standalone [`essos.rk.solve_rk`](essos/rk.py) (and its `solve_rk45` and
+The native selections in `Tracing` and `trace_boozer` implement forward
+collisionless orbits. Forward split collisions have a separate entry point,
+[`essos.split.trace_split`](essos/split.py), described below. A custom
+derivative rule that replays accepted steps is a subsequent phase; the adaptive
+drivers do not yet support reverse-mode AD. The standalone
+[`essos.rk.solve_rk`](essos/rk.py) (and its `solve_rk45` and
 `solve_dopri8` entry points) also exposes termination status, accepted/rejected
 trial counts and optional accepted-time history.
 The comparison scripts in [`examples/paper`](examples/paper) include both
 backends; their reported times include JAX compilation.
+
+For nonrelativistic orbit/collision splitting:
+
+```python
+from essos.split import trace_split, SplitStatus
+
+result = trace_split(
+    field, particles, species,  # existing field, Particles and BackgroundSpecies
+    model="GuidingCenter",     # or "FullOrbit" for a Cartesian field
+    integrator="essos_dopri8", # or "essos_rk45"
+    tmax=1e-5, timestep=1e-7, n_save=100,
+    collision_tolerance=1e-3, rtol=1e-9, atol=1e-9,
+)
+# Check every particle's result.status before interpreting result.ys.
+# SUCCESS=0, EVENT=1; codes >=2 indicate an incomplete/failed solve.
+```
+
+This Lie split advances the orbit with the native RK solver and then applies
+a separate collision kick at its endpoint. The Milstein maps, collision error
+estimates, reflecting speed/pitch boundaries and conditional Brownian bridge
+follow [Sarkimaki et al., sections 5.1--5.3](https://arxiv.org/pdf/1701.05043).
+ESSOS's existing nonrelativistic Maxwellian collision rates supply the physics,
+including the derivative of the speed-dependent Coulomb logarithm. Guiding
+centers update speed/pitch; full orbits update velocity in its local aligned
+basis. These are the paper's local maps, not a full Milstein construction for
+arbitrary noncommuting noise. The default `collision_controller="conservative"`
+adjusts the interval from the last drift/diffusion estimates.
+`collision_controller="paper"` selects section 5.3's Wiener look-ahead
+(Eqs. 78--82): candidate times are successive thirds of the proposed interval,
+and all sampled values, including failed candidates, remain in Brownian memory.
+The particle controller uses the parallel Wiener increment from Eq. (62).
+The GC controller uses the Euclidean norm of speed/pitch Wiener increments;
+spatial-diffusion noise is excluded because it has no separate error estimate.
+This GC vector-norm convention remains an implementation choice: the paper's
+scalar step-selection notation does not specify how to combine its two GC
+error components. It has not been checked against the authors' reference code.
+The pitch error estimate follows the explicit magnitude approximation after
+Eq. (55), `abs(dW_pitch) + sqrt(h/3)`, despite the inconsistent printing in
+Eq. (75). Local-error acceptance is shared by all adaptive controllers.
+
+There are also numerical-prefactor inconsistencies within the paper. Substituting
+the pitch drift/noise and Eq. (55)'s magnitude approximation into the general
+Eq. (54) gives a pitch error six times smaller than the explicit Eq. (75).
+Likewise, substituting `g = sqrt(2 D_parallel)` into Eq. (53) gives a speed
+error smaller than Eq. (62) by `sqrt(2)`. These are algebraic comparisons of
+the printed formulas, not confirmation of an intended correction. ESSOS keeps
+the explicit particle/GC coefficients in Eqs. (62)/(75), including the larger
+pitch coefficient; it does not reduce error estimates to gain speed.
+
+`collision_controller="candidate"` is an optional alternative to the paper's
+step-selection heuristic. It reuses the local coefficients computed by the
+last trial to predict **both** drift and diffusion errors at candidate times,
+including the timestep-dependent speed tolerance. Eight scalar bisections
+fit an initial proposal using unit Gaussian magnitudes; up to four retained
+Brownian probes backtrack if the predicted error exceeds 0.9. Accepted trials
+can grow by at most two. The next full trial always checks the actual errors
+against one, even if the prediction passes or the probe budget is exhausted.
+This changes the proposal, not the collision maps or local acceptance rule.
+
+The frozen coefficients are returned as optional `CollisionStep.error_model`
+metadata. No extra runtime collision-rate, derivative, or orbit RHS evaluation
+is needed for a probe. Generic `solve_split` callbacks must supply a scalar
+`CollisionErrorModel` when selecting this option; `trace_split` supplies it
+automatically. Frozen predictions can become inaccurate as the state changes,
+and the additional proposal work must be included when comparing timings.
+
+Rejected kicks repeat the split trial from its previous state. All sampled
+future Brownian values are retained in bounded memory. The conservative
+controller splits an increment conditionally and stops growth at the next
+known endpoint. The paper and candidate controllers can span stored intervals while retaining
+their realized Brownian values. Exceeding
+`max_pending` returns `BROWNIAN_CAPACITY`, with no discarded samples or forced
+acceptance. `result.stats` reports split/orbit attempts, rejections, peak stored
+intervals, and the largest accepted collision error estimate.
+
+`timestep` sets the initial and default maximum split interval;
+`collision_dtmax` overrides the latter. `orbit_dt0`, `rtol` and `atol` control
+the independent RK solve inside each interval. `reuse_orbit_step=True` carries
+only its next adaptive step-size guess across collision kicks and retries;
+derivatives are recomputed after every kick. Set it to `False` to compare
+restarting from `orbit_dt0`. Collision error estimates do
+not bound splitting error: refine the maximum interval to check the coupled
+orbit/collision accuracy. Saves are exact split boundaries, so changing the
+save grid can change the accepted path. There is no ODE interpolation of the
+stochastic state. Deterministic orbit events are root-found before a kick;
+events caused by a spatial kick stop at the kick endpoint.
+
+GC output states are `(position[3], v_parallel, mu)` with **physical** magnetic
+moment `mu = mass*v_perp**2/(2*B)` [J/T]. Cartesian positions use metres;
+VMEC/Boozer positions use `(s, theta, zeta)`. Their existing field representations
+and axis charts are reused, and these coordinate traces stop at the LCFS;
+exterior continuation is not connected to this entry point. Full-orbit output
+is `(xyz, vx, vy, vz)`. `result.ts` is shared; other result arrays have a leading
+particle dimension. Failures hold the last finite state and remain explicit
+in `status`, so finite saved output alone does not imply success.
+
+The default collision kick acts on velocity. Cartesian guiding centers may
+select `spatial_diffusion=True` for the paper's local uniform-field spatial
+diffusion approximation; spatial diffusion in VMEC/Boozer coordinates is
+rejected until its coordinate transformation is implemented. GC speed reflects
+at `speed_floor` (default: 5% of the smallest active background thermal speed
+for the test mass); check sensitivity to this wall near zero speed. Use
+`orbit=False` for collision-only statistics. Randomness uses the explicit
+per-particle `particles.random_keys`. Individual collision maps support JVP/VJP;
+adaptive reverse-mode replay through orbit **and** collisions remains future work.
+
+Run the small example with
+`python -m examples.particle_tracing_collisions.trace_particles_split`;
+add `--model FullOrbit` to select Lorentz motion or `--collision-only` for
+collision statistics without orbit drift. It reports outcomes and step counts.
+
+### Optional impact-parameter Coulomb logarithm
+
+`BackgroundSpecies(..., coulomb_log_model="impact")` selects a shared
+coefficient model for native and Diffrax, guiding-center and full-orbit
+tracing. The default remains `"nrl"`, preserving previous results. The
+low-speed Chandrasekhar series from [PR #114](https://github.com/uwplasma/ESSOS/pull/114)
+is retained for both models. That PR addresses cancellation in the special
+function; the impact option addresses the cutoff and screening prescription.
+
+The implementation in [`essos/coulomb.py`](essos/coulomb.py) uses
+`lnLambda = log(lambda_D / hypot(b90, b_quantum))`, where
+`b90 = abs(q_a*q_b)/(4*pi*epsilon_0*m_reduced*u_eff**2)` and
+`b_quantum = hbar/(2*m_reduced*u_eff)`. The smooth inner cutoff follows
+[Landau--Spitzer GMS-1](https://docs.plasmapy.org/en/stable/api/plasmapy.formulary.collisions.coulomb.Coulomb_logarithm.html).
+Here `u_eff**2 = v**2 + 3*T_b/m_b` is the mean squared relative velocity
+against a stationary Maxwellian background (temperature converted to joules).
+Evaluating the cutoffs at this RMS speed is an explicit approximation;
+it is not exact averaging of the scattering kernel. Screening is static
+Debye screening from the supplied background species. Dynamic screening,
+relativistic corrections and strong coupling are outside this option.
+
+An optional `screening_species=another_background` specifies a separate
+screening population without adding its collision contributions. For example,
+an explicit electron screening bath can accompany ion-only collision tests.
+The impact model never infers electron temperature from the test particle's
+energy. Invalid nonpositive occupied-background logarithms propagate NaN;
+they are not silently clipped. A vacuum contributes zero collision rates.
+
+The old thermal/beam switch is absent, and the existing coefficient
+derivatives include the new logarithm's speed dependence. Tests check both
+speed and Cartesian drift/diffusion balance against the Maxwellian for
+proton, alpha and electron test masses. Independent NumPy coefficients use
+an algebraic expression and analytic derivative, and the backward references
+are recalculated for the selected law. For the smooth model the ideal
+Maxwellian is stationary, with the GC reference conditioned on its existing
+reflecting speed floor. This does not certify finite-step accuracy.
+Agreement with the selected-law references checks that the tracer implements
+that model. It does not establish that its RMS averaging and static screening
+are more accurate than NRL for every plasma regime.
+
+### Accepted collision physics benchmarks
+
+The retained benchmarks use the production collision maps and native split
+driver, including its Gaussian increments and Brownian rejection memory.
+The coefficient model is the optional smooth impact-parameter law above;
+the production default remains NRL. Each configuration contains 2,000
+independent particles, evaluated on CPU in batches of 50. These tests start
+from a monoenergetic anisotropic proton beam, `E=5T` and pitch 0.6, in a
+stationary 1 keV proton background at `1e20 m^-3`, without a source.
+References use independent NumPy/SciPy coefficients and backward generators.
+Black curves show those references; intervals describe sampling uncertainty.
+Run the commands below from the ESSOS repository root with the project
+environment activated. Force CPU execution in that shell with:
+
+```bash
+export JAX_PLATFORMS=cpu
+export ESSOS_CPU_DEVICES=1
+```
+
+The JSON/CSV records, PNG figures and adjacent SVG versions are retained.
+Fresh output names ending in `_NEW` keep the saved reference runs intact.
+
+#### Thermalization
+
+The unabsorbed beam evolves for 20 collision times. Checks cover speed and
+pitch means, variances and distributions, plus parallel-velocity statistics.
+The GC reference includes the same reflecting speed floor. The black lines
+below include the transient evolution toward the Maxwellian equilibrium.
+
+![Beam thermalization mean and variance evolution](examples/benchmarks/results/impact_beam_relaxation_2000_20261016.png)
+
+![Thermalized speed and pitch distributions](examples/benchmarks/results/impact_beam_relaxation_2000_20261016_distribution.png)
+
+Saved [thermalization data](examples/benchmarks/results/impact_beam_relaxation_2000_20261016.json).
+Reproduce with `python -m examples.benchmarks.validate_beam_relaxation --particles 2000 --batch-size 50 --coefficient-model impact --methods conservative --settings fine --output examples/benchmarks/results/thermalization_NEW.json`.
+
+#### Spatial diffusion
+
+The GC test measures actual perpendicular displacement and accumulated
+diffusion during unabsorbed relaxation. Independent spatial noise is checked
+conditionally on each path's accumulated diffusion. The Lorentz test evolves
+full gyromotion and physical Coulomb collisions, and measures the displacement
+of `X=x+v cross b/Omega`. Its reference retains finite gyrofrequency effects;
+the cases use `Omega/nu0=32,64` and two step ceilings.
+
+![GC accumulated diffusion and spatial spreading](examples/benchmarks/results/impact_beam_relaxation_2000_20261016_spatial.png)
+
+![Lorentz Coulomb spatial diffusion](examples/benchmarks/results/impact_coulomb_spatial_2000_20261016.png)
+
+Saved [Lorentz spatial data](examples/benchmarks/results/impact_coulomb_spatial_2000_20261016.json).
+Reproduce with `python -m examples.benchmarks.validate_lorentz_coulomb_spatial --particles 2000 --batch-size 50 --coulomb-log-model impact --output examples/benchmarks/results/spatial_NEW.json`.
+
+#### First stopping
+
+First stopping means first detected entry from `E=5T` into `E<=2T`.
+The existing boundary-aware diagnostic refines crossing intervals; it is not
+an automatic thermal stop in ordinary tracing. The accepted comparison keeps
+`hmax*nu0=0.00078125`, the same initial interval, save anchors and event
+interval `1.220703125e-5`. It compares fixed stepping with conservative
+adaptive tolerances `0.001` and `0.00025`, using 2,000 particles per case.
+Fifty baseline paths for each model/method replay exactly before reuse.
+
+![Production first-stopping distributions](examples/benchmarks/results/production_tolerance_2000_original_ceiling_20261017_distribution.png)
+
+![Production first-stopping mean and variance](examples/benchmarks/results/production_tolerance_2000_original_ceiling_20261017_moments.png)
+
+All six mean/variance intervals include theory at the marginal 95% level;
+all six CDF screens pass, with no censored paths. These checks establish
+statistical agreement at the tested settings. Step-ceiling and boundary-
+resolution convergence remain separate checks. Shared particle keys do not
+guarantee identical production Wiener paths after timestep histories diverge.
+
+Saved [comparison JSON](examples/benchmarks/results/production_tolerance_2000_original_ceiling_20261017.json)
+and [CSV](examples/benchmarks/results/production_tolerance_2000_original_ceiling_20261017.csv).
+The [baseline ensembles](examples/benchmarks/results/impact_first_passage_2000_matched_20261016.json)
+retain two independent 2,000-particle seeds per model/method and stopped GC
+spatial diagnostics. Their NRL replay input is retained for reproducibility.
+Reproduce with `python -m examples.benchmarks.validate_production_tolerance --baseline examples/benchmarks/results/impact_first_passage_2000_matched_20261016.json --output examples/benchmarks/results/stopping_NEW.json`.
+The helper `plot_matched_first_passage` renders the saved pooled baseline.
+
+#### Regenerate the accepted plots from saved data
+
+This renders the six accepted figures without running particle trajectories
+or changing the saved JSON/CSV records:
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+from examples.benchmarks.validate_beam_relaxation import plot as plot_beam
+from examples.benchmarks.validate_lorentz_coulomb_spatial import plot as plot_spatial
+from examples.benchmarks.validate_production_tolerance import plot as plot_stopping
+from examples.benchmarks.nonrelativistic_collision_reference import ProtonBackground, proton_first_passage
+
+results = Path("examples/benchmarks/results")
+beam = results / "impact_beam_relaxation_2000_20261016.json"
+spatial = results / "impact_coulomb_spatial_2000_20261016.json"
+stopping = results / "production_tolerance_2000_original_ceiling_20261017.json"
+plot_beam(json.loads(beam.read_text()), beam)
+plot_spatial(json.loads(spatial.read_text()), spatial)
+reference = proton_first_passage(ProtonBackground(coulomb_log_model="impact"), nodes=1536)
+plot_stopping(json.loads(stopping.read_text()), reference, stopping)
+PY
+```
+
+#### Retained adaptive/fixed convergence controls
+
+The current thermalization runner can compare fixed and conservative adaptive
+stepping at both caps, including GC spatial spreading. The Lorentz spatial
+runner already includes both methods and two caps. The first-stopping runner
+retains the fixed baseline and two adaptive tolerances at the original ceiling.
+For a new thermalization convergence study, use:
+
+```bash
+python -m examples.benchmarks.validate_beam_relaxation \
+  --particles 512 --batch-size 64 --coefficient-model impact \
+  --methods fixed conservative --settings coarse fine \
+  --output examples/benchmarks/results/thermalization_convergence_NEW.json
+```
+
+Two additional production-sampler controls and their saved inputs are retained:
+
+| Control | Saved data | Reproduction module |
+| --- | --- | --- |
+| Fixed/adaptive timestep, tolerance and particle-prefix sweeps | [512-particle JSON](examples/benchmarks/results/collisional_convergence_512_20261016.json), [CSV](examples/benchmarks/results/collisional_convergence_512_20261016.csv) | `examples.benchmarks.converge_collisional_slowing_down` |
+| First-entry event-resolution refinement | [2,000-particle JSON](examples/benchmarks/results/collisional_event_refinement_2000_20261016.json), [CSV](examples/benchmarks/results/collisional_event_refinement_2000_20261016.csv), [required input](examples/benchmarks/results/collisional_physics_2000_20261016.json) | `examples.benchmarks.validate_collision_event_refinement` |
+
+These dated NRL controls are historical convergence diagnostics. The first
+uses endpoint-only stopping; the second investigates its boundary-resolution
+bias. Their recorded source hashes describe those historical runs. The
+accepted validation figures above use the later refined stopping diagnostic
+and impact coefficients. No custom Wiener generator is retained.
+
+```bash
+python -m examples.benchmarks.converge_collisional_slowing_down \
+  --paths 512 --batch-size 64 --repeats 3 \
+  --output examples/benchmarks/results/collision_convergence_NEW.json
+
+python -m examples.benchmarks.validate_collision_event_refinement \
+  examples/benchmarks/results/collisional_physics_2000_20261016.json \
+  --particles 512 --batch-size 64 --methods fixed conservative \
+  --output examples/benchmarks/results/event_resolution_NEW.json
+```
+
+Each historical control also supports `--plot-only` with its saved output
+JSON; the event-resolution command still requires the input path. These
+optional studies use the explicit settings written to their own reports.
+
+### Tracing speed on the bundled QA coil example
+
+`python -m examples.benchmarks.benchmark_collision_tracing --output examples/benchmarks/results/qa_tracing_NEW.json`
+compares native adaptive collisions, native fixed collisions, fixed Diffrax
+`GuidingCenterCollisionsMuFixed`, and native collisionless tracing. It uses
+the field and 4 keV alpha launch setup from
+[`trace_particles_coils_guidingcenter.py`](examples/particle_tracing/trace_particles_coils_guidingcenter.py).
+JSON/CSV record settings, source hashes, completion status, split/orbit counts,
+effective mean intervals, compilation times and interleaved warm timings.
+The small timing ensemble is separate from the physics benchmarks above.
+
+The saved CPU run uses the example's original two-particle ensemble, `tmax=1e-4 s`,
+101 save times and five interleaved warm repetitions. Native orbit solves use
+Dopri8 with `rtol=atol=1e-9`; adaptive collisions use tolerance `0.001` and a
+`1e-6 s` ceiling. Both fixed collision cases use `1e-7 s` steps. Each native
+collision interval contains its own adaptive orbit solve.
+
+| Case | Accepted intervals per particle | Native orbit trials per particle | Effective mean interval (s) | Warm median, two particles (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Native adaptive collisions | 314.5 | 380.0 | 3.180e-7 | 506.1 |
+| Native fixed collisions | 1000.0 | 1000.0 | 1.000e-7 | 1202.0 |
+| Fixed Diffrax collisions | 1000.0 | n/a | 1.000e-7 | 871.1 |
+| Native without collisions | 175.5 | 182.5 | 5.698e-7 | 228.4 |
+
+For the collisionless row, intervals and trials refer to RK steps. For native
+collision rows, the first count is the collision/split interval count and the
+second includes inner RK attempts and rejections. Diffrax advances its coupled
+SDE in each fixed step. The effective interval is the horizon divided by the
+mean accepted count; it is not a maximum timestep or a measured per-step cost.
+Native adaptive collisions take about 1.72 times less warm time than fixed
+Diffrax in this case. Native fixed collisions take about 1.38 times as long
+as Diffrax at the same fixed count. The collisionless row measures integration
+cost with different physical dynamics; this small timing study does not
+establish statistical equivalence between the collisional implementations.
+
+Saved [JSON](examples/benchmarks/results/qa_collision_tracing_20261017.json) and
+[CSV](examples/benchmarks/results/qa_collision_tracing_20261017.csv) include all
+five timing samples and per-particle counts. All four reported cases complete.
+An eight-particle preflight exposed an inner-orbit `MIN_STEP` failure for one
+native fixed-collision launch at `t=7.87e-5 s`, also with endpoint-only saves.
+That issue remains unresolved; the failed preflight is excluded from timing
+claims and retained outside the checkout with the cleanup recovery files.
+
+Memory is measured by replaying each case once in its own fresh Linux CPU
+process. All four replays reproduce the timed run's per-particle step counts
+and terminal states exactly. The compiler buffer estimate is arguments plus
+outputs plus temporaries minus aliases. Peak resident RAM (`ru_maxrss`) includes
+Python/JAX, input setup, compilation and execution, and is measured only for
+the child process itself. It is not a runtime-only integration allocation.
+
+| Case | Compiled forward buffers (MiB) | Peak process RAM, including compilation (MiB) |
+| --- | ---: | ---: |
+| Native adaptive collisions | 0.959 | 779.1 |
+| Native fixed collisions | 0.959 | 779.7 |
+| Fixed Diffrax collisions | 3.501 | 1226.6 |
+| Native without collisions | 0.388 | 695.2 |
+
+These are forward measurements for the two-particle example. They do not
+measure AD memory. Fewer adaptive steps reduce execution work while the
+compiled buffers remain the same size as the fixed native case.
+
+Saved [memory JSON](examples/benchmarks/results/qa_collision_tracing_memory_20261017.json)
+and [CSV](examples/benchmarks/results/qa_collision_tracing_memory_20261017.csv)
+retain compiler buffer components, setup/compile/execute RSS peaks, source
+hashes and replay checks. Reproduce on Linux/WSL with
+`python -m examples.benchmarks.measure_collision_tracing_memory --timings examples/benchmarks/results/qa_collision_tracing_20261017.json --output examples/benchmarks/results/qa_memory_NEW.json`.
+
+The retained collision-map, Brownian-memory, event-diagnostic and independent
+reference regression selection passes **184 tests** on CPU.
+
+### Native orbit integration
+
 
 GC and Lorentz use the same native RK increment loop, separate from adaptive
 retries, events and saving. It stores `k_i = h*f_i` for stage combinations and
