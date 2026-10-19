@@ -38,7 +38,13 @@ class MagneticField():
     @jit
     def dB_by_dX(self, points):
         return jacfwd(self.B)(points)
-    
+
+    @jit
+    def d2B_by_dXdX(self, points):
+        """Return ``d² B_i / (d X_j d X_k)`` in Cartesian coordinates."""
+
+        return jacfwd(self.dB_by_dX)(points)
+
     @jit
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
@@ -102,7 +108,19 @@ class BiotSavart(MagneticField):
         self.coils = coils
         self._r_axis = None
         self._z_axis = None
-    
+
+    @property
+    def currents(self):
+        return self.coils.currents
+
+    @property
+    def gamma(self):
+        return self.coils.gamma
+
+    @property
+    def gamma_dash(self):
+        return self.coils.gamma_dash
+
     @property
     def dofs(self):
         return self.coils.dofs
