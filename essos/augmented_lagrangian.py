@@ -1,5 +1,5 @@
 
-"""ALM (Augmented Lagrangian Method) using JAX and optimizers from OPTAX/JAXOPT/OPTIMISTIX inspired by mdmm_jax github repository"""
+"""ALM (Augmented Lagrangian Method) using JAX and optimizers from OPTAX/OPTIMISTIX inspired by mdmm_jax github repository"""
 
 from typing import Any, Callable, NamedTuple
 import os
@@ -8,7 +8,6 @@ from jax import jit
 import jax.numpy as jnp
 from functools import partial
 import optax
-import jaxopt
 import optimistix
 from essos.frozen_dofs import FrozenDOFs
 
@@ -588,7 +587,7 @@ def norm_constraints(tree):
 
 def infty_norm_constraints(tree):
     flat=jax.flatten_util.ravel_pytree(tree)[0]
-    return jnp.max(flat)
+    return jnp.max(jnp.abs(flat))
 
 def penalty_average(tree):
     pred = lambda x: isinstance(x, LagrangeMultiplier)
@@ -782,9 +781,8 @@ class ALM(NamedTuple):
 
 
 
-#Using explicit jaxopt optimizer and not scipy wrapper, Note: JAXOPT is the only jax library with bounded lbfgs-B at the moment
-#Using LBFGSB (bounded) 
-def ALM_model_jaxopt_lbfgsb(constraints: BaseConstraint,#List of constraints
+#Inner solve with optimistix L-BFGS; a (lower, upper) box is enforced by a tanh reparametrization
+def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
     loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
     model_lagrangian='Standard',
     model_mu='Mu_Tolerance',
@@ -813,13 +811,13 @@ def ALM_model_jaxopt_lbfgsb(constraints: BaseConstraint,#List of constraints
 
     if model_lagrangian=='Standard':
         def lagrangian(main_params,lagrange_params,**kargs):
-            main_loss = jnp.linalg.norm((loss(main_params,**kargs)))
+            main_loss = optax.safe_norm(loss(main_params,**kargs), 0.)
             mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
             return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
     elif model_lagrangian=='Squared':
         #jax.debug.print(' LFBGSB {m}',m={model_lagrangian})
         def lagrangian(main_params,lagrange_params,**kargs):
-            main_loss = jnp.square(jnp.linalg.norm((loss(main_params,**kargs))))
+            main_loss = jnp.square(optax.safe_norm(loss(main_params,**kargs), 0.))
             #This uses ||f(x)||^2 in the lagrangian
             mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
             return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
@@ -834,9 +832,15 @@ def ALM_model_jaxopt_lbfgsb(constraints: BaseConstraint,#List of constraints
         omega_flat = jax.flatten_util.ravel_pytree(omega_vals)[0]
         omega_min = jnp.min(omega_flat)
         old_info=info[2]
-        minimization_loop=jaxopt.LBFGSB(fun=lagrangian,has_aux=True,value_and_grad=False,tol=omega_min,maxiter=inner_maxiter,history_size=history_size)
-        state=minimization_loop.run(main_params,bounds=bounds,lagrange_params=lagrange_params,**kargs)
-        main_params=state.params
+        if bounds is None:
+            to_x, z0 = (lambda z: z), main_params
+        else:
+            mid, half = (bounds[1] + bounds[0]) / 2, (bounds[1] - bounds[0]) / 2
+            to_x, z0 = (lambda z: mid + half * jnp.tanh(z)), jnp.arctanh(jnp.clip((main_params - mid) / half, -1 + 1e-12, 1 - 1e-12))
+        solver = optimistix.LBFGS(rtol=omega_min, atol=omega_min, history_length=history_size)
+        sol = optimistix.minimise(lambda z, lp: lagrangian(to_x(z), lp, **kargs), solver, z0, lagrange_params,
+                                  has_aux=True, max_steps=inner_maxiter, throw=False)
+        main_params = to_x(sol.value)
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
         
         # Choose cross-constraint Mu_Tolerance updater or per-constraint updater
@@ -869,6 +873,9 @@ def ALM_model_jaxopt_lbfgsb(constraints: BaseConstraint,#List of constraints
 
 
     return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
+
+
+ALM_model_jaxopt_lbfgsb = ALM_model_lbfgs  # former name
 
 
 
