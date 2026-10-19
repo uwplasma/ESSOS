@@ -15,7 +15,7 @@ from essos.augmented_lagrangian import (
     penalty_average,
     BaseConstraint,
     ALM,
-    ALM_model_jaxopt_lbfgsb,
+    ALM_model_lbfgs,
 )
 
 class TestAugmentedLagrangian(unittest.TestCase):
@@ -124,7 +124,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
     def test_infty_norm_constraints(self):
         tree = {'a': jnp.array([1.0, -5.0, 3.0])}
         result = infty_norm_constraints(tree)
-        self.assertAlmostEqual(float(result), 3.0)
+        self.assertAlmostEqual(float(result), 5.0)  # infinity norm: largest magnitude
 
     def test_penalty_average(self):
         tree = {'a': LagrangeMultiplier(value=jnp.array([1.0]), penalty=jnp.array([2.0]), omega=jnp.array([0.0]), eta=jnp.array([0.0]), sq_grad=jnp.array([0.0]))}
@@ -161,24 +161,24 @@ class TestAugmentedLagrangian(unittest.TestCase):
 
     # ---- ALM model tests ----
 
-    def test_ALM_model_jaxopt_lbfgsb_init_and_update(self):
+    def test_ALM_model_lbfgs_init_and_update(self):
         def fun(x): return x - 1
         constraint = eq(fun)
         main_params = jnp.array([6.0,2.0])        
         lagrange_params = constraint.init(main_params)
         params = main_params,lagrange_params            
-        alm = ALM_model_jaxopt_lbfgsb(constraint)
+        alm = ALM_model_lbfgs(constraint)
         self.assertIsInstance(alm, ALM)
         state,grad,info = alm.init(params)
         alm.update(params, state,grad,info)
 
-    def _solve_ineq(self, h, model_lagrangian, iters=20):
+    def _solve_ineq(self, h, model_lagrangian, iters=30):
         def loss(x):
             return x - 2.0  # main loss ||x - 2||
         constraint = ineq(h, model_lagrangian=model_lagrangian)
         main_params = jnp.array([0.0])
         params = main_params, constraint.init(main_params)
-        alm = ALM_model_jaxopt_lbfgsb(
+        alm = ALM_model_lbfgs(
             constraint, loss=loss, model_lagrangian=model_lagrangian)
         state, grad, info = alm.init(params)
         for _ in range(iters):
@@ -205,11 +205,22 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = eq(lambda x: x - 150.0)
         main_params = jnp.array([0.0])
         params = main_params, constraint.init(main_params)
-        alm = ALM_model_jaxopt_lbfgsb(constraint)
+        alm = ALM_model_lbfgs(constraint)
         state, grad, info = alm.init(params)
         for _ in range(10):
             params, state, grad, info = alm.update(params, state, grad, info)
         self.assertAlmostEqual(float(params[0][0]), 150.0, places=3)
+
+    def test_ALM_lbfgs_respects_bounds(self):
+        # eq constraint x = 150 inside the box [0, 100] -> x at the upper bound
+        constraint = eq(lambda x: x - 150.0)
+        params = jnp.array([10.0]), constraint.init(jnp.array([10.0]))
+        alm = ALM_model_lbfgs(constraint, bounds=(0.0, 100.0))
+        state, grad, info = alm.init(params)
+        for _ in range(5):
+            params, state, grad, info = alm.update(params, state, grad, info)
+        self.assertLessEqual(float(params[0][0]), 100.0)
+        self.assertGreater(float(params[0][0]), 99.0)
 
 
 if __name__ == "__main__":
