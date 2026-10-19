@@ -47,11 +47,12 @@ dependencies = [
     "matplotlib",
     "diffrax>=0.7.2",
     "optax",
-    "jaxopt",
     "optimistix>=0.1.0",
     "scipy",
     "jaxkd",
     "netcdf4",
+    # SurfaceRZFourier.from_input_file parses VMEC input namelists.
+    "f90nml",
     # Used internally by SurfaceRZFourier.to_vtk() and Coils.to_vtk().
     "pyevtk",
 ]
@@ -70,6 +71,9 @@ Homepage = "https://github.com/uwplasma/ESSOS"
 essos = "essos.__main__:main"
 
 [project.optional-dependencies]
+booz = ["booz_xform_jax>=0.4.3"]
+# MultiObjectiveOptimizer; plotly only for its interactive plot_* figures.
+multiobjective = ["optuna", "pandas", "plotly"]
 # Examples that build VMEX equilibria, mgrid fields or free-boundary
 # (virtual-casing) fields. 0.11.3 is the first VMEX with MgridField(order=...).
 vmex = ["vmex[freeb]>=0.11.3"]
