@@ -403,7 +403,7 @@ class Curves:
 
         cuves_simsopt = []
         currents_simsopt = []
-        for dofs in self.dofs:
+        for dofs in self._dofs:
             curve = CurveXYZFourier(self.n_segments, self.order)
             curve.x = jnp.reshape(dofs, (curve.x.shape))
             cuves_simsopt.append(curve)
@@ -795,20 +795,20 @@ class Coils:
 
     def __getitem__(self, key):
         if isinstance(key, int):
-            return Coils(Curves(jnp.expand_dims(self.curves[key], 0), self.n_segments, 1, False), jnp.expand_dims(self.currents[key], 0))
+            return Coils(self.curves[key], jnp.expand_dims(self.currents[key], 0))
         elif isinstance(key, (slice, jnp.ndarray)):
-            return Coils(Curves(self.curves[key], self.n_segments, 1, False), self.curves[key])
+            return Coils(self.curves[key], self.currents[key])
         else:
             raise TypeError(f"Invalid argument type. Got {type(key)}, expected int, slice or jnp.ndarray.")
     
     def __add__(self, other):
         if isinstance(other, Coils):
-            return Coils(Curves(jnp.concatenate((self.curves, other.curves), axis=0), self.n_segments, 1, False), jnp.concatenate((self.currents, other.currents), axis=0))
+            return Coils(Curves(jnp.concatenate((self.curves.curves, other.curves.curves), axis=0), self.n_segments, 1, False), jnp.concatenate((self.currents, other.currents), axis=0))
         else:
             raise TypeError(f"Invalid argument type. Got {type(other)}, expected Coils.")
         
     def __exclude_coil__(self, index):
-        return Coils(Curves(jnp.concatenate((self.curves[:index], self.curves[index+1:])), self.n_segments, 1, False), jnp.concatenate((self.currents[:index], self.currents[index+1:])))
+        return Coils(Curves(jnp.concatenate((self.curves.curves[:index], self.curves.curves[index+1:])), self.n_segments, 1, False), jnp.concatenate((self.currents[:index], self.currents[index+1:])))
 
         
     def __contains__(self, other):
@@ -851,7 +851,7 @@ class Coils:
         from simsopt.geo import CurveXYZFourier
         cuves_simsopt = []
         currents_simsopt = []
-        for dofs, current in zip(self.dofs_curves, self.dofs_currents*self.currents_scale):
+        for dofs, current in zip(self.curves._dofs, self.dofs_currents_raw):
             curve = CurveXYZFourier(self.n_segments, self.order)
             curve.x = jnp.reshape(dofs, (curve.x.shape))
             cuves_simsopt.append(curve)
@@ -1456,7 +1456,7 @@ class DiscretizedCoils:
     
     # copy method
     def copy(self):
-        coils = DiscretizedCoils(self.dofs_gamma.copy(), self.dofs_currents_raw.copy(),
+        coils = DiscretizedCoils(self._gamma.copy(), self.dofs_currents_raw.copy(),
                                    nfp=self.nfp, stellsym=self.stellsym,
                                    currents_scale=self.currents_scale, scale_fixed=self.scale_fixed)
         
@@ -1586,7 +1586,7 @@ class DiscretizedCoils:
             gamma = gamma * scale_fixed
         nfp = data.get("nfp", 1)
         stellsym = data.get("stellsym", False)
-        if "dofs_gamma" not in data and gamma.shape[0] % (nfp * (1 + int(stellsym))) == 0:
+        if "dofs_gamma" not in data and "dofs_gamma_raw" not in data and gamma.shape[0] % (nfp * (1 + int(stellsym))) == 0:
             n_base = gamma.shape[0] // (nfp * (1 + int(stellsym)))
             gamma = gamma[:n_base]
             currents = currents[:n_base]
@@ -1715,7 +1715,7 @@ class DiscretizedCoils:
     @classmethod
     def from_Coils(cls, coils: Coils):
         """Create from a standard Coils object"""
-        base_gamma = Curves(coils.dofs_curves, coils.n_segments, nfp=1, stellsym=False).gamma
+        base_gamma = Curves(coils.curves._dofs, coils.n_segments, nfp=1, stellsym=False).gamma
         currents = coils.dofs_currents_raw
         return cls(base_gamma, currents, nfp=coils.nfp, stellsym=coils.stellsym)
     
