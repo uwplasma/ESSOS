@@ -712,6 +712,19 @@ Fourier and normalized-current DOFs. Birth XYZ, pitch, energy and gyrophase
 stay fixed; the Lorentz GC-to-full-orbit conversion retains its field
 dependence. All particles are vectorized together, without particle chunking.
 
+Optimization follows JAX's default device selection. The examples do not set
+`JAX_PLATFORMS` or `ESSOS_CPU_DEVICES`; the backend and selected devices are
+printed at startup and saved in `summary.json`. Clear any CPU override left
+from benchmark commands before launching on a GPU machine, for example with
+`unset JAX_PLATFORMS JAX_PLATFORM_NAME`. Restart an existing Python process
+after changing backend settings. On an NVIDIA installation,
+`JAX_PLATFORMS=cuda,cpu python -m ...` requires CUDA and selects it as the
+default while retaining CPU devices for runtime error callbacks. Do not use
+`cuda` alone: a failed native solve or accepted-step tape overflow could then
+be obscured by a callback error about a missing CPU device.
+JAX orbit integration and AD use the selected devices; compilation, SciPy
+optimization control and plotting still involve the CPU.
+
 The two original entry points start from the bundled QA coil JSON.
 Two additional examples put editable physical and optimization settings in a
 `PARAMETERS` block at the top of each script:
@@ -749,14 +762,29 @@ python -m examples.coil_optimization.optimize_coils_particle_confinement_guiding
 
 No CLI arguments are required for these two cases. Edit `horizon` for final
 time and choose a fresh `output` directory in `PARAMETERS`; optional CLI
-arguments override the script settings. The fixed QA classifier/Bn surface is
-scaled to major radius 7.74 m. Its classifier grid spacing, padding and sigmoid
-width scale with the geometry. This is a geometric target, without a VMEC
-recalculation. Coil optimization can deform the initially circular shapes.
+arguments override the script settings. These circular-coil cases use a fixed
+circular torus for both the classifier and Bn surface, with major radius
+7.74 m and minor radius 3.5 m, inside the initial 4.5 m coil circles. Edit
+`target_surface="torus"` and `target_minor_radius=3.5` in `PARAMETERS` to choose
+the target; its minor radius must be smaller than the initial coil radius.
+Use `target_surface="qa"` for the original scaled QA shape instead. The torus
+does not read a VMEC file. The target stays fixed while coils deform.
+
+Set `PARTICLE_OBJECTIVE = "loss_fraction"` in either script to use the classifier
+surrogate, or override the objective on the command line:
 
 ```bash
-export JAX_PLATFORMS=cpu
-export ESSOS_CPU_DEVICES=1
+python -m examples.coil_optimization.optimize_coils_particle_confinement_fullorbit_native --objective loss_fraction --target-surface torus --target-minor-radius 3.5 --output output/native_fullorbit_loss
+python -m examples.coil_optimization.optimize_coils_particle_confinement_guidingcenter_native --objective loss_fraction --target-surface torus --target-minor-radius 3.5 --output output/native_gc_loss
+```
+
+The surrogate averages, over particles, the maximum saved-time outside
+probability `sigmoid(-softness * signed_distance)`. Distance is positive inside
+the target and probability is 0.5 on the surface. `softness` has units 1/m;
+larger values sharpen the transition. This is a geometric confinement objective
+and does not stop particles at the surface.
+
+```bash
 python -m examples.coil_optimization.optimize_coils_native_loss_fraction --output .tmp/native_loss_fraction
 python -m examples.coil_optimization.optimize_coils_native_final_radius --output .tmp/native_final_radius
 # Small one-iteration check; select a fresh output directory for each run.
@@ -797,7 +825,7 @@ The original QA entry points default to 1.05 times the largest initial coil
 length and pointwise curvature, respectively. The two circular-coil cases
 explicitly use the reference targets of 31 m and 0.4 /m.
 Resolved targets and weights are saved in the summary. The normal-field term
-uses the same fixed, scaled QA shape as the classifier, sampled separately
+uses the same fixed target shape as the classifier, sampled separately
 on a half-period mesh (`--surface-ntheta 30 --surface-nphi 30`). Its sum follows
 the existing example and changes with mesh size; choose weights accordingly.
 All these derivatives include the coil geometry/current dependence.

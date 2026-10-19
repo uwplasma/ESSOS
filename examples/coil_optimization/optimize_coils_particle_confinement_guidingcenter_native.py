@@ -50,7 +50,9 @@ PARAMETERS = dict(
     curvature_target=.4,              # 1/m
     bdotn_weight=1.,
     wout=Path(__file__).resolve().parents[1] / "input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
-    reference_major_radius=7.74,      # Scale fixed QA classifier/Bn surface to this case.
+    target_surface="torus",          # Fixed classifier and Bn target, inside the coils.
+    reference_major_radius=7.74,      # m; torus major radius.
+    target_minor_radius=3.5,          # m; smaller than coil_minor_radius=4.5 m.
     surface_ntheta=30,
     surface_nphi=30,
     softness=10./7.74,                # 1/m; same relative sigmoid width as native example.

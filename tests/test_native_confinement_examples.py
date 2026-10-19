@@ -8,6 +8,7 @@ import pytest
 
 from essos.constants import FUSION_ALPHA_PARTICLE_ENERGY, ONE_EV
 from essos.dynamics import Particles
+from essos.particle_losses import classifier_loss_fraction
 from examples.coil_optimization import native_particle_optimization as native
 from examples.coil_optimization import optimize_coils_particle_confinement_fullorbit_native as full
 from examples.coil_optimization import optimize_coils_particle_confinement_guidingcenter_native as gc
@@ -54,3 +55,54 @@ def test_reference_surface_scales_to_circular_case_major_radius():
     np.testing.assert_allclose(large.rc,7.74*small.rc,rtol=2e-14,atol=1e-16)
     np.testing.assert_allclose(large.zs,7.74*small.zs,rtol=2e-14,atol=1e-16)
     np.testing.assert_allclose(large.rc[0],7.74,rtol=2e-14)
+
+
+def test_circular_target_has_requested_geometry_without_reading_vmec(tmp_path):
+    surface = native.fixed_surface(tmp_path / "not_needed.nc", shape="torus",
+        major_radius=7.74, minor_radius=3.5, nfp=2, ntheta=32, nphi=24)
+    points = np.asarray(surface.gamma)
+    radius = np.hypot(np.hypot(points[...,0], points[...,1])-7.74, points[...,2])
+    np.testing.assert_allclose(radius, 3.5, rtol=2e-14, atol=2e-14)
+    assert surface.nfp == 2
+    assert full.PARAMETERS["target_minor_radius"] < full.PARAMETERS["coil_minor_radius"]
+    assert gc.PARAMETERS["target_surface"] == full.PARAMETERS["target_surface"] == "torus"
+
+
+@pytest.fixture(scope="module")
+def torus_classifier():
+    return native.fixed_classifier(None, shape="torus", major_radius=7.74,
+        minor_radius=3.5, nfp=2)
+
+
+def test_torus_classifier_and_loss_gradient_have_correct_sign(torus_classifier):
+    points = jnp.array([[7.74+2.5, 0., 0.], [7.74+3.5, 0., 0.], [7.74+3.6, 0., 0.]])
+    distance = jax.jit(jax.vmap(torus_classifier.evaluate_xyz))(points)
+    assert distance.shape == (3,)
+    assert distance[0] > .8 and distance[2] < -.05
+    assert abs(float(distance[1])) < .04
+    states = jnp.zeros((1,2,4)).at[0,:,:3].set(points[jnp.array([0,2])])
+    loss = lambda states: classifier_loss_fraction(states, torus_classifier, softness=3.)
+    value, gradient = jax.jit(jax.value_and_grad(loss))(states)
+    np.testing.assert_allclose(value, jax.nn.sigmoid(.3), atol=.03, rtol=0.)
+    assert np.isfinite(gradient).all()
+    assert gradient[0,-1,0] > 0.  # Moving an outside endpoint further out raises loss.
+
+
+@pytest.mark.parametrize("example", [gc, full])
+def test_torus_loss_objective_runs_native_reverse_ad(example):
+    settings = dict(example.PARAMETERS, particles=2, horizon=2e-8, saves=4,
+        length_weight=0., curvature_weight=0., bdotn_weight=0., axis_field_weight=0.)
+    _, theta, _, _, _, objective = native.build_objective(SimpleNamespace(**settings), "loss_fraction")
+    (value, (components, states)), gradient = jax.block_until_ready(
+        jax.jit(jax.value_and_grad(objective, has_aux=True))(jnp.zeros_like(theta)))
+    assert 0 <= value <= 1
+    np.testing.assert_array_equal(value, components["particle_metric"])
+    assert gradient.shape == theta.shape
+    assert np.isfinite(gradient).all() and np.isfinite(states).all()
+
+
+def test_target_must_be_smaller_than_initial_circular_coils(tmp_path):
+    output = tmp_path / "invalid"
+    with pytest.raises(SystemExit):
+        full.main(["--target-minor-radius", "4.5", "--output", str(output)])
+    assert not output.exists()

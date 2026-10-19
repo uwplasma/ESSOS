@@ -11,8 +11,6 @@ import os
 from pathlib import Path
 from time import perf_counter
 
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
-os.environ.setdefault("ESSOS_CPU_DEVICES", "1")
 os.environ.setdefault("ESSOS_PROGRESS", "0")
 
 import jax
@@ -114,8 +112,18 @@ def radial_increment_cost(trajectories, axis_r, axis_z):
     return jnp.sum(jnp.mean(jnp.diff(radius, axis=1), axis=1)**2)
 
 
-def fixed_surface(wout, *, ntheta=64, nphi=64, range_torus="full torus", major_radius=1.):
-    """Scaled QA reference shape, held fixed during coil optimization."""
+def fixed_surface(wout, *, ntheta=64, nphi=64, range_torus="full torus", major_radius=1.,
+                  shape="qa", minor_radius=.2, nfp=1):
+    """QA shape or circular torus, held fixed during coil optimization."""
+    if shape == "torus":
+        if not (np.isfinite(major_radius) and np.isfinite(minor_radius)
+                and 0 < minor_radius < major_radius):
+            raise ValueError("torus radii must be finite with 0 < minor radius < major radius")
+        return SurfaceRZFourier(jnp.array([major_radius, minor_radius]),
+            jnp.array([0., minor_radius]), nfp, 1, 0, ntheta=ntheta, nphi=nphi,
+            range_torus=range_torus)
+    if shape != "qa":
+        raise ValueError("target surface must be 'qa' or 'torus'")
     surface = SurfaceRZFourier.from_wout_file(str(wout))
     scale = surface.rc[0]
     return SurfaceRZFourier(surface.rc * (major_radius / scale), surface.zs * (major_radius / scale),
@@ -123,14 +131,15 @@ def fixed_surface(wout, *, ntheta=64, nphi=64, range_torus="full torus", major_r
         range_torus=range_torus)
 
 
-def fixed_classifier(wout, *, major_radius=1.):
+def fixed_classifier(wout, *, major_radius=1., shape="qa", minor_radius=.2, nfp=1):
     """Fixed reference surface classifier used by the orbit benchmarks.
 
     This is a geometric confinement target, not an equilibrium recalculated
     after a coil update. Periodic cubic angular interpolation also matches
     derivatives at the toroidal seam. Distances are positive inside.
     """
-    return SurfaceClassifier(fixed_surface(wout, major_radius=major_radius),
+    return SurfaceClassifier(fixed_surface(wout, major_radius=major_radius,
+                             shape=shape, minor_radius=minor_radius, nfp=nfp),
                              h=.03 * major_radius, padding=.16 * major_radius,
                              angular_interpolation="periodic_cubic")
 
@@ -171,10 +180,12 @@ def build_objective(options, objective):
         options.length_target = 1.05 * float(jnp.max(base.length))
     if options.curvature_target is None:
         options.curvature_target = 1.05 * float(jnp.max(base.curvature))
-    classifier = fixed_classifier(options.wout, major_radius=options.reference_major_radius) if objective == "loss_fraction" else None
+    target = dict(major_radius=options.reference_major_radius,
+        shape=getattr(options, "target_surface", "qa"),
+        minor_radius=getattr(options, "target_minor_radius", .2), nfp=base.nfp)
+    classifier = fixed_classifier(options.wout, **target) if objective == "loss_fraction" else None
     surface = fixed_surface(options.wout, ntheta=options.surface_ntheta,
-        nphi=options.surface_nphi, range_torus="half period",
-        major_radius=options.reference_major_radius) if options.bdotn_weight else None
+        nphi=options.surface_nphi, range_torus="half period", **target) if options.bdotn_weight else None
     if options.particle_setup == "axis":
         # Match the reference examples, including the duplicated 0/2pi birth.
         phi = jnp.linspace(0., 2*jnp.pi, options.particles)
@@ -257,7 +268,11 @@ def run(objective, argv=None, *, defaults=None):
     parser.add_argument("--coil-stellsym", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--coil-segments", type=int, default=60)
     parser.add_argument("--coil-scaling-factor", type=float, default=0.)
-    parser.add_argument("--wout", type=Path, default=WOUT, help="Fixed scaled reference shape for loss fraction and B dot n / |B|")
+    parser.add_argument("--wout", type=Path, default=WOUT, help="VMEC target file when target-surface is qa")
+    parser.add_argument("--target-surface", choices=("qa", "torus"), default="qa",
+        help="Fixed geometry shared by the loss classifier and B dot n / |B|")
+    parser.add_argument("--target-minor-radius", type=float, default=.2,
+        help="Metres; circular target torus minor radius")
     parser.add_argument("--model", choices=("gc", "lorentz"), default="gc")
     parser.add_argument("--method", choices=("dopri5", "dopri8"), default="dopri8")
     parser.add_argument("--particles", type=int, default=8)
@@ -291,7 +306,7 @@ def run(objective, argv=None, *, defaults=None):
     parser.add_argument("--curvature-target", type=float, help="1/metre; default 1.05 times the largest initial pointwise curvature")
     parser.add_argument("--surface-ntheta", type=int, default=30, help="Poloidal points for the normal-field objective")
     parser.add_argument("--surface-nphi", type=int, default=30, help="Toroidal points over a half field period for the normal-field objective")
-    parser.add_argument("--reference-major-radius", type=float, default=1., help="Metres; scale the fixed QA target to this major radius")
+    parser.add_argument("--reference-major-radius", type=float, default=1., help="Metres; fixed target major radius")
     parser.add_argument("--softness", type=float, default=10., help="Loss sigmoid slope in 1/metre")
     parser.add_argument("--save-plots", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--plot-particles", type=int, default=10, help="Random subset size, capped by traced population")
@@ -312,6 +327,12 @@ def run(objective, argv=None, *, defaults=None):
                 options.coil_major_radius, options.coil_minor_radius)
     if any(not np.isfinite(value) or value <= 0 for value in positive):
         parser.error("horizon, energy, tolerance, max-change, softness and radii must be finite and positive")
+    if options.target_surface == "torus":
+        if not (np.isfinite(options.target_minor_radius)
+                and 0 < options.target_minor_radius < options.reference_major_radius):
+            parser.error("target torus requires 0 < target-minor-radius < reference-major-radius")
+        if options.coils is None and options.target_minor_radius >= options.coil_minor_radius:
+            parser.error("target-minor-radius must be smaller than the initial circular coil radius")
     if options.initial_step is not None and (not np.isfinite(options.initial_step) or options.initial_step <= 0):
         parser.error("initial-step must be finite and positive")
     if (not -1 <= options.pitch_min < options.pitch_max <= 1 or
@@ -335,6 +356,7 @@ def run(objective, argv=None, *, defaults=None):
         parser.error("length, curvature and axis-field targets must be finite and nonnegative")
     if options.output.exists():
         parser.error("output directory already exists; choose a new path")
+    print(f"JAX backend: {jax.default_backend()}; devices: {jax.devices()}", flush=True)
     options.output.mkdir(parents=True)
     print(f"Building {objective}, {options.model}, {options.particles} particles; coil DOFs only", flush=True)
     base, theta0, axis, xyz, pitches, objective_fn = build_objective(options, objective)
@@ -346,6 +368,10 @@ def run(objective, argv=None, *, defaults=None):
     print(f"Length target {options.length_target:.6g} m; curvature target "
           f"{options.curvature_target:.6g} /m; particle/length/curvature/Bn/axis weights "
           f"{weights[:5]}", flush=True)
+    print(f"Fixed target surface: {options.target_surface}; "
+          f"major radius {options.reference_major_radius:g} m" +
+          (f"; minor radius {options.target_minor_radius:g} m" if options.target_surface == "torus" else ""),
+          flush=True)
     evaluate = jax.jit(jax.value_and_grad(objective_fn, has_aux=True))
     history = []
     cached = None
@@ -427,13 +453,14 @@ def run(objective, argv=None, *, defaults=None):
         optimizer_success=bool(result.success), optimizer_message=str(result.message),
         iterations=int(result.nit), function_evaluations=int(result.nfev),
         recorded_evaluations=len(history), coil_dof_names=list(base.dof_names),
-        reference_axis_r_z_m=axis, backend=jax.default_backend(), jax=jax.__version__,
+        reference_axis_r_z_m=axis, backend=jax.default_backend(),
+        devices=[str(device) for device in jax.devices()], jax=jax.__version__,
         settings={name: str(value.resolve()) if isinstance(value, Path) else value
                   for name, value in vars(options).items()},
         plots=plots,
         derivative_policy="Accepted-step reverse AD with frozen adaptive times; segment checkpoints; full population vmap",
         birth_policy="Fixed GC birth XYZ, pitch, energy and gyrophase; Lorentz conversion remains field-dependent",
-        target_policy="Fixed initial reference axis and fixed scaled QA surface; no hard wall stopping",
+        target_policy="Fixed initial reference axis and fixed target surface; no hard wall stopping",
         gradient_coordinates="Dimensionless delta; coil DOFs = initial DOFs + max_change * delta",
         timing_scope="First evaluation includes compilation; later evaluations reuse compiled value_and_grad")
     (options.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
