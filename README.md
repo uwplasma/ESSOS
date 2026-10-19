@@ -275,12 +275,454 @@ at `speed_floor` (default: 5% of the smallest active background thermal speed
 for the test mass); check sensitivity to this wall near zero speed. Use
 `orbit=False` for collision-only statistics. Randomness uses the explicit
 per-particle `particles.random_keys`. Individual collision maps support JVP/VJP;
-adaptive reverse-mode replay through orbit **and** collisions remains future work.
+accepted-step reverse replay through orbit **and** collisions is described below.
 
 Run the small example with
 `python -m examples.particle_tracing_collisions.trace_particles_split`;
 add `--model FullOrbit` to select Lorentz motion or `--collision-only` for
 collision statistics without orbit drift. It reports outcomes and step counts.
+
+### Accepted-step reverse AD for split orbit/collision tracing
+
+`trace_split(..., adjoint="accepted")` enables checkpointed pathwise reverse
+AD through both the native orbit solve and collision kick for Cartesian GC
+and Lorentz fields. The default `adjoint="none"` preserves forward tracing.
+The implementation lives in [`essos/split_ad.py`](essos/split_ad.py); field,
+particle and background-species classes remain unchanged.
+
+```python
+from essos.split import trace_split
+from essos.particle_losses import mean_final_radius
+
+reference_field = BiotSavart(coils)
+reference_axis = (reference_field.r_axis, reference_field.z_axis)
+
+def cost(coil_dofs):
+    field = BiotSavart(coils.with_dofs(coil_dofs))
+    out = trace_split(field, particles, species, model="GuidingCenter",
+        tmax=2e-6, timestep=2e-7, collision_dtmax=5e-7, n_save=16,
+        adjoint="accepted", adjoint_checkpoint_steps=16,
+        adjoint_orbit_checkpoint_steps=16,
+        adjoint_max_accepted_steps=256, adjoint_max_orbit_steps=2048,
+        max_steps=4096, max_orbit_steps=256)
+    return mean_final_radius(out.ys, *reference_axis)
+
+value, gradient = jax.jit(jax.value_and_grad(cost))(coils.dofs)
+```
+
+The forward solver retains the production Gaussian sampler, Brownian bridges,
+controllers, tolerances and saves. The tape records only committed split maps,
+their exact Wiener increments and the inner accepted RK schedule. Rejected
+collision trials contribute no physical reverse maps, including their inner
+orbit attempts. Pitch deflections, speed/velocity diffusion, collision-coefficient
+dependence and enabled GC spatial diffusion remain differentiable. Each
+particle retains its own production noise path; reverse replay draws no noise.
+Error-estimator preparation is excluded from the physical pullback, including
+unused expressions with singular derivatives. Diffusion roots retain their
+forward values and positive-coefficient derivatives, with a zero AD tangent
+at zero diffusion to preserve vacuum-state sensitivities. Switching noise on
+exactly at zero is a singular pathwise limit; this boundary convention does
+not supply that missing derivative.
+
+The accepted outer and inner times, controller decisions and event fractions
+are held fixed during AD. This computes the discrete gradient of that sampled
+numerical path, rather than differentiating adaptive mesh selection. Orbit
+events skip the collision kick; kick events stop at their endpoint. Terminal
+states held at later save times receive their full objective cotangents. Event
+times themselves remain frozen, so this is not the derivative of a moving
+hard first-hit boundary; use smooth classifier objectives for optimization.
+
+Outer and inner segment lengths are independent. Outer state storage scales
+with `accepted_capacity / adjoint_checkpoint_steps`; the local inner workspace
+uses RK segment checkpoints and small stage vectors. The complete inner
+accepted schedule is one flat tape, rather than an array sized by the product
+of outer and inner work ceilings. `adjoint_max_accepted_steps` bounds committed
+outer maps (including a terminal orbit-event map);
+`adjoint_max_orbit_steps` bounds the **total** accepted inner RK steps across
+these maps. Both default to `max_steps`. They do not change forward integration.
+A capacity overflow or failed solve raises during reverse AD, so an incomplete
+gradient is never returned. Set explicit capacities for the intended horizon
+and parameter range. All particles are vectorized together without chunking.
+
+`solve_split` exposes the same adjoint options for custom physical callbacks.
+[`replay_accepted_split`](essos/split_ad.py) supplies a frozen-grid/noise forward
+oracle for directional finite differences; it propagates perturbed states
+through every map and ignores recorded checkpoint states. Reverse-mode is
+first-order; JVPs through the custom VJP and higher derivatives are outside this
+phase. VMEC/Boozer split reverse AD remains deferred.
+
+The two native circular-coil optimization examples also support `--collisions`
+in this checkout. They keep the same coil DOFs, classifier/final-radius
+objectives, engineering penalties and plots, and call the production
+`trace_split(..., adjoint="accepted")` path. Orbit-only tracing remains the
+default. Editable collision/background settings are in each script's
+`PARAMETERS` block; CLI arguments override them. No device backend is forced.
+
+```bash
+python -m examples.coil_optimization.optimize_coils_particle_confinement_guidingcenter_native \
+  --collisions --objective loss_fraction --bdotn-weight 0 \
+  --particles 2 --horizon 1e-6 --maxiter 1 \
+  --output output/native_gc_split_loss_run1
+python -m examples.coil_optimization.optimize_coils_particle_confinement_fullorbit_native \
+  --collisions --objective final_radius --bdotn-weight 0 \
+  --particles 2 --horizon 1e-7 --maxiter 1 \
+  --output output/native_fo_split_radius_run1
+```
+
+`--collision-step` (default 1e-7 s) is the initial adaptive split interval;
+`--collision-dtmax` (1e-6 s) is the independent splitting ceiling.
+`--no-collision-adaptive` fixes the outer grid while leaving the orbit solve
+adaptive. Collision tolerance defaults to 0.003 and the conservative controller;
+`--collision-controller paper` or `candidate` selects the other implemented
+controllers. The numerical method and production Brownian sampler are the
+same as forward split tracing. Per-particle noise uses the unchanged seed-42
+keys across objective evaluations; an adaptive parameter perturbation can
+choose a different mesh, while each reverse pass freezes its own recorded mesh
+and exact increments. This is a sampled pathwise gradient, not an exact
+gradient of a statistical ensemble expectation.
+
+The example background is one uniform Maxwellian proton species at
+`--background-density 1e20` m^-3 and `--background-temperature-ev 1000`.
+Its mass and charge are configurable in proton-mass/elementary-charge units;
+`--coulomb-log-model nrl` preserves the existing default (`impact` is optional).
+Coil DOFs are the optimization variables; background and birth parameters stay
+fixed. `--collision-spatial-diffusion` enables the existing Cartesian GC
+increment and is rejected for Lorentz motion. The history/summary include mean
+accepted/rejected collision counts and orbit trial/rejection counts.
+
+`--collision-accepted-capacity` bounds the outer tape;
+`--accepted-capacity` bounds the total accepted inner RK tape across all
+committed intervals. `--collision-checkpoint-steps` and `--checkpoint-steps`
+set outer and inner segment lengths, respectively. `--max-steps` limits outer
+trials and `--max-orbit-steps` limits trials within one interval. These limits
+raise on failure or reverse-tape overflow; no capacity is grown automatically.
+All particles remain in one vectorized population. The separate 4.4 m safety
+surface is also passed to split tracing. Its orbit crossing is root-found and
+later saves hold the terminal state, unlike the collisionless plotting path's
+last saved interior point. Its crossing time/fraction remains frozen in AD.
+
+The array particle objectives support native split GC's five-component SI
+state `(xyz, v_parallel, mu)`. Energy and heat objectives use its evolving
+physical `mu` in J/T; they do not reconstruct a constant birth magnetic moment.
+
+Run the CPU correctness checks and the small production QA-coil timing example:
+
+```bash
+export JAX_PLATFORMS=cpu
+export ESSOS_CPU_DEVICES=1
+export ESSOS_XLA_CACHE=
+pytest -q tests/test_split_ad.py tests/test_particle_losses.py
+python -m examples.benchmarks.benchmark_split_ad --output examples/benchmarks/results/split_ad_NEW.json
+# Optional smooth loss, loss-location and heat-proxy objectives.
+python -m examples.benchmarks.benchmark_split_ad --objectives loss_fraction loss_location heat_proxy --output examples/benchmarks/results/split_ad_losses_NEW.json
+```
+
+The timing example uses the production `trace_split` pipeline, two particles
+and all QA coil DOFs. Fixed cases validate gradients with both grids fixed and
+the same per-particle noise keys. Adaptive frozen-grid/noise validation is
+performed by the unit tests. Warm timings include forward and reverse execution
+and exclude compilation; executable buffer estimates are not peak process RSS.
+The saved [two-particle CPU baseline](examples/benchmarks/results/split_ad_cpu_smoke_20261019.json)
+uses Dopri8, conservative collision control, eight saves and the final-radius
+objective, with all 136 coil DOFs active. Counts below are per particle;
+warm times cover the full two-particle value and gradient evaluation.
+
+| Model | Grids | Accepted split maps | Accepted inner RK steps | Warm value + gradient (ms) | Compiler buffers (MiB) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| GC | Fixed | 14 | 70 | 711.27 | 1.59 |
+| GC | Adaptive | 7 | 7 | 133.43 | 1.59 |
+| Lorentz | Fixed | 14 | 70 | 179.80 | 1.15 |
+| Lorentz | Adaptive | 7 | 7 | 21.95 | 1.15 |
+
+All four cases completed successfully with finite gradients and normalized
+forward differences below `3.4e-15` against the ordinary production solve.
+The best fixed-grid directional finite-difference relative errors were
+`1.2e-9` (GC) and `4.8e-8` (Lorentz). These short adaptive cases had no rejected
+steps; the unit tests separately force inner and outer rejections and compare
+against frozen-schedule/noise finite differences. This is a split-AD correctness
+and timing baseline, not a Diffrax speed or peak-memory comparison.
+
+The separate [warm phase measurements](examples/benchmarks/results/split_ad_cpu_phases_20261019.json)
+use the same two-particle QA setup with adaptive Dopri8, 136 coil DOFs, seven
+accepted outer maps and seven accepted inner steps per particle. Both checkpoint
+segment lengths are 16. Ordinary forward calls, forward linearization (including
+tape construction and host dispatch), and standalone reverse pullbacks are
+timed separately after compilation, using three blocked repetitions. The
+standalone pullback reuses baseline residuals and is checked against the fused
+value-and-gradient result. These are small CPU cases, not GPU or long-run
+scaling measurements.
+
+| Model | Ordinary forward (ms) | Forward linearization (ms) | Reverse only (ms) | Reverse / ordinary forward | Fused value + gradient (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GC | 9.87 | 12.22 | 127.60 | 12.93 | 132.84 |
+| Lorentz | 4.23 | 5.00 | 22.38 | 5.29 | 23.48 |
+
+Separately compiled phase medians need not sum to the fused timing. The current
+split adjoint does not meet a three-times-forward reverse-time target in these
+cases. With outer segment lengths greater than one, its backward pass replays
+outer maps, replays each map's orbit to build inner checkpoints, and reconstructs
+inner RK stages before the physical pullbacks. Removing duplicated reconstruction
+is a performance task; checkpointing alone does not establish a runtime bound.
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.benchmark_split_ad \
+  --modes adaptive --separate-phases \
+  --output examples/benchmarks/results/split_ad_phases_NEW.json
+```
+
+The collisionless timing/memory reports later in this README were measured at
+base commit `c50da30`; they are not measurements of the split adjoint.
+
+### Circular-coil gradient horizon audit
+
+`examples/benchmarks/audit_orbit_collision_gradients.py` compares collisionless
+and production adaptive split tracing for GC and Lorentz. It retains birth IDs
+0 and 9 from the ten-particle circular-coil examples, including their original
+seed-42 collision keys, 3.52 MeV energy, model-specific Fourier normalization,
+and the 4.4 m safety torus. All 120 order-six coil DOFs are active. The cost is
+the mean final saved minor radius about the fixed reference axis; classifier
+and engineering penalties are omitted. No optimizer runs in this audit.
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.audit_orbit_collision_gradients \
+  --horizons 1e-7 1e-6 1e-5 3e-5 --accepted-capacity 16384 \
+  --output examples/benchmarks/results/orbit_collision_gradient_audit_NEW.json
+```
+
+The audit records the production accepted schedules and Wiener increments,
+then checks reverse AD against an independently differentiated frozen replay
+(JVP) and centered directional finite differences at three perturbation sizes.
+It also reports fresh adaptive finite differences separately: those change the
+adaptive grid and can change save/stop decisions. Collision coefficients,
+velocity-space directions and physical field dependence remain differentiable.
+The selected perturbation direction is the normalized mean coil gradient;
+these are directional checks, not exhaustive finite differences of 120 DOFs.
+
+Saved JSON includes complete per-particle gradient vectors, step counts, solver
+statuses, sampled coil clearance, energy changes and source hashes. Gradients
+use `coil_dofs = initial_dofs + 0.01 * delta`. The explicitly recorded replay
+threshold is `1e-9` in the position/velocity/energy scales; both that discrepancy
+and derivative-check errors are saved. Audit wall times include compilation
+and validation work and must not be read as warm execution benchmarks.
+Collisional energy changes include physical drag/diffusion. Two births test
+derivative consistency, not ensemble statistics or convergence of optimization.
+
+The saved [CPU horizon audit](examples/benchmarks/results/orbit_collision_gradient_audit_20261019.json)
+contains 15 completed cases. Its `complete` flag is **false**: the last Lorentz
+collision case at 30 microseconds stopped on a scaled replay discrepancy of
+`1.0507e-8`, above the explicit `1e-9` audit threshold. This is not a passing
+certificate for the full requested sweep. The successful 30-microsecond GC,
+GC-with-collisions and collisionless Lorentz cases have best frozen directional
+FD relative errors of `1.29e-7`, `7.39e-8` and `6.57e-8`, respectively. No safety
+stop was triggered in those cases. They do not reproduce or explain the huge
+gradients previously seen in the long-horizon optimizer.
+
+The 10-microsecond Lorentz collision case revealed a separate sampling
+smoothness problem: `velocity_basis` chooses its perpendicular reference axis
+with `argmin(abs(direction))`. The basis is orthonormal on each branch, but a
+finite parameter perturbation can switch branches and abruptly rotate a fixed
+noise realization. Independent JVP and reverse AD agree locally, while a
+finite-difference interval crossing a branch need not approximate that local
+derivative.
+
+The [frame observation audit](examples/benchmarks/results/lorentz_collision_frame_audit_20261019.json)
+retains the exact production grids, Wiener increments and physical collision
+function. An ordered callback observes the reference-axis choices and returns
+the original basis unchanged. For birth ID 9 and the original two-particle mean
+gradient direction, it found:
+
+| Perturbation in scaled coil coordinates | AD directional derivative | Frozen directional FD | Changed reference-axis choices |
+| ---: | ---: | ---: | ---: |
+| `1e-5` | -0.03272256736 | -0.2705588697 | 1 in the negative perturbation |
+| `1e-6` | -0.03272256736 | -0.03272256499 | 0 |
+
+The second row agrees to `7.25e-8` relative error. The switch in the first row
+occurs at zero-based kick 98. This diagnoses nonsmooth coupling of fixed local
+noise to parameter-dependent frames; it does not establish incorrect
+thermalization statistics. A smooth Cartesian diffusion square root is a
+candidate correction, with its parallel noise, Milstein term and adaptive
+error calculations changed consistently and then physically revalidated.
+This audit does not change the production collision method or optimizer cost.
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.audit_lorentz_collision_frames \
+  --audit examples/benchmarks/results/orbit_collision_gradient_audit_20261019.json \
+  --output examples/benchmarks/results/lorentz_collision_frames_NEW.json
+```
+
+### First-loss-time objective and crossing derivative
+
+The opt-in functions in [`essos/first_loss.py`](essos/first_loss.py) provide a
+normalized confinement-time objective. With `t_i = min(first_exit_i, T)` and
+`rate = 2`, the per-particle penalty is
+`(exp(-2*t_i/T) - exp(-2)) / (1 - exp(-2))`. It is one for loss at birth and zero
+for retention through `T`. Later escape improves this cost even if the loss
+fraction is unchanged. This is a confinement-time objective, not a measurement
+of physical collisional energy loss or a guarantee of smaller trajectory
+sensitivities. The selected confinement surface is distinct from a numerical
+guard near the coils.
+
+The existing accepted-step adjoints still freeze event times/fractions. For
+this objective only, `first_loss_time` adds the implicit derivative of the
+physical level-set crossing. If `g(t,y,parameters)=0` at escape, it uses
+`dt_hit = -d(g at fixed time) / (g_t + g_y * ydot_dense)`. The tangent is the
+derivative of the exact standard RK interpolant used by the event search, not
+an endpoint RHS approximation. The adaptive schedule, accepted interval,
+Wiener increments and bisection decisions remain frozen. Physical trajectory
+and boundary-parameter derivatives stay active. The general terminal-state
+adjoint is not changed by this separate time sensitivity.
+
+`solve_rk` and `trace_split` accept `record_event_tangent=True` to expose this
+small terminal metadata vector as `solution.event_tangent`; the default does
+not calculate it. Use `adjoint="accepted"` for reverse differentiation. For
+example, in an existing Cartesian split cost:
+
+```python
+from essos.first_loss import (
+    toroidal_loss_boundary, first_loss_event, mean_loss_time_cost,
+)
+
+boundary = toroidal_loss_boundary(major_radius=7.74, minor_radius=3.5)
+solution = trace_split(
+    field, particles, species, model="GuidingCenter",
+    tmax=T, timestep=1e-7, collision_dtmax=1e-6,
+    event=first_loss_event(boundary),
+    record_event_tangent=True, adjoint="accepted",
+)
+cost = mean_loss_time_cost(solution, boundary, T)
+```
+
+`boundary` must be a differentiable, unclamped scalar level set positive inside.
+`first_loss_event` supplies its clipped forward counterpart to stop initial
+exterior births immediately. Initial losses and retained particles have zero
+time sensitivity. Wrong-surface events and failed solves raise explicitly.
+The gradient requires a finite transverse outward crossing; no denominator
+clipping or gradient regularization is applied. Boolean/unrefined events and
+instantaneous spatial-kick crossings do not have this continuous-time rule.
+Cartesian split GC/Lorentz are supported; VMEC/Boozer event tangents are deferred.
+Existing coil optimization entry points retain their objective selections and
+defaults. The separate staged example below uses this first-loss objective.
+
+#### Staged coil optimization with a fixed torus
+
+[`optimize_coils_first_loss_staged.py`](examples/coil_optimization/optimize_coils_first_loss_staged.py)
+uses the native checkpointed accepted-step reverse AD for Cartesian GC or
+Lorentz tracing, optionally with production split collisions. Edit `PARAMETERS`
+in that file or override it on the CLI. `stage_times` and `stage_orders` are
+paired lists, not a Cartesian product. Each stage starts from the best total
+cost evaluated at the preceding stage; its baseline is included when selecting
+the best. `maxiter` limits optimizer iterations; `max_evaluations` separately
+caps actual value/gradient calls per stage, including line searches.
+
+The orders unlock **coil** Fourier coefficients. Higher modes remain frozen;
+the stored representation, normalization and coil quadrature resolution stay
+fixed at the maximum requested order. Optional currents are active at every
+stage (`--no-optimize-currents` freezes them). The global bounds remain
+`initial_dofs +/- max_change` throughout the sequence. There are no VMEC or
+Boozer optimization variables. This adapts the continuation idea in
+[Bindel, Landreman and Padidar](https://arxiv.org/html/2302.11369v2), rather than
+reproducing their plasma-boundary optimization or derivative-free optimizer.
+
+The circular coils have `R=7.74 m`, minor radius `4.5 m`, and the fixed
+first-loss torus has minor radius `3.5 m`. The torus is an absorbing geometric
+confinement region, not a computed magnetic flux surface or a soft classifier.
+Tracing terminates on its first detected continuous crossing, with root
+refinement; the implicit time derivative enters the objective. No separate
+near-coil guard is needed after termination at this inner target.
+
+Births are sampled **once**, saved in `births.npz`, and reused across all
+evaluations and stages. Positions cover the full torus and default to uniform
+physical volume between minor-radius fractions `0` and `0.9`, including the
+toroidal volume Jacobian. Pitches are sampled uniformly in `[-1,1]`. Energy,
+gyrophase, particle IDs and collision keys also stay fixed. Lorentz conversion
+from GC birth coordinates to particle position/velocity remains field-dependent.
+To select several radii explicitly, use `--birth-radius-fractions 0 .3 .6 .9`:
+counts are balanced across shells, with random positions weighted by physical
+surface area on each shell. Neither birth distribution is a fusion-weighted
+source model. Same production collision keys are reused, but changing horizons
+or adaptive proposals does not promise identical increments across separate
+solves; each reverse pass replays its own exact recorded increments.
+
+For example, start with a shorter continuation than the editable default:
+
+```bash
+python -m examples.coil_optimization.optimize_coils_first_loss_staged \
+  --model gc --particles 10 \
+  --stage-times 1e-5 1e-4 1e-4 1e-3 \
+  --stage-orders 1 1 2 2 \
+  --birth-radius-fractions 0 .3 .6 .9 \
+  --maxiter 10 --max-evaluations 40 \
+  --output output/native_gc_first_loss_staged
+```
+
+Use `--model lorentz` for full orbits, `--collisions` for production split
+velocity kicks, or `--stage-maxiter 5 10 10 20` for different iteration limits.
+Spatial collision kicks are excluded from this continuous-crossing derivative.
+An optional `--max-stage-loss-fraction 0.05` prevents advancing to the next
+stage unless the best coils satisfy that sampled loss fraction. Ten particles
+are a small trial population, not evidence of statistical confinement quality.
+Later stages do not automatically cure large sensitivities or failed line
+searches. Check each stage's status, loss fraction, first-loss cost and penalties.
+Costs at different horizons describe different objectives and should be compared
+within stages. The normalized particle cost rescales the exponential objective;
+engineering penalty weights are explicitly selectable in this script.
+
+Each `stage_XX` directory contains a flushed evaluation history, summary,
+initial/best coil JSON files, trajectories/loss times, and matched initial/final
+3D and R-Z plots of up to ten fixed random particle IDs. The root summary
+records completion, advancement gating and backend/device information; the
+root `optimized_coils.json` contains the most recent completed stage's best coils.
+The script follows the available JAX backend and does not force CPU execution.
+No full optimization is run by the tests: solver wiring uses one-particle short
+GC/Lorentz cases, with and without collisions, alongside mode/population and
+evaluation-budget checks in `tests/test_staged_first_loss.py`.
+
+The [saved two-particle CPU pilot](examples/benchmarks/results/first_loss_coils_20261019.json)
+uses the same 12 circular coils, order-six representation, 120 coil DOFs and
+3.52 MeV particles as the native examples. It retains original birth IDs 0 and
+9, pitches, gyrophase and production noise keys, while moving their GC birth
+positions to `Z=+3.2 m` to obtain short crossings of the `3.5 m` torus within a
+`5 microsecond` horizon. This different birth population is a local validation
+case, not a test of the original axis-born optimizer. The split cases execute
+physical collision kicks before escape. No collision method, noise sampler or
+checkpoint algorithm is replaced.
+
+The independent FD oracle propagates perturbed states through the recorded
+accepted maps and collision increments, then re-solves the last crossing on
+the full accepted RK polynomial. It does not use the implicit AD formula.
+Reported FD intervals are checked to retain a valid crossing bracket. Fresh
+adaptive forward calls separately test actual descent along the negative AD
+gradient, using the same two births and production keys.
+
+| Case | Mean initial cost | Best frozen-root directional FD relative error | Fresh cost change at step `1e-3` |
+| --- | ---: | ---: | ---: |
+| GC, orbit only | 0.0165810530 | 3.33e-9 | -1.18688e-6 |
+| GC, split collisions | 0.0165991791 | 3.34e-9 | -1.19520e-6 |
+| Lorentz, orbit only | 0.0436054851 | 2.61e-9 | -1.57231e-6 |
+| Lorentz, split collisions | 0.0436071011 | 7.27e-10 | -1.57082e-6 |
+
+Steps are in scaled coordinates `coil_dofs = initial_dofs + 0.01*delta`, along
+the normalized mean cost gradient. All four tested step sizes from `1e-3` to
+`1e-6` reduced the fresh cost in every case. One particle remained retained and
+one was lost in each case/trial: the decrease reflects later escape, not a
+reduction in loss fraction. These small fixed-sample changes validate local
+derivatives/descent; they do not establish statistical robustness or successful
+long-horizon optimization.
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m pytest -q tests/test_first_loss.py
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m pytest -q tests/test_staged_first_loss.py
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.validate_first_loss_coils \
+  --output examples/benchmarks/results/first_loss_coils_NEW.json
+```
+
+Analytic tests cover flow, birth-state and moving-boundary parameters;
+nonlinear rejected-step cases; the actual coarse-step dense-output derivative;
+stochastic drag/diffusion sensitivities; retained/initial losses; and unsupported
+grazing or jump events. Focused existing RK/split event tests retain their
+original frozen-event contracts. The new tests also exposed and corrected
+native RK adjoint event callbacks receiving prepared RHS data instead of their
+original public `args` object.
 
 ### Optional impact-parameter Coulomb logarithm
 
@@ -712,9 +1154,105 @@ Fourier and normalized-current DOFs. Birth XYZ, pitch, energy and gyrophase
 stay fixed; the Lorentz GC-to-full-orbit conversion retains its field
 dependence. All particles are vectorized together, without particle chunking.
 
+Optimization follows JAX's default device selection. The examples do not set
+`JAX_PLATFORMS` or `ESSOS_CPU_DEVICES`; the backend and selected devices are
+printed at startup and saved in `summary.json`. Clear any CPU override left
+from benchmark commands before launching on a GPU machine, for example with
+`unset JAX_PLATFORMS JAX_PLATFORM_NAME`. Restart an existing Python process
+after changing backend settings. On an NVIDIA installation,
+`JAX_PLATFORMS=cuda,cpu python -m ...` requires CUDA and selects it as the
+default while retaining CPU devices for runtime error callbacks. Do not use
+`cuda` alone: a failed native solve or accepted-step tape overflow could then
+be obscured by a callback error about a missing CPU device.
+JAX orbit integration and AD use the selected devices; compilation, SciPy
+optimization control and plotting still involve the CPU.
+
+The two original entry points start from the bundled QA coil JSON.
+Two additional examples put editable physical and optimization settings in a
+`PARAMETERS` block at the top of each script:
+
+- [Native full-orbit circular-coil case](examples/coil_optimization/optimize_coils_particle_confinement_fullorbit_native.py)
+- [Native GC circular-coil case](examples/coil_optimization/optimize_coils_particle_confinement_guidingcenter_native.py)
+
+These use the respective `optimize_coils_particle_confinement_*` reference
+parameters: three independent circular coils, two field periods, stellarator
+symmetry (12 physical coils), major radius 7.74 m, coil radius 4.5 m, 18.4 MA
+currents, Fourier order 6 and 60 quadrature points. Ten 3.52 MeV alpha particles
+start at equally spaced angles on the R=7.74 m, Z=0 circle, including the
+reference examples' duplicated 0/2pi endpoint. Pitches are sampled uniformly
+in [-1,1] with seed 42; gyrophase is zero. The GC case retains L2 Fourier
+scaling factor 1.2; the full-orbit case uses factor 0. Both expose 120 coil
+geometry/current DOFs.
+
+They reuse the same native runner, Dopri8, I controller, standard dense output,
+accepted-step reverse AD, 16-step checkpoints and bounded L-BFGS-B optimization.
+Their final time is 100 us, tolerance `rtol=atol=1e-8` and save count 1000.
+The reference `1e-14 s` timestep becomes the initial adaptive step guess.
+Their 200 function-evaluation setting uses the native optimizer's limit;
+these scripts do not reproduce the old least-squares optimizer or Boris map.
+The full-orbit birth conversion remains field-dependent. Edit `PARTICLE_OBJECTIVE`
+to select `"final_radius"` (default), `"loss_fraction"` or `"radial_increment"`.
+The latter implements the intended full-orbit reference formula with Cartesian
+time indexing corrected: `sum_i(mean_j(r[i,j+1]-r[i,j]))**2`. It has no division
+by dt, depends on save count and measures net displacement rather than excursions.
+All reference radii stay fixed at their initial values, as in the native runner.
+
 ```bash
-export JAX_PLATFORMS=cpu
-export ESSOS_CPU_DEVICES=1
+python -m examples.coil_optimization.optimize_coils_particle_confinement_fullorbit_native
+python -m examples.coil_optimization.optimize_coils_particle_confinement_guidingcenter_native
+```
+
+No CLI arguments are required for these two cases. Edit `horizon` for final
+time and choose a fresh `output` directory in `PARAMETERS`; optional CLI
+arguments override the script settings. These circular-coil cases use a fixed
+circular torus for both the classifier and Bn surface, with major radius
+7.74 m and minor radius 3.5 m, inside the initial 4.5 m coil circles. Edit
+`target_surface="torus"` and `target_minor_radius=3.5` in `PARAMETERS` to choose
+the target; its minor radius must be smaller than the initial coil radius.
+Use `target_surface="qa"` for the original scaled QA shape instead. The torus
+does not read a VMEC file. The target stays fixed while coils deform.
+
+Set `PARTICLE_OBJECTIVE = "loss_fraction"` in either script to use the classifier
+surrogate, or override the objective on the command line:
+
+```bash
+python -m examples.coil_optimization.optimize_coils_particle_confinement_fullorbit_native --objective loss_fraction --target-surface torus --target-minor-radius 3.5 --output output/native_fullorbit_loss
+python -m examples.coil_optimization.optimize_coils_particle_confinement_guidingcenter_native --objective loss_fraction --target-surface torus --target-minor-radius 3.5 --output output/native_gc_loss
+```
+
+The surrogate averages, over particles, the maximum saved-time outside
+probability `sigmoid(-softness * signed_distance)`. Distance is positive inside
+the target and probability is 0.5 on the surface. `softness` has units 1/m;
+larger values sharpen the transition. This is a geometric confinement objective
+and does not stop particles at the surface.
+
+The two circular-coil examples additionally enable a **separate safety stop**:
+`safety_minor_radius=4.4` m, 10 cm inside the initial 4.5 m coil circles.
+The 3.5 m target remains a soft classifier. Both GC and Lorentz tracing stop
+on the first accepted step reaching the safety torus, using an inexpensive
+analytic level set about the fixed initial axis. Later saves hold the last
+saved interior state; the plotted endpoint is therefore slightly inside the
+safety surface and depends on the save spacing. The RK stages of the crossing
+trial are still evaluated. This prevents continuing escaped trajectories
+toward the wires; it is not a change to the field or RK formulas.
+
+Use `--safety-minor-radius 4.4` to change the safety radius, or
+`--no-safety-stop` to disable it. For circular targets it must lie outside
+the soft target and inside the initial coil radius. The torus stays fixed as
+coils deform; it is not a wire-clearance constraint on optimized coils.
+Plots show the soft target in black and the safety surface in red.
+`safety_stop_fraction` in the history and summary records physical safety
+hits separately from the surrogate, without adding a new optimization term.
+The original QA entry points leave safety stopping disabled unless requested.
+
+The existing maximum-sigmoid objective is unchanged and can level off once
+all particles reach the safety stop (about 0.76 at radius 4.4 m with the
+reference softness). It does not reward a later exit explicitly. Accepted
+steps and stopping/saved-time decisions remain frozen during reverse AD;
+these are not derivatives of a moving first-hit time. A safety stop alone
+does not establish that the long-horizon gradients or optimization converge.
+
+```bash
 python -m examples.coil_optimization.optimize_coils_native_loss_fraction --output .tmp/native_loss_fraction
 python -m examples.coil_optimization.optimize_coils_native_final_radius --output .tmp/native_final_radius
 # Small one-iteration check; select a fresh output directory for each run.
@@ -730,7 +1268,7 @@ uses the particle mean of final-save minor radius in metres:
 The initial field's reference axis is held fixed throughout optimization.
 This is distinct from the legacy time-averaged radius reduction above.
 
-Both examples also include the length, curvature and normal-field terms from
+All four entry points include the length, curvature and normal-field terms from
 `optimize_coils_vmec_surface.py` in a weighted scalar cost:
 
 ```text
@@ -738,17 +1276,24 @@ cost = particle_weight * particle_metric
      + length_weight * mean(max(coil_length - length_target, 0))
      + curvature_weight * mean(max(pointwise_curvature - curvature_target, 0))
      + bdotn_weight * sum(abs(B dot unitnormal / |B|))
+     + axis_field_weight * abs(mean(axis |B|) - axis_field_target)
      + regularization * mean(delta**2)
 ```
 
 `--particle-weight`, `--length-weight`, `--curvature-weight` and
 `--bdotn-weight` each default to 1. The last three terms can be disabled
 individually with weight 0; disabled terms are omitted and logged as zero.
+`--axis-field-weight` adds an independently selectable axis-field term. Its
+default is zero in the two original entry points and one in the two reference
+case scripts, alongside the other four terms. The target is 5.7 T, sampled at
+15 angles on the fixed initial axis circle. Set `axis_field_weight=0` in the
+script to omit it; the other objective weights work in the same way.
 `--length-target` is in metres and `--curvature-target` in inverse metres.
-Their defaults are 1.05 times the largest initial coil length and pointwise
-curvature, respectively, so targets follow the bundled coils' physical scale.
+The original QA entry points default to 1.05 times the largest initial coil
+length and pointwise curvature, respectively. The two circular-coil cases
+explicitly use the reference targets of 31 m and 0.4 /m.
 Resolved targets and weights are saved in the summary. The normal-field term
-uses the same fixed, scaled QA shape as the classifier, sampled separately
+uses the same fixed target shape as the classifier, sampled separately
 on a half-period mesh (`--surface-ntheta 30 --surface-nphi 30`). Its sum follows
 the existing example and changes with mesh size; choose weights accordingly.
 All these derivatives include the coil geometry/current dependence.
@@ -759,7 +1304,7 @@ python -m examples.coil_optimization.optimize_coils_native_loss_fraction --lengt
 python -m examples.coil_optimization.optimize_coils_native_final_radius --length-weight 0 --curvature-weight 0 --bdotn-weight 0 --output .tmp/native_radius_particle_only
 ```
 
-Both examples default to eight 4 keV alpha particles, Dopri8, I control,
+The two original QA entry points default to eight 4 keV alpha particles, Dopri8, I control,
 `rtol=atol=1e-9`, 32 saves, 16-step checkpoints, accepted capacity 512,
 trial limit 4096 and ten L-BFGS-B iterations. The default horizon is 20 us for
 GC and 2 us with `--model lorentz`. `--method dopri5` selects the other native
@@ -770,8 +1315,18 @@ its default is zero. The geometry targets are soft penalties, in addition to
 the small coil-DOF box; coil separation and other engineering constraints
 are not included.
 
-Each fresh output directory contains `optimized_coils.json`, `summary.json`,
+Each fresh output directory contains `initial_coils.json`, `optimized_coils.json`, `summary.json`,
 `history.csv` and `orbits.npz` with initial/final trajectories and coil DOFs.
+Plots are saved by default as `orbit_comparison.png` and `orbit_comparison.svg`.
+Their four panels show initial and optimized coils with 3D trajectories and
+the corresponding R-Z poloidal projections across all toroidal angles. These
+are projections, not Poincare sections. A reproducible random sample of up to
+ten traced particles is used, with identical particle IDs and colors in both
+configurations; all particles are shown when fewer than ten were traced.
+The plots reuse the stored optimization trajectories without additional tracing.
+Edit `save_plots`, `plot_particles` and `plot_seed` in the reference scripts,
+or use `--no-save-plots`, `--plot-particles` and `--plot-seed`. The selected
+particle IDs and plot filenames are recorded in `summary.json`.
 The summary records optimizer termination, solver settings, initial/final loss
 components, their weights, gradient norms and the fixed reference axis. Every
 history row logs each raw component as well as the weighted total cost, so a

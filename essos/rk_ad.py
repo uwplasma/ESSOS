@@ -155,6 +155,11 @@ def solve_accepted(rhs, y0, args=None, **options):
     A second conversion exposes forward-only controls (including event/norm
     closures) separately: their cotangents are zero under this AD contract.
     """
+    if options.get("event") is not None:
+        # The converted driver uses prepared RHS parameters internally; event
+        # callbacks must still receive their original public args object.
+        options["event"] = tree_util.tree_map(
+            lambda function:lambda t,y,unused:function(t,y,args), options["event"])
     y0 = jnp.asarray(y0, dtype=jnp.result_type(y0, float))
     t0 = lax.stop_gradient(jnp.asarray(options.get("t0", 0.), dtype=y0.dtype))
     ts = lax.stop_gradient(jnp.asarray(options.get("ts", ()), dtype=y0.dtype))

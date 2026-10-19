@@ -56,6 +56,18 @@ def test_main_legacy_cost_is_distinct_from_final_particle_mean():
     np.testing.assert_allclose(legacy_rcross_cost(states,1.,0.),np.linalg.norm([.2,.3]),atol=2e-12)
 
 
+def test_split_gc_kinetic_objectives_use_evolving_physical_mu():
+    field=ExternalField(lambda point:jnp.broadcast_to(jnp.array([0.,0.,2.]),point.shape))
+    states=jnp.array([[[.5,0.,0.,3.,8.], [.6,0.,0.,2.,5.], [.7,0.,0.,1.,2.]]])
+    total,perpendicular,speed=kinetic_components(states,field,2.,25.,"GuidingCenter")
+    np.testing.assert_allclose(total,[[25.,14.,5.]])
+    np.testing.assert_allclose(perpendicular,[[16.,10.,4.]])
+    np.testing.assert_allclose(speed,[[4.,np.sqrt(10.),2.]])
+    derivative=jax.grad(lambda mu:jnp.sum(kinetic_components(states.at[...,4].set(mu),
+        field,2.,999.,"GuidingCenter")[0]))(states[...,4])
+    np.testing.assert_array_equal(derivative,[[2.,2.,2.]])
+
+
 def test_signed_distance_returns_one_value_per_point():
     surface=SurfaceRZFourier(jnp.array([1.,.2]),jnp.array([0.,.2]),
         nfp=1,mpol=1,ntor=0,ntheta=16,nphi=16)

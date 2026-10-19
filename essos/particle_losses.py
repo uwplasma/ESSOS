@@ -1,10 +1,11 @@
-"""Array objectives for collisionless Cartesian GC and Lorentz trajectories.
+"""Array objectives for Cartesian GC and Lorentz trajectories.
 
 Classifier loss fraction and first-loss weights follow jax_9/jax_10 Tracing.
 The heat proxy follows jax_10; perpendicular energy is separately exposed in
 joules (jax_9's heat method) and with jax_10's original normalization. State
 reconstruction is adapted explicitly to collisionless SI states, not the
-normalized five-component Mu-collision states used by those branches.
+normalized five-component Mu-collision states used by those branches. Native
+split GC states instead supply evolving physical mu [J/T] as component five.
 """
 import jax
 import jax.numpy as jnp
@@ -64,10 +65,13 @@ def classifier_loss_location(trajectories, target_position, boundary, softness=1
 def kinetic_components(trajectories, field, mass, birth_energy, model):
     """Total/perpendicular energy in J and perpendicular speed in m/s."""
     xyz = trajectories[..., :3]
-    if model in ("GuidingCenter", "GuidingCenterAdaptative") and trajectories.shape[-1] == 4:
+    if model in ("GuidingCenter", "GuidingCenterAdaptative") and trajectories.shape[-1] in (4, 5):
         magnitude = jax.vmap(field.AbsB)(xyz.reshape((-1, 3))).reshape(xyz.shape[:2])
-        initial_mu = (birth_energy-.5*mass*trajectories[:, 0, 3]**2)/magnitude[:, 0]
-        perpendicular = jnp.maximum(initial_mu[:, None]*magnitude, 0.)
+        if trajectories.shape[-1] == 5:
+            perpendicular = jnp.maximum(trajectories[..., 4]*magnitude, 0.)
+        else:
+            initial_mu = (birth_energy-.5*mass*trajectories[:, 0, 3]**2)/magnitude[:, 0]
+            perpendicular = jnp.maximum(initial_mu[:, None]*magnitude, 0.)
         total = .5*mass*trajectories[..., 3]**2+perpendicular
     elif model in ("FullOrbit", "FullOrbitAdaptative") and trajectories.shape[-1] == 6:
         magnetic = jax.vmap(field.B_contravariant)(xyz.reshape((-1, 3))).reshape(xyz.shape)
@@ -77,7 +81,7 @@ def kinetic_components(trajectories, field, mass, birth_energy, model):
         total = .5*mass*jnp.sum(velocity**2, axis=-1)
         perpendicular = jnp.maximum(total-.5*mass*parallel**2, 0.)
     else:
-        raise ValueError("kinetic objectives require collisionless Cartesian GC (4) or Lorentz (6) SI states")
+        raise ValueError("kinetic objectives require Cartesian GC (4 or physical-mu 5) or Lorentz (6) SI states")
     return total, perpendicular, jnp.sqrt(2*perpendicular/mass)
 
 

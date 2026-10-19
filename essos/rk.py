@@ -58,6 +58,7 @@ class RKSolution(NamedTuple):
     stats: RKStats
     step_ts: jax.Array
     next_dt: jax.Array
+    event_tangent: jax.Array
 
 
 class _RKReplayTape(NamedTuple):
@@ -83,6 +84,13 @@ class _RKCheckpointTape(NamedTuple):
     initial_saves: jax.Array
     count: jax.Array
     status: jax.Array
+
+
+class _RKSchedule(NamedTuple):
+    """Small accepted-time record for a containing split solve; no states."""
+    times: jax.Array
+    fraction: jax.Array
+    count: jax.Array
 
 
 # Dormand--Prince stages, with Shampine's embedded error estimator (1986).
@@ -346,7 +354,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                max_steps=1_000_000, dtmin=0., dtmax=np.inf, record_steps=False, method="dopri5",
                error_norm=None, controller="i", pcoeff=.4, icoeff=.3, dense_output="standard",
                adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None, _record_ad=False,
-               _ad_checkpoint_steps=1, _ad_compact=False):
+               _ad_checkpoint_steps=1, _ad_compact=False, _record_schedule=False,
+               record_event_tangent=False):
     """Integrate an array state forward in time with bounded adaptive retries.
 
     ``ts`` is an ordered save grid, independent of the integration steps.
@@ -373,6 +382,11 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     no inaccurate step is forced through a minimum step-size limit.
     ``next_dt`` returns the controller's next step-size proposal. It can seed
     a subsequent solve after a state jump; derivatives must be recomputed.
+    ``record_event_tangent=True`` records the time derivative of the standard
+    RK interpolant at a root-found scalar event in ``event_tangent``. This is
+    metadata for the separate implicit first-loss-time derivative. It is zero
+    when not requested or no event occurs, and NaN for an unrefined/boolean
+    event. It does not change accepted-step AD or differentiate the root search.
 
     ``adjoint="accepted"`` opts into reverse AD of accepted numerical maps.
     Rejected trials, controller decisions, step times and event fractions are
@@ -414,6 +428,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     """
     if adjoint not in ("none", "accepted"):
         raise ValueError("adjoint must be 'none' or 'accepted'")
+    if _record_schedule and (_record_ad or adjoint != "none"):
+        raise ValueError("schedule recording is an internal forward-only mode")
     for value, name in ((adjoint_checkpoint_steps, "adjoint_checkpoint_steps"),
                         (_ad_checkpoint_steps, "_ad_checkpoint_steps")):
         if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value <= 0:
@@ -430,7 +446,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             method=method, error_norm=error_norm, controller=controller,
             pcoeff=pcoeff, icoeff=icoeff, dense_output=dense_output,
             adjoint_checkpoint_steps=adjoint_checkpoint_steps,
-            adjoint_max_accepted_steps=adjoint_max_accepted_steps)
+            adjoint_max_accepted_steps=adjoint_max_accepted_steps,
+            record_event_tangent=record_event_tangent)
     if method == "dopri5":
         nodes, rows, weights, dense, error_order = _C, _A, _ERROR, _rk45_dense, 5
     elif method == "dopri8":
@@ -512,10 +529,15 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                  saved_ts=jnp.full(ts.shape, jnp.inf, dtype=ts.dtype),
                  index=jnp.array(0), steps=jnp.array(0), accepted=jnp.array(0), rejected=jnp.array(0),
                  history=jnp.full((max_steps + 1 if record_steps else 0,), jnp.inf, dtype=y0.dtype))
+    if record_event_tangent:
+        state["event_tangent"] = jnp.zeros_like(y0)
     if adaptive and controller == "pi":
         state["previous_error"] = jnp.ones((), dtype=y0.dtype)
     if record_steps:
         state["history"] = state["history"].at[0].set(t0)
+    if _record_schedule:
+        state.update(schedule=jnp.zeros((max_steps, 2), y0.dtype),
+                     schedule_fraction=jnp.ones((), y0.dtype))
     if _record_ad:
         ad_capacity = min(max_steps, adjoint_max_accepted_steps) if (
             _ad_compact and adjoint_max_accepted_steps is not None) else max_steps
@@ -605,6 +627,15 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         stop_t = jnp.where(has_event, t + fraction * h, end_t)
         stop_y = interpolate(y, h, trial, fraction)
         hits = _first_hit(tuple(hit & accept & (fraction_i == first) for hit, fraction_i in zip(triggered, fractions)))
+        if record_event_tangent:
+            continuous_event = has_event & root_find & jnp.any(jnp.asarray(
+                tuple(hit if old.dtype != jnp.bool_ else jnp.asarray(False)
+                      for hit, old in zip(hits, s["values"])), dtype=bool))
+            def terminal_tangent(_):
+                return jax.jvp(lambda theta: interpolate(y, h, trial, theta),
+                    (fraction,), (jnp.ones_like(fraction),))[1]/h
+            event_tangent = lax.cond(continuous_event, terminal_tangent,
+                lambda _: jnp.full_like(y, jnp.nan), None)
         if adaptive and controller == "pi":
             # Work in log space so zero errors and clipped factors stay finite.
             safe_error = jnp.maximum(jnp.where(finite, error, 1.), jnp.finfo(y.dtype).tiny)
@@ -628,6 +659,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                        values=tuple(jnp.where(accept, new, old) for old, new in zip(s["values"], new_values)),
                        hits=hits, status=status, steps=s["steps"] + 1,
                        accepted=s["accepted"] + accept.astype(int), rejected=s["rejected"] + (~accept).astype(int))
+        if record_event_tangent:
+            updated["event_tangent"] = jnp.where(has_event, event_tangent, s["event_tangent"])
         if adaptive and controller == "pi":
             # Zero errors use neutral history; rejected trials retain the last
             # accepted error, including after a non-finite trial.
@@ -670,6 +703,11 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                 return dict(s, ys=s["ys"].at[i].set(value), saved_ts=s["saved_ts"].at[i].set(ts[i]), index=i + 1)
             updated = lax.while_loop(lambda s: accept & output_finite & (s["index"] < len(ts)) &
                                      (ts[jnp.minimum(s["index"], len(ts) - 1)] <= stop_t), save, updated)
+        if _record_schedule:
+            updated = lax.cond(accept,
+                lambda updated: dict(updated,
+                    schedule=updated["schedule"].at[s["accepted"]].set(jnp.stack([t, h])),
+                    schedule_fraction=fraction), lambda updated: updated, updated)
         if _record_ad:
             def record(updated):
                 i = s["accepted"]
@@ -699,7 +737,10 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     status = jnp.where((state["t"] < t1) & (state["status"] == RKStatus.SUCCESS), RKStatus.MAX_STEPS, state["status"])
     solution = RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
                       tree_util.tree_unflatten(structure, state["hits"]),
-                      RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"], state["h"])
+                      RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"], state["h"],
+                      state["event_tangent"] if record_event_tangent else jnp.zeros_like(y0))
+    if _record_schedule:
+        return solution, _RKSchedule(state["schedule"], state["schedule_fraction"], state["accepted"])
     if _record_ad:
         if _ad_compact:
             return solution, _RKCheckpointTape(state["ad_steps"], state["ad_times"],

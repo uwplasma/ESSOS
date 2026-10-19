@@ -34,6 +34,19 @@ class CollisionStep(NamedTuple):
     error_model: CollisionErrorModel | None = None
 
 
+def _diffusion_root(value):
+    """sqrt(max(value, 0)) with a zero AD tangent at zero diffusion.
+
+    The safe inner argument prevents 0*inf from contaminating vacuum-state
+    sensitivities. Positive-coefficient values/derivatives and invalid NaN
+    values are preserved. Turning on noise exactly at zero is not a regular
+    pathwise derivative; zero is the chosen boundary convention there.
+    """
+    positive = value > 0
+    return jnp.where(positive, jnp.sqrt(jnp.where(positive, value, 1.)),
+                     jnp.where(jnp.isnan(value), value, 0.))
+
+
 def guiding_center_spatial_diffusion(pitch, c, gyrofrequency):
     """Paper Eq. (36), in SI velocity units: D_X [m^2/s].
 
@@ -51,7 +64,7 @@ def guiding_center_spatial_increment(pitch, dw, c, unit_b, gyrofrequency):
     or full multidimensional Milstein correction is supplied by this map.
     """
     dx = guiding_center_spatial_diffusion(pitch, c, gyrofrequency)
-    return jnp.sqrt(jnp.maximum(2*dx, 0.))*(dw-unit_b*jnp.dot(unit_b, dw))
+    return _diffusion_root(2*dx)*(dw-unit_b*jnp.dot(unit_b, dw))
 
 
 def collision_coefficients(species, mass, charge, speed, point, *, full_orbit=False):
@@ -102,9 +115,9 @@ def guiding_center_collision_step(speed, pitch, h, dw, c, *, tolerance=1e-3, spe
     dp, dt, ddp, q, dq, _ = c
     nu = 2*dt/speed**2
     drift = q + ddp + 2*dp/speed
-    v = speed + drift*h + jnp.sqrt(jnp.maximum(2*dp, 0.))*dw[0] + .5*ddp*(dw[0]**2-h)
+    v = speed + drift*h + _diffusion_root(2*dp)*dw[0] + .5*ddp*(dw[0]**2-h)
     v = speed_floor + jnp.abs(v-speed_floor)
-    angular_noise = jnp.sqrt(jnp.maximum((1-pitch**2)*nu, 0.))
+    angular_noise = _diffusion_root((1-pitch**2)*nu)
     xi = pitch - pitch*nu*h + angular_noise*dw[1] - .5*pitch*nu*(dw[1]**2-h)
     eps_v = tolerance*(jnp.abs(drift)*h + jnp.sqrt(jnp.maximum(2*dp*h, 0.)))
     ed = jnp.maximum(_ratio(.5*jnp.abs(q*dq)*h*h, eps_v),
@@ -140,8 +153,8 @@ def particle_collision_step(velocity, h, dw, c, *, tolerance=1e-3, return_error_
     speed = jnp.linalg.norm(velocity)
     dp, dt, ddp, q, _, dk = c
     drift = q + ddp + 2*(dp-dt)/speed
-    delta = jnp.concatenate([jnp.sqrt(jnp.maximum(2*dt, 0.))*dw[:2],
-        jnp.reshape(drift*h + jnp.sqrt(jnp.maximum(2*dp, 0.))*dw[2]
+    delta = jnp.concatenate([_diffusion_root(2*dt)*dw[:2],
+        jnp.reshape(drift*h + _diffusion_root(2*dp)*dw[2]
                     + .5*ddp*(dw[2]**2-h), (1,))])
     eps_v = tolerance*(jnp.abs(drift)*h + jnp.sqrt(jnp.maximum(2*dp*h, 0.)))
     model = (CollisionErrorModel(jnp.abs(drift), dp, .5*jnp.abs(drift*dk), ddp**2,
