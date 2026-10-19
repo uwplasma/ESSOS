@@ -909,7 +909,9 @@ class Tracing():
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None, integrator="diffrax", native_error_control="physics",
                  orbit_length_scale=1., orbit_speed_scale=None,
-                 native_controller="i", native_pcoeff=.4, native_icoeff=.3, native_dense_output="standard"):
+                 native_controller="i", native_pcoeff=.4, native_icoeff=.3, native_dense_output="standard",
+                 native_adjoint="none", native_adjoint_checkpoint_steps=16,
+                 native_adjoint_max_accepted_steps=None):
 
         if integrator not in ("diffrax", "essos_rk45", "essos_dopri8"):
             raise ValueError("integrator must be 'diffrax', 'essos_rk45' or 'essos_dopri8'")
@@ -928,6 +930,20 @@ class Tracing():
         if native_dense_output not in ("standard", "optimized", "higher_order"):
             raise ValueError("native_dense_output must be 'standard', 'optimized' or 'higher_order'")
         self.native_dense_output = native_dense_output
+        if native_adjoint not in ("none", "accepted"):
+            raise ValueError("native_adjoint must be 'none' or 'accepted'")
+        self.native_adjoint = native_adjoint
+        if (isinstance(native_adjoint_checkpoint_steps, (bool, np.bool_)) or
+                not isinstance(native_adjoint_checkpoint_steps, (int, np.integer)) or
+                native_adjoint_checkpoint_steps <= 0):
+            raise ValueError("native_adjoint_checkpoint_steps must be a positive integer")
+        self.native_adjoint_checkpoint_steps = native_adjoint_checkpoint_steps
+        if native_adjoint_max_accepted_steps is not None and (
+                isinstance(native_adjoint_max_accepted_steps, (bool, np.bool_)) or
+                not isinstance(native_adjoint_max_accepted_steps, (int, np.integer)) or
+                native_adjoint_max_accepted_steps <= 0):
+            raise ValueError("native_adjoint_max_accepted_steps must be a positive integer or None")
+        self.native_adjoint_max_accepted_steps = native_adjoint_max_accepted_steps
         self.orbit_length_scale, self.orbit_speed_scale = orbit_length_scale, orbit_speed_scale
 
         if condition is not None and stopping_criteria is not None:
@@ -1292,7 +1308,9 @@ class Tracing():
                 method="dopri8" if self.integrator == "essos_dopri8" else "dopri5",
                 error_norm=self._native_error_norm(exterior=exterior, flag=flag),
                 controller=self.native_controller, pcoeff=self.native_pcoeff, icoeff=self.native_icoeff,
-                dense_output=self.native_dense_output)
+                dense_output=self.native_dense_output, adjoint=self.native_adjoint,
+                adjoint_checkpoint_steps=self.native_adjoint_checkpoint_steps,
+                adjoint_max_accepted_steps=self.native_adjoint_max_accepted_steps)
             ys = solution.ys
             if throw:
                 import equinox as eqx
@@ -1457,6 +1475,35 @@ class Tracing():
     def trajectories(self, value):
         self._trajectories = value
     
+    def loss_fraction_classifier_differentiable(self, boundary, softness=10., stride=1, final_timestep_only=False):
+        from .particle_losses import classifier_loss_fraction
+        if self._axis_regular:
+            raise ValueError("classifier objectives currently require Cartesian trajectories")
+        return classifier_loss_fraction(self.trajectories, boundary, softness, stride, final_timestep_only)
+
+    def loss_location_classifier_differentiable(self, target_position, boundary, softness=10.,
+                                                stride=1, final_timestep_only=False):
+        from .particle_losses import classifier_loss_location
+        if self._axis_regular:
+            raise ValueError("classifier objectives currently require Cartesian trajectories")
+        return classifier_loss_location(self.trajectories, target_position, boundary,
+            softness, stride, final_timestep_only)
+
+    def _classifier_energy_cost(self, kind, boundary, softness, stride, final_timestep_only):
+        from .particle_losses import classifier_energy_cost
+        if self._axis_regular:
+            raise ValueError("classifier energy objectives currently require Cartesian trajectories")
+        return classifier_energy_cost(self.trajectories, self.field, self.particles.mass,
+            self.particles.energy, self.model, boundary, softness, stride, final_timestep_only, kind=kind)
+
+    def loss_perpendicular_heat_flux_classifier_differentiable(self, boundary, softness=10.,
+                                                               stride=1, final_timestep_only=False):
+        return self._classifier_energy_cost("heat_jax10", boundary, softness, stride, final_timestep_only)
+
+    def loss_perpendicular_energy_classifier_differentiable(self, boundary, softness=10.,
+                                                            stride=1, final_timestep_only=False):
+        return self._classifier_energy_cost("perpendicular_jax10", boundary, softness, stride, final_timestep_only)
+
     def energy(self):
         assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
         mass = self.particles.mass

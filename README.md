@@ -163,8 +163,9 @@ equations require a field that supplies Cartesian magnetic vectors.
 The native selections in `Tracing` and `trace_boozer` implement forward
 collisionless orbits. Forward split collisions have a separate entry point,
 [`essos.split.trace_split`](essos/split.py), described below. A custom
-derivative rule that replays accepted steps is a subsequent phase; the adaptive
-drivers do not yet support reverse-mode AD. The standalone
+derivative rule for collisionless Cartesian GC/Lorentz is now available with
+`native_adjoint="accepted"`, as described below. Split-collision reverse replay
+is a subsequent phase. The standalone
 [`essos.rk.solve_rk`](essos/rk.py) (and its `solve_rk45` and
 `solve_dopri8` entry points) also exposes termination status, accepted/rejected
 trial counts and optional accepted-time history.
@@ -596,6 +597,290 @@ reference regression selection passes **184 tests** on CPU.
 
 ### Native orbit integration
 
+#### Accepted-step reverse AD for collisionless GC and Lorentz
+
+The native integrators opt into reverse AD with `native_adjoint="accepted"`:
+
+```python
+tracing = Tracing(field=field, particles=particles,
+    model="GuidingCenterAdaptative",  # or "FullOrbitAdaptative"
+    integrator="essos_dopri8",        # or "essos_rk45"
+    native_adjoint="accepted", native_adjoint_checkpoint_steps=16,
+    native_adjoint_max_accepted_steps=512, max_steps=4096,
+    maxtime=2e-6, timestep=1e-7, times_to_trace=32, progress=False)
+```
+
+The standalone API uses `solve_rk(..., adjoint="accepted")`. The default
+`"none"` keeps the existing forward/JVP path. This phase covers collisionless
+Cartesian tracing. Split-collision reverse replay and the public VMEC/exterior
+segment driver are not included.
+
+Like NEOPAX's accepted-step replay, the forward controller chooses its grid
+and the reverse rule treats that grid as fixed. The forward solve records
+accepted step sizes, the terminal event fraction, and time/state/FSAL
+checkpoints at segment starts. Saved-sample ownership is reconstructed from
+these frozen times. The backward loop reconstructs one segment's states and
+caches its small RK stage vectors, then transposes one step at a time. Each RHS transpose uses
+ordinary JAX AD, with only one stage's field intermediates live at a time.
+One reverse-stage loop includes internal stages, endpoint FSAL and the first
+step's initial RHS derivative, so these paths share one RHS transpose body.
+Parameter cotangents include initial-condition construction, field/coil parameters and
+direct dependence of each objective on the field. Rejected trials, embedded
+errors, controller history and chosen step sizes have no derivative path.
+
+Dense interpolation is differentiated. Event times and root fractions are
+frozen; this is not the derivative of a moving hard first-hit time. Use the
+classifier surrogates below for the loss benchmarks. Failed solves raise an
+error during reverse AD. No gradients are returned for an incomplete trace.
+Forward-mode through this custom VJP and higher derivatives are outside this
+phase; the pure RK maps retain their ordinary JVP/VJP support.
+
+`native_adjoint_checkpoint_steps` (standalone `adjoint_checkpoint_steps`)
+defaults to 16. Set 1 to retain every accepted state, or a larger positive
+integer to trade checkpoint storage for segment reconstruction. Following
+NEOPAX's segment strategy, the RK tape and reconstruction workspace scale as
+`O((accepted_capacity / segment_length + segment_length * rk_stages) * state_size)`;
+the accepted schedule also uses `O(accepted_capacity)` scalar metadata. The
+stage cache holds small state-sized vectors, not field intermediates. It avoids
+reconstructing every RK step twice during backward execution.
+
+`native_adjoint_max_accepted_steps` (standalone `adjoint_max_accepted_steps`)
+optionally bounds this AD storage independently of `max_steps`, which still
+counts accepted and rejected trials. The default `None` retains the existing
+`max_steps` allocation bound. A full tape does not alter forward trajectories
+or controller decisions; requesting its gradient raises an explicit capacity
+error. Increase the capacity and retry rather than accepting a partial gradient.
+The RK pullback never reruns rejected trials or the adaptive controller.
+
+Forward execution and segment reconstruction use the forward solver's generic
+preparation of parameter-only RHS expressions. Backward execution rebuilds
+that setup once. Ordinary JAX VJPs transpose the stage RHS with respect to
+state and prepared parameters; each accepted step accumulates its stage
+cotangents before applying the setup pullback once. JAX's activity flags
+exclude fixed input data from differentiation; they do not exclude any active
+physical parameter. The reverse loop accumulates gradients in the original
+parameter representation. No field/particle
+class or PyTree structure is changed. The implementation is isolated in
+[`essos/rk_ad.py`](essos/rk_ad.py).
+
+The current benchmark differentiates coils and birth parameters:
+
+| Parameter family | Coverage in this phase |
+| --- | --- |
+| Coil geometry and current | All 136 bundled QA Fourier/normalized-current DOFs |
+| Birth position and pitch | Independent Cartesian XYZ in metres and `v_parallel/v` for each particle |
+| Birth energy | Shared `log(E / 4000 eV)` parameter; includes speed initialization, GC RHS and direct energy-objective dependence |
+| Lorentz birth gyrophase | Shared angle in radians; includes both gyroradius displacement and velocity initialization |
+
+Energy and gyrophase are shared across the population in this first benchmark;
+the existing particle class and scalar-energy API are unchanged. For Lorentz,
+the GC-to-full-orbit conversion also retains its dependence on the coil field.
+VMEC/Boozer RBC/ZBS benchmarks are deferred. They require the full
+equilibrium-to-field chain, including the Boozer transform when used;
+perturbing only a loaded field table would not validate that chain.
+
+The array objectives in [`essos/particle_losses.py`](essos/particle_losses.py)
+adapt the inspected branch formulas to collisionless SI GC/Lorentz states:
+
+| Objective | Definition / source |
+| --- | --- |
+| `mean_final_radius` | Mean minor radius over particles at the final save |
+| `legacy_rcross_cost` | Exact existing `loss_particle_rcross_final`: norm of each particle's time-mean minor radius; despite its name it is not a final-save mean |
+| `classifier_loss_fraction` | Mean over particles of the maximum saved sigmoid outside probability; `jax_9` / `jax_10` |
+| `classifier_loss_location` | Distance to target weighted by increments of cumulative loss probability; `jax_9` / `jax_10` |
+| `classifier_energy_cost(kind="heat_jax10")` | Escape-weighted total kinetic energy times perpendicular speed, with the original normalization |
+| `classifier_energy_cost(kind="perpendicular_jax9")` | Escape-weighted perpendicular energy in joules; `jax_9`'s method named heat flux |
+| `classifier_energy_cost(kind="perpendicular_jax10")` | Escape-weighted perpendicular energy with `jax_10`'s original normalization |
+
+`Tracing` also exposes the classifier loss-fraction, location, heat-proxy and
+normalized perpendicular-energy methods with the branch method names. The
+original main objective accepts native solver options; the separately named
+`loss_particle_mean_final_radius` supplies the actual final-save mean.
+The source snapshots are `jax_9` at `4b68978` and `jax_10` at `9258ce0`.
+The one-distance-per-point shape correction from `jax_8` (`bb74c07`) is included
+in `signed_distance_from_surface_jax` and tested for scalar and batch inputs.
+
+The branch energy objectives retain their `+1e-12` denominators for comparison.
+In SI units this constant can dominate the particle birth energy, so the
+`jax_10` energy normalization is not scale invariant at arbitrary energies.
+The heat objective is a proxy, not an area-resolved physical wall heat flux.
+
+#### Coil optimization with accepted-step AD
+
+Two runnable examples use the production `Tracing` API and optimize all coil
+Fourier and normalized-current DOFs. Birth XYZ, pitch, energy and gyrophase
+stay fixed; the Lorentz GC-to-full-orbit conversion retains its field
+dependence. All particles are vectorized together, without particle chunking.
+
+```bash
+export JAX_PLATFORMS=cpu
+export ESSOS_CPU_DEVICES=1
+python -m examples.coil_optimization.optimize_coils_native_loss_fraction --output .tmp/native_loss_fraction
+python -m examples.coil_optimization.optimize_coils_native_final_radius --output .tmp/native_final_radius
+# Small one-iteration check; select a fresh output directory for each run.
+python -m examples.coil_optimization.optimize_coils_native_final_radius --particles 2 --maxiter 1 --output .tmp/native_radius_smoke
+```
+
+The [loss-fraction example](examples/coil_optimization/optimize_coils_native_loss_fraction.py)
+uses the particle mean of the maximum saved sigmoid outside probability as
+its particle term, using the fixed, scaled QA reference surface. This surrogate is not a hard
+particle count. The [radius example](examples/coil_optimization/optimize_coils_native_final_radius.py)
+uses the particle mean of final-save minor radius in metres:
+`sqrt((sqrt(x*x + y*y) - R_axis)**2 + (z - Z_axis)**2)`.
+The initial field's reference axis is held fixed throughout optimization.
+This is distinct from the legacy time-averaged radius reduction above.
+
+Both examples also include the length, curvature and normal-field terms from
+`optimize_coils_vmec_surface.py` in a weighted scalar cost:
+
+```text
+cost = particle_weight * particle_metric
+     + length_weight * mean(max(coil_length - length_target, 0))
+     + curvature_weight * mean(max(pointwise_curvature - curvature_target, 0))
+     + bdotn_weight * sum(abs(B dot unitnormal / |B|))
+     + regularization * mean(delta**2)
+```
+
+`--particle-weight`, `--length-weight`, `--curvature-weight` and
+`--bdotn-weight` each default to 1. The last three terms can be disabled
+individually with weight 0; disabled terms are omitted and logged as zero.
+`--length-target` is in metres and `--curvature-target` in inverse metres.
+Their defaults are 1.05 times the largest initial coil length and pointwise
+curvature, respectively, so targets follow the bundled coils' physical scale.
+Resolved targets and weights are saved in the summary. The normal-field term
+uses the same fixed, scaled QA shape as the classifier, sampled separately
+on a half-period mesh (`--surface-ntheta 30 --surface-nphi 30`). Its sum follows
+the existing example and changes with mesh size; choose weights accordingly.
+All these derivatives include the coil geometry/current dependence.
+
+```bash
+python -m examples.coil_optimization.optimize_coils_native_loss_fraction --length-weight 1 --curvature-weight 0.1 --bdotn-weight 0.01 --output .tmp/native_loss_fraction_weighted
+# Recover the particle-only objective used by the earlier smoke checks.
+python -m examples.coil_optimization.optimize_coils_native_final_radius --length-weight 0 --curvature-weight 0 --bdotn-weight 0 --output .tmp/native_radius_particle_only
+```
+
+Both examples default to eight 4 keV alpha particles, Dopri8, I control,
+`rtol=atol=1e-9`, 32 saves, 16-step checkpoints, accepted capacity 512,
+trial limit 4096 and ten L-BFGS-B iterations. The default horizon is 20 us for
+GC and 2 us with `--model lorentz`. `--method dopri5` selects the other native
+RK method. `--max-change` bounds the absolute displacement of each public
+normalized coil DOF (default 0.01), including initially zero coefficients.
+An optional `--regularization` adds a mean-square displacement penalty;
+its default is zero. The geometry targets are soft penalties, in addition to
+the small coil-DOF box; coil separation and other engineering constraints
+are not included.
+
+Each fresh output directory contains `optimized_coils.json`, `summary.json`,
+`history.csv` and `orbits.npz` with initial/final trajectories and coil DOFs.
+The summary records optimizer termination, solver settings, initial/final loss
+components, their weights, gradient norms and the fixed reference axis. Every
+history row logs each raw component as well as the weighted total cost, so a
+tradeoff between particle confinement and coil objectives remains visible.
+History times include compilation on the first evaluation. Reaching
+`--maxiter` is recorded as the optimizer's
+iteration limit, rather than reported as convergence. Increase
+`--accepted-capacity` if an updated coil needs more accepted steps; an
+incomplete reverse tape raises an error.
+
+#### Retained reverse-AD timing and memory comparisons (CPU, 2026-10-18)
+
+The complete [seven-objective JSON](examples/benchmarks/results/native_ad_unbatched_25x_20261018.json)
+and [per-objective CSV](examples/benchmarks/results/native_ad_unbatched_25x_20261018.csv)
+compare both GC/Lorentz models and both RK methods with Diffrax's default
+`RecursiveCheckpointAdjoint`. They use two particles, the bundled QA coils,
+136 coil DOFs plus birth parameters, 32 saves, `rtol=atol=1e-9`, trial limit
+4096, 16-step native checkpoints and accepted capacity 2048. GC runs for
+50 us; Lorentz for 5 us. Both backends have the same physical embedded-error
+budgets; native uses I and Diffrax uses ESSOS's PI coefficients `p=.4, i=.3`,
+so their accepted grids can differ. All particles are vectorized together.
+
+| Model / method | Native reverse (ms) | Diffrax reverse (ms) | Native speedup |
+| --- | ---: | ---: | ---: |
+| GC / Dopri5 | 523.3 | 1117.0 | 2.13x |
+| GC / Dopri8 | 514.6 | 1118.9 | 2.17x |
+| Lorentz / Dopri5 | 911.1 | 2123.7 | 2.33x |
+| Lorentz / Dopri8 | 275.8 | 696.6 | 2.53x |
+
+These are warm reverse-only times, excluding compilation and forward
+linearization. Each entry is the mean of seven per-objective medians from
+three repetitions, representing one reverse pass. The JSON also retains raw
+timings, full gradients, objective values, accepted/rejected counts, source
+fingerprints and compiler buffer estimates. Native frozen-schedule directional
+finite differences agree within `1.18e-8`; native/Diffrax gradient relative-L2
+differences are at most about `1.01e-7` in these cases. Ordinary adaptive finite
+differences are recorded separately. Replay must reproduce the adaptive primal.
+
+The classifier uses `angular_interpolation="periodic_cubic"`, with periodic
+Hermite tangents matching values and first derivatives at every angular knot
+and the `0/2*pi` seam. R/Z interpolation remains bilinear, so this is not a
+globally smooth or exact signed-distance function. The default `"linear"`
+classifier behavior is unchanged. The fixed reference surface is not a newly
+solved coil equilibrium; no hard wall event is used in these comparisons.
+At least one particle's maximum outside probability must occur after birth.
+Lorentz starts at gyrophase `pi` to exercise evolved-state loss gradients.
+
+Process memory is measured separately for the scalar mean-final-radius
+`value_and_grad`, using Dopri8, 1 and 8 particles, the same million-trial
+ceiling for both backends, and one fresh Linux CPU process per case. The
+[trial-limit-sized tape report](examples/benchmarks/results/native_ad_full_population_capacity_baseline_20261018.json)
+uses native accepted capacity `None`; the [bounded tape report](examples/benchmarks/results/native_ad_full_population_capacity_bounded_20261018.json)
+uses capacity 512. The [comparison CSV](examples/benchmarks/results/native_ad_full_population_capacity_20261018.csv)
+contains both settings, all backends, compiler/first-execution/warm peaks,
+timings and executable buffers. The uncapped comparison is retained so the
+benefit of the explicit storage setting remains visible.
+
+| Dopri8, 8 particles | Native value/grad (ms) | Diffrax value/grad (ms) | Native peak RSS (MiB) | Diffrax peak RSS (MiB) | Native buffers (KiB/particle) | Diffrax buffers (KiB/particle) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| GC | 1922.9 | 2596.2 | 815.3 | 857.6 | 478.3 | 642.0 |
+| Lorentz | 1223.6 | 1782.1 | 806.0 | 862.5 | 539.5 | 797.3 |
+
+Here native uses capacity 512. Times include the complete scalar forward and
+reverse calculation, excluding compilation, with three blocked warm repeats.
+Peak RSS is the maximum over setup, compilation and execution. Native warm
+RSS peaks are 814.3/805.2 MiB; Diffrax's are 857.6/862.5 MiB. Linux RSS
+high-water marks are reset after compilation and first execution to isolate
+warm peaks; resident JAX, executable and allocator memory remain included.
+Executable buffers are `arguments + outputs + temporaries - aliases`, divided
+by eight: an amortized footprint, not marginal process memory per particle.
+
+The largest native accepted counts are 109 for GC and 154 for Lorentz, so
+capacity 512 accommodates the complete paths. Bounded and trial-limit-sized
+native tapes give exactly matching gradient vectors, counts and values.
+Without the separate storage bound, native peak RSS is 1006.1/1034.6 MiB and
+warm value/gradient execution takes 3623.8/4199.2 ms. Capacity 512 reduces the
+native executable buffers from 191.9/223.0 MiB to 3.74/4.22 MiB without
+changing the forward trial limit or accuracy. The default capacity remains
+`None`; choose an explicit bound for the intended parameter range.
+
+These CPU cases demonstrate a speed and memory advantage with the stated
+configuration, not a universal ranking. In the shared seven-objective graph,
+native compiler buffer estimates are slightly larger than Diffrax's
+(50.66/51.07 MiB versus 50.62/51.03 MiB for GC/Lorentz), so the scalar RSS and
+buffer gains should not be generalized to every objective graph. Neither
+comparison uses particle chunking. Superseded AD development reports have
+been removed; unrelated orbit and collision physics/convergence benchmarks
+remain available above and below.
+
+Reproduce from this checkout's root, choosing new output names:
+
+```bash
+export JAX_PLATFORMS=cpu
+export ESSOS_CPU_DEVICES=1
+export ESSOS_XLA_CACHE=
+python -m examples.benchmarks.benchmark_native_ad --checkpoint-steps 16 --accepted-capacity 2048 --max-steps 4096 --gc-horizon 5e-5 --lorentz-horizon 5e-6 --output examples/benchmarks/results/native_ad_full_population_NEW.json
+python -m examples.benchmarks.benchmark_native_ad_scaling --particle-counts 1 8 --checkpoint-steps 16 --max-steps 1000000 --output examples/benchmarks/results/native_ad_capacity_baseline_NEW.json
+python -m examples.benchmarks.benchmark_native_ad_scaling --particle-counts 1 8 --backends native --checkpoint-steps 16 --max-steps 1000000 --accepted-capacity 512 --reference examples/benchmarks/results/native_ad_capacity_baseline_NEW.json --output examples/benchmarks/results/native_ad_capacity_bounded_NEW.json
+pytest -q tests/test_rk_ad.py tests/test_particle_losses.py tests/test_surface_classifier_ad.py tests/test_rk.py tests/test_rk_rhs.py tests/test_rk_controllers.py tests/test_rk_dense.py tests/test_rk_higher_dense.py tests/test_orbit_error.py
+```
+
+The AD/forward/controller/dense-output CPU regression selection passes
+**245 tests**. Capacity checks cover identical forward results and gradients,
+independent allocation sizes and an explicit reverse-AD overflow error.
+Two-particle, one-iteration Dopri8 particle-only optimization smoke checks
+decrease both particle objectives for GC and Lorentz. Four composite checks
+with active geometry penalties and a 10-by-10 normal-field mesh also reduce
+the weighted total cost. Each coil-penalty gradient agrees with directional
+finite differences. These checks do not establish optimizer convergence.
 
 GC and Lorentz use the same native RK increment loop, separate from adaptive
 retries, events and saving. It stores `k_i = h*f_i` for stage combinations and
@@ -604,7 +889,7 @@ division by `h` is needed. The stage loop and the public derivative-based
 `rk45_step`/`dopri8_step` maps have ordinary forward/reverse JAX derivatives
 in state, time, step size, vector-field parameters and the FSAL cache;
 their values and derivatives are checked against each other, including `h=0`.
-The full adaptive driver still needs the later accepted-step replay adjoint.
+The full driver exposes the opt-in accepted-step reverse rule described above.
 
 At solve setup, native RK separates RHS work that depends only on parameters
 from work that depends on time or the particle state. The parameter work runs
@@ -694,8 +979,8 @@ endpoint saves skip them. Under particle batching, masked particles may share
 the evaluations required by another particle in the same batch. Temporary
 stage/coefficient storage is reused each step; no additional history is kept.
 The pure output map supports forward/reverse AD, including derivatives in
-step size and parameters. This does not implement the adaptive driver's later
-replay adjoint. Non-finite extra evaluations return a failure status without
+step size and parameters. The accepted-step adjoint differentiates the actual
+save interpolant, including these extra stages when used. Non-finite extra evaluations return a failure status without
 retrying the accepted orbit step.
 
 The coefficients in [`essos/rk_dense_high.py`](essos/rk_dense_high.py) are
@@ -794,7 +1079,7 @@ This compares mathematical kernel variants in the same fixed-step scan, with
 identical FSAL reuse and no saving, events or adaptive controller. It checks
 final-state agreement and records warm timings and compilation sizes in JSON.
 The RK map stays separate from acceptance, error scaling and output handling
-so a later AD rule can replay accepted steps without differentiating retries.
+so the accepted-step AD rule can replay numerical maps without differentiating retries.
 
 For paired measurements of the previous and current native time-step map, run
 `python -m examples.benchmarks.benchmark_native_stage_modes --derivatives`.

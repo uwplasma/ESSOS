@@ -54,7 +54,7 @@ def setup():
     return options, field, birth, background, points, keys
 
 
-def reference_wall():
+def reference_wall(*, angular_interpolation="linear"):
     """Same scaled boundary, 8 cm clearance and grid as connection-length example.
 
     This is an explicit reference geometry, not a newly solved coil LCFS or a
@@ -64,7 +64,8 @@ def reference_wall():
     scale = surface.rc[0]
     boundary = SurfaceRZFourier(surface.rc/scale, surface.zs/scale, surface.nfp,
         surface.mpol, surface.ntor, ntheta=64, nphi=64)
-    return LevelsetStoppingCriterion(SurfaceClassifier(boundary, h=.03, padding=.16),
+    return LevelsetStoppingCriterion(SurfaceClassifier(boundary, h=.03, padding=.16,
+        angular_interpolation=angular_interpolation),
         maximum_distance=.08)
 
 

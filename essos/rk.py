@@ -2,8 +2,8 @@
 
 This module has no Diffrax dependency. The driver supports fixed or adaptive
 steps, dense output, scalar boolean/level-set events and bounded work.
-It deliberately has no custom adjoint yet: reverse-mode differentiation of the
-adaptive while loop is a separate implementation phase.
+Accepted-step reverse differentiation is available with ``adjoint="accepted"``.
+Its numerical replay and pullback live separately in :mod:`essos.rk_ad`.
 """
 
 from enum import IntEnum
@@ -58,6 +58,31 @@ class RKSolution(NamedTuple):
     stats: RKStats
     step_ts: jax.Array
     next_dt: jax.Array
+
+
+class _RKReplayTape(NamedTuple):
+    times: jax.Array
+    fractions: jax.Array
+    states: jax.Array
+    derivatives: jax.Array
+    save_start: jax.Array
+    save_end: jax.Array
+    initial_saves: jax.Array
+    count: jax.Array
+    status: jax.Array
+
+
+class _RKCheckpointTape(NamedTuple):
+    """Accepted step sizes and segment starts; no per-step state/save tape."""
+    step_sizes: jax.Array
+    times: jax.Array
+    states: jax.Array
+    derivatives: jax.Array
+    fraction: jax.Array
+    final_time: jax.Array
+    initial_saves: jax.Array
+    count: jax.Array
+    status: jax.Array
 
 
 # Dormand--Prince stages, with Shampine's embedded error estimator (1986).
@@ -276,6 +301,14 @@ def _concrete_check(value, predicate, message):
         raise ValueError(message)
 
 
+def _partition_rhs(rhs, t0, y0, args):
+    """Split solve-invariant setup from time/state-dependent stage arithmetic."""
+    graph = jax.make_jaxpr(lambda t, y: rhs(t, y, args))(t0, y0)
+    setup, stage, _, _ = partial_eval.partial_eval_jaxpr_nounits(
+        graph, [True, True], instantiate=True)
+    return setup, stage
+
+
 def _prepare_rhs(rhs, t0, y0, args):
     """Separate solve-invariant work from the time/state-dependent RHS.
 
@@ -289,9 +322,7 @@ def _prepare_rhs(rhs, t0, y0, args):
     resulting setup/stage graphs execute ordinary JAX primitives, including
     when enclosed by jit, vmap, JVP or VJP.
     """
-    graph = jax.make_jaxpr(lambda t, y: rhs(t, y, args))(t0, y0)
-    setup, stage, _, _ = partial_eval.partial_eval_jaxpr_nounits(
-        graph, [True, True], instantiate=True)
+    setup, stage = _partition_rhs(rhs, t0, y0, args)
     residuals = jax.core.eval_jaxpr(setup.jaxpr, setup.consts)
 
     def evaluate(t, y, unused_args):
@@ -313,7 +344,9 @@ def _first_hit(hits):
 def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                rtol=1e-9, atol=1e-9, event=None, root_find=True,
                max_steps=1_000_000, dtmin=0., dtmax=np.inf, record_steps=False, method="dopri5",
-               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, dense_output="standard"):
+               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, dense_output="standard",
+               adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None, _record_ad=False,
+               _ad_checkpoint_steps=1, _ad_compact=False):
     """Integrate an array state forward in time with bounded adaptive retries.
 
     ``ts`` is an ordered save grid, independent of the integration steps.
@@ -341,10 +374,23 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     ``next_dt`` returns the controller's next step-size proposal. It can seed
     a subsequent solve after a state jump; derivatives must be recomputed.
 
+    ``adjoint="accepted"`` opts into reverse AD of accepted numerical maps.
+    Rejected trials, controller decisions, step times and event fractions are
+    frozen. Initial states, RHS arguments and differentiable RHS closures receive
+    cotangents. Dense-save interpolation remains part of the differentiated map.
+    ``adjoint_checkpoint_steps`` accepted steps share one state/FSAL checkpoint
+    (default 16). Backward replay reconstructs one segment's states and small
+    RK stage vectors. Set 1 to store every accepted state.
+    ``adjoint_max_accepted_steps`` optionally bounds accepted-step tape storage
+    independently of the accepted/rejected trial limit ``max_steps``. None
+    uses max_steps. A full tape does not change the forward solve, but reverse
+    AD raises an explicit capacity error instead of returning a partial gradient.
+    ``adjoint="none"`` preserves the original forward/JVP implementation.
+
     By default memory holds only the save grid and current step. Opt into an
     infinity-padded accepted-time history with ``record_steps=True``; its first
     ``stats.accepted + 1`` entries are valid. This is diagnostic data for future
-    accepted-step replay, not an implemented AD rule.
+    accepted-step inspection; reverse AD uses its own internal state/FSAL tape.
 
     Concrete invalid inputs raise ValueError. Invalid dynamic values under JIT
     return INVALID_INPUT. Non-finite states, derivatives or event values are
@@ -364,8 +410,27 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     their polynomial across all saves in that step. Events retain the standard
     interpolant. A non-finite output evaluation returns NONFINITE without
     retrying or changing the accepted orbit step. These maps support ordinary
-    AD; the adaptive driver still has no reverse-mode replay rule.
+    AD; ``adjoint="accepted"`` also differentiates these save maps in reverse.
     """
+    if adjoint not in ("none", "accepted"):
+        raise ValueError("adjoint must be 'none' or 'accepted'")
+    for value, name in ((adjoint_checkpoint_steps, "adjoint_checkpoint_steps"),
+                        (_ad_checkpoint_steps, "_ad_checkpoint_steps")):
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+    if adjoint_max_accepted_steps is not None and (
+            isinstance(adjoint_max_accepted_steps, (bool, np.bool_)) or
+            not isinstance(adjoint_max_accepted_steps, (int, np.integer)) or adjoint_max_accepted_steps <= 0):
+        raise ValueError("adjoint_max_accepted_steps must be a positive integer or None")
+    if adjoint == "accepted":
+        from .rk_ad import solve_accepted
+        return solve_accepted(rhs, y0, args, t0=t0, t1=t1, dt0=dt0, ts=ts,
+            adaptive=adaptive, rtol=rtol, atol=atol, event=event, root_find=root_find,
+            max_steps=max_steps, dtmin=dtmin, dtmax=dtmax, record_steps=record_steps,
+            method=method, error_norm=error_norm, controller=controller,
+            pcoeff=pcoeff, icoeff=icoeff, dense_output=dense_output,
+            adjoint_checkpoint_steps=adjoint_checkpoint_steps,
+            adjoint_max_accepted_steps=adjoint_max_accepted_steps)
     if method == "dopri5":
         nodes, rows, weights, dense, error_order = _C, _A, _ERROR, _rk45_dense, 5
     elif method == "dopri8":
@@ -451,6 +516,21 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         state["previous_error"] = jnp.ones((), dtype=y0.dtype)
     if record_steps:
         state["history"] = state["history"].at[0].set(t0)
+    if _record_ad:
+        ad_capacity = min(max_steps, adjoint_max_accepted_steps) if (
+            _ad_compact and adjoint_max_accepted_steps is not None) else max_steps
+        checkpoint_count = (ad_capacity + _ad_checkpoint_steps - 1) // _ad_checkpoint_steps
+        state.update(ad_states=jnp.zeros((checkpoint_count, y0.size), y0.dtype),
+            ad_derivatives=jnp.zeros((checkpoint_count, y0.size), y0.dtype))
+        if _ad_compact:
+            state.update(ad_times=jnp.zeros((checkpoint_count,), y0.dtype),
+                ad_steps=jnp.zeros((ad_capacity,), y0.dtype),
+                ad_fractions=jnp.ones((), y0.dtype))
+        else:
+            state.update(ad_times=jnp.zeros((max_steps, 2), y0.dtype),
+                ad_fractions=jnp.zeros((max_steps,), y0.dtype),
+                ad_save_start=jnp.zeros((max_steps,), jnp.int32),
+                ad_save_end=jnp.zeros((max_steps,), jnp.int32))
 
     def save_initial(s):
         if not len(ts):
@@ -462,6 +542,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                               (ts[jnp.minimum(s["index"], len(ts) - 1)] == t0), body, s)
 
     state = save_initial(state)
+    initial_saves = state["index"]
 
     def advance(s):
         t, y = s["t"], s["y"]
@@ -589,14 +670,45 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                 return dict(s, ys=s["ys"].at[i].set(value), saved_ts=s["saved_ts"].at[i].set(ts[i]), index=i + 1)
             updated = lax.while_loop(lambda s: accept & output_finite & (s["index"] < len(ts)) &
                                      (ts[jnp.minimum(s["index"], len(ts) - 1)] <= stop_t), save, updated)
+        if _record_ad:
+            def record(updated):
+                i = s["accepted"]
+                def checkpoint(updated):
+                    slot = i // _ad_checkpoint_steps
+                    if _ad_compact:
+                        updated = dict(updated, ad_times=updated["ad_times"].at[slot].set(t))
+                    return dict(updated,
+                        ad_states=updated["ad_states"].at[slot].set(y),
+                        ad_derivatives=updated["ad_derivatives"].at[slot].set(s["f"]))
+                updated = lax.cond(i % _ad_checkpoint_steps == 0, checkpoint,
+                                   lambda updated: updated, updated)
+                if _ad_compact:
+                    return dict(updated, ad_steps=updated["ad_steps"].at[i].set(h),
+                                ad_fractions=fraction)
+                return dict(updated,
+                    ad_times=updated["ad_times"].at[i].set(jnp.stack([t, h])),
+                    ad_fractions=updated["ad_fractions"].at[i].set(fraction),
+                    ad_save_start=updated["ad_save_start"].at[i].set(s["index"]),
+                    ad_save_end=updated["ad_save_end"].at[i].set(updated["index"]))
+            can_record = accept & (s["accepted"] < ad_capacity) if _ad_compact else accept
+            updated = lax.cond(can_record, record, lambda updated: updated, updated)
         return updated
 
     state = lax.while_loop(lambda s: (s["t"] < t1) & (s["status"] == RKStatus.SUCCESS) &
                            (s["steps"] < max_steps), advance, state)
     status = jnp.where((state["t"] < t1) & (state["status"] == RKStatus.SUCCESS), RKStatus.MAX_STEPS, state["status"])
-    return RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
+    solution = RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
                       tree_util.tree_unflatten(structure, state["hits"]),
                       RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"], state["h"])
+    if _record_ad:
+        if _ad_compact:
+            return solution, _RKCheckpointTape(state["ad_steps"], state["ad_times"],
+                state["ad_states"], state["ad_derivatives"], state["ad_fractions"],
+                state["t"], initial_saves, state["accepted"], status)
+        return solution, _RKReplayTape(state["ad_times"], state["ad_fractions"], state["ad_states"],
+            state["ad_derivatives"], state["ad_save_start"], state["ad_save_end"],
+            initial_saves, state["accepted"], status)
+    return solution
 
 
 def solve_rk45(rhs, y0, args=None, **kwargs):
