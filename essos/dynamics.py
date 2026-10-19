@@ -17,6 +17,7 @@ from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
 from time import perf_counter
+from typing import NamedTuple
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
@@ -27,6 +28,8 @@ from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
 from essos.plot import fix_matplotlib_3d
+from essos.rk import solve_rk, RKStatus
+from essos.orbit_error import OrbitErrorNorm
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu_D_ab
 
 
@@ -891,13 +894,41 @@ def _wall_function(field, wall):
     return getattr(wall, "evaluate_xyz", wall)
 
 
+class _NativeOrbitSolution(NamedTuple):
+    ys: object
+    ts: object
+    event_mask: object
+    result: object
+
+
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
-                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
+                 rtol=None, atol=None, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
                  solver=None, stopping_criteria=None, progress=True, devices=None,
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
-                 particle_batch_size=None):
+                 particle_batch_size=None, integrator="diffrax", native_error_control="physics",
+                 orbit_length_scale=1., orbit_speed_scale=None,
+                 native_controller="i", native_pcoeff=.4, native_icoeff=.3, native_dense_output="standard"):
+
+        if integrator not in ("diffrax", "essos_rk45", "essos_dopri8"):
+            raise ValueError("integrator must be 'diffrax', 'essos_rk45' or 'essos_dopri8'")
+        if integrator != "diffrax":
+            if model not in ('GuidingCenter', 'GuidingCenterAdaptative', 'FullOrbit', 'FullOrbitAdaptative'):
+                raise ValueError("native integrators currently support collisionless guiding-center and full-orbit models only")
+            if solver is not None:
+                raise ValueError("solver selects a Diffrax solver; omit it when using a native integrator")
+        self.integrator = integrator
+        if native_error_control not in ("physics", "standard"):
+            raise ValueError("native_error_control must be 'physics' or 'standard'")
+        self.native_error_control = native_error_control
+        if native_controller not in ("i", "pi"):
+            raise ValueError("native_controller must be 'i' or 'pi'")
+        self.native_controller, self.native_pcoeff, self.native_icoeff = native_controller, native_pcoeff, native_icoeff
+        if native_dense_output not in ("standard", "optimized", "higher_order"):
+            raise ValueError("native_dense_output must be 'standard', 'optimized' or 'higher_order'")
+        self.native_dense_output = native_dense_output
+        self.orbit_length_scale, self.orbit_speed_scale = orbit_length_scale, orbit_speed_scale
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")
@@ -933,8 +964,9 @@ class Tracing():
         self.times_to_trace = times_to_trace
         self.maxtime = maxtime
         self.timestep = timestep
-        self.rtol = rtol
-        self.atol = atol
+        default_tolerance = 1e-7 if integrator == "diffrax" else 1e-9
+        self.rtol = default_tolerance if rtol is None else rtol
+        self.atol = default_tolerance if atol is None else atol
         self._trajectories = trajectories_input
         self.particles = particles
         self.species=species
@@ -1206,9 +1238,11 @@ class Tracing():
         return tree_util.tree_map(lambda *x: jnp.asarray(np.concatenate(x)), *results)
 
     def _terms(self, key, flag=False):
-        """Diffrax terms, solver and step-size controller of self.model (with _with_failure_flag if ``flag``)."""
+        """Terms and stepping configuration, with a failure flag for VMEC segments."""
         flagged = (lambda f, drift=True: _with_failure_flag(f, drift)) if flag else (lambda f, drift=True: f)
         dt0, model = self.timestep, self.model
+        if self.integrator != "diffrax":
+            return flagged(self.ODE_term.vector_field), None, model in _ADAPTIVE_MODELS
         if model in _SDE_MODELS:
             drift, diffusion, solver, dim = _SDE_MODELS[model]
             # With flag (segments), a vmapped solve of an orbit that starts at maxtime evaluates the path
@@ -1232,8 +1266,42 @@ class Tracing():
                                        dtmin=dt0 if model == 'FullOrbitCollisions' else None)
         return terms, solver, controller
 
-    def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False):
-        """diffeqsolve from t0 to maxtime, saving at self.times (clipped to t0) and at the end."""
+    def _native_error_norm(self, *, exterior=False, flag=False):
+        """Physical blocks only; keep coordinates/diagnostics out of the RK map."""
+        if self.native_error_control == "standard":
+            return None
+        position_map = None
+        if self._axis_regular and not exterior:
+            def position_map(y):
+                state = y[:-1] if flag else y
+                return self.field.to_xyz(_from_axis_regular(state)[:3])
+        return OrbitErrorNorm(
+            rtol=self.rtol, atol=self.atol, length_scale=self.orbit_length_scale,
+            speed_scale=self.particles.total_speed if self.orbit_speed_scale is None else self.orbit_speed_scale,
+            velocity_components=3 if self.model.startswith("FullOrbit") else 1,
+            position_map=position_map)
+
+    def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False, *, exterior=False, flag=False):
+        """Integrate to maxtime, saving at self.times (clipped to t0) and at the end."""
+        if self.integrator != "diffrax":
+            solution = solve_rk(
+                terms, y0, args, t0=t0, t1=self.maxtime, dt0=self.timestep,
+                ts=jnp.clip(self.times, t0, self.maxtime), adaptive=controller,
+                rtol=self.rtol, atol=self.atol, event=event.cond_fn,
+                root_find=event.root_finder is not None, max_steps=self.max_steps,
+                method="dopri8" if self.integrator == "essos_dopri8" else "dopri5",
+                error_norm=self._native_error_norm(exterior=exterior, flag=flag),
+                controller=self.native_controller, pcoeff=self.native_pcoeff, icoeff=self.native_icoeff,
+                dense_output=self.native_dense_output)
+            ys = solution.ys
+            if throw:
+                import equinox as eqx
+                ys = eqx.error_if(ys, solution.status > RKStatus.EVENT, "native RK solve failed; inspect solve_rk status/stats")
+            result = diffrax.RESULTS.where(solution.status == RKStatus.SUCCESS, diffrax.RESULTS.successful,
+                       diffrax.RESULTS.where(solution.status == RKStatus.EVENT, diffrax.RESULTS.event_occurred,
+                                             diffrax.RESULTS.max_steps_reached))
+            return _NativeOrbitSolution((ys, solution.y[None]), (solution.ts, solution.t[None]),
+                                        solution.event_mask, result)
         import warnings
         warnings.simplefilter("ignore", category=FutureWarning)  # see https://github.com/patrick-kidger/diffrax/issues/445
         return diffeqsolve(terms, solver, t0=t0, t1=self.maxtime, dt0=self.timestep, y0=y0, args=args,
@@ -1261,8 +1329,10 @@ class Tracing():
                         root_finder=_EVENT_ROOT_FINDER))
         if ext is not None:
             wall = self.wall if self.wall is not None else (lambda x: jnp.ones(()))
-            outside = (ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else
-                       diffrax.Dopri8(), PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
+            exterior_terms = ((_with_failure_flag(GuidingCenterMu), None, True) if self.integrator != "diffrax" else
+                              (ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else
+                               diffrax.Dopri8(), PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol)))
+            outside = (*exterior_terms,
                        (ext, self.particles, Electric_field_zero()),
                        Event((lambda t, y, args, **kwargs: wall(y[:3]),
                               lambda t, y, args, **kwargs: self.field.boundary_distance(y[:3]) - self.reentry_depth,
@@ -1270,7 +1340,8 @@ class Tracing():
 
         def segment(o, run, spec, y, code, to_flux=lambda y: y):
             """Solve one segment of the orbits in ``run`` and record its saves."""
-            solution = self._solve(*spec[:3], jnp.where(run, o["t"], T), jnp.append(y, 0.0), *spec[3:])
+            solution = self._solve(*spec[:3], jnp.where(run, o["t"], T), jnp.append(y, 0.0), *spec[3:],
+                                   exterior=code != 0, flag=True)
             saves, end = vmap(to_flux)(solution.ys[0][:, :-1]), to_flux(solution.ys[1][-1, :-1])
             failed = run & (solution.event_mask[-1] | ~((solution.result == diffrax.RESULTS.successful)
                             | (solution.result == diffrax.RESULTS.event_occurred)
