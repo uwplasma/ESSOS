@@ -153,6 +153,7 @@ class custom_loss(base_loss):
         
         new_fun = lambda *args, **kwargs: other * self.fun(*args, **kwargs)
         out_loss = custom_loss(new_fun, *self.args_names, **self.kwargs)
+        out_loss.dependencies = self.dependencies
         return out_loss
 
 
