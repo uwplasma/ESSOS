@@ -12,7 +12,7 @@ from essos.losses import custom_loss, base_loss
 import essos.augmented_lagrangian as alm
 from functools import partial
 #  In this exmple, `scipy.optimize.least_squares` is used for the normal optimization, but any other optimizer, e.g. from
-#  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
+#  `scipy.optimize.minimize`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
 
 # Optimization parameters
@@ -98,7 +98,7 @@ omega=1./penalty
 eta=1./penalty**0.1
 sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
 model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers
-#Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
+#Since we are using L-BFGS, model_mu will be updated with tolerances so we do not need to difinte the model
 model_mu='Tolerance'
 
 
@@ -134,7 +134,7 @@ C_Total_constraint.dependencies = {"field": init_field}
 
 
 #If loss=cost_function(x) is not prescribed, f(x)=0 is considered, uncomment second line to use B dot N as a loss and not a constraint
-ALM=alm.ALM_model_jaxopt_lbfgsb(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+ALM=alm.ALM_model_lbfgs(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
 #Initializing lagrange multipliers
 lagrange_params=C_Total_constraint.init(init_field.dofs)
