@@ -2,12 +2,12 @@ name: Build and Test
 
 on:
   push:
-    branches:
-    - main
-    - en/**
-    - fix/**
-    - eg/**
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -24,19 +24,25 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ESSOS
+        cache: pip
+        cache-dependency-path: |
+          pyproject.toml
+          requirements.txt
+    - name: Install ESSOS and test tools
       run: |
         python -m pip install --upgrade pip
-        # Exercise the optional residence solver in both supported Python lanes.
-        pip install ".[ash]"
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install flake8 pytest coverage pytest-cov
+        pip install ".[ash]" flake8 pytest pytest-cov pytest-xdist
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        echo "JAX_VERSION=$(python -c 'import jax; print(jax.__version__)')" >> $GITHUB_ENV
+    - name: Cache JAX compilations
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/essos/xla
+        key: xla-${{ runner.os }}-py${{ matrix.python-version }}-jax${{ env.JAX_VERSION }}-${{ github.sha }}
+        restore-keys: xla-${{ runner.os }}-py${{ matrix.python-version }}-jax${{ env.JAX_VERSION }}-
     - name: Lint with flake8
       run: |
         # stop the build if there are Python syntax errors or undefined names
@@ -44,9 +50,13 @@ jobs:
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=examples_old
 
+    - name: Run tests
+      if: matrix.python-version != '3.12'
+      run: pytest -n auto
+
     - name: Run tests with coverage
-      run: |
-        pytest --cov-branch --cov-report=xml --cov=essos
+      if: matrix.python-version == '3.12'
+      run: pytest -n auto --cov-branch --cov-report=xml --cov=essos
 
     - name: Upload coverage reports to Codecov
       if: matrix.python-version == '3.12'

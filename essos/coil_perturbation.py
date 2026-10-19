@@ -73,13 +73,13 @@ class GaussianSampler():
 
     .. math::
 
-        \kappa(d) = \sigma^2 \exp(-d^2/l^2)
+        \kappa(d) = \sigma^2 \exp(-d^2/(2 l^2))
 
     and then consider a Gaussian process with covariance
 
     .. math::
 
-        Cov(X(s), X(t)) = \sum_{i=-\infty}^\infty \sigma^2 \exp(-(s-t+i)^2/l^2)
+        Cov(X(s), X(t)) = \sum_{i=-\infty}^\infty \sigma^2 \exp(-(s-t+i)^2/(2 l^2))
 
     the sum is used to make the kernel periodic and in practice the infinite sum is truncated.
 
@@ -140,7 +140,7 @@ class GaussianSampler():
         cov_mat= jax.vmap(jax.vmap(self.kernel_periodicity,in_axes=(None,0)),in_axes=(0,None))(self.points, self.points)
         dcov_mat_dx= jax.vmap(jax.vmap(self.d_kernel_periodicity_dx,in_axes=(None,0)),in_axes=(0,None))(self.points, self.points)
         dcov_mat_dxdx= jax.vmap(jax.vmap(self.d_kernel_periodicity_dxdx,in_axes=(None,0)),in_axes=(0,None))(self.points, self.points)
-        final_mat = jnp.concatenate((jnp.concatenate((cov_mat, dcov_mat_dx),axis=0),jnp.concatenate((-dcov_mat_dx,dcov_mat_dxdx),axis=0 )), axis=1)
+        final_mat = jnp.concatenate((jnp.concatenate((cov_mat, dcov_mat_dx),axis=0),jnp.concatenate((-dcov_mat_dx,-dcov_mat_dxdx),axis=0 )), axis=1)
         return matrix_sqrt_via_spectral(final_mat)
 
     @partial(jit, static_argnames=['self'])
@@ -151,8 +151,8 @@ class GaussianSampler():
         dcov_mat_dxdxdx= jax.vmap(jax.vmap(self.d_kernel_periodicity_dxdxdx,in_axes=(None,0)),in_axes=(0,None))(self.points, self.points) 
         dcov_mat_dxdxdxdx= jax.vmap(jax.vmap(self.d_kernel_periodicity_dxdxdxdx,in_axes=(None,0)),in_axes=(0,None))(self.points, self.points)                
         final_mat= jnp.concatenate((jnp.concatenate((cov_mat, dcov_mat_dx,dcov_mat_dxdx),axis=0),
-            jnp.concatenate((-dcov_mat_dx,dcov_mat_dxdx,-dcov_mat_dxdxdx),axis=0),
-            jnp.concatenate((dcov_mat_dxdx,-dcov_mat_dxdxdx,dcov_mat_dxdxdxdx),axis=0 )), axis=1)  
+            jnp.concatenate((-dcov_mat_dx,-dcov_mat_dxdx,-dcov_mat_dxdxdx),axis=0),
+            jnp.concatenate((dcov_mat_dxdx,dcov_mat_dxdxdx,dcov_mat_dxdxdxdx),axis=0 )), axis=1)  
         return matrix_sqrt_via_spectral(final_mat)
 
     @partial(jit, static_argnames=['self'])
@@ -240,11 +240,12 @@ def perturb_curves(curves, sampler:GaussianSampler, key=None, perturbation_type=
     Returns:
         A new perturbed object of the same type as the input.
     """
+    key = jax.random.PRNGKey(0) if key is None else key
     if perturbation_type == "systematic":
         if isinstance(curves, DiscretizedCoils):
             perturbation = _draw_curve_perturbation(sampler, key, curves.n_base_curves)
             return DiscretizedCoils(
-                curves.dofs_gamma + perturbation,
+                curves._gamma + perturbation,
                 currents=curves.dofs_currents_raw,
                 nfp=curves.nfp,
                 stellsym=curves.stellsym,
