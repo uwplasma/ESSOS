@@ -13,6 +13,13 @@ from pandas.plotting import parallel_coordinates
 import pandas as pd
 
 
+def _require_plotly():
+    try:
+        import plotly  # noqa: F401  (optuna.visualization needs it too)
+    except ImportError as err:
+        raise ImportError("This plot needs plotly: pip install 'essos[multiobjective]'") from err
+
+
 class MultiObjectiveOptimizer:
     def __init__(self, loss_functions, vmec, coils_init=None, function_inputs=None, opt_config=None):
         self.loss_functions = loss_functions  
@@ -65,7 +72,8 @@ class MultiObjectiveOptimizer:
         dofs_curves = jnp.reshape(x[:dofs_len], self.initial_coils.dofs_curves.shape)
         dofs_currents = x[dofs_len:]
         curves = Curves(dofs_curves, self.num_points, self.initial_coils.nfp, self.initial_coils.stellsym)
-        coils = Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale)
+        coils = Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale,
+                      currents_scale=self.initial_coils.currents_scale)
         field = BiotSavart(coils)
         inputs = {
             "field": field,
@@ -132,7 +140,8 @@ class MultiObjectiveOptimizer:
         dofs_curves = jnp.reshape(x[:dofs_len], self.initial_coils.dofs_curves.shape)
         dofs_currents = x[dofs_len:]
         curves = Curves(dofs_curves, self.num_points, self.initial_coils.nfp, self.initial_coils.stellsym)
-        return Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale)
+        return Coils(curves=curves, currents=dofs_currents * self.initial_coils.currents_scale,
+                     currents_scale=self.initial_coils.currents_scale)
 
     def run(self, seed: int = 42):
         sampler = optuna.samplers.NSGAIISampler(seed=seed)
@@ -304,6 +313,7 @@ class MultiObjectiveOptimizer:
         save: str (exact path) or True (auto-save in ./output/) or None (no save).
                 For True/str, a separate file per objective is saved.
         """
+        _require_plotly()
         import numpy as np
         import plotly.graph_objects as go
         import optuna.visualization as vis
@@ -396,6 +406,7 @@ class MultiObjectiveOptimizer:
         ncols: Number of columns in the grid layout.
         save: str (exact path) or True (auto-save in ./output/) or None (no save).
         """
+        _require_plotly()
         import numpy as np
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
@@ -471,6 +482,7 @@ class MultiObjectiveOptimizer:
         fig.show()
     
     def plot_param_importances(self, save=None, ncols=2):
+        _require_plotly()
         import optuna.visualization as vis
         from plotly.subplots import make_subplots
         import plotly.graph_objects as go
