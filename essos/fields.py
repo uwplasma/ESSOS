@@ -119,14 +119,36 @@ class BiotSavart(MagneticField):
     def gc_quantities(self, points):
         """Guiding-center field quantities from one pass over the coils.
 
-        The separate methods each rebuild B and its Jacobian (``kappa`` even
-        recomputes ``curl_b``). Here a single forward-mode Jacobian yields B
-        and dB/dX together, and in Cartesian coordinates (sqrtg = 1)
+        The spatial Jacobian follows directly from the Biot--Savart kernel;
+        its expression remains ordinary differentiable JAX arithmetic.
+        In Cartesian coordinates (sqrtg = 1)
         grad|B| = (dB/dX)^T b, curl b = curl B/|B| + B x grad|B|/|B|^2 and
         kappa = -B x curl b / |B| follow algebraically.
         """
-        jacobian, field = jacfwd(lambda x: (self.B(x), self.B(x)), has_aux=True)(jnp.asarray(points))
-        return _gc_from_jacobian(field, jacobian)
+        return _gc_from_jacobian(*self.B_and_dB_by_dX(points))
+
+    @jit
+    def B_and_dB_by_dX(self, points):
+        """B and its spatial Jacobian, differentiable in position and coils.
+
+        For r = x - gamma and tangent l, differentiate l x r / |r|^3:
+        [l]_cross / |r|^3 - 3 (l x r) r^T / |r|^5.
+        The field summation uses the same order as B(). Higher derivatives
+        and coil-shape/current sensitivities use JAX's ordinary AD rules.
+        """
+        r = (jnp.array(points) - self.coils.gamma).T
+        tangent = self.coils.gamma_dash.T
+        radius = jnp.linalg.norm(r, axis=0)
+        contribution = jnp.cross(tangent, r, axisa=0, axisb=0, axisc=0) / radius**3
+        currents = self.coils.currents * 1e-7
+        field = jnp.mean(jnp.einsum("i,bai", currents, contribution, optimize="greedy"), axis=0)
+        tx, ty, tz = jnp.mean(jnp.einsum("i,bai", currents, tangent / radius**3, optimize="greedy"), axis=0)
+        cross_matrix = jnp.array([[0., -tz, ty], [tz, 0., -tx], [-ty, tx, 0.]])
+        # Average after contraction, retaining geometry precision when input
+        # currents have a lower dtype than the positions/coil geometry.
+        jacobian = cross_matrix - (3 / r.shape[1]) * jnp.einsum("iac,jac,c->ij", contribution,
+                                                              r / radius**2, currents, optimize="greedy")
+        return field, jacobian
 
     @jit
     def B(self, points):
