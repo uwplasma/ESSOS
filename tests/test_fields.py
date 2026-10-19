@@ -99,6 +99,17 @@ def test_vmec_from_arrays_matches_wout_file():
     assert jnp.array_equal(vmap(rebuilt.AbsB)(points), vmap(vmec.AbsB)(points))
     assert jnp.array_equal(rebuilt.surface.gamma, vmec.surface.gamma)
 
+def test_vmec_from_an_in_memory_wout_matches_the_file():
+    from types import SimpleNamespace
+    vmec = Vmec(WOUT_FILE)
+    wout = SimpleNamespace(nfp=vmec.nfp, ns=vmec.ns, lasym=False, rmns=jnp.ones(1),
+                           **{name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS})
+    memory = Vmec(wout)
+    assert memory.wout_filename is None and memory.rmns is None
+    point = jnp.array([0.5, 0.3, 0.2])
+    np.testing.assert_allclose(memory.B_contravariant(point), vmec.B_contravariant(point), rtol=1e-14)
+
+
 def test_vmec_from_arrays_is_differentiable_in_the_coefficients():
     vmec = Vmec(WOUT_FILE)
     arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
@@ -269,7 +280,7 @@ def test_external_field_wraps_batched_sources():
     x = jnp.array([1.1, 0.2, 0.05])
     for source in (batched, Batched(), Cylindrical()):
         field = ExternalField(source)
-        assert jnp.allclose(field.B(x), coils.B(x), rtol=1e-12)
+        assert jnp.allclose(field.B(x), coils.B(x), rtol=1e-12) and jnp.array_equal(field.to_xyz(x), x)
         assert jnp.allclose(field.dAbsB_by_dX(x), jax.grad(coils.AbsB)(x), rtol=1e-9)
         assert jnp.allclose(field.curl_b(x), coils.curl_b(x), rtol=1e-8, atol=1e-12)
         assert jnp.allclose(field.kappa(x), coils.kappa(x), rtol=1e-8, atol=1e-12)
@@ -290,6 +301,123 @@ def test_fused_guiding_center_quantities_match_the_separate_methods():
     generic = jax.vmap(lambda p: MagneticField.gc_quantities(field, p))(points)
     for a, b in zip(fused, generic):
         np.testing.assert_allclose(np.broadcast_to(a, np.shape(b)), b, rtol=1e-9, atol=1e-12)
+
+
+def _circular_loop(radius=1.3, current=2.5e5, n_segments=64):
+    """One counterclockwise circular filament in the xy plane."""
+    dofs = jnp.zeros((1, 3, 3))
+    dofs = dofs.at[0, 0, 2].set(radius)  # x = R cos(theta)
+    dofs = dofs.at[0, 1, 1].set(radius)  # y = R sin(theta)
+    return Coils(
+        Curves(dofs, n_segments=n_segments, nfp=1, stellsym=False),
+        jnp.array([current]),
+    )
+
+
+def _axis_field_derivatives(radius, current, z):
+    """Bz and its first three z derivatives for an ideal circular loop."""
+    # mu_0 / 2 in SI units; this is independent of ESSOS's quadrature kernel.
+    coefficient = 2.0 * jnp.pi * 1.0e-7 * current * radius**2
+    q = radius**2 + z**2
+    field = coefficient * q**(-1.5)
+    first = -3.0 * coefficient * z * q**(-2.5)
+    second = -3.0 * coefficient * (radius**2 - 4.0 * z**2) * q**(-3.5)
+    third = 15.0 * coefficient * z * (3.0 * radius**2 - 4.0 * z**2) * q**(-4.5)
+    return field, first, second, third
+
+
+def _axis_cartesian_tensors(radius, current, z):
+    """Full Cartesian B derivative tensors through third order on the axis.
+
+    The entries follow from the source-free axisymmetric expansion
+
+      Bz = F - (x**2 + y**2) F'' / 4 + ...
+      (Bx, By) = -(x, y) F' / 2
+                 + (x, y) (x**2 + y**2) F''' / 16 + ... .
+    """
+    field, first, second, third = _axis_field_derivatives(radius, current, z)
+    tensors = [jnp.array([0.0, 0.0, field])]
+
+    d1 = jnp.zeros((3, 3))
+    d1 = d1.at[0, 0].set(-first / 2).at[1, 1].set(-first / 2)
+    d1 = d1.at[2, 2].set(first)
+    tensors.append(d1)
+
+    d2 = jnp.zeros((3, 3, 3))
+    for output, radial in ((0, 0), (1, 1)):
+        d2 = d2.at[output, radial, 2].set(-second / 2)
+        d2 = d2.at[output, 2, radial].set(-second / 2)
+    d2 = d2.at[2, 0, 0].set(-second / 2)
+    d2 = d2.at[2, 1, 1].set(-second / 2)
+    d2 = d2.at[2, 2, 2].set(second)
+    tensors.append(d2)
+
+    d3 = jnp.zeros((3, 3, 3, 3))
+    for output, radial, transverse in ((0, 0, 1), (1, 1, 0)):
+        for indices in ((radial, 2, 2), (2, radial, 2), (2, 2, radial)):
+            d3 = d3.at[(output,) + indices].set(-third / 2)
+        d3 = d3.at[output, radial, radial, radial].set(3 * third / 8)
+        for indices in ((radial, transverse, transverse),
+                        (transverse, radial, transverse),
+                        (transverse, transverse, radial)):
+            d3 = d3.at[(output,) + indices].set(third / 8)
+    d3 = d3.at[2, 2, 2, 2].set(third)
+    for radial in (0, 1):
+        for indices in ((radial, radial, 2), (radial, 2, radial),
+                        (2, radial, radial)):
+            d3 = d3.at[(2,) + indices].set(-third / 2)
+    tensors.append(d3)
+    return tensors
+
+
+def test_biot_savart_circular_loop_axis_derivative_tensors():
+    radius, current, z = 1.3, 2.5e5, 0.4
+    field = BiotSavart(_circular_loop(radius, current))
+    point = jnp.array([0.0, 0.0, z])
+
+    actual = [field.B(point)]
+    derivative = field.B
+    for _ in range(3):
+        derivative = jax.jacfwd(derivative)
+        actual.append(derivative(point))
+
+    expected = _axis_cartesian_tensors(radius, current, z)
+    for order, (result, reference) in enumerate(zip(actual, expected)):
+        assert result.shape == (3,) * (order + 1)
+        atol = 2e-12 * jnp.max(jnp.abs(reference))
+        assert jnp.allclose(result, reference, rtol=2e-11, atol=atol), order
+
+
+def test_biot_savart_circular_loop_current_and_radius_sensitivities():
+    radius, current, z = 1.3, 2.5e5, 0.4
+    coils = _circular_loop(radius, current)
+    point = jnp.array([0.0, 0.0, z])
+
+    def field_from_dofs(dofs):
+        return BiotSavart(coils.with_dofs(dofs)).B(point)
+
+    # The public current DOF is normalized; this tangent represents +1 ampere.
+    current_index = coils.dof_names.index("coil[0].current")
+    current_direction = jnp.zeros_like(coils.dofs).at[current_index].set(
+        1.0 / coils.currents_scale)
+    radius_direction = jnp.zeros_like(coils.dofs)
+    for name in ("coil[0].xc(1)", "coil[0].ys(1)"):
+        radius_direction = radius_direction.at[coils.dof_names.index(name)].set(1.0)
+    _, current_tangent = jax.jvp(field_from_dofs, (coils.dofs,), (current_direction,))
+    _, radius_tangent = jax.jvp(field_from_dofs, (coils.dofs,), (radius_direction,))
+
+    axis_field = _axis_field_derivatives(radius, current, z)[0]
+    expected_current = jnp.array([0.0, 0.0, axis_field / current])
+    q = radius**2 + z**2
+    expected_radius_z = (2.0 * jnp.pi * 1.0e-7 * current * radius
+                         * (2.0 * z**2 - radius**2) * q**(-2.5))
+    expected_radius = jnp.array([0.0, 0.0, expected_radius_z])
+    current_atol = 2e-12 * jnp.max(jnp.abs(expected_current))
+    radius_atol = 2e-12 * jnp.max(jnp.abs(expected_radius))
+    assert jnp.allclose(
+        current_tangent, expected_current, rtol=2e-11, atol=current_atol)
+    assert jnp.allclose(
+        radius_tangent, expected_radius, rtol=2e-11, atol=radius_atol)
 
 
 def _asymmetric_vmec_arrays(phase=0.0, ntor=0):
@@ -394,6 +522,7 @@ def test_asymmetric_surface_geometry_dofs_and_pytree():
         surface.dofs = dofs[:-1]
 
 
+@pytest.mark.filterwarnings("ignore:Setting the shape:DeprecationWarning")  # netCDF4 writer, NumPy 2.5
 def test_asymmetric_vmec_wout_and_surface_loading(tmp_path, monkeypatch):
     from netCDF4 import Dataset
     from essos.fields import VMEC_WOUT_PARTNERS
@@ -562,3 +691,14 @@ def test_vmec_partner_cutoff_is_phase_invariant():
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0, 1])
     arrays['bmns'] = jnp.zeros_like(arrays['bmns'])
     np.testing.assert_array_equal(Vmec.from_arrays(**arrays, mode_tolerance=.01).xm_nyq, [0])
+
+
+def test_half_grid_interpolation_keeps_its_slope_up_to_the_lcfs():
+    """Issue #111: the half grid ends at s = 1 - ds/2; beyond it the scaled table must not freeze."""
+    from essos.fields import _radial_interp
+    grid = (jnp.arange(100) + 0.5) / 100
+    table = jnp.concatenate([jnp.zeros(1), 1 + grid])[:, None]   # the linear field 1 + s
+    def f(s):
+        return _radial_interp(s, grid, table, jnp.array([0]), half_grid=True)[0]
+    for s in (0.994, 0.996, 0.999, 1.0):
+        assert jnp.isclose(f(s), 1 + s, rtol=1e-12) and jnp.isclose(jax.grad(f)(s), 1.0, rtol=1e-9)
