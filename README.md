@@ -213,6 +213,8 @@ collisions. `method="rk4"` (default), `"dopri5"` or `"dopri8"` take fixed
 steps; `"adaptive"` (Dopri5) and `"adaptive8"` (Dopri8) control each
 particle's step to `tolerance`. This tracer provides forward diagnostics.
 
+Install the transform extra with `pip install 'essos[booz]'`.
+
 ```python
 import numpy as np
 from netCDF4 import Dataset
