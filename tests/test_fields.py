@@ -767,3 +767,14 @@ def test_half_grid_interpolation_keeps_its_slope_up_to_the_lcfs():
         return _radial_interp(s, grid, table, jnp.array([0]), half_grid=True)[0]
     for s in (0.994, 0.996, 0.999, 1.0):
         assert jnp.isclose(f(s), 1 + s, rtol=1e-12) and jnp.isclose(jax.grad(f)(s), 1.0, rtol=1e-9)
+
+
+def test_surface_toroidal_flux_uses_filament_potential():
+    from essos.fields import section_flux
+    from essos.surfaces import surfacerzfourier_from_boundary, toroidal_flux
+    dofs = jnp.zeros((1, 3, 3)).at[0, 0, 2].set(2.0).at[0, 2, 1].set(2.0)
+    field = BiotSavart(Coils(Curves(dofs, n_segments=128, stellsym=False), jnp.array([1.0e5])))
+    surface = surfacerzfourier_from_boundary([[0.8, 0.15]], [[0.0, 0.15]], 1, ntheta=64, nphi=4)
+    gamma = surface.gamma[0]
+    section = jnp.stack([jnp.hypot(gamma[:, 0], gamma[:, 1]), gamma[:, 2]], -1)
+    np.testing.assert_allclose(toroidal_flux(surface, field), -section_flux(field, section), rtol=5e-3)
