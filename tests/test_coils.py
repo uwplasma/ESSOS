@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import jax
 from essos.coils import Coils, Curves
@@ -119,6 +120,40 @@ def test_curves_pytree_preserves_scaling_metadata():
     assert curves_copy.scaling_factor == curves.scaling_factor
     assert curves_copy.scale_fixed == curves.scale_fixed
 
+def _fake_simsopt(monkeypatch):
+    import sys
+    import types
+    import numpy as np
+
+    class CurveXYZFourier:
+        def __init__(self, n_segments, order):
+            self.x = np.zeros(3 * (2 * order + 1))
+
+    geo = types.SimpleNamespace(CurveXYZFourier=CurveXYZFourier)
+    field = types.SimpleNamespace(
+        Current=lambda value: value,
+        coils_via_symmetries=lambda curves, currents, nfp, stellsym: [
+            types.SimpleNamespace(curve=c, current=i) for c, i in zip(curves, currents)])
+    monkeypatch.setitem(sys.modules, "simsopt", types.ModuleType("simsopt"))
+    monkeypatch.setitem(sys.modules, "simsopt.geo", geo)
+    monkeypatch.setitem(sys.modules, "simsopt.field", field)
+
+
+def test_scaled_curves_convert_with_physical_coefficients(monkeypatch):
+    from essos.coils import DiscretizedCoils
+    _fake_simsopt(monkeypatch)
+    dofs = jnp.zeros((1, 3, 5)).at[0, 0, 2].set(2.0).at[0, 1, 1].set(2.0).at[0, 2, 3].set(0.3)
+    curves = Curves(dofs, 32, 1, False, scaling_factor=0.3, scale_fixed=7.0)
+    coils = Coils(curves, jnp.array([2.0e5]), currents_scale=1.0e5)
+    assert not jnp.allclose(curves.dofs, dofs)  # public dofs are scaled
+
+    assert jnp.allclose(curves.to_simsopt()[0].x, dofs[0].ravel())
+    simsopt_coil = coils.to_simsopt()[0]
+    assert jnp.allclose(simsopt_coil.curve.x, dofs[0].ravel())
+    assert jnp.isclose(simsopt_coil.current, 2.0e5)
+    assert jnp.allclose(DiscretizedCoils.from_Coils(coils).gamma, coils.gamma, atol=1e-12)
+
+
 def test_curves_str_repr():
     dofs = jnp.zeros((2, 3, 5))
     curves = Curves(dofs)
@@ -233,3 +268,27 @@ def test_coil_tracer_unflatten_preserves_physical_scales():
     assert jnp.allclose(value, jnp.sum(curves._dofs * weights) + 45.)
     assert jnp.allclose(geometry_grad, weights / curves.scaling[None, None, :])
     assert jnp.allclose(current_grad, jnp.array([18., 36.]))
+
+
+def test_coils_indexing_addition_and_exclusion():
+    from essos.coils import CreateEquallySpacedCurves
+    coils = Coils(CreateEquallySpacedCurves(2, 2, 1.0, 0.3, 32, 2, True), jnp.array([1e5, 2e5]))
+    one, part = coils[3], coils[1:5]
+    np.testing.assert_allclose(one.gamma[0], coils.gamma[3], atol=1e-14)
+    np.testing.assert_allclose(one.currents, coils.currents[3:4])
+    np.testing.assert_allclose(part.currents, coils.currents[1:5])
+    both = coils + coils
+    np.testing.assert_allclose(both.gamma, jnp.concatenate([coils.gamma] * 2), atol=1e-14)
+    fewer = coils.__exclude_coil__(2)
+    np.testing.assert_allclose(fewer.gamma, jnp.delete(coils.gamma, 2, axis=0), atol=1e-14)
+
+
+def test_discretized_coils_copy_and_json_round_trip(tmp_path):
+    from essos.coils import DiscretizedCoils
+    t = jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False)
+    base = jnp.stack([jnp.stack([3 + .5 * jnp.cos(t), .2 * k + 0 * t, .5 * jnp.sin(t)], axis=1) for k in range(4)])
+    coils = DiscretizedCoils(base, jnp.arange(1., 5.) * 1e5, nfp=2, stellsym=True)
+    np.testing.assert_allclose(coils.copy().gamma, coils.gamma, atol=1e-12)
+    coils.to_json(str(tmp_path / "c.json"))
+    loaded = DiscretizedCoils.from_json(str(tmp_path / "c.json"))
+    np.testing.assert_allclose(loaded.gamma, coils.gamma, atol=1e-12)
