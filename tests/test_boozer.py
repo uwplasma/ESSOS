@@ -16,6 +16,8 @@ from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as 
 
 B0, EPS, IOTA, G, PSI0 = 5.0, 0.25, 0.4, 40.0, 40.0
 V0 = float(np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / M))
+# One per stepping loop: dopri8/dopri5 and adaptive8/adaptive differ only in the tableau.
+BOOKKEEPING_METHODS = ["rk4", "dopri5", "adaptive"]
 
 
 def tokamak(nfp=1):
@@ -124,7 +126,7 @@ def test_nonfinite_step_is_reported_as_failed_not_confined():
         legacy.loss_fractions()
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri5"])
 def test_crossing_with_invalid_field_is_failed_not_lost(method):
     """A finite LCFS crossing cannot hide an invalid outside-field evaluation."""
     base = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
@@ -287,7 +289,7 @@ def test_pitch_angle_scattering_decays_the_mean_pitch_at_nu_D():
     assert float(jnp.mean(lam)) == pytest.approx(0.6 * np.exp(-0.5), abs=4 * 0.8 / np.sqrt(n) + 1e-2)
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
+@pytest.mark.parametrize("method", BOOKKEEPING_METHODS)
 def test_progress_chunks_reproduce_the_unchunked_trace(method, monkeypatch, capsys):
     """Host-side chunks for progress carry the whole state: the trace is bit-identical."""
     field, n = tokamak(), 6
@@ -319,7 +321,7 @@ def test_default_timestep_is_tied_to_the_field_period():
     (4, 2, False), (4, 23, True),
 ])
 @pytest.mark.parametrize("with_progress", [False, True])
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
+@pytest.mark.parametrize("method", BOOKKEEPING_METHODS)
 def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, with_progress, method):
     field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
     s = np.array([0.999] * edge_births + [0.3] * (6 - edge_births))
@@ -338,7 +340,7 @@ def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, 
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
+@pytest.mark.parametrize("method", BOOKKEEPING_METHODS)
 def test_survivor_compaction_preserves_failures(method):
     singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.0)
     args = ([0.3] * 4, [0.0] * 4, [0.0] * 4, [0.2] * 4)
@@ -411,7 +413,7 @@ def test_sine_orbits_match_rotated_cosine_field():
 
 
 @pytest.mark.parametrize("collisions", [False, True])
-@pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5"])
+@pytest.mark.parametrize("method", ["rk4", "dopri5"])
 def test_substep_counts_reuse_compilation_and_preserve_static_outputs(collisions, method):
     from essos.boozer import _advance, _start
 
