@@ -712,6 +712,48 @@ Fourier and normalized-current DOFs. Birth XYZ, pitch, energy and gyrophase
 stay fixed; the Lorentz GC-to-full-orbit conversion retains its field
 dependence. All particles are vectorized together, without particle chunking.
 
+The two original entry points start from the bundled QA coil JSON.
+Two additional examples put editable physical and optimization settings in a
+`PARAMETERS` block at the top of each script:
+
+- [Native full-orbit circular-coil case](examples/coil_optimization/optimize_coils_particle_confinement_fullorbit_native.py)
+- [Native GC circular-coil case](examples/coil_optimization/optimize_coils_particle_confinement_guidingcenter_native.py)
+
+These use the respective `optimize_coils_particle_confinement_*` reference
+parameters: three independent circular coils, two field periods, stellarator
+symmetry (12 physical coils), major radius 7.74 m, coil radius 4.5 m, 18.4 MA
+currents, Fourier order 6 and 60 quadrature points. Ten 3.52 MeV alpha particles
+start at equally spaced angles on the R=7.74 m, Z=0 circle, including the
+reference examples' duplicated 0/2pi endpoint. Pitches are sampled uniformly
+in [-1,1] with seed 42; gyrophase is zero. The GC case retains L2 Fourier
+scaling factor 1.2; the full-orbit case uses factor 0. Both expose 120 coil
+geometry/current DOFs.
+
+They reuse the same native runner, Dopri8, I controller, standard dense output,
+accepted-step reverse AD, 16-step checkpoints and bounded L-BFGS-B optimization.
+Their final time is 100 us, tolerance `rtol=atol=1e-8` and save count 1000.
+The reference `1e-14 s` timestep becomes the initial adaptive step guess.
+Their 200 function-evaluation setting uses the native optimizer's limit;
+these scripts do not reproduce the old least-squares optimizer or Boris map.
+The full-orbit birth conversion remains field-dependent. Edit `PARTICLE_OBJECTIVE`
+to select `"final_radius"` (default), `"loss_fraction"` or `"radial_increment"`.
+The latter implements the intended full-orbit reference formula with Cartesian
+time indexing corrected: `sum_i(mean_j(r[i,j+1]-r[i,j]))**2`. It has no division
+by dt, depends on save count and measures net displacement rather than excursions.
+All reference radii stay fixed at their initial values, as in the native runner.
+
+```bash
+python -m examples.coil_optimization.optimize_coils_particle_confinement_fullorbit_native
+python -m examples.coil_optimization.optimize_coils_particle_confinement_guidingcenter_native
+```
+
+No CLI arguments are required for these two cases. Edit `horizon` for final
+time and choose a fresh `output` directory in `PARAMETERS`; optional CLI
+arguments override the script settings. The fixed QA classifier/Bn surface is
+scaled to major radius 7.74 m. Its classifier grid spacing, padding and sigmoid
+width scale with the geometry. This is a geometric target, without a VMEC
+recalculation. Coil optimization can deform the initially circular shapes.
+
 ```bash
 export JAX_PLATFORMS=cpu
 export ESSOS_CPU_DEVICES=1
@@ -730,7 +772,7 @@ uses the particle mean of final-save minor radius in metres:
 The initial field's reference axis is held fixed throughout optimization.
 This is distinct from the legacy time-averaged radius reduction above.
 
-Both examples also include the length, curvature and normal-field terms from
+All four entry points include the length, curvature and normal-field terms from
 `optimize_coils_vmec_surface.py` in a weighted scalar cost:
 
 ```text
@@ -738,15 +780,22 @@ cost = particle_weight * particle_metric
      + length_weight * mean(max(coil_length - length_target, 0))
      + curvature_weight * mean(max(pointwise_curvature - curvature_target, 0))
      + bdotn_weight * sum(abs(B dot unitnormal / |B|))
+     + axis_field_weight * abs(mean(axis |B|) - axis_field_target)
      + regularization * mean(delta**2)
 ```
 
 `--particle-weight`, `--length-weight`, `--curvature-weight` and
 `--bdotn-weight` each default to 1. The last three terms can be disabled
 individually with weight 0; disabled terms are omitted and logged as zero.
+`--axis-field-weight` adds an independently selectable axis-field term. Its
+default is zero in the two original entry points and one in the two reference
+case scripts, alongside the other four terms. The target is 5.7 T, sampled at
+15 angles on the fixed initial axis circle. Set `axis_field_weight=0` in the
+script to omit it; the other objective weights work in the same way.
 `--length-target` is in metres and `--curvature-target` in inverse metres.
-Their defaults are 1.05 times the largest initial coil length and pointwise
-curvature, respectively, so targets follow the bundled coils' physical scale.
+The original QA entry points default to 1.05 times the largest initial coil
+length and pointwise curvature, respectively. The two circular-coil cases
+explicitly use the reference targets of 31 m and 0.4 /m.
 Resolved targets and weights are saved in the summary. The normal-field term
 uses the same fixed, scaled QA shape as the classifier, sampled separately
 on a half-period mesh (`--surface-ntheta 30 --surface-nphi 30`). Its sum follows
@@ -759,7 +808,7 @@ python -m examples.coil_optimization.optimize_coils_native_loss_fraction --lengt
 python -m examples.coil_optimization.optimize_coils_native_final_radius --length-weight 0 --curvature-weight 0 --bdotn-weight 0 --output .tmp/native_radius_particle_only
 ```
 
-Both examples default to eight 4 keV alpha particles, Dopri8, I control,
+The two original QA entry points default to eight 4 keV alpha particles, Dopri8, I control,
 `rtol=atol=1e-9`, 32 saves, 16-step checkpoints, accepted capacity 512,
 trial limit 4096 and ten L-BFGS-B iterations. The default horizon is 20 us for
 GC and 2 us with `--model lorentz`. `--method dopri5` selects the other native
@@ -770,8 +819,18 @@ its default is zero. The geometry targets are soft penalties, in addition to
 the small coil-DOF box; coil separation and other engineering constraints
 are not included.
 
-Each fresh output directory contains `optimized_coils.json`, `summary.json`,
+Each fresh output directory contains `initial_coils.json`, `optimized_coils.json`, `summary.json`,
 `history.csv` and `orbits.npz` with initial/final trajectories and coil DOFs.
+Plots are saved by default as `orbit_comparison.png` and `orbit_comparison.svg`.
+Their four panels show initial and optimized coils with 3D trajectories and
+the corresponding R-Z poloidal projections across all toroidal angles. These
+are projections, not Poincare sections. A reproducible random sample of up to
+ten traced particles is used, with identical particle IDs and colors in both
+configurations; all particles are shown when fewer than ten were traced.
+The plots reuse the stored optimization trajectories without additional tracing.
+Edit `save_plots`, `plot_particles` and `plot_seed` in the reference scripts,
+or use `--no-save-plots`, `--plot-particles` and `--plot-seed`. The selected
+particle IDs and plot filenames are recorded in `summary.json`.
 The summary records optimizer termination, solver settings, initial/final loss
 components, their weights, gradient norms and the fixed reference axis. Every
 history row logs each raw component as well as the weighted total cost, so a
