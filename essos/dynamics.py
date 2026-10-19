@@ -683,10 +683,14 @@ def FieldLineToroidal(t, initial_condition, field) -> jnp.ndarray:
     return B / B[2]
 
 
-def _fill_stopped_trajectories(trajectories, criteria, args):
+def _fill_stopped_trajectories(trajectories, criteria, args, initial_conditions):
     """Hold each trajectory at its last point inside all level sets."""
 
-    def fill_trajectory(trajectory):
+    def fill_trajectory(trajectory, initial):
+        # A safety event at birth can leave every requested save unfilled.
+        # Keep the finite birth state, including its field-dependent FO offset.
+        trajectory = trajectory.at[0].set(jnp.where(jnp.isfinite(trajectory[0]).all(),
+                                                   trajectory[0], initial))
         def remains_inside(state):
             values = [criterion(0.0, state, args) for criterion in criteria]
             return jnp.all(jnp.stack(values) > 0.0) & jnp.isfinite(state).all()
@@ -701,7 +705,7 @@ def _fill_stopped_trajectories(trajectories, criteria, args):
         _, tail = lax.scan(fill_state, (trajectory[0], initial_active), trajectory[1:])
         return jnp.vstack((trajectory[0], tail))
 
-    return vmap(fill_trajectory)(trajectories)
+    return vmap(fill_trajectory)(trajectories, initial_conditions)
 
 
 _VMEC_GUIDING_CENTER_MODELS = frozenset(
@@ -1125,7 +1129,7 @@ class Tracing():
             self.boundary_hits = jnp.any(jnp.stack(event_leaves), axis=0)
             self.axis_hits = jnp.zeros_like(self.boundary_hits)
             self._trajectories = _fill_stopped_trajectories(
-                trajectories, self.stopping_criteria, self.args
+                trajectories, self.stopping_criteria, self.args, self.initial_conditions
             )
         else:
             self._trajectories = trace_result

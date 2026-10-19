@@ -33,7 +33,7 @@ PARTICLE_OBJECTIVES = ("loss_fraction", "final_radius", "radial_increment")
 
 def save_optimization_plots(output, initial_coils, optimized_coils,
                             initial_trajectories, final_trajectories, *, axis,
-                            count=10, seed=42):
+                            count=10, seed=42, target_torus=None, safety_torus=None):
     """Save matched 3D and R-Z views of a random subset of stored trajectories.
 
     R-Z panels are poloidal projections across all toroidal angles, not
@@ -55,7 +55,12 @@ def save_optimization_plots(output, initial_coils, optimized_coils,
     spans = np.maximum(hi-lo, 1e-6)
     rz = [np.stack((np.hypot(paths[indices,...,0], paths[indices,...,1]),
                     paths[indices,...,2]), axis=-1) for paths in (before, after)]
-    rz_all = np.concatenate([values.reshape(-1,2) for values in rz] + [np.asarray(axis)[None,:]])
+    angle = np.linspace(0., 2*np.pi, 97)
+    outlines = [np.column_stack((major+minor*np.cos(angle), z_axis+minor*np.sin(angle)))
+                for torus in (target_torus, safety_torus) if torus is not None
+                for major, minor, z_axis in (torus,)]
+    rz_all = np.concatenate([values.reshape(-1,2) for values in rz] +
+                            [np.asarray(axis)[None,:]] + outlines)
     rz_lo, rz_hi = rz_all.min(axis=0), rz_all.max(axis=0)
     rz_pad = .08*np.maximum(rz_hi-rz_lo, 1e-6)
     figure = Figure(figsize=(14,11))
@@ -64,6 +69,16 @@ def save_optimization_plots(output, initial_coils, optimized_coils,
     axesrz = [figure.add_subplot(2,2,i+3) for i in range(2)]
     for column, (title, paths) in enumerate((("Initial", before), ("Optimized", after))):
         ax3d, axrz = axes3d[column], axesrz[column]
+        for torus, color, label in ((target_torus, "black", "Soft target"),
+                                    (safety_torus, "crimson", "Safety stop")):
+            if torus is None:
+                continue
+            major, minor, z_axis = torus
+            radius, height = major + minor*np.cos(angle), z_axis + minor*np.sin(angle)
+            axrz.plot(radius, height, "--", color=color, linewidth=1., label=label)
+            for phi in np.linspace(0., 2*np.pi, 9)[:-1]:
+                ax3d.plot(radius*np.cos(phi), radius*np.sin(phi), height,
+                          "--", color=color, linewidth=.6, alpha=.35)
         for curve in curves[column]:
             closed = np.concatenate((curve, curve[:1]))
             ax3d.plot(*closed.T, color="0.45", linewidth=1., alpha=.65)
@@ -144,6 +159,20 @@ def fixed_classifier(wout, *, major_radius=1., shape="qa", minor_radius=.2, nfp=
                              angular_interpolation="periodic_cubic")
 
 
+def toroidal_safety_stop(major_radius, minor_radius, axis_z=0.):
+    """Cheap analytic level set, independent of the soft loss classifier.
+
+    Positive inside, zero at/outside the safety torus. The squared minor
+    radius avoids a square-root derivative at axis births. Clamping to zero
+    also stops particles initially outside instead of waiting for re-entry.
+    """
+    def stop(t, y, args, **kwargs):
+        del t, args, kwargs
+        radial = jnp.hypot(y[0], y[1]) - major_radius
+        return jnp.maximum(0., minor_radius**2 - radial**2 - (y[2]-axis_z)**2)
+    return stop
+
+
 def coil_penalties(field, surface, options):
     """Scalar penalties matching optimize_coils_vmec_surface.py.
 
@@ -202,6 +231,8 @@ def build_objective(options, objective):
     phi_axis = jnp.linspace(0., 2*jnp.pi, options.axis_field_points)
     axis_points = jnp.column_stack((axis[0]*jnp.cos(phi_axis), axis[0]*jnp.sin(phi_axis),
                                    jnp.full_like(phi_axis, axis[1])))
+    safety_radius = getattr(options, "safety_minor_radius", None)
+    safety_stop = toroidal_safety_stop(axis[0], safety_radius, axis[1]) if safety_radius is not None else None
 
     def evaluate(delta):
         # Coils.dofs already applies the public curve/current normalization.
@@ -222,6 +253,7 @@ def build_objective(options, objective):
             maxtime=options.horizon,
             timestep=options.initial_step if options.initial_step is not None else options.horizon / 2,
             times_to_trace=options.saves, max_steps=options.max_steps,
+            stopping_criteria=safety_stop,
             progress=False)
         if objective == "loss_fraction":
             metric = trace.loss_fraction_classifier_differentiable(
@@ -231,6 +263,7 @@ def build_objective(options, objective):
         else:
             metric = radial_increment_cost(trace.trajectories, *axis)
         components = dict(particle_metric=metric,
+            safety_stop_fraction=jnp.mean(trace.boundary_hits.astype(float)),
             **coil_penalties(field, surface, options),
             axis_field_penalty=jnp.abs(jnp.mean(jax.vmap(field.AbsB)(axis_points)) - options.axis_field_target)
                 if options.axis_field_weight else jnp.array(0.),
@@ -273,6 +306,11 @@ def run(objective, argv=None, *, defaults=None):
         help="Fixed geometry shared by the loss classifier and B dot n / |B|")
     parser.add_argument("--target-minor-radius", type=float, default=.2,
         help="Metres; circular target torus minor radius")
+    safety = parser.add_mutually_exclusive_group()
+    safety.add_argument("--safety-minor-radius", type=float,
+        help="Metres; separate hard stopping torus about the fixed initial axis (disabled if omitted)")
+    safety.add_argument("--no-safety-stop", dest="safety_minor_radius", action="store_const", const=None,
+        help="Disable the separate safety stopping torus")
     parser.add_argument("--model", choices=("gc", "lorentz"), default="gc")
     parser.add_argument("--method", choices=("dopri5", "dopri8"), default="dopri8")
     parser.add_argument("--particles", type=int, default=8)
@@ -333,6 +371,13 @@ def run(objective, argv=None, *, defaults=None):
             parser.error("target torus requires 0 < target-minor-radius < reference-major-radius")
         if options.coils is None and options.target_minor_radius >= options.coil_minor_radius:
             parser.error("target-minor-radius must be smaller than the initial circular coil radius")
+    if options.safety_minor_radius is not None:
+        if not (np.isfinite(options.safety_minor_radius) and options.safety_minor_radius > 0):
+            parser.error("safety-minor-radius must be finite and positive")
+        if options.target_surface == "torus" and options.safety_minor_radius <= options.target_minor_radius:
+            parser.error("safety-minor-radius must be larger than target-minor-radius")
+        if options.coils is None and options.safety_minor_radius >= options.coil_minor_radius:
+            parser.error("safety-minor-radius must be smaller than the initial circular coil radius")
     if options.initial_step is not None and (not np.isfinite(options.initial_step) or options.initial_step <= 0):
         parser.error("initial-step must be finite and positive")
     if (not -1 <= options.pitch_min < options.pitch_max <= 1 or
@@ -372,13 +417,16 @@ def run(objective, argv=None, *, defaults=None):
           f"major radius {options.reference_major_radius:g} m" +
           (f"; minor radius {options.target_minor_radius:g} m" if options.target_surface == "torus" else ""),
           flush=True)
+    if options.safety_minor_radius is not None:
+        print(f"Safety stopping torus: R={axis[0]:g} m, Z={axis[1]:g} m; "
+              f"minor radius {options.safety_minor_radius:g} m (separate from the soft target)", flush=True)
     evaluate = jax.jit(jax.value_and_grad(objective_fn, has_aux=True))
     history = []
     cached = None
 
     with (options.output / "history.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=("evaluation", "cost", "particle_metric",
-            "length_penalty", "curvature_penalty", "bdotn_penalty", "axis_field_penalty", "regularization_penalty",
+            "safety_stop_fraction", "length_penalty", "curvature_penalty", "bdotn_penalty", "axis_field_penalty", "regularization_penalty",
             "gradient_l2", "max_abs_displacement", "seconds"))
         writer.writeheader()
 
@@ -405,6 +453,7 @@ def run(objective, argv=None, *, defaults=None):
             stream.flush()
             print(f"eval {row['evaluation']:3d}: metric={metric:.10g}, "
                   f"cost={value:.10g}, |grad|={row['gradient_l2']:.4g}, "
+                  f"safety stops={components['safety_stop_fraction']:.1%}, "
                   f"{row['seconds']:.2f} s", flush=True)
             cached = (delta.copy(), value, gradient, components, trajectories)
             return value, gradient
@@ -430,7 +479,11 @@ def run(objective, argv=None, *, defaults=None):
         birth_xyz=np.asarray(xyz), birth_pitch=np.asarray(pitches))
     plots = save_optimization_plots(options.output, base, base.with_dofs(final_dofs),
         initial_trajectories, final_trajectories, axis=axis,
-        count=options.plot_particles, seed=options.plot_seed) if options.save_plots else None
+        count=options.plot_particles, seed=options.plot_seed,
+        target_torus=(options.reference_major_radius, options.target_minor_radius, 0.)
+            if options.target_surface == "torus" else None,
+        safety_torus=(axis[0], options.safety_minor_radius, axis[1])
+            if options.safety_minor_radius is not None else None) if options.save_plots else None
     units = {"loss_fraction": "probability", "final_radius": "metres", "radial_increment": "metres squared"}
     report = dict(objective=objective, metric_units=units[objective],
         coil_initialization="planar_circular" if options.coils is None else "json_file",
@@ -460,7 +513,10 @@ def run(objective, argv=None, *, defaults=None):
         plots=plots,
         derivative_policy="Accepted-step reverse AD with frozen adaptive times; segment checkpoints; full population vmap",
         birth_policy="Fixed GC birth XYZ, pitch, energy and gyrophase; Lorentz conversion remains field-dependent",
-        target_policy="Fixed initial reference axis and fixed target surface; no hard wall stopping",
+        target_policy="Fixed initial reference axis and fixed soft target; separate optional safety stopping torus",
+        safety_policy="Stop on the first accepted step reaching the safety torus; hold the last saved interior state; "
+            "accepted step times, stopping decisions and saved-time masks are frozen in reverse AD. "
+            "The safety-stop fraction is a diagnostic, not an added objective.",
         gradient_coordinates="Dimensionless delta; coil DOFs = initial DOFs + max_change * delta",
         timing_scope="First evaluation includes compilation; later evaluations reuse compiled value_and_grad")
     (options.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")

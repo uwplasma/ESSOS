@@ -54,6 +54,7 @@ PARAMETERS = dict(
     target_surface="torus",          # Fixed classifier and Bn target, inside the coils.
     reference_major_radius=7.74,      # m; torus major radius.
     target_minor_radius=3.5,          # m; smaller than coil_minor_radius=4.5 m.
+    safety_minor_radius=4.4,          # m; stop 10 cm inside the initial coil circles.
     surface_ntheta=30,
     surface_nphi=30,
     softness=10./7.74,                # 1/m; same relative sigmoid width as native example.

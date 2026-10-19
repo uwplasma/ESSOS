@@ -784,6 +784,32 @@ the target and probability is 0.5 on the surface. `softness` has units 1/m;
 larger values sharpen the transition. This is a geometric confinement objective
 and does not stop particles at the surface.
 
+The two circular-coil examples additionally enable a **separate safety stop**:
+`safety_minor_radius=4.4` m, 10 cm inside the initial 4.5 m coil circles.
+The 3.5 m target remains a soft classifier. Both GC and Lorentz tracing stop
+on the first accepted step reaching the safety torus, using an inexpensive
+analytic level set about the fixed initial axis. Later saves hold the last
+saved interior state; the plotted endpoint is therefore slightly inside the
+safety surface and depends on the save spacing. The RK stages of the crossing
+trial are still evaluated. This prevents continuing escaped trajectories
+toward the wires; it is not a change to the field or RK formulas.
+
+Use `--safety-minor-radius 4.4` to change the safety radius, or
+`--no-safety-stop` to disable it. For circular targets it must lie outside
+the soft target and inside the initial coil radius. The torus stays fixed as
+coils deform; it is not a wire-clearance constraint on optimized coils.
+Plots show the soft target in black and the safety surface in red.
+`safety_stop_fraction` in the history and summary records physical safety
+hits separately from the surrogate, without adding a new optimization term.
+The original QA entry points leave safety stopping disabled unless requested.
+
+The existing maximum-sigmoid objective is unchanged and can level off once
+all particles reach the safety stop (about 0.76 at radius 4.4 m with the
+reference softness). It does not reward a later exit explicitly. Accepted
+steps and stopping/saved-time decisions remain frozen during reverse AD;
+these are not derivatives of a moving first-hit time. A safety stop alone
+does not establish that the long-horizon gradients or optimization converge.
+
 ```bash
 python -m examples.coil_optimization.optimize_coils_native_loss_fraction --output .tmp/native_loss_fraction
 python -m examples.coil_optimization.optimize_coils_native_final_radius --output .tmp/native_final_radius
