@@ -9,6 +9,8 @@ import pytest
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 PYQSC_SOURCE = REPOSITORY.parent / "pyQSC_JAX" / "src"
+if not PYQSC_SOURCE.is_dir():
+    pytest.importorskip("pyqsc_jax")
 
 
 @pytest.mark.parametrize(

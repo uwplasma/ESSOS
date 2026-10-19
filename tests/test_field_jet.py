@@ -3,11 +3,11 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pyqsc_jax as qsc
 import pytest
 from jax.flatten_util import ravel_pytree
 
 from essos.coils import Coils, Curves
+qsc = pytest.importorskip("pyqsc_jax")
 from essos.field_jet import (
     FieldJetResiduals,
     NearAxisFieldJetTarget,
