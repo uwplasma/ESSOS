@@ -71,14 +71,12 @@ def _circular_coils(radii, n_segments=64):
     return Coils(Curves(dofs, n_segments, nfp=1, stellsym=False), jnp.ones(len(radii)))
 
 
-def test_coil_length_loss_is_a_one_sided_cap():
+def test_coil_length_loss_is_a_two_sided_target():
     coils = _circular_coils([1.0, 2.0])
-    lengths = 2 * jnp.pi * jnp.array([1.0, 2.0])
-    loss = objf.loss_coil_length(coils, max_coil_length=float(lengths[0]) * 1.5)
-    np.testing.assert_allclose(loss, (lengths[1] / (lengths[0] * 1.5) - 1) ** 2, rtol=1e-6)
-    assert objf.loss_coil_length(coils, max_coil_length=100.0) == 0.0
-    with pytest.raises(ValueError):
-        objf.loss_coil_length(coils)
+    target = 3 * jnp.pi
+    loss = objf.loss_coil_length(coils, max_coil_length=float(target))
+    np.testing.assert_allclose(loss, 2 * (1 / 3) ** 2, rtol=1e-5)
+    assert objf.loss_coil_length(coils, max_coil_length=0) == 0.0
 
 
 def test_coil_curvature_loss_is_scalar():

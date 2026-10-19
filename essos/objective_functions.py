@@ -237,10 +237,11 @@ def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6
 ######################### COIL GEOMETRY LOSSES #################################
 
 @partial(jit, static_argnames=['max_coil_length'])
-def loss_coil_length(coils, max_coil_length=None):
-    if max_coil_length is None or max_coil_length <= 0:
-        raise ValueError("max_coil_length must be a positive length.")
-    return jnp.sum(jnp.square(jnp.maximum(coils.length/max_coil_length - 1, 0)))
+def loss_coil_length(coils, max_coil_length=0):
+    """Two-sided target sum((L/L0 - 1)^2), as in SIMSOPT; L0 <= 0 disables it."""
+    if max_coil_length <= 0:
+        return jnp.zeros(())
+    return jnp.sum(jnp.square(coils.length/max_coil_length - 1))
 
 @partial(jit, static_argnames=['max_coil_curvature'])
 def loss_coil_curvature(coils, max_coil_curvature=0):
