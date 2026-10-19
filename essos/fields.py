@@ -755,7 +755,6 @@ def _fourier_zernike(c, modes, rho, theta, zeta, nfp):
     return jnp.sum(c * (-1.)**j * rho**a * radial * angle(m, theta) * angle(n, nfp * zeta))
 
 
-@tree_util.register_static
 class DescField(ToroidalField):
     """A DESC equilibrium (https://github.com/PlasmaControl/DESC) in the coordinates of :class:`ToroidalField`.
 
@@ -836,6 +835,17 @@ class DescField(ToroidalField):
     def B_covariant(self, points):
         e, _, B_con = self._frame(points)
         return e.T @ (e @ B_con)
+
+
+def _unflatten_desc(aux, children):  # a pytree, so the coefficients can be traced and differentiated
+    field = DescField.__new__(DescField)
+    (field.coefficients, field.iota, field.Aminor_p), (modes, field.Psi, field.nfp) = children, aux
+    field.modes = tuple(np.array(m, dtype=int).reshape(-1, 3) for m in modes)
+    return field
+
+
+tree_util.register_pytree_node(DescField, lambda f: ((f.coefficients, f.iota, getattr(f, "Aminor_p", None)), (
+    tuple(tuple(map(tuple, m.tolist())) for m in f.modes), f.Psi, f.nfp)), _unflatten_desc)
 
 
 class near_axis:
