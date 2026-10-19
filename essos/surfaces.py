@@ -896,6 +896,36 @@ tree_util.register_pytree_node(SurfaceRZFourier,
                                SurfaceRZFourier._tree_unflatten)
 
 #This class is based on simsopt classifier but translated to fit jax    
+def _periodic_cubic_distance(grid, values, rphiz):
+    """Periodic C1 angular interpolation, bilinear in radius and height.
+
+    The uniform angular grid includes both 0 and 2*pi. Its final row is a
+    duplicate, so angular neighbours wrap over the unique rows. Central
+    secants give shared Hermite tangents on each side of every angular knot.
+    """
+    rgrid, phigrid, zgrid = grid
+    radius, phi, height = rphiz
+    ir = jnp.clip(jnp.searchsorted(rgrid, radius)-1, 0, rgrid.size-2)
+    iz = jnp.clip(jnp.searchsorted(zgrid, height)-1, 0, zgrid.size-2)
+    wr = (radius-rgrid[ir])/(rgrid[ir+1]-rgrid[ir])
+    wz = (height-zgrid[iz])/(zgrid[iz+1]-zgrid[iz])
+    count = phigrid.size-1
+    period = phigrid[-1]-phigrid[0]
+    coordinate = jnp.mod(phi-phigrid[0], period)*(count/period)
+    index = jnp.floor(coordinate).astype(jnp.int32)
+    u = coordinate-index
+    neighbours = (index+jnp.arange(-1, 3)) % count
+    # SurfaceClassifier tables have one trailing signed-distance component.
+    def radial_slice(i):
+        return (1-wz)*values[i, neighbours, iz, 0]+wz*values[i, neighbours, iz+1, 0]
+    p0, p1, p2, p3 = (1-wr)*radial_slice(ir)+wr*radial_slice(ir+1)
+    m1, m2 = .5*(p2-p0), .5*(p3-p1)
+    distance = ((2*u**3-3*u**2+1)*p1+(u**3-2*u**2+u)*m1
+        +(-2*u**3+3*u**2)*p2+(u**3-u**2)*m2)
+    outside = (radius<rgrid[0]) | (radius>rgrid[-1]) | (height<zgrid[0]) | (height>zgrid[-1])
+    return jnp.where(outside, -1., distance)
+
+
 class SurfaceClassifier():
     """
     Takes in a toroidal surface and constructs an interpolant of the signed distance function
@@ -903,15 +933,24 @@ class SurfaceClassifier():
     (approximately) zero on the surface, and negative outisde the volume contained by the surface.
     """
 
-    def __init__(self, surface, h=0.05, padding=0.1):
+    def __init__(self, surface, h=0.05, padding=0.1, *, angular_interpolation="linear"):
         """
         Args:
             surface: the surface to contruct the distance from.
             h: grid resolution of the interpolant
             padding: distance represented outside the surface
+            angular_interpolation: ``"linear"`` preserves existing tracing;
+                ``"periodic_cubic"`` matches angular values and first
+                derivatives at 0/2*pi and every angular knot. R/Z remain
+                piecewise linear. Cubic distances may overshoot between knots.
         """
         if padding <= 0.0:
             raise ValueError("padding must be positive")
+        if h <= 0.0:
+            raise ValueError("h must be positive")
+        if angular_interpolation not in ("linear", "periodic_cubic"):
+            raise ValueError("angular_interpolation must be 'linear' or 'periodic_cubic'")
+        self.angular_interpolation = angular_interpolation
         gammas = surface.gamma
         r = jnp.linalg.norm(gammas[:, :, :2], axis=2)
         z = gammas[:, :, 2]
@@ -926,6 +965,8 @@ class SurfaceClassifier():
         nr = int((self.rrange[1]-self.rrange[0])/h)
         nphi = int(2*jnp.pi/h)
         nz = int((self.zrange[1]-self.zrange[0])/h)
+        if angular_interpolation == "periodic_cubic" and nphi < 4:
+            raise ValueError("periodic_cubic requires at least four angular grid points")
 
         gammas_flat = surface.gamma.reshape((-1, 3))
         normals_flat = surface.unitnormal.reshape((-1, 3))
@@ -976,15 +1017,15 @@ class SurfaceClassifier():
         rphiz=rphiz.at[2].set(xyz.at[2].get())
         # initialize to -1 since the regular grid interpolant will just keep
         # that value when evaluated outside of bounds
-        d=self.dist(rphiz)[0][0]
-        return d
+        return self.evaluate_rphiz(rphiz)
 
     @partial(jit, static_argnames=['self'])
     def evaluate_rphiz(self, rphiz):
         # initialize to -1 since the regular grid interpolant will just keep
         # that value when evaluated outside of bounds
-        d=self.dist(rphiz)[0][0]
-        return d
+        if self.angular_interpolation == "periodic_cubic":
+            return _periodic_cubic_distance(self.dist.grid, self.dist.values, rphiz)
+        return self.dist(rphiz)[0][0]
     
 
 partial(jit, static_argnames=['surface'])
@@ -993,10 +1034,12 @@ def signed_distance_from_surface_jax(xyz, surface):
     Compute the signed distances from points ``xyz`` to a surface.  The sign is
     positive for points inside the volume surrounded by the surface.
     """
+    xyz = jnp.atleast_2d(xyz)
     gammas = surface.gamma.reshape((-1, 3))
     #from scipy.spatial import KDTree ##better for cpu?
     tree = jaxkd.build_tree(gammas)
-    mins, _ = jaxkd.query_neighbors(tree, xyz, k=1)    
+    mins, _ = jaxkd.query_neighbors(tree, xyz, k=1)
+    mins = jnp.squeeze(mins, axis=-1)
     n = surface.unitnormal.reshape((-1, 3))
     nmins = n[mins]
     gammamins = gammas[mins]

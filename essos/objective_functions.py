@@ -119,14 +119,24 @@ def loss_particle_gammac(field, particles, timestep=1.e-8, maxtime=1e-5, num_ste
     #return jnp.sum(jnp.square((2./jnp.pi*jnp.absolute(jnp.arctan2(jnp.average(v_r_cross,axis=1),jnp.average(v_theta,axis=1))))))
     return jnp.max(2./jnp.pi*jnp.absolute(jnp.arctan2(jnp.average(v_r_cross,axis=1),jnp.average(v_theta,axis=1))))
     
-def loss_particle_rcross_final(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_rcross_final(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None, **trace_options):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary, **trace_options)
     xyz = tracing.trajectories[:,:, :3]
     R_axis=field.r_axis
     Z_axis=field.z_axis
     r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
     return jnp.linalg.norm((jnp.average(r_cross,axis=1)))
+
+
+def loss_particle_mean_final_radius(field, particles, timestep=1.e-8, maxtime=1e-5,
+        num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative', boundary=None, **trace_options):
+    """Particle mean minor radius at the final saved position, in metres."""
+    from .particle_losses import mean_final_radius
+    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
+        timestep=timestep, times_to_trace=num_steps, atol=trace_tolerance,
+        rtol=trace_tolerance, boundary=boundary, **trace_options)
+    return mean_final_radius(tracing.trajectories, field.r_axis, field.z_axis)
 
 
 
