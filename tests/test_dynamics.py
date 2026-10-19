@@ -320,7 +320,7 @@ def test_levelset_stopping_criterion_stops_and_fills_field_line():
     )
 
     assert tracing.boundary_hits.tolist() == [True]
-    assert tracing.progress is False
+    assert tracing.progress is False  # ESSOS_PROGRESS=0 in conftest
     assert jnp.isfinite(tracing.trajectories).all()
     assert jnp.max(tracing.trajectories[0, :, 0]) <= 1.7 + 1e-8
     assert jnp.allclose(tracing.trajectories[0, -1], tracing.trajectories[0, -2])
@@ -438,8 +438,9 @@ def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature()
     assert np.all(np.abs(energy.mean(axis=0) - 1) < 4 * error)
 
 
-def test_vmec_guiding_centers_cross_the_magnetic_axis():
+def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch):
     """The orbit born at s = 1e-7 used to stop at once, at s <= axis_threshold = 1e-6."""
+    monkeypatch.delenv("ESSOS_PROGRESS")  # default progress must not break the vmapped segment loop
     particles = _near_axis_particles()
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
                       particles=particles, maxtime=2e-5, timestep=1e-9, times_to_trace=200,
@@ -636,6 +637,26 @@ def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypat
         assert bool(trace.boundary_hits[0])
         assert float(jnp.max(trace.trajectories[0, :, 2])) < ceiling
         np.testing.assert_array_equal(trace.trajectories[0, -1], trace.trajectories[0, -2])
+
+
+def test_tracing_pytree_round_trip_and_jit():
+    """Unflatten re-ran __init__ with times as times_to_trace, passed both
+    condition and stopping_criteria, and dropped species and boundary."""
+    field = _UniformField((0., 0., 1.), magnitude=1e-3)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+
+    def below_ceiling(t, y, args, **kwargs):
+        return 1.0 - y[2]
+    trace = Tracing(field=field, particles=particles, species=species, model="FullOrbitCollisions",
+                    maxtime=1e-6, timestep=1e-7, times_to_trace=3, stopping_criteria=below_ceiling)
+    leaves, treedef = jax.tree_util.tree_flatten(trace)
+    rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+    assert rebuilt.species is species and rebuilt.times_to_trace == 3
+    assert rebuilt.stopping_criteria == trace.stopping_criteria and rebuilt.condition is trace.condition
+    np.testing.assert_array_equal(rebuilt.times, trace.times)
+    np.testing.assert_array_equal(rebuilt.trajectories, trace.trajectories)
+    np.testing.assert_allclose(jax.jit(lambda tr: tr.energy())(trace), trace.energy(), rtol=1e-12)
 
 
 class _MuField:
@@ -909,12 +930,13 @@ def test_vmec_lost_energies_come_from_the_last_finite_state():
     assert jnp.allclose(tracing.lost_positions[lost, 0], 1.0, atol=1e-9)
 
 
-def test_particle_batches_report_completed_particles_and_match_one_batch(capsys):
+def test_particle_batches_report_completed_particles_and_match_one_batch(capsys, monkeypatch):
     """Batches of 6 (the last one padded) give the orbits, events and losses of one batch."""
     whole = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9)
     capsys.readouterr()
+    monkeypatch.delenv("ESSOS_PROGRESS")
     batched = _edge_tracing("GuidingCenterAdaptative", 0.993, 50, atol=1e-9, rtol=1e-9,
-                            particle_batch_size=6, progress=True)
+                            particle_batch_size=6)
     progress = capsys.readouterr().err
     assert "Tracing particles" in progress and "16/16" in progress
     # The adaptive steps of a vmapped solve depend on the batch in the last bits.
