@@ -23,7 +23,7 @@ from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipSte
 import diffrax
 import optimistix as optx
 from essos.coils import Coils
-from essos.fields import BiotSavart, ExternalField, MagneticField, is_toroidal
+from essos.fields import BiotSavart, ExternalField, MagneticField, NearAxisField, is_toroidal
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
@@ -920,6 +920,8 @@ class Tracing():
         else:
             self.electric_field=electric_field
 
+        if model is not None and model.startswith('FullOrbit') and isinstance(getattr(field, "fields", (field,))[0], NearAxisField):
+            raise ValueError("full orbits need B at Cartesian points, which a near-axis field does not invert to")
         if model is not None and model.startswith('FullOrbit') and is_toroidal(field):
             # Full orbits move in Cartesian space: trace them in the Cartesian view of the field, from the
             # Cartesian position of each guiding center given in (s, theta, phi), up to the boundary s = 1.

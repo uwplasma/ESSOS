@@ -36,6 +36,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install . flake8 pytest pytest-cov pytest-xdist
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install "git+https://github.com/uwplasma/pyQSC_JAX.git"
         echo "JAX_VERSION=$(python -c 'import jax; print(jax.__version__)')" >> $GITHUB_ENV
     - name: Cache JAX compilations
       uses: actions/cache@v4
