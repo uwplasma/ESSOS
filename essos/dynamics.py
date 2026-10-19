@@ -24,7 +24,7 @@ import diffrax
 import optimistix as optx
 from essos.coils import Coils
 from essos.fields import BiotSavart, ExternalField, MagneticField, is_toroidal
-from essos.surfaces import SurfaceClassifier
+from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
 from essos.plot import fix_matplotlib_3d
@@ -582,7 +582,7 @@ def LorentzCollisionsDiffusion(t,
     v_vector=jnp.array([vx, vy, vz])
     v=jnp.sqrt(vx**2+vy**2+vz**2)
     p=m*v
-    I_vv_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(v_vector,jnp.reshape(v_vector,(3,1))))/v**2
+    P_v=jnp.outer(v_vector,v_vector)/v**2  # projector on the velocity direction
     indeces_species=species.species_indeces
     nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
     nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
@@ -591,7 +591,7 @@ def LorentzCollisionsDiffusion(t,
     Dpar=jnp.sqrt(2.*Diffusion_par)#*0.0000
     Dperp=jnp.sqrt(2.*Diffusion_perp)#*0.0000
     dxdt = jnp.zeros((3,3))
-    dvdt=Dpar/m*jnp.identity(3)-Dperp/m*I_vv_tensor
+    dvdt=Dpar/m*P_v+Dperp/m*(jnp.identity(3)-P_v)
     #Off diagonals between position an dvelocity are zero at zeroth order
     Dxv=jnp.zeros((3,3))
     Dvx=jnp.zeros((3,3))
@@ -613,7 +613,14 @@ def LorentzCollisionsDrift(t,
     indeces_species=species.species_indeces
     nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
     dxdt = jnp.array([vx, vy, vz])
-    dvdt =  q / m * jnp.cross(dxdt, B_contravariant)-nu_s*dxdt#*0.00000
+    # Noise-induced drift. The Fokker-Planck operator d_i(nu_s v_i f + D_ij d_j f),
+    # D = sigma sigma^T / 2, has Ito drift -nu_s v + d_j D_ij; the Stratonovich
+    # solver (SPaRK) needs that minus sigma_jk d_j sigma_ik / 2, i.e.
+    # -nu_s v + sigma_ik d_j sigma_jk / 2.
+    def sigma(velocity):
+        return LorentzCollisionsDiffusion(t, jnp.append(points, velocity), args)[3:, 3:]
+    noise_drift = 0.5*jnp.einsum('ik,jkj->i', sigma(dxdt), jax.jacfwd(sigma)(dxdt))
+    dvdt =  q / m * jnp.cross(dxdt, B_contravariant)-nu_s*dxdt+noise_drift
     return jnp.append(dxdt, dvdt)
     # def zero_derivatives(_):
     #     return jnp.zeros(6, dtype=float)
@@ -870,11 +877,26 @@ def _place_on_devices(x, target):
 ## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
 ## !!!!  Here particle_key was added to compute_trajectories (E. Neto collisions modifications)
 ## This is important for correct sampling of Brownian motion
+def _wall_function(field, wall):
+    """``Tracing``'s wall as ``xyz -> signed distance`` (positive inside), or None.
+
+    ``wall`` is a gap [m] (the LCFS of ``field`` grown that far), a surface
+    (classified on a grid of 2% of its major radius, at least 2 cm), an object
+    with ``evaluate_xyz`` or a callable.
+    """
+    if isinstance(wall, (int, float)):
+        wall = SurfaceRZFourier.from_vmec(field, ntheta=64, nphi=128, offset=wall)
+    if hasattr(wall, "gamma"):
+        scale = max(1.0, float(jnp.mean(jnp.linalg.norm(jnp.asarray(wall.gamma)[..., :2], axis=-1))))
+        wall = SurfaceClassifier(wall, h=0.02 * scale, padding=0.05 * scale)
+    return getattr(wall, "evaluate_xyz", wall)
+
+
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
-                 solver=None, stopping_criteria=None, progress=False, devices=None,
+                 solver=None, stopping_criteria=None, progress=True, devices=None,
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None):
 
@@ -943,7 +965,7 @@ class Tracing():
         elif exterior_field is not None and not hasattr(exterior_field, "curl_b"):
             exterior_field = ExternalField(exterior_field)
         self.exterior_field, self.max_returns = exterior_field, int(max_returns)
-        self.wall = getattr(wall, "evaluate_xyz", wall)
+        self.wall = _wall_function(field, wall)
         # An orbit outside is back inside once it is reentry_depth [m] inside
         # the LCFS (default 1e-3 minor radii), so an orbit skimming the surface,
         # where the two fields differ slightly, does not bounce between them.
@@ -953,7 +975,8 @@ class Tracing():
         # Diffrax's ceiling was effectively unbounded, so a trace that could not
         # finish ran until the process was killed rather than returning.
         self.max_steps = max_steps
-        self.progress = bool(progress)
+        # ESSOS_PROGRESS=0 turns every default progress bar off (the test suite does).
+        self.progress = bool(progress) and os.environ.get("ESSOS_PROGRESS", "1") != "0"
         # With particle_batch_size, particles are traced in batches of that
         # size and progress counts completed particles instead of Diffrax
         # steps. Under a JAX transformation the batches are bypassed.
@@ -962,8 +985,10 @@ class Tracing():
                 or particle_batch_size <= 0):
             raise ValueError("particle_batch_size must be a positive integer or None")
         self.particle_batch_size = None if particle_batch_size is None else int(particle_batch_size)
+        # Diffrax's meter is an unordered callback, which the vmapped while loop of
+        # the VMEC segment path rejects; that path reports progress by batches only.
         self.progress_meter = (TqdmProgressMeter() if self.progress and self.particle_batch_size is None
-                               else NoProgressMeter())
+                               and not self._vmec_default else NoProgressMeter())
         # Diffrax solver to use for the adaptive integrators. If left as None,
         # each integrator falls back to its previous default (Dopri8), so
         # existing call sites are unaffected. Selecting the solver here (rather
@@ -1021,8 +1046,8 @@ class Tracing():
             #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))
             self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
             #x,y,z=self.particles.initial_xyz[]
-            B_particle=jax.vmap(field.AbsB,in_axes=0)(particles.initial_xyz)
-            mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*particles.mass)          
+            B_particle=jax.vmap(self.field.AbsB,in_axes=0)(self.particles.initial_xyz)
+            mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*self.particles.mass)          
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,self.particles.initial_vparallel[:, None]/SPEED_OF_LIGHT,mu[:, None]],axis=1)        
         elif model == 'FullOrbit' or model == 'FullOrbit_Boris' or model == 'FullOrbitAdaptative':
             self.ODE_term = ODETerm(Lorentz)
@@ -1376,8 +1401,8 @@ class Tracing():
         mass = self.particles.mass
 
         if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
-            initial_xyz = self.initial_conditions[:, :3]
-            initial_vparallel = self.initial_conditions[:, 3]
+            initial_xyz = self.trajectories[:, 0, :3]  # t = 0, on the trajectories' devices
+            initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
             def compute_energy(trajectory, mu):
@@ -1414,8 +1439,8 @@ class Tracing():
         mass = self.particles.mass
 
         if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
-            initial_xyz = self.initial_conditions[:, :3]
-            initial_vparallel = self.initial_conditions[:, 3]
+            initial_xyz = self.trajectories[:, 0, :3]  # t = 0, on the trajectories' devices
+            initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
             def compute_vperp(trajectory, mu):
@@ -1433,9 +1458,7 @@ class Tracing():
             v_perp = vmap(compute_vperp)(self.trajectories)           
         elif self.model == 'GuidingCenterCollisions':
             def compute_vperp(trajectory):
-                vpar=trajectory[:, 3]*trajectory[:, 4]
-                v=trajectory[:, 4]*SPEED_OF_LIGHT
-                return jnp.sqrt(v**2-vpar**2)
+                return trajectory[:, 3]*jnp.sqrt(jnp.maximum(1-trajectory[:, 4]**2, 0.))
             v_perp = vmap(compute_vperp)(self.trajectories)
 
         else:  # the full-orbit models: FullOrbit, FullOrbit_Boris, FullOrbitAdaptative, FullOrbitCollisions
@@ -1692,18 +1715,21 @@ class Tracing():
         return plotting_data
     
     def _tree_flatten(self):
-        children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
-        aux_data = {'field': self.field, 'electric_field': self.electric_field, 'model': self.model, 'maxtime': self.maxtime, 'timestep': self.timestep,
-                    'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc,
-                    'solver': self.solver, 'stopping_criteria': self.stopping_criteria,
-                    'progress': self.progress, 'devices': self.devices, 'exterior_field': self.exterior_field,
-                    'wall': self.wall, 'max_returns': self.max_returns, 'reentry_depth': self.reentry_depth,
-                    'particle_batch_size': self.particle_batch_size}  # static values
-        return (children, aux_data)
+        # Rebuilding through __init__ would trace again and mapped times onto
+        # times_to_trace; every attribute holding arrays is a child instead.
+        def has_arrays(value):
+            return any(isinstance(leaf, (jax.Array, np.ndarray)) for leaf in tree_util.tree_leaves(value))
+        names = tuple(name for name, value in vars(self).items() if has_arrays(value))
+        static = tuple((name, value) for name, value in vars(self).items() if name not in names)
+        return tuple(getattr(self, name) for name in names), (names, static)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        return cls(*children, **aux_data)
+        names, static = aux_data
+        tracing = object.__new__(cls)
+        tracing.__dict__.update(static)
+        tracing.__dict__.update(zip(names, children))
+        return tracing
 
 
 tree_util.register_pytree_node(Tracing,

@@ -15,7 +15,7 @@ from essos.objective_functions import (
 )
 
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from
-#  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
+#  `scipy.optimize.minimize`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
 
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")

@@ -91,9 +91,9 @@ with writer.saving(fig, f"{HERE}/readme_mrx_islands_full.mp4", dpi=110):
     for f in range(FRAMES):
         draw(f)
         writer.grab_frame()
-# The README shows a GIF, which GitHub plays inline: cropped to the panels, 10 frames per second, 64 colors.
+# The README shows a GIF, which GitHub plays inline: cropped to the panels, 5 frames per second, 64 colors, under 1 MB.
 import subprocess
-crop = "crop=1040:1020:270:14,fps=10,scale=640:-1:flags=lanczos"
+crop = "crop=1040:1020:270:14,fps=5,scale=560:-1:flags=lanczos"
 movie, palette = f"{HERE}/readme_mrx_islands_full.mp4", f"{HERE}/palette.png"
 subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", movie, "-vf", f"{crop},palettegen=max_colors=64:stats_mode=diff",
                 palette], check=True)
