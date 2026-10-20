@@ -1,0 +1,82 @@
+/home/exouser/ESSOS/examples/coil_optimization/diagnose_surface_mismatch.py:40: UserWarning: Explicitly requested dtype <class 'jax.numpy.float64'> requested in zeros_like is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  x1 = jnp.zeros_like(rz_surface.rc, dtype=jnp.float64)
+/home/exouser/ESSOS/examples/coil_optimization/diagnose_surface_mismatch.py:41: UserWarning: Explicitly requested dtype <class 'jax.numpy.float64'> requested in zeros_like is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  x2 = jnp.zeros_like(rz_surface.zs, dtype=jnp.float64)
+/home/exouser/ESSOS/examples/coil_optimization/diagnose_surface_mismatch.py:42: UserWarning: Explicitly requested dtype <class 'jax.numpy.float64'> requested in zeros is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  axis_rc = jnp.zeros(2 * axis_ntor + 1, dtype=jnp.float64)
+/home/exouser/ESSOS/examples/coil_optimization/diagnose_surface_mismatch.py:43: UserWarning: Explicitly requested dtype <class 'jax.numpy.float64'> requested in zeros is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  axis_zs = jnp.zeros(2 * axis_ntor + 1, dtype=jnp.float64)
+================================================================================
+LOADING RZ ELLIPSE
+================================================================================
+
+RZ Fourier Coefficients:
+  xm (poloidal modes): [0 0 0 1 1 1 1 1 2 2 2 2 2]
+  xn (toroidal modes): [ 0  2  4 -4 -2  0  2  4 -4 -2  0  2  4]
+  rc (major radius): [ 1.0e+01  1.0e+00  0.0e+00  0.0e+00  1.0e-01  2.5e+00 -1.0e+00  0.0e+00
+  1.0e-04  0.0e+00  0.0e+00  0.0e+00  0.0e+00]
+  zs (vertical): [ 0.0e+00 -1.0e+00  0.0e+00  0.0e+00  1.0e-01  2.5e+00  1.0e+00  0.0e+00
+  1.0e-04  0.0e+00  0.0e+00  0.0e+00  0.0e+00]
+
+GFrame mapping (NFP=2):
+  mpol=2, ntor=2, axis_ntor=2
+  xm modes: [0 0 0 1 1 1 1 1 2 2 2 2 2]
+  xn modes: [ 0  2  4 -4 -2  0  2  4 -4 -2  0  2  4]
+    RZ mode (0,0=0) → axis[2]: rc=10.000000, zs=0.000000
+    RZ mode (1,0=0) → axis[3]: rc=1.000000, zs=-1.000000
+    RZ mode (2,0=0) → axis[4]: rc=0.000000, zs=0.000000
+    RZ mode (-1,1) → x1[4]=0.100000, x2[4]=0.100000
+    RZ mode (0,1) → x1[5]=2.500000, x2[5]=2.500000
+    RZ mode (1,1) → x1[6]=-1.000000, x2[6]=1.000000
+    RZ mode (-2,2) → x1[8]=0.000100, x2[8]=0.000100
+
+Extracted GFrame coefficients:
+  axis_rc: [ 0.  0. 10.  1.  0.]
+  axis_zs: [ 0.  0.  0. -1.  0.]
+  x1 (nonzero): [ 1.0e-01  2.5e+00 -1.0e+00  1.0e-04  0.0e+00  0.0e+00  0.0e+00  0.0e+00
+  0.0e+00  0.0e+00]
+  x2 (nonzero): [1.0e-01 2.5e+00 1.0e+00 1.0e-04 0.0e+00 0.0e+00 0.0e+00 0.0e+00 0.0e+00
+ 0.0e+00]
+
+================================================================================
+SURFACE GEOMETRY COMPARISON
+================================================================================
+
+RZ Surface:
+  R: min=5.604492, max=12.765518, mean=10.058084
+  Z: min=-4.045475, max=4.045475, mean=-0.000000
+
+GFrame Surface:
+  R: min=5.604555, max=12.766360, mean=10.061326
+  Z: min=-4.020621, max=4.020621, mean=0.000000
+
+Point-wise differences (R,Z):
+  ΔR: min=-1.8961906433e-02, max=9.5367431641e-07, mean=3.2414097805e-03
+  ΔZ: min=-5.8047771454e-02, max=5.8047771454e-02, mean=1.5343461186e-02
+  Distance: min=8.3446502686e-07, max=6.1045344919e-02, mean=1.5734875575e-02
+
+Worst mismatch at (phi,theta) = (0, 15):
+  RZ point: R=10.9573078156, Z=3.5987191200
+  GF point: R=10.9762020111, Z=3.5406713486
+  Distance: 6.1045344919e-02
+
+Cross-section at theta=0 (varying phi):
+phi      R_RZ            Z_RZ            R_GF            Z_GF            ΔR              ΔZ              dist           
+--------------------------------------------------------------------------------------------------------------
+0        12.6001005173   0.0000000000    12.6000995636   0.0000000000    9.5367431641e-07 0.0000000000e+00 9.5367431641e-07
+12       12.5287866592   0.0957974494    12.5288782120   0.0971510410    -9.1552734375e-05 -1.3535916805e-03 1.3566842536e-03
+24       12.4167079926   0.0551878400    12.4170265198   0.0632139891    -3.1852722168e-04 -8.0261491239e-03 8.0324672163e-03
+36       12.4230346680   -0.0637261495   12.4233951569   -0.0715560764   -3.6048889160e-04 7.8299269080e-03 7.8382212669e-03
+48       12.5388126373   -0.0922028422   12.5389661789   -0.0945159346   -1.5354156494e-04 2.3130923510e-03 2.3181827273e-03
+
+Metric comparison:
+  Area element RZ: mean=1.0587410889e+03, std=3.3492724609e+02
+  Area element GF: mean=1.0638723145e+03, std=3.4073434448e+02
+  Total area RZ:   41797.4257812500
+  Total area GF:   41999.9960937500
+
+Normal vector differences:
+  Max difference: 7.5542703271e-02
+  Mean difference: 1.3106744736e-02
+
+================================================================================

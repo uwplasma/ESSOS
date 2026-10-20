@@ -47,23 +47,33 @@ def loss(field, surface):
 
 def BdotN_constraint(field,surface,target_tol=1.e-6):
     bdotn_over_b = BdotN_over_B(surface, field)
+    bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0))/target_tol)
     bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
     #bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum((jnp.square(bdotn_over_b)-target_tol)/target_tol,0.0)))
     return bdotn_over_b_loss
+
+def BdotN_constraint_test(field,surface,target_tol=1.e-6,P=50.):
+    bdotn_over_b = BdotN_over_B(surface, field)
+    g_local = (jnp.square(bdotn_over_b) / target_tol) - 1.0
+    # 2. Agregação KS (Smooth Max) para ser uma única restrição escalar
+    # LogSumExp aproxima o máximo de forma diferenciável
+    g_max_smooth = (1.0 / P) * jax.scipy.special.logsumexp(P * g_local) - (jnp.log(len(g_local)) / P)
+    return g_max_smooth
 
 def loss_length_constraint(field):
     return jnp.maximum(0, field.coils.length - LENGTH_TARGET)
     #return jnp.maximum(0, (field.coils.length - LENGTH_TARGET)/LENGTH_TARGET)
 
 def loss_curvature_contraint(field):
+    #return jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET)/CURVATURE_TARGET
     return jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET)
     #return jnp.mean(jnp.maximum(0, (field.coils.curvature - CURVATURE_TARGET)/CURVATURE_TARGET))
 
 def loss_length(field):
-    return jnp.mean(jnp.maximum(0, field.coils.length - LENGTH_TARGET))
+    return jnp.mean(jnp.maximum(0, field.coils.length - LENGTH_TARGET))/LENGTH_TARGET
 
 def loss_curvature(field):
-    return jnp.mean(jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET))
+    return jnp.mean(jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET))/CURVATURE_TARGET
 
 
 """ Defining custom losses """
@@ -97,25 +107,26 @@ eta=1./penalty**0.1
 sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
 model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers 
 #Since we are using LBFGS-B from jaxopt, model_mu will be updated with tolerances so we do not need to difinte the model
-model_mu='Tolerance'
+model_mu='Mu_Adaptative_2'
 
 
 
 
-beta=2.                                     #penalty update parameter
+beta=1.01                                     #penalty update parameter
 mu_max=1.e4                                #Maximum penalty parameter allowed
 alpha=0.99                                  #These are parameters only used if gradient descent and adaaptative mu
 gamma=1.e-2
 epsilon=1.e-8
 omega_tol=1.e-7    #desired grad_tolerance, associated with grad of lagrangian to main parameters
-eta_tol=1.e-7    #desired contraint tolerance, associated with variation of contraints
+eta_tol=1.e-5    #desired contraint tolerance, associated with variation of contraints
+decrease_tol=0.99
 
 #curvature_constraint=alm.ScaledConstraint(alm.eq(loss_curvature_contraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad))
 #length_constraint=alm.ScaledConstraint(alm.eq(loss_length_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad))
 #field_constraint=alm.ScaledConstraint(alm.eq(BdotN_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad))
-curvature_constraint=alm.eq(loss_curvature_contraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad)
-length_constraint=alm.eq(loss_length_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad)
-field_constraint=alm.eq(BdotN_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,sq_grad=sq_grad)
+curvature_constraint=alm.ScaledConstraint(alm.eq(loss_curvature_contraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega),auto_scale=True)
+length_constraint=alm.ScaledConstraint(alm.eq(loss_length_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega),auto_scale=True)
+field_constraint=alm.ScaledConstraint(alm.eq(BdotN_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega),auto_scale=True)
 
 
 
@@ -147,18 +158,53 @@ C_Total_constraint.dependencies = {"field": init_field}
 
 #If loss=cost_function(x) is not prescribed, f(x)=0 is considered, uncomment second line to use B dot N as a loss and not a constraint
 #ALM=alm.ALM_model_jaxopt_lbfgsb(constraints,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
-ALM=alm.ALM_model_jaxopt_lbfgsb(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+ALM=alm.ALM_model_jaxopt_lbfgsb(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol,decrease_tol=decrease_tol)
 
 #Initializing lagrange multipliers
 lagrange_params=C_Total_constraint.init(init_field.dofs)
 #parameters are a tuple of the primal/main optimisation parameters and the lagrange multipliers
 params = init_field.dofs, lagrange_params
 #This is just to initialize an empty state for the lagrange multiplier update and get some information
-lag_state,grad,info=ALM.init(params)
+params,lag_state,grad,info=ALM.init(params)
+
+# Print auto-scaling factors for each constraint
+def print_weights():
+    print("\n" + "="*70)
+    print("AUTO-SCALING FACTORS FOR CONSTRAINTS")
+    print("="*70)
+    constraint_names = [
+        "Coil Length",
+        "Coil Curvature",
+        "Normal Field (BdotN)",         
+    ]
+    selective_constraints = [
+        C_length_constraint,
+        C_curvature_constraint,
+        C_normal_field_constraint,
+    ]
+    for name, sel_constraint in zip(constraint_names, selective_constraints):
+        # Access the underlying ScaledConstraint
+        scaled_constraint = sel_constraint.constraint
+        #print(f"\n{name}:")
+        #print(f"  auto_scale: {scaled_constraint.auto_scale}")
+        #print(f"  max_scale_factor: {scaled_constraint.max_scale_factor}")
+        if hasattr(scaled_constraint, '_initial_scale_scalar'):
+            if scaled_constraint._initial_scale_scalar is not None:
+                scale = float(scaled_constraint._initial_scale_scalar)
+                print(f"{name}:  → scale factor = {scale:.6e} (auto-scaled)")
+            else:
+                print(f"{name}:  → scale factor = NOT COMPUTED (auto_scale=True but _initial_scale_scalar=None)")
+                print(f"{name}:      This usually means auto-scaling evaluation failed!")
+        elif hasattr(scaled_constraint, 'scale_factor'):
+            print(f"{name}:  → scale factor = {scaled_constraint.scale_factor:.6e} (manual fallback)")
+        else:
+            print(f"{name}:  → no scaling info available")
+    print("="*70)
+
+print_weights()
 
 
-
-
+C_Total_constraint.loss(params[1],params[0])
 
 
 
@@ -231,7 +277,7 @@ opt_coils_alm.plot(ax=ax3, show=False,label='ALM optimized coils')
 surface.plot(ax=ax3, show=False)
 plt.legend()
 plt.tight_layout()
-plt.show()
+plt.savefig("coil_optimization_comparison.png", dpi=300)
 
 EXPORT = False
 if EXPORT:

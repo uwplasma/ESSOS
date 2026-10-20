@@ -58,33 +58,39 @@ init_surface_1=SurfaceRZFourier.from_input_file(elipse_input, ntheta=ntheta, nph
 init_surface_2=SurfaceRZFourier.from_input_file(elipse_input_1, ntheta=ntheta, nphi=nphi, close=True,range_torus='full period',scaling_factor=-1.2,scaling_type=jnp.inf)
 init_surface_2.change_resolution( mpol=3, ntor=3, ntheta=ntheta, nphi=nphi)
 
+# # Freeze rc[0,0] to keep major radius fixed during optimization
+# init_surface_2.freeze_dofs_by_modes(rc_modes=[(0, 0)])
+# print(f"Surface DOFs: {len(init_surface_2.all_dofs)} total, {len(init_surface_2.dofs)} free after freezing rc[0,0]")
 
-""" Creating the loss functions """
-def iota(field, surface,surface2,target_iota=0.5,delta_s=0.02):
-    B_on_surface_2= B_on_surface(surface, field)
-    #Contravariant psi/s basis vector on surface_2
-    e_s=(surface.gamma-surface2.gamma)/delta_s
-    #Calculate jacobian
-    jac=jnp.einsum('ijk,ijk->ij',e_s, jnp.cross(surface.gammadash_theta,surface.gammadash_phi,axis=-1))
-    jac_g = jac[:, :, jnp.newaxis]
-    jac_g = jnp.repeat(jac_g, 3, axis=2)
-    #jac_cov=jnp.linalg.norm(jnp.einsum('ijk,ijk->ij',e_r, jnp.cross(result['s'].gammadash_theta,result['s'].gammadash_phi,axis=-1)),keepdims=True)
-    #grad_alpha_final = -jnp.cross(B_on_surface_2, surface_2.unitnormal, axis=-1)
-    #Covariant basis vectors on surface 2
-    ##grad_psi = jnp.cross(surface.gammadash_theta,surface.gammadash_phi, axis=-1)/jac_g
-    #grad_psi=jnp.true_divide(grad_psi,jnp.linalg.norm(grad_psi,axis=-1,keepdims=True))
-    grad_theta = -jnp.cross(e_s, surface.gammadash_phi, axis=-1)/jac_g
-    grad_phi = jnp.cross(e_s, surface.gammadash_theta, axis=-1)/jac_g
-    #grad_phi=jnp.true_divide(grad_phi,jnp.linalg.norm(grad_phi,axis=-1,keepdims=True))
-    #e_phi=jnp.cross(grad_phi,grad_psi , axis=-1)
-    ###B_contravariant_psi=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_psi)*jac
-    B_contravariant_theta=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_theta)*jac
-    B_contravariant_phi=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_phi)*jac
-    #iota=jnp.average(B_contravariant_theta)/jnp.average(B_contravariant_phi)#*result['s'].nfp
-    iota=B_contravariant_theta/B_contravariant_phi#*result['s'].nfp
-    #modB=jnp.linalg.norm(B_on_surface_2,axis=-1)    
-    return iota
 
+
+
+
+
+@jax.jit
+def iota_function(field, surface):
+    # 1. Elemento de área (Jacobiano de superfície)
+    # n_vec_raw = e_theta x e_phi
+    B= B_on_surface(surface, field)
+    e_theta = surface.gammadash_theta
+    e_phi = surface.gammadash_phi
+    n_vec_raw = jnp.cross(e_theta, e_phi, axis=-1)
+    area_element = jnp.linalg.norm(n_vec_raw, axis=-1)
+    # 2. Métrica 2D da superfície (igual ao anterior)
+    g_tt = jnp.sum(e_theta**2, axis=-1)
+    g_pp = jnp.sum(e_phi**2, axis=-1)
+    g_tp = jnp.sum(e_theta * e_phi, axis=-1)
+    det_g2d = g_tt * g_pp - g_tp**2
+    # 3. Componentes contravariantes via métrica inversa
+    b_cov_theta = jnp.sum(B * e_theta, axis=-1)
+    b_cov_phi = jnp.sum(B * e_phi, axis=-1)
+    b_theta = (g_pp * b_cov_theta - g_tp * b_cov_phi) / (det_g2d + 1e-15)
+    b_phi = (g_tt * b_cov_phi - g_tp * b_cov_theta) / (det_g2d + 1e-15)
+    # 4. Integração usando o elemento de área
+    # iota = <B^theta * area> / <B^phi * area>
+    iota_local=b_theta / (b_phi )
+    iota_average = jnp.sum(iota_local * area_element) / (jnp.sum(area_element) + 1e-15)
+    return iota_local,iota_average
 
 """ Setting the losses weights and targets """
 Enforce_R0_magnitude=10000.
@@ -108,75 +114,9 @@ Toroidal_Flux_target_2=toroidal_flux(target_surface_1,target_field)
 R0_target=target_surface_2.rc[0]
 R1_target=1.0
 
-iota_target=iota(target_field, target_surface_2,target_surface_1,delta_s=0.02)
+iota_target=iota_function(target_field, target_surface_2,target_surface_1,delta_s=0.02)
 
 
-
-
-
-
-
-
-""" Creating the loss functions """
-# def loss_bdotn(field, surface):
-#     return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
-
-# def BdotN_constraint(field,surface,target_tol=1.e-6):
-#     bdotn_over_b = BdotN_over_B(surface, field)
-#     bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
-#     return bdotn_over_b_loss
-
-# def loss_length_constraint(field,surface,target_length=40.0):
-#     return jnp.maximum(0, field.coils.length - target_length)
-
-# def loss_curvature_contraint(field,surface,target_curvature=0.5):
-#     return jnp.maximum(0, field.coils.curvature - target_curvature)
-
-
-# def loss_length(field,target_length=40.0):
-#     return jnp.mean(jnp.maximum(0, field.coils.length - target_length))
-
-# def loss_curvature(field,target_curvature=0.5):
-#     return jnp.mean(jnp.maximum(0, field.coils.curvature - target_curvature))
-
-
-
-# """ Surface Constraints """
-
-# def loss_area_contraint(field,surface,target_area=900.):
-#     return jnp.maximum(0, (surface.area - target_area))#/target_area))
-
-# def loss_volume_contraint(field,surface,target_volume=2000):
-#     return jnp.maximum(0, (surface.volume - target_volume)/target_volume)
-
-# def loss_toroidal_flux_contraint(field,surface,target_toroidal_flux=1.e-5):
-#     return jnp.maximum(0, (toroidal_flux(surface,field) - target_toroidal_flux)/target_toroidal_flux)
-
-
-# """ Geometry cost functions """
-
-# def loss_quasisymmetry(field,surface):
-#     # Calculating ∇(B · ∇|B|) on the surface
-#     gamma_reshaped = jnp.reshape(surface.gamma, (-1, 3))
-#     grad_B_dot_grad_absB_on_surface = vmap(field.grad_B_dot_GradAbsB)(gamma_reshaped)
-#     # Calculating ∇ψ · ∇|B| on the surface)
-#     grad_absB_on_surface = vmap(field.dAbsB_by_dX)(gamma_reshaped)
-#     normal_reshaped = jnp.reshape(surface.unitnormal, (-1, 3))
-#     normal_cross_grad_absB_on_surface = jnp.cross(normal_reshaped, grad_absB_on_surface)
-#     qs_residual = jnp.mean(jnp.abs(jnp.sum(normal_cross_grad_absB_on_surface * grad_B_dot_grad_absB_on_surface, axis=-1)))/(1.e-7)**3
-#     return qs_residual
-
-
-# def loss_quasisymmetry_constraint(field,surface,target_QS=0.0001):
-#     # Calculating ∇(B · ∇|B|) on the surface
-#     gamma_reshaped = jnp.reshape(surface.gamma, (-1, 3))
-#     grad_B_dot_grad_absB_on_surface = vmap(field.grad_B_dot_GradAbsB)(gamma_reshaped)
-#     # Calculating ∇ψ · ∇|B| on the surface)
-#     grad_absB_on_surface = vmap(field.dAbsB_by_dX)(gamma_reshaped)
-#     normal_reshaped = jnp.reshape(surface.unitnormal, (-1, 3))
-#     normal_cross_grad_absB_on_surface = jnp.cross(normal_reshaped, grad_absB_on_surface)
-#     qs_residual = jnp.sum(jnp.maximum(jnp.abs(jnp.sum(normal_cross_grad_absB_on_surface * grad_B_dot_grad_absB_on_surface, axis=-1))-target_QS,0.0))/(1.e-7)**3
-#     return qs_residual
 
 
 """ Creating the loss functions """
@@ -279,39 +219,302 @@ def loss_toroidal_constraint(field,surface,target_QS=0.0001):
     return toroidal_residual
 
 
+# def loss_minmax_constraint(field,surface,target_minmax=0.00001):
+#     modB=jnp.linalg.norm( B_on_surface(surface, field),axis=-1).T
+#     #grad_B_poloidal=jnp.diff(modB,axis=1)
+#     #poloidal_residual = jnp.sum(jnp.maximum(jnp.abs((jnp.sum(grad_B_poloidal*grad_B_poloidal, axis=-1))-target_QS)/target_QS,0.0))/(jnp.average(modB))**2
+#     # 2. Espaço de Fourier: Fecho Poloidal e Simetria de Espelhamento
+#     coeffs = jnp.fft.rfft2(modB)
+#     # 3. Posicionamento: Mínimo no centro (phi = pi/n_fp), Máximo nas pontas (0, 2pi/n_fp)
+#     # Analisamos a componente toroidal média (m=0)
+#     b_toroidal = jnp.real(coeffs[0, :]) # Coeficientes Fourier da variação toroidal
+#     # O modo n=1 (fundamental do período de campo) deve ser positivo para que
+#     # o cosseno atinja o máximo em 0 e o mínimo em pi.
+#     # Penalizamos se o coeficiente do modo fundamental for negativo ou pequeno.
+#     loss_pos = jnp.exp(-b_toroidal[1]) 
+#     return loss_pos
+
+
+# @jax.jit
+# def loss_minmax_constraint(field,surface, target_minmax=0.00001):
+#     """
+#     Força o Mínimo e Máximo em posições reais da grelha B(phi, theta).
+#     Assume b_grid shape: (n_phi, n_theta)
+#     """
+#     b_grid = jnp.linalg.norm( B_on_surface(surface, field),axis=-1)
+#     b_grid=b_grid/jnp.average(b_grid)
+#     n_phi, n_theta = b_grid.shape
+#     phi_coords = jnp.linspace(0, 2 * jnp.pi / surface._nfp, n_phi)
+#     # 1. Reduzir a variação poloidal (média em theta) para focar no poço toroidal
+#     b_avg = jnp.mean(b_grid, axis=1) 
+#     # 2. LOCALIZAR O MÍNIMO (Soft-argmin)
+#     # Quanto maior o 'beta', mais preciso é o local, mas o gradiente fica mais 'agressivo'
+#     beta = 1000.0 
+#     weights_min = jax.nn.softmax(-b_avg * beta) # Destaca onde B é baixo
+#     phi_min_current = jnp.sum(weights_min * phi_coords)
+#     # Alvo para o Mínimo: Centro do período de campo
+#     target_min = jnp.pi / (2.0 * surface._nfp)
+#     loss_min = jnp.square(phi_min_current - target_min)
+    
+#     # 3. LOCALIZAR O MÁXIMO (Soft-argmax)
+#     weights_max = jax.nn.softmax(b_avg * beta) # Destaca onde B é alto
+#     phi_max_current = jnp.sum(weights_max * phi_coords)
+    
+#     # Alvo para o Máximo: As pontas (0 ou 2pi/n_fp)
+#     # Como a grelha é periódica, usamos o cosseno para o alvo do máximo
+#     # O cosseno é máximo em 0 e 2pi/n_fp. 
+#     # Queremos que a posição do máximo tenha cos(phi * n_fp) = 1
+#     loss_max = 1.0 - jnp.cos(phi_max_current * surface._nfp)
+    
+#     return jnp.array([loss_min, loss_max])
+
+
+# @jax.jit
+# def loss_minmax_constraint(field,surface, target_minmax=0.00001):
+#     """
+#     Força o mínimo no centro e o máximo nas pontas.
+#     b_grid shape: (n_phi, n_theta)
+#     """
+#     n_phi, n_theta = b_grid.shape
+#     phi_coords = jnp.linspace(0, 2 * jnp.pi / surface._nfp, n_phi)
+#     # Média poloidal para focar no perfil toroidal
+#     b_avg = jnp.mean(b_grid, axis=1) 
+#     # 1. Normalizar b_avg entre 0 e 1 para usar como peso
+#     b_norm = (b_avg - jnp.min(b_avg)) / (jnp.max(b_avg) - jnp.min(b_avg) + 1e-8)
+#     # 2. Penalizar o Mínimo:
+#     # Queremos que o valor de B seja o mais baixo possível perto de pi/n_fp.
+#     # Criamos um "peso alvo" que é 1.0 no centro e 0.0 nas bordas.
+#     target_well = jnp.sin(phi_coords * (surface._nfp / 2))**2  # Máximo no centro (pi/n_fp)
+#     # Se B for alto onde target_well é alto, penalizamos.
+#     # Isto empurra o "buraco" do campo para o centro.
+#     loss_min = jnp.mean(b_norm * target_well)
+#     # 3. Penalizar o Máximo:
+#     # Queremos B alto nas bordas (0, 2pi/n_fp). 
+#     # Usamos um peso que é 1.0 nas bordas e 0.0 no centro.
+#     target_peaks = jnp.cos(phi_coords * (surface._nfp / 2))**2
+#     loss_max = jnp.mean((1.0 - b_norm) * target_peaks)
+    
+#     return jnp.array([loss_min, loss_max])
+
+
+
+
+
+
+# @jax.jit
+# def spectral_omnigenity_penalty(b_grid, m_target, n_target, n_fp):
+#     """
+#     m_target, n_target: define a helicidade do fecho dos contornos.
+#     QI/Toroidal: m=1, n=0
+#     Helical: m=1, n=1 (ou outro valor de n)
+#     """
+#     coeffs = jnp.fft.rfft2(b_grid)
+#     coeffs_mag = jnp.abs(coeffs)
+    
+#     n_theta, n_phi_half = coeffs.shape
+#     m_idx = jnp.arange(n_theta)
+#     n_idx = jnp.arange(n_phi_half)
+#     M, N = jnp.meshgrid(m_idx, n_idx, indexing='ij')
+
+#     # A métrica de fecho: penalizamos modos que NÃO seguem a linha m*n_target = n*m_target
+#     # Para QI (n_target=0), isto reduz-se a penalizar todos os n > 0.
+#     condition = jnp.abs(M * n_target * n_fp - N * m_target)
+    
+#     # Criamos um filtro que penaliza tudo o que se afasta da helicidade desejada
+#     penalty_mask = jnp.where(condition < 1e-5, 1.0, 100.0)
+    
+#     return jnp.sum(penalty_mask * coeffs_mag**2)
+
+
+
+# @jax.jit
+# def universal_position_loss(b_grid, m_target, n_target, n_fp):
+#     """
+#     Força o máximo e o mínimo ao longo da direção helicoidal escolhida.
+#     """
+#     # Para omnigeneidade geral, a simetria de estelarator deve ser mantida
+#     # em relação à fase helicoidal. A forma mais simples é manter a 
+#     # penalização da parte imaginária (senos) na FFT.
+#     coeffs = jnp.fft.rfft2(b_grid)
+#     loss_symmetry = jnp.sum(jnp.imag(coeffs)**2)
+    
+#     # Perfil: Queremos que o modo fundamental da hélice (m_target, n_target)
+#     # seja o dominante e tenha a fase correta.
+#     b_real = jnp.real(coeffs)
+#     mode_amplitude = b_real[m_target, n_target]
+    
+#     # Penaliza se a hélice principal for fraca ou tiver sinal invertido
+#     loss_profile = jnp.exp(-mode_amplitude) 
+    
+#     return loss_symmetry + loss_profile
+
+
+
+@jax.jit
+def loss_minmax_constraint(field,surface, target_minmax=0.00001,M_target=1,N_target=0):
+    """
+    Força a fase do primeiro harmónico toroidal a ser um cosseno positivo.
+    Garante máximo em 0 e mínimo em pi.
+    """
+    b_grid = jnp.linalg.norm( B_on_surface(surface, field),axis=-1)
+    # FFT apenas no eixo toroidal (phi)
+    coeffs_phi = jnp.fft.rfft2(b_grid/jnp.mean(b_grid))
+    # O modo n=1 é o fundamental.
+    # Queremos que ele seja puramente Real e Positivo: B ~ cos(phi)
+    mode_1 = coeffs_phi[M_target,N_target]
+    # Penaliza a parte imaginária (desvio de fase)
+    loss_phase = jnp.abs(jnp.imag(mode_1)) 
+    # Penaliza se a parte real for negativa (mínimo vira máximo)
+    loss_sign = jnp.maximum(0, -jnp.real(mode_1)) 
+    return jnp.array([loss_phase, loss_sign])
+
+# def loss_poloidal_constraint(field,surface):
+#     modB=jnp.linalg.norm( B_on_surface(surface, field),axis=-1).T
+#     #grad_B_poloidal=jnp.diff(modB,axis=1)
+#     #poloidal_residual = jnp.sum(jnp.maximum(jnp.abs((jnp.sum(grad_B_poloidal*grad_B_poloidal, axis=-1))-target_QS)/target_QS,0.0))/(jnp.average(modB))**2
+#     # 2. Espaço de Fourier: Fecho Poloidal e Simetria de Espelhamento
+#     coeffs = jnp.fft.rfft2(modB/jnp.average(modB))
+#     # Penaliza modos toroidais (n > 0) para fecho poloidal
+#     loss_poloidal = jnp.sqrt(jnp.sum(jnp.abs(coeffs[:, 1:])**2))
+#     return loss_poloidal
+
+
+def loss_poloidal_constraint(field,surface,target_poloidal=0.00001,M_target=1,N_target=0):
+    modB=jnp.linalg.norm( B_on_surface(surface, field),axis=-1)
+    #grad_B_poloidal=jax.grad(modB, argnums=1)
+    grad_B_poloidal=jnp.diff(modB,axis=1)
+    #grad_B_toroidal=jnp.diff(modB,axis=0)[:, :-1]
+    #gradB=M_target*grad_B_poloidal + surface._nfp*N_target*grad_B_toroidal
+    #poloidal_residual = jnp.sum(jnp.maximum(jnp.abs((jnp.sum(gradB*gradB, axis=-1))/(jnp.average(modB))**2-target_poloidal)/target_poloidal,0.0))
+    poloidal_residual = jnp.sum(jnp.maximum(jnp.abs((jnp.sum(grad_B_poloidal*grad_B_poloidal, axis=-1))/(jnp.average(modB))**2-target_poloidal)/target_poloidal,0.0))
+    return poloidal_residual
+
+
+# @jax.jit
+# def loss_poloidal_constraint(field,surface,target_poloidal=0.00001, m_target=1, n_target=0):
+#     """
+#     m_target, n_target: define a helicidade do fecho dos contornos.
+#     QI/Toroidal: m=1, n=0
+#     Helical: m=1, n=1 (ou outro valor de n)
+#     """
+#     modB = jnp.linalg.norm( B_on_surface(surface, field),axis=-1).T
+#     nfp=surface._nfp
+#     coeffs = jnp.fft.rfft2(modB/jnp.average(modB))
+#     coeffs_mag = jnp.abs(coeffs)
+#     n_theta, n_phi_half = coeffs.shape
+#     m_idx = jnp.arange(n_theta)
+#     n_idx = jnp.arange(n_phi_half)
+#     M, N = jnp.meshgrid(m_idx, n_idx, indexing='ij')
+#     # A métrica de fecho: penalizamos modos que NÃO seguem a linha m*n_target = n*m_target
+#     # Para QI (n_target=0), isto reduz-se a penalizar todos os n > 0.
+#     condition = jnp.abs(M * n_target * nfp - N * m_target)
+#     # Criamos um filtro que penaliza tudo o que se afasta da helicidade desejada
+#     penalty_mask = jnp.where(condition < 1e-5, 0.0, 1.0)
+#     return jnp.sum(penalty_mask * coeffs_mag)
+
+
+def loss_mirror_constraint(field,surface,target_mirror=0.29):
+    modB=jnp.linalg.norm( B_on_surface(surface, field),axis=-1).T
+    # 4. Mirror Ratio (Profundidade do Poço)
+    b_min, b_max = jnp.min(modB), jnp.max(modB)
+    mirror_val = (b_max - b_min) / (b_max + b_min)
+    loss_mirror = jnp.maximum(mirror_val - target_mirror, 0.0)    
+    return jnp.maximum(loss_mirror-0.00001, 0)/0.00001
+
+import jax
+@jax.jit
+def compute_J_dynamic_lambda(b_grid,dl_dphi, iota, nfp,f_trapped, alpha, phi_coords):
+    """
+    Calcula J usando um lambda que se ajusta automaticamente ao campo.
+    f_trapped: float entre 0 e 1 (0 = fundo do poço, 1 = topo do poço)
+    """
+    n_theta, n_phi = b_grid.shape
+    # 1. Caracterização dinâmica do poço (diferenciável)
+    b_min = jnp.min(b_grid)
+    b_max = jnp.max(b_grid)
+    # 2. Definir lambda como uma fração do intervalo de aprisionamento
+    # lambda = 1/B_reflect. Queremos B_reflect entre b_min e b_max.
+    # B_reflect = b_min + f_trapped * (b_max - b_min)
+    b_reflect = b_min + f_trapped * (b_max - b_min)
+    lmbda = 1.0 / (b_reflect + 1e-10) # Evitar divisão por zero
+    # 3. Traçar linha de campo e interpolar
+    theta_coords = iota * phi_coords + alpha
+    coords = jnp.stack([(theta_coords % (2 * jnp.pi)) * (n_theta / (2 * jnp.pi)),
+    (phi_coords % (2 * jnp.pi/nfp)) * (n_phi / (2 * jnp.pi/nfp))])
+    
+    dl_dphi_along_line = jax.scipy.ndimage.map_coordinates(dl_dphi, coords, order=1, mode='wrap')
+    b_along_line = jax.scipy.ndimage.map_coordinates(b_grid, coords, order=1, mode='wrap')
+    # # 4. v_parallel = sqrt(1 - lambda * B)
+    # # Nota: E=1 explícito, J proporcional à integral de v_par
+    # v_par_sq = 1.0 - lmbda * b_along_line
+    # v_par = jnp.sqrt(jnp.maximum(0, v_par_sq))
+        # 4. v_parallel com Epsilon para evitar grad(sqrt(0)) = NaN
+    v_par_sq = 1.0 - lmbda * b_along_line
+    # Usamos uma máscara suave para zerar onde v_par_sq < 0
+    # Mas mantemos um epsilon dentro da raiz para o gradiente
+    
+    v_par = jnp.sqrt(jnp.where(v_par_sq > 0, v_par_sq + 1e-9, 0.0))
+    return jnp.trapezoid(v_par*dl_dphi_along_line, phi_coords)
+
+@partial(jax.jit, static_argnames=['n_phi','nalphas'])
+def loss_omnigenity_dynamic(b_grid, dl_dphi, iota,nfp, f_trapped=0.5,n_phi=1000,nalphas=16):
+    """
+    Métrica de omnigeneidade para uma classe de partículas (f_trapped).
+    """
+    phi_coords = jnp.linspace(0, 2 * jnp.pi/nfp, n_phi) # 10 voltas para garantir amostragem
+    #phi_coords = jnp.linspace(0, 2 * jnp.pi * 20, n_phi) # 20 voltas para garantir amostragem
+    alphas = jnp.linspace(0, 2 * jnp.pi, nalphas)
+    # Calcular J para todos os alphas
+    j_values = jax.vmap(compute_J_dynamic_lambda, in_axes=(None, None,None, None, None, 0, None))(
+        b_grid, dl_dphi, iota, nfp, f_trapped, alphas, phi_coords)
+    # Retorna variância relativa
+    return jnp.var(j_values) / (jnp.mean(j_values)**2 + 1e-7)
+
+# @jax.jit
+# def qi_combined_loss(field,surface, iota=0.41):
+#     # Omnigeneidade em 3 níveis do poço (fundo, meio, topo)    
+#     b_grid = jnp.linalg.norm(B_on_surface(surface, field), axis=-1).T
+#     #_,iota=iota(field, surface,target_surface_1,delta_s=0.02)
+#     loss_j=jnp.array([loss_omnigenity_dynamic(b_grid, iota, nfp, 0.1),loss_omnigenity_dynamic(b_grid, iota, nfp, 0.2),loss_omnigenity_dynamic(b_grid, iota, nfp, 0.3),loss_omnigenity_dynamic(b_grid, iota, nfp, 0.5),loss_omnigenity_dynamic(b_grid, iota, nfp, 0.8),loss_omnigenity_dynamic(b_grid, iota, nfp, 0.9)])
+#     return loss_j
+
+
+@partial(jax.jit, static_argnames=['nphi','nalphas','n_lambdas'])
+def qi_combined_loss(field,surface, iota=0.41,nphi=1000,nalphas=51,n_lambdas=66):
+    #Surface quantities
+    b_grid = jnp.linalg.norm(B_on_surface(surface, field), axis=-1).T
+    dl_dphi=jnp.linalg.norm(surface.gammadash_phi + iota*surface.gammadash_theta, axis=-1).T
+    #_,iota=iota_function(field, surface)
+    nfp=surface._nfp
+    # Numero de wells de aprisionamento    
+    lambda_array = jnp.linspace(0.0, 1.0, n_lambdas)
+    # # 1. Definimos uma função que calcula a variância para um único f
+    # def single_f_loss(f,iota=iota, nfp=nfp,nphi=nphi,nalphas=nalphas):
+    #     j_value = jax.vmap(loss_omnigenity_dynamic, in_axes=(None, None,None, 0, None,None))(
+    #         b_grid, iota, nfp, lambda, nphi, nalphas)
+    #     return j_value
+    #Vmap over lambda_array
+    J_lambda=jax.vmap(loss_omnigenity_dynamic, in_axes=(None, None,None, None,0, None,None))(b_grid, dl_dphi, iota, nfp, lambda_array, nphi, nalphas)
+    return J_lambda
 
 
 """ Creating the loss functions """
-def loss_iota(field, surface,surface2,target_iota=0.5,delta_s=0.02):
-    B_on_surface_2= B_on_surface(surface, field)
-    #Contravariant psi/s basis vector on surface_2
-    e_s=(surface.gamma-surface2.gamma)/delta_s
-    #Calculate jacobian
-    jac=jnp.einsum('ijk,ijk->ij',e_s, jnp.cross(surface.gammadash_theta,surface.gammadash_phi,axis=-1))
-    jac_g = jac[:, :, jnp.newaxis]
-    jac_g = jnp.repeat(jac_g, 3, axis=2)
-    #jac_cov=jnp.linalg.norm(jnp.einsum('ijk,ijk->ij',e_r, jnp.cross(result['s'].gammadash_theta,result['s'].gammadash_phi,axis=-1)),keepdims=True)
-    #grad_alpha_final = -jnp.cross(B_on_surface_2, surface_2.unitnormal, axis=-1)
-    #Covariant basis vectors on surface 2
-    ##grad_psi = jnp.cross(surface.gammadash_theta,surface.gammadash_phi, axis=-1)/jac_g
-    #grad_psi=jnp.true_divide(grad_psi,jnp.linalg.norm(grad_psi,axis=-1,keepdims=True))
-    grad_theta = -jnp.cross(e_s, surface.gammadash_phi, axis=-1)/jac_g
-    grad_phi = jnp.cross(e_s, surface.gammadash_theta, axis=-1)/jac_g
-    #grad_phi=jnp.true_divide(grad_phi,jnp.linalg.norm(grad_phi,axis=-1,keepdims=True))
-    #e_phi=jnp.cross(grad_phi,grad_psi , axis=-1)
-    ###B_contravariant_psi=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_psi)*jac
-    B_contravariant_theta=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_theta)*jac
-    B_contravariant_phi=jnp.einsum('ijk,ijk->ij',B_on_surface_2, grad_phi)*jac
-    #iota=jnp.average(B_contravariant_theta)/jnp.average(B_contravariant_phi)#*result['s'].nfp
-    iota=B_contravariant_theta/B_contravariant_phi#*result['s'].nfp
-    #modB=jnp.linalg.norm(B_on_surface_2,axis=-1)    
-    #iota_residual=jnp.sum(jnp.maximum(jnp.abs((iota-target_iota)/target_iota),0.0))
-    #iota_residual=jnp.sum(jnp.abs((iota-target_iota)/target_iota))#*1000.
-    #iota_residual=jnp.abs((iota-target_iota))
-    #iota_residual=jnp.maximum(jnp.abs((iota-target_iota))-0.01,0.0)
-    iota_precision=0.001   
-    iota_residual=(jnp.abs((iota-target_iota))-iota_precision)/iota_precision
+def loss_iota(field, surface,target_iota=0.41):
+    iota,iota_average= iota_function(field, surface)
+    iota_variance=0.3
+    iota_target=0.41
+    iota_precision=0.01
+    iota_max=0.43
+    iota_min=0.405
+    #iota_residual=(jnp.abs((iota-target_iota))-iota_precision)/iota_precision
+    #iota_residual=(jnp.abs((iota-iota_target))-iota_precision)/iota_precision
+    #iota_residual=(jnp.append(jnp.abs(iota_average-iota_target)/jnp.abs(iota_target),jnp.maximum(jnp.abs(iota-iota_target)/jnp.abs(iota_target)-iota_variance,0.0)/iota_variance)-iota_precision)/iota_precision
+    iota_residual=(jnp.append(jnp.abs(iota_average-iota_target)/jnp.abs(iota_target),(jnp.maximum(0.0,iota_min-iota)+jnp.maximum(0.0,iota-iota_max))/iota_target)-iota_precision)/iota_precision
+    #iota_residual=(jnp.abs((iota_average-iota_target))-iota_precision)/iota_precision
     return iota_residual
+
+
+
 
 """ Creating the loss functions """
 def loss_boozer(field, surface,surface2,delta_s=0.02):
@@ -337,7 +540,7 @@ loss_currents_contraint = custom_loss(loss_currents_contraint, "field", target_c
 L_area = custom_loss(loss_area_contraint, "surface", target_area=Area_Target)
 L_volume = custom_loss(loss_volume_contraint, "surface", target_volume=Volume_Target)
 L_toroidal_flux = custom_loss(loss_toroidal_flux_contraint, "field", "surface", target_toroidal_flux=Toroidal_Flux_target)
-L_R0 = custom_loss(loss_R0_contraint, "surface", target_R0=R0_target)
+#L_R0 = custom_loss(loss_R0_contraint, "surface", target_R0=R0_target)
 L_R1 = custom_loss(loss_R1_contraint, "surface", target_R1=R1_target)
 
 L_QS = custom_loss(loss_quasisymmetry, "field", "surface")
@@ -361,7 +564,7 @@ L_normal_field_constraint.dependencies = {"field": init_field, "surface": init_s
 L_area.dependencies = {"surface": init_surface_2}
 L_volume.dependencies = {"surface": init_surface_2}
 L_toroidal_flux.dependencies = {"field": init_field, "surface": init_surface_2}
-L_R0.dependencies = {"surface": init_surface_2}
+#L_R0.dependencies = {"surface": init_surface_2}
 L_R1.dependencies = {"surface": init_surface_2}
 
 L_QS.dependencies = {"field": init_field, "surface": init_surface_2}
@@ -392,7 +595,7 @@ model_mu='Mu_Adaptative_2'
 
 
 beta=2.                                     #penalty update parameter
-mu_max=1.e6                                #Maximum penalty parameter allowed
+mu_max=1.e4                                #Maximum penalty parameter allowed
 alpha=0.99                                  #These are parameters only used if gradient descent and adaaptative mu
 gamma=1.e-2
 epsilon=1.e-8
@@ -411,7 +614,10 @@ R0_constraint=alm.ScaledConstraint(alm.eq(loss_R0_contraint,model_lagrangian=mod
 #R1_constraint=alm.ScaledConstraint(alm.eq(L_R1,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,eta=eta,sq_grad=sq_grad))
 QS_constraint=alm.ScaledConstraint(alm.eq(loss_quasisymmetry_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,eta=eta,sq_grad=sq_grad))
 iota_constraint=alm.ScaledConstraint(alm.eq(loss_iota,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,eta=eta,sq_grad=sq_grad))
-
+poloidal_constraint=alm.ScaledConstraint(alm.eq(loss_poloidal_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,eta=eta,sq_grad=sq_grad))
+minmax_constraint=alm.ScaledConstraint(alm.eq(loss_minmax_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,eta=eta,sq_grad=sq_grad))
+mirror_constraint=alm.ScaledConstraint(alm.eq(loss_mirror_constraint,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,eta=eta,sq_grad=sq_grad))
+omnigenity_constraint=alm.ScaledConstraint(alm.eq(qi_combined_loss,model_lagrangian=model_lagrangian, multiplier=multiplier,penalty=penalty,omega=omega,eta=eta,sq_grad=sq_grad))
 
 
 C_normal_field_constraint = alm.SelectiveConstraint(field_constraint, "field", "surface", target_tol=BDOTN_TARGET)
@@ -422,10 +628,16 @@ C_volume_constraint = alm.SelectiveConstraint(volume_constraint, "surface", targ
 C_toroidal_flux_constraint = alm.SelectiveConstraint(toroidal_flux_constraint, "field", "surface", target_toroidal_flux=Toroidal_Flux_target)
 C_R0_constraint = alm.SelectiveConstraint(R0_constraint,  "surface", target_R0=R0_target)
 C_QS_constraint = alm.SelectiveConstraint(QS_constraint,"field", "surface", target_QS=0.000001)
-C_iota_constraint = alm.SelectiveConstraint(iota_constraint,  "field", "surface", surface2=target_surface_1, target_iota=iota_target, delta_s=0.02)
+C_iota_constraint = alm.SelectiveConstraint(iota_constraint,  "field", "surface", target_iota=iota_target)
+C_poloidal_constraint = alm.SelectiveConstraint(poloidal_constraint,  "field", "surface", target_poloidal=0.00001, M_target=1, N_target=0)
+C_minmax_constraint = alm.SelectiveConstraint(minmax_constraint,  "field", "surface", target_minmax=0.00001,M_target=1,N_target=0)
+C_mirror_constraint = alm.SelectiveConstraint(mirror_constraint,  "field", "surface", target_mirror=0.29)
+C_QI_constraint = alm.SelectiveConstraint(omnigenity_constraint,  "field", "surface", iota=0.41,nphi=601,nalphas=51,n_lambdas=401)
 
 
-C_Total_constraint = alm.combine(C_normal_field_constraint, C_length_constraint, C_curvature_constraint, C_area_constraint, C_volume_constraint, C_toroidal_flux_constraint, C_R0_constraint, C_QS_constraint, C_iota_constraint)
+#C_Total_constraint = alm.combine(C_normal_field_constraint, C_length_constraint, C_curvature_constraint, C_area_constraint, C_volume_constraint, C_toroidal_flux_constraint, C_R0_constraint, C_iota_constraint, C_poloidal_constraint, C_mirror_constraint,C_minmax_constraint,C_QI_constraint )
+C_Total_constraint = alm.combine(C_normal_field_constraint, C_length_constraint, C_curvature_constraint, C_area_constraint, C_volume_constraint,  C_toroidal_flux_constraint, C_R0_constraint, C_iota_constraint, C_poloidal_constraint, C_mirror_constraint,C_minmax_constraint,C_QI_constraint)
+#C_Total_constraint = alm.combine(C_normal_field_constraint, C_length_constraint, C_curvature_constraint,  C_toroidal_flux_constraint, C_R0_constraint,  C_poloidal_constraint, C_mirror_constraint,C_minmax_constraint,C_QI_constraint )
 
 
 
@@ -438,9 +650,14 @@ C_curvature_constraint.dependencies = {"field": init_field}
 C_area_constraint.dependencies = {"surface": init_surface_2}
 C_volume_constraint.dependencies = {"surface": init_surface_2}
 C_toroidal_flux_constraint.dependencies = {"field": init_field, "surface": init_surface_2}
-C_R0_constraint.dependencies = {"surface": init_surface_2}
+#C_R0_constraint.dependencies = {"surface": init_surface_2}
 C_QS_constraint.dependencies = {"field": init_field, "surface": init_surface_2}
 C_iota_constraint.dependencies = {"field": init_field, "surface": init_surface_2}
+C_poloidal_constraint.dependencies = {"field": init_field, "surface": init_surface_2}
+C_minmax_constraint.dependencies = {"field": init_field, "surface": init_surface_2}
+C_mirror_constraint.dependencies = {"field": init_field, "surface": init_surface_2}
+C_QI_constraint.dependencies = {"field": init_field, "surface": init_surface_2}
+
 
 C_Total_constraint.dependencies = {"field": init_field, "surface": init_surface_2}  
 
@@ -449,13 +666,17 @@ C_Total_constraint.dependencies = {"field": init_field, "surface": init_surface_
 ALM=alm.ALM_model_jaxopt_lbfgsb(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,model_mu=model_mu,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
 
-
-
+# Get starting DOFs - this will respect frozen DOFs because init_surface_2 is already frozen
+# The starting_dofs combines coils.dofs and surface.dofs (which excludes frozen DOFs)
+starting_dofs = L_QS.starting_dofs
+print(f"Starting DOFs shape: {starting_dofs.shape}")
+print(f"  Coils DOFs: {init_field.coils.dofs.size}")
+print(f"  Surface free DOFs: {init_surface_2.dofs.size} (frozen DOFs excluded)")
 
 #Initializing lagrange multipliers
-lagrange_params=C_Total_constraint.init(L_QS.starting_dofs)
+lagrange_params=C_Total_constraint.init(starting_dofs)
 #parameters are a tuple of the primal/main optimisation parameters and the lagrange multipliers
-params = L_QS.starting_dofs, lagrange_params
+params = starting_dofs, lagrange_params
 #This is just to initialize an empty state for the lagrange multiplier update and get some information
 lag_state,grad,info=ALM.init(params)
 
@@ -478,7 +699,7 @@ while i<=4000 and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(in
 t_end = time()
 
 import pickle
-with open('alm_optimization_QA_correct_no_island_QA_mn3_more.pkl', 'wb') as f:
+with open('alm_optimization_QI_test_new.pkl', 'wb') as f:
     pickle.dump(params, f)
     pickle.dump(lag_state, f)
     pickle.dump(grad, f)
@@ -488,7 +709,7 @@ with open('alm_optimization_QA_correct_no_island_QA_mn3_more.pkl', 'wb') as f:
 
 
 import pickle
-with open('alm_optimization_QA_correct_no_island_QA_mn3_more.pkl', 'rb') as f:
+with open('alm_optimization_QI_test_new.pkl', 'rb') as f:
     params=pickle.load(f)
     lag_state=pickle.load( f)
     grad=pickle.load( f)
@@ -503,6 +724,14 @@ opt_coils_alm = opt_field_alm.coils
 opt_surface_alm_2= C_Total_constraint.dofs_to_pytree(params[0])[1]
 #opt_surface_alm_1= L_normal_field_constraint.dofs_to_pytree(params[0])[2]
 
+# Verify frozen DOF was preserved
+print(f"\n=== Frozen DOF Verification ===")
+print(f"Initial rc[0,0] (frozen): {init_surface_2.rc[0]:.6f}")
+print(f"Optimized rc[0,0] (should be same): {opt_surface_alm_2.rc[0]:.6f}")
+print(f"Full rc array shape: {opt_surface_alm_2.rc.shape}")
+print(f"Full zs array shape: {opt_surface_alm_2.zs.shape}")
+print(f"Free DOFs in optimized surface: {len(opt_surface_alm_2.dofs)}")
+print(f"Total DOFs (including frozen): {len(opt_surface_alm_2.all_dofs)}")
 
 
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")
@@ -532,10 +761,18 @@ plt.legend()
 plt.tight_layout()
 plt.savefig('coils_and_surfaces.pdf')
 iota(opt_field_alm, opt_surface_alm_2,target_surface_1,delta_s=0.02)
-jnp.average(iota(opt_field_alm, opt_surface_alm_2,target_surface_1,delta_s=0.02))
+C_Total_constraint.loss(params[1],params[0])
 
 
 
+B_final= B_on_surface(opt_surface_alm_2, opt_field_alm)
+modB=jnp.linalg.norm(B_final,axis=-1)
+
+
+fig, ax = plt.subplots(figsize=(6, 6))
+plt.contour(opt_surface_alm_2.phi2d,opt_surface_alm_2.theta2d, modB, levels=20, cmap='viridis') # Using 20 levels and 'viridis' colorma
+plt.colorbar()
+plt.savefig('modB.png', dpi=300)
 
 # # Field line tracing
 from jax import block_until_ready
@@ -548,7 +785,7 @@ nfieldlines_per_core = 40
 nfieldlines = nfieldlines_per_core * number_of_processors_to_use
 #R0 = jnp.linspace(11.2, 14.9, nfieldlines)
 #R0 = jnp.linspace(10.5, 11.5, nfieldlines)
-R0 = jnp.linspace(11.7, 13.1, nfieldlines)
+R0 = jnp.linspace(11.7, 13.3, nfieldlines)
 trace_tolerance = 1e-7
 num_steps = 60000
 

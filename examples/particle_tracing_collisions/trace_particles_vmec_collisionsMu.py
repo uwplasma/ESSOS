@@ -55,7 +55,7 @@ tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuFixed', particles=
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
 print(f"Particle 1 lost {tracing.lost_energies[0]} Joules while hitting (s, theta, phi)=({tracing.lost_positions[0,0]:.2f},{tracing.lost_positions[0,1]:.2f},{tracing.lost_positions[0,2]:.2f})")
-trajectories = tracing.trajectories
+
 
 # Plot trajectories, velocity parallel to the magnetic field, loss fractions and/or energy error
 fig = plt.figure(figsize=(9, 8))
@@ -71,12 +71,14 @@ tracing.plot(ax=ax1, show=False, n_trajectories_plot=nparticles)
 for i in np.random.choice(nparticles, size=n_particles_to_plot, replace=False):
     trajectory = trajectories[i]
     ## Plot energy error
-    ax2.plot(tracing.times, (tracing.energy[i]-tracing.energy[i][0])/tracing.energy[i][0], label=f'Particle {i+1}')
+    ax2.plot(tracing.times, (tracing.energy()[i]-tracing.energy()[i][0])/tracing.energy()[i][0], label=f'Particle {i+1}')
     ## Plot velocity parallel to the magnetic field
     ax3.plot(tracing.times, trajectory[:, 3]*SPEED_OF_LIGHT/jnp.sqrt(tracing.energy[i]/particles.mass*2.), label=f'Particle {i+1}')
     ## Plot s-coordinate
     ax4.plot(tracing.times, trajectory[:,0], label=f'Particle {i+1}')
-    # ax4.set_ylabel(r'$s=\psi/\psi_b$')
+    # ax4.set_ylabel(r'trajectories = tracing.trajectories$s=\psi/\psi_b$')
+
+
 ## Plot loss fractions
 #ax4.plot(tracing.times, tracing.loss_fractions)
 #ax4.set_ylabel('Loss Fraction');ax4.set_ylim(0, 1);ax4.set_xscale('log')
@@ -87,7 +89,7 @@ ax3.set_ylabel(r'$v_{\parallel}/v$')
 ax3.set_xlabel('Time (s)')
 ax4.set_xlabel('Time (s)')
 plt.tight_layout()
-plt.show()
+plt.savefig('tracing_particles_vmec_collisionsMu.png', dpi=300)
 
 # # Save results in vtk format to analyze in Paraview
 # vmec.surface.to_vtk('surface')
