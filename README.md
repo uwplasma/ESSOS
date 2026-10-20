@@ -203,6 +203,41 @@ is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
 and its derivatives, together with the flux functions `G`, `I` and `iota`.
 
+### Prescribed analytical Alfvén perturbations
+
+Analytical modes supply `delta A = alpha B0` and an electric potential to the
+existing guiding-centre equations, in Boozer coordinates or full VMEC geometry.
+The corrections include magnetic flutter, induction and the parallel-force
+correction, with constant magnetic moment and physical wave energy exchange.
+
+```python
+from essos.gc_perturbations import AnalyticalVmecAlfvenMode
+
+wave = AnalyticalVmecAlfvenMode(3, 2, 9e5, 2e4,
+                              radial_center=.4, radial_width=.5)
+tracing = Tracing(field=field, particles=particles,
+                  model="GuidingCenterAdaptative", perturbation=wave,
+                  maxtime=2e-7, times_to_trace=9, progress=False)
+```
+
+The [small CPU example](examples/particle_tracing/vmec_alfven_cpu_smoke.py)
+traces two particles with and without a wave under a 120-second cap.
+[Equations, conservation checks and reproduction commands](docs/analytical_perturbations.rst)
+describe the model and its limits.
+
+![Paul alpha-loss comparison: 100 particles per curve](docs/_static/analytical_perturbations/paul_loss_100.png)
+
+The Paul comparison uses the same 100 initial particles for Boozer / Perfect QS
+and VMEC / full equilibrium, without and with the m=15 wave. Weighted losses
+are 12.25% / 21.53% for Boozer and 12.25% / 20.56% for VMEC. Published endpoints
+are shown as crosses. This small comparison does not establish quantitative
+paper reproduction. Compact saved data regenerate all documentation figures
+without particle tracing:
+
+```bash
+python -m examples.benchmarks.plot_alfven_results
+```
+
 ## Comparison with other codes
 
 256 collisionless 3.5 MeV alphas per equilibrium, started at `s = 0.5` with
