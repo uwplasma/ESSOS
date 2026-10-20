@@ -1,0 +1,11 @@
+jax
+jaxlib
+tqdm
+matplotlib
+diffrax
+optax
+jaxopt
+optimistix
+scipy
+jaxkd
+netcdf4
