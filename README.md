@@ -143,44 +143,18 @@ full-orbit, collisional and electric-field variants.
 
 ## Cartesian collision coefficients
 
-For custom Cartesian particle SDEs, `essos.collisions` provides opt-in
-nonrelativistic Maxwellian test-particle coefficients in SI units. Specify
-positive pair Coulomb logs explicitly; the existing tracer collision models
-keep their current behavior.
+`essos.collisions.maxwellian_cartesian_coefficients` returns Maxwellian
+test-particle Ito drift, diffusion and symmetric noise in Cartesian coordinates.
+Use SI units, temperatures in eV, and explicit positive pair Coulomb logs.
+Logs may also be a differentiable function of speed squared; their derivatives
+are included in the drift. The function docstring specifies shapes and units.
 
-```python
-import jax
-jax.config.update("jax_enable_x64", True)
-import jax.numpy as jnp
-from essos.collisions import maxwellian_cartesian_coefficients
-from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, PROTON_MASS, ELEMENTARY_CHARGE
-
-coeff = maxwellian_cartesian_coefficients(
-    jnp.array([1e5, 0., 0.]), ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE,
-    bath_mass=jnp.array([2 * PROTON_MASS]),       # kg
-    bath_charge=jnp.array([ELEMENTARY_CHARGE]),  # C
-    density=jnp.array([1e20]),                  # m^-3
-    temperature=jnp.array([1000.]),             # eV
-    coulomb_logs=jnp.array([15.]),
-)
-# dV = coeff.ito_drift*dt + coeff.noise@dW
-# coeff.noise @ coeff.noise.T == 2*coeff.diffusion
-```
-
-A differentiable `coulomb_logs(speed_squared)` callable may instead return a
-scalar or one value per bath species; its argument is in m²/s². The Ito drift
-includes each log's regular speed derivative. The utility selects no screening
-policy and cannot supply interface terms for discontinuous log models. It
-returns NaNs for invalid numerical parameters and raises for malformed shapes.
-Zero density or charge gives zero collisions. The symmetric noise is smooth in
-velocity, including zero speed, for a positive active bath; density/charge
-noise derivatives at a zero-collision boundary need not exist.
-
-For a full particle SDE, add `charge/mass * (E + cross(V, B))` to the returned
-Ito drift using physical Cartesian field vectors, and use a general-noise Ito
-integrator. A Stratonovich solver needs the corresponding drift conversion.
-This utility does not transform collisions into guiding-center coordinates,
-select a timestep, or include the bath's field-particle response.
+For `coeff = maxwellian_cartesian_coefficients(...)`, the collision step is
+`dV = coeff.ito_drift*dt + coeff.noise@dW`, with
+`coeff.noise @ coeff.noise.T == 2*coeff.diffusion`.
+Add the Lorentz force separately and use a general-noise Ito integrator.
+These coefficients describe a prescribed bath; they exclude field-particle
+response and the guiding-center coordinate transformation.
 
 ## Tracing to the wall
 

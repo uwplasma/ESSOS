@@ -1,9 +1,7 @@
-"""SI Cartesian Maxwellian test-particle Landau coefficients.
+"""Cartesian Maxwellian test-particle Landau coefficients in SI units.
 
-Explicit pair Coulomb logs are values or a differentiable callable of speed^2
-[m^2/s^2]. Temperatures are eV. Returns Ito drift [m/s^2], diffusion D
-[m^2/s^3], and a smooth symmetric sigma with sigma@sigma.T=2D. This does not
-select a log policy or integrator, or implement transformed GC collisions.
+Returns Ito drift, diffusion D and symmetric noise sigma with sigma@sigma.T=2D.
+Temperatures are eV; pair Coulomb logs are explicit values or functions of speed².
 """
 
 from typing import NamedTuple
@@ -77,24 +75,20 @@ def maxwellian_cartesian_coefficients(
     *,
     coulomb_logs,
 ):
-    """Evaluate native JAX coefficients; invalid numerical inputs return NaNs.
+    """Return Ito drift [m/s²], diffusion [m²/s³] and symmetric noise.
 
-    velocity shape(3,), bath arrays shape(n_species,), scalar test mass/charge.
-    Coulomb logs must be positive and finite. A callable takes scalar speed^2
-    and returns a pair vector; its regular derivative is INCLUDED in Ito drift.
-    Bath masses are kg, charges C, densities m^-3 and temperatures eV.
-    The bath is prescribed, isotropic, nonrelativistic and Maxwellian; this is
-    a test-particle operator, without a field-particle response. Its particle
-    momentum convention follows Hirvijoki et al., Phys. Plasmas 20, 092505
-    (2013), Eqs. (1)--(12), doi:10.1063/1.4820951.
+    velocity has shape (3,); bath arrays have shape (n_species,); test mass
+    and charge are scalars. Use kg, C, m⁻³ and eV. Float64 is recommended.
+    Positive finite Coulomb logs may be scalar, per-species, or a differentiable
+    callable of speed² [m²/s²]; its derivative contributes to the Ito drift.
 
-    Structural shape mismatches raise ValueError. Zero density/charge means
-    zero collisions. The noise is smooth in velocity for a positive active
-    bath, including zero velocity. Noise derivatives in density or charge at
-    a zero-collision boundary need not exist. Host I/O/conversions are absent
-    from numerical evaluation. Float64 is recommended for SI accuracy.
-    Noise is generally noncommutative; an integrator must support general
-    Ito noise. A Stratonovich solver requires its usual drift conversion.
+    The prescribed bath is isotropic, nonrelativistic and Maxwellian, without
+    field-particle response. Conventions follow Hirvijoki et al. (2013),
+    Eqs. (1)–(12), doi:10.1063/1.4820951. Use a general-noise Ito integrator.
+
+    Shape errors raise ValueError; invalid values return NaNs. Zero density or
+    charge gives zero collisions. Noise is smooth in velocity, including zero,
+    for an active bath; density/charge derivatives at zero may not exist.
     """
     v = jnp.asarray(velocity)
     v = v.astype(jnp.result_type(v, float))
