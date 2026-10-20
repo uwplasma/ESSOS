@@ -1,0 +1,29 @@
+# Full equilibrium column; distinct from the existing Perfect QS benchmark.
+paper = "Fast-ion transport in quasisymmetric equilibria in the presence of a resonant Alfvenic perturbation"
+doi = "10.1017/S0022377823001095"
+source = "https://arxiv.org/html/2306.12531v2#S6.T2"
+table = "Table 2, QA vac, Equil."
+particles = 5000
+tmax_seconds = 0.001
+energy_MeV = 3.52
+minor_radius_m = 1.70
+field_strength_T = 5.86
+loss_boundary = "s=0 or s=1"
+
+[[cases]]
+name = "Unperturbed"
+m = 15
+n = 7
+omega_rad_s = 399000.0
+delta_bhat_psi = 0.0
+loss_fraction = 0.083
+mean_abs_delta_s = 0.105
+
+[[cases]]
+name = "m=15 mode"
+m = 15
+n = 7
+omega_rad_s = 399000.0
+delta_bhat_psi = 0.001
+loss_fraction = 0.194
+mean_abs_delta_s = 0.163
