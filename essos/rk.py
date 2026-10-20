@@ -12,7 +12,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import lax, tree_util
-from jax.interpreters import partial_eval
+from jax._src.interpreters import partial_eval
 import numpy as np
 
 from .rk_dense import DOPRI8_OUTPUT
