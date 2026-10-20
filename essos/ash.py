@@ -1,12 +1,9 @@
-"""Coefficient-driven thermal-helium core residence, not pumped exhaust.
+"""Source-weighted thermal-helium residence for Gamma = -D*dn/dr + V*n.
 
-The trace, local closure is Gamma=-D*dn/dr+V*n. Cell volumes and W=dV/dr
-must describe the same physical radial coordinate. Profiles, electric field,
-collision model and boundary assumptions belong to the coefficient provider.
-This module neither infers them from a WOUT nor imports a kinetic solver.
-All numerical functions are JIT/AD compatible; invalid values return a false
-``valid`` flag and NaN physical outputs. Static shape mistakes raise ValueError.
-Use :func:`check_helium_residence` at a host/reporting boundary.
+Supply transport coefficients, consistent radial volumes, a source and a boundary
+condition. JIT/AD-compatible functions return valid=False and NaN outputs for
+invalid values; shape errors raise ValueError. Core residence excludes recycling
+and pumping. See docs/helium_residence.rst for the model and input contract.
 """
 from typing import NamedTuple
 
@@ -52,20 +49,16 @@ def evaluate_helium_residence(
     diffusion_m2_s, convection_m_s, source_m3_s, *,
     boundary_kappa_m_s, core_cost=None,
 ):
-    """Solve K*n=M*S and K.T*T=M*c with checked SOLVAX tridiagonal solves.
+    """Solve K*n=M*S and K.T*T=M*c using checked SOLVAX tridiagonal solves.
 
-    Edges, W, D and V have shape (n+1,), volumes, S and dimensionless c (n,).
-    At least two cells start at r=0; the axis reflects. ``boundary_kappa_m_s``
-    is explicit: +inf absorbs; finite positive kappa gives Gamma=kappa*n at
-    the outer face, including half-cell transport resistance. Zero kappa has
-    no finite steady residence. Positive diffusivity is required without floors.
+    Edges, W=dV/dr, D and V have shape (n+1,); volumes, S and dimensionless
+    cost c have shape (n,). At least two cells start at r=0 with a reflecting
+    axis. Positive finite kappa imposes Gamma=kappa*n, including half-cell
+    resistance; +inf absorbs. D and kappa must be positive; no floors are used.
 
-    ``occupation_s`` and ``mean_occupation_s`` use c; ``mean_residence_s`` is
-    unweighted inventory/source. Validity qualifies this discrete solve only:
-    pivot, RHS residual, positivity, duality and balance checks do not bound
-    continuum error or certify a kinetic closure or its geometry derivatives.
-    Gradients include every supplied coefficient/volume/source/cost dependence;
-    host loading and an unprovided electric-field/root response are outside it.
+    occupation_s and mean_occupation_s use c; mean_residence_s is inventory
+    divided by source rate. Validity checks the discrete solve, not continuum
+    convergence or the kinetic closure. Gradients include supplied inputs only.
     """
     try:
         from solvax import tridiagonal_factor, tridiagonal_solve_factored_checked
