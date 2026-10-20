@@ -711,9 +711,15 @@ def test_zero_density_mu_collisions_have_zero_noise_and_collisionless_drift(xi):
         sigma, tangent = jax.jvp(noise, (state,), (jnp.ones(5),))
         np.testing.assert_array_equal(sigma, np.zeros((5, 5)))
         np.testing.assert_array_equal(tangent, np.zeros((5, 5)))
+        batch = jnp.stack([state, state])
+        sigma, tangent = jax.jvp(jax.vmap(noise), (batch,), (jnp.ones_like(batch),))
+        np.testing.assert_array_equal(sigma, np.zeros((2, 5, 5)))
+        np.testing.assert_array_equal(tangent, np.zeros((2, 5, 5)))
         expected = np.array([0., 0., state[3]*scale[0], 0., 0.])
         for drift in (GuidingCenterCollisionsDriftMuIto, GuidingCenterCollisionsDriftMuStratonovich):
             np.testing.assert_allclose(drift(0., state, args), expected, rtol=1e-14, atol=1e-14)
+            np.testing.assert_allclose(jax.vmap(lambda y: drift(0., y, args))(batch),
+                                       np.stack([expected, expected]), rtol=1e-14, atol=1e-14)
 
 
 @pytest.mark.parametrize("v,xi", [(1e5, 0.0), (1e6, 0.0), (1e5, 0.3), (1e5, 1.0), (1e6, -1.0)])
