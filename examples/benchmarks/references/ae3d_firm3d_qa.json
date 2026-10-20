@@ -1,0 +1,120 @@
+{
+    "doi":  "10.5281/zenodo.21299908",
+    "concept_doi":  "10.5281/zenodo.21299907",
+    "paper":  "https://arxiv.org/abs/2603.03118",
+    "license":  "CC-BY-4.0",
+    "firm3d_commit":  "bc65bab877d88b6b00d6d248f54e5c75d893e6ac",
+    "archive_url":  "https://zenodo.org/api/records/21299908/files/Knyazev_JPP2026.zip/content",
+    "archive_size":  1127897428,
+    "archive_md5":  "7f65aebb55500e7bba026fd4fd91510b",
+    "members":  [
+                    {
+                        "name":  "Knyazev_JPP2026/README.md",
+                        "compressed_size":  987,
+                        "size":  2113,
+                        "method":  8,
+                        "crc":  1416890727,
+                        "offset":  356013550,
+                        "sha256":  "b48f53836de8049c65fc37e4cb8bc28545182e74215049ef8ec37a150843ee79"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/simulations_fig4_fig5/QA/oc_QA_001/classify_orbits.py",
+                        "compressed_size":  3867,
+                        "size":  11446,
+                        "method":  8,
+                        "crc":  1863343503,
+                        "offset":  428382849,
+                        "sha256":  "13045cec47c861044fe06484d3ccf9a9a388bc45d2097c8e21c8ce66f480fde4"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/simulations_fig4_fig5/QA/oc_QA_001/inputs/link_inputs.sh",
+                        "compressed_size":  183,
+                        "size":  344,
+                        "method":  8,
+                        "crc":  4012891989,
+                        "offset":  428386959,
+                        "sha256":  "17bc3aee4452550f8f4494a4c934b1a22c470979657855bb5f0179d1fe139932"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/simulations_fig4_fig5/QA/all_inputs/boozmn_betaQA.nc",
+                        "compressed_size":  8779981,
+                        "size":  9022980,
+                        "method":  8,
+                        "crc":  2070526736,
+                        "offset":  428460027,
+                        "sha256":  "6a32726c66b57dc5d68e31bbf53f6f5833f1e7fb124404dadfe76873beb2b6d5"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/simulations_fig4_fig5/QA/all_inputs/ae3d_saw_scaled/saw_zero.npy",
+                        "compressed_size":  565,
+                        "size":  1322,
+                        "method":  8,
+                        "crc":  2771146897,
+                        "offset":  437297506,
+                        "sha256":  "f953b467516c13770c60bd49dcb9bd4248cb69ce49ddf2f43956326bea30599f"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/simulations_fig4_fig5/QA/all_inputs/ae3d_saw_scaled/QA_35harmonics_scale0_001.npy",
+                        "compressed_size":  14183,
+                        "size":  16796,
+                        "method":  8,
+                        "crc":  2985740293,
+                        "offset":  437298209,
+                        "sha256":  "17983671ea72b829066b139d20d90127e696a5e378ed1c326b2e8f3584fecc36"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/simulations_fig4_fig5/QA/all_inputs/ICs/fusion_ICs_5000.txt",
+                        "compressed_size":  275834,
+                        "size":  627562,
+                        "method":  8,
+                        "crc":  2650828699,
+                        "offset":  446121501,
+                        "sha256":  "34a72a4bce0ec3b8b422f6de3595e5abcbabbc14809e7882798eeddc9597a020"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/simulations_fig4_fig5/QA/all_inputs/ICs/generate_ICs.py",
+                        "compressed_size":  1450,
+                        "size":  3681,
+                        "method":  8,
+                        "crc":  2809750425,
+                        "offset":  446397468,
+                        "sha256":  "659f41248ffbfbd911ca1d60af3fc86462fedb2c5987683874e07bd95fe83370"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/simulations_fig4_fig5/QA/all_inputs/ICs/fusion_ICs.txt",
+                        "compressed_size":  275751,
+                        "size":  627501,
+                        "method":  8,
+                        "crc":  173764197,
+                        "offset":  446427804,
+                        "sha256":  "ab09270ee542fffface087ab4b39f5298112d1086bcb5e0d9bf7aa81fd30955b"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/simulations_fig4_fig5/QA/oc_QA_0/classify_orbits.py",
+                        "compressed_size":  3854,
+                        "size":  11429,
+                        "method":  8,
+                        "crc":  716325310,
+                        "offset":  446727572,
+                        "sha256":  "f81e93778a7dd16550812e4c71ded47a8a31e3d66055bbc744d02902255a7b8b"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/FIG4-orbit_loss_classification/scripts/oc_losses_fig.py",
+                        "compressed_size":  3828,
+                        "size":  13314,
+                        "method":  8,
+                        "crc":  1534753794,
+                        "offset":  1055193383,
+                        "sha256":  "adbddbdfdbfbc43eb8541fe7a8752936c401154ea1ece7ca258bf6ec309296a0"
+                    },
+                    {
+                        "name":  "Knyazev_JPP2026/FIG4-orbit_loss_classification/inputs/QA.txt",
+                        "compressed_size":  973,
+                        "size":  6253,
+                        "method":  8,
+                        "crc":  3510099955,
+                        "offset":  1127833761,
+                        "sha256":  "357f024c0b14321e155ccc208020fb8eecdfe6db3059d07fb249c6b28e1771c1"
+                    }
+                ]
+}

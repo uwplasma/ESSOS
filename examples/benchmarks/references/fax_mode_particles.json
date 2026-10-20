@@ -1,0 +1,89 @@
+{
+  "scope": "FAX reduced envelope assigned to Phi; imposed ideal-wave polarization; integration demonstration",
+  "published_loss_benchmark": false,
+  "mode_metadata": {
+    "interpretation": "potential_shape",
+    "coordinates": "essos_boozer",
+    "source": "fax",
+    "equilibrium_sha256": "ba8dcfaf18d27c99dc9ca4b38116d71b697626d54408de41b47e126676e1e94f",
+    "mode_index": 0,
+    "eigenpair_residual": 2.2325244323552003e-14,
+    "operator_metadata": [
+      [
+        "source",
+        "boozmn_global_3d"
+      ],
+      [
+        "radial_coupling_fraction",
+        0.01
+      ],
+      [
+        "radial_stiffness_method",
+        "metric"
+      ],
+      [
+        "radial_stiffness_scale",
+        1.0
+      ],
+      [
+        "theta_points",
+        16
+      ],
+      [
+        "zeta_points",
+        16
+      ]
+    ],
+    "polarization": "scalar envelope assigned to Phi; alpha from reduced ideal relation"
+  },
+  "frequency_hz": 16298515.049019707,
+  "omega_rad_s": 102406590.284846,
+  "potential_scale_volts": 430159.02889073844,
+  "taper_width_s": 0.061224489795918324,
+  "radial_rms": 0.0001,
+  "normalization_s": 0.4,
+  "angular_points": 16,
+  "particles_per_case": 2,
+  "tmax_s": 2e-07,
+  "cases": [
+    {
+      "name": "unperturbed",
+      "failed": 0,
+      "lcfs_exits": 0,
+      "loss_fraction": {
+        "value": 0.0,
+        "interval_95": [
+          5.551115123125783e-17,
+          0.6591533691264173
+        ],
+        "effective_particles": 1.9864091697027821
+      },
+      "max_relative_energy_change": 1.1671496658038905e-06
+    },
+    {
+      "name": "perturbed",
+      "failed": 0,
+      "lcfs_exits": 0,
+      "loss_fraction": {
+        "value": 0.0,
+        "interval_95": [
+          5.551115123125783e-17,
+          0.6591533691264173
+        ],
+        "effective_particles": 1.9864091697027821
+      },
+      "max_relative_mu_change": 0.0
+    }
+  ],
+  "mass_density_kg_m3": 3.4e-08,
+  "wout": "examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
+  "seed": 42,
+  "platform": "cpu",
+  "birth_frequency_to_gyrofrequency": [
+    0.3771791407398339,
+    0.3474417218504347
+  ],
+  "gc_ordering_validated": false,
+  "elapsed_seconds_before_plot": 38.41307073600001,
+  "original_total_seconds_rounded_from_stdout": 57.4
+}

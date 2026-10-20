@@ -1,0 +1,124 @@
+{
+  "scope": "Analytic uniform-plasma verification of FAX, reconstruction and reduced GC; absorbing plane, not toroidal confinement",
+  "passed": true,
+  "gates": {
+    "fax_spectrum": true,
+    "fax_constant_mode": true,
+    "field_reconstruction": true,
+    "ideal_parallel_electric_field": true,
+    "comoving_cancellation": true,
+    "deletion_control_sensitive": true,
+    "gc_ordering": true,
+    "tight_exact_orbit": true,
+    "tolerance_convergence": true,
+    "baseline_no_loss": true,
+    "absorbing_loss_mask": true,
+    "sampled_loss_mask": true,
+    "exit_times": true,
+    "exit_interpolation_convergence": true,
+    "flat_envelope_domain": true
+  },
+  "input_file": "examples/benchmarks/references/fax_shear_alfven_input.json",
+  "equilibrium_sha256": "3e467c84bbdea51b6ac769ef0c3789b0ad5438cc629cbe3e1bcceb3362b06b6d",
+  "frequency_hz": 35494.02152189641,
+  "exact_frequency_hz": 35494.021521896546,
+  "potential_volts": 55753.878629774095,
+  "particles": 16,
+  "trajectories": 64,
+  "duration_s": 5.6347517532387355e-05,
+  "platform": "cpu",
+  "spectrum": [
+    {
+      "radial_points": 8,
+      "max_relative_omega2_error": 4.440892098500626e-16,
+      "frequency_relative_error": 2.220446049250313e-16,
+      "constant_envelope_error": 3.3306690738754696e-16,
+      "max_eigenpair_residual": 3.8540790308599306e-16
+    },
+    {
+      "radial_points": 16,
+      "max_relative_omega2_error": 7.993605777301127e-15,
+      "frequency_relative_error": 3.9968028886505635e-15,
+      "constant_envelope_error": 1.9317880628477724e-14,
+      "max_eigenpair_residual": 7.177074446120747e-15
+    },
+    {
+      "radial_points": 32,
+      "max_relative_omega2_error": 7.327471962526033e-15,
+      "frequency_relative_error": 1.5543122344752192e-15,
+      "constant_envelope_error": 4.196643033083092e-14,
+      "max_eigenpair_residual": 3.2794697772086426e-14
+    }
+  ],
+  "fields": {
+    "potential_relative_error": 8.091085018046935e-15,
+    "magnetic_relative_error": 8.61640902548055e-14,
+    "electric_relative_error": 8.616409025480518e-14,
+    "parallel_electric_relative_error": 3.05862588887863e-17,
+    "comoving_radial_velocity_normalized": 6.627022759237031e-16,
+    "comoving_parallel_acceleration_normalized": 1.8868513103343822e-18,
+    "missing_flutter_or_ExB_velocity_normalized": 0.16425233099048103
+  },
+  "ordering": {
+    "omega_over_gyro": 0.000924905310158373,
+    "max_kperp_rho": 0.021613615389309362,
+    "kparallel_over_kperp": 0.125,
+    "delta_b_over_b": 0.001
+  },
+  "cases": {
+    "baseline": {
+      "rtol": 1e-10,
+      "atol": 1e-10,
+      "finite_orbits": 16,
+      "hits": 0,
+      "loss_fraction": 0.0,
+      "max_radial_error_m": 0.0
+    },
+    "loose": {
+      "rtol": 1e-06,
+      "atol": 1e-06,
+      "finite_orbits": 16,
+      "max_radial_error_over_excursion": 0.00020802410751197264,
+      "max_transverse_y_error_m": 1.0658141036401503e-14,
+      "max_parallel_z_error_m": 4.177991286269389e-12,
+      "max_vparallel_error_over_speed": 1.429634086017068e-16,
+      "max_relative_mu_drift": 0.0
+    },
+    "tight": {
+      "rtol": 1e-10,
+      "atol": 1e-10,
+      "finite_orbits": 16,
+      "max_radial_error_over_excursion": 1.353413492388711e-07,
+      "max_transverse_y_error_m": 1.9539925233402755e-14,
+      "max_parallel_z_error_m": 2.4726887204451486e-12,
+      "max_vparallel_error_over_speed": 7.14817043008534e-17,
+      "max_relative_mu_drift": 0.0
+    },
+    "absorbing": {
+      "rtol": 1e-10,
+      "atol": 1e-10,
+      "finite_orbits": 16,
+      "hits": 9,
+      "loss_fraction": 0.5625
+    }
+  },
+  "exact_hits": 9,
+  "exact_loss_fraction": 0.5625,
+  "comoving_radial_error_over_excursion": 4.440892098500626e-14,
+  "exit_time_error_s": 4.123745482297747e-09,
+  "coarse_exit_time_error_s": 1.9645430353694317e-08,
+  "save_interval_s": 2.201074903608881e-07,
+  "elapsed_seconds": 47.593021863000004,
+  "parameters": {
+    "B0": 5.0,
+    "density": 1e-06,
+    "k_parallel": 0.05,
+    "k_perp": 0.4,
+    "delta_b_over_b": 0.001,
+    "wall_x": 0.75,
+    "periods": 2.0,
+    "mass": 6.644657345e-27,
+    "charge": 3.204353268e-19,
+    "energy": 5.63966175168e-13
+  }
+}

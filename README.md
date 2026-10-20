@@ -238,6 +238,27 @@ without particle tracing:
 python -m examples.benchmarks.plot_alfven_results
 ```
 
+An optional [FAX mode example](docs/fax_modes.rst) imports calculated harmonic
+envelopes and frequency, reconstructs reduced electromagnetic potentials, and
+uses the same VMEC GC solver. The scalar-envelope-to-potential interpretation
+and imposed physical amplitude are explicit. This first coupling is not a
+validated full-MHD polarization or published FAX particle-loss benchmark.
+
+The [independent shear-Alfvén benchmark](docs/fax_modes.rst#independent-analytic-benchmark)
+checks the complete FAX-to-GC path against closed-form fields, orbits and
+absorbing-plane first exits. It reproduces all nine losses in a specified
+16-marker cohort, with maximum tight-run radial error 2.7e-9 m. This is an
+analytic uniform-plasma verification; the general GC RHS is unchanged.
+
+The [published AE3D–FIRM3D QA benchmark](docs/ae3d_firm3d_benchmark.rst)
+now imports the archived equilibrium, 35-harmonic potential and 5000 saved
+birth states. Its 10 ms reference losses are 0.52% unperturbed and 3.18%
+perturbed. The example defaults to 5000 particles, natural cubic wave
+profiles and adaptive RK5 at tolerance 1e-9; the linked GPU command traces
+both cases for 10 ms and saves loss histories. Linear profiles remain
+available to match the archived FIRM3D interpolation. Full-cohort ESSOS
+loss agreement remains to be established.
+
 ## Comparison with other codes
 
 256 collisionless 3.5 MeV alphas per equilibrium, started at `s = 0.5` with

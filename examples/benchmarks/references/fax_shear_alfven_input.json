@@ -1,0 +1,12 @@
+{
+  "B0": 5.0,
+  "density": 1e-6,
+  "k_parallel": 0.05,
+  "k_perp": 0.4,
+  "delta_b_over_b": 0.001,
+  "wall_x": 0.75,
+  "periods": 2.0,
+  "mass": 6.644657345e-27,
+  "charge": 3.204353268e-19,
+  "energy": 5.63966175168e-13
+}

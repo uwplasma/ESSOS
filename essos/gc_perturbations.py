@@ -161,7 +161,10 @@ class MappedBoozerPerturbation(GuidingCenterPerturbation):
         if not callable(coordinate_map):
             raise TypeError("coordinate_map must be callable")
         self.background, self.perturbation = background, perturbation
-        self.coordinate_map = coordinate_map if isinstance(coordinate_map, eqx.Module) else eqx.Partial(coordinate_map)
+        # A plain map's callable must be static under the existing jitted GC
+        # RHS. eqx.Partial would expose the Python function as a dynamic leaf.
+        self.coordinate_map = (coordinate_map if isinstance(coordinate_map, eqx.Module)
+                               else jax.tree_util.Partial(coordinate_map))
 
     def axis_stop_threshold(self):
         return self.perturbation.axis_stop_threshold()

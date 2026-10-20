@@ -1,0 +1,195 @@
+{
+  "scope": "Published QA AE3D/FIRM3D case; preparation is not a loss-agreement result",
+  "doi": "10.5281/zenodo.21299908",
+  "paper": "https://arxiv.org/abs/2603.03118",
+  "firm3d_commit": "bc65bab877d88b6b00d6d248f54e5c75d893e6ac",
+  "mode_tag": "QA_35harmonics_scale0_001",
+  "omega_rad_s": 30308.607688245924,
+  "cyclic_frequency_hz": 4823.764731817361,
+  "frequency_conversion": "sqrt(AE3D eigenvalue)*1000 rad/s, following pinned FIRM3D; no extra 2*pi",
+  "harmonics": 35,
+  "radial_samples": 49,
+  "mode_sha256": "17983671ea72b829066b139d20d90127e696a5e378ed1c326b2e8f3584fecc36",
+  "mass_kg": 6.69509884346e-27,
+  "charge_C": 3.204353268e-19,
+  "nominal_energy_J": 5.63966175168e-13,
+  "full_reference_particles": 5000,
+  "full_reference_duration_s": 0.01,
+  "birth_state": "archived s/theta/zeta/vparallel/mu_per_mass preserved; equal marker weights",
+  "field": {
+    "coordinates": "same Boozer convention; psi0=-phi_edge/(2*pi); K=0",
+    "angular_points": 48,
+    "mode_tolerance": 1e-07,
+    "retained_modes": 937,
+    "interpolation": "ESSOS radial sqrt(s) cubic and angular quintic; FIRM3D used cubic 48x48x48",
+    "max_birth_B_relative_difference": 0.004646323633852534,
+    "rms_birth_B_relative_difference": 0.00023956593397318909,
+    "max_birth_energy_relative_difference": 0.0036548917767633693
+  },
+  "reference": {
+    "saw_zero": {
+      "tag": "saw_zero",
+      "amplitude": 0.0,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 26,
+      "loss_fraction": 0.0052,
+      "counts": {
+        "lost_passing": 2,
+        "lost_barely_trapped": 2,
+        "lost_other_trapped": 22,
+        "confined_passing": 4143,
+        "confined_barely_trapped": 171,
+        "confined_other_trapped": 660
+      }
+    },
+    "QA_35harmonics_scale0_001": {
+      "tag": "QA_35harmonics_scale0_001",
+      "amplitude": 0.001,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 159,
+      "loss_fraction": 0.0318,
+      "counts": {
+        "lost_passing": 66,
+        "lost_barely_trapped": 29,
+        "lost_other_trapped": 64,
+        "confined_passing": 3953,
+        "confined_barely_trapped": 370,
+        "confined_other_trapped": 518
+      }
+    }
+  },
+  "reference_scan": [
+    {
+      "tag": "saw_zero",
+      "amplitude": 0.0,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 26,
+      "loss_fraction": 0.0052,
+      "counts": {
+        "lost_passing": 2,
+        "lost_barely_trapped": 2,
+        "lost_other_trapped": 22,
+        "confined_passing": 4143,
+        "confined_barely_trapped": 171,
+        "confined_other_trapped": 660
+      }
+    },
+    {
+      "tag": "QA_35harmonics_scale0_0001",
+      "amplitude": 0.0001,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 32,
+      "loss_fraction": 0.0064,
+      "counts": {
+        "lost_passing": 2,
+        "lost_barely_trapped": 4,
+        "lost_other_trapped": 26,
+        "confined_passing": 4130,
+        "confined_barely_trapped": 182,
+        "confined_other_trapped": 656
+      }
+    },
+    {
+      "tag": "QA_35harmonics_scale0_000215443",
+      "amplitude": 0.000215443,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 34,
+      "loss_fraction": 0.0068,
+      "counts": {
+        "lost_passing": 2,
+        "lost_barely_trapped": 5,
+        "lost_other_trapped": 27,
+        "confined_passing": 4112,
+        "confined_barely_trapped": 218,
+        "confined_other_trapped": 636
+      }
+    },
+    {
+      "tag": "QA_35harmonics_scale0_000464159",
+      "amplitude": 0.000464159,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 60,
+      "loss_fraction": 0.012,
+      "counts": {
+        "lost_passing": 10,
+        "lost_barely_trapped": 15,
+        "lost_other_trapped": 35,
+        "confined_passing": 4075,
+        "confined_barely_trapped": 275,
+        "confined_other_trapped": 590
+      }
+    },
+    {
+      "tag": "QA_35harmonics_scale0_001",
+      "amplitude": 0.001,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 159,
+      "loss_fraction": 0.0318,
+      "counts": {
+        "lost_passing": 66,
+        "lost_barely_trapped": 29,
+        "lost_other_trapped": 64,
+        "confined_passing": 3953,
+        "confined_barely_trapped": 370,
+        "confined_other_trapped": 518
+      }
+    },
+    {
+      "tag": "QA_35harmonics_scale0_00215443",
+      "amplitude": 0.00215443,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 1733,
+      "loss_fraction": 0.3466,
+      "counts": {
+        "lost_passing": 1293,
+        "lost_barely_trapped": 245,
+        "lost_other_trapped": 195,
+        "confined_passing": 2531,
+        "confined_barely_trapped": 443,
+        "confined_other_trapped": 293
+      }
+    },
+    {
+      "tag": "QA_35harmonics_scale0_00464159",
+      "amplitude": 0.00464159,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 3955,
+      "loss_fraction": 0.791,
+      "counts": {
+        "lost_passing": 2790,
+        "lost_barely_trapped": 765,
+        "lost_other_trapped": 400,
+        "confined_passing": 807,
+        "confined_barely_trapped": 110,
+        "confined_other_trapped": 128
+      }
+    },
+    {
+      "tag": "QA_35harmonics_scale0_01",
+      "amplitude": 0.01,
+      "particles": 5000,
+      "duration_s": 0.01,
+      "lost": 4789,
+      "loss_fraction": 0.9578,
+      "counts": {
+        "lost_passing": 3298,
+        "lost_barely_trapped": 846,
+        "lost_other_trapped": 645,
+        "confined_passing": 208,
+        "confined_barely_trapped": 2,
+        "confined_other_trapped": 1
+      }
+    }
+  ],
+  "cases": {},
+  "elapsed_seconds": 24.663632938000006
+}
