@@ -307,19 +307,25 @@ def _mu_collision_noise(vpar, mu, points, field, particles, species):
     indeces_species = species.species_indeces
     nu_D = jnp.sum(jax.vmap(nu_D_ab, in_axes=(None, None, 0, None, None, None))(m, q, indeces_species, v, points, species), axis=0)
     nu_par = jnp.sum(jax.vmap(nu_par_ab, in_axes=(None, None, 0, None, None, None))(m, q, indeces_species, v, points, species), axis=0)
-    # Velocity-space diffusion of (vpar/v, mu/(m v^2/2B)), divided by v^2
-    Yvv = (nu_par*xi**2+nu_D*(1.-xi**2))/2.
-    Yvmu = xi*(1.-xi**2)*(nu_par-nu_D)
-    Ymumu = 2.*(1.-xi**2)*(nu_par*(1.-xi**2)+nu_D*xi**2)
-    root = jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2)
-    lambda_p = 0.5*(Yvv+Ymumu+root)
-    lambda_m = (1.-xi**2)*nu_par*nu_D/lambda_p  # det(Y)/lambda_p, free of cancellation
-    theta = 0.5*jnp.arctan2(2.*Yvmu, Yvv-Ymumu)
-    rotation = jnp.array([[jnp.cos(theta), -jnp.sin(theta)], [jnp.sin(theta), jnp.cos(theta)]])
-    scale = jnp.array([v, 0.5*m*v**2/B])
-    # sqrt(lambda_m) ~ sqrt(mu) has an infinite slope at |xi| = 1; keep its jvp finite for Milstein
-    root_m = jnp.where(lambda_m > 0, jnp.sqrt(2.*jnp.where(lambda_m > 0, lambda_m, 1.)), 0.)
-    return scale[:, None]*rotation*jnp.array([jnp.sqrt(2.*lambda_p), root_m])[None, :]
+    def factor(_):
+        # Velocity-space diffusion of (vpar/v, mu/(m v^2/2B)), divided by v^2
+        Yvv = (nu_par*xi**2+nu_D*(1.-xi**2))/2.
+        Yvmu = xi*(1.-xi**2)*(nu_par-nu_D)
+        Ymumu = 2.*(1.-xi**2)*(nu_par*(1.-xi**2)+nu_D*xi**2)
+        root = jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2)
+        lambda_p = 0.5*(Yvv+Ymumu+root)
+        lambda_m = (1.-xi**2)*nu_par*nu_D/lambda_p  # det(Y)/lambda_p, free of cancellation
+        theta = 0.5*jnp.arctan2(2.*Yvmu, Yvv-Ymumu)
+        rotation = jnp.array([[jnp.cos(theta), -jnp.sin(theta)], [jnp.sin(theta), jnp.cos(theta)]])
+        scale = jnp.array([v, 0.5*m*v**2/B])
+        # sqrt(lambda_m) ~ sqrt(mu) has an infinite slope at |xi| = 1; keep its jvp finite for Milstein
+        root_m = jnp.where(lambda_m > 0, jnp.sqrt(2.*jnp.where(lambda_m > 0, lambda_m, 1.)), 0.)
+        return scale[:, None]*rotation*jnp.array([jnp.sqrt(2.*lambda_p), root_m])[None, :]
+
+    # An absent bath has identically zero noise and velocity derivatives.
+    # Avoid differentiating a degenerate zero eigensystem in Milstein/Stratonovich.
+    return jax.lax.cond((nu_D == 0) & (nu_par == 0),
+                        lambda _: jnp.zeros((2, 2), dtype=v.dtype), factor, None)
 
 @partial(jit, static_argnums=(2))
 def GuidingCenterCollisionsDiffusionMu(t,
