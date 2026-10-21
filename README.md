@@ -302,6 +302,157 @@ command if it is missing.
 | [`simple_examples`](examples/simple_examples) | Coils from near-axis or BOOZ_XFORM, perturbed coils, combined fields, MGRID |
 | [`paper`](examples/paper) | Integrator, gradient and Poincare figures |
 
+Joint QS and QI surface/coil design is demonstrated in
+[`optimize_coils_surface_augmented_lagrangian.py`](examples/coil_optimization/optimize_coils_surface_augmented_lagrangian.py):
+
+```sh
+python -m examples.coil_optimization.optimize_coils_surface_augmented_lagrangian --case qs --output qs_output
+python -m examples.coil_optimization.optimize_coils_surface_augmented_lagrangian --case qi --output qi_output
+```
+
+Both cases optimize coil geometry, currents and an RZ Fourier surface with
+dimensionless engineering and physics constraints. `Mu_Adaptative_2` updates
+penalties per element; `eq(..., eta_tol=...)` and `ineq(..., eta_tol=...)`
+set individual convergence tolerances, with conditional freezing and
+reactivation. Inequalities use **h >= 0**. The existing global `Mu_Tolerance`
+strategy and solver initialization API remain supported.
+
+The example initializes fixed constraint weights from their initial gradients
+by default (`--constraint-weights element`). For each residual,
+`w_i = ||grad f|| / max(||grad c_i||, 1e-4)`, with a numerator of one for a
+zero objective gradient. Raw constraints are differentiated, including satisfied
+inequalities. `constraint` and `global` use Jacobian Frobenius norms; `none`
+disables this initialization. Weights scale ALM residuals, while diagnostics and
+individual tolerances retain their original units. The helper can also be used
+directly before the existing solver initialization:
+
+```python
+multipliers = alm.initialize_constraint_weights(constraints, x, constraints.init(x), loss=objective)
+state, grad, info = solver.init((x, multipliers))
+```
+
+The complete branch-feature audit is recorded in
+[`alm_feature_coverage.json`](docs/alm_feature_coverage.json), including the
+six source commit IDs and intentional corrections. The additional controls are:
+
+| Feature | API / example option |
+|---|---|
+| Seeded relative/absolute gradient sampling | `use_perturbation`, magnitude, mode and seed; `--weight-perturbation`, `--weight-seed` |
+| Bounded-memory or direct Jacobians | `jacobian_method='vjp'/'jacrev'`; `--weight-jacobian` |
+| Automatic weight initialization | `ALM_model_scipy(use_per_constraint_weights='element'/'constraint'/'global')` |
+| Explicit bounded slacks | `ineq(..., use_analytical_penalty=False)`; `--explicit-slacks` |
+| Consistent power-of-two padding | `pad_output_to_power_of_2=True`; `--pad-constraints` |
+| Additional inner-coordinate scaling | `parameter_scale` with physical bounds; `--parameter-scale` |
+| Optional compiled update | `jit_update=True`; `--jit-outer` compiles the full JAXopt update or SciPy dual update |
+| Raw, elementwise constraint autoscales | `ScaledConstraint(..., max_scale_factor=...)`; physical residuals preserved |
+| Per-block evaluation | `combined.get_single_constraint_loss(index)` |
+| Save/reconstruct/restart | `save_checkpoint_with_constraints`, `load_checkpoint_for_reconstruction`, `restart_optimization_from_file` |
+| Example checkpointing and resume | `--checkpoint-every N`, `--resume output/checkpoint.pkl` |
+
+The example samples constraint gradients at a relative 1% perturbation by
+default; `--weight-perturbation none` evaluates them at the initial point.
+Automatic initialization retains the three-result `solver.init` API and
+stores its fixed weights in the optimizer state until the first update returns
+weighted parameters. Explicit initialization above makes weights available in
+the parameter tree immediately. Reinitializing a resumed solver preserves
+saved weights. Zero-valued entries stay zero under relative perturbations;
+absolute mode can perturb them.
+
+Current main's public DOFs already include Fourier geometry scaling and current
+normalization. `scaled_dofs` exposes these coordinates; the legacy
+`use_scaled_main_params=True` option reuses them without applying scaling twice.
+`parameter_scale` optionally supplies an additional positive diagonal inner
+preconditioner; returned parameters and bounds retain the public coordinate convention.
+Padding masks cover multipliers, reductions and statistics. Checkpoints retain
+fixed weights, learned multipliers/penalties, slack values, tolerances and nested
+autoscales; full constraint closures can optionally be saved with cloudpickle.
+Reconstruct equivalent constraints before loading a lightweight checkpoint and
+construct the resumed solver after restoring them. Other optimizer backends
+present in the old common base are not new additions from these branches.
+GFrame remains a separate change.
+
+ALM defaults to SciPy with compiled JAX values and analytic gradients. Core ESSOS
+requires neither Optax nor JAXopt. The preferred factory is:
+
+```python
+solver = alm.ALM_model_scipy(constraints, loss=objective, model_mu='Mu_Adaptative_2',
+                             history_size=10, inner_options={'maxls': 40})
+```
+
+The default `method='L-BFGS-B'` preserves bounds and uses limited history;
+`history_size` sets SciPy's `maxcor`. `SLSQP` also handles bounds. `BFGS` and
+`CG` require unbounded primals and analytic inequalities; incompatible bounds
+or explicit slacks raise an error. Full BFGS and SLSQP can need substantially
+more optimizer memory than L-BFGS-B. The example accepts `--method`.
+
+The native JAXopt L-BFGS-B path is also available as an optional backend:
+
+```sh
+pip install 'essos[jaxopt]'
+python -m examples.coil_optimization.optimize_coils_surface_augmented_lagrangian --case qs --backend jaxopt
+```
+
+```python
+solver = alm.ALM_model_jaxopt_lbfgsb(constraints, loss=objective,
+    model_mu='Mu_Adaptative_2', jit_update=True)
+```
+
+Both factories share constraint weights, padding, slacks, scaling, conditional
+dual updates and checkpoint support. JAXopt keeps its line search and optimizer
+iterations inside JAX; `jit_update=True` compiles the complete update and can
+reduce repeated-solve overhead. The factory retains its historical default
+`jit_update=False`, which can repeatedly compile inner solves. The example
+enables it by default for `--backend jaxopt`; use `--no-jit-outer` to disable it.
+For SciPy the example defaults to an uncompiled dual update. SciPy-specific
+`method`, `inner_options` and `inner_callback` controls do not apply to JAXopt.
+JAXopt may import Optax through its own dependencies; both remain optional
+for core ESSOS. See [measured CPU/GPU comparisons](docs/alm_benchmarks.md).
+
+The SciPy loop runs on the host; `jit_update=True` compiles the JAX dual update,
+and values/gradients are always JIT compiled. The complete SciPy solve cannot be
+wrapped in `jax.jit` or differentiated through. GPU evaluations transfer a
+parameter vector and a gradient for each SciPy callback. Default L-BFGS-B
+`gtol` is the smaller of ALM's current inner tolerance and half the initial
+projected gradient, ensuring progress from nonstationary starts; `ftol=0`.
+`inner_options` can override these settings. `inner_callback` receives each completed SciPy
+`OptimizeResult`, including its status and evaluation counts. Iteration limits
+are normal for inexact ALM solves; other unsuccessful exits emit a warning.
+For GPU evaluations, `scipy_pinned_host=True` (`--scipy-pinned-host` in the
+example) optionally writes values/gradients directly into pinned host buffers.
+This can reduce transfer overhead and requires a single GPU; see the
+[pinned-output measurements](docs/alm_benchmarks.md#gpu-pinned-host-outputs).
+Both global and per-element tolerances tighten at unit penalty so a loose
+initial tolerance cannot remain fixed indefinitely.
+
+Numeric checkpoints from the former backend load without Optax. Full saved
+Python closures can still depend on packages imported by those closures.
+The separate legacy multiobjective Adam/SGD methods keep Optax as an optional
+dependency: install them with `pip install 'essos[multiobjective]'`.
+
+For a CPU/GPU comparison in separate processes on Linux/WSL, run
+`python -m examples.coil_optimization.benchmark_alm --platforms cpu cuda --backends scipy jaxopt`.
+It separates setup, first-update and warm timings, synchronizes device work,
+and records process peak RSS and GPU allocator peaks. `--baseline-module`
+can compare a saved earlier ALM module when its dependencies are installed.
+Persistent compilation caching is disabled for these isolated comparisons;
+The benchmark enables `--jit-update` for both backends by default (the full
+update for JAXopt; the dual update for SciPy). `--no-jit-update` includes any
+recurring compilation in the repeated-update timing.
+QS/QI benchmark cases are tiny fixed-work execution checks; their timings
+and residuals do not establish full-resolution convergence or performance.
+
+QS uses the triple-product residual. QI compares bounce actions at common
+reflection fields along traced surface field lines and constrains a single
+well per field period with poloidally closed maximum contours. The QI seed
+is the small boundary spectrum extracted from `en/jax_10`'s QI VMEC case.
+`--smoke` runs a tiny execution check. Refine `--resolution`, `--segments`,
+`--trace-points`, `--alpha-points`, `--pitch-points` and `--iota-turns` before assessing a design;
+clearance is sampled and this single-surface example does not establish nested
+flux surfaces. Outputs include coils, a boundary namelist and convergence diagnostics.
+`optimization.svg` and `optimization.png` compare initial/final geometry,
+normal-field errors, optimization history and initial weight ranges. Use
+`--no-plot` to skip figure generation. Smoke figures are labelled unconverged.
+
 ## Testing
 
 ```sh

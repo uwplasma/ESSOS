@@ -46,8 +46,7 @@ dependencies = [
     "tqdm",
     "matplotlib",
     "diffrax>=0.7.2",
-    "optax",
-    "jaxopt",
+    "cloudpickle",  # optional full-object ALM checkpoints contain Python closures
     "optimistix>=0.1.0",
     "scipy",
     "jaxkd",
@@ -70,6 +69,8 @@ Homepage = "https://github.com/uwplasma/ESSOS"
 essos = "essos.__main__:main"
 
 [project.optional-dependencies]
+jaxopt = ["jaxopt"]
+multiobjective = ["optax", "optuna", "pandas"]
 booz = ["booz_xform_jax>=0.4.3"]
 # Examples that build VMEX equilibria, mgrid fields or free-boundary
 # (virtual-casing) fields. 0.11.3 is the first VMEX with MgridField(order=...).

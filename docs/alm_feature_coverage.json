@@ -1,0 +1,79 @@
+{
+  "common_base": "d98190481f279008c4795834dfb39e40967e2881",
+  "source_branches": {
+    "en/jax_6": "26674cc30fdfe3fe427e0eb670132f3a283a6c0f",
+    "en/jax_version2": "0be7b64f38239aa473050acc0f538459878e42e9",
+    "en/jax_6version2": "1e1f8cf0f0fdc8457a982838a5940e8203d50159",
+    "en/jax_8": "bb74c07895f2cd6dc805b03c02bb992bbe66bff8",
+    "en/jax_9": "4b689780876a134076a4bf89de15f5dee0f18abb",
+    "en/jax_10": "9258ce01821ca44d293ceb0857f343b8745ad960"
+  },
+  "coverage": {
+    "individual_scalar_and_array_tolerances": "eq/ineq eta_tol; physical auxiliary residuals",
+    "conditional_multiplier_and_penalty_updates": "Mu_Adaptative_1 and Mu_Adaptative_2",
+    "freeze_reactivate_hysteresis": "per-element thresholds and previous outer residuals",
+    "tolerance_schedules": "eta/omega tighten with unit penalties; individual eta floors",
+    "global_updates": "Mu_Tolerance, metadata- and padding-aware statistics",
+    "analytic_inequalities": "default PHR elimination, correct projected dual update",
+    "explicit_nonnegative_slacks": "ineq(use_analytical_penalty=False), bounded inner primal solve",
+    "gradient_weights": "element, constraint and global modes; fixed stop_gradient metadata",
+    "automatic_gradient_initialization": "Both ALM factories support use_per_constraint_weights; three-value init API retained",
+    "perturbed_gradient_weights": "relative/absolute perturbations, magnitude and seed",
+    "jacobian_memory_options": "batched VJPs and direct jacrev",
+    "single_constraint_evaluation": "CompositeConstraint.get_single_constraint_loss",
+    "native_scaled_dofs": "Composite/SelectiveConstraint.scaled_dofs, public geometry/current scaling",
+    "additional_primal_preconditioning": "parameter_scale; bounds transformed consistently",
+    "outer_jit_control": "jit_update=False factory default; True compiles the full native JAXopt update or the SciPy dual update. SciPy host iteration cannot be jitted or differentiated through.",
+    "power_of_two_padding": "en/jax_6 option with consistent multiplier shapes, reduction and statistics masks",
+    "constraint_autoscales": "raw inequality initialization, elementwise scales, max_scale_factor denominator floor",
+    "scale_preservation": "physical residuals; fixed scale metadata in numerical parameters",
+    "numerical_checkpoints": "atomic save_optimization_state / load_optimization_state",
+    "constraint_checkpoints": "metadata, recursive autoscales, optional cloudpickle closure serialization",
+    "reconstruction": "load_checkpoint_for_reconstruction / load_and_merge_constraints",
+    "restarts": "preserve learned state, optional dual reset and optimizer reinitialization",
+    "checkpointed_iterations": "augmented_lagrangian_optimization with actual eta/omega values"
+  },
+  "tests": [
+    "tests/test_augmented_lagrangian.py",
+    "tests/test_alm_extensions.py",
+    "tests/test_surface_coil_alm_example.py"
+  ],
+  "corrections": [
+    "Current main's h >= 0 inequality convention and default analytic mode are retained.",
+    "Positive gradient weights scale residuals consistently with projected inequality updates.",
+    "Constraint/global weights use Jacobian Frobenius norms, avoiding the vanishing gradient of a satisfied residual norm.",
+    "Padding preserves reductions and excludes dummy entries from multiplier statistics.",
+    "Public DOFs already include geometry/current normalization; legacy use_scaled_main_params does not apply it twice.",
+    "Checkpoint reconstruction restores nested composite autoscales and numerical metadata.",
+    "Restart resets and checkpoint iteration helpers repair incomplete source-branch implementations.",
+    "SciPy L-BFGS-B is the default and needs no Optax/JAXopt. ALM_model_jaxopt_lbfgsb restores native JAXopt as an optional backend, sharing all ALM updates.",
+    "Global as well as per-element tolerances tighten at unit penalty; exact-zero objective norms use a finite zero subgradient.",
+    "Legacy numeric EmptyState checkpoints load without Optax; full Python closures retain their own dependency requirements."
+  ],
+  "inherited_backends_not_new_in_these_branches": [
+    "ALM_model_optax",
+    "ALM_model_jaxopt_lbfgs",
+    "ALM_model_jaxopt_LevenbergMarquardt",
+    "ALM_model_optimistix_LevenbergMarquardt"
+  ],
+  "gframe": "Excluded by request; separate checkout.",
+  "validation": {
+    "date": "2026-10-20",
+    "main_commit": "6c5eef7c71721659e2a4a116439d45b2e77b0767",
+    "additional_collected_tests": 18,
+    "added_test_function_names": 19,
+    "renamed_existing_tests": 1,
+    "cpu_alm_and_example_tests": 38,
+    "gpu_feature_groups": 4,
+    "field_regression_cases": 30,
+    "alm_statement_coverage": {
+      "covered": 726,
+      "total": 726
+    },
+    "alm_branch_coverage": {
+      "covered": 246,
+      "total": 246
+    },
+    "coverage_exclusions": 0
+  }
+}

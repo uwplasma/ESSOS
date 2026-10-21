@@ -136,6 +136,13 @@ class BiotSavart(MagneticField):
         return jnp.mean(dB_sum, axis=0)
 
     @jit
+    def A(self, points):
+        """Cartesian vector potential [T m], using the same coil quadrature as B."""
+        distance = jnp.linalg.norm(jnp.asarray(points) - self.coils.gamma, axis=-1)
+        return 1e-7 * jnp.sum(self.coils.currents[:, None] * jnp.mean(
+            self.coils.gamma_dash / distance[..., None], axis=1), axis=0)
+
+    @jit
     def b_cyl(self, R, phi, Z):
         """Return ``(B_R, B_phi, B_Z)`` on broadcast cylindrical arrays.
 

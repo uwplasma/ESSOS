@@ -3,8 +3,7 @@ jaxlib
 tqdm
 matplotlib
 diffrax
-optax
-jaxopt
+cloudpickle
 optimistix
 scipy
 jaxkd

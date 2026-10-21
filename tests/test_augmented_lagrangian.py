@@ -1,5 +1,4 @@
 import unittest
-import pytest
 import jax
 import jax.numpy as jnp
 
@@ -15,8 +14,12 @@ from essos.augmented_lagrangian import (
     penalty_average,
     BaseConstraint,
     ALM,
-    ALM_model_jaxopt_lbfgsb,
+    ALM_model_scipy,
+    apply_mu_tolerance_per_constraint,
+    apply_mu_tolerance_all_constraints,
 )
+import numpy as np
+
 
 class TestAugmentedLagrangian(unittest.TestCase):
 
@@ -161,13 +164,13 @@ class TestAugmentedLagrangian(unittest.TestCase):
 
     # ---- ALM model tests ----
 
-    def test_ALM_model_jaxopt_lbfgsb_init_and_update(self):
+    def test_ALM_model_scipy_init_and_update(self):
         def fun(x): return x - 1
         constraint = eq(fun)
         main_params = jnp.array([6.0,2.0])        
         lagrange_params = constraint.init(main_params)
         params = main_params,lagrange_params            
-        alm = ALM_model_jaxopt_lbfgsb(constraint)
+        alm = ALM_model_scipy(constraint)
         self.assertIsInstance(alm, ALM)
         state,grad,info = alm.init(params)
         alm.update(params, state,grad,info)
@@ -178,7 +181,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = ineq(h, model_lagrangian=model_lagrangian)
         main_params = jnp.array([0.0])
         params = main_params, constraint.init(main_params)
-        alm = ALM_model_jaxopt_lbfgsb(
+        alm = ALM_model_scipy(
             constraint, loss=loss, model_lagrangian=model_lagrangian)
         state, grad, info = alm.init(params)
         for _ in range(iters):
@@ -205,7 +208,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = eq(lambda x: x - 150.0)
         main_params = jnp.array([0.0])
         params = main_params, constraint.init(main_params)
-        alm = ALM_model_jaxopt_lbfgsb(constraint)
+        alm = ALM_model_scipy(constraint)
         state, grad, info = alm.init(params)
         for _ in range(10):
             params, state, grad, info = alm.update(params, state, grad, info)

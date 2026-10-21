@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 import optuna
 import inspect
-import optax
 import matplotlib.pyplot as plt
 from jax import jit
 from functools import partial
@@ -94,6 +93,7 @@ class MultiObjectiveOptimizer:
         return total_loss
 
     def _objective(self, trial):
+        import optax  # optional: pip install essos[multiobjective]
         method = trial.suggest_categorical("method", self.optimizer_choices)
         lr = trial.suggest_float("lr", 1e-4, 1e-1, log=True)
         weights = [
@@ -143,6 +143,7 @@ class MultiObjectiveOptimizer:
         self.study.optimize(self._objective, n_trials=self.n_trials)
 
     def optimize_with_optax(self, weights, method="adam", lr=1e-2):
+        import optax  # optional: pip install essos[multiobjective]
         loss_fn = lambda x: self.weighted_loss(x, weights)
         grad_fn = jax.grad(loss_fn)
         x = self.initial_coils.x

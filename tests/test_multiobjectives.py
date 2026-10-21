@@ -1,4 +1,6 @@
 import pytest
+pytest.importorskip('optuna', reason='Install the optional multiobjective extra')
+pytest.importorskip('pandas', reason='Install the optional multiobjective extra')
 from unittest.mock import MagicMock, patch
 import essos.objective_functions as objf
 from essos.losses import custom_loss

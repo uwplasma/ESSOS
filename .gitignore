@@ -169,6 +169,9 @@ output/*
 tests/comparisons_SIMSOPT/output/*
 essos/version.py
 *.json
+!examples/input_files/surface_QI_nfp2.json
+!docs/alm_feature_coverage.json
+!docs/alm_benchmark_results.json
 *.png
 *.csv
 *.vtu
