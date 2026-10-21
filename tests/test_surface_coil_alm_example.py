@@ -6,7 +6,7 @@ from scipy.integrate import quad
 
 from examples.coil_optimization.optimize_coils_surface_augmented_lagrangian import (
     bounce_integrals, build_problem, initial_configuration, qi_residuals,
-    quasisymmetry, toroidal_flux, trace_surface,
+    qs_measure, qs_reference, quasisymmetry, toroidal_flux, trace_surface,
 )
 
 
@@ -72,7 +72,7 @@ def test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients():
     for case in ('qs', 'qi'):
         field, surface, _ = initial_configuration(case, smoke=True)
         x, constraints, objective, _, names = build_problem(field, surface, case,
-            ntrace=9, nalpha=2, npitch=2, iota_periods=1)
+            ntrace=9, nalpha=2, npitch=2, iota_periods=1, smoke=True)
         p = constraints.init(x)
         value, gradient = jax.jit(jax.value_and_grad(
             lambda dofs: objective(dofs) + constraints.loss(p, dofs)[0]))(x)
@@ -89,3 +89,46 @@ def test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients():
         assert (target > 0) == (case == 'qs')
         flux = toroidal_flux(field, surface)
         assert jnp.isfinite(flux) and jnp.abs(flux) > 1e-6
+
+    # The full QS case must start from the source torus and circular coils,
+    # while its targets come from the independent QA reference.
+    field, surface, iota = initial_configuration('qs', resolution=9, segments=16)
+    assert field.coils.curves.n_base_curves == 4 and field.coils.curves.order == 6
+    assert surface.mpol == surface.ntor == 2 and surface.dofs.size == 26
+    assert surface.nphi == 18 and surface.ntheta == 9
+    assert field.coils.curves.scaling_factor == surface.scaling_factor == 1.2
+    np.testing.assert_allclose(field.coils.dofs_currents_raw, jnp.ones(4))
+    gamma = field.coils.gamma
+    centers = jnp.mean(gamma, axis=1)
+    np.testing.assert_allclose(jnp.linalg.norm(centers[:, :2], axis=-1), 10., atol=1e-12)
+    np.testing.assert_allclose(jnp.linalg.norm(gamma - centers[:, None], axis=-1), 5.7, atol=1e-12)
+    points = surface.gamma
+    np.testing.assert_allclose(jnp.sqrt((jnp.linalg.norm(points[..., :2], axis=-1) - 10.)**2
+                                         + points[..., 2]**2), 4., atol=1e-12)
+    reference = qs_reference(9)
+    ref_field, ref_surface, _ = reference
+    assert ref_field.coils.curves.n_base_curves == 3 and ref_field.coils.curves.order == 3
+    assert ref_field.coils.n_segments == 45
+    assert jnp.all((ref_field.coils.dofs_currents_raw > .9) & (ref_field.coils.dofs_currents_raw < 1.1))
+    x, constraints, objective, _, names = build_problem(field, surface, 'qs', reference=reference,
+        ntrace=9, nalpha=2, iota_periods=1)
+    assert x.size == 186
+    assert names == ['normal field', 'length', 'curvature', 'major radius', 'area',
+        'volume', 'toroidal flux', 'metric aspect bound', 'iota', 'quasisymmetry',
+        'toroidal contours (geometric)']
+    p = constraints.init(x)
+    residual = dict(zip(names, constraints.loss(p, x, _raw=True)[1]))
+    np.testing.assert_allclose(residual['area'], surface.area - ref_surface.area)
+    np.testing.assert_allclose(residual['volume'], surface.volume - ref_surface.volume)
+    np.testing.assert_allclose(residual['toroidal flux'],
+        toroidal_flux(field, surface) - toroidal_flux(ref_field, ref_surface))
+    assert abs(residual['area']) > 1 and abs(residual['volume']) > 1
+    np.testing.assert_allclose(residual['quasisymmetry'], qs_measure(field, surface))
+    np.testing.assert_allclose(p[0]['eta_tol'], 1e-8)
+    np.testing.assert_allclose(p[1]['eta_tol'], 4e-4)
+    np.testing.assert_allclose(p[2]['eta_tol'], 5e-6)
+    assert objective(x) == 0 and '_inequality' not in p[names.index('quasisymmetry')]
+    value, gradient = jax.jit(jax.value_and_grad(lambda dofs: constraints.loss(p, dofs)[0]))(x)
+    assert jnp.isfinite(value) and jnp.all(jnp.isfinite(gradient))
+    assert jnp.linalg.norm(gradient[:field.dofs.size]) > 0
+    assert jnp.linalg.norm(gradient[field.dofs.size:]) > 0

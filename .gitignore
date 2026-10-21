@@ -170,6 +170,7 @@ tests/comparisons_SIMSOPT/output/*
 essos/version.py
 *.json
 !examples/input_files/surface_QI_nfp2.json
+!examples/input_files/LandremanPaul2021_QA_coils.json
 !docs/alm_feature_coverage.json
 !docs/alm_benchmark_results.json
 *.png

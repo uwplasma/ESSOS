@@ -3,7 +3,9 @@
     python -m examples.coil_optimization.optimize_coils_surface_augmented_lagrangian --case qs
     python -m examples.coil_optimization.optimize_coils_surface_augmented_lagrangian --case qi
 
-Compact port of en/jax_10's QS_maybe_final and QIIIII experiments. QS uses
+QS starts from the torus and circular coils in en/jax_10's QS_maybe_final,
+with its QA reference targets and ALM settings. The QI formulation is adapted
+from the QIIIII experiments. QS uses
 the coordinate-independent triple product (Rodriguez et al., JPP 2021,
 doi:10.1017/S0022377821001331); its zero does not select a helicity.
 QI minimizes variation of J at COMMON reflection fields along traced field
@@ -131,7 +133,23 @@ def clearance(field, surface):
     return jnp.sqrt(jnp.min(jnp.sum(delta**2, axis=-1), axis=1))
 
 
-def initial_configuration(case, resolution=32, segments=64, smoke=False):
+def qs_reference(resolution=60):
+    """Original QS reference field and boundary, used only to define targets."""
+    inputs = Path(__file__).resolve().parents[1] / 'input_files'
+    wout = inputs / 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'
+    surface = SurfaceRZFourier.from_wout_file(
+        wout, ntheta=resolution, nphi=2 * resolution, close=False)
+    coils = Coils.from_json(inputs / 'LandremanPaul2021_QA_coils.json')
+    field = BiotSavart(coils)
+    grid, bphi = field_grid(field, surface)
+    # Retain the source's numerical target; the optimization below measures
+    # iota with signed field-line traces rather than this reference proxy.
+    iota = float(jnp.sum(grid[0] * bphi * surface.area_element) /
+                 jnp.sum(bphi * surface.area_element))
+    return field, surface, iota
+
+
+def initial_configuration(case, resolution=60, segments=60, smoke=False, reference=None):
     if smoke:
         # A small torus and one base coil exercise both primal parameter blocks.
         surface = SurfaceRZFourier(jnp.array([10., 1.]), jnp.array([0., 1.]),
@@ -141,15 +159,15 @@ def initial_configuration(case, resolution=32, segments=64, smoke=False):
         return BiotSavart(coils), surface, .42
     inputs = Path(__file__).resolve().parents[1] / 'input_files'
     if case == 'qs':
-        from netCDF4 import Dataset
-
-        wout = inputs / 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'
-        surface = SurfaceRZFourier.from_wout_file(
-            wout, ntheta=resolution, nphi=resolution, close=False)
-        coils = Coils.from_json(inputs / 'ESSOS_biot_savart_LandremanPaulQA.json')
-        coils.n_segments = segments
-        with Dataset(wout) as nc:
-            iota_target = float(nc['iotaf'][-1])
+        # Original R=10, a=4 torus, with all m<=2, |n|<=2 coefficients free.
+        rc = jnp.zeros(13).at[0].set(10.).at[5].set(4.)
+        zs = jnp.zeros(13).at[5].set(4.)
+        surface = SurfaceRZFourier(rc, zs, 2, 2, 2, ntheta=resolution,
+            nphi=2 * resolution, close=False, scaling_type=jnp.inf, scaling_factor=1.2)
+        coils = Coils(CreateEquallySpacedCurves(4, 6, 10., 5.7,
+            n_segments=segments, nfp=2, stellsym=True, scaling_type=jnp.inf,
+            scaling_factor=1.2), jnp.ones(4))
+        iota_target = (qs_reference(resolution) if reference is None else reference)[2]
     else:
         data = json.loads((inputs / 'surface_QI_nfp2.json').read_text())
         surface = SurfaceRZFourier(jnp.array(data['rc']), jnp.array(data['zs']),
@@ -165,10 +183,87 @@ def initial_configuration(case, resolution=32, segments=64, smoke=False):
     return BiotSavart(coils), surface, iota_target
 
 
+def qs_measure(field, surface):
+    """Source-case area mean |f_T| in m^-3, without changing its QS criterion."""
+    area = surface.area_element.ravel()
+    residual = quasisymmetry(field, surface) / (surface.rc[0]**3 * jnp.sqrt(area / jnp.mean(area)))
+    return jnp.sum(jnp.abs(residual) * area) / jnp.sum(area)
+
+
+def metric_aspect(surface):
+    ratio = jnp.linalg.norm(surface.gammadash_theta, axis=-1) / jnp.linalg.norm(surface.gammadash_phi, axis=-1)
+    return jnp.mean(ratio**2 + ratio**-2)
+
+
+def toroidal_contours(field, surface):
+    """Legacy geometric-angle shaping constraint, separate from the QS criterion."""
+    b = jnp.linalg.norm(B_on_surface(surface, field), axis=-1)[:surface.nphi // surface.nfp]
+    return jnp.linalg.norm(jnp.fft.rfft2(b / jnp.mean(b))[1:])
+
+
+def build_source_qs_problem(field, surface, reference, *, ntrace=257, nalpha=16,
+                            iota_target=None, iota_periods=16,
+                            pad_constraints=False, explicit_slacks=False):
+    """Preserve the active QS_maybe_final problem, correcting inequality signs.
+
+    Reference targets and physical tolerances are fixed before optimization.
+    Pointwise normal-field bounds replace the source's shifted soft maximum;
+    signed field-line tracing replaces its geometric-angle iota proxy.
+    """
+    target_field, target_surface, _ = reference
+    if iota_target is None:
+        iota_target = reference[2]
+    x0, unpack = ravel_pytree((field, surface))
+    area, volume, major = target_surface.area, target_surface.volume, target_surface.rc[0]
+    flux = toroidal_flux(target_field, target_surface)
+    aspect, contours = metric_aspect(target_surface), toroidal_contours(target_field, target_surface)
+    a = target_surface.area_element.ravel()
+    qs_max = jnp.max(jnp.abs(quasisymmetry(target_field, target_surface)) /
+                     (major**3 * jnp.sqrt(a / jnp.mean(a))))
+    constraints, names = [], []
+
+    def add(name, fun, tolerance, inequality=False, weight=1.):
+        options = {'use_analytical_penalty': not explicit_slacks} if inequality else {}
+        constructor = alm.ineq if inequality else alm.eq
+        constraints.append(constructor(lambda x: fun(*unpack(x)), eta_tol=tolerance,
+            weight=weight, pad_output_to_power_of_2=pad_constraints, **options))
+        names.append(name)
+
+    def normal_margin(f, s):
+        b = B_on_surface(s, f)
+        normal = jnp.sum(b * s.unitnormal, axis=-1) / jnp.linalg.norm(b, axis=-1)
+        return jnp.concatenate((1e-3 - normal.ravel(), 1e-3 + normal.ravel()))
+
+    add('normal field', normal_margin, 1e-8, True)
+    add('length', lambda f, s: 40. - f.coils.length[:4], 4e-4, True)
+    add('curvature', lambda f, s: .5 - f.coils.curvature[:4], 5e-6, True)
+    add('major radius', lambda f, s: s.rc[0] - major, 1e-5 * major, weight=1000.)
+    add('area', lambda f, s: s.area - area, 1e-5 * area)
+    add('volume', lambda f, s: s.volume - volume, 1e-5 * volume)
+    add('toroidal flux', lambda f, s: toroidal_flux(f, s) - flux, 1e-5 * jnp.abs(flux))
+    add('metric aspect bound', lambda f, s: aspect - metric_aspect(s), 1e-5 * aspect, True)
+
+    def rotational_transform(f, s):
+        phi, theta, _, _ = trace_surface(field_grid(f, s)[0], s.nfp, ntrace, nalpha, periods=iota_periods)
+        return jnp.mean((theta[:, -1] - theta[:, 0]) / phi[-1]) - iota_target
+
+    add('iota', rotational_transform, 1e-5 * abs(iota_target))
+    add('quasisymmetry', qs_measure, 1e-7 * qs_max)
+    add('toroidal contours (geometric)', lambda f, s: contours - toroidal_contours(f, s), 1e-5 * contours, True)
+    return x0, alm.combine(*constraints), lambda x: jnp.array(0., dtype=x.dtype), unpack, names
+
+
 def build_problem(field, surface, case, *, ntrace=129, nalpha=16, npitch=16,
-                  iota_target=.42, iota_periods=16, distance=.5, mirror=.25,
-                  pad_constraints=False, explicit_slacks=False):
-    """Use dimensionless residuals so tolerances retain their stated meaning."""
+                  iota_target=None, iota_periods=16, distance=.5, mirror=.25,
+                  pad_constraints=False, explicit_slacks=False, smoke=False, reference=None):
+    """Full source QS by default; dimensionless QI or explicitly selected smoke."""
+    if case == 'qs' and not smoke:
+        return build_source_qs_problem(field, surface,
+            qs_reference(surface.ntheta) if reference is None else reference,
+            ntrace=ntrace, nalpha=nalpha, iota_target=iota_target, iota_periods=iota_periods,
+            pad_constraints=pad_constraints, explicit_slacks=explicit_slacks)
+    if iota_target is None:
+        iota_target = .42
     x0, unpack = ravel_pytree((field, surface))
     _, bp0 = field_grid(field, surface)
     major, volume, area = surface.rc[0], surface.volume, surface.area
@@ -306,15 +401,19 @@ def plot_optimization(initial, final, history, weights, output, case, smoke=Fals
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case', choices=('qs', 'qi'), default='qs')
-    parser.add_argument('--outer-iterations', type=int, default=50)
-    parser.add_argument('--inner-iterations', type=int, default=50)
-    parser.add_argument('--resolution', type=int, default=32)
-    parser.add_argument('--segments', type=int, default=64)
+    parser.add_argument('--outer-iterations', type=int)
+    parser.add_argument('--inner-iterations', type=int)
+    parser.add_argument('--resolution', type=int)
+    parser.add_argument('--segments', type=int)
     parser.add_argument('--trace-points', type=int, default=257)
     parser.add_argument('--alpha-points', type=int, default=16)
     parser.add_argument('--pitch-points', type=int, default=16)
     parser.add_argument('--iota-turns', type=int, default=8)
     parser.add_argument('--iota', type=float)
+    parser.add_argument('--penalty-growth', type=float)
+    parser.add_argument('--decrease-tol', type=float)
+    parser.add_argument('--eta-tol', type=float)
+    parser.add_argument('--omega-tol', type=float)
     parser.add_argument('--constraint-weights', choices=('element', 'constraint', 'global', 'none'), default='element')
     parser.add_argument('--weight-perturbation', choices=('none', 'relative', 'absolute'), default='relative')
     parser.add_argument('--weight-perturbation-magnitude', type=float, default=.01)
@@ -335,6 +434,15 @@ def main(argv=None):
     parser.add_argument('--smoke', action='store_true', help='tiny execution check; no convergence claim')
     parser.add_argument('--output', type=Path, default=Path('surface_coil_alm_output'))
     args = parser.parse_args(argv)
+    source_qs = args.case == 'qs' and not args.smoke
+    defaults = dict(outer_iterations=60001 if source_qs else 50,
+        inner_iterations=50, resolution=60 if source_qs else 32,
+        segments=60 if source_qs else 64, penalty_growth=1.01 if source_qs else 2.,
+        decrease_tol=.99 if source_qs else .75, eta_tol=1e-5 if source_qs else 1e-4,
+        omega_tol=1e-7 if source_qs else 1e-6)
+    for name, value in defaults.items():
+        if getattr(args, name) is None:
+            setattr(args, name, value)
     if args.backend == 'jaxopt' and args.method != 'L-BFGS-B':
         parser.error('--method applies to SciPy; JAXopt uses L-BFGS-B')
     if args.backend != 'scipy' and args.scipy_pinned_host:
@@ -346,13 +454,20 @@ def main(argv=None):
         parser.error('iteration counts and grid sizes must be positive; trace-points must be >= 3')
     if args.parameter_scale <= 0 or args.checkpoint_every < 0 or args.weight_perturbation_magnitude < 0:
         parser.error('parameter-scale must be positive; checkpoint interval and perturbation must be nonnegative')
-    f, s, target = initial_configuration(args.case, args.resolution, args.segments, args.smoke)
+    if args.penalty_growth < 1 or not 0 < args.decrease_tol <= 1 or min(args.eta_tol, args.omega_tol) <= 0:
+        parser.error('penalty-growth must be >= 1, decrease-tol in (0, 1], and tolerances positive')
+    reference = qs_reference(args.resolution) if source_qs else None
+    f, s, target = initial_configuration(args.case, args.resolution, args.segments, args.smoke, reference)
     options = dict(ntrace=args.trace_points, nalpha=args.alpha_points, npitch=args.pitch_points,
                    iota_target=target if args.iota is None else args.iota, iota_periods=args.iota_turns * s.nfp,
                    pad_constraints=args.pad_constraints, explicit_slacks=args.explicit_slacks)
     if args.smoke:
         options.update(ntrace=9, nalpha=2, npitch=2, iota_periods=1)
-    x, constraints, objective, unpack, names = build_problem(f, s, args.case, **options)
+    x, constraints, objective, unpack, names = build_problem(
+        f, s, args.case, smoke=args.smoke, reference=reference, **options)
+    if source_qs:
+        print(f'QS_maybe_final: {x.size} primal DOFs, surface grid {s.nphi}x{s.ntheta}, '
+              f'penalty growth {args.penalty_growth}, decrease threshold {args.decrease_tol}', flush=True)
     multipliers = constraints.init(x)
     if args.constraint_weights != 'none' and args.resume is None:
         multipliers = alm.initialize_constraint_weights(constraints, x, multipliers,
@@ -363,7 +478,8 @@ def main(argv=None):
     params = x, multipliers
     factory = alm.ALM_model_scipy if args.backend == 'scipy' else alm.ALM_model_jaxopt_lbfgsb
     solver = factory(constraints, loss=objective, model_mu='Mu_Adaptative_2', method=args.method,
-        eta_tol=1e-4, omega_tol=1e-6, decrease_tol=.75,
+        beta=args.penalty_growth, eta_tol=args.eta_tol, omega_tol=args.omega_tol, decrease_tol=args.decrease_tol,
+        bounds=(-100. * jnp.ones_like(x), 100. * jnp.ones_like(x)) if source_qs else None,
         inner_maxiter=1 if args.smoke else args.inner_iterations,
         parameter_scale=args.parameter_scale, jit_update=args.jit_outer,
         scipy_pinned_host=args.scipy_pinned_host)
@@ -378,14 +494,16 @@ def main(argv=None):
         valid = jnp.broadcast_to(p.get('_mask', 1.), values.shape) > 0
         return {'min': float(jnp.min(values[valid])), 'max': float(jnp.max(values[valid]))}
     weights = {name: weight_range(p) for name, p in zip(names, params[1])}
-    initial_cost = float(info[0])
+    def physics_cost():
+        return float(info[2][names.index('quasisymmetry')]) if source_qs else float(info[0])
+    initial_cost = physics_cost()
     history = []
 
     def record(iteration):
         worst = max(float(jnp.max(jnp.abs(r) / p['eta_tol'])) for r, p in zip(info[2], params[1]))
-        history.append(dict(iteration=iteration, cost=float(info[0]), residual_ratio=worst,
+        history.append(dict(iteration=iteration, cost=physics_cost(), residual_ratio=worst,
                             gradient_norm=float(jnp.linalg.norm(grad[0]))))
-        print(f'{iteration:3d}: cost={float(info[0]):.6g}, max residual/tolerance={worst:.4g}', flush=True)
+        print(f'{iteration:3d}: cost={physics_cost():.6g}, max residual/tolerance={worst:.4g}', flush=True)
         return worst
 
     worst = record(0)
@@ -394,7 +512,7 @@ def main(argv=None):
         if not all(bool(jnp.all(jnp.isfinite(v))) for v in jax.tree_util.tree_leaves((params, grad, info))):
             raise FloatingPointError('Nonfinite ALM iterate')
         worst = record(iteration + 1)
-        converged = worst <= 1 and float(jnp.linalg.norm(grad[0])) <= 1e-6
+        converged = worst <= 1 and float(jnp.linalg.norm(grad[0])) <= args.omega_tol
         if args.checkpoint_every and ((iteration + 1) % args.checkpoint_every == 0 or
             iteration + 1 == (1 if args.smoke else args.outer_iterations) or converged):
             alm.save_checkpoint_with_constraints(args.output / 'checkpoint.pkl', params, state, grad,
@@ -407,12 +525,18 @@ def main(argv=None):
     final_surface.to_vmec(str(args.output / 'input.surface'))
     report = dict(case=args.case, smoke=args.smoke, backend=args.backend, jit_update=args.jit_outer,
                   scipy_pinned_host=args.scipy_pinned_host,
-                  method=args.method, initial_cost=initial_cost, final_cost=float(info[0]),
+                  method=args.method, initial_cost=initial_cost, final_cost=physics_cost(),
+                  objective_cost=float(info[0]),
+                  cost_definition='area mean absolute QS triple product [m^-3]' if source_qs else 'RMS physics residual',
+                  configuration='QS_maybe_final' if source_qs else 'smoke' if args.smoke else 'qi',
+                  resolution=args.resolution, segments=args.segments,
+                  penalty_growth=args.penalty_growth, decrease_tol=args.decrease_tol,
+                  eta_tol=args.eta_tol, omega_tol=args.omega_tol,
                   constraint_weights='restored' if args.resume else args.constraint_weights, weights=weights, history=history,
                   weight_perturbation=args.weight_perturbation, weight_seed=args.weight_seed,
                   jacobian_method=args.weight_jacobian, padded=args.pad_constraints, explicit_slacks=args.explicit_slacks,
                   constraints={name: float(jnp.max(jnp.abs(r))) for name, r in zip(names, info[2])},
-                  converged=worst <= 1 and float(jnp.linalg.norm(grad[0])) <= 1e-6)
+                  converged=worst <= 1 and float(jnp.linalg.norm(grad[0])) <= args.omega_tol)
     (args.output / 'diagnostics.json').write_text(json.dumps(report, indent=2) + '\n')
     if not args.no_plot:
         plot_optimization((f, s), (final_field, final_surface), history, weights,

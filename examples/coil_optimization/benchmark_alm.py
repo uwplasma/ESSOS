@@ -45,7 +45,7 @@ def worker(args):
         example.alm = alm
         field, surface, iota = example.initial_configuration(args.case, smoke=True)
         x, constraints, objective, _, _ = example.build_problem(field, surface, args.case,
-            ntrace=9, nalpha=2, npitch=2, iota_periods=1, iota_target=iota)
+            ntrace=9, nalpha=2, npitch=2, iota_periods=1, iota_target=iota, smoke=True)
     params = x, constraints.init(x)
     if args.case != 'quadratic':
         params = x, alm.initialize_constraint_weights(constraints, x, params[1], loss=objective,

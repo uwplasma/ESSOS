@@ -44,6 +44,9 @@ by the SciPy factory.
 
 ## Measured results
 
+The timing table below uses the small synthetic smoke problems. It does not
+measure convergence of the full source QS case described below.
+
 Recorded on 2026-10-20 in WSL/Linux: AMD Ryzen 7 250 CPU (16 logical CPUs,
 one JAX CPU device), NVIDIA GeForce RTX 5060 Laptop GPU, Python 3.14.4,
 JAX 0.11.2, SciPy 1.18.1 and JAXopt 0.8.5. Both backends use the current
@@ -232,6 +235,52 @@ backends. Only two inner iterations are allowed. Their outputs are
 **unconverged execution checks**. Equal iteration limits do not guarantee equal
 function evaluations, line-search work or final quality, so these measurements
 do not establish time to an equivalent QS/QI design or production performance.
+
+## Source QS case
+
+The full `--case qs` run preserves the non-GFrame `QS_maybe_final` problem
+from `en/jax_10` at `9258ce01821ca44d293ceb0857f343b8745ad960`:
+
+| Setting | Source and restored full QS case |
+|---|---|
+| Initial surface | R=10 m, a=4 m torus; all m<=2, abs(n)<=2 modes free |
+| Initial coils | Four circular base coils, order 6, radius 5.7 m, 1 A, nfp=2, stellarator symmetry |
+| Spectral scaling | 1.2, infinity norm, on coil and surface modes |
+| Target geometry and field | Original QA wout and `LandremanPaul2021_QA_coils.json` (three reference coils, order 3, 45 segments) |
+| Constraints | Normal field, length, curvature, major radius, area, volume, flux, metric aspect bound, iota, QS, geometric toroidal contours |
+| Length / curvature bounds | 40 m / 0.5 m^-1 |
+| Objective | Zero; area mean absolute QS triple product is an ALM equality |
+| Penalties | Initial 1, growth 1.01, cap 10000; decrease threshold 0.99 |
+| Solver tolerances | eta=1e-5, omega=1e-7, with the source's individual physical constraint tolerances |
+| Budgets | 60001 outer updates, 50 inner iterations, history size 10 |
+
+Source inequality signs are translated to main's `h>=0` convention. Pointwise
+normal-field bounds replace the shifted soft maximum that could hide local
+violations. The source iota target is retained, while the residual measures
+signed field-line winding rather than a geometric-angle proxy. Flux quadrature
+uses Fourier tangents instead of polygon edges. Current main's
+endpoint-free full-torus grid uses 120 toroidal points to retain 60 per field
+period. These numerical corrections prevent a claim of identical iterates or
+identical convergence time. The geometric FFT bound is retained as a shaping
+constraint; the QS criterion is the coordinate-independent triple product.
+
+Run on a configured CUDA installation with the optional JAXopt extra:
+
+```sh
+python -m pip install -e '.[jaxopt]'
+JAX_PLATFORMS=cuda ESSOS_CPU_DEVICES=1 XLA_PYTHON_CLIENT_PREALLOCATE=false \
+python -m examples.coil_optimization.optimize_coils_surface_augmented_lagrangian \
+  --case qs --backend jaxopt --jit-outer --resolution 60 --segments 60 \
+  --outer-iterations 60001 --inner-iterations 50 \
+  --penalty-growth 1.01 --decrease-tol 0.99 --eta-tol 1e-5 --omega-tol 1e-7 \
+  --constraint-weights element --weight-perturbation relative --weight-seed 42 \
+  --checkpoint-every 10 --output qs_source_run
+```
+
+For SciPy, use `--backend scipy`; `--scipy-pinned-host` optionally enables the
+GPU transfer optimization. Results include geometry and convergence plots,
+`diagnostics.json`, coil/surface files and `checkpoint.pkl`. A finite reduced
+grid execution check does not establish convergence at this full resolution.
 
 ## Test coverage
 

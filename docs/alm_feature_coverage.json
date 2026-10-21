@@ -75,5 +75,73 @@
       "total": 246
     },
     "coverage_exclusions": 0
+  },
+  "qs_source_case": {
+    "restored_date": "2026-10-21",
+    "branch": "en/jax_10",
+    "commit": "9258ce01821ca44d293ceb0857f343b8745ad960",
+    "example": "examples/coil_optimization/optimize_coils_surface_augmented_lagrangian_one_surface_QS_maybe_final.py",
+    "reference_coils": "examples/input_files/LandremanPaul2021_QA_coils.json",
+    "reference_coils_sha256": "a79b873b4cb38df432587cd5f211dabae417bd1ea1794449cfb64b8d428ce531",
+    "initial_surface": {
+      "major_radius": 10.0,
+      "minor_radius": 4.0,
+      "mpol": 2,
+      "ntor": 2,
+      "dofs": 26
+    },
+    "initial_coils": {
+      "base_coils": 4,
+      "order": 6,
+      "center_radius": 10.0,
+      "minor_radius": 5.7,
+      "current_ampere": 1.0,
+      "nfp": 2,
+      "stellsym": true
+    },
+    "spectral_scaling": 1.2,
+    "primal_dofs": 186,
+    "gradient_weights": "element",
+    "perturbation": {
+      "mode": "relative",
+      "magnitude": 0.01,
+      "seed": 42
+    },
+    "solver": {
+      "model_mu": "Mu_Adaptative_2",
+      "penalty_growth": 1.01,
+      "decrease_tol": 0.99,
+      "eta_tol": 1e-05,
+      "omega_tol": 1e-07,
+      "inner_iterations": 50,
+      "outer_iterations": 60001,
+      "history_size": 10,
+      "lower_bound": -100.0,
+      "upper_bound": 100.0
+    },
+    "objective": "zero; area mean absolute QS triple product is an equality constraint",
+    "numerical_corrections": [
+      "main h>=0 inequality signs",
+      "pointwise normal field bounds",
+      "signed field-line iota with the source reference target formula",
+      "endpoint-free full-torus quadrature at the source density per period",
+      "Fourier-tangent flux quadrature",
+      "public DOFs scaled exactly once"
+    ],
+    "test": "tests/test_surface_coil_alm_example.py::test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients",
+    "verification": {
+      "surface_grid": [
+        18,
+        9
+      ],
+      "coil_segments": 16,
+      "primal_dofs": 186,
+      "source_problem_runs": [
+        "SciPy CPU, two one-inner-iteration updates with plots and checkpoint",
+        "SciPy CPU, one resumed update",
+        "JAXopt GPU, one compiled update with checkpoint"
+      ],
+      "scope": "reduced-quadrature execution checks; full-resolution convergence is unverified"
+    }
   }
 }

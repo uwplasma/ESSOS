@@ -310,8 +310,21 @@ python -m examples.coil_optimization.optimize_coils_surface_augmented_lagrangian
 python -m examples.coil_optimization.optimize_coils_surface_augmented_lagrangian --case qi --output qi_output
 ```
 
-Both cases optimize coil geometry, currents and an RZ Fourier surface with
-dimensionless engineering and physics constraints. `Mu_Adaptative_2` updates
+The full QS case starts from the source `QS_maybe_final` torus (major radius
+10 m, minor radius 4 m, `mpol=ntor=2`) and four circular base coils (radius
+5.7 m, Fourier order 6, 1 A), with the source's 1.2 spectral scaling.
+Its geometry and flux targets use the original QA reference input rather than
+the starting torus. The default grid has 60 poloidal points and 60 toroidal
+points per field period; current main represents both periods on the full torus.
+QS is an ALM equality constraint with zero external objective. Its default
+penalty growth is 1.01, decrease threshold 0.99, inner iteration limit 50,
+and outer limit 60001, matching the source budget. `--smoke` selects a separate
+tiny execution check. The [benchmark notes](docs/alm_benchmarks.md#source-qs-case)
+list the retained constraints and numerical corrections.
+
+Both cases optimize coil geometry, currents and an RZ Fourier surface.
+QS retains the source's physical residuals and tolerances; QI uses dimensionless
+residuals. `Mu_Adaptative_2` updates
 penalties per element; `eq(..., eta_tol=...)` and `ineq(..., eta_tol=...)`
 set individual convergence tolerances, with conditional freezing and
 reactivation. Inequalities use **h >= 0**. The existing global `Mu_Tolerance`
