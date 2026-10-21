@@ -70,6 +70,9 @@ rminor = 2.0 # only valid for wout_LandremanPaul2021_QA_reactorScale_low
 # step_sample chooses how many surface points you skip when sampling.
 # step_sample = 4 means: take one point every 4 points in both directions (phi and theta).
 step_sample = 4
+# Colormap for the 3D surfaces and the 2D (phi, theta) maps
+scalar_cmap = "jet"
+
 output_folder = os.path.join( os.path.dirname(__file__) , "output_coil_fields_on_a_surface" )
 
 # ============================================================================================
@@ -193,62 +196,59 @@ fig2.savefig(os.path.join(output_folder, "01_surface_normals_B_vectors.png"), dp
 plt.show()
 plt.close(fig2)
 
+
 # ========================================
-# Scalar fields on the surface: one 3D figure + one 2D (phi, theta) map each
+# Scalar fields on the surface in one figure (3 rows x 2 columns)
+# Each row is one field: 3D surface (left) + 2D (phi, theta) map (right)
 # ========================================
 
 # Toroidal position of each coil center (dashed lines on the 2D maps)
 phi_coils = jnp.mod(jnp.arctan2(centers[:, 1], centers[:, 0]), 2 * jnp.pi)
 
+fig3 = plt.figure(figsize=(14, 16))
+
 # ----------------------------------------
-# B · n / |B|
+# Row 1: B · n / |B|
 # ----------------------------------------
-fig3, ax3 = plot_scalar_on_surface_3d(surface, B_dot_n_pt_full, coils=coils,
-                                      label=r"$B\cdot n/|B|$", title=r"$B\cdot n/|B|$ on the surface", symmetric=True)
-fig3.savefig(os.path.join(output_folder, "02_B_dot_n_3d.png"), dpi=300, bbox_inches="tight")
+ax3  = fig3.add_subplot(3, 2, 1, projection="3d")
+ax3m = fig3.add_subplot(3, 2, 2)
+
+plot_scalar_on_surface_3d(surface, B_dot_n_pt_full, ax=ax3, coils=coils, cmap=scalar_cmap,
+                          label=r"$B\cdot n/|B|$", title=r"$B\cdot n/|B|$ on the surface", symmetric=True)
+plot_scalar_map_2d(surface, B_dot_n_pt_full, ax=ax3m, cmap=scalar_cmap,
+                   label=r"$B\cdot n/|B|$", title=r"$B\cdot n/|B|$ in $(\phi,\theta)$", symmetric=True, contours=10)
+for phi_c in phi_coils:
+    ax3m.axvline(float(phi_c), color="brown", linestyle="--", linewidth=1)
+
+# ----------------------------------------
+# Row 2: Magnetic-gradient scale length L_B
+# ----------------------------------------
+ax_LB  = fig3.add_subplot(3, 2, 3, projection="3d")
+ax_LBm = fig3.add_subplot(3, 2, 4)
+
+plot_scalar_on_surface_3d(surface, L_B_pt_full, ax=ax_LB, coils=coils, cmap=scalar_cmap,
+                          label=r"$L_{\nabla B} = \sqrt{2}\,|B| / \|\nabla \mathbf{B}\|_F$", title="Magnetic-gradient scale length on the surface")
+plot_scalar_map_2d(surface, L_B_pt_full, ax=ax_LBm, cmap=scalar_cmap,
+                   label=r"$L_{\nabla B}$", title=r"Magnetic-gradient scale length in $(\phi,\theta)$", contours=10)
+for phi_c in phi_coils:
+    ax_LBm.axvline(float(phi_c), color="brown", linestyle="--", linewidth=1)
+
+# ----------------------------------------
+# Row 3: Quasi-symmetry residual
+# ----------------------------------------
+ax4  = fig3.add_subplot(3, 2, 5, projection="3d")
+ax4m = fig3.add_subplot(3, 2, 6)
+
+plot_scalar_on_surface_3d(surface, QS_condition_xyz_full, ax=ax4, coils=coils, cmap=scalar_cmap,
+                          label="QS residual", title="Quasi-symmetry residual on the surface", symmetric=True)
+plot_scalar_map_2d(surface, QS_condition_xyz_full, ax=ax4m, cmap=scalar_cmap,
+                   label="QS residual", title=r"Quasi-symmetry residual in $(\phi,\theta)$", symmetric=True, contours=10)
+for phi_c in phi_coils:
+    ax4m.axvline(float(phi_c), color="brown", linestyle="--", linewidth=1)
+
+fig3.tight_layout()
+fig3.savefig(os.path.join(output_folder, "02_scalar_fields_on_surface.png"), dpi=300, bbox_inches="tight")
 plt.show()
 plt.close(fig3)
 
-fig3m, ax3m = plot_scalar_map_2d(surface, B_dot_n_pt_full,
-                                 label=r"$B\cdot n/|B|$", title=r"$B\cdot n/|B|$ in $(\phi,\theta)$", symmetric=True, contours=10)
-for phi_c in phi_coils:
-    ax3m.axvline(float(phi_c), color="brown", linestyle="--", linewidth=1)
-fig3m.savefig(os.path.join(output_folder, "02_B_dot_n_map.png"), dpi=300, bbox_inches="tight")
-plt.show()
-plt.close(fig3m)
 
-# ----------------------------------------
-# Magnetic-gradient scale length L_B
-# ----------------------------------------
-fig_LB, ax_LB = plot_scalar_on_surface_3d(surface, L_B_pt_full, coils=coils,
-                                          label=r"$L_{\nabla B} = \sqrt{2}\,|B| / \|\nabla \mathbf{B}\|_F$",
-                                          title="Magnetic-gradient scale length on the surface")
-fig_LB.savefig(os.path.join(output_folder, "03_magnetic_scale_length_3d.png"), dpi=300, bbox_inches="tight")
-plt.show()
-plt.close(fig_LB)
-
-fig_LBm, ax_LBm = plot_scalar_map_2d(surface, L_B_pt_full,
-                                     label=r"$L_{\nabla B}$", title=r"Magnetic-gradient scale length in $(\phi,\theta)$",
-                                     contours=10)
-for phi_c in phi_coils:
-    ax_LBm.axvline(float(phi_c), color="brown", linestyle="--", linewidth=1)
-fig_LBm.savefig(os.path.join(output_folder, "03_magnetic_scale_length_map.png"), dpi=300, bbox_inches="tight")
-plt.show()
-plt.close(fig_LBm)
-
-# ----------------------------------------
-# Quasi-symmetry residual
-# ----------------------------------------
-fig4, ax4 = plot_scalar_on_surface_3d(surface, QS_condition_xyz_full, coils=coils,
-                                      label="QS residual", title="Quasi-symmetry residual on the surface", symmetric=True)
-fig4.savefig(os.path.join(output_folder, "04_QS_condition_3d.png"), dpi=300, bbox_inches="tight")
-plt.show()
-plt.close(fig4)
-
-fig4m, ax4m = plot_scalar_map_2d(surface, QS_condition_xyz_full,
-                                 label="QS residual", title=r"Quasi-symmetry residual in $(\phi,\theta)$", symmetric=True, contours=10)
-for phi_c in phi_coils:
-    ax4m.axvline(float(phi_c), color="brown", linestyle="--", linewidth=1)
-fig4m.savefig(os.path.join(output_folder, "04_QS_condition_map.png"), dpi=300, bbox_inches="tight")
-plt.show()
-plt.close(fig4m)

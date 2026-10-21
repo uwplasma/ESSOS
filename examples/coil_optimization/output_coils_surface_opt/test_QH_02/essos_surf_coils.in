@@ -1,0 +1,64 @@
+# ESSOS single-stage run parameters (2026-10-19 16:32)
+VMEC_INPUT = 'input.toroidal_surface_02'
+
+# Run control
+EXPORT = True
+RUN_VMEX = True
+LOAD_RESULT = False
+MAXITER = 3000
+
+# Continuation
+RESTART_FROM = False
+restart_filepath = '/Users/gftd/GitHub/uwplasma/ESSOS/examples/coil_optimization/output_coils_surface_opt/test_QH_01'
+SURFACE_MPOL = 2
+SURFACE_NTOR = 3
+
+# Initial surface
+ntheta = 26
+nphi = 26
+
+# Coils
+N_COILS = 4
+FOURIER_ORDER = 3
+LARGE_R = 10
+SMALL_R = 5.6
+NFP = 2
+N_SEGMENTS = 40
+STELLSYM = True
+COIL_CURRENT = 1.0
+
+# Geometry losses
+MAJOR_RADIUS_WEIGHT = 0
+
+# Coil losses
+LENGTH_WEIGHT = 10.0
+LENGTH_TARGET = 40.0
+CURVATURE_WEIGHT = 500.0
+CURVATURE_TARGET = 0.5
+
+# Field losses
+NORMAL_FIELD_WEIGHT = 10000.0
+QS_WEIGHT = 100.0
+
+# Surface losses
+CROSS_SECTIONAL_AREA_WEIGHT = 100.0
+AREA_UNIFORMITY_WEIGHT = 100.0
+AREA_UNIFORMITY_TOLERANCE = 0.05
+NORMAL_DISPLACEMENT_WEIGHT = 0.0
+QQ_WEIGHT = 0.0
+ALPHA_QQ = 1.0
+KAPPA_WEIGHT = 100.0
+ALPHA_KAPPA = 3.0
+A3D_MIN = 0.2
+A3D_WEIGHT = 100.0
+
+# Rotational transform
+IOTA_APPROX_WEIGHT = 100000.0
+IOTA_APPROX_TARGET = 0.5
+SLOPE_MIN = 0.05
+PHI_FLOOR_FRACTION = 0.1
+POLOIDAL_SLOPE_WEIGHT = 0.0
+
+# x_scale
+SCALE_FIELD = 2.18
+SCALE_SURFACE = 1.0

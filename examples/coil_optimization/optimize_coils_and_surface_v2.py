@@ -40,22 +40,21 @@ import datetime
 
 # Exporting results and the folder name
 EXPORT = True
-output_filepath = os.path.join(os.path.dirname(__file__), "output_single_stage/test_QS_01")
+output_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_islands_01")
 os.makedirs(output_filepath, exist_ok=True) # Make the path
 
 # True -> run a fixed-boundary VMEX equilibrium on the exported surface
 RUN_VMEX = True
 
-# True -> skip optimization, load saved dofs
-LOAD_RESULT = False
+# True -> skip optimization, load saved dofs from output_filepath
+LOAD_RESULT = True
 
 # CONTINUATION -----------------------------------------------------------------------
 # False -> start from the initial torus (vmec_input) and equally spaced coils.
 # True -> start from an already optimized surface and coils, at a higher surface resolution (select the folder).
-RESTART_FROM = True
-restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface/test_QS_no_islands_02")
+RESTART_FROM = False
+restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QH_02")
 SURFACE_MPOL = 2; SURFACE_NTOR = 3   # maximum m and n of the surface (ESSOS convention)
-
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -63,12 +62,12 @@ input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_input = os.path.join(input_filepath, 'input.toroidal_surface_02')
 
 # SURFACE PARAMETERS -----------------------------------------------------------------
-ntheta = 26; nphi = 26; Npoints = ntheta * nphi
+ntheta = 26; nphi = 26 ; Npoints = ntheta * nphi
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
 N_COILS = 4; FOURIER_ORDER = 3;
-LARGE_R = 10; SMALL_R = 5.6; NFP = 2;
+LARGE_R = 10; SMALL_R = 5.6; NFP = 3;
 N_SEGMENTS = 40; STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
@@ -82,18 +81,18 @@ MAJOR_RADIUS_WEIGHT = 0 # The target will be calculated from the initial surface
 
 # Coils ~~~~~~~~~~~~~~~~~~~~
 LENGTH_WEIGHT = 10.; LENGTH_TARGET = 40.;
-CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 0.6
+CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 0.5
 
 # Field ~~~~~~~~~~~~~~~~~~~~
 NORMAL_FIELD_WEIGHT = 1e4;
-QS_WEIGHT = 250
+QS_WEIGHT = 1e2
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e3
-AREA_UNIFORMITY_WEIGHT = 1e3
+AREA_UNIFORMITY_WEIGHT = 1e2
 AREA_UNIFORMITY_TOLERANCE = 0.05     # |A(phi)/<A> - 1| allowed without penalty (~ Amax/Amin <= 1.1)
 
-NORMAL_DISPLACEMENT_WEIGHT = 0. # 1e4      # Importance of this constraint in the total loss
+NORMAL_DISPLACEMENT_WEIGHT = 0. # 1e4  
 
 # Surface-parametrization control: prevent qq = ||dc_phi/dtheta|| from approaching zero.
 QQ_WEIGHT = 0. # 1e5;
@@ -108,8 +107,8 @@ A3D_MIN = 0.2
 A3D_WEIGHT = 1e2
 
 # Rotational transform ~~~~~~~~~~~~~~~~~~~~
-IOTA_APPROX_WEIGHT = 1e3    
-IOTA_APPROX_TARGET = 0.4
+IOTA_APPROX_WEIGHT = 1e5    
+IOTA_APPROX_TARGET = 0.8
 
 # dtheta/dphi slope penalty
 SLOPE_MIN = 0.05
@@ -173,18 +172,24 @@ if not RESTART_FROM:
     surface_init = SurfaceRZFourier.from_input_file(vmec_input, ntheta=ntheta, nphi=nphi, close=True, range_torus='half period')
 else:
     # The optimized coils of the previous run are the initial coils of this one.
-    init_coils = Coils.from_json(os.path.join(restart_filepath, "opt_coils_single_stage.json"))
+    init_coils = Coils.from_json(os.path.join(restart_filepath, "opt_coils_coils_surface.json"))
 
     # The previous optimized boundary is read with VMEX and padded with zero modes up to the new resolution
     # (VMEC's MPOL counts poloidal modes, so MPOL = mpol + 1). It is saved as the initial surface of this run.
     restart_input_file = os.path.join(output_filepath, "input.restart_surface")
-    vj.VmecInput.from_file(os.path.join(restart_filepath, "input.single_stage")).change_resolution(
+    vj.VmecInput.from_file(os.path.join(restart_filepath, "input.coils_surface")).change_resolution(
         mpol=SURFACE_MPOL + 1, ntor=SURFACE_NTOR).to_indata(restart_input_file)
     surface_init = SurfaceRZFourier.from_input_file(restart_input_file, ntheta=ntheta, nphi=nphi, close=True, range_torus='half period')
 
 
 field_init = BiotSavart(init_coils)
 
+# Report where the initial coils and surface come from.
+if RESTART_FROM:
+    print(f"\nRESTART: initial coils and surface from '{os.path.basename(restart_filepath)}', "
+          f"surface resolution raised to mpol = {SURFACE_MPOL}, ntor = {SURFACE_NTOR}\n")
+else:
+    print(f"\nNEW RUN: initial surface from '{os.path.basename(vmec_input)}' and equally spaced coils\n")
 
 # ------------------------------------------------------------------------------------
 # Initialize reference values for the surface geometry. These will be used to compute the surface normal displacement loss. 
@@ -341,6 +346,12 @@ t_start = time()
 if LOAD_RESULT:
     from types import SimpleNamespace
     x_opt = jnp.load(os.path.join( output_filepath , "res_x.npy"))
+    
+    # The saved dofs only fit the problem they were optimized in (same coils and surface resolution).
+    if x_opt.size != L_total.starting_dofs.size:
+        raise ValueError(f"res_x.npy has {x_opt.size} dofs, but this setup has {L_total.starting_dofs.size}. "
+                         f"Use the coil and surface settings in {os.path.join(output_filepath, 'essos_surf_coils.in')}.")
+    
     res = SimpleNamespace(x=x_opt, nfev=0)
 else:
     res = minimize(L_total, L_total.starting_dofs, jac=L_total.grad, method="L-BFGS-B",
@@ -520,13 +531,13 @@ print("max abs residual (initial):", jnp.max(jnp.abs(QS_residual_xyz_init)))
 print("max abs residual (optimized):", jnp.max(jnp.abs(QS_residual_xyz_opt)))
 if QS_WEIGHT != 0.0:
     print("QS loss (initial field, initial surface):", loss_quasi_symmetry(field_init, surface_init))
-    print("QS loss (optimized field, initial surface):", loss_quasi_symmetry(field_opt, surface_init))
-    print("QS loss (initial field, optimized surface):", loss_quasi_symmetry(field_init, surface_opt))
     print("QS loss (optimized field, optimized surface):", loss_quasi_symmetry(field_opt, surface_opt))
-
-    coils_hybrid = Coils(curves=opt_coils.curves, currents=init_coils.dofs_currents_raw)
-    field_hybrid = BiotSavart(coils_hybrid)
-    print("QS loss (optimized coil shapes, initial currents, initial surface):", loss_quasi_symmetry(field_hybrid, surface_init))
+    # print("QS loss (optimized field, initial surface):", loss_quasi_symmetry(field_opt, surface_init))
+    # print("QS loss (initial field, optimized surface):", loss_quasi_symmetry(field_init, surface_opt))
+    
+    # coils_hybrid = Coils(curves=opt_coils.curves, currents=init_coils.dofs_currents_raw)
+    # field_hybrid = BiotSavart(coils_hybrid)
+    # print("QS loss (optimized coil shapes, initial currents, initial surface):", loss_quasi_symmetry(field_hybrid, surface_init))
 
 print("\n---------------------------------------------------------------------------")
 print("Rotational transform:")
@@ -548,10 +559,10 @@ cross_sectional_area_initial = surface_init.area_section_by_phi()
 cross_sectional_area_optimized = surface_opt.area_section_by_phi()
 relative_cross_sectional_area_change = ( cross_sectional_area_optimized - cross_sectional_area_initial ) / cross_sectional_area_initial
 
-print("Initial area:", cross_sectional_area_initial)
-print("Optimized area:", cross_sectional_area_optimized)
-print("Absolute area change:", jnp.abs(cross_sectional_area_optimized - cross_sectional_area_initial))
-print("Relative area change:", relative_cross_sectional_area_change)
+# print("Initial area:", cross_sectional_area_initial)
+# print("Optimized area:", cross_sectional_area_optimized)
+# print("Absolute area change:", jnp.abs(cross_sectional_area_optimized - cross_sectional_area_initial))
+# print("Relative area change:", relative_cross_sectional_area_change)
 print("Relative area change (%):", 100 * relative_cross_sectional_area_change)
 
 if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
@@ -764,19 +775,19 @@ plt.show()
 if EXPORT:
 
     """ Save the coils to a json file """
-    init_coils.to_json(os.path.join(output_filepath, "init_coils_single_stage.json"))
-    opt_coils.to_json(os.path.join(output_filepath, "opt_coils_single_stage.json"))
+    init_coils.to_json(os.path.join(output_filepath, "init_coils_coils_surface.json"))
+    opt_coils.to_json(os.path.join(output_filepath, "opt_coils_coils_surface.json"))
 
     """ Save results in vtk format to analyze in Paraview """
-    surface_init.to_vtk(os.path.join(output_filepath, "init_surface_single_stage"), field=field_init)
-    surface_opt.to_vtk(os.path.join(output_filepath, "opt_surface_single_stage"), field=field_opt)
-    init_coils.to_vtk(os.path.join(output_filepath, "init_coils_single_stage"))
-    opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_single_stage"))
+    surface_init.to_vtk(os.path.join(output_filepath, "init_surface_coils_surface"), field=field_init)
+    surface_opt.to_vtk(os.path.join(output_filepath, "opt_surface_coils_surface"), field=field_opt)
+    init_coils.to_vtk(os.path.join(output_filepath, "init_coils_coils_surface"))
+    opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_coils_surface"))
 
     """ Save the optimized boundary as a VMEC input file for VMEX """
     # to_vmec writes only the boundary. VMEX reads it back, sets the run controls, and rewrites a complete input:
     # NCURR = 1 holds the toroidal current at zero, so iota is computed (default 0 prescribes iota = 0).
-    vmec_input_file = os.path.join(output_filepath, "input.single_stage")
+    vmec_input_file = os.path.join(output_filepath, "input.coils_surface")
     surface_opt.to_vmec(vmec_input_file)
     vmec_inp = replace(vj.VmecInput.from_file(vmec_input_file), ncurr=1, niter_array=[20000])
     vmec_inp.to_indata(vmec_input_file)
@@ -791,7 +802,7 @@ if EXPORT:
 
         # The equilibrium is saved as a wout file, and VMEX's diagnostic figures are written next to it.
         wout = vj.wout_from_result(vmec_inp, vmec_result)
-        wout_file = vj.write_wout(os.path.join(vmex_output_filepath, "wout_single_stage.nc"), wout)
+        wout_file = vj.write_wout(os.path.join(vmex_output_filepath, "wout_coils_surface.nc"), wout)
         vj.plot_wout(wout_file, vmex_output_filepath)
 
         # The Boozer transform shows how quasisymmetric |B| is.
@@ -811,7 +822,7 @@ if EXPORT:
         symmetry_breaking = np.sqrt(np.sum(bmnc[:, xn_b != 0]**2, axis=1)) / B00
         print("  QA symmetry breaking (n != 0 modes / B00):")
         for s_index in [bmnc.shape[0] // 4, bmnc.shape[0] // 2, bmnc.shape[0] - 1]:
-        print(f"    s = {(s_index + 0.5) / bmnc.shape[0]:.2f}: {100 * symmetry_breaking[s_index]:.2f} %")
+            print(f"    s = {(s_index + 0.5) / bmnc.shape[0]:.2f}: {100 * symmetry_breaking[s_index]:.2f} %")
 
 
 """ Record of the run parameters """
