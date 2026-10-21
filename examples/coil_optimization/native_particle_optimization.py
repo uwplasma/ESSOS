@@ -280,6 +280,7 @@ def build_objective(options, objective):
             trace = Tracing(field=field, particles=birth, model=model,
                 integrator=integrator, native_adjoint="accepted",
                 native_adjoint_checkpoint_steps=options.checkpoint_steps,
+                native_adjoint_parameter_accumulation=getattr(options, "parameter_accumulation", "segment"),
                 native_adjoint_max_accepted_steps=options.accepted_capacity,
                 native_controller="i", native_dense_output="standard",
                 rtol=options.tolerance, atol=options.tolerance,
@@ -358,6 +359,8 @@ def run(objective, argv=None, *, defaults=None):
     parser.add_argument("--energy-ev", type=float, default=4000.)
     parser.add_argument("--tolerance", type=float, default=1e-9)
     parser.add_argument("--checkpoint-steps", type=int, default=16)
+    parser.add_argument("--parameter-accumulation", choices=("step", "segment"), default="segment",
+                        help="Collisionless RHS parameter pullback per step or checkpoint segment")
     parser.add_argument("--accepted-capacity", type=int, default=512)
     parser.add_argument("--max-steps", type=int, default=4096)
     parser.add_argument("--collisions", action=argparse.BooleanOptionalAction, default=False,

@@ -8,9 +8,11 @@ controllers, error estimates and event-root searches are not differentiated.
 
 All dense-output modes differentiate their actual save polynomial. Event
 fractions are frozen, so this is not a derivative of a moving first-hit time.
-RHS setup is rebuilt once during backward execution. Each step accumulates its
-stage parameter cotangents before transposing that setup once. Fixed input data
-is excluded by JAX activity flags; physical parameter derivatives are retained.
+RHS setup is rebuilt once during backward execution. Small results of large
+RHS reductions are retained within the current replay segment; field-sized
+arrays are rematerialized. Parameter cotangents are accumulated through either
+one step or a checkpoint segment before transposing setup. Fixed input data is
+excluded by JAX activity flags; physical parameter derivatives are retained.
 """
 import equinox as eqx
 import jax
@@ -22,6 +24,7 @@ from jax.custom_derivatives import SymbolicZero, custom_vjp_primal_tree_values
 from .rk import (solve_rk, _trial_step, _C, _A, _ERROR, _C8, _A8, _ERROR8,
     _rk45_dense, _dopri8_dense, _dopri8_output_coefficients,
     _higher_order_output_coefficients, _polynomial_dense, _partition_rhs, _RKTrial, RKStatus)
+from .rk_ad_rhs import prepare_rhs_linearization, prepare_reverse_rhs
 
 
 def _zeros(tree):
@@ -68,12 +71,13 @@ def _samples(rhs, y, t, h, trial, parameters, fractions, owned, method, mode):
 
 def _step_pullback(rhs, y, t, h, endpoint, increments, parameters,
                    fraction, sample_fractions, owned, event_save, by, bf, saved_bar, method, mode,
-                   initial_fsal=False):
+                   initial_fsal=False, cached_pullback=None):
     """Transpose the RK recurrence from reconstructed primal stage values.
 
     Segment reconstruction supplies the primal stage values. Linear RK/dense
-    algebra is transposed separately; each RHS VJP uses ordinary JAX AD at the
-    original stage time/state. Only one RHS transpose's temporary arrays are
+    algebra is transposed separately; each RHS VJP retains the physical
+    derivatives at the original stage time/state. Stock prepared Biot--Savart
+    calls can use the exact native field linearization. Only one RHS transpose's temporary arrays are
     live at a time, rather than every stage's field intermediates. The reverse
     recurrence includes all stage dependencies; stages are not frozen in AD.
     """
@@ -106,16 +110,51 @@ def _step_pullback(rhs, y, t, h, endpoint, increments, parameters,
         weights = coefficients[i]
         point = y+jnp.tensordot(weights, bank, axes=1)
         point = jnp.where(i == len(increments)-1, endpoint, jnp.where(i == 0, y, point))
-        _, rhs_vjp = jax.vjp(lambda state,p: rhs(t+times[i]*h,state,p), point, parameters)
         # The endpoint FSAL derivative is unscaled; its RK increment also
         # contributes to dense output. Stage zero is visited only on the first
         # accepted step, where the initial FSAL value is an actual RHS call.
         seed = h*dk[i]+jnp.where(i == len(increments)-1, bf, 0.)
-        dpoint, dparams = rhs_vjp(seed)
+        if cached_pullback is None:
+            _, rhs_vjp = jax.vjp(lambda state,p: rhs(t+times[i]*h,state,p), point, parameters)
+            dpoint, dparams = rhs_vjp(seed)
+        else:
+            dpoint, dparams = cached_pullback(i, seed)
         return dy+dpoint, dk.at[:-1].add(weights[:, None]*dpoint), _add(dp, dparams)
     bound = len(increments)-1+jnp.asarray(initial_fsal, jnp.int32)
     dy, dk, dp = lax.fori_loop(jnp.asarray(0, jnp.int32), bound, stage, (dy, dk, dp))
     return dy, jnp.where(initial_fsal, 0., h*dk[0]), dp
+
+
+def _trial_with_residuals(linearize, t, y, h, f0, constants, initial_cache):
+    """Replay the unchanged RK stages and keep compact RHS residuals.
+
+    Used only in backward reconstruction; no embedded error is needed here.
+    Stage zero's cache belongs to the initial trajectory RHS. It is consumed
+    only when ``initial_fsal`` is true in the first accepted step's pullback.
+    """
+    nodes, rows, error_weights = constants
+    n = len(error_weights)
+    coefficients = np.zeros((n-2, n-1))
+    for i, row in enumerate(rows[:-1]):
+        coefficients[i, :len(row)] = row
+    coefficients = jnp.asarray(coefficients, y.dtype)
+    times = jnp.asarray(nodes[:-1], y.dtype)
+    bank = jnp.concatenate([(h*f0)[None], jnp.zeros((n-2,)+y.shape, y.dtype)])
+    cache = tree_util.tree_map(lambda r: jnp.zeros((n,)+r.shape, r.dtype).at[0].set(r), initial_cache)
+
+    def stage(i, values):
+        bank, cache = values
+        point = y+jnp.tensordot(coefficients[i-1], bank, axes=1)
+        f, residuals = linearize(t+times[i-1]*h, point)
+        return lax.dynamic_update_index_in_dim(bank, h*f, i, axis=0), tree_util.tree_map(
+            lambda buffer, r: lax.dynamic_update_index_in_dim(buffer, r, i, axis=0), cache, residuals)
+
+    bank, cache = lax.fori_loop(1, n-1, stage, (bank, cache))
+    endpoint = y+jnp.tensordot(jnp.asarray(rows[-1], y.dtype), bank, axes=1)
+    final, residuals = linearize(t+h, endpoint)
+    cache = tree_util.tree_map(lambda buffer, r: buffer.at[-1].set(r), cache, residuals)
+    trial = _RKTrial(endpoint, jnp.zeros_like(y), jnp.concatenate([bank, (h*final)[None]]), final)
+    return trial, cache
 
 
 def replay_accepted(rhs, y0, args, tape, ts, *, method="dopri5", dense_output="standard"):
@@ -164,6 +203,9 @@ def solve_accepted(rhs, y0, args=None, **options):
     t0 = lax.stop_gradient(jnp.asarray(options.get("t0", 0.), dtype=y0.dtype))
     ts = lax.stop_gradient(jnp.asarray(options.get("ts", ()), dtype=y0.dtype))
     checkpoint_steps = int(options.pop("adjoint_checkpoint_steps", 16))
+    parameter_accumulation = options.pop("adjoint_parameter_accumulation", "segment")
+    if parameter_accumulation not in ("step", "segment"):
+        raise ValueError("adjoint_parameter_accumulation must be 'step' or 'segment'")
     # Bind arbitrary ESSOS args before conversion. Particles intentionally is
     # an ordinary object, and need not become a new field/particle PyTree just
     # to cross the custom VJP boundary. Its actually used traced attributes,
@@ -205,18 +247,29 @@ def solve_accepted(rhs, y0, args=None, **options):
             "accepted-step AD capacity exceeded; increase adjoint_max_accepted_steps")
         raw_leaves, raw_structure = tree_util.tree_flatten(raw)
         active = tuple(value for value, flag in zip(raw_leaves, activity.flags) if flag)
+        backward_prepare, backward_rhs = prepare_reverse_rhs(prepare, evaluate, controls[1], initial, raw)
         def prepare_active(values):
             iterator = iter(values)
             full = tree_util.tree_unflatten(raw_structure,
                 [next(iterator) if flag else value for value, flag in zip(raw_leaves, activity.flags)])
-            return prepare(full)
+            return backward_prepare(full)
         parameters, setup_pullback = jax.vjp(prepare_active, active)
         _, t0, ts = controls
+        linearization = prepare_rhs_linearization(backward_rhs, t0, initial, parameters)
+        if linearization is None:
+            initial_cache = ()
+        else:
+            linearize, rhs_pullback, initial_cache = linearization
         sample_indices = jnp.arange(len(ts))
         terminal_bar = jnp.zeros_like(initial) if isinstance(bar.y, SymbolicZero) else bar.y
         saved_bar = jnp.zeros((len(ts), initial.size), initial.dtype) if isinstance(bar.ys, SymbolicZero) else bar.ys
 
-        def reverse_step(carry, y, t, endpoint, increments):
+        def replay_trial(t, y, h, f):
+            if linearization is None:
+                return _trial_step(backward_rhs, t, y, h, parameters, f, *constants), ()
+            return _trial_with_residuals(linearize, t, y, h, f, constants, initial_cache)
+
+        def reverse_step(carry, y, t, endpoint, increments, cache):
             i, by, bf, bp = carry
             i = i-1
             h = tape.step_sizes[i]
@@ -225,47 +278,64 @@ def solve_accepted(rhs, y0, args=None, **options):
             owned = (ts > t) & (ts <= end_time)
             sample_fractions = jnp.where(owned, (ts-t)/h, 0.)
             event_save = (fraction < 1) & (ts == t+fraction*h)
-            dy, df, dp = _step_pullback(evaluate, y, t, h, endpoint, increments, parameters,
+            def cached_pullback(index, seed):
+                return rhs_pullback(tree_util.tree_map(lambda buffer: buffer[index], cache), seed)
+            dy, df, dp = _step_pullback(backward_rhs, y, t, h, endpoint, increments, parameters,
                 fraction, sample_fractions, owned, event_save, by, bf, saved_bar, method, mode,
-                initial_fsal=(i == 0))
-            return i, dy, df, _add(bp, setup_pullback(dp)[0])
+                initial_fsal=(i == 0), cached_pullback=None if linearization is None else cached_pullback)
+            contribution = setup_pullback(dp)[0] if parameter_accumulation == "step" else dp
+            return i, dy, df, _add(bp, contribution)
 
-        def reverse(carry):
+        def reverse_segment(carry):
             end = carry[0]
             segment = jnp.maximum((end-1) // checkpoint_steps, 0)
             start = segment*checkpoint_steps
             y, f = tape.states[segment], tape.derivatives[segment]
             t = tape.times[segment]
             if checkpoint_steps == 1:
-                trial = _trial_step(evaluate, t, y, tape.step_sizes[start], parameters, f, *constants)
-                return reverse_step(carry, y, t, trial.y, trial.increments)
+                trial, cache = replay_trial(t, y, tape.step_sizes[start], f)
+                return reverse_step(carry, y, t, trial.y, trial.increments, cache)
 
-            # Reconstruct the segment once. Cache only small RK stage vectors,
-            # not RHS/field intermediates, to avoid rebuilding every step twice.
+            # Reconstruct the segment once. Cache RK stage vectors and compact
+            # RHS reductions; field-sized arrays are rematerialized.
             # Rejections and adaptation are absent from this RK reverse replay.
             states = jnp.zeros((checkpoint_steps, initial.size), initial.dtype)
             endpoints = jnp.zeros_like(states)
             increments = jnp.zeros((checkpoint_steps, len(constants[2]), initial.size), initial.dtype)
             times = jnp.zeros((checkpoint_steps,), initial.dtype)
+            cache = tree_util.tree_map(lambda r: jnp.zeros(
+                (checkpoint_steps, len(constants[2]))+r.shape, r.dtype), initial_cache)
             def reconstruct(local):
-                i, t, y, f, states, endpoints, increments, times = local
+                i, t, y, f, states, endpoints, increments, times, cache = local
                 slot = i-start
                 states = states.at[slot].set(y)
                 times = times.at[slot].set(t)
                 h = tape.step_sizes[i]
-                trial = _trial_step(evaluate, t, y, h, parameters, f, *constants)
+                trial, residuals = replay_trial(t, y, h, f)
+                cache = tree_util.tree_map(lambda buffer, r: buffer.at[slot].set(r), cache, residuals)
                 endpoints = endpoints.at[slot].set(trial.y)
                 increments = increments.at[slot].set(trial.increments)
                 # An event can only terminate the last accepted step. Its
                 # full endpoint is harmless here: no later slot consumes it.
-                return i+1, t+h, trial.y, trial.f1, states, endpoints, increments, times
-            _, _, _, _, states, endpoints, increments, times = lax.while_loop(
+                return i+1, t+h, trial.y, trial.f1, states, endpoints, increments, times, cache
+            _, _, _, _, states, endpoints, increments, times, cache = lax.while_loop(
                 lambda local: local[0] < end, reconstruct,
-                (start, t, y, f, states, endpoints, increments, times))
+                (start, t, y, f, states, endpoints, increments, times, cache))
             def local_reverse(local):
                 index = local[0]-1-start
-                return reverse_step(local, states[index], times[index], endpoints[index], increments[index])
+                return reverse_step(local, states[index], times[index], endpoints[index], increments[index],
+                                    tree_util.tree_map(lambda buffer: buffer[index], cache))
             return lax.while_loop(lambda local: local[0] > start, local_reverse, carry)
+
+        def reverse(carry):
+            if parameter_accumulation == "step":
+                return reverse_segment(carry)
+            # Preparation's pullback is linear in these cotangents. Sum them
+            # locally before applying it; the outer carry still stores only
+            # active raw-parameter bars, never a full-trajectory field tape.
+            i, by, bf, bp = carry
+            i, dy, df, dp = reverse_segment((i, by, bf, _zeros(parameters)))
+            return i, dy, df, _add(bp, setup_pullback(dp)[0])
 
         _, by, bf, bp = lax.while_loop(lambda carry: carry[0] > 0, reverse,
             (tape.count, terminal_bar, jnp.zeros_like(initial), _zeros(active)))

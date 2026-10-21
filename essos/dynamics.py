@@ -915,7 +915,7 @@ class Tracing():
                  orbit_length_scale=1., orbit_speed_scale=None,
                  native_controller="i", native_pcoeff=.4, native_icoeff=.3, native_dense_output="standard",
                  native_adjoint="none", native_adjoint_checkpoint_steps=16,
-                 native_adjoint_max_accepted_steps=None):
+                 native_adjoint_max_accepted_steps=None, native_adjoint_parameter_accumulation="segment"):
 
         if integrator not in ("diffrax", "essos_rk45", "essos_dopri8"):
             raise ValueError("integrator must be 'diffrax', 'essos_rk45' or 'essos_dopri8'")
@@ -948,6 +948,9 @@ class Tracing():
                 native_adjoint_max_accepted_steps <= 0):
             raise ValueError("native_adjoint_max_accepted_steps must be a positive integer or None")
         self.native_adjoint_max_accepted_steps = native_adjoint_max_accepted_steps
+        if native_adjoint_parameter_accumulation not in ("step", "segment"):
+            raise ValueError("native_adjoint_parameter_accumulation must be 'step' or 'segment'")
+        self.native_adjoint_parameter_accumulation = native_adjoint_parameter_accumulation
         self.orbit_length_scale, self.orbit_speed_scale = orbit_length_scale, orbit_speed_scale
 
         if condition is not None and stopping_criteria is not None:
@@ -1314,7 +1317,8 @@ class Tracing():
                 controller=self.native_controller, pcoeff=self.native_pcoeff, icoeff=self.native_icoeff,
                 dense_output=self.native_dense_output, adjoint=self.native_adjoint,
                 adjoint_checkpoint_steps=self.native_adjoint_checkpoint_steps,
-                adjoint_max_accepted_steps=self.native_adjoint_max_accepted_steps)
+                adjoint_max_accepted_steps=self.native_adjoint_max_accepted_steps,
+                adjoint_parameter_accumulation=self.native_adjoint_parameter_accumulation)
             ys = solution.ys
             if throw:
                 import equinox as eqx

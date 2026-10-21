@@ -197,7 +197,8 @@ def test_stage_pullback_matches_automatic_vjp_of_original_rk_map(method, mode, i
 
 
 @pytest.mark.parametrize("method", ["dopri5", "dopri8"])
-def test_fixed_setup_has_no_pullback_but_nonlinear_parameter_setup_differentiates(method):
+@pytest.mark.parametrize("nested", [False, True])
+def test_fixed_setup_has_no_pullback_but_nonlinear_parameter_setup_differentiates(method, nested):
     @jax.custom_vjp
     def fixed_setup(value):
         return value[0]
@@ -212,6 +213,8 @@ def test_fixed_setup_has_no_pullback_but_nonlinear_parameter_setup_differentiate
         # the RHS, but JAX's activity flag correctly identifies it as fixed.
         fixed = jnp.array([.7,.2])
         rhs = lambda t,y,a: fixed_setup(fixed)*jnp.exp(parameter)*y
+        if nested:
+            rhs = jax.jit(rhs)
         return solve_rk(rhs,jnp.array([.4]),t1=.7,dt0=.03,adaptive=False,
             method=method,max_steps=30,adjoint="accepted").y[0]
     p = .3

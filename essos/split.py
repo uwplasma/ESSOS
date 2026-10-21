@@ -582,6 +582,13 @@ def trace_split(field, particles, species, *, model="GuidingCenter", tmax, times
                     tolerance=collision_tolerance, speed_floor=floor,
                     return_error_model=adaptive and collision_controller == "candidate")
                 v, pitch = step.y
+                if adjoint == "accepted":
+                    from .collision_ad import speed_pitch_linearization
+                    def velocity_map(v, xi):
+                        coefficients = collision_coefficients(species, mass, charge, v, point)
+                        return guiding_center_collision_step(v, xi, h, dw[-2:], coefficients,
+                            tolerance=collision_tolerance, speed_floor=floor).y
+                    v, pitch = speed_pitch_linearization(velocity_map, speed, state[3]/speed)
                 if spatial_diffusion:
                     b = field.B_contravariant(point)/B
                     point = point + guiding_center_spatial_increment(

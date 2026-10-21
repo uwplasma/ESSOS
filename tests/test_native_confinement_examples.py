@@ -89,8 +89,10 @@ def test_torus_classifier_and_loss_gradient_have_correct_sign(torus_classifier):
 
 
 @pytest.mark.parametrize("example", [gc, full])
-def test_torus_loss_objective_runs_native_reverse_ad(example):
+@pytest.mark.parametrize("accumulation", ["step", "segment"])
+def test_torus_loss_objective_runs_native_reverse_ad(example, accumulation):
     settings = dict(example.PARAMETERS, particles=2, horizon=2e-8, saves=4,
+        parameter_accumulation=accumulation,
         length_weight=0., curvature_weight=0., bdotn_weight=0., axis_field_weight=0.)
     _, theta, _, _, _, objective = native.build_objective(SimpleNamespace(**settings), "loss_fraction")
     (value, (components, states)), gradient = jax.block_until_ready(

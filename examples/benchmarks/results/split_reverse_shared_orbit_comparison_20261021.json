@@ -1,0 +1,383 @@
+{
+  "complete": true,
+  "metadata": {
+    "backend": "cpu",
+    "particles": 2,
+    "repeats": 21,
+    "outer_checkpoint_steps": 16,
+    "inner_checkpoint_steps": 16,
+    "scope": "Production adaptive Dopri8 split maps, conservative collision control, no particle chunking",
+    "change": "Shared native RK reverse field/cache helpers and inner-segment prepared-parameter accumulation",
+    "timing": "Blocked warm CPU medians; reverse reuses baseline residuals; compilation excluded; each ratio uses its own ordinary forward"
+  },
+  "rows": [
+    {
+      "model": "gc",
+      "horizon_set": "short",
+      "max_abs_gradient_difference": 2.7755575615628914e-17,
+      "before": {
+        "report": "split_reverse_current_short_20261021.json",
+        "split_ad_sha256": "93cc63c77993ee033c1e40fd47540d206fb620e3d4896a13cae7802020cb4c96",
+        "horizon": 2e-06,
+        "forward_ms": 8.819238999421941,
+        "reverse_ms": 58.597274000931066,
+        "value_and_grad_ms": 64.86727900119149,
+        "reverse_over_forward": 6.644255134118923,
+        "total_over_forward": 7.355201396111754,
+        "compiler_buffer_bytes": 1797384,
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            7,
+            7
+          ],
+          "orbit_rejected": [
+            0,
+            0
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.010932417018347592,
+            0.00919271350365398
+          ]
+        },
+        "best_frozen_fd_relative_error": 1.2128716817038302e-10
+      },
+      "after": {
+        "report": "split_reverse_shared_orbit_short_20261021.json",
+        "split_ad_sha256": "6a7cfa82000d718bbf802f39a70c4704bdd36cba0bd1b50059167693195ef310",
+        "horizon": 2e-06,
+        "forward_ms": 9.505850997811649,
+        "reverse_ms": 37.206176999461604,
+        "value_and_grad_ms": 47.37189799925545,
+        "reverse_over_forward": 3.91402905516054,
+        "total_over_forward": 4.983446301668413,
+        "compiler_buffer_bytes": 1773848,
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            7,
+            7
+          ],
+          "orbit_rejected": [
+            0,
+            0
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.010932417018347592,
+            0.00919271350365398
+          ]
+        },
+        "best_frozen_fd_relative_error": 1.212868358148533e-10
+      },
+      "reverse_speedup": 1.5749340224280233,
+      "value_and_grad_speedup": 1.369319823373153,
+      "compiler_buffer_ratio": 0.9869054136456094
+    },
+    {
+      "model": "lorentz",
+      "horizon_set": "short",
+      "max_abs_gradient_difference": 6.938893903907228e-18,
+      "before": {
+        "report": "split_reverse_current_short_20261021.json",
+        "split_ad_sha256": "93cc63c77993ee033c1e40fd47540d206fb620e3d4896a13cae7802020cb4c96",
+        "horizon": 2e-07,
+        "forward_ms": 3.8372269991668873,
+        "reverse_ms": 15.108840001630597,
+        "value_and_grad_ms": 17.74306299921591,
+        "reverse_over_forward": 3.9374371140698545,
+        "total_over_forward": 4.623928426196355,
+        "compiler_buffer_bytes": 1226672,
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            7,
+            7
+          ],
+          "orbit_rejected": [
+            0,
+            0
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.002098915855587767,
+            0.0009667942074728473
+          ]
+        },
+        "best_frozen_fd_relative_error": 1.5225563012912569e-09
+      },
+      "after": {
+        "report": "split_reverse_shared_orbit_short_20261021.json",
+        "split_ad_sha256": "6a7cfa82000d718bbf802f39a70c4704bdd36cba0bd1b50059167693195ef310",
+        "horizon": 2e-07,
+        "forward_ms": 3.915853998478269,
+        "reverse_ms": 9.969784998247633,
+        "value_and_grad_ms": 14.608416997361928,
+        "reverse_over_forward": 2.5460052908310593,
+        "total_over_forward": 3.7305826527339554,
+        "compiler_buffer_bytes": 1201528,
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            7,
+            7
+          ],
+          "orbit_rejected": [
+            0,
+            0
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.002098915855587767,
+            0.0009667942074728473
+          ]
+        },
+        "best_frozen_fd_relative_error": 1.5225563012912569e-09
+      },
+      "reverse_speedup": 1.5154629717979118,
+      "value_and_grad_speedup": 1.2145780752575759,
+      "compiler_buffer_ratio": 0.979502263033639
+    },
+    {
+      "model": "gc",
+      "horizon_set": "long",
+      "max_abs_gradient_difference": 2.9976021664879227e-15,
+      "before": {
+        "report": "split_reverse_current_long_20261021.json",
+        "split_ad_sha256": "93cc63c77993ee033c1e40fd47540d206fb620e3d4896a13cae7802020cb4c96",
+        "horizon": 2e-05,
+        "forward_ms": 43.123513998580165,
+        "reverse_ms": 370.9094540026854,
+        "value_and_grad_ms": 402.0139519998338,
+        "reverse_over_forward": 8.601095309971667,
+        "total_over_forward": 9.322383885809261,
+        "compiler_buffer_bytes": 1797384,
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            29,
+            52
+          ],
+          "orbit_rejected": [
+            3,
+            3
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.10083804561991146,
+            0.08408395681395082
+          ]
+        },
+        "best_frozen_fd_relative_error": 9.846964953196904e-11
+      },
+      "after": {
+        "report": "split_reverse_shared_orbit_long_20261021.json",
+        "split_ad_sha256": "6a7cfa82000d718bbf802f39a70c4704bdd36cba0bd1b50059167693195ef310",
+        "horizon": 2e-05,
+        "forward_ms": 49.513370999193285,
+        "reverse_ms": 255.30637500196462,
+        "value_and_grad_ms": 295.47527199974866,
+        "reverse_over_forward": 5.156311716407358,
+        "total_over_forward": 5.96758544282034,
+        "compiler_buffer_bytes": 1773848,
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            29,
+            52
+          ],
+          "orbit_rejected": [
+            3,
+            3
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.10083804561991146,
+            0.08408395681395082
+          ]
+        },
+        "best_frozen_fd_relative_error": 9.846964953196904e-11
+      },
+      "reverse_speedup": 1.4528013803017303,
+      "value_and_grad_speedup": 1.3605671610996124,
+      "compiler_buffer_ratio": 0.9869054136456094
+    },
+    {
+      "model": "lorentz",
+      "horizon_set": "long",
+      "max_abs_gradient_difference": 1.3877787807814457e-16,
+      "before": {
+        "report": "split_reverse_current_long_20261021.json",
+        "split_ad_sha256": "93cc63c77993ee033c1e40fd47540d206fb620e3d4896a13cae7802020cb4c96",
+        "horizon": 2e-06,
+        "forward_ms": 18.7313569986145,
+        "reverse_ms": 107.35724700134597,
+        "value_and_grad_ms": 164.66844600290642,
+        "reverse_over_forward": 5.731418551751848,
+        "total_over_forward": 8.79105801117807,
+        "compiler_buffer_bytes": 1226672,
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            69,
+            63
+          ],
+          "orbit_rejected": [
+            2,
+            2
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.020171177131112685,
+            0.009330023495050613
+          ]
+        },
+        "best_frozen_fd_relative_error": 1.781724994908376e-11
+      },
+      "after": {
+        "report": "split_reverse_shared_orbit_long_20261021.json",
+        "split_ad_sha256": "6a7cfa82000d718bbf802f39a70c4704bdd36cba0bd1b50059167693195ef310",
+        "horizon": 2e-06,
+        "forward_ms": 18.648362001840724,
+        "reverse_ms": 65.2325529990776,
+        "value_and_grad_ms": 89.6803789983096,
+        "reverse_over_forward": 3.498031247604411,
+        "total_over_forward": 4.809021778398421,
+        "compiler_buffer_bytes": 1201528,
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            69,
+            63
+          ],
+          "orbit_rejected": [
+            2,
+            2
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.020171177131112685,
+            0.009330023495050613
+          ]
+        },
+        "best_frozen_fd_relative_error": 1.7818684770202647e-11
+      },
+      "reverse_speedup": 1.6457618484265675,
+      "value_and_grad_speedup": 1.836170273165441,
+      "compiler_buffer_ratio": 0.979502263033639
+    }
+  ]
+}

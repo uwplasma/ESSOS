@@ -457,9 +457,10 @@ scaling measurements.
 | GC | 9.87 | 12.22 | 127.60 | 12.93 | 132.84 |
 | Lorentz | 4.23 | 5.00 | 22.38 | 5.29 | 23.48 |
 
-Separately compiled phase medians need not sum to the fused timing. The current
-split adjoint does not meet a three-times-forward reverse-time target in these
-cases. With outer segment lengths greater than one, its backward pass replays
+Separately compiled phase medians need not sum to the fused timing. These saved
+baseline measurements predate the collision-state pullback optimization below
+and exceed a three-times-forward reverse-time target. With outer segment
+lengths greater than one, the backward pass replays
 outer maps, replays each map's orbit to build inner checkpoints, and reconstructs
 inner RK stages before the physical pullbacks. Removing duplicated reconstruction
 is a performance task; checkpointing alone does not establish a runtime bound.
@@ -470,8 +471,874 @@ JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.benchmark_sp
   --output examples/benchmarks/results/split_ad_phases_NEW.json
 ```
 
-The collisionless timing/memory reports later in this README were measured at
-base commit `c50da30`; they are not measurements of the split adjoint.
+#### Split collision-state pullback optimization
+
+The split reverse pass projects the production `CollisionStep` onto its physical
+state before differentiation. Controller error estimates and unused prepared
+inputs are removed from that graph. State derivatives and all active
+field/background/birth sensitivities are retained; the original JAX activity
+flags still exclude fixed input data from the returned parameter gradient. Collision
+parameter cotangents accumulate across accepted kicks, then the collision
+preparation is transposed once. This avoids repeating its pullback at every
+kick and avoids zero cotangents multiplying singular error-only derivatives.
+
+The ordinary forward solver, error control, accepted schedules, physical kicks,
+recorded Gaussian/bridge increments and field classes are unchanged. There is
+no particle chunking, lowered precision, tolerance relaxation or frozen physical
+collision coefficient. The checkpointed orbit pullback and its FSAL derivatives
+retain the same accepted-step map.
+
+The isolated comparison helper runs each model/implementation in a fresh CPU
+process. It loads the reference `essos/split.py` and `essos/split_ad.py` into
+baseline workers; physical kernels and inputs come from the current checkout.
+An optional `--baseline-reverse-source` keeps the adjoint fixed to isolate the
+new GC kinetic rule. It checks complete gradient vectors, objective values and
+solver statistics. Peak memory uses Linux worker `VmHWM`/`VmRSS`, sampled every
+10 ms, and includes compilation plus execution. This is separate from XLA's
+compiled buffer estimate and is not a warm-only memory measurement.
+
+The [retained comparison](examples/benchmarks/results/split_reverse_speed_20261019/comparison.json)
+uses two QA-coil particles, all 136 coil DOFs, adaptive Dopri8 with conservative
+collision control, eight saves and 16-step inner/outer checkpoints. The horizons
+are `2e-6 s` for GC and `2e-7 s` for Lorentz. Both versions take seven accepted
+outer maps and seven accepted inner steps per particle. Times below are medians
+of seven blocked warm calls, excluding compilation. The reference reverse
+implementation comes from commit `4abaf51`; this earlier report replaced only
+the adjoint module and predates the GC custom derivative below.
+
+| Model | Reverse before (ms) | Reverse after (ms) | Reverse speedup | Value + gradient before (ms) | Value + gradient after (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GC | 129.82 | 79.82 | 1.63x | 135.33 | 85.35 |
+| Lorentz | 18.47 | 13.51 | 1.37x | 21.91 | 21.38 |
+
+The separately compiled pullback timings need not add to the fused timings.
+In particular the fused Lorentz evaluation changed little in this measurement.
+Both objective values and solver statistics match. The maximum absolute change
+in the full coil gradient vector is `2.78e-17` for GC and zero for Lorentz.
+The retained implementation passed all 50 split/first-loss regression checks;
+the classifier, energy and birth-objective checks also passed during this audit.
+
+| Model | Compiler buffers before (MiB) | Compiler buffers after (MiB) | Process peak before (MiB) | Process peak after (MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| GC | 1.592 | 1.731 | 1223.2 | 1313.4 |
+| Lorentz | 1.152 | 1.170 | 1087.0 | 1142.0 |
+
+This is a speed/memory tradeoff: keeping prepared collision parameter
+cotangents until the shared pullback adds a persistent buffer. Observed process
+peaks increased by 7.4% for GC and 5.1% for Lorentz, including compilation.
+These results do not establish a reduction in peak or per-particle memory.
+The tested per-kick alternative removed that accumulator but lost most of the
+speedup, so it is not retained. Particle chunks and changes to the physical
+collision operator were not used. The worker reports retain compilation times,
+raw timing samples, gradients, source/input hashes and memory estimates.
+
+```bash
+python -m examples.benchmarks.compare_split_reverse \
+  --baseline-revision 4abaf51 --particles 2 --repeats 7 \
+  --output examples/benchmarks/results/split_reverse_speed_NEW
+```
+
+These are short CPU engineering measurements, not a GPU, large-population,
+long-horizon or Diffrax comparison. The tests also cover physical density,
+temperature and birth gradients, refined events, empty paths and heterogeneous
+vectorized populations with unused singular parameter preparation.
+
+#### GC speed/pitch custom derivative
+
+Native accepted-map GC AD uses a custom JVP rule from
+[`essos/collision_ad.py`](essos/collision_ad.py). The two kinetic inputs are
+scalar speed and pitch. Their partial derivatives are computed by scalar
+forward AD and contracted in reverse, rather than transposing the whole
+coefficient/update graph with a generic reverse rule. Captured physical
+parameters retain ordinary JAX derivatives. Traced integer profile selectors
+are passed explicitly, so they cannot leak through a custom-rule closure.
+This forms no dense coil Jacobian and changes no field class, physical
+collision formula, controller, accepted schedule or recorded Wiener sample.
+Keeping speed and pitch together as a two-component state while tracing the
+local map is necessary for the measured speedup; tested scalar-only forms did
+not provide a reliable improvement.
+
+The ordinary forward tracer and frozen-schedule JVP/FD oracle use the original
+map. Only the accepted GC adjoint selects this rule; the Lorentz path is
+unchanged. Validation covers forward/reverse local derivatives, pitch endpoints,
+zero diffusion, active profile vectors, higher derivatives, physical field,
+density, temperature and birth sensitivities, spatial diffusion, and a vmapped
+particle lost before its first collision. All 61 relevant checks passed.
+
+The [GC comparison](examples/benchmarks/results/split_gc_kinetic_ad_20261020/comparison.json)
+uses the same two QA-coil particles, all 136 coil DOFs, adaptive Dopri8,
+eight saves and 16-step checkpoints as the earlier split comparison. Both
+versions take seven accepted collision maps per particle. These are medians
+of seven blocked warm CPU calls, excluding compilation:
+
+| GC measurement | Previous adjoint | Custom kinetic rule |
+| --- | ---: | ---: |
+| Ordinary forward (ms) | 9.07 | 8.74 |
+| Forward linearization (ms) | 11.42 | 11.84 |
+| Reverse only (ms) | 86.85 | 60.11 |
+| Fused value + gradient (ms) | 87.52 | 69.94 |
+| Compiler buffers (MiB) | 1.731 | 1.731 |
+| Process peak, compilation + execution (MiB) | 1310.7 | 1321.3 |
+| Fused compilation (s) | 14.71 | 15.96 |
+
+The reverse speedup is 1.44x (31% less time); fused value-and-gradient speedup
+is 1.25x (20% less time). The full gradient vector changes by at most
+`1.39e-17`, and saved states, objective and solver statistics agree. The
+ordinary forward code is unchanged; its small timing difference is run-to-run
+variation. Separately compiled phases need not sum to fused execution.
+
+Compiler buffers did not increase, but observed process peak increased by
+0.8%, including compilation. This does not establish a reduction in memory
+per particle. Reverse remains about 6.9 times ordinary forward in this short
+CPU case; a three-times-forward target is still unmet. GPU performance and
+large-population/long-horizon scaling were not measured. The Lorentz path was
+not changed or rebenchmarked in this comparison.
+
+To isolate this rule from the earlier checkpoint/pullback improvement, use the
+committed driver with the same current `split_ad.py` in baseline workers:
+
+```bash
+python -m examples.benchmarks.compare_split_reverse \
+  --baseline-revision 4abaf51 --baseline-reverse-source essos/split_ad.py \
+  --models gc --particles 2 --repeats 7 \
+  --output examples/benchmarks/results/split_gc_kinetic_ad_NEW
+```
+
+#### Shared orbit reverse in split tracing
+
+The figures in this subsection precede the bounded checkpoint reuse below.
+
+Split backward replay now uses the same native field transposes, compact RK
+stage cache and segment parameter accumulation as collisionless tracing. Each
+collision interval rebuilds its own initial FSAL cache at the state after the
+preceding kick. The forward solver, collision coefficients/kicks, controllers,
+accepted grids and production Wiener increments are unchanged. No field class
+or particle chunking change is involved. Outer and inner checkpoint lengths
+remain 16.
+
+The [saved comparison](examples/benchmarks/results/split_reverse_shared_orbit_comparison_20261021.json)
+records the previous split pullback and the shared implementation. The
+[short](examples/benchmarks/results/split_reverse_shared_orbit_short_20261021.json)
+and [long](examples/benchmarks/results/split_reverse_shared_orbit_long_20261021.json)
+reports include complete gradients, solver statistics, compilation times,
+raw samples and source/input hashes. Reference reports are retained for
+[short](examples/benchmarks/results/split_reverse_current_short_20261021.json)
+and [long](examples/benchmarks/results/split_reverse_current_long_20261021.json)
+horizons.
+
+These are two QA-coil particles, all 136 coil DOFs, 4 keV alpha particles,
+a uniform hydrogen background at `1e20 m^-3` and `1 keV`, eight saves,
+adaptive Dopri8, `rtol=atol=1e-9` and conservative collision control with
+tolerance `0.003`. GC uses the default velocity-only kicks; optional GC
+spatial diffusion is covered by regression tests, not timed here. The objective
+is mean final minor radius. Each entry is the median of 21 blocked warm CPU
+calls, excluding compilation; reverse reuses baseline pullback residuals.
+
+| Model | Horizon (s) | Forward (ms) | Reverse only (ms) | Fused value + gradient (ms) | Reverse / forward | Value + gradient / forward |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| GC | `2e-6` | 9.51 | 37.21 | 47.37 | 3.91 | 4.98 |
+| GC | `2e-5` | 49.51 | 255.31 | 295.48 | 5.16 | 5.97 |
+| Lorentz | `2e-7` | 3.92 | 9.97 | 14.61 | 2.55 | 3.73 |
+| Lorentz | `2e-6` | 18.65 | 65.23 | 89.68 | 3.50 | 4.81 |
+
+The longer cases reduce reverse time by 31.2% for GC and 39.2% for Lorentz;
+fused evaluation time falls by 26.5% and 45.5%. Before/after versions run in
+separate CPU processes, rather than interleaved samples. Each ratio uses its
+own ordinary-forward median. The ordinary forward code is unchanged, so its
+timing differences reflect execution variability. Separate phase medians need
+not add to fused evaluation time.
+
+These full-split ratios remain higher than the collisionless ratios. Split AD
+still reconstructs outer collision segments and each inner orbit's checkpoints
+before rebuilding local RK stages; it also transposes the physical collision
+kicks. Sharing the orbit kernels does not remove that additional replay work.
+The complete value-and-gradient evaluations remain above three times forward
+in all four measured split cases.
+
+All four cases reproduce the production trajectory on the recorded accepted
+grids and Wiener increments. Independent frozen-replay JVPs and centered
+directional finite differences validate the coil gradients; the best relative
+FD discrepancy is below `2e-9` in each case. Accepted/rejected counts and solver
+statuses match between implementations; the largest absolute change in a full
+coil-gradient component is `3.00e-15`. All 48 split/kinetic regression checks
+passed, including physical field, density, temperature, birth and optional GC
+spatial-diffusion sensitivities. The longer GC case has 26/49 accepted
+inner RK steps (3/3 rejected); Lorentz has 67/61 (2/2 rejected). Each has seven
+accepted outer maps per particle and no rejected outer trials. This benchmark
+therefore does not measure rejection-heavy or long collisional relaxation runs.
+
+Fused compiler buffers decrease from 1,797,384 to 1,773,848 bytes for GC
+(-1.31%) and from 1,226,672 to 1,201,528 bytes for Lorentz (-2.05%). These are
+executable buffer estimates; process peak RAM and GPU performance are not
+measured in this split timing comparison.
+
+Reproduce the current implementation with production replay checks:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.benchmark_split_ad \
+  --modes adaptive --separate-phases --validate-replay --particles 2 --repeats 21 \
+  --checkpoint-steps 16 --orbit-checkpoint-steps 16 \
+  --gc-horizon 2e-6 --lorentz-horizon 2e-7 \
+  --output examples/benchmarks/results/split_reverse_shared_orbit_short_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.benchmark_split_ad \
+  --modes adaptive --separate-phases --validate-replay --particles 2 --repeats 21 \
+  --checkpoint-steps 16 --orbit-checkpoint-steps 16 \
+  --gc-horizon 2e-5 --lorentz-horizon 2e-6 \
+  --output examples/benchmarks/results/split_reverse_shared_orbit_long_NEW.json
+```
+
+#### Bounded checkpoint reuse across split replay
+
+The split reverse pass now retains inner orbit checkpoints while rebuilding an
+outer segment, then reuses them for the orbit pullback. Previously it discarded
+these states and repeated the orbit to reconstruct the same checkpoints. The
+scratch buffer holds at most `ceil(workspace / inner_segment) + outer_segment - 1`
+state/FSAL pairs, where `workspace` is the per-orbit accepted-work bound. It is
+reused for each outer segment. Maps that do not fit use the existing replay
+path, so this is not an allocation proportional to the product of outer and
+inner work ceilings. Stage geometry is still rematerialized.
+
+The fallback is controlled by its loop bound. A conditional around it would
+execute both branches under `vmap` and preserve the unwanted RK work. Outer
+reconstruction also skips its final collision evaluation because no following
+map consumes that state; the physical final collision pullback still runs.
+Both checkpoint lengths remain 16, with unchanged forward integration, accepted
+times, noise, field classes and physical derivatives. No particle chunking is
+used. A pilot of the existing field transpose inside the GC collision callback
+showed no further benefit and was not retained.
+
+The comparison reports contain complete gradient vectors, raw warm samples,
+source/input hashes and independent production frozen-grid/noise JVP/FD checks.
+The long report also archives the preceding reverse module, since it was a
+working-tree baseline rather than a separate commit. All 49 split/kinetic
+regression checks passed, including a new mixed-particle test that fills the
+checkpoint budget in one lane while caching every map in the other, across
+multiple outer segments. Its gradients match an independently replayed path.
+
+The [long comparison](examples/benchmarks/results/split_reverse_checkpoint_reuse_long_20261021/comparison.json)
+and [short comparison](examples/benchmarks/results/split_reverse_checkpoint_reuse_short_20261021/comparison.json)
+use the same two QA-coil particles, 136 coil DOFs, eight saves, conservative
+collision tolerance `0.003`, native adaptive Dopri8, `rtol=atol=1e-9` and
+16-step inner/outer checkpoints as above. Both implementations are compiled
+and warmed before 21 repetitions in seeded randomized order. These paired
+measurements supersede the earlier separate-run ratios for performance
+comparisons; compilation is excluded.
+
+| Model | Horizon (s) | Forward after (ms) | Reverse before (ms) | Reverse after (ms) | Value + gradient after (ms) | Reverse / forward after | Value + gradient / forward after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| GC | `2e-6` | 8.84 | 36.22 | 29.39 | 38.32 | 3.32 | 4.33 |
+| GC | `2e-5` | 43.34 | 208.49 | 158.14 | 213.62 | 3.65 | 4.93 |
+| Lorentz | `2e-7` | 4.14 | 10.47 | 9.71 | 13.74 | 2.35 | 3.32 |
+| Lorentz | `2e-6` | 18.65 | 63.84 | 50.74 | 73.88 | 2.72 | 3.96 |
+
+Long-case reverse time falls by 24.1% for GC and 20.5% for Lorentz; fused
+evaluation time falls by 18.9% and 12.6%. The shorter reverse gains are 18.9%
+and 7.2%, respectively. Each ratio uses its own version's ordinary-forward
+median; independent phase timings need not add to the fused evaluation.
+GC reverse and all four fused evaluations remain above three times forward.
+The full gradient vectors are unchanged in all four comparisons, and each
+case passes independent frozen-grid/noise JVP and directional FD checks. The
+best FD discrepancies are below `2e-9`.
+
+All maps in these datasets fit the local checkpoint budget. The nominal
+accepted-RK step replays therefore decrease from three to two per step; the
+reports record these work counts separately from RHS transposes and initial
+FSAL calls. These small CPU measurements do not establish speedups for large
+or rejection-heavy populations, where mixed cache misses can reduce the
+benefit under `vmap`.
+
+The [isolated memory comparison](examples/benchmarks/results/split_reverse_checkpoint_reuse_memory_20261021/comparison.json)
+runs each model/version in a fresh process with the longer horizons. Process
+peaks include compilation and execution of the benchmark's forward, reverse
+and fused executables. They are not warm-only or marginal per-particle memory:
+
+| Model | Compiler buffers before (bytes) | After (bytes) | Change | Process peak before (MiB) | After (MiB) | Change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| GC | 1,773,848 | 1,808,168 | +1.93% | 1333.38 | 1349.04 | +1.17% |
+| Lorentz | 1,201,528 | 1,207,896 | +0.53% | 1125.69 | 1139.78 | +1.25% |
+
+This is a measured speed/memory tradeoff. The memory workers use three warm
+repetitions to exercise allocation; their phase timings are not the performance
+comparison. Use the interleaved 21-repeat reports above for timing conclusions.
+
+Reproduce the paired long case using the archived baseline and identical
+current forward driver. The source overrides replace both committed files;
+the actual baseline is identified by its recorded SHA:
+
+```bash
+mkdir -p .tmp
+python -c "import json; from pathlib import Path; r=json.loads(Path('examples/benchmarks/results/split_reverse_checkpoint_reuse_long_20261021/comparison.json').read_text()); Path('.tmp/split_ad_baseline.py').write_bytes(r['metadata']['baseline_reverse_source_archive']['text'].encode())"
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_split_reverse \
+  --baseline-revision HEAD --baseline-driver-source essos/split.py \
+  --baseline-reverse-source .tmp/split_ad_baseline.py \
+  --interleaved --validate-replay --particles 2 --repeats 21 \
+  --gc-horizon 2e-5 --lorentz-horizon 2e-6 \
+  --output examples/benchmarks/results/split_reverse_checkpoint_reuse_long_NEW
+```
+
+For the short comparison use `--gc-horizon 2e-6 --lorentz-horizon 2e-7` and a
+new output directory. Omit `--interleaved --validate-replay` and use three
+repetitions to reproduce the separate-process compilation/execution RAM check.
+
+#### Collisionless reverse cost diagnosis
+
+The [collisionless profile](examples/benchmarks/results/native_reverse_profile_20261020.json)
+uses production GC/Lorentz RHS and native accepted-step AD without collisions
+or Diffrax. Two QA-coil particles, all 136 coil DOFs, a fixed reference axis,
+eight saves, adaptive Dopri8 with I control, `rtol=atol=1e-9`, standard dense
+output and 16-step checkpoints are held fixed. The objective is mean final
+minor radius. These are medians of 21 blocked warm CPU calls, excluding
+compilation; reverse alone reuses the forward pullback residuals.
+
+| Model | Horizon (s) | Accepted steps per particle | Rejected steps per particle | Forward (ms) | Reverse only (ms) | Fused value + gradient (ms) | Reverse / forward |
+| --- | ---: | --- | --- | ---: | ---: | ---: | ---: |
+| GC | `2e-6` | 4, 5 | 0, 0 | 5.75 | 24.87 | 28.75 | 4.33 |
+| GC | `2e-5` | 25, 44 | 2, 4 | 51.52 | 214.01 | 258.24 | 4.15 |
+| Lorentz | `2e-7` | 7, 6 | 1, 1 | 2.46 | 13.44 | 15.16 | 5.47 |
+| Lorentz | `2e-6` | 63, 56 | 2, 3 | 14.99 | 111.75 | 127.34 | 7.46 |
+
+The fused value-and-gradient / forward ratios are 5.00, 5.01, 6.16 and 8.50,
+respectively. Independently compiled forward and reverse phases need not sum
+to fused execution. All four cases agree with forward-mode derivatives on
+the frozen accepted grid and pass directional finite differences; the largest
+best FD relative error is `8.34e-9`. Full reverse and fused gradients agree.
+Rejected steps remain excluded from the adjoint, including the longer runs.
+
+A diagnostic holds coils fixed and differentiates only the initial states,
+using the same forward trajectories, accepted schedules and objective. On the
+longer horizons, reverse takes 182.40 ms for GC and 50.35 ms for Lorentz,
+compared with 214.01 and 111.75 ms for coil sensitivities. These different
+derivative targets isolate work; the state-only gradient cannot replace the
+coil-optimization gradient. The decrease indicates substantially more
+coil-sensitivity overhead in Lorentz relative to its inexpensive forward RHS.
+
+The accepted adjoint reconstructs RK stage increments once per segment, then
+rebuilds local RHS derivative intermediates for each stage VJP. It retains
+small state/stage vectors and avoids storing every field-sized AD residual.
+GC differentiates a forward RHS that already uses spatial field gradients,
+so its state pullback includes second spatial derivatives and its coil
+pullback includes mixed field/coil derivatives. Lorentz's forward RHS needs
+only B, while its pullback additionally propagates position and coil-field
+sensitivities. Prepared parameter cotangents are accumulated through the
+stages and their preparation is transposed once per accepted step.
+
+Thus one accepted-grid replay does not imply a universal three-times-forward
+execution bound. The report also records frozen-grid replay and independent
+RHS state/parameter VJP kernels, with a cached-residual pullback diagnostic.
+These separately compiled kernels are not an additive profile of the full
+reverse. No field class or production adjoint was changed for this profile.
+The collisionless GC state here is the production four-component energy-based
+state; split GC evolves a fifth magnetic-moment component, so comparisons with
+earlier split timings would also change state representation and step grids.
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.profile_native_reverse \
+  --particles 2 --horizon-factors 1 10 --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_profile_NEW.json
+```
+
+The report retains raw samples, gradients, work counts, compiler-buffer
+estimates and source/input hashes. It does not measure process peak RSS or
+GPU performance. Older collisionless timing/memory reports later in this
+README were measured at base commit `c50da30`; they are not measurements of
+the split adjoint or this profile.
+
+The collisionless adjoint now retains compact RHS reduction results within
+the current replay segment. It reuses the original RHS linearization and
+rematerializes field-sized arrays; the forward solver, field classes and
+accepted-grid derivative contract are unchanged. On the QA-coil cases the
+cache holds 10 scalars per GC stage and nine per Lorentz stage, including
+the stage state. Cheap RHS functions retain the earlier reconstruction.
+
+The [interleaved comparison](examples/benchmarks/results/native_reverse_cache_comparison_20261020.json)
+compiles the committed `4abaf51` adjoint and the compact-cache implementation
+before 21 randomized, blocked warm CPU repeats. Inputs and solver settings
+are those of the profile above. Times are measured together, so use these
+before/after pairs rather than differences between separate profiling runs.
+
+| Model | Horizon (s) | Reverse before / after (ms) | Full value + gradient before / after (ms) | New full / forward | Executable buffers before / after (bytes) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GC | `2e-6` | 29.20 / 26.13 | 36.90 / 32.10 | 4.53 | 1,085,232 / 1,095,080 |
+| GC | `2e-5` | 257.74 / 215.85 | 312.90 / 282.54 | 4.46 | 1,085,232 / 1,095,080 |
+| Lorentz | `2e-7` | 15.37 / 12.16 | 17.03 / 13.49 | 5.29 | 1,147,168 / 1,156,888 |
+| Lorentz | `2e-6` | 115.79 / 92.43 | 138.43 / 110.90 | 7.24 | 1,147,168 / 1,156,888 |
+
+Reverse time decreases by 11--16% for GC and 20--21% for Lorentz, with
+less than 1% more executable buffers. Full coil gradients match the previous
+adjoint to `1.3e-15` maximum absolute difference; states, step counts and
+statuses also match. The [production-RHS validation](examples/benchmarks/results/native_reverse_cache_validation_20261020.json)
+checks the four cases against frozen-grid JVPs and directional finite
+differences. The RK/cache/first-loss suite passed 83 tests covering both
+Dopri methods, dense modes, events, partial segments and batched empty paths.
+
+The [isolated memory comparison](examples/benchmarks/results/native_reverse_cache_memory_20261020.json)
+runs each longer case in a fresh Linux CPU process. Peak RSS, including
+compilation, changes from 794.81 to 796.97 MiB for GC and 799.84 to 798.78 MiB
+for Lorentz. The warm peaks after resetting Linux RSS high-water accounting
+are the same in these cases. These measurements include resident JAX,
+executable and allocator memory; they are not marginal per-particle memory.
+Executable buffer estimates above exclude compiler/host/runtime allocations.
+Neither this comparison nor the cache establishes a three-times-forward
+bound or a GPU speedup.
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --baseline-revision 4abaf51 --particles 2 --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_cache_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --baseline-revision 4abaf51 --particles 2 --horizon-factors 10 --repeats 5 \
+  --isolated-memory --output examples/benchmarks/results/native_reverse_cache_memory_NEW.json
+```
+
+For collisionless tracing, `adjoint_parameter_accumulation="segment"` in
+`solve_rk`, or `native_adjoint_parameter_accumulation="segment"` in `Tracing`,
+sums prepared RHS cotangents over one checkpoint segment before transposing
+parameter preparation. This uses its linearity in the cotangent; all stage,
+state and coil derivatives remain present. This is now the default for both GC
+and Lorentz. The optional `"step"` mode transposes preparation once per accepted
+step. Both models support both modes. Segment
+accumulation changes the reverse workspace and its performance depends on the
+RHS and backend; it does not change checkpoint spacing or the forward solver.
+
+The circular-coil optimization scripts expose this as
+`--parameter-accumulation segment`, with `parameter_accumulation="segment"` also
+editable in both scripts' `PARAMETERS`. This setting currently applies to
+the collisionless path. `--checkpoint-steps N` selects the accepted steps per
+segment (default 16), identically for GC and Lorentz; the corresponding APIs are
+`adjoint_checkpoint_steps=N` in `solve_rk` and
+`native_adjoint_checkpoint_steps=N` in `Tracing`. Segment length can affect
+runtime and memory, so comparisons must report it. To isolate the two modes in
+interleaved CPU timing:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --compare-accumulation --parameter-accumulation segment --particles 2 --horizon-factors 10 --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_accumulation_NEW.json
+```
+
+The [current-source accumulation comparison](examples/benchmarks/results/native_reverse_accumulation_comparison_20261020.json)
+changes only this setting, with 21 interleaved warm CPU repeats per mode:
+
+| Model / horizon | Reverse step / segment (ms) | Full value + gradient step / segment (ms) | Executable buffers step / segment (bytes) |
+| --- | ---: | ---: | ---: |
+| GC / `2e-5` s | 207.91 / 214.71 | 271.58 / 269.69 | 1,095,080 / 1,231,016 |
+| Lorentz / `2e-6` s | 91.31 / 74.25 | 108.04 / 93.89 | 1,156,888 / 1,124,696 |
+
+For Lorentz this is 18.7% less reverse time, 13.1% less fused time and 2.8%
+fewer executable buffers. GC has no useful timing improvement and 12.4% more
+buffers in that historical run. Both models now default to `"segment"`.
+The mode is available to both models
+without changing the integration method. Full gradients match between modes
+to `4.5e-16` maximum absolute difference, with identical work counts/statuses.
+The shared forward map is unchanged. The original mixed-mode ratios are
+superseded by the matched segment-mode benchmark below.
+
+The [combined cache/segment comparison](examples/benchmarks/results/native_reverse_segment_comparison_20261020.json)
+also measures both horizons against commit `4abaf51`. Lorentz reverse time
+decreases by 33--36%, fused time by 27--32%, and executable buffers by 2%.
+The [fresh-process comparison](examples/benchmarks/results/native_reverse_segment_memory_20261020.json)
+records peak RSS of 811.09 to 799.92 MiB for the longer Lorentz case, including
+compilation; the measured warm peaks are the same. These are whole-process
+measurements, not marginal per-particle storage. The larger GC segment
+workspace is not justified by these timings even though whole-process RSS is
+similar. The [segment validation](examples/benchmarks/results/native_reverse_segment_validation_20261020.json)
+passes frozen-grid JVPs and directional finite differences for both models
+and horizons; the largest best FD relative error is `8.35e-9`. Both modes,
+both RK methods, dense output, events, empty batches and optimization wiring
+passed 104 targeted tests.
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --baseline-revision 4abaf51 --parameter-accumulation segment --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_segment_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --baseline-revision 4abaf51 --parameter-accumulation segment --horizon-factors 10 \
+  --repeats 5 --isolated-memory --output examples/benchmarks/results/native_reverse_segment_memory_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.profile_native_reverse \
+  --parameter-accumulation segment --repeats 5 \
+  --output examples/benchmarks/results/native_reverse_segment_validation_NEW.json
+```
+
+#### Reverse RHS preparation and custom derivative rules
+
+The collisionless reverse replay exposes ordinary internal JIT calls before
+building its RHS transpose. The adaptive forward driver and field classes keep
+their original calculations. This changes the representation of the same
+accepted-step derivative; it adds no rejected-step or controller derivatives.
+
+RHS graphs containing custom JVP/VJP calls use conservative preparation instead.
+Whole primitive calls are separated by value dependence without transforming
+their control-flow bodies. Parameter-only work still moves out of the stage
+calculation, so fixed discretization data does not acquire an unnecessary
+pullback. This also applies to split-solver preparation. Tests use deliberately
+distinct custom derivatives inside conditionals and nested JITs, checking the
+complete RK adjoint against independent frozen-grid JVPs for both RK methods
+and both parameter-accumulation modes.
+
+To isolate reverse JIT-boundary removal on the longer production-RHS cases:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --compare-rhs-inlining --parameter-accumulation recommended \
+  --horizon-factors 10 --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_inline_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --compare-rhs-inlining --parameter-accumulation recommended \
+  --horizon-factors 10 --repeats 5 --isolated-memory \
+  --output examples/benchmarks/results/native_reverse_inline_memory_NEW.json
+```
+
+Here `recommended` reproduces the historical benchmark setting selecting step
+accumulation for GC and segment accumulation for Lorentz. The current public
+solver and benchmark default is `segment` for both; historical commands above
+retain their explicit mixed setting. Production device selection is unchanged.
+
+The [fresh interleaved comparison](examples/benchmarks/results/native_reverse_inline_comparison_20261020.json)
+uses two particles, all 136 coil DOFs and 21 blocked warm CPU repeats. Both
+versions use the compact cache and the same accumulation mode; only reverse
+JIT-boundary removal changes. Compilation is excluded.
+
+| Model / mode | Forward before / after (ms) | Reverse before / after (ms) | Full value + gradient before / after (ms) | New full / forward |
+| --- | ---: | ---: | ---: | ---: |
+| GC / step | 49.28 / 47.75 | 183.37 / 181.59 | 228.75 / 229.09 | 4.80 |
+| Lorentz / segment | 14.02 / 13.92 | 64.17 / 56.22 | 79.89 / 71.95 | 5.17 |
+
+This provides no useful GC timing gain. Lorentz reverse decreases by 12.4%
+and the full call by 9.9%. Ratios use each row's measured after-forward median;
+the forward map is identical, although its timing fluctuates. Neither case
+reaches three times forward. Accepted/rejected counts stay at 25/2 and 44/4
+for GC, and 63/2 and 56/3 for Lorentz. Full gradients differ by at most
+`1.8e-15` for GC and `2.0e-16` for Lorentz.
+
+Executable buffers stay effectively unchanged: 1,095,080 to 1,094,936 bytes
+for GC and 1,124,696 to 1,124,688 bytes for Lorentz. The affected preparation,
+custom-rule, activity-filtering and split/collision AD regression run passed
+64 tests. This is a CPU result for these cases, not a GPU speedup claim.
+
+The [fresh-process memory report](examples/benchmarks/results/native_reverse_inline_guard_memory_20261020.json)
+records overall peaks of 789.75 to 787.06 MiB for GC and 794.08 to 799.45 MiB
+for Lorentz. Compilation-phase peaks are 786.31 to 784.29 MiB and 790.44 to
+796.69 MiB, respectively. These changes are below 1%; they do not establish
+a memory reduction. RSS includes JAX, executables and allocator residency,
+and must not be interpreted as marginal memory per particle.
+
+The [production-RHS validation](examples/benchmarks/results/native_reverse_inline_validation_20261020.json)
+passes independent frozen-grid JVPs and directional finite differences for both
+models at both horizons, with a largest best FD relative discrepancy of
+`8.35e-9`. This validation uses segment accumulation for both models; the paired
+GC timing above uses step accumulation. Step and segment modes also have
+complete-RK frozen-grid JVP regression checks. Reproduce the validation with:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.profile_native_reverse \
+  --parameter-accumulation segment --horizon-factors 1 10 --repeats 5 \
+  --output examples/benchmarks/results/native_reverse_inline_validation_NEW.json
+```
+
+#### Native Biot--Savart Jacobian transpose
+
+Native collisionless reverse replay now recognizes the stock prepared
+`BiotSavart.B_and_dB_by_dX` call and supplies an exact geometry linearization.
+The original field method supplies every primal value. Its transpose includes
+position, discretized coil positions, tangent components, the full tangent
+tensor and current weights. The original parameter-setup pullback still maps
+these cotangents to Fourier/current DOFs, including symmetry and scaling.
+Second spatial and mixed coil/spatial derivatives required by GC remain live.
+
+The transpose expresses its small coordinate matrix products directly so they
+can fuse with the geometry operations. Its JVP is obtained by transposing that
+linear pullback; the geometry coefficients remain differentiable. Tests compare
+all independent prepared inputs, ordinary JVPs and Hessian-vector products
+against the original field graph. Complete RK tests compare coil and birth
+position/pitch/energy sensitivities with independent frozen-grid JVPs, including
+both RK methods, dense-save modes and accumulation modes.
+
+This changes native backward preparation only. Field classes, forward RHS,
+RK formulas, controller tolerances and accepted-step schedules are unchanged.
+Recognition requires the stock source and prepared float64 signature; other
+fields/signatures keep ordinary JAX AD. The B/J specialization targets GC;
+the later field-only extension for Lorentz is described below. The separate
+split-collision adjoint keeps its existing derivative path.
+
+The [21-repeat paired CPU timing report](examples/benchmarks/results/native_reverse_field_comparison_20261020.json)
+uses the same two-particle QA-coil cases as the preceding comparison. Both
+versions compile before interleaved warm measurements. Only this field
+linearization is enabled/disabled; GC uses step accumulation and Lorentz uses
+segment accumulation in both versions.
+
+| Case | Forward before / after (ms) | Reverse before / after (ms) | Forward + gradient before / after (ms) | After reverse / forward | After total / forward |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GC, 20 microseconds | 52.54 / 53.00 | 191.88 / 142.86 | 240.15 / 198.29 | 2.70 | 3.74 |
+| Lorentz, 2 microseconds | 13.94 / 14.01 | 57.92 / 58.39 | 74.44 / 73.00 | 4.17 | 5.21 |
+
+GC reverse time decreases 25.5% and total AD time decreases 17.4%. Forward
+work is unchanged: GC accepts 25/44 steps and rejects 2/4; Lorentz accepts
+63/56 and rejects 2/3. Maximum absolute gradient differences are
+`1.34e-15` for GC and zero for Lorentz. Lorentz does not use this specialization;
+its small timing changes are measurement variation. The total GC evaluation
+still exceeds three times forward time. Standalone reverse and fused total
+timings are measured independently and need not add exactly.
+
+The [fresh-process memory report](examples/benchmarks/results/native_reverse_field_memory_20261020.json)
+shows GC executable buffers decreasing from 1,094,936 to 938,752 bytes (14.3%).
+Whole-process peak RSS instead increases from 782.96 to 799.21 MiB (2.1%);
+compilation peaks are 778.64/796.45 MiB and warm peaks are 782.96/799.21 MiB.
+These include the runtime, compiler and retained allocator memory and are not
+marginal memory per particle. This change improves speed and executable-buffer
+usage, without demonstrating lower process peak RAM. Lorentz executable buffers
+are unchanged and its process peaks are 785.84/788.15 MiB.
+
+All 132 targeted field, reverse-RK, stopping-surface and optimization integration
+tests pass. The [independent frozen-grid validation](examples/benchmarks/results/native_reverse_field_validation_20261020.json)
+also checks coil and initial-state directional derivatives for short and long
+GC/Lorentz runs against the original RHS JVPs. Each coil finite-difference sweep
+contains a relative discrepancy below `8.35e-9`. That validation uses segment
+accumulation for both models; the paired GC timing above uses step accumulation.
+These measurements are CPU-only, with no particle chunking; they do not
+establish GPU performance or new split-collision speedups.
+
+To compare this change alone with the preceding native implementation:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --compare-field-transpose --parameter-accumulation recommended \
+  --horizon-factors 10 --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_field_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --compare-field-transpose --parameter-accumulation recommended \
+  --horizon-factors 10 --repeats 5 --isolated-memory \
+  --output examples/benchmarks/results/native_reverse_field_memory_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.profile_native_reverse \
+  --parameter-accumulation segment --horizon-factors 1 10 --repeats 5 \
+  --output examples/benchmarks/results/native_reverse_field_validation_NEW.json
+```
+
+#### Shared segment default for GC and Lorentz
+
+Collisionless accepted-step AD now defaults to segment accumulation in
+`solve_rk`, `Tracing`, both circular-coil optimization scripts and the benchmark
+CLI. The optional step mode remains available. Segment size is selectable with
+`--checkpoint-steps N`, or `adjoint_checkpoint_steps=N` /
+`native_adjoint_checkpoint_steps=N` in the two public orbit APIs.
+
+The matched benchmark uses segment mode and 16 accepted steps per checkpoint
+for both models, adaptive Dopri8, standard dense output, I control,
+`rtol=atol=1e-9`, two particles and all 136 bundled QA-coil DOFs. Warm medians
+exclude compilation. Each row uses its own measured forward median as the
+denominator; neither mode nor forward samples are mixed between cases.
+Segment length can affect execution time and memory, so the ratios apply to
+the reported setting.
+
+The [21-repeat interleaved confirmation](examples/benchmarks/results/native_reverse_segment_standard_paired_20261020.json)
+compiles both versions before sampling. Both use segment accumulation; the
+before/after difference is only the stock field linearization. The table uses
+the new implementation's medians, with its own forward time in each row:
+
+| Model / horizon | Forward (ms) | Reverse (ms) | Forward + gradient (ms) | Reverse / forward | Total AD / forward |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GC / 20 microseconds | 55.91 | 148.30 | 201.97 | 2.65 | 3.61 |
+| Lorentz / 2 microseconds | 14.95 | 61.79 | 79.08 | 4.13 | 5.29 |
+
+The [initial phased timing and independent gradient checks](examples/benchmarks/results/native_reverse_segment_standard_20261020.json)
+are retained too. That batch measured GC forward/reverse/total at
+57.40/243.78/270.78 ms (ratios 4.25/4.72), with reverse samples spanning
+159.44--279.22 ms. The interleaved GC reverse samples span 136.80--214.39 ms.
+Thus the GC timing varies materially across batches; the latest medians are
+measurements of this CPU case, not a stable performance guarantee. The phased
+Lorentz ratios were 4.07/5.12.
+
+Both batches have identical accepted/rejected counts: GC 25/44 accepted and
+2/4 rejected; Lorentz 63/56 accepted and 2/3 rejected. Native coil gradients in
+the interleaved field comparison differ by at most `1.28e-15` (GC) and zero
+(Lorentz). Independent frozen-grid coil JVP/finite-difference checks also pass;
+best directional finite-difference relative discrepancies are `1.37e-10`
+for GC and `3.76e-10` for Lorentz.
+
+The default-change regression run passes 66 tests, including frozen-grid RK
+gradients, nonlinear parameter preparation, both optimization models and
+safety stopping surfaces.
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.profile_native_reverse \
+  --parameter-accumulation segment --checkpoint-steps 16 \
+  --horizon-factors 10 --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_segment_standard_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --compare-field-transpose --parameter-accumulation segment --checkpoint-steps 16 \
+  --horizon-factors 10 --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_segment_standard_paired_NEW.json
+```
+
+#### Lorentz field-only transpose
+
+Native collisionless reverse preparation also recognizes the stock prepared
+float64 `BiotSavart.B` call. Its original graph still computes every primal
+field value. A coordinate-wise exact transpose returns sensitivities for the
+position, coil points, three independent tangent views and current weights.
+The original setup pullback combines these into coil Fourier/current DOFs.
+The physical Lorentz RHS, field classes, RK maps and accepted grids are unchanged.
+
+For each coil quadrature contribution, write `r = x - gamma`, tangent `l`,
+weight `w` and field cotangent `u`. With `c = l cross r` and `k = u dot c`,
+the transpose uses `bar_r = w*((u cross l)/|r|^3 - 3*k*r/|r|^5)` and
+`bar_l = w*(r cross u)/|r|^3`, with the original quadrature normalization.
+Position sums `bar_r`; coil points receive its negative; weight gradients use
+`k/|r|^3`. Coordinate products allow these operations to fuse without a
+separate large cross-product transpose. All position and geometry coefficients
+remain differentiable. A custom JVP obtained by transposing this linear
+pullback supports ordinary JVPs and mixed Hessian-vector products too.
+
+Recognition checks stock source, prepared layout and dtype. Other fields or
+signatures keep ordinary AD, including user derivative rules. Tests compare all
+six independent field inputs against the original graph and compare complete
+Dopri5/Dopri8 coil and birth-position/pitch/energy/gyrophase gradients against
+independent frozen-grid JVPs, with standard/higher-order dense output and both
+accumulation modes. The timing configuration uses segment accumulation and
+16 accepted steps per checkpoint for both orbit models, without particle chunks.
+
+These transpose-only figures precede the small-output cache fix below.
+The [21-repeat paired production timing](examples/benchmarks/results/native_reverse_lorentz_field_comparison_20261020.json)
+uses the same two-particle QA-coil, 2-microsecond Lorentz case, all 136 coil DOFs,
+adaptive Dopri8, I control, standard dense output and `rtol=atol=1e-9`.
+Both versions compile before interleaved blocked warm measurements:
+
+| Measurement | Ordinary field AD | Exact field-only transpose |
+| --- | ---: | ---: |
+| Forward (ms) | 13.978 | 13.973 |
+| Reverse (ms) | 56.969 | 47.908 |
+| Forward + gradient (ms) | 73.817 | 63.975 |
+| Reverse / own forward | 4.08 | 3.43 |
+| Total AD / own forward | 5.28 | 4.58 |
+
+Reverse decreases 15.9% and total AD decreases 13.3%. Full gradients differ by
+at most `8.33e-17`, with identical forward outputs and work counts: 63/56
+accepted steps and 2/3 rejected trials. The full AD evaluation still exceeds
+three times forward time. Ratios use each version's own forward median.
+
+The [fresh-process memory comparison](examples/benchmarks/results/native_reverse_lorentz_field_memory_20261020.json)
+shows fused executable buffers decreasing slightly, 1,124,688 to 1,119,704 bytes
+(0.44%). Whole-process peak/warm RSS increases from 784.45 to 797.95 MiB
+(1.72%); compilation peaks are 780.27/794.30 MiB. Thus this is a runtime gain
+with a small process-memory increase, without demonstrating lower peak RAM.
+RSS includes compiler/runtime/allocator residency and is not marginal memory
+per particle. Compilation durations in these single fresh-process cases are
+4.45/4.56 seconds; they are diagnostic and excluded from warm timings.
+
+All 77 targeted tests pass, including the new Lorentz field/trajectory checks,
+existing GC field checks, user custom derivative rules and both native
+optimization examples. The [independent short/long frozen-grid checks](examples/benchmarks/results/native_reverse_lorentz_field_validation_20261020.json)
+also pass for both models' coil and initial-state directional derivatives.
+Every coil finite-difference sweep contains a relative discrepancy below
+`8.35e-9`. Both models use segment accumulation with 16-step checkpoints in
+that validation; its five-repeat diagnostic timings are separate from the
+21-repeat controlled Lorentz comparison above. These results are CPU-only;
+they do not establish GPU or split-collision speedups.
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --models lorentz --compare-field-transpose --parameter-accumulation segment \
+  --checkpoint-steps 16 --horizon-factors 10 --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_lorentz_field_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --models lorentz --compare-field-transpose --parameter-accumulation segment \
+  --checkpoint-steps 16 --horizon-factors 10 --repeats 5 --isolated-memory \
+  --output examples/benchmarks/results/native_reverse_lorentz_field_memory_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.profile_native_reverse \
+  --parameter-accumulation segment --checkpoint-steps 16 \
+  --horizon-factors 1 10 --repeats 5 \
+  --output examples/benchmarks/results/native_reverse_lorentz_field_validation_NEW.json
+```
+
+#### Restoring the small field-output cache
+
+Profiling exposed an interaction between the exact field transposes and the
+compact checkpoint policy. The policy selected small `reduce_sum` results,
+but the new custom-JVP calls hid their internal field reductions. A runtime
+probe returned no compact RHS linearization for either model. The warmed
+Lorentz kernel consequently recomputed the primal Biot--Savart field inside
+the stage pullback, alongside the geometry needed for its derivatives.
+
+The field outputs are now explicitly named for checkpoint retention. The
+policy accepts only that private name and an output of at most 12 scalars;
+large coil geometry arrays remain rematerialized. Lorentz retains its three
+field components and GC retains the field plus its nine Jacobian components.
+Including state data, the packed cache holds 9 float64 values (72 bytes) per
+Lorentz stage and 16 (128 bytes) per GC stage. The validation report records
+these actual shapes and confirms the cache is inactive when named-output
+retention is disabled.
+
+The cached values are the actual stage primals used by the exact transpose.
+Position, coil-shape/current and birth derivatives remain present. Forward
+field classes, physical RHS, RK recurrences, dense output, accepted grids and
+segment size are unchanged. Both models still default to segment accumulation
+with 16 accepted steps per checkpoint. No particle chunking is used.
+
+The pilot also tested carrying parameter bars directly across each segment
+and reversing the initial FSAL call outside the stage loop. The former slowed
+GC without a useful memory gain; the latter increased buffers without a useful
+speed gain. Neither layout change is retained.
+
+The [paired measurement](examples/benchmarks/results/native_reverse_output_cache_comparison_20261020.json)
+uses two QA-coil particles, all 136 coil DOFs, eight saves, adaptive Dopri8
+with standard dense output and 16-step segment accumulation. These are medians
+of 21 blocked warm CPU calls, excluding compilation. The horizons are 20 us
+for GC and 2 us for Lorentz. Before and after use the same exact field
+transposes; only retention of the named small outputs differs.
+
+| Model | Forward after (ms) | Reverse before (ms) | Reverse after (ms) | Value + gradient before (ms) | Value + gradient after (ms) | Reverse / forward after | Value + gradient / forward after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| GC | 55.45 | 141.51 | 94.57 | 192.53 | 147.02 | 1.71 | 2.65 |
+| Lorentz | 14.36 | 48.22 | 35.00 | 64.29 | 51.05 | 2.44 | 3.55 |
+
+Reverse time decreases by 33.2% for GC and 27.4% for Lorentz; fused evaluation
+time decreases by 23.6% and 20.6%. Each ratio uses that version's own ordinary
+forward median. Separate reverse timings reuse baseline pullback residuals and
+need not add to the fused evaluation. Both reverse-only ratios are below three
+in this measurement; the full Lorentz value-and-gradient evaluation remains
+above three times ordinary forward.
+
+The [fresh-process memory report](examples/benchmarks/results/native_reverse_output_cache_memory_20261020.json)
+measures each model/version separately, including compilation and execution:
+
+| Model | Fused compiler buffers before (bytes) | After (bytes) | Change | Process peak before (MiB) | After (MiB) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GC | 1,056,496 | 1,046,008 | -0.99% | 794.51 | 790.01 |
+| Lorentz | 1,119,704 | 1,121,696 | +0.18% | 799.32 | 794.76 |
+
+The net Lorentz buffer increase is 1.95 KiB; GC buffers decrease by 10.24 KiB.
+Process peaks decrease by about 0.57% in this run, too little to establish a
+meaningful RAM reduction. RSS includes JAX, compiler and allocator memory;
+these two-particle measurements do not determine marginal memory per particle.
+There is no GPU or collision-speed claim from this collisionless comparison.
+
+Saved states, statuses and accepted/rejected counts match between versions.
+The maximum absolute change in the complete coil gradient is `9.99e-16` for
+GC and zero for Lorentz. The
+[independent validation](examples/benchmarks/results/native_reverse_output_cache_validation_20261020.json)
+checks short and long horizons against frozen-grid forward JVPs and directional
+finite differences, including initial-state sensitivities. The best relative
+FD discrepancies are below `9e-9` in all four cases. The validation report's
+phase timings are separate diagnostics; the interleaved 21-repeat report above
+supplies the paired performance comparison. All 80 targeted field-rule,
+compact-cache, RHS and toroidal-loss optimization checks passed.
+
+To isolate the retained cache change with the same exact transposes in both
+versions:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --compare-field-cache --parameter-accumulation segment --checkpoint-steps 16 \
+  --horizon-factors 10 --repeats 21 \
+  --output examples/benchmarks/results/native_reverse_output_cache_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_native_reverse \
+  --compare-field-cache --parameter-accumulation segment --checkpoint-steps 16 \
+  --horizon-factors 10 --repeats 5 --isolated-memory \
+  --output examples/benchmarks/results/native_reverse_output_cache_memory_NEW.json
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.profile_native_reverse \
+  --parameter-accumulation segment --checkpoint-steps 16 \
+  --horizon-factors 1 10 --repeats 5 \
+  --output examples/benchmarks/results/native_reverse_output_cache_validation_NEW.json
+```
 
 ### Circular-coil gradient horizon audit
 

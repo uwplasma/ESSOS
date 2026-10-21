@@ -186,3 +186,5 @@ examples/benchmarks/output/
 !examples/benchmarks/results/*.csv
 !examples/benchmarks/results/*.png
 !examples/benchmarks/results/*.svg
+!examples/benchmarks/results/split_reverse_speed_20261019/*.json
+!examples/benchmarks/results/split_gc_kinetic_ad_20261020/*.json

@@ -2,8 +2,9 @@
 
 Fixed cases freeze both grids by construction and compare directional finite
 differences using the unchanged production Gaussian/bridge sampler. Adaptive
-cases check complete finite gradients and forward equivalence; their exact
-frozen-schedule gradient oracle is exercised by tests/test_split_ad.py. This
+cases check complete finite gradients and forward equivalence; optional
+record/replay checks validate their gradients at the actual accepted schedules
+and Wiener increments. This
 report does not compare different SDE discretizations or noise generators.
 """
 import argparse
@@ -34,6 +35,12 @@ from .validate_coil_orbit_loss import reference_wall
 
 ROOT = Path(__file__).resolve().parents[2]
 OBJECTIVES = ("mean_final_radius", "loss_fraction", "loss_location", "heat_proxy")
+SOURCES = ("essos/split.py", "essos/split_ad.py", "essos/collision_ad.py", "essos/rk.py", "essos/rk_ad.py",
+    "essos/rk_ad_rhs.py", "essos/rk_ad_biot_savart.py",
+    "essos/collisions.py", "essos/collision_controller.py", "essos/collision_error.py",
+    "essos/background_species.py", "essos/coulomb.py", "essos/fields.py", "essos/coils.py",
+    "essos/dynamics.py", "essos/particle_losses.py", "essos/surfaces.py",
+    "examples/benchmarks/benchmark_split_ad.py", "examples/benchmarks/validate_coil_orbit_loss.py")
 
 
 def build_case(options, model, adaptive, objective, boundary):
@@ -52,7 +59,7 @@ def build_case(options, model, adaptive, objective, boundary):
                                    jnp.array([1e20]), jnp.array([1000.]))
     state_scale = jnp.array([1., 1., 1., speed, energy] if model == "gc" else [1.]*3+[speed]*3)
 
-    def cost(theta, adjoint):
+    def cost(theta, adjoint, *, record=False, replay_tapes=None):
         field = BiotSavart(base.with_dofs(theta))
         birth = Particles(points, initial_vparallel_over_v=pitch, energy=energy, mass=M, charge=Q,
             field=field if model == "lorentz" else None, phase_angle_full_orbit=jnp.pi)
@@ -66,16 +73,22 @@ def build_case(options, model, adaptive, objective, boundary):
             adjoint=adjoint, adjoint_checkpoint_steps=options.checkpoint_steps,
             adjoint_orbit_checkpoint_steps=options.orbit_checkpoint_steps,
             adjoint_max_accepted_steps=options.accepted_capacity,
-            adjoint_max_orbit_steps=options.orbit_capacity)
+            adjoint_max_orbit_steps=options.orbit_capacity,
+            _record_ad=record, _replay_tapes=replay_tapes)
+        if record:
+            return out
+        states = out.ys if replay_tapes is None else out[0]
         if objective == "mean_final_radius":
-            value = mean_final_radius(out.ys, *axis)
+            value = mean_final_radius(states, *axis)
         elif objective == "loss_fraction":
-            value = classifier_loss_fraction(out.ys, boundary)
+            value = classifier_loss_fraction(states, boundary)
         elif objective == "loss_location":
-            value = classifier_loss_location(out.ys, jnp.array([1.1,.1,0.]), boundary)
+            value = classifier_loss_location(states, jnp.array([1.1,.1,0.]), boundary)
         else:
-            value = classifier_energy_cost(out.ys, field, M, energy, physical_model,
+            value = classifier_energy_cost(states, field, M, energy, physical_model,
                                             boundary, kind="heat_jax10")
+        if replay_tapes is not None:
+            return value, out
         return value, (out.ys, out.stats, out.status)
 
     return parameters, cost, state_scale, base.dof_names
@@ -105,6 +118,8 @@ def main():
     parser.add_argument("--fixed-orbit-steps", type=int, default=64)
     parser.add_argument("--separate-phases", action="store_true",
         help="Also time ordinary forward, forward linearization and a standalone reverse pullback")
+    parser.add_argument("--validate-replay", action="store_true",
+        help="Check coil gradients against independent JVP/FD on the recorded production grids/noise")
     options = parser.parse_args()
     if options.output.exists() or jax.default_backend() != "cpu":
         parser.error("choose a new output path and CPU backend")
@@ -115,11 +130,7 @@ def main():
     if min(bounds) < 1 or any(not np.isfinite(x) or x <= 0 for x in
         (options.gc_horizon, options.lorentz_horizon, options.tolerance, options.collision_tolerance)):
         parser.error("positive finite tolerances/horizons and positive storage/work bounds required")
-    sources = ("essos/split.py", "essos/split_ad.py", "essos/rk.py", "essos/rk_ad.py",
-        "essos/collisions.py", "essos/collision_controller.py", "essos/collision_error.py",
-        "essos/background_species.py", "essos/coulomb.py", "essos/fields.py", "essos/coils.py",
-        "essos/dynamics.py", "essos/particle_losses.py", "essos/surfaces.py",
-        "examples/benchmarks/benchmark_split_ad.py", "examples/benchmarks/validate_coil_orbit_loss.py")
+    sources = SOURCES
     fingerprints = {name: hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in sources}
     report = dict(complete=False, metadata=dict(backend=jax.default_backend(), jax=jax.__version__,
         settings={name: str(value) if isinstance(value,Path) else value for name,value in vars(options).items()},
@@ -128,7 +139,7 @@ def main():
             ("examples/input_files/ESSOS_biot_savart_LandremanPaulQA.json",
              "examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc")},
         derivative_policy="Discrete accepted orbit/collision maps; frozen schedules and exact production Wiener increments",
-        validation_policy="Fixed-case FD uses both fixed grids and identical per-particle keys. Adaptive-case frozen replay is covered by unit tests; ordinary adaptive FD is not used as its oracle.",
+        validation_policy="Fixed-case FD uses both fixed grids and identical per-particle keys. Optional replay checks use the production record/replay hooks with exact accepted grids and Wiener increments; ordinary adaptive FD is not used as its oracle.",
         timing_scope=("Blocked warm value_and_grad includes forward solve and excludes compilation. "
             "Optional phase timings report ordinary forward, public jax.vjp of a jitted cost "
             "(forward linearization includes tape construction/host dispatch), and a separately jitted "
@@ -165,6 +176,32 @@ def main():
                     gradient_l2=float(jnp.linalg.norm(gradient)),status=np.asarray(status).tolist(),
                     stats={name:np.asarray(value).tolist() for name,value in stats._asdict().items()},
                     max_normalized_forward_difference=state_difference,compile_seconds=compile_seconds)
+                if options.validate_replay:
+                    recorded, tapes = jax.block_until_ready(jax.jit(
+                        lambda p:cost(p,"none",record=True))(theta))
+                    replay = jax.jit(lambda p:cost(p,"none",replay_tapes=tapes))
+                    replay_value, (replay_ys,replay_final) = jax.block_until_ready(replay(theta))
+                    replay_difference = float(jnp.max(jnp.abs(replay_ys-ys)/scale))
+                    np.testing.assert_allclose(recorded.ys/scale,ys/scale,rtol=0.,atol=2e-12)
+                    np.testing.assert_allclose(replay_final/scale,recorded.y/scale,rtol=0.,atol=2e-12)
+                    np.testing.assert_allclose(replay_value,value,rtol=2e-12,atol=1e-25)
+                    if replay_difference > 2e-12:
+                        raise RuntimeError("frozen split replay changed the production trajectory")
+                    direction=jnp.asarray(np.random.default_rng(12).normal(size=theta.size))
+                    direction/=jnp.linalg.norm(direction)
+                    expected=float(jnp.dot(gradient,direction))
+                    tangent=jax.block_until_ready(jax.jit(lambda p,d:jax.jvp(
+                        lambda p:cost(p,"none",replay_tapes=tapes)[0],(p,),(d,))[1])(theta,direction))
+                    np.testing.assert_allclose(tangent,expected,rtol=2e-7,atol=1e-10)
+                    fd=[]
+                    for eps in (1e-5,3e-6,1e-6):
+                        finite=float((replay(theta+eps*direction)[0]-replay(theta-eps*direction)[0])/(2*eps))
+                        fd.append(dict(epsilon=eps,ad=expected,finite_difference=finite,
+                            relative_error=abs(finite-expected)/max(abs(finite),abs(expected),1e-30)))
+                    if min(item["relative_error"] for item in fd) > 2e-5:
+                        raise RuntimeError(f"frozen-grid/noise coil-gradient FD mismatch: {fd}")
+                    row.update(frozen_directional_jvp=float(tangent),frozen_directional_fd=fd,
+                        max_normalized_replay_difference=replay_difference)
                 if mode == "fixed":
                     direction=jnp.asarray(np.random.default_rng(12).normal(size=theta.size))
                     direction/=jnp.linalg.norm(direction)

@@ -32,6 +32,55 @@ def objective(out):
     return jnp.sum(out.y**2)+jnp.sum(out.ys*jnp.linspace(.1, .7, len(out.ts))[:, None])
 
 
+def test_bounded_checkpoint_reuse_overflow_with_mixed_vmap_lanes():
+    """One lane overflows the scratch budget; the other reuses every map.
+
+    Two outer segments also check that the local checkpoint buffer resets.
+    The independent oracle propagates perturbed states through the full path.
+    """
+    def rhs(t,y,p):
+        return p[0]*jnp.sin(y+.2*t)
+    def collision(t,y,h,dw,p):
+        return CollisionStep(y+p[1]*jnp.tanh(y)*dw,jnp.array(0.),jnp.array(0.))
+    times=jnp.array([0.,.8])
+    keys=jax.random.split(jax.random.key(17),2)
+    orbit_steps=jnp.array([.002,.02])
+    options=dict(t1=.8,dt0=.1,ts=times,noise_dim=1,method="dopri8",
+        adaptive=False,orbit_adaptive=False,max_steps=16,max_orbit_steps=64,
+        adjoint_checkpoint_steps=4,adjoint_orbit_checkpoint_steps=8,
+        adjoint_max_accepted_steps=16,adjoint_max_orbit_steps=512)
+    p=jnp.array([[.4,.04,1.2],[.35,.03,1.1]])
+    def run(p,adjoint="none",record=False):
+        return jax.vmap(lambda row,h,key:solve_split(rhs,collision,row[2:3],row[:2],
+            **options,orbit_dt0=h,key=key,adjoint=adjoint,_record_ad=record))(p,orbit_steps,keys)
+    recorded,tapes=jax.jit(lambda p:run(p,record=True))(p)
+    np.testing.assert_array_equal(recorded.status,0)
+    # Budget = one orbit's eight checkpoint slots + three other outer maps.
+    counts=np.diff(np.asarray(tapes.offsets),axis=1)[:,:4]
+    nodes=(counts+7)//8
+    assert np.sum(nodes[0])>11 and np.sum(nodes[1])<=11
+    def metric(saved,final):
+        return jnp.sum(final**2)+.3*jnp.sum(saved**2)
+    def cost(p):
+        out=run(p,adjoint="accepted")
+        return metric(out.ys,out.y)
+    def frozen(p):
+        saved,final=jax.vmap(lambda row,tape:replay_accepted_split(rhs,collision,
+            row[2:3],row[:2],tape,times,method="dopri8"))(p,tapes)
+        return metric(saved,final)
+    value,gradient=jax.jit(jax.value_and_grad(cost))(p)
+    oracle=jax.jit(frozen)
+    np.testing.assert_allclose(value,metric(recorded.ys,recorded.y),rtol=2e-13)
+    np.testing.assert_allclose(value,oracle(p),rtol=2e-13)
+    direction=jnp.sin(jnp.arange(p.size).reshape(p.shape)+.4)
+    _,tangent=jax.jit(lambda p,d:jax.jvp(frozen,(p,),(d,)))(p,direction)
+    np.testing.assert_allclose(jnp.sum(gradient*direction),tangent,rtol=2e-10,atol=2e-12)
+    epsilon=1e-5
+    finite=np.array([(oracle(p+epsilon*row)-oracle(p-epsilon*row))/(2*epsilon)
+        for row in np.eye(p.size).reshape((-1,)+p.shape)]).reshape(p.shape)
+    np.testing.assert_allclose(gradient,finite,rtol=3e-7,atol=1e-8)
+
+
 @pytest.mark.parametrize("method", ["dopri5", "dopri8"])
 def test_recording_keeps_production_forward_and_noise_exact(method):
     rhs, collision = kernels()
@@ -180,6 +229,33 @@ def test_failure_and_zero_span_contract():
         y,t1=0.,dt0=.1,ts=jnp.array([0.,0.]),key=jax.random.key(0),noise_dim=1,
         max_steps=1,max_orbit_steps=2,adjoint="accepted").ys)
     np.testing.assert_array_equal(jax.jit(jax.grad(empty))(jnp.array([2.])), [2.])
+
+
+def test_empty_path_does_not_differentiate_unused_singular_rhs_preparation():
+    def cost(p):
+        out = solve_split(lambda t,y,a:jnp.sqrt(p)*y,
+            lambda t,y,h,dw,a:CollisionStep(y,jnp.array(0.),jnp.array(0.)),
+            jnp.ones(1),t1=0.,dt0=.1,ts=jnp.array([0.]),key=jax.random.key(0),
+            noise_dim=1,max_steps=2,max_orbit_steps=2,adjoint="accepted")
+        return jnp.sum(out.ys)+jnp.sum(out.y)
+    value,gradient = jax.jit(jax.value_and_grad(cost))(0.)
+    np.testing.assert_array_equal([value,gradient],[2.,0.])
+
+
+def test_inactive_singular_collision_preparation_stays_zero_under_vmap():
+    def run(p,horizon,key,adjoint):
+        return solve_split(lambda t,y,a:jnp.zeros_like(y),
+            lambda t,y,h,dw,a:CollisionStep(y+jnp.sqrt(p)*dw,jnp.array(0.),jnp.array(0.)),
+            jnp.ones(1),t1=horizon,dt0=.1,ts=jnp.empty(0),key=key,noise_dim=1,
+            adaptive=False,adjoint=adjoint,max_steps=8,max_orbit_steps=8,
+            adjoint_checkpoint_steps=2,adjoint_orbit_checkpoint_steps=2).y[0]
+    p,times=jnp.array([0.,.4]),jnp.array([0.,.3])
+    keys=jax.random.split(jax.random.key(32),2)
+    derivative=jax.jit(jax.vmap(jax.grad(lambda p,t,k:run(p,t,k,"accepted"))))(p,times,keys)
+    assert derivative[0] == 0 and np.isfinite(derivative).all()
+    forward=jax.jit(lambda p:run(p,times[1],keys[1],"none"))
+    eps=1e-5
+    np.testing.assert_allclose(derivative[1],(forward(p[1]+eps)-forward(p[1]-eps))/(2*eps),rtol=2e-7)
 
 
 def test_vmap_heterogeneous_and_zero_length_paths():
@@ -333,3 +409,32 @@ def test_production_adaptive_trace_record_replay_and_jvp(model):
     finite = (frozen(p+eps*direction)[0]-frozen(p-eps*direction)[0])/(2*eps)
     np.testing.assert_allclose(gradient@direction,tangent,rtol=3e-8,atol=1e-11)
     np.testing.assert_allclose(gradient@direction,finite,rtol=3e-5,atol=1e-10)
+
+
+def test_production_gc_initially_lost_lane_has_finite_kinetic_adjoint():
+    from essos.background_species import BackgroundSpecies
+    from essos.constants import PROTON_MASS as M, ELEMENTARY_CHARGE as Q
+    from essos.dynamics import Particles
+    from essos.fields import ExternalField
+    horizon = 1e-7
+    def cost(p, adjoint):
+        field = ExternalField(lambda x:jnp.stack([0*x[...,0], 0*x[...,0],
+            2*p[0]+0*x[...,0]], axis=-1))
+        birth = Particles(jnp.array([[2.,0.,0.],[.2,0.,0.]]),mass=M,charge=Q,
+            energy=2000*Q*jnp.exp(p[1]),initial_vparallel_over_v=jnp.array([.6,.4]))
+        background = BackgroundSpecies(1,jnp.array([1.]),jnp.array([1.]),
+            jnp.array([1e20]),jnp.array([1000.]))
+        out = trace_split(field,birth,background,model="GuidingCenter",tmax=horizon,
+            timestep=horizon/4,n_save=3,adaptive=False,orbit_adaptive=False,
+            event=lambda t,y,a:1-y[0],adjoint=adjoint,max_steps=16,max_orbit_steps=8,
+            adjoint_checkpoint_steps=2,adjoint_orbit_checkpoint_steps=2,
+            adjoint_max_accepted_steps=16,adjoint_max_orbit_steps=64)
+        return jnp.sum(out.y[:,2]+out.y[:,3]/1e6+.2*out.y[:,4]/(2000*Q))
+    p = jnp.array([1.,0.])
+    value, gradient = jax.jit(jax.value_and_grad(lambda p:cost(p,"accepted")))(p)
+    primal = jax.jit(lambda p:cost(p,"none"))
+    eps = 1e-5
+    finite = np.array([(primal(p+row*eps)-primal(p-row*eps))/(2*eps) for row in np.eye(2)])
+    np.testing.assert_allclose(value,primal(p),rtol=2e-13)
+    assert np.isfinite(gradient).all()
+    np.testing.assert_allclose(gradient,finite,rtol=3e-5,atol=3e-9)

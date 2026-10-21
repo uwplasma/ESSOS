@@ -39,6 +39,7 @@ PARAMETERS = dict(
     saves=1000,
     method="dopri8",
     checkpoint_steps=16,
+    parameter_accumulation="segment",  # Shared GC/Lorentz reverse accumulation policy.
     accepted_capacity=65536,
     max_steps=262144,
     collisions=False,                 # Opt in to full split orbit/collision reverse AD.

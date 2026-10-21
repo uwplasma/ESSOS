@@ -309,12 +309,83 @@ def _concrete_check(value, predicate, message):
         raise ValueError(message)
 
 
+def _contains_custom_rule(graph):
+    """Find opaque derivative rules, including calls nested in control flow."""
+    for equation in graph.eqns:
+        if equation.primitive.name.startswith("custom_"):
+            return True
+        for value in tree_util.tree_leaves(equation.params):
+            nested = getattr(value, "jaxpr", value)
+            if hasattr(nested, "eqns") and _contains_custom_rule(nested):
+                return True
+    return False
+
+
+def _evaluate_inline(graph, constants, *arguments):
+    """Expose jit boundaries without entering custom AD/control-flow calls."""
+    from jax.extend.core import Literal
+    environment = dict(zip(graph.constvars, constants))
+    environment.update(zip(graph.invars, arguments))
+
+    def read(var):
+        return var.val if isinstance(var, Literal) else environment[var]
+
+    for equation in graph.eqns:
+        values = [read(var) for var in equation.invars]
+        with equation.ctx.manager:
+            if equation.primitive.name == "jit":
+                nested = equation.params["jaxpr"]
+                result = _evaluate_inline(nested.jaxpr, nested.consts, *values)
+            else:
+                params = equation.primitive.get_bind_params(equation.params)
+                result = equation.primitive.bind(*values, **params)
+                if not equation.primitive.multiple_results:
+                    result = [result]
+        environment.update(zip(equation.outvars, result))
+    return [read(var) for var in graph.outvars]
+
+
+def _partition_graph(graph, unknowns):
+    # Partial evaluation can replace a nested custom-JVP call by its primal
+    # graph. In that case only partition whole primitive calls by dependency;
+    # never transform their bodies. Parameter-only calls still move to setup,
+    # avoiding pullbacks of fixed discretization data inside the stage VJP.
+    if _contains_custom_rule(graph.jaxpr):
+        from jax.extend.core import ClosedJaxpr, Literal
+        if not all(unknowns):
+            raise ValueError("opaque RHS partition expects state/time inputs")
+        examples = [jax.ShapeDtypeStruct(var.aval.shape, var.aval.dtype) for var in graph.jaxpr.invars]
+        original = graph
+        graph = jax.make_jaxpr(lambda *values: _evaluate_inline(
+            original.jaxpr, original.consts, *values))(*examples)
+        body = graph.jaxpr
+        unknown = set(body.invars)
+        setup_equations, stage_equations = [], []
+        for equation in body.eqns:
+            dependent = bool(equation.effects) or any(
+                not isinstance(var, Literal) and var in unknown for var in equation.invars)
+            (stage_equations if dependent else setup_equations).append(equation)
+            if dependent:
+                unknown.update(equation.outvars)
+        residuals, seen = [], set()
+        for var in [var for equation in stage_equations for var in equation.invars]+list(body.outvars):
+            if not isinstance(var, Literal) and var not in unknown and var not in seen:
+                residuals.append(var)
+                seen.add(var)
+        setup = body.replace(invars=[], outvars=residuals, eqns=setup_equations,
+            effects=set().union(*(eq.effects for eq in setup_equations)))
+        stage = body.replace(constvars=[], invars=residuals+list(body.invars),
+            eqns=stage_equations, effects=set().union(*(eq.effects for eq in stage_equations)))
+        return ClosedJaxpr(setup, graph.consts), ClosedJaxpr(stage, ())
+    setup, stage, _, _ = partial_eval.partial_eval_jaxpr_nounits(
+        graph, unknowns, instantiate=True)
+    return setup, stage
+
+
 def _partition_rhs(rhs, t0, y0, args):
     """Split solve-invariant setup from time/state-dependent stage arithmetic."""
     graph = jax.make_jaxpr(lambda t, y: rhs(t, y, args))(t0, y0)
-    setup, stage, _, _ = partial_eval.partial_eval_jaxpr_nounits(
-        graph, [True, True], instantiate=True)
-    return setup, stage
+    return _partition_graph(graph, [True, True])
 
 
 def _prepare_rhs(rhs, t0, y0, args):
@@ -353,7 +424,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                rtol=1e-9, atol=1e-9, event=None, root_find=True,
                max_steps=1_000_000, dtmin=0., dtmax=np.inf, record_steps=False, method="dopri5",
                error_norm=None, controller="i", pcoeff=.4, icoeff=.3, dense_output="standard",
-               adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None, _record_ad=False,
+               adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None,
+               adjoint_parameter_accumulation="segment", _record_ad=False,
                _ad_checkpoint_steps=1, _ad_compact=False, _record_schedule=False,
                record_event_tangent=False):
     """Integrate an array state forward in time with bounded adaptive retries.
@@ -395,6 +467,11 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     ``adjoint_checkpoint_steps`` accepted steps share one state/FSAL checkpoint
     (default 16). Backward replay reconstructs one segment's states and small
     RK stage vectors. Set 1 to store every accepted state.
+    The default ``adjoint_parameter_accumulation="segment"`` accumulates prepared RHS
+    parameter cotangents within that segment before transposing their setup.
+    The optional ``"step"`` applies setup's pullback once per accepted step.
+    Both differentiate the same accepted maps; runtime and workspace depend on
+    the RHS and backend. The setting has no effect with ``adjoint="none"``.
     ``adjoint_max_accepted_steps`` optionally bounds accepted-step tape storage
     independently of the accepted/rejected trial limit ``max_steps``. None
     uses max_steps. A full tape does not change the forward solve, but reverse
@@ -428,6 +505,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     """
     if adjoint not in ("none", "accepted"):
         raise ValueError("adjoint must be 'none' or 'accepted'")
+    if adjoint_parameter_accumulation not in ("step", "segment"):
+        raise ValueError("adjoint_parameter_accumulation must be 'step' or 'segment'")
     if _record_schedule and (_record_ad or adjoint != "none"):
         raise ValueError("schedule recording is an internal forward-only mode")
     for value, name in ((adjoint_checkpoint_steps, "adjoint_checkpoint_steps"),
@@ -447,6 +526,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             pcoeff=pcoeff, icoeff=icoeff, dense_output=dense_output,
             adjoint_checkpoint_steps=adjoint_checkpoint_steps,
             adjoint_max_accepted_steps=adjoint_max_accepted_steps,
+            adjoint_parameter_accumulation=adjoint_parameter_accumulation,
             record_event_tangent=record_event_tangent)
     if method == "dopri5":
         nodes, rows, weights, dense, error_order = _C, _A, _ERROR, _rk45_dense, 5
