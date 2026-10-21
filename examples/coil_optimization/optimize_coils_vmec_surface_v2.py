@@ -22,8 +22,7 @@ from scipy.optimize import least_squares
 # ====================================================================================
 
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
-# vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
-vmec_input = os.path.join(input_filepath, 'input.toroidal_surface_02')
+vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
 
 # ====================================================================================
 # ====================================================================================
@@ -41,8 +40,7 @@ init_field = BiotSavart(init_coils)
 
 # Initialize the surface from a VMEC output file.
 ntheta = 30; nphi = 30; Npoints = ntheta * nphi  # Surface parametersrs
-# surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=ntheta, nphi=nphi, range_torus='half period')
-surface = SurfaceRZFourier.from_input_file(vmec_input, ntheta=ntheta, nphi=nphi, close=True, range_torus='half period')
+surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=ntheta, nphi=nphi, range_torus='full torus')
 
 # Build and cache surface geometry before JAX starts the optimization.
 surface.gamma.block_until_ready()
@@ -54,8 +52,8 @@ surface.unitnormal.block_until_ready()
 # ====================================================================================
 # ====================================================================================
 
-LENGTH_WEIGHT = 10.; LENGTH_TARGET = 32.
-CURVATURE_WEIGHT = 100.; CURVATURE_TARGET = 0.1
+LENGTH_WEIGHT = 1.; LENGTH_TARGET = 32.
+CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.1
 NORMAL_FIELD_WEIGHT = Npoints
 QS_WEIGHT = 30.
 
@@ -77,7 +75,7 @@ QS_WEIGHT = 30.
 L_normal_field = custom_loss( loss_BdotN_mean, "field", surface=surface)
 L_length_max = custom_loss( loss_coil_length_max , "field", max_coil_length=LENGTH_TARGET )
 L_curvature = custom_loss( loss_coil_curvature_from_field , "field" , max_coil_curvature=CURVATURE_TARGET )
-L_QS = custom_loss(loss_quasi_symmetry, "field", surface=surface)
+L_quasi_symmetry = custom_loss(loss_quasi_symmetry, "field", surface=surface)
 
 # ====================================================================================
 # ====================================================================================
@@ -85,8 +83,7 @@ L_QS = custom_loss(loss_quasi_symmetry, "field", surface=surface)
 # ====================================================================================
 # ====================================================================================
 
-L_total = NORMAL_FIELD_WEIGHT*L_normal_field + LENGTH_WEIGHT*L_length_max + CURVATURE_WEIGHT*L_curvature + QS_WEIGHT*L_QS
-# L_total = NORMAL_FIELD_WEIGHT*L_normal_field + QS_WEIGHT*L_QS
+L_total = NORMAL_FIELD_WEIGHT*L_normal_field + LENGTH_WEIGHT*L_length_max + CURVATURE_WEIGHT*L_curvature # + QS_WEIGHT*L_quasi_symmetry
 
 L_total.dependencies = {"field": init_field}
 
@@ -207,7 +204,7 @@ plt.show()
 
 """ Exporting results """
 
-EXPORT = False
+EXPORT = True
 if EXPORT:
     output_filepath = os.path.join(os.path.dirname(__file__), "output")
 

@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 def fix_matplotlib_3d(ax):
     x_limits = ax.get_xlim3d()
@@ -31,7 +32,6 @@ def plot_scalar_map_2d(surface, values, ax=None, label=None, title=None, symmetr
     contours  : number of contour lines (0 = none)
     Returns (fig, ax).
     """
-    import matplotlib.pyplot as plt
 
     phi   = np.asarray(surface.phi2d)
     theta = np.asarray(surface.theta2d)
@@ -70,7 +70,6 @@ def plot_scalar_on_surface_3d(surface, values, ax=None, coils=None, label=None, 
     symmetric : True -> color scale centered at 0
     Returns (fig, ax).
     """
-    import matplotlib.pyplot as plt
 
     xyz  = np.asarray(surface.gamma)
     vals = np.asarray(values).reshape(xyz.shape[:2])
@@ -123,7 +122,6 @@ def plot_vector_field_on_surface_3d(surface, vectors, ax=None, coils=None, step=
     coils        : optional Coils object, drawn with coils.plot
     Returns (fig, ax).
     """
-    import matplotlib.pyplot as plt
 
     xyz = np.asarray(surface.gamma)
     vec = np.asarray(vectors).reshape(xyz.shape)
