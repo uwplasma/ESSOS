@@ -11,6 +11,48 @@ from essos.rk import _prepare_rhs
 jax.config.update("jax_enable_x64", True)
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_equation_binding_compatibility_preserves_jvp_and_vjp(legacy):
+    """Exercise both binding ABIs on real JAX equations, not global patches."""
+    from essos.rk import _bind_primitive
+
+    graph = jax.make_jaxpr(lambda x: jnp.sin(x)*jnp.array([2.,3.]))(jnp.ones(2)).jaxpr
+    equation = graph.eqns[0]
+    actual = equation.primitive
+
+    class BindingAPI:
+        def get_bind_params(self, params):
+            binding = actual.get_bind_params(params)
+            if isinstance(binding, tuple):
+                functions, binding = binding
+                assert not functions
+            return ([], binding) if legacy else binding
+
+        def bind(self, *args, **kwargs):
+            return actual.bind(*args, **kwargs)
+
+    prepared = lambda x: _bind_primitive(BindingAPI(), (x,), equation.params)
+    x, dx = jnp.array([.2,-.4]), jnp.array([.3,.7])
+    np.testing.assert_allclose(jax.jit(prepared)(x), jnp.sin(x), rtol=1e-14)
+    np.testing.assert_allclose(jax.jvp(prepared,(x,),(dx,))[1], jnp.cos(x)*dx, rtol=1e-14)
+    np.testing.assert_allclose(jax.vjp(prepared,x)[1](dx)[0], jnp.cos(x)*dx, rtol=1e-14)
+
+
+def test_legacy_binding_keeps_nonempty_subfunctions():
+    from essos.rk import _bind_primitive
+
+    class LegacyCall:
+        def get_bind_params(self, params):
+            return (lambda x: 3*x,), params
+
+        def bind(self, function, x, *, offset):
+            return function(x)+offset
+
+    prepared = lambda x: _bind_primitive(LegacyCall(), (x,), {"offset":2.})
+    assert float(prepared(jnp.array(4.))) == 14.
+    assert float(jax.grad(prepared)(jnp.array(4.))) == 3.
+
+
 @pytest.mark.parametrize("dependence", ["parameters", "time", "state", "both"])
 @pytest.mark.parametrize("coalesce_views", [False, True])
 def test_preparation_keeps_new_times_states_and_parameter_derivatives(dependence, coalesce_views):

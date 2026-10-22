@@ -323,6 +323,21 @@ def _contains_custom_rule(graph):
     return False
 
 
+def _bind_primitive(primitive, values, parameters):
+    """Bind an equation using either supported JAX get_bind_params ABI.
+
+    Older JAX returns (subfunctions, keyword_parameters); newer JAX returns
+    only keyword_parameters. Keep legacy subfunctions for opaque AD/call
+    primitives rather than discarding them while adapting ordinary equations.
+    This Python dispatch runs during graph preparation, not each RK stage.
+    """
+    binding = primitive.get_bind_params(parameters)
+    if isinstance(binding, tuple):
+        subfunctions, binding = binding
+        return primitive.bind(*subfunctions, *values, **binding)
+    return primitive.bind(*values, **binding)
+
+
 def _evaluate_inline(graph, constants, *arguments):
     """Expose jit boundaries without entering custom AD/control-flow calls."""
     from jax.extend.core import Literal
@@ -339,8 +354,7 @@ def _evaluate_inline(graph, constants, *arguments):
                 nested = equation.params["jaxpr"]
                 result = _evaluate_inline(nested.jaxpr, nested.consts, *values)
             else:
-                params = equation.primitive.get_bind_params(equation.params)
-                result = equation.primitive.bind(*values, **params)
+                result = _bind_primitive(equation.primitive, values, equation.params)
                 if not equation.primitive.multiple_results:
                     result = [result]
         environment.update(zip(equation.outvars, result))

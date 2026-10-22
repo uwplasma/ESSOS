@@ -9,6 +9,8 @@ import jax.numpy as jnp
 from jax import tree_util, ad_checkpoint
 from jax.extend.core import Literal
 
+from .rk import _bind_primitive
+
 
 
 def _geometry_pullback(values,seed):
@@ -192,8 +194,7 @@ def _rewrite(graph,constants,*arguments):
                 else:
                     result = _rewrite(closed.jaxpr,closed.consts,*values)
             else:
-                params = eq.primitive.get_bind_params(eq.params)
-                result = eq.primitive.bind(*values,**params)
+                result = _bind_primitive(eq.primitive, values, eq.params)
                 if not eq.primitive.multiple_results:
                     result = [result]
         env.update(zip(eq.outvars,result))

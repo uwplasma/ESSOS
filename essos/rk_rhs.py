@@ -14,7 +14,7 @@ def coalesced_rhs(graph, t0, y0):
     Recreate those cheap views at their use site, so the compiler can choose
     their layouts together. All parameter values remain differentiable.
     """
-    from .rk import _evaluate_inline, _partition_graph
+    from .rk import _bind_primitive, _evaluate_inline, _partition_graph
 
     flat = jax.make_jaxpr(lambda t, y: _evaluate_inline(
         graph.jaxpr, graph.consts, t, y)[0])(t0, y0)
@@ -57,8 +57,7 @@ def coalesced_rhs(graph, t0, y0):
                 value = read(ancestor)
                 for equation in path:
                     with equation.ctx.manager:
-                        params = equation.primitive.get_bind_params(equation.params)
-                        value = equation.primitive.bind(value, **params)
+                        value = _bind_primitive(equation.primitive, (value,), equation.params)
                         if equation.primitive.multiple_results:
                             value = value[0]
                 cache[variable] = value
