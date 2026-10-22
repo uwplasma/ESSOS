@@ -246,6 +246,7 @@ from `en/jax_10` at `9258ce01821ca44d293ceb0857f343b8745ad960`:
 | Initial surface | R=10 m, a=4 m torus; all m<=2, abs(n)<=2 modes free |
 | Initial coils | Four circular base coils, order 6, radius 5.7 m, 1 A, nfp=2, stellarator symmetry |
 | Spectral scaling | 1.2, infinity norm, on coil and surface modes |
+| Surface sampling | 60 poloidal x 60 toroidal points over one field period (`range_torus='full period'`), without duplicate endpoints |
 | Target geometry and field | Original QA wout and `LandremanPaul2021_QA_coils.json` (three reference coils, order 3, 45 segments) |
 | Constraints | Normal field, length, curvature, major radius, area, volume, flux, metric aspect bound, iota, QS, geometric toroidal contours |
 | Length / curvature bounds | 40 m / 0.5 m^-1 |
@@ -258,9 +259,10 @@ Source inequality signs are translated to main's `h>=0` convention. Pointwise
 normal-field bounds replace the shifted soft maximum that could hide local
 violations. The source iota target is retained, while the residual measures
 signed field-line winding rather than a geometric-angle proxy. Flux quadrature
-uses Fourier tangents instead of polygon edges. Current main's
-endpoint-free full-torus grid uses 120 toroidal points to retain 60 per field
-period. These numerical corrections prevent a claim of identical iterates or
+uses Fourier tangents instead of polygon edges. The 60 x 60 grid covers one
+field period, as in the source, with duplicate endpoints omitted. Field-line
+interpolation repeats that one-period grid at the correct physical angle.
+These numerical corrections prevent a claim of identical iterates or
 identical convergence time. The geometric FFT bound is retained as a shaping
 constraint; the QS criterion is the coordinate-independent triple product.
 

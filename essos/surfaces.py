@@ -153,7 +153,7 @@ class SurfaceRZFourier:
             ntheta: number of theta grid points.
             nphi: number of phi grid points.
             close: whether the surface mesh includes the endpoint.
-            range_torus: either ``'full torus'`` or ``'half period'``.
+            range_torus: ``'full torus'``, ``'full period'`` or ``'half period'``.
             scaling_type: norm used in the mode scaling. Accepted values are
                 ``'L1'`` or ``1``, ``'L2'`` or ``2``, and ``'Linfty'`` or ``-1``.
             scaling_factor: exponential weight used in the scaling
@@ -169,7 +169,7 @@ class SurfaceRZFourier:
         assert isinstance(ntheta, int) and ntheta > 0, "ntheta must be a positive integer."
         assert isinstance(nphi, int) and nphi > 0, "nphi must be a positive integer."
         assert isinstance(close, bool), "close must be a boolean."
-        assert range_torus in ['full torus', 'half period'], f"Unknown range_torus: {range_torus}. Choose 'full torus' or 'half period'."
+        assert range_torus in ['full torus', 'full period', 'half period'], f"Unknown range_torus: {range_torus}."
         self._initialize_state(
             rc,
             zs,
@@ -464,6 +464,8 @@ class SurfaceRZFourier:
     def _compute_meshgrid(self):
         if self.range_torus == "full torus":
             div, end_val = 1., 1.
+        elif self.range_torus == "full period":
+            div, end_val = self.nfp, 1.
         elif self.range_torus == "half period":
             div, end_val = self.nfp, 0.5
         quadpoints_theta = jnp.linspace(0, 2 * jnp.pi, num=self.ntheta, endpoint=self.close)
@@ -659,7 +661,8 @@ class SurfaceRZFourier:
         """Average of ``values`` (on the ``(nphi, ntheta)`` grid) over the whole torus.
 
         Theta is periodic, so a duplicated ``close=True`` end column is dropped.
-        Over a full torus phi is treated the same way; over a half period with
+        Over a full torus or full field period phi is treated the same way;
+        over a half period with
         ``close=True`` both ends are sampled and the trapezoid rule is used.
         A half period with ``close=False`` misses the end at ``pi/nfp`` and is
         only first-order accurate in ``1/nphi``.
@@ -669,7 +672,7 @@ class SurfaceRZFourier:
         """
         if self.close:
             values = values[:, :-1]
-        if self.range_torus == "full torus" or not self.close:
+        if self.range_torus in ("full torus", "full period") or not self.close:
             if self.close:
                 values = values[:-1]
             return jnp.mean(values)

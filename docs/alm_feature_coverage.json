@@ -88,7 +88,11 @@
       "minor_radius": 4.0,
       "mpol": 2,
       "ntor": 2,
-      "dofs": 26
+      "dofs": 26,
+      "range_torus": "full period",
+      "ntheta": 60,
+      "nphi": 60,
+      "close": false
     },
     "initial_coils": {
       "base_coils": 4,
@@ -124,22 +128,22 @@
       "main h>=0 inequality signs",
       "pointwise normal field bounds",
       "signed field-line iota with the source reference target formula",
-      "endpoint-free full-torus quadrature at the source density per period",
+      "endpoint-free one-field-period quadrature with the source's 60 x 60 point counts",
       "Fourier-tangent flux quadrature",
       "public DOFs scaled exactly once"
     ],
     "test": "tests/test_surface_coil_alm_example.py::test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients",
     "verification": {
       "surface_grid": [
-        18,
+        9,
         9
       ],
+      "range_torus": "full period",
       "coil_segments": 16,
       "primal_dofs": 186,
+      "cpu_tests": "14 focused surface/example tests passed, including period repetition and signed traces",
       "source_problem_runs": [
-        "SciPy CPU, two one-inner-iteration updates with plots and checkpoint",
-        "SciPy CPU, one resumed update",
-        "JAXopt GPU, one compiled update with checkpoint"
+        "JAXopt GPU, one compiled update on the one-field-period grid with plot and checkpoint"
       ],
       "scope": "reduced-quadrature execution checks; full-resolution convergence is unverified"
     }

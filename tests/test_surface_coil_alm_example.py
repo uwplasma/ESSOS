@@ -6,7 +6,7 @@ from scipy.integrate import quad
 
 from examples.coil_optimization.optimize_coils_surface_augmented_lagrangian import (
     bounce_integrals, build_problem, initial_configuration, qi_residuals,
-    qs_measure, qs_reference, quasisymmetry, toroidal_flux, trace_surface,
+    qs_measure, qs_reference, quasisymmetry, toroidal_contours, toroidal_flux, trace_surface,
 )
 
 
@@ -16,6 +16,17 @@ def test_traces_keep_signed_slope_and_unwrapped_theta():
     np.testing.assert_allclose((theta[:, -1] - theta[:, 0]) / phi[-1], -.37, atol=1e-12)
     np.testing.assert_allclose(b, 2.)
     np.testing.assert_allclose(dl, 1.)
+
+    # A one-period grid and its full-torus repetition must produce the same
+    # nonconstant traces, including across the period boundary.
+    angle = jnp.linspace(0., jnp.pi, 32, endpoint=False)[:, None]
+    slope = jnp.broadcast_to(.3 + .1 * jnp.cos(2 * angle), (32, 8))
+    grid = jnp.stack((slope, jnp.ones_like(slope), 2 + slope))
+    one_period = trace_surface(grid, 2, nphi=161, nalpha=3, periods=5, grid_period=jnp.pi)
+    full_torus = trace_surface(jnp.tile(grid, (1, 2, 1)), 2, nphi=161, nalpha=3, periods=5)
+    for actual, expected in zip(one_period, full_torus):
+        np.testing.assert_allclose(actual, expected, atol=1e-12)
+    np.testing.assert_allclose(one_period[1][:, -1] - one_period[1][:, 0], .3 * 5 * jnp.pi, atol=1e-12)
 
 
 def test_qi_bounce_quadrature_scaling_and_single_well_topology():
@@ -95,7 +106,9 @@ def test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients():
     field, surface, iota = initial_configuration('qs', resolution=9, segments=16)
     assert field.coils.curves.n_base_curves == 4 and field.coils.curves.order == 6
     assert surface.mpol == surface.ntor == 2 and surface.dofs.size == 26
-    assert surface.nphi == 18 and surface.ntheta == 9
+    assert surface.nphi == surface.ntheta == 9 and surface.range_torus == 'full period'
+    assert not surface.close
+    np.testing.assert_allclose(surface.phi2d[:, 0], np.arange(9) * np.pi / 9)
     assert field.coils.curves.scaling_factor == surface.scaling_factor == 1.2
     np.testing.assert_allclose(field.coils.dofs_currents_raw, jnp.ones(4))
     gamma = field.coils.gamma
@@ -107,6 +120,23 @@ def test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients():
                                          + points[..., 2]**2), 4., atol=1e-12)
     reference = qs_reference(9)
     ref_field, ref_surface, _ = reference
+    assert ref_surface.nphi == ref_surface.ntheta == 9 and ref_surface.range_torus == 'full period'
+    # Check the public defaults without evaluating the high-resolution field.
+    default_field, default_surface, _ = initial_configuration('qs', reference=reference)
+    assert default_surface.nphi == default_surface.ntheta == 60
+    assert default_surface.range_torus == 'full period' and default_field.coils.n_segments == 60
+    full_surface = jax.tree_util.tree_map(lambda x: x, surface)
+    full_surface.nphi, full_surface.range_torus = 18, 'full torus'
+    for close in (False, True):
+        one_period = jax.tree_util.tree_map(lambda x: x, ref_surface)
+        whole_torus = jax.tree_util.tree_map(lambda x: x, ref_surface)
+        whole_torus.range_torus = 'full torus'
+        one_period.close = whole_torus.close = close
+        one_period.nphi, whole_torus.nphi = (9, 17) if close else (9, 18)
+        np.testing.assert_allclose(one_period.area, whole_torus.area, rtol=1e-12)
+        np.testing.assert_allclose(one_period.volume, whole_torus.volume, rtol=1e-12)
+    np.testing.assert_allclose(qs_measure(field, surface), qs_measure(field, full_surface), rtol=1e-12)
+    np.testing.assert_allclose(toroidal_contours(field, surface), toroidal_contours(field, full_surface), rtol=1e-12)
     assert ref_field.coils.curves.n_base_curves == 3 and ref_field.coils.curves.order == 3
     assert ref_field.coils.n_segments == 45
     assert jnp.all((ref_field.coils.dofs_currents_raw > .9) & (ref_field.coils.dofs_currents_raw < 1.1))

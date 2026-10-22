@@ -47,7 +47,7 @@ def quasisymmetry(field, surface):
 
 
 def field_grid(field, surface):
-    """Slope dtheta/dphi, dl/dphi and |B| on an endpoint-free full-torus grid."""
+    """Slope dtheta/dphi, dl/dphi and |B| on an endpoint-free surface grid."""
     b = B_on_surface(surface, field)
     et, ep = surface.gammadash_theta, surface.gammadash_phi
     tt, tp, pp = (jnp.sum(a * c, axis=-1) for a, c in ((et, et), (et, ep), (ep, ep)))
@@ -63,18 +63,24 @@ def field_grid(field, surface):
     return jnp.stack((slope, dl, jnp.linalg.norm(b, axis=-1))), bphi
 
 
-def trace_surface(grid, nfp, nphi=129, nalpha=16, periods=1):
+def toroidal_extent(surface):
+    return 2 * jnp.pi / {'full torus': 1, 'full period': surface.nfp,
+                         'half period': 2 * surface.nfp}[surface.range_torus]
+
+
+def trace_surface(grid, nfp, nphi=129, nalpha=16, periods=1, *, grid_period=2 * jnp.pi):
     """RK4 traces of the tangential field, with periodic grid interpolation.
 
     This approaches actual field-line tracing as B.n -> 0 and the surface and
     integration grids are refined. Theta stays unwrapped for the iota estimate.
+    grid_period is the toroidal angle covered by the periodically repeated grid.
     """
     phi = jnp.linspace(0., periods * 2 * jnp.pi / nfp, nphi)
     theta0 = jnp.linspace(0., 2 * jnp.pi, nalpha, endpoint=False)
     step = phi[1] - phi[0]
 
     def sample(p, theta):
-        coords = jnp.stack((jnp.full_like(theta, p * grid.shape[1] / (2 * jnp.pi)),
+        coords = jnp.stack((jnp.full_like(theta, p * grid.shape[1] / grid_period),
                             theta * grid.shape[2] / (2 * jnp.pi)))
         return jax.vmap(lambda values: map_coordinates(values, coords, order=1, mode='wrap'))(grid)
 
@@ -138,7 +144,7 @@ def qs_reference(resolution=60):
     inputs = Path(__file__).resolve().parents[1] / 'input_files'
     wout = inputs / 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'
     surface = SurfaceRZFourier.from_wout_file(
-        wout, ntheta=resolution, nphi=2 * resolution, close=False)
+        wout, ntheta=resolution, nphi=resolution, close=False, range_torus='full period')
     coils = Coils.from_json(inputs / 'LandremanPaul2021_QA_coils.json')
     field = BiotSavart(coils)
     grid, bphi = field_grid(field, surface)
@@ -163,7 +169,8 @@ def initial_configuration(case, resolution=60, segments=60, smoke=False, referen
         rc = jnp.zeros(13).at[0].set(10.).at[5].set(4.)
         zs = jnp.zeros(13).at[5].set(4.)
         surface = SurfaceRZFourier(rc, zs, 2, 2, 2, ntheta=resolution,
-            nphi=2 * resolution, close=False, scaling_type=jnp.inf, scaling_factor=1.2)
+            nphi=resolution, close=False, range_torus='full period',
+            scaling_type=jnp.inf, scaling_factor=1.2)
         coils = Coils(CreateEquallySpacedCurves(4, 6, 10., 5.7,
             n_segments=segments, nfp=2, stellsym=True, scaling_type=jnp.inf,
             scaling_factor=1.2), jnp.ones(4))
@@ -197,7 +204,9 @@ def metric_aspect(surface):
 
 def toroidal_contours(field, surface):
     """Legacy geometric-angle shaping constraint, separate from the QS criterion."""
-    b = jnp.linalg.norm(B_on_surface(surface, field), axis=-1)[:surface.nphi // surface.nfp]
+    b = jnp.linalg.norm(B_on_surface(surface, field), axis=-1)
+    if surface.range_torus == 'full torus':
+        b = b[:surface.nphi // surface.nfp]
     return jnp.linalg.norm(jnp.fft.rfft2(b / jnp.mean(b))[1:])
 
 
@@ -244,7 +253,8 @@ def build_source_qs_problem(field, surface, reference, *, ntrace=257, nalpha=16,
     add('metric aspect bound', lambda f, s: aspect - metric_aspect(s), 1e-5 * aspect, True)
 
     def rotational_transform(f, s):
-        phi, theta, _, _ = trace_surface(field_grid(f, s)[0], s.nfp, ntrace, nalpha, periods=iota_periods)
+        phi, theta, _, _ = trace_surface(field_grid(f, s)[0], s.nfp, ntrace, nalpha,
+            periods=iota_periods, grid_period=toroidal_extent(s))
         return jnp.mean((theta[:, -1] - theta[:, 0]) / phi[-1]) - iota_target
 
     add('iota', rotational_transform, 1e-5 * abs(iota_target))
@@ -347,7 +357,9 @@ def plot_optimization(initial, final, history, weights, output, case, smoke=Fals
     for index, ((field, surface), title) in enumerate(zip((initial, final), ('Initial', 'Final'))):
         ax = fig.add_subplot(2, 3, index + 1, projection='3d')
         display_surface = jax.tree_util.tree_map(lambda x: x, surface)
-        display_surface.ntheta, display_surface.nphi = max(32, surface.ntheta), max(48, surface.nphi)
+        display_surface.ntheta = max(32, surface.ntheta)
+        display_surface.nphi = max(48, round(surface.nphi * 2 * jnp.pi / toroidal_extent(surface)))
+        display_surface.range_torus = 'full torus'
         display_curves = field.coils.curves.copy()
         display_curves.n_segments = max(128, field.coils.n_segments)
         mesh = np.pad(np.asarray(display_surface.gamma), ((0, 1), (0, 1), (0, 0)), mode='wrap')
@@ -380,7 +392,8 @@ def plot_optimization(initial, final, history, weights, output, case, smoke=Fals
     map_axes = []
     for index, (values, title) in enumerate(zip(normal_maps, ('Initial', 'Final'))):
         ax = fig.add_subplot(2, 3, index + 4)
-        image = ax.imshow(values, origin='lower', aspect='auto', extent=(0, 360, 0, 360),
+        image = ax.imshow(values, origin='lower', aspect='auto',
+                          extent=(0, 360, 0, float(toroidal_extent(initial[1]) * 180 / jnp.pi)),
                           cmap='RdBu_r', vmin=-limit, vmax=limit)
         ax.set(title=f'{title} normal-field error', xlabel='Poloidal angle [deg]', ylabel='Toroidal angle [deg]')
         map_axes.append(ax)
@@ -467,7 +480,8 @@ def main(argv=None):
         f, s, args.case, smoke=args.smoke, reference=reference, **options)
     if source_qs:
         print(f'QS_maybe_final: {x.size} primal DOFs, surface grid {s.nphi}x{s.ntheta}, '
-              f'penalty growth {args.penalty_growth}, decrease threshold {args.decrease_tol}', flush=True)
+              f'{s.range_torus}, penalty growth {args.penalty_growth}, '
+              f'decrease threshold {args.decrease_tol}', flush=True)
     multipliers = constraints.init(x)
     if args.constraint_weights != 'none' and args.resume is None:
         multipliers = alm.initialize_constraint_weights(constraints, x, multipliers,
@@ -530,6 +544,7 @@ def main(argv=None):
                   cost_definition='area mean absolute QS triple product [m^-3]' if source_qs else 'RMS physics residual',
                   configuration='QS_maybe_final' if source_qs else 'smoke' if args.smoke else 'qi',
                   resolution=args.resolution, segments=args.segments,
+                  surface_grid=[s.nphi, s.ntheta], range_torus=s.range_torus,
                   penalty_growth=args.penalty_growth, decrease_tol=args.decrease_tol,
                   eta_tol=args.eta_tol, omega_tol=args.omega_tol,
                   constraint_weights='restored' if args.resume else args.constraint_weights, weights=weights, history=history,

@@ -315,7 +315,8 @@ The full QS case starts from the source `QS_maybe_final` torus (major radius
 5.7 m, Fourier order 6, 1 A), with the source's 1.2 spectral scaling.
 Its geometry and flux targets use the original QA reference input rather than
 the starting torus. The default grid has 60 poloidal points and 60 toroidal
-points per field period; current main represents both periods on the full torus.
+points over one field period (`range_torus='full period'`), matching the source
+domain and point counts; duplicate endpoints are omitted.
 QS is an ALM equality constraint with zero external objective. Its default
 penalty growth is 1.01, decrease threshold 0.99, inner iteration limit 50,
 and outer limit 60001, matching the source budget. `--smoke` selects a separate
