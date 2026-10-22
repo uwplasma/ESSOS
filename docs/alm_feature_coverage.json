@@ -31,7 +31,8 @@
     "constraint_checkpoints": "metadata, recursive autoscales, optional cloudpickle closure serialization",
     "reconstruction": "load_checkpoint_for_reconstruction / load_and_merge_constraints",
     "restarts": "preserve learned state, optional dual reset and optimizer reinitialization",
-    "checkpointed_iterations": "augmented_lagrangian_optimization with actual eta/omega values"
+    "checkpointed_iterations": "augmented_lagrangian_optimization with actual eta/omega values",
+    "gradient_weight_application": "source whole-term weights or residual preconditioning; physical-coordinate Jacobian scaling"
   },
   "tests": [
     "tests/test_augmented_lagrangian.py",
@@ -64,17 +65,18 @@
     "added_test_function_names": 19,
     "renamed_existing_tests": 1,
     "cpu_alm_and_example_tests": 38,
-    "gpu_feature_groups": 4,
+    "gpu_feature_groups": 1,
     "field_regression_cases": 30,
     "alm_statement_coverage": {
-      "covered": 726,
-      "total": 726
+      "covered": 744,
+      "total": 744
     },
     "alm_branch_coverage": {
-      "covered": 246,
-      "total": 246
+      "covered": 258,
+      "total": 258
     },
-    "coverage_exclusions": 0
+    "coverage_exclusions": 0,
+    "last_validation_date": "2026-10-22"
   },
   "qs_source_case": {
     "restored_date": "2026-10-21",
@@ -126,11 +128,11 @@
     "objective": "zero; area mean absolute QS triple product is an equality constraint",
     "numerical_corrections": [
       "main h>=0 inequality signs",
-      "pointwise normal field bounds",
-      "signed field-line iota with the source reference target formula",
-      "endpoint-free one-field-period quadrature with the source's 60 x 60 point counts",
+      "projected duals can decrease",
+      "endpoint-free one-field-period quadrature with source 60 x 60 point counts",
       "Fourier-tangent flux quadrature",
-      "public DOFs scaled exactly once"
+      "public solver DOFs scaled exactly once",
+      "main metric aspect denominator omits the source 1e-8 regularizer"
     ],
     "test": "tests/test_surface_coil_alm_example.py::test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients",
     "verification": {
@@ -138,14 +140,90 @@
         9,
         9
       ],
-      "range_torus": "full period",
-      "coil_segments": 16,
+      "coil_segments": 60,
       "primal_dofs": 186,
-      "cpu_tests": "14 focused surface/example tests passed, including period repetition and signed traces",
-      "source_problem_runs": [
-        "JAXopt GPU, one compiled update on the one-field-period grid with plot and checkpoint"
+      "range_torus": "full period",
+      "outer_updates": 12,
+      "inner_maxiter": 50,
+      "backend": "jaxopt",
+      "jit_update": true,
+      "initial_cost": 0.006287490463300941,
+      "final_cost": 0.0007509461620521353,
+      "converged": false,
+      "failure_checkpoint_test": "Injected nonfinite update preserves last finite checkpoint and failed state",
+      "full_grid_attempts": {
+        "gpu": "8 GiB local GPU: out of memory before completing update 1",
+        "cpu": "Local full-grid CPU run ended before completing update 1"
+      },
+      "scope": "Reduced-sampling execution and formula comparison; remote NaN resolution and full-grid convergence unverified"
+    },
+    "formulation_correction_date": "2026-10-22",
+    "formulation": "source",
+    "gradient_weighting": "lagrangian",
+    "weight_coordinates": "physical",
+    "volume_normalization": "physical volume / (2*pi)^2",
+    "alternate_formulation": {
+      "flag": "--qs-formulation traced",
+      "normal": "pointwise bounds",
+      "iota": "traced winding",
+      "gradient_weighting": "residual",
+      "weight_coordinates": "scaled"
+    },
+    "formula_comparison": {
+      "source_commit": "9258ce01821ca44d293ceb0857f343b8745ad960",
+      "surface_grid": [
+        9,
+        9
       ],
-      "scope": "reduced-quadrature execution checks; full-resolution convergence is unverified"
+      "segments": 60,
+      "primal_dofs": 186,
+      "scope": "Source functions evaluated on the same endpoint-free geometry; flux uses modern tangent quadrature in both sides.",
+      "constraints": {
+        "normal field": {
+          "max_abs_difference": 0.0,
+          "size": 1
+        },
+        "length": {
+          "max_abs_difference": 0.0,
+          "size": 4
+        },
+        "curvature": {
+          "max_abs_difference": 0.0,
+          "size": 240
+        },
+        "major radius": {
+          "max_abs_difference": 0.0,
+          "size": 1
+        },
+        "area": {
+          "max_abs_difference": 0.0,
+          "size": 1
+        },
+        "volume": {
+          "max_abs_difference": 0.0,
+          "size": 1
+        },
+        "toroidal flux": {
+          "max_abs_difference": 0.0,
+          "size": 1
+        },
+        "metric aspect bound": {
+          "max_abs_difference": 6.560467369354228e-08,
+          "size": 1
+        },
+        "iota": {
+          "max_abs_difference": 0.0,
+          "size": 1
+        },
+        "quasisymmetry": {
+          "max_abs_difference": 3.469446951953614e-18,
+          "size": 1
+        },
+        "toroidal contours (geometric)": {
+          "max_abs_difference": 0.0,
+          "size": 1
+        }
+      }
     }
   }
 }

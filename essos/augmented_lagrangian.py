@@ -339,17 +339,19 @@ class ScaledConstraint:
         weighted = {**params, 'weight_g': params.get('weight_g', 1.) * loss_scale}
         return self.constraint.loss(weighted, *args, **kwargs)
         
-def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,omega=1.0,eta=1.0,sq_grad=0., weight=1., reduction=jnp.sum, eta_tol=None, pad_output_to_power_of_2=False):
+def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,omega=1.0,eta=1.0,sq_grad=0., weight=1., reduction=jnp.sum, eta_tol=None, pad_output_to_power_of_2=False, gradient_weighting='residual'):
     """Equality g(x) = 0 with optional scalar/array physical ``eta_tol``.
 
     ``weight`` scales the reduced Lagrangian; ``reduction`` aggregates its
-    elements. Gradient weights in parameter metadata scale residuals instead.
+    elements. ``gradient_weighting`` selects whether fixed gradient weights
+    scale residuals (default), or whole Lagrangian terms (``'lagrangian'``).
     """
     return _make_constraint(fun, model_lagrangian, multiplier, penalty, omega, eta,
-                            sq_grad, weight, reduction, eta_tol, pad_output_to_power_of_2)
+                            sq_grad, weight, reduction, eta_tol, pad_output_to_power_of_2,
+                            gradient_weighting=gradient_weighting)
 
 
-def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1.,omega=1.0,eta=1.0, sq_grad=0.,weight=1., reduction=jnp.sum, eta_tol=None, use_analytical_penalty=True, pad_output_to_power_of_2=False):
+def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1.,omega=1.0,eta=1.0, sq_grad=0.,weight=1., reduction=jnp.sum, eta_tol=None, use_analytical_penalty=True, pad_output_to_power_of_2=False, gradient_weighting='residual'):
     """Inequality h(x) >= 0, with the weighting/tolerance options of ``eq``.
 
     Default PHR eliminates h-s=0, s>=0 analytically; set
@@ -357,17 +359,23 @@ def ineq(fun, model_lagrangian='Standard', multiplier=0.,penalty=1.,omega=1.0,et
     """
     return _make_constraint(fun, model_lagrangian, multiplier, penalty, omega, eta,
                             sq_grad, weight, reduction, eta_tol, pad_output_to_power_of_2,
-                            inequality=True, analytical=use_analytical_penalty)
+                            inequality=True, analytical=use_analytical_penalty,
+                            gradient_weighting=gradient_weighting)
 
 
 def _make_constraint(fun, model, multiplier, penalty, omega, eta, sq_grad,
-                     weight, reduction, eta_tol, padding, inequality=False, analytical=True):
+                     weight, reduction, eta_tol, padding, inequality=False, analytical=True,
+                     gradient_weighting='residual'):
     if model not in ('Standard', 'Squared'):
         raise ValueError("model_lagrangian must be 'Standard' or 'Squared'")
+    if gradient_weighting not in ('residual', 'lagrangian'):
+        raise ValueError("gradient_weighting must be 'residual' or 'lagrangian'")
 
     def init_fn(*args, **kwargs):
         out = fun(*args, **kwargs)
         params = {'lambda': _multiplier_like(out, multiplier, penalty, omega, eta, sq_grad)}
+        if gradient_weighting == 'lagrangian':
+            params['_lagrangian_weight'] = jnp.asarray(weight, dtype=jnp.asarray(out).dtype)
         if eta_tol is not None:
             params['eta_tol'] = jnp.broadcast_to(jnp.asarray(eta_tol, dtype=jnp.asarray(out).dtype), jnp.shape(out))
         if inequality:
@@ -378,7 +386,8 @@ def _make_constraint(fun, model, multiplier, penalty, omega, eta, sq_grad,
 
     def loss_fn(params, *args, _raw=False, **kwargs):
         lm = params['lambda']
-        scale = jax.lax.stop_gradient(params.get('weight_g', 1.))
+        gradient_weight = jax.lax.stop_gradient(params.get('weight_g', 1.))
+        scale = gradient_weight if gradient_weighting == 'residual' else 1.
         residual = fun(*args, **kwargs)
         if inequality and not _raw:
             residual = (jnp.minimum(residual, lm.value / (lm.penalty * scale))
@@ -387,10 +396,13 @@ def _make_constraint(fun, model, multiplier, penalty, omega, eta, sq_grad,
         terms = -lm.value * scaled + lm.penalty * scaled**2 / 2
         if model == 'Squared':
             terms += lm.value**2 / (2 * lm.penalty)
+        if gradient_weighting == 'lagrangian':
+            terms *= gradient_weight
         return weight * reduction(terms), residual
 
     constraint = BaseConstraint(init_fn, loss_fn)
     constraint._supports_gradient_weights = True
+    constraint._gradient_weighting = gradient_weighting
     if inequality:
         constraint._is_inequality = True
         constraint._use_analytical_penalty = analytical
@@ -440,7 +452,7 @@ def _with_padding(constraint, fun, enabled):
         value, residual = constraint.loss(original, *args, _raw=_raw, **kwargs)
         return value, pad_to_power_of_2(jnp.ravel(residual))[0]
     padded = BaseConstraint(init, loss)
-    for key in ('_is_inequality', '_use_analytical_penalty', '_raw_constraint', '_supports_gradient_weights'):
+    for key in ('_is_inequality', '_use_analytical_penalty', '_raw_constraint', '_supports_gradient_weights', '_gradient_weighting'):
         if hasattr(constraint, key):
             setattr(padded, key, getattr(constraint, key))
     padded._padding = True
@@ -510,7 +522,8 @@ def initialize_constraint_weights(constraints, main_params, lagrange_params,
                                   loss=lambda x: 0., mode='element', epsilon=1e-4,
                                   batch_size=16, use_perturbation=False,
                                   perturbation_magnitude=.01, perturbation_mode='relative',
-                                  seed=42, jacobian_method='vjp', grad_f_norm=None):
+                                  seed=42, jacobian_method='vjp', grad_f_norm=None,
+                                  jacobian_scale=None):
     """Initialize fixed gradient weights before ``ALM.init((x, multipliers))``.
 
     For ``element``, w_i = ||grad ||loss|||| / max(||grad c_i||, epsilon).
@@ -520,8 +533,10 @@ def initialize_constraint_weights(constraints, main_params, lagrange_params,
     primal DOFs, at their initial values. Batched VJPs avoid storing a full
     Jacobian. Uses raw eq/ineq functions, including satisfied inequalities.
 
-    Weights scale residuals inside the Lagrangian. Auxiliary residuals and
-    eta_tol stay in their original units; weights remain fixed during updates.
+    Constraint constructors select residual or whole-term weighting. Auxiliary
+    residuals and eta_tol keep their units; weights remain fixed during updates.
+    ``jacobian_scale`` optionally maps Jacobian columns to another coordinate
+    system, e.g. physical Fourier coefficients instead of scaled solver DOFs.
     """
     if mode not in ('element', 'constraint', 'global'):
         raise ValueError("mode must be 'element', 'constraint', or 'global'")
@@ -529,6 +544,9 @@ def initialize_constraint_weights(constraints, main_params, lagrange_params,
         raise ValueError('epsilon and batch_size must be positive')
     if jacobian_method not in ('vjp', 'jacrev') or perturbation_mode not in ('relative', 'absolute'):
         raise ValueError('Invalid Jacobian or perturbation mode')
+    column_scale = 1. if jacobian_scale is None else jnp.broadcast_to(jnp.asarray(jacobian_scale), main_params.shape)
+    if not bool(jnp.all(jnp.isfinite(column_scale) & (column_scale > 0))):
+        raise ValueError('jacobian_scale must be finite and positive')
     evaluation_point = main_params
     if use_perturbation:
         perturb = perturb_params_relative if perturbation_mode == 'relative' else perturb_params_absolute
@@ -544,7 +562,7 @@ def initialize_constraint_weights(constraints, main_params, lagrange_params,
         raise ValueError('Each constraint must return one scalar or array')
     if grad_f_norm is None:
         objective, grad_f = jax.value_and_grad(lambda x: _objective_value(loss(x), 'Standard'))(main_params)
-        numerator = jnp.linalg.norm(grad_f)
+        numerator = jnp.linalg.norm(grad_f * column_scale)
     else:
         objective, grad_f = jnp.array(0.), jnp.asarray(grad_f_norm)
         numerator = grad_f
@@ -559,10 +577,10 @@ def initialize_constraint_weights(constraints, main_params, lagrange_params,
             return jnp.ravel(value)
         def row_norms(x):
             if jacobian_method == 'jacrev':
-                return jnp.linalg.norm(jax.jacrev(raw_block)(x).reshape(outputs[index].size, -1), axis=1)
+                return jnp.linalg.norm(jax.jacrev(raw_block)(x).reshape(outputs[index].size, -1) * column_scale, axis=1)
             values, pullback = jax.vjp(raw_block, x)
             return jax.lax.map(lambda i: jnp.linalg.norm(pullback(
-                jax.nn.one_hot(i, values.size, dtype=values.dtype))[0]),
+                jax.nn.one_hot(i, values.size, dtype=values.dtype))[0] * column_scale),
                 jnp.arange(values.size), batch_size=batch_size)
         norms.append(jax.jit(row_norms)(evaluation_point).reshape(jnp.shape(outputs[index])))
     if mode == 'global':
@@ -793,9 +811,15 @@ def _constraint_update(params, gradient, satisfied, eta, omega, beta, mu_max,
                        model_lagrangian, frozen=False):
     """Shared dual increments; metadata and explicit primal slacks stay fixed."""
     lm, grad = params['lambda'], gradient['lambda']
-    dual_step = lm.penalty * grad.value
+    dual_gradient = grad.value
+    if '_lagrangian_weight' in params:
+        # Whole-term weights precondition the primal solve, not the physical
+        # multiplier update. In particular, do not multiply R0's dual step by 1000.
+        weight = params['_lagrangian_weight'] * params.get('weight_g', 1.)
+        dual_gradient = jnp.where(weight != 0, dual_gradient / jnp.where(weight != 0, weight, 1.), 0.)
+    dual_step = lm.penalty * dual_gradient
     if model_lagrangian == 'Squared':
-        dual_step = lm.penalty * (grad.value - lm.value / lm.penalty)
+        dual_step = lm.penalty * (dual_gradient - lm.value / lm.penalty)
     change = LagrangeMultiplier(
         jnp.where(satisfied & ~jnp.asarray(frozen), dual_step, 0.),
         jnp.where(satisfied | frozen, 0., jnp.minimum(beta * lm.penalty, mu_max) - lm.penalty),
@@ -1165,13 +1189,16 @@ def restore_autoscales_to_constraints(constraints, scales):
 
 
 def extract_constraint_metadata(constraints):
-    return dict(type=type(constraints).__name__,
+    metadata = dict(type=type(constraints).__name__,
                 arguments=list(getattr(constraints, 'arg_names', ())),
                 inequality=getattr(constraints, '_is_inequality', False),
                 analytical=getattr(constraints, '_use_analytical_penalty', True),
                 padding=getattr(constraints, '_padding', False),
                 children={key: extract_constraint_metadata(child)
                           for key, child in _constraint_children(constraints).items()})
+    if getattr(constraints, '_gradient_weighting', 'residual') != 'residual':
+        metadata['gradient_weighting'] = constraints._gradient_weighting
+    return metadata
 
 
 def save_checkpoint_with_constraints(filename, params, lag_state, grad, eta, omega, info,

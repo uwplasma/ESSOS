@@ -26,6 +26,7 @@ import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 from jax.scipy.ndimage import map_coordinates
+from jax.scipy.special import logsumexp
 
 from essos import augmented_lagrangian as alm
 from essos.coils import Coils, CreateEquallySpacedCurves
@@ -147,12 +148,27 @@ def qs_reference(resolution=60):
         wout, ntheta=resolution, nphi=resolution, close=False, range_torus='full period')
     coils = Coils.from_json(inputs / 'LandremanPaul2021_QA_coils.json')
     field = BiotSavart(coils)
-    grid, bphi = field_grid(field, surface)
-    # Retain the source's numerical target; the optimization below measures
-    # iota with signed field-line traces rather than this reference proxy.
-    iota = float(jnp.sum(grid[0] * bphi * surface.area_element) /
-                 jnp.sum(bphi * surface.area_element))
+    iota = float(algebraic_iota(field, surface))
     return field, surface, iota
+
+
+def algebraic_iota(field, surface):
+    """Source benchmark's area-weighted ratio; a proxy, not traced winding."""
+    b = B_on_surface(surface, field)
+    et, ep = surface.gammadash_theta, surface.gammadash_phi
+    tt, tp, pp = (jnp.sum(a * c, axis=-1) for a, c in ((et, et), (et, ep), (ep, ep)))
+    bt, bp = jnp.sum(b * et, axis=-1), jnp.sum(b * ep, axis=-1)
+    det = tt * pp - tp**2 + 1e-8
+    btheta, bphi = (pp * bt - tp * bp) / det, (tt * bp - tp * bt) / det
+    return jnp.sum(btheta * surface.area_element) / jnp.sum(bphi * surface.area_element)
+
+
+def physical_dof_scale(field, surface):
+    """d(scaled solver DOFs)/d(physical coefficients), in the ravel order."""
+    curves = field.coils.curves
+    return jnp.concatenate(((jnp.ones_like(curves.dofs) * curves.scaling).ravel(),
+        jnp.ones_like(field.coils.dofs_currents) / field.coils.currents_scale,
+        jnp.tile(surface.scaling, surface.dofs.size // surface.scaling.size)))
 
 
 def initial_configuration(case, resolution=60, segments=60, smoke=False, reference=None):
@@ -212,18 +228,25 @@ def toroidal_contours(field, surface):
 
 def build_source_qs_problem(field, surface, reference, *, ntrace=257, nalpha=16,
                             iota_target=None, iota_periods=16,
-                            pad_constraints=False, explicit_slacks=False):
+                            pad_constraints=False, explicit_slacks=False,
+                            formulation='source', gradient_weighting=None):
     """Preserve the active QS_maybe_final problem, correcting inequality signs.
 
     Reference targets and physical tolerances are fixed before optimization.
-    Pointwise normal-field bounds replace the source's shifted soft maximum;
-    signed field-line tracing replaces its geometric-angle iota proxy.
+    The default retains its scalar normal-field reduction, algebraic iota
+    proxy and whole-term gradient weights. ``formulation='traced'`` selects
+    pointwise normal-field bounds and signed field-line winding instead.
     """
     target_field, target_surface, _ = reference
     if iota_target is None:
         iota_target = reference[2]
+    if formulation not in ('source', 'traced'):
+        raise ValueError("QS formulation must be 'source' or 'traced'")
+    if gradient_weighting is None:
+        gradient_weighting = 'lagrangian' if formulation == 'source' else 'residual'
     x0, unpack = ravel_pytree((field, surface))
-    area, volume, major = target_surface.area, target_surface.volume, target_surface.rc[0]
+    volume_scale = (2 * jnp.pi)**-2 if formulation == 'source' else 1.
+    area, volume, major = target_surface.area, target_surface.volume * volume_scale, target_surface.rc[0]
     flux = toroidal_flux(target_field, target_surface)
     aspect, contours = metric_aspect(target_surface), toroidal_contours(target_field, target_surface)
     a = target_surface.area_element.ravel()
@@ -235,12 +258,16 @@ def build_source_qs_problem(field, surface, reference, *, ntrace=257, nalpha=16,
         options = {'use_analytical_penalty': not explicit_slacks} if inequality else {}
         constructor = alm.ineq if inequality else alm.eq
         constraints.append(constructor(lambda x: fun(*unpack(x)), eta_tol=tolerance,
-            weight=weight, pad_output_to_power_of_2=pad_constraints, **options))
+            weight=weight, pad_output_to_power_of_2=pad_constraints,
+            gradient_weighting=gradient_weighting, **options))
         names.append(name)
 
     def normal_margin(f, s):
         b = B_on_surface(s, f)
         normal = jnp.sum(b * s.unitnormal, axis=-1) / jnp.linalg.norm(b, axis=-1)
+        if formulation == 'source':
+            p = 20. / 1e-3
+            return -(logsumexp(p * (jnp.abs(normal) - 1e-3)) - jnp.log(normal.size)) / p
         return jnp.concatenate((1e-3 - normal.ravel(), 1e-3 + normal.ravel()))
 
     add('normal field', normal_margin, 1e-8, True)
@@ -248,11 +275,13 @@ def build_source_qs_problem(field, surface, reference, *, ntrace=257, nalpha=16,
     add('curvature', lambda f, s: .5 - f.coils.curvature[:4], 5e-6, True)
     add('major radius', lambda f, s: s.rc[0] - major, 1e-5 * major, weight=1000.)
     add('area', lambda f, s: s.area - area, 1e-5 * area)
-    add('volume', lambda f, s: s.volume - volume, 1e-5 * volume)
+    add('volume', lambda f, s: s.volume * volume_scale - volume, 1e-5 * volume)
     add('toroidal flux', lambda f, s: toroidal_flux(f, s) - flux, 1e-5 * jnp.abs(flux))
     add('metric aspect bound', lambda f, s: aspect - metric_aspect(s), 1e-5 * aspect, True)
 
     def rotational_transform(f, s):
+        if formulation == 'source':
+            return algebraic_iota(f, s) - iota_target
         phi, theta, _, _ = trace_surface(field_grid(f, s)[0], s.nfp, ntrace, nalpha,
             periods=iota_periods, grid_period=toroidal_extent(s))
         return jnp.mean((theta[:, -1] - theta[:, 0]) / phi[-1]) - iota_target
@@ -265,13 +294,17 @@ def build_source_qs_problem(field, surface, reference, *, ntrace=257, nalpha=16,
 
 def build_problem(field, surface, case, *, ntrace=129, nalpha=16, npitch=16,
                   iota_target=None, iota_periods=16, distance=.5, mirror=.25,
-                  pad_constraints=False, explicit_slacks=False, smoke=False, reference=None):
+                  pad_constraints=False, explicit_slacks=False, smoke=False, reference=None,
+                  qs_formulation='source', gradient_weighting=None):
     """Full source QS by default; dimensionless QI or explicitly selected smoke."""
     if case == 'qs' and not smoke:
         return build_source_qs_problem(field, surface,
             qs_reference(surface.ntheta) if reference is None else reference,
             ntrace=ntrace, nalpha=nalpha, iota_target=iota_target, iota_periods=iota_periods,
-            pad_constraints=pad_constraints, explicit_slacks=explicit_slacks)
+            pad_constraints=pad_constraints, explicit_slacks=explicit_slacks,
+            formulation=qs_formulation, gradient_weighting=gradient_weighting)
+    if gradient_weighting is None:
+        gradient_weighting = 'residual'
     if iota_target is None:
         iota_target = .42
     x0, unpack = ravel_pytree((field, surface))
@@ -289,7 +322,7 @@ def build_problem(field, surface, case, *, ntrace=129, nalpha=16, npitch=16,
         constructor = alm.ineq if inequality else alm.eq
         options = {'use_analytical_penalty': not explicit_slacks} if inequality else {}
         constraints.append(constructor(lambda x: fun(*unpack(x)), eta_tol=tolerance,
-            pad_output_to_power_of_2=pad_constraints, **options))
+            pad_output_to_power_of_2=pad_constraints, gradient_weighting=gradient_weighting, **options))
         names.append(name)
 
     def normal_margin(f, s):
@@ -414,6 +447,12 @@ def plot_optimization(initial, final, history, weights, output, case, smoke=Fals
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case', choices=('qs', 'qi'), default='qs')
+    parser.add_argument('--qs-formulation', choices=('source', 'traced'), default='source',
+                        help='source scalar normal-field/iota proxy, or pointwise bounds and traced winding')
+    parser.add_argument('--gradient-weighting', choices=('residual', 'lagrangian'),
+                        help='weight residuals or whole Lagrangian terms (source QS defaults to lagrangian)')
+    parser.add_argument('--weight-coordinates', choices=('scaled', 'physical'),
+                        help='coordinates for gradient-weight norms (source QS defaults to physical)')
     parser.add_argument('--outer-iterations', type=int)
     parser.add_argument('--inner-iterations', type=int)
     parser.add_argument('--resolution', type=int)
@@ -448,6 +487,10 @@ def main(argv=None):
     parser.add_argument('--output', type=Path, default=Path('surface_coil_alm_output'))
     args = parser.parse_args(argv)
     source_qs = args.case == 'qs' and not args.smoke
+    if args.gradient_weighting is None:
+        args.gradient_weighting = 'lagrangian' if source_qs and args.qs_formulation == 'source' else 'residual'
+    if args.weight_coordinates is None:
+        args.weight_coordinates = 'physical' if source_qs and args.qs_formulation == 'source' else 'scaled'
     defaults = dict(outer_iterations=60001 if source_qs else 50,
         inner_iterations=50, resolution=60 if source_qs else 32,
         segments=60 if source_qs else 64, penalty_growth=1.01 if source_qs else 2.,
@@ -477,18 +520,21 @@ def main(argv=None):
     if args.smoke:
         options.update(ntrace=9, nalpha=2, npitch=2, iota_periods=1)
     x, constraints, objective, unpack, names = build_problem(
-        f, s, args.case, smoke=args.smoke, reference=reference, **options)
+        f, s, args.case, smoke=args.smoke, reference=reference,
+        qs_formulation=args.qs_formulation, gradient_weighting=args.gradient_weighting, **options)
     if source_qs:
         print(f'QS_maybe_final: {x.size} primal DOFs, surface grid {s.nphi}x{s.ntheta}, '
               f'{s.range_torus}, penalty growth {args.penalty_growth}, '
-              f'decrease threshold {args.decrease_tol}', flush=True)
+              f'decrease threshold {args.decrease_tol}, formulation {args.qs_formulation}, '
+              f'{args.gradient_weighting} gradient weights in {args.weight_coordinates} coordinates', flush=True)
     multipliers = constraints.init(x)
     if args.constraint_weights != 'none' and args.resume is None:
         multipliers = alm.initialize_constraint_weights(constraints, x, multipliers,
             loss=objective, mode=args.constraint_weights, use_perturbation=args.weight_perturbation != 'none',
             perturbation_mode='relative' if args.weight_perturbation == 'none' else args.weight_perturbation,
             perturbation_magnitude=args.weight_perturbation_magnitude, seed=args.weight_seed,
-            jacobian_method=args.weight_jacobian)
+            jacobian_method=args.weight_jacobian,
+            jacobian_scale=physical_dof_scale(f, s) if args.weight_coordinates == 'physical' else None)
     params = x, multipliers
     factory = alm.ALM_model_scipy if args.backend == 'scipy' else alm.ALM_model_jaxopt_lbfgsb
     solver = factory(constraints, loss=objective, model_mu='Mu_Adaptative_2', method=args.method,
@@ -522,9 +568,18 @@ def main(argv=None):
 
     worst = record(0)
     for iteration in range(1 if args.smoke else args.outer_iterations):
+        previous = params, state, grad, info
         params, state, grad, info = solver.update(params, state, grad, info)
         if not all(bool(jnp.all(jnp.isfinite(v))) for v in jax.tree_util.tree_leaves((params, grad, info))):
-            raise FloatingPointError('Nonfinite ALM iterate')
+            bad = [label for label, tree in zip(('parameters', 'gradient', 'diagnostics'), (params, grad, info))
+                   if not all(bool(jnp.all(jnp.isfinite(v))) for v in jax.tree_util.tree_leaves(tree))]
+            alm.save_optimization_state(args.output / 'failed_iterate.pkl', params, state, grad, 0., 0., info)
+            params, state, grad, info = previous
+            checkpoint = args.output / 'last_finite.pkl'
+            alm.save_checkpoint_with_constraints(checkpoint, params, state, grad,
+                alm._multiplier_stat(params[1], 'eta'), alm.omega_min_from_lagrange_params(params[1]), info, constraints)
+            raise FloatingPointError(f'Nonfinite ALM iterate at update {iteration + 1}: {", ".join(bad)}. '
+                                     f'Last finite checkpoint: {checkpoint}')
         worst = record(iteration + 1)
         converged = worst <= 1 and float(jnp.linalg.norm(grad[0])) <= args.omega_tol
         if args.checkpoint_every and ((iteration + 1) % args.checkpoint_every == 0 or
@@ -545,6 +600,10 @@ def main(argv=None):
                   configuration='QS_maybe_final' if source_qs else 'smoke' if args.smoke else 'qi',
                   resolution=args.resolution, segments=args.segments,
                   surface_grid=[s.nphi, s.ntheta], range_torus=s.range_torus,
+                  qs_formulation=args.qs_formulation if source_qs else None,
+                  gradient_weighting=args.gradient_weighting,
+                  weight_coordinates=args.weight_coordinates,
+                  volume_normalization='mean / 3' if source_qs and args.qs_formulation == 'source' else 'physical volume',
                   penalty_growth=args.penalty_growth, decrease_tol=args.decrease_tol,
                   eta_tol=args.eta_tol, omega_tol=args.omega_tol,
                   constraint_weights='restored' if args.resume else args.constraint_weights, weights=weights, history=history,

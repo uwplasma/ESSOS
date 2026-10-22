@@ -318,7 +318,12 @@ the starting torus. The default grid has 60 poloidal points and 60 toroidal
 points over one field period (`range_torus='full period'`), matching the source
 domain and point counts; duplicate endpoints are omitted.
 QS is an ALM equality constraint with zero external objective. Its default
-penalty growth is 1.01, decrease threshold 0.99, inner iteration limit 50,
+`--qs-formulation source` retains the source's scalar normal-field reduction,
+algebraic iota proxy, volume normalization and whole-term gradient weights.
+Those norms use physical coefficients (`--weight-coordinates physical`).
+`--qs-formulation traced` selects pointwise normal bounds, traced winding and
+residual weighting; it defines a different optimization problem.
+Default penalty growth is 1.01, decrease threshold 0.99, inner iteration limit 50,
 and outer limit 60001, matching the source budget. `--smoke` selects a separate
 tiny execution check. The [benchmark notes](docs/alm_benchmarks.md#source-qs-case)
 list the retained constraints and numerical corrections.
@@ -336,8 +341,9 @@ by default (`--constraint-weights element`). For each residual,
 `w_i = ||grad f|| / max(||grad c_i||, 1e-4)`, with a numerator of one for a
 zero objective gradient. Raw constraints are differentiated, including satisfied
 inequalities. `constraint` and `global` use Jacobian Frobenius norms; `none`
-disables this initialization. Weights scale ALM residuals, while diagnostics and
-individual tolerances retain their original units. The helper can also be used
+disables this initialization. `--gradient-weighting` selects whole-term or
+residual weighting; diagnostics and individual tolerances keep their units.
+The helper can also be used
 directly before the existing solver initialization:
 
 ```python

@@ -155,8 +155,46 @@ def test_projected_duals_keep_weights_and_physical_tolerances_fixed():
     updates = alm.apply_mu_tolerance_per_constraint(p, grad, residual)
     np.testing.assert_array_equal(updates['lambda'].value, jnp.zeros(1))
 
+    # The source branches weight the entire term once, and update physical
+    # multipliers independently of both the gradient weight and R0's weight=1000.
+    for model, inequality, global_update in itertools.product(MODELS, (False, True), (False, True)):
+        constructor = alm.ineq if inequality else alm.eq
+        constraint = constructor(lambda x: x, multiplier=1., penalty=2., weight=1000.,
+            model_lagrangian=model, gradient_weighting='lagrangian', eta_tol=1e-12)
+        x = jnp.array([-.25, .1])
+        p = {**constraint.init(x), 'weight_g': jnp.array([4., 9.])}
+        value, residual = constraint.loss(p, x)
+        expected = -x + x**2 + (.25 if model == 'Squared' else 0.)
+        np.testing.assert_allclose(value, 1000. * jnp.sum(p['weight_g'] * expected))
+        grad = jax.grad(lambda q: constraint.loss(q, x)[0])(p)
+        np.testing.assert_allclose(grad['weight_g'], 0.)
+        if global_update:
+            updates = alm.apply_mu_tolerance_all_constraints(p, grad, residual, model_lagrangian=model)
+        else:
+            updates = alm.apply_mu_tolerance_per_constraint(p, grad, residual, residual * 2,
+                model_lagrangian=model, model_mu='Mu_Adaptative_2')
+        np.testing.assert_allclose(p['lambda'].value + updates['lambda'].value, [1.5, .8])
+    zero = alm.eq(lambda x: x, weight=0., gradient_weighting='lagrangian')
+    p = zero.init(x)
+    grad, residual = jax.grad(lambda q: zero.loss(q, x), has_aux=True)(p)
+    updates = alm.apply_mu_tolerance_all_constraints(p, grad, residual)
+    np.testing.assert_array_equal(updates['lambda'].value, jnp.zeros(2))
+    with pytest.raises(ValueError, match='gradient_weighting'):
+        alm.eq(lambda x: x, gradient_weighting='unknown')
+
 
 def test_gradient_weights_use_raw_jacobians_and_finite_norms():
+    coordinates = jnp.array([3., 4.])
+    constraint = alm.eq(lambda x: jnp.array([2 * x[0], 3 * x[1]]))
+    for method in ('vjp', 'jacrev'):
+        weights = alm.initialize_constraint_weights(constraint, coordinates, constraint.init(coordinates),
+            jacobian_scale=jnp.array([10., .5]), jacobian_method=method)
+        np.testing.assert_allclose(weights['weight_g'], [1/20, 1/1.5])
+        weights = alm.initialize_constraint_weights(constraint, coordinates, constraint.init(coordinates),
+            loss=lambda x: x[0], jacobian_scale=jnp.array([10., .5]), jacobian_method=method)
+        np.testing.assert_allclose(weights['weight_g'], [.5, 10/1.5])
+    with pytest.raises(ValueError, match='jacobian_scale'):
+        alm.initialize_constraint_weights(constraint, coordinates, constraint.init(coordinates), jacobian_scale=0.)
     for mode, batch_size in itertools.product(WEIGHT_MODES, (1, 3)):
         constraints = alm.combine(alm.eq(lambda x: 2 * x[0]), alm.ineq(lambda x: 4 * x[1] + 3))
         x = jnp.zeros(2)
@@ -243,6 +281,15 @@ def test_seeded_perturbations_and_jacobian_methods():
 
 
 def test_padding_and_autoscales_preserve_physical_units():
+    x = jnp.array([1., 2., 3.])
+    options = dict(weight=2., gradient_weighting='lagrangian')
+    plain = alm.eq(lambda x: x, **options)
+    padded = alm.eq(lambda x: x, pad_output_to_power_of_2=True, **options)
+    p, q = plain.init(x), padded.init(x)
+    np.testing.assert_allclose(plain.loss(p, x)[0], padded.loss(q, x)[0])
+    grad, residual = jax.grad(lambda m: padded.loss(m, x), has_aux=True)(q)
+    updates = alm.apply_mu_tolerance_all_constraints(q, grad, residual)
+    assert jnp.all(jnp.isfinite(updates['lambda'].value))
     for reduction, inequality in itertools.product((jnp.sum, jnp.mean, jnp.max), (False, True)):
         constructor = alm.ineq if inequality else alm.eq
         options = dict(penalty=2., reduction=reduction, eta_tol=jnp.array([.001, .002, .003]))
@@ -636,6 +683,14 @@ def _check_checkpoint_continuation(solver_factory, tmp_path, full_object):
 
 
 def test_checkpoints_restore_scales_weights_and_exact_continuation(tmp_path):
+    outside = alm.eq(lambda x: x, gradient_weighting='lagrangian')
+    filename = tmp_path/'whole_term.pkl'
+    x = jnp.zeros(1)
+    alm.save_checkpoint_with_constraints(filename, (x, outside.init(x)), (), (), 1., 1., (), outside)
+    restored = alm.load_checkpoint_for_reconstruction(filename, outside)
+    assert '_lagrangian_weight' in restored[0][1]
+    with pytest.raises(ValueError, match='structure/order'):
+        alm.load_checkpoint_for_reconstruction(filename, alm.eq(lambda x: x))
     for full_object in (False, True):
         _check_checkpoint_continuation(alm.ALM_model_scipy, tmp_path, full_object)
     filename = tmp_path/'state.pkl'

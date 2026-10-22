@@ -2,10 +2,13 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from scipy.integrate import quad
+from essos import augmented_lagrangian as alm
+from examples.coil_optimization import optimize_coils_surface_augmented_lagrangian as example
 
 from examples.coil_optimization.optimize_coils_surface_augmented_lagrangian import (
-    bounce_integrals, build_problem, initial_configuration, qi_residuals,
+    algebraic_iota, bounce_integrals, build_problem, initial_configuration, physical_dof_scale, qi_residuals,
     qs_measure, qs_reference, quasisymmetry, toroidal_contours, toroidal_flux, trace_surface,
 )
 
@@ -79,7 +82,7 @@ def test_axisymmetric_qs_and_biot_savart_vector_potential():
     np.testing.assert_allclose(curl, field.B(x), rtol=1e-12, atol=1e-12)
 
 
-def test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients():
+def test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients(tmp_path, monkeypatch):
     for case in ('qs', 'qi'):
         field, surface, _ = initial_configuration(case, smoke=True)
         x, constraints, objective, _, names = build_problem(field, surface, case,
@@ -111,6 +114,11 @@ def test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients():
     np.testing.assert_allclose(surface.phi2d[:, 0], np.arange(9) * np.pi / 9)
     assert field.coils.curves.scaling_factor == surface.scaling_factor == 1.2
     np.testing.assert_allclose(field.coils.dofs_currents_raw, jnp.ones(4))
+    coordinate_scale = physical_dof_scale(field, surface)
+    np.testing.assert_allclose(coordinate_scale[:156].reshape(field.coils.curves.dofs.shape),
+        np.broadcast_to(field.coils.curves.scaling, field.coils.curves.dofs.shape))
+    np.testing.assert_allclose(coordinate_scale[156:160], 1. / field.coils.currents_scale)
+    np.testing.assert_allclose(coordinate_scale[160:], jnp.tile(surface.scaling, 2))
     gamma = field.coils.gamma
     centers = jnp.mean(gamma, axis=1)
     np.testing.assert_allclose(jnp.linalg.norm(centers[:, :2], axis=-1), 10., atol=1e-12)
@@ -148,8 +156,14 @@ def test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients():
         'toroidal contours (geometric)']
     p = constraints.init(x)
     residual = dict(zip(names, constraints.loss(p, x, _raw=True)[1]))
+    assert p[0]['lambda'].value.shape == () and '_lagrangian_weight' in p[0]
+    b = jax.vmap(field.B)(surface.gamma.reshape(-1, 3)).reshape(surface.nphi, surface.ntheta, 3)
+    bn = jnp.abs(jnp.sum(b * surface.unitnormal, axis=-1) / jnp.linalg.norm(b, axis=-1))
+    expected_normal = -(jax.scipy.special.logsumexp(2e4 * (bn - 1e-3)) - jnp.log(bn.size)) / 2e4
+    np.testing.assert_allclose(residual['normal field'], expected_normal)
+    np.testing.assert_allclose(residual['iota'], algebraic_iota(field, surface) - iota)
     np.testing.assert_allclose(residual['area'], surface.area - ref_surface.area)
-    np.testing.assert_allclose(residual['volume'], surface.volume - ref_surface.volume)
+    np.testing.assert_allclose(residual['volume'], (surface.volume - ref_surface.volume) / (2 * np.pi)**2)
     np.testing.assert_allclose(residual['toroidal flux'],
         toroidal_flux(field, surface) - toroidal_flux(ref_field, ref_surface))
     assert abs(residual['area']) > 1 and abs(residual['volume']) > 1
@@ -162,3 +176,24 @@ def test_qs_qi_reference_inputs_flux_and_joint_geometry_gradients():
     assert jnp.isfinite(value) and jnp.all(jnp.isfinite(gradient))
     assert jnp.linalg.norm(gradient[:field.dofs.size]) > 0
     assert jnp.linalg.norm(gradient[field.dofs.size:]) > 0
+    _, traced, _, _, _ = build_problem(field, surface, 'qs', reference=reference,
+        qs_formulation='traced', ntrace=9, nalpha=2, iota_periods=1)
+    traced_params = traced.init(x)
+    assert traced_params[0]['lambda'].value.size == 2 * surface.nphi * surface.ntheta
+    assert '_lagrangian_weight' not in traced_params[0]
+    assert jnp.isfinite(jax.jit(jax.value_and_grad(lambda y: traced.loss(traced_params, y)[0]))(x)[0])
+
+    real_factory = alm.ALM_model_scipy
+    def failing_factory(*args, **kwargs):
+        solver = real_factory(*args, **kwargs)
+        def update(params, state, gradient, info):
+            return (params[0] * jnp.nan, params[1]), state, gradient, info
+        return alm.ALM(solver.init, update)
+    monkeypatch.setattr(alm, 'ALM_model_scipy', failing_factory)
+    output = tmp_path / 'failed_run'
+    with pytest.raises(FloatingPointError, match='update 1: parameters.*Last finite checkpoint'):
+        example.main(['--smoke', '--constraint-weights', 'none', '--no-plot', '--output', str(output)])
+    finite = alm.load_optimization_state(output / 'last_finite.pkl')
+    failed = alm.load_optimization_state(output / 'failed_iterate.pkl')
+    assert all(jnp.all(jnp.isfinite(v)) for v in jax.tree_util.tree_leaves(finite))
+    assert jnp.all(jnp.isnan(failed[0][0]))

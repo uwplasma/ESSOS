@@ -251,19 +251,36 @@ from `en/jax_10` at `9258ce01821ca44d293ceb0857f343b8745ad960`:
 | Constraints | Normal field, length, curvature, major radius, area, volume, flux, metric aspect bound, iota, QS, geometric toroidal contours |
 | Length / curvature bounds | 40 m / 0.5 m^-1 |
 | Objective | Zero; area mean absolute QS triple product is an ALM equality |
+| Normal-field reduction | Source scalar shifted log-sum-exp, with P=20000 and target 1e-3 |
+| Iota constraint | Source area-weighted ratio of contravariant field components; a proxy |
+| Gradient weights | Multiply whole Lagrangian terms once; norms in physical coefficient coordinates |
+| Volume normalization | Source mean of x dot outward normal divided by 3; physical volume divided by (2 pi)^2 |
 | Penalties | Initial 1, growth 1.01, cap 10000; decrease threshold 0.99 |
 | Solver tolerances | eta=1e-5, omega=1e-7, with the source's individual physical constraint tolerances |
 | Budgets | 60001 outer updates, 50 inner iterations, history size 10 |
 
-Source inequality signs are translated to main's `h>=0` convention. Pointwise
-normal-field bounds replace the shifted soft maximum that could hide local
-violations. The source iota target is retained, while the residual measures
-signed field-line winding rather than a geometric-angle proxy. Flux quadrature
-uses Fourier tangents instead of polygon edges. The 60 x 60 grid covers one
-field period, as in the source, with duplicate endpoints omitted. Field-line
-interpolation repeats that one-period grid at the correct physical angle.
-These numerical corrections prevent a claim of identical iterates or
-identical convergence time. The geometric FFT bound is retained as a shaping
+The default `--qs-formulation source` restores these formulations. Source
+inequality signs are translated to main's `h>=0` convention. Whole-term weights
+use `gradient_weighting='lagrangian'`; multiplier increments use physical
+residuals independently of gradient/base weights. The existing
+`gradient_weighting='residual'` choice remains available for eq/ineq.
+`initialize_constraint_weights(..., jacobian_scale=...)` maps Jacobian columns
+to physical coefficients without applying spectral scaling twice to the solver.
+
+The earlier port changed the scalar normal constraint to thousands of pointwise
+constraints, replaced algebraic iota by traced winding, and applied gradient
+weights to residuals, squaring their effect on quadratic penalties. Those
+choices are available as `--qs-formulation traced --gradient-weighting residual
+--weight-coordinates scaled`; they define a different problem and are not the
+source benchmark. The source normal reduction can underestimate the pointwise
+maximum, and its iota proxy does not replace field-line validation.
+
+Main's corrected surface integrals remain unchanged; source mode converts
+volume residuals/tolerances to the source normalization in the example only.
+Flux uses Fourier tangents instead of polygon edges. Duplicate surface
+endpoints are omitted. These remaining quadrature differences, modern field
+implementations and projected dual updates prevent a claim of identical
+iterates or convergence time. The geometric FFT bound remains a shaping
 constraint; the QS criterion is the coordinate-independent triple product.
 
 Run on a configured CUDA installation with the optional JAXopt extra:
@@ -273,6 +290,7 @@ python -m pip install -e '.[jaxopt]'
 JAX_PLATFORMS=cuda ESSOS_CPU_DEVICES=1 XLA_PYTHON_CLIENT_PREALLOCATE=false \
 python -m examples.coil_optimization.optimize_coils_surface_augmented_lagrangian \
   --case qs --backend jaxopt --jit-outer --resolution 60 --segments 60 \
+  --qs-formulation source --gradient-weighting lagrangian --weight-coordinates physical \
   --outer-iterations 60001 --inner-iterations 50 \
   --penalty-growth 1.01 --decrease-tol 0.99 --eta-tol 1e-5 --omega-tol 1e-7 \
   --constraint-weights element --weight-perturbation relative --weight-seed 42 \
@@ -283,16 +301,21 @@ For SciPy, use `--backend scipy`; `--scipy-pinned-host` optionally enables the
 GPU transfer optimization. Results include geometry and convergence plots,
 `diagnostics.json`, coil/surface files and `checkpoint.pkl`. A finite reduced
 grid execution check does not establish convergence at this full resolution.
+Nonfinite updates save `last_finite.pkl` and `failed_iterate.pkl`, even before
+the periodic checkpoint interval, and report the failed update and state group.
 
 ## Test coverage
 
 The port adds 18 collected tests relative to main: 14 ALM feature groups and
 four QS/QI physics groups. Counting the renamed existing backend test gives
 19 added function names. Configuration matrices remain explicit within these
-groups. The 38 CPU tests and four GPU feature groups passed; the final GPU
-pinned-host path was rechecked after cleanup. Thirty existing field tests also
-passed. Combined CPU/GPU coverage of `essos/augmented_lagrangian.py` is
-**726/726 executable lines and 246/246 branches**, without exclusions.
+groups. The 38 CPU tests, GPU pinned-host group and a 12-update native QS
+execution check passed. That check used a 9 x 9 surface grid, all 186 primal
+DOFs and 60 coil segments; it was not converged. A local full-grid GPU attempt
+exhausted the 8 GiB device, so full-grid convergence and resolution of the remote
+nonfinite iterate remain unverified.
+Combined CPU/GPU coverage of `essos/augmented_lagrangian.py` is
+**744/744 executable lines and 258/258 branches**, without exclusions.
 The [feature audit](alm_feature_coverage.json) records the main commit and counts.
 
 Reproduce with pytest, coverage and the optional JAXopt extra installed:
