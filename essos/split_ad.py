@@ -3,8 +3,10 @@
 The production forward solve chooses all times and draws all noise. Replay
 uses only its accepted outer maps, inner RK schedules and Wiener increments.
 Every collision coefficient, magnetic coordinate transform and physical kick
-retains its physical derivatives. Orbit replay shares the collisionless native
-field transposes, compact stage caches and segment parameter accumulation.
+retains its physical derivatives. Sparse inner state/FSAL checkpoints come from
+the accepted forward trials. Reverse rebuilds one inner segment at a time,
+sharing the collisionless native field transposes, compact stage caches and
+segment parameter accumulation. No outer orbit reconstruction is needed.
 Controllers, rejected trials, error estimates
 and event-time searches have no derivative path. No Brownian samples are drawn
 in replay. The inner schedule is flat, rather than a product of step limits.
@@ -24,7 +26,17 @@ from .rk_ad_rhs import prepare_reverse_rhs, prepare_rhs_linearization
 from .split import solve_split, SplitStatus
 
 
-def _checked_tape(tape):
+def _checked_tape(tape, *, compact=False):
+    if compact:
+        # Replay depends on count, so a checked count gates every reverse map
+        # without routing the large checkpoint banks through error branches.
+        count = eqx.error_if(tape.count, tape.status > SplitStatus.EVENT,
+            "accepted split AD requires a successful/event solve; inspect status and work limits")
+        count = eqx.error_if(count, count > tape.times.shape[0],
+            "accepted split AD capacity exceeded; increase adjoint_max_accepted_steps")
+        count = eqx.error_if(count, tape.orbit_count > tape.orbit_times.shape[0],
+            "accepted orbit AD capacity exceeded; increase adjoint_max_orbit_steps")
+        return tape._replace(count=count)
     tape = eqx.error_if(tape, tape.status > SplitStatus.EVENT,
         "accepted split AD requires a successful/event solve; inspect status and work limits")
     tape = eqx.error_if(tape, tape.count > tape.times.shape[0],
@@ -75,43 +87,24 @@ def _state_projection(prepare, evaluate, raw, *examples):
     return prepare_state,state
 
 
-def _orbit_replay(rhs, initial, parameters, tape, index, method, *, checkpoint_steps=0, workspace=0,
-                  checkpoints=None, checkpoint_offset=0, retain=True, enabled=True):
-    """Replay one committed orbit, optionally into a shared checkpoint buffer.
-
-    ``enabled`` bounds the loop itself: a vmapped conditional around replay
-    would execute both branches, including the supposedly skipped RK work.
-    """
+def _orbit_replay(rhs, initial, parameters, tape, index, method):
+    """Forward-only oracle; propagate new physical inputs on the frozen grid."""
     constants = (_C, _A, _ERROR) if method == "dopri5" else (_C8, _A8, _ERROR8)
     dense = _rk45_dense if method == "dopri5" else _dopri8_dense
     start, end = tape.offsets[index], tape.offsets[index+1]
-    end = jnp.where(enabled, end, start)
-    count = (workspace + checkpoint_steps - 1) // checkpoint_steps if checkpoint_steps else 0
-    if checkpoints is None:
-        states = jnp.zeros((count, initial.size), initial.dtype)
-        derivatives = jnp.zeros_like(states)
-    else:
-        states, derivatives = checkpoints
     f = rhs(tape.orbit_times[start, 0], initial, parameters)
 
     def step(local):
-        i, y, f, states, derivatives = local
-        if checkpoint_steps:
-            def checkpoint(buffers):
-                states, derivatives = buffers
-                slot = checkpoint_offset + (i-start) // checkpoint_steps
-                return states.at[slot].set(y), derivatives.at[slot].set(f)
-            states, derivatives = lax.cond(((i-start) % checkpoint_steps == 0) & retain,
-                checkpoint, lambda buffers: buffers, (states, derivatives))
+        i, y, f = local
         t, h = tape.orbit_times[i]
         trial = _trial_step(rhs, t, y, h, parameters, f, *constants)
         fraction = jnp.where(i == end-1, tape.fractions[index], 1.)
         terminal = dense(y, trial.y, trial.increments, fraction)
-        return i+1, terminal, trial.f1, states, derivatives
+        return i+1, terminal, trial.f1
 
-    _, final, _, states, derivatives = lax.while_loop(
-        lambda local: local[0] < end, step, (start, initial, f, states, derivatives))
-    return final, (states, derivatives)
+    _, final, _ = lax.while_loop(
+        lambda local: local[0] < end, step, (start, initial, f))
+    return final
 
 
 def replay_accepted_split(rhs, collision, initial, args, tape, ts, *, method="dopri8"):
@@ -127,7 +120,7 @@ def replay_accepted_split(rhs, collision, initial, args, tape, ts, *, method="do
 
     def advance(local):
         index, y, saved = local
-        y, _ = _orbit_replay(rhs_bound, y, None, tape, index, method)
+        y = _orbit_replay(rhs_bound, y, None, tape, index, method)
         t, end = tape.times[index]
         y = lax.cond(tape.kicks[index],
             lambda y: collision(end, y, end-t, tape.increments[index], args).y,
@@ -169,10 +162,19 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
     def orbit_rhs(t, y, parameters):
         return evaluate_rhs((t, y), parameters)
 
+    # Components omitted from a stored endpoint must be copied unchanged by
+    # the collision map. This metadata selects compact full-orbit storage;
+    # generic maps and GC retain their previous layout.
+    collision_indices = options.get("_collision_state_indices")
+    forward_options = dict(options)
+    if collision_indices is not None:
+        # _partition already hoisted all parameter-only RHS preparation.
+        forward_options["_orbit_rhs_prepared"] = True
+
     def forward(initial, parameters):
         return solve_split(lambda t, y, p: orbit_rhs(t, y, p[0]),
             lambda t, y, h, dw, p: evaluate_collision((t, y, h, dw), p[1]),
-            initial, parameters, **options, _record_ad=True)
+            initial, parameters, **forward_options, _record_ad=True)
 
     raw = (raw_rhs, raw_collision)
     converted_forward, driver_constants = _convert_all(forward, y0, prepare(raw))
@@ -192,11 +194,12 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
         activity = _ParameterActivity(tuple(leaf.perturbed for leaf in tree_util.tree_leaves(raw)))
         initial, raw, controls = custom_vjp_primal_tree_values((initial, raw, controls))
         out, tape = converted_forward((initial, prepare(raw)), controls[0])
-        return out, (initial, raw, controls, tape, activity)
+        return out, (initial, raw, controls, tape, activity,
+                     out.y if collision_indices is not None else None)
 
     def bwd(residual, bar):
-        initial, raw, controls, tape, activity = residual
-        tape = _checked_tape(tape)
+        initial, raw, controls, tape, activity, final = residual
+        tape = _checked_tape(tape, compact=collision_indices is not None)
         raw_leaves, raw_structure = tree_util.tree_flatten(raw)
         active = tuple(value for value, flag in zip(raw_leaves, activity.flags) if flag)
 
@@ -209,7 +212,6 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
             prepare_rhs, orbit_rhs, t0, initial, raw[0])
         rp, rhs_setup_pullback = jax.vjp(
             lambda values: backward_prepare(active_raw(values)[0]), active)
-        cp = prepare_collision(active_raw(active)[1])
         linearization = prepare_rhs_linearization(backward_rhs, t0, initial, rp)
         if linearization is not None:
             linearize, rhs_pullback, initial_cache = linearization
@@ -222,21 +224,23 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
         terminal_bar = jnp.zeros_like(initial) if isinstance(bar.y, SymbolicZero) else bar.y
         terminal_bar += jnp.sum(jnp.where((jnp.arange(len(ts)) >= tape.saved_count)[:, None], saved_bar, 0.), axis=0)
 
-        def reverse_map(carry, initial, reconstructed=None):
-            index, by, bp = carry
+        def reverse_map(carry, initial):
+            index, by, bp, post = carry
             index -= 1
-            if reconstructed is None:
-                orbit_end, checkpoints = _orbit_replay(backward_rhs, initial, rp, tape, index, method,
-                    checkpoint_steps=inner_segment, workspace=workspace)
+            offset = tape.checkpoint_offsets[index]
+            # The next map's initial state is this map's post-collision state.
+            # Restore only changed components to obtain the pre-collision state.
+            orbit_end = (tape.orbit_endpoints[index] if collision_indices is None else
+                post.at[jnp.asarray(collision_indices)].set(tape.orbit_endpoints[index]))
+            count = (workspace+inner_segment-1)//inner_segment
+            rows = offset+jnp.arange(count)
+            # Padded rows are never read by the bounded inner reverse loop.
+            if collision_indices is None:
+                checkpoints = (tape.orbit_states[rows],tape.orbit_derivatives[rows])
             else:
-                orbit_end, offset, retained_states, retained_derivatives = reconstructed
-                count = (workspace+inner_segment-1)//inner_segment
-                rows = offset+jnp.arange(count)
-                # Bound fallback work so fully cached batches skip its RK loop.
-                fallback = _orbit_replay(backward_rhs, initial, rp, tape, index, method,
-                    checkpoint_steps=inner_segment, workspace=workspace, enabled=offset < 0)[1]
-                checkpoints = (jnp.where(offset >= 0, retained_states[rows], fallback[0]),
-                               jnp.where(offset >= 0, retained_derivatives[rows], fallback[1]))
+                # One first derivative per preceding interval is omitted.
+                derivative_rows = offset-index+jnp.arange(max(count-1,0))
+                checkpoints = (tape.orbit_states[rows],tape.orbit_derivatives[derivative_rows])
             t, end = tape.times[index]
             by += jnp.sum(jnp.where(((ts > t) & (ts <= end))[:, None], saved_bar, 0.), axis=0)
 
@@ -252,14 +256,25 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
             states, derivatives = checkpoints
             # Each collision starts a new orbit: its initial FSAL cache must
             # use this map's state, not the trajectory's original birth state.
-            map_initial_cache = (linearize(tape.orbit_times[orbit_start, 0], initial)[1]
-                                 if linearization is not None else ())
+            if collision_indices is None:
+                map_initial_cache = (linearize(tape.orbit_times[orbit_start, 0], initial)[1]
+                                     if linearization is not None else ())
+            elif linearization is not None:
+                map_initial_value, map_initial_cache = linearize(tape.orbit_times[orbit_start, 0], initial)
+            else:
+                map_initial_value = backward_rhs(tape.orbit_times[orbit_start, 0], initial, rp)
+                map_initial_cache = ()
 
             def reverse_orbit_segment(local):
                 stop, by, bf, bp = local
                 segment = jnp.maximum((stop-orbit_start-1) // inner_segment, 0)
                 start = orbit_start + segment*inner_segment
-                y, f = states[segment], derivatives[segment]
+                y = states[segment]
+                if collision_indices is None:
+                    f = derivatives[segment]
+                else:
+                    f = (jnp.where(segment == 0, map_initial_value, derivatives[jnp.maximum(segment-1,0)])
+                         if derivatives.shape[0] else map_initial_value)
                 state_bank = jnp.zeros((inner_segment, initial.size), initial.dtype)
                 endpoint_bank = jnp.zeros_like(state_bank)
                 increment_bank = jnp.zeros((inner_segment, len(constants[2]), initial.size), initial.dtype)
@@ -311,53 +326,22 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
 
             _, by, _, bp = lax.while_loop(lambda values: values[0] > orbit_start,
                 reverse_orbit_segment, (orbit_stop, by, jnp.zeros_like(initial), bp))
-            return index, by, bp
+            return index, by, bp, initial if collision_indices is not None else None
 
         def reverse(carry):
             stop = carry[0]
             segment = jnp.maximum((stop-1) // outer_segment, 0)
             start = segment*outer_segment
-            initial = tape.states[segment]
-            if outer_segment == 1:
-                return reverse_map(carry, initial)
-            bank = jnp.zeros((outer_segment, initial.size), initial.dtype)
-            endpoints = jnp.zeros_like(bank)
-            # One orbit's checkpoint capacity plus one node for every other
-            # outer map. Overflow maps use ordinary replay instead of growing
-            # this scratch space with the product of the two work ceilings.
-            capacity = (workspace+inner_segment-1)//inner_segment+outer_segment-1
-            states = jnp.zeros((capacity, initial.size), initial.dtype)
-            derivatives = jnp.zeros_like(states)
-            offsets = jnp.full((outer_segment,), -1, jnp.int32)
+            def reverse_recorded(values):
+                index = values[0]-1
+                initial = (jnp.where(tape.offsets[index+1]>tape.offsets[index],
+                    tape.orbit_states[tape.checkpoint_offsets[index]],tape.orbit_endpoints[index])
+                    if collision_indices is None else tape.orbit_states[tape.checkpoint_offsets[index]])
+                return reverse_map(values,initial)
+            return lax.while_loop(lambda values: values[0]>start,reverse_recorded,carry)
 
-            def reconstruct(values):
-                i, y, bank, endpoints, offsets, used, states, derivatives = values
-                slot = i-start
-                bank = bank.at[slot].set(y)
-                count = (tape.offsets[i+1]-tape.offsets[i]+inner_segment-1)//inner_segment
-                retain = used+count <= capacity
-                offsets = offsets.at[slot].set(jnp.where(retain, used, -1))
-                y, (states, derivatives) = _orbit_replay(backward_rhs, y, rp, tape, i, method,
-                    checkpoint_steps=inner_segment, checkpoints=(states, derivatives),
-                    checkpoint_offset=used, retain=retain)
-                endpoints = endpoints.at[slot].set(y)
-                t, end = tape.times[i]
-                # No following reconstructed map consumes the final kick.
-                # Its physical pullback still runs in reverse_map.
-                y = lax.fori_loop(0, (tape.kicks[i] & (i+1 < stop)).astype(jnp.int32),
-                    lambda unused,y: evaluate_collision((end, y, end-t, tape.increments[i]), cp).y, y)
-                return i+1, y, bank, endpoints, offsets, used+jnp.where(retain, count, 0), states, derivatives
-
-            _, _, bank, endpoints, offsets, _, states, derivatives = lax.while_loop(
-                lambda values: values[0] < stop, reconstruct,
-                (start, initial, bank, endpoints, offsets, jnp.array(0, jnp.int32), states, derivatives))
-            def reverse_cached(values):
-                slot = values[0]-1-start
-                return reverse_map(values, bank[slot], (endpoints[slot], offsets[slot], states, derivatives))
-            return lax.while_loop(lambda values: values[0] > start, reverse_cached, carry)
-
-        _, by, bp = lax.while_loop(lambda values: values[0] > 0, reverse,
-            (tape.count, terminal_bar, (_zeros(active),_zeros(csp))))
+        _, by, bp, _ = lax.while_loop(lambda values: values[0] > 0, reverse,
+            (tape.count, terminal_bar, (_zeros(active),_zeros(csp)), final))
         has_kick = jnp.any((jnp.arange(tape.kicks.size) < tape.count) & tape.kicks)
         collision_bar = lax.cond(has_kick,lambda _:collision_setup_pullback(bp[1])[0],
             lambda _:_zeros(active),None)

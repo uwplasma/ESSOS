@@ -188,3 +188,9 @@ examples/benchmarks/output/
 !examples/benchmarks/results/*.svg
 !examples/benchmarks/results/split_reverse_speed_20261019/*.json
 !examples/benchmarks/results/split_gc_kinetic_ad_20261020/*.json
+!examples/benchmarks/results/split_reverse_checkpoint_reuse_*_20261021/*.json
+!examples/benchmarks/results/split_reverse_forward_checkpoints_20261021/*.json
+!examples/benchmarks/results/ad_native_diffrax_20261021/*.json
+!examples/benchmarks/results/ad_native_diffrax_20261021/*.csv
+!examples/benchmarks/results/ad_native_diffrax_forward_views_20261021/*.json
+!examples/benchmarks/results/ad_native_diffrax_forward_views_20261021/*.csv

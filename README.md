@@ -689,7 +689,9 @@ JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.benchmark_sp
 
 #### Bounded checkpoint reuse across split replay
 
-The split reverse pass now retains inner orbit checkpoints while rebuilding an
+This historical nested-replay optimization is superseded by sparse forward
+checkpoints below. At revision `35fb855`, the split reverse pass retained inner
+orbit checkpoints while rebuilding an
 outer segment, then reuses them for the orbit pullback. Previously it discarded
 these states and repeated the orbit to reconstruct the same checkpoints. The
 scratch buffer holds at most `ceil(workspace / inner_segment) + outer_segment - 1`
@@ -761,6 +763,8 @@ This is a measured speed/memory tradeoff. The memory workers use three warm
 repetitions to exercise allocation; their phase timings are not the performance
 comparison. Use the interleaved 21-repeat reports above for timing conclusions.
 
+To reproduce this historical comparison, run the following block from
+revision `35fb855`. Later revisions use the sparse forward checkpoints below.
 Reproduce the paired long case using the archived baseline and identical
 current forward driver. The source overrides replace both committed files;
 the actual baseline is identified by its recorded SHA:
@@ -779,6 +783,636 @@ JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_spli
 For the short comparison use `--gc-horizon 2e-6 --lorentz-horizon 2e-7` and a
 new output directory. Omit `--interleaved --validate-replay` and use three
 repetitions to reproduce the separate-process compilation/execution RAM check.
+
+#### Sparse forward checkpoints for full split reverse AD
+
+The current split adjoint keeps sparse inner state/FSAL checkpoints from the
+accepted forward orbit trials, together with each pre-collision endpoint.
+Rejected outer trials do not consume checkpoint nodes. Reverse now rebuilds
+each inner segment directly; it no longer integrates the outer segment again
+to reconstruct the same checkpoints or repeats its collision evaluations.
+The physical orbit and collision pullbacks remain unchanged, including
+speed-dependent coefficients, magnetic-coordinate transforms and coil/birth
+derivatives. Accepted times, event fractions and the production Wiener samples
+remain frozen. Stage field geometry is still rematerialized; no particle
+chunking is used.
+
+The state/FSAL bank is flat, with capacity
+`ceil(total_orbit_capacity / inner_segment) + outer_capacity - 1` pairs.
+This bounds the sum of the per-map checkpoint counts without multiplying the
+two accepted-work ceilings. The measured configuration adds about 25.4 KiB
+of logical recording arrays per GC particle and 30.4 KiB per Lorentz particle.
+The actual executable buffers below also account for removed replay scratch
+space. Recording memory scales with both configured accepted capacities;
+these percentages cannot be extrapolated to arbitrarily larger bounds.
+
+The [saved comparison](examples/benchmarks/results/split_reverse_forward_checkpoints_20261021/comparison.json)
+and its four worker reports compare revision `35fb855` with the new recorder
+and adjoint. Each version/model runs in a fresh CPU process, with 21 blocked
+warm repetitions after compilation. These are separate-process medians, not
+interleaved samples. A pilot that reloaded both solver versions in one JAX
+process produced inconsistent fused timings; the final measurements isolate
+the implementations. Raw samples, source/input hashes, full gradients and
+independent frozen-grid/noise JVP/FD checks are saved in the reports.
+
+Both versions use two QA-coil particles, all 136 coil DOFs, eight saves,
+native adaptive Dopri8, orbit I control with `rtol=atol=1e-9`, conservative
+collision tolerance `0.003`, outer grouping 16 and inner checkpoint length 16.
+Accepted/rejected work counts are unchanged: GC has 26/49 accepted inner steps
+and 3/3 rejected trials; Lorentz has 67/61 accepted and 2/2 rejected. Both have
+seven accepted outer maps per particle and no rejected outer trials.
+
+| Model | Horizon (s) | Forward after (ms) | Reverse before (ms) | Reverse after (ms) | Reverse / forward after | Fused before (ms) | Fused after (ms) | Fused / forward after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| GC | `2e-5` | 41.27 | 154.90 | 103.16 | 2.50 | 209.19 | 161.71 | 3.92 |
+| Lorentz | `2e-6` | 18.82 | 54.01 | 36.99 | 1.97 | 72.43 | 58.41 | 3.10 |
+
+GC reverse time decreases 33.4% and its fused value/gradient time decreases
+22.7%; the corresponding Lorentz reductions are 31.5% and 19.4%. Ratios use
+each version's own ordinary forward median. Standalone phases need not sum to
+the fused evaluation. Reverse is below three times forward in these cases;
+the complete fused calculation still exceeds three times forward.
+
+| Model | Compiler buffers before (bytes) | After (bytes) | Change | Process peak before (MiB) | After (MiB) | Change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| GC | 1,808,168 | 1,823,824 | +0.87% | 1382.57 | 1249.06 | -9.66% |
+| Lorentz | 1,207,896 | 1,261,456 | +4.43% | 1159.82 | 1120.78 | -3.37% |
+
+Process peaks include compilation and execution of the forward, reverse,
+fused and validation executables. They are not warm-only or marginal
+per-particle RAM. The physical class implementations are unchanged. Complete
+gradients agree within `4.2e-15`; the best directional FD relative errors are
+below `1e-10`. All 49 split/kinetic and 134 forward/reverse RK checks passed.
+They cover rejected trials, events, empty paths, unequal vmapped work counts,
+captured physical profiles and checkpoint capacity bounds. These small CPU
+cases do not establish the same speedup for other fields or large populations.
+
+Reproduce the current comparison with a new output directory:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.compare_split_reverse \
+  --baseline-revision 35fb855 --baseline-kernel-sources \
+  --validate-replay --particles 2 --repeats 21 \
+  --gc-horizon 2e-5 --lorentz-horizon 2e-6 \
+  --output examples/benchmarks/results/split_reverse_forward_checkpoints_NEW
+```
+
+#### Refreshed native/Diffrax timing and memory after forward changes (CPU, 2026-10-21)
+
+The [new comparison JSON](examples/benchmarks/results/ad_native_diffrax_forward_views_20261021/comparison.json), [complete metric CSV](examples/benchmarks/results/ad_native_diffrax_forward_views_20261021/summary.csv)
+and [consistency audit](examples/benchmarks/results/ad_native_diffrax_forward_views_20261021/audit.json) rerun all ten cases after the forward
+parameter-view changes. This matrix precedes the focused shared-setup change
+documented below; its measurements are retained as recorded. The earlier measurement below is retained as a
+historical record. Each case uses a fresh sequential CPU worker, two QA-coil
+alpha particles, all 136 coil DOFs, the fixed-axis mean final minor-radius
+objective, eight saves and 21 synchronized warm repetitions. GC runs for 20 us
+and Lorentz for 2 us, at 4 keV, with orbit tolerances of 1e-9 and native collision
+tolerance 0.003. Native checkpoints contain 16 accepted steps. No GPU or particle
+chunking or explicit GC spatial collision kicks are used. The detailed physical inputs and numerical schemes are the
+same as in the earlier comparison and are included in each worker record.
+
+Times exclude compilation. Forward means an ordinary solve without an AD tape;
+reverse reuses a previously constructed pullback. Combined value/gradient
+execution is measured independently, including its recording forward solve.
+The forward-only view optimization does not imply the same saving in that
+recording solve, and the separate medians need not add to the combined time.
+
+| Model | Case | Forward (ms) | Linearization (ms) | Reverse (ms) | Value + gradient (ms) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| GC | Native, no collisions | 34.59 | 54.24 | 90.41 | 141.95 |
+| GC | Diffrax, no collisions | 36.26 | 43.47 | 427.99 | 498.63 |
+| GC | Native, adaptive collisions | 40.96 | 59.49 | 104.67 | 161.21 |
+| GC | Native, fixed collisions | 197.41 | 295.12 | 622.70 | 921.47 |
+| GC | Diffrax, fixed collisions | 197.19 | 279.76 | 12816.10 | 12869.16 |
+| Lorentz | Native, no collisions | 14.36 | 18.47 | 34.47 | 50.52 |
+| Lorentz | Diffrax, no collisions | 15.64 | 29.09 | 291.01 | 295.54 |
+| Lorentz | Native, adaptive collisions | 18.67 | 21.85 | 36.97 | 57.13 |
+| Lorentz | Native, fixed collisions | 731.59 | 1128.21 | 1116.90 | 2260.65 |
+| Lorentz | Diffrax, fixed collisions | 717.40 | 773.31 | 3660.37 | 4348.96 |
+
+Compiler buffers are arguments plus outputs plus temporaries minus aliases.
+The process peak below covers setup, compilation, first execution and warm
+combined execution, measured before compiling standalone forward/reverse or
+gradient-validation programs. The CSV also retains warm process peaks,
+complete-worker peaks, compilation times and reverse/forward ratios. Process
+RAM includes JAX, compiler and allocator residency; it is not incremental
+memory per particle.
+
+| Model | Case | Forward buffers (MiB) | Reverse buffers (MiB) | Combined buffers (MiB) | Combined process peak (MiB) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| GC | Native, no collisions | 0.382 | 0.979 | 0.976 | 797.4 |
+| GC | Diffrax, no collisions | 0.342 | 0.935 | 0.907 | 830.2 |
+| GC | Native, adaptive collisions | 0.957 | 2.334 | 1.739 | 1058.1 |
+| GC | Native, fixed collisions | 0.957 | 2.407 | 1.775 | 1067.4 |
+| GC | Diffrax, fixed collisions | 3.491 | 27.129 | 26.032 | 3131.7 |
+| Lorentz | Native, no collisions | 0.342 | 1.140 | 1.045 | 792.4 |
+| Lorentz | Diffrax, no collisions | 0.343 | 1.339 | 1.214 | 837.9 |
+| Lorentz | Native, adaptive collisions | 0.958 | 1.428 | 1.203 | 986.7 |
+| Lorentz | Native, fixed collisions | 0.958 | 2.838 | 2.315 | 984.3 |
+| Lorentz | Diffrax, fixed collisions | 0.346 | 1.314 | 1.207 | 1175.7 |
+
+Collisionless native combined evaluation is 3.51x faster
+than Diffrax for GC and 5.85x for Lorentz. Fixed-collision
+combined evaluation is 13.97x and 1.92x faster.
+Memory comparisons must retain both measures: lower process RAM does not
+guarantee lower compiled buffers for every native case.
+
+Native adaptive collisions use seven outer maps per particle, versus 224 GC
+or 1792 Lorentz fixed intervals. Their speed advantage includes less collision
+work. Split and Diffrax SDE integrators use different production noise bases
+and discretizations, so these are workload comparisons, not certifications of
+equal stochastic accuracy or matching stochastic gradients.
+
+The specialized Boozer RK4 tracer is also available in this checkout through
+`essos.boozer.trace_boozer(..., method="rk4", integrator=None)`. The current
+legacy Boozer default is fixed Dopri8, so RK4 must be selected explicitly.
+The following published GPU results are a separate forward-only reference:
+8,192 common 3.52 MeV alpha guiding centres, 20 ms, 101 saves, no collisions,
+and an RTX A4000. ESSOS uses RK4 with a 1.25e-7 s timestep and 12 retained
+Boozer modes; CATAPULT uses adaptive DP5 with tolerance 1e-10.
+
+| Published GPU reference | Cold trace (s) | Warm trace (s) |
+| --- | ---: | ---: |
+| ESSOS Boozer RK4, without particle compaction | 76.40 | 69.06 |
+| ESSOS Boozer RK4, with lost-particle compaction | 49.29 | 37.42 |
+| CATAPULT, regular axis | 36.69 | 37.04 |
+
+These are measurements of pinned ESSOS revision `1307356`, recorded on
+2026-10-01 in [VMEX's raw benchmark record](https://github.com/uwplasma/vmex/blob/045db9f6/benchmarks/trace_accuracy.json).
+Cold includes the first trace's compilation; field setup is excluded from both
+timings. They have not been rerun on this checkout, whose Boozer implementation
+has since changed. The different field, particle count, horizon and hardware
+preclude a direct speed ranking against the CPU coil/AD table above. This
+reference includes no reverse-AD timing or GPU memory measurement; compaction
+belongs to this published forward-only case.
+
+For a CATAPULT-sized workload using the **current native solver and coil
+field**, run this example from the repository root on the large machine:
+
+```bash
+python -m examples.benchmarks.benchmark_native_coil_alpha \
+  --output output/native_coil_alpha_run1
+```
+
+The editable `PARAMETERS` dictionary in
+[`benchmark_native_coil_alpha.py`](examples/benchmarks/benchmark_native_coil_alpha.py)
+defaults to 8,192 collisionless 3.52 MeV alpha guiding centres, 20 ms,
+101 saves and adaptive native Dopri8 with the I-controller at
+`rtol=atol=1e-9`. CLI options override those settings. JAX selects its normal
+backend; the script does not force CPU or GPU. It prints the selected devices.
+The entire particle batch is traced together, without compaction or AD.
+It uses the existing `GuidingCenterMu` RHS with constant physical magnetic
+moment and the shared native `solve_rk` driver; no solver or field class is
+modified for this example.
+
+The field is the bundled **Landreman-Paul QA Biot-Savart coil set**: four
+independent coils, 16 after symmetry, Fourier order 5 and 75 segments per coil.
+Its unit-size geometry is enlarged to the bundled reactor-scale QA reference.
+All four currents are multiplied by the same factor to give a measured mean
+`|B|=5.7 T` at 256 points on the reference QA axis. This is an axis-field
+normalization, distinct from the published benchmark's volume-average field.
+The example prints the reference `R00`, minor radius, measured field and
+physical currents, and saves the actual scaled coils as JSON.
+
+The QA `wout` supplies **geometry only**: size, the reference axis, the `s=0.3`
+birth shell, angular volume weights and the stopping surface. All orbit RHS
+and magnetic-field evaluations use Cartesian coil fields. Pitch is uniform
+on `[-1,1]`, with seed 42. A root-found exit through the reference QA surface
+counts as lost; that surface is not a newly computed coil-field LCFS.
+Consequently, this is a similar-size coil workload, not an exact rerun or
+speed comparison against the published Boozer/CATAPULT result.
+
+The output directory contains `benchmark.json` (setup/compile/first execution
+and synchronized warm timings, compiled buffer estimates and per-particle
+step-count summaries), `births.npz`, `traces.npz`, `scaled_qa_coils.json`,
+`benchmark.png` and `trajectories.png`. The energy diagnostic checks saved
+and terminal states. Setup, diagnostics, disk output and plots are excluded
+from solver timings. First-trace time includes lowering/compilation; an
+existing persistent compilation cache may shorten it.
+
+Inspect only the physical setup with `--setup-only`. For a short CPU smoke
+check, explicitly select CPU in your shell and reduce the workload:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 \
+python -m examples.benchmarks.benchmark_native_coil_alpha \
+  --particles 2 --horizon 1e-7 --saves 5 --repeats 1 \
+  --output output/native_coil_alpha_smoke
+```
+
+All ten cases passed finite-state/status checks and complete 136-DOF gradient
+checks. Native gradients passed independent JVP and finite differences on the
+recorded accepted grids and production noise. Fixed Diffrax gradients passed
+fixed-grid/production-noise finite differences. Standalone and combined gradients
+agree. The audit also confirms unchanged work counts, objectives and gradients
+relative to the earlier run, and identical source/input hashes across workers.
+
+Reproduce from the repository root using a new output directory:
+
+```bash
+python -m examples.benchmarks.benchmark_ad_backends \
+  --particles 2 --repeats 21 \
+  --output examples/benchmarks/results/ad_native_diffrax_NEW
+```
+
+#### Forward setup and collision-cost investigation (CPU, 2026-10-21)
+
+The [investigation record](examples/benchmarks/results/split_efficiency_investigation_20261021.json)
+preserves paired warm samples, compiler-buffer measurements, source snapshots,
+validation and diagnostic reproduction code. It uses the same two particles,
+fields, tolerances, production noise and fixed/adaptive schedules as the matrix
+above. No particle chunking or field-class changes are introduced.
+
+The earlier view coalescing reduced GC adaptive forward time from 40.58 to
+39.19 ms, versus 246.92 to 196.78 ms for fixed collisions in the paired audit.
+Actual compiled traces retain 52 batched adaptive RK trials and 624 interior
+stage iterations, versus 224 trials and 2688 interior iterations fixed.
+Most dominant stage arithmetic is structurally unchanged. The larger saving
+with many short inner solves does not establish the same speedup per trial in
+the full adaptive program. Geometry construction is already outside the
+collision loop; it is not rebuilt at each kick. Instrumented trace durations
+are not used as warm timings.
+
+For fixed native runs, disabling the orbit through the existing `orbit=False`
+option leaves collision kernels, production noise, interval counts and driver
+work active. This diagnostic costs 30.98 ms for GC and 120.52 ms for Lorentz,
+versus 198.14 and 734.80 ms with the orbit: about 16% of full runtime.
+Different trajectories and compiler fusion prevent treating this subtraction
+as an exact component timer. A native fixed interval restarts Dopri8 with 14
+orbit RHS evaluations, while Diffrax SPaRK uses three drift and three diffusion
+evaluations. Total interval timings therefore do not isolate kick efficiency.
+
+Native standard RHS preparation also materialized particle copies of shared
+coil geometry. Sharing that preparation before the particle `vmap` fixes this
+for the Lorentz case. The coalesced GC representation retains its existing
+preparation, which avoids the slowdown observed when relocating both layouts.
+The implemented selection follows the RHS representation, not the orbit model.
+
+| Native case | Before forward (ms) | After forward (ms) | Before buffers (MiB) | After buffers (MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| GC, adaptive collisions | 39.82 | 39.33 | 0.957 | 0.957 |
+| GC, fixed collisions | 194.02 | 195.75 | 0.957 | 0.957 |
+| Lorentz, adaptive collisions | 18.61 | 18.94 | 0.958 | 0.348 |
+| Lorentz, fixed collisions | 722.75 | 697.05 | 0.958 | 0.348 |
+
+These are 21 interleaved synchronized warm repetitions, excluding compilation.
+Lorentz forward buffers fall 64%, and fixed forward execution improves about
+3.6%; adaptive execution has no demonstrated timing gain. The earlier Diffrax
+Lorentz forward-buffer reference is 0.346 MiB. States, statuses and integer work
+counts match the old production path; scaled state differences are checked to
+2e-12. The recording forward and reverse AD preparation remain unchanged.
+
+Separate checkpoint prototypes explain the remaining Lorentz AD buffer excess:
+initial derivatives and pre-collision endpoints are retained for nearly every
+fixed interval. Reusing the initial derivative already available during reverse
+linearization reduces combined buffers from 2.315 to 1.867 MiB. Recovering the
+endpoint during existing segment reconstruction reduces them further to
+1.595 MiB, with matching complete 136-DOF gradients. The latter increases GC
+combined buffers from 1.775 to 1.852 MiB, so these remain experiments rather than
+the production AD implementation. Process peak RAM is a separate metric from
+these compiler buffers.
+
+#### Split AD storage audit (CPU, 2026-10-22)
+
+The [storage audit](examples/benchmarks/results/split_ad_storage_20261022.json)
+and [selected metrics CSV](examples/benchmarks/results/split_ad_storage_20261022.csv)
+record two-particle CPU comparisons with the same physical kernels, production
+noise, tolerances, work limits and 16-step checkpoint segments as above.
+
+Full-orbit recording stores only the velocity components of each collision
+endpoint. Reverse recovers the unchanged position from the following accepted
+map's initial state, starting from the final state. The full collision Jacobian
+is still transposed; the stored-component indices are not a gradient mask.
+Initial RHS derivatives remain stored, so this adds no field evaluation or
+orbit replay. This compact path also uses a tighter valid checkpoint bound and
+gates runtime validation through a checked map count, avoiding error branches
+over the complete checkpoint banks.
+
+GC keeps its previous endpoint, capacity and validation layout. Packing GC
+endpoints slowed fixed combined execution about 2.4% and adaptive reverse about
+9% in the paired experiment. Reconstructing initial derivatives also introduced
+small fixed-case slowdowns; those alternatives were not selected.
+
+| Case | Reverse buffers before / after (MiB) | Value + gradient buffers before / after (MiB) |
+| --- | ---: | ---: |
+| GC, fixed collisions | 2.407 / 2.407 | 1.775 / 1.775 |
+| GC, adaptive collisions | 2.334 / 2.334 | 1.739 / 1.739 |
+| Lorentz, fixed collisions | 2.838 / 1.833 | 2.315 / 2.087 |
+| Lorentz, adaptive collisions | 1.428 / 1.285 | 1.203 / 1.194 |
+
+There is no demonstrated timing penalty for the selected Lorentz layout.
+In 21 adjacent alternating warm samples, fixed reverse measured
+1133.6 / 1140.1 ms and combined execution 2201.2 / 2195.0 ms; adaptive combined
+execution measured 55.95 / 55.91 ms. Independent fresh-process fixed workers
+measured 2233.4 / 2237.2 ms combined. These differences are around 1% or less,
+rather than a demonstrated speed improvement. Compilation is excluded.
+
+The fixed Lorentz process peak was about 979 / 981 MiB. It includes setup,
+compilation and execution, and is essentially unchanged: this small case
+establishes smaller compiler buffers, not a reduction in total process peak RAM.
+The record retains all raw samples and rejected experiments.
+
+The implementation passed 63 AD regressions, including partial endpoints,
+unequal events, empty paths, capacity failures, physical profile/birth
+sensitivities and frozen-path gradient checks. The implementation audit also
+compares complete 136-DOF coil gradients, trajectories, counts and compiler
+buffers against the archived solver and measured prototypes.
+
+Reproduce current native timing, memory and gradient checks with a new output
+directory; the audit JSON embeds before-source snapshots and the paired scripts:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.benchmark_ad_backends \
+  --cases native_split_adaptive native_split_fixed --particles 2 --repeats 21 \
+  --output examples/benchmarks/results/split_ad_storage_NEW
+```
+
+#### Further split derivative storage audit (CPU, 2026-10-22)
+
+The [follow-up audit](examples/benchmarks/results/split_ad_derivative_storage_20261022.json)
+and [metrics CSV](examples/benchmarks/results/split_ad_derivative_storage_20261022.csv)
+retain the actual-code before/after comparison, full gradients, regression
+results, raw timing samples and isolated experiments. They build on the storage
+audit above; its measurements remain a historical reference.
+
+Compact Lorentz recording now omits the first RHS derivative of each accepted
+collision interval. The stock Biot--Savart reverse linearization already
+evaluates that derivative while preparing its first-stage pullback. A cheap
+RHS without a cached linearization evaluates it explicitly in reverse.
+Only derivatives at later inner
+checkpoint starts remain stored. Their flat offset is the state-checkpoint
+offset minus the number of preceding intervals, so no additional offsets array
+is needed. Segment length, accepted grids, collision coefficients and production
+Wiener increments are unchanged. There is no particle chunking. GC retains its
+previous layout.
+
+For fixed Lorentz tracing, combined compiler buffers decrease from 2.087 to
+1.652 MiB, about 21%; standalone reverse buffers decrease from 1.833 to
+1.678 MiB. The complete 136-DOF coil gradients, saved states and step counts are
+compared against the archived implementation. Additional tests cover unequal
+inner paths, interior derivative offsets, several segment lengths, cached and
+cheap RHSs, and a single-step tape with no derivative bank.
+
+Actual-code timings use 21 paired synchronized CPU samples, two particles and
+no compilation time. Fixed reverse and combined execution improve by about 1%.
+Adaptive combined execution differs by 0.4%, so no adaptive combined speedup is
+claimed.
+
+| Lorentz case | Reverse before / after (ms) | Value + gradient before / after (ms) | Combined buffers before / after (MiB) |
+| --- | ---: | ---: | ---: |
+| Fixed collisions | 1201.74 / 1189.46 | 2298.28 / 2271.43 | 2.087 / 1.652 |
+| Adaptive collisions | 39.36 / 38.65 | 57.34 / 57.58 | 1.194 / 1.184 |
+
+All 70 focused regressions passed. The actual-code audit finds zero differences
+in saved states and complete coil-gradient values for both GC and Lorentz,
+fixed and adaptive. Both GC cases also retain identical compiler buffer sizes.
+
+The fixed-case buffers remain above the saved Diffrax reference (1.207 MiB
+combined; 1.314 MiB reverse). Native reverse working memory is about 0.790 MiB,
+versus 0.929 MiB for Diffrax; the remaining excess comes from retained inputs to
+reverse, including the accepted schedules, noise and state checkpoints. Compiler
+buffer savings do not establish a reduction in total process peak RAM.
+
+Reconstructing collision endpoints and extending checkpoints across collision
+intervals were also tested. They reduced storage further but slowed reverse
+execution, so neither is enabled. The audit preserves these rejected trials.
+Its embedded scripts and before-source snapshots reproduce the paired study;
+the command above reproduces current production measurements in a fresh results
+directory.
+
+#### Rejected compact schedule experiment (CPU, 2026-10-22)
+
+The [rejected experiment](examples/benchmarks/results/split_ad_schedule_storage_rejected_20261022.json)
+and [metrics CSV](examples/benchmarks/results/split_ad_schedule_storage_rejected_20261022.csv)
+record a compact Lorentz time tape that was tested and reverted. It reduced
+fixed-case combined compiler buffers from 1.652 to 1.524 MiB, but did not
+establish lower execution time and total process peak RAM.
+
+In 21 paired warm CPU samples, fixed reverse medians were 1197 / 1211 ms and
+value + gradient medians were 2237 / 2250 ms (baseline / rejected candidate).
+Fresh-process peak RAM ranged from 979--981 MiB for the baseline and
+981--994 MiB for the candidate, using two runs each in opposite orders.
+Smaller compiler buffers alone do not satisfy the acceptance criterion.
+
+The solver files are restored to the preceding validated implementation;
+its derivative-storage improvement remains in place. The rejected layout,
+its clock-specific tests, interval-spanning replay and compact-noise/index
+alternatives are not enabled in production. The record retains the candidate
+source snapshots, measurements and gradient validation for reproducibility.
+
+#### Earlier native/Diffrax AD timing and memory (CPU, 2026-10-21)
+
+The [comparison JSON](examples/benchmarks/results/ad_native_diffrax_20261021/comparison.json)
+and [CSV](examples/benchmarks/results/ad_native_diffrax_20261021/comparison.csv)
+record the production solvers before the forward-view changes, with two QA-coil alpha particles and all 136
+coil Fourier/normalized-current DOFs, a fixed-reference-axis mean final minor
+radius objective, eight saves, 4 keV energy and birth pitches 0.35/0.65.
+GC runs for 20 us and Lorentz for 2 us. Guiding-center birth sites, pitches,
+energy and gyrophase are fixed; the production field-dependent reconstruction
+of full-orbit births remains differentiated. No classifier, hard-wall event,
+particle chunking, GPU or spatial collision kick is used.
+
+Collisionless cases use adaptive Dopri8 with matched position/speed embedded
+error budgets (`rtol=atol=1e-9`): native I control and Diffrax PI `(0.4, 0.3)`.
+The collision background is hydrogen at `1e20 m^-3` and 1 keV. Native collision
+cases use the production split algorithm and accepted-map reverse AD with
+16-step inner checkpoints; the conservative adaptive collision tolerance is
+`0.003`. The fixed native rows hold collision intervals fixed while retaining
+adaptive Dopri8 error control inside each orbit interval.
+Collisionless GC evolves `(xyz, v_parallel)` using fixed particle energy;
+collisional GC also evolves physical `mu`. The with/without-collision rows
+therefore do not constitute an additive breakdown of one identical RHS.
+
+Fixed Diffrax uses the existing production SDE kernels: Stratonovich Milstein
+for GC and SPaRK for Lorentz, with `ConstantStepSize`, `VirtualBrownianTree`
+and the default `RecursiveCheckpointAdjoint`. The nominal fixed grids have
+224 GC intervals (`dt=8.9286e-8 s`) and 1792 Lorentz intervals
+(`dt=1.1161e-9 s`), shared with the native fixed collision cases.
+The fixed SDE step is not controlled by the orbit `rtol/atol` budget.
+The main ODE/coupled/outer loop limit is 4096; split orbit intervals have a
+128-trial limit each. Native adaptive accepted capacity is 128;
+fixed collision tapes have room for their fixed intervals plus save boundaries.
+The total inner-orbit accepted capacity is 2048. Per-case settings, accepted
+counts, full gradients, source/input fingerprints and raw timings are saved.
+
+Each case runs in a fresh CPU worker with 21 blocked warm repetitions;
+compilation is excluded from time. Ordinary forward, standalone reverse and
+combined value/gradient executions are measured separately. Reverse reuses
+its forward residuals, so independent phase medians need not sum to combined
+execution. Trajectory/statistics diagnostics are retained consistently as
+auxiliary outputs. Fused process peak RSS is measured over setup, compilation,
+first and warm combined execution **before** compiling separate forward,
+reverse or validation programs. Warm RSS, complete-worker RSS and standalone
+reverse buffer estimates are also recorded. Compiler buffers mean arguments
+plus outputs plus temporaries minus aliases; process RAM is not marginal
+per-particle memory.
+
+| Model | Case | Forward (ms) | Reverse (ms) | Forward + gradient (ms) | Fused buffers (MiB) | Fused process peak (MiB) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| GC | Native, no collisions | 52.49 | 91.45 | 142.17 | 0.976 | 792.2 |
+| GC | Diffrax, no collisions | 38.30 | 434.90 | 506.07 | 0.907 | 829.8 |
+| GC | Native, adaptive collisions | 46.12 | 119.06 | 181.51 | 1.739 | 1060.5 |
+| GC | Native, fixed collisions | 248.78 | 641.46 | 996.65 | 1.775 | 1061.9 |
+| GC | Diffrax, fixed collisions | 196.72 | 12734.73 | 13297.62 | 26.032 | 3106.5 |
+| Lorentz | Native, no collisions | 14.21 | 35.47 | 50.61 | 1.045 | 790.2 |
+| Lorentz | Diffrax, no collisions | 15.50 | 278.31 | 295.52 | 1.214 | 836.6 |
+| Lorentz | Native, adaptive collisions | 19.29 | 36.82 | 57.40 | 1.203 | 981.7 |
+| Lorentz | Native, fixed collisions | 733.68 | 1144.33 | 2264.75 | 2.315 | 981.6 |
+| Lorentz | Diffrax, fixed collisions | 725.94 | 3674.99 | 4267.94 | 1.207 | 1173.3 |
+
+Collisionless native reverse is 4.76x faster for GC and 7.85x for Lorentz;
+combined evaluation is 3.56x and 5.84x faster. The corresponding full
+collisionless gradient differences are only `1.08e-9` and `1.63e-9` in
+relative L2. Fixed-collision native reverse is 19.85x faster for GC and 3.21x
+for Lorentz; combined evaluation is 13.34x and 1.88x faster. These fixed rows
+use the same number of collision intervals, while their numerical methods,
+noise representations and drift/noise kernel implementations differ.
+
+Adaptive native collisions use seven accepted outer maps per particle,
+versus 224/1792 fixed intervals for GC/Lorentz. Its roughly 73x/74x combined
+speedups therefore include much less collision work and are not comparisons
+of equal stochastic accuracy or of the adjoints alone. Ordinary forward
+native GC is slower than Diffrax in both collisionless and fixed-collision
+rows in this saved comparison, before the forward-view optimization described
+below; the reverse pass supplies its combined speed advantage.
+
+A subsequent [GC forward attribution audit](examples/benchmarks/results/gc_forward_attribution_20261021.json)
+compares ordinary forward execution against the pre-AD RK revision `5c84b7f`,
+using the identical current GC RHS and two-particle inputs. Both take 59.43 ms
+in paired warm measurements and produce matching trajectories and step counts.
+Replacing only RHS preparation with its old implementation also leaves timing
+unchanged. Capturing coil parameters as constants does not recover the gap.
+Thus the slower forward row is reproducible without the new reverse machinery.
+
+Batch size changes the ranking. With matching PI controllers, per-particle
+step counts agree exactly between backends in each configuration:
+
+| GC configuration | Particles | Native forward (ms) | Diffrax forward (ms) |
+| --- | ---: | ---: | ---: |
+| Current AD benchmark inputs | 2 | 50.63 | 38.12 |
+| Current AD benchmark inputs | 8 | 125.37 | 132.11 |
+| Original orbit benchmark inputs | 2 | 20.34 | 15.88 |
+| Original orbit benchmark inputs | 8 | 52.63 | 55.27 |
+
+These are 21 interleaved, blocked warm CPU repetitions, excluding compilation
+and all reverse work. The original eight-particle I-controller case also
+reproduces its larger advantage: 36.24 ms versus 59.18 ms, with 11.875 versus
+18.5 accepted steps on average. The ranking therefore reflects both controller
+work and batch-dependent compiled execution. The audit does not identify the
+specific vectorization, memory-layout or loop-lowering cause of the latter.
+Raw samples, source fingerprints and standalone reproduction scripts are
+embedded in the saved record. These collisionless checks do not attribute the
+separate fixed-collision SDE/split timing difference.
+
+A subsequent [forward-view optimization audit](examples/benchmarks/results/native_gc_forward_views_20261021.json)
+compares the same native solver with and without coalescing redundant
+parameter-array views. Both versions were already JIT-compiled. These are
+21 interleaved, synchronized warm CPU repetitions with matching trajectories,
+accepted/rejected counts, physical parameters and tolerance settings:
+
+| Ordinary forward case | Particles | Before (ms) | After (ms) |
+| --- | ---: | ---: | ---: |
+| Collisionless GC | 2 | 51.58 | 33.96 |
+| Collisionless GC | 8 | 124.25 | 128.35 |
+| Collisionless Lorentz | 2 | 14.22 | 13.95 |
+| GC adaptive collisions | 2 | 40.68 | 39.38 |
+| GC fixed collisions | 2 | 246.40 | 199.70 |
+
+The two-particle collisionless GC forward reduction is 34.2%; the eight-particle
+case is 3.3% slower in this sample. This is a compiler representation improvement,
+not a different field model or RK method, and has not been measured on GPU.
+Preparing coalesced arrays once outside the collision loop reduces fixed GC
+forward time by 19.0%, while adaptive GC changes only 3.2%. Fixed GC has 224
+inner orbit solves per particle here, versus seven for adaptive GC. This count
+alone does not explain the difference: a controlled loop of identical GC
+Dopri8 trials improves from 1.06 to 0.71 ms per two-particle trial (32 trials),
+or 1.03 to 0.69 ms (224 trials). That diagnostic excludes controllers and
+Brownian bookkeeping and has a different compilation context. The limited
+transfer to the enclosing adaptive program is measured; the contributions of
+compiler layout/fusion and other driver work have not been apportioned.
+The paired bootstrap interval for adaptive GC speedup is 0.996--1.068, so this
+sample does not establish an adaptive speedup. That interval describes warm
+sample variability within this run, not uncertainty across machines or runs.
+
+AD recorders retain their prior representation. The combined collisionless GC
+objective-and-gradient evaluation is unchanged (137.60 versus 137.09 ms), and
+standalone reverse time is 88.17 versus 88.47 ms. Fixed GC reverse is likewise
+unchanged (629.35 versus 628.69 ms); its combined evaluation is 918.84 versus
+923.69 ms. Full 136-DOF gradients agree. Compiler-reported collisionless forward
+buffers fall only from 400,952 to 400,800 bytes; split forward buffers increase
+by 200 bytes, from 1,003,744 to 1,003,944. Reverse and combined buffers are
+unchanged. This audit does not measure process peak RAM. Coalescing inside each
+inner orbit solve instead raised forward buffers to 2,732,584 bytes without a
+substantial speedup, so that variant is excluded. The initial broad regression
+run passed 417 tests; the subsequent collision integration passed 152 targeted
+tests, including new fixed/adaptive Dopri5/Dopri8 path and derivative checks.
+
+Fresh paired forward-only references give 35.20 ms for collisionless native
+GC versus 37.36 ms for Diffrax, and 194.81 ms for fixed native GC collisions
+versus 190.23 ms for fixed Diffrax collisions. These use the same two-particle
+inputs as above. The controllers and split/SDE noise schemes differ as in the
+ten-case comparison; these workload timings do not certify equal stochastic
+accuracy.
+
+The saved audit embeds the measurement scripts. Reproduce the paired native
+forward and AD checks from the repository root:
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+report = json.loads(Path("examples/benchmarks/results/native_gc_forward_views_20261021.json").read_text())
+directory = Path(report["reproduction"]["directory"])
+directory.mkdir(parents=True, exist_ok=True)
+for name, source in report["reproduction"]["scripts"].items():
+    (directory / name).write_text(source)
+PY
+python .tmp/gc_forward_views_reproduce/production.py
+# Optional controlled trials and refreshed forward-only Diffrax references:
+python .tmp/gc_forward_views_reproduce/trial_cost.py
+python .tmp/gc_forward_views_reproduce/forward_reference.py
+```
+
+In the ten-case native/Diffrax comparison above, measured combined-process
+peaks are lower for native in every pair.
+Compiled buffers are mixed: native collisionless GC uses 7.65% more, and
+native fixed-collision Lorentz uses 91.74% more. The latter's process peak is
+still 16.34% lower, because compiler buffers and whole-process RAM measure
+different things. These are individual fresh-worker peaks, not confidence
+intervals or large-population memory scaling results.
+
+All ten cases passed finite-state/status checks, complete 136-DOF gradient
+checks and standalone-versus-combined gradient consistency. Native cases
+also passed independent frozen-path JVP/FD checks, and both fixed Diffrax
+SDE cases passed fixed-grid/noise FD checks. The audit confirms identical
+input/source fingerprints across workers and that the production numerical
+sources match the preceding validated sparse-checkpoint implementation.
+
+The native frozen-grid/production-noise JVP and directional FD checks preserve
+physical coefficient/field derivatives. Fixed Diffrax gradients are checked
+against finite differences with its production noise and grid held fixed;
+ordinary adaptive Diffrax FD is retained as a diagnostic. Collisionless
+cross-backend gradient differences are reported. For collisions, the noise
+bases, Brownian generators and discretizations differ even with seed 42;
+individual sample losses/gradients are not expected to match. This small
+benchmark compares computational cost and checks discrete derivatives. It
+does not establish equal statistical accuracy, collision tolerance equivalence
+or timestep convergence between the stochastic methods. The existing
+thermalization, first-stopping and spatial-diffusion validations remain the
+physics benchmarks.
+
+Reproduce from this checkout's root with a new output directory:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 python -m examples.benchmarks.benchmark_ad_backends \
+  --particles 2 --repeats 21 \
+  --output examples/benchmarks/results/ad_native_diffrax_NEW
+```
+
+Use `--models`, `--cases`, `--gc-horizon`, `--lorentz-horizon`,
+`--fixed-gc-steps` and `--fixed-lorentz-steps` to select other measured cases;
+increase the storage/work bounds when extending a path. Outputs preserve
+failed cases explicitly rather than treating nonfinite gradients as timings.
 
 #### Collisionless reverse cost diagnosis
 
@@ -2320,6 +2954,18 @@ JAX partial evaluation leaves the field objects and RK formulas unchanged;
 time, the complete state, and parameter derivatives remain live. It uses JAX's
 partial-evaluation interface in the isolated `_prepare_rhs` helper in `rk.py`.
 
+Ordinary saved forward trajectories additionally coalesce redundant parameter
+views using `essos/rk_rhs.py`: when setup would retain both an array and views
+derived from it, the views are reconstructed from that same array inside the
+stage graph. Both versions are JIT-compiled; the improvement comes from giving
+XLA more freedom over array layout. Field classes, field equations, RK stages
+and tolerance policies are unchanged. The rule is generic to GC/Lorentz RHSs.
+AD recorders retain their existing layout. Ordinary collision splitting prepares
+coalesced parameter arrays once outside the collision loop, then reuses that
+RHS in its inner orbit solves. With no redundant views it retains the original
+inner preparation. Coalescing inside each nested solve instead can inflate
+temporary buffers. The accepted-step reverse implementation is unchanged.
+
 Native adaptive orbits default to `native_error_control="physics"`. The
 embedded error is measured in separate Cartesian-position and velocity blocks:
 `max(norm(dx)/L, norm(dv)/V) / (atol + rtol)`. The position reference
@@ -2433,10 +3079,10 @@ Diffrax Dopri8 reference; GC velocity is the parallel component.
 
 | Orbit/method | Warm median (ms) | Position error (m) | Velocity error (m/s) |
 | --- | ---: | ---: | ---: |
-| GC Dopri5 | 29.61 → 41.01 | 5.68e-9 → 1.91e-9 | 1.45e-2 → 1.10e-3 |
-| GC Dopri8 | 35.11 → 44.63 | 1.86e-9 → 1.17e-10 | 3.53e-3 → 2.39e-4 |
-| Lorentz Dopri5 | 29.15 → 40.81 | 9.77e-11 → 9.77e-11 | 3.05e-3 → 2.86e-3 |
-| Lorentz Dopri8 | 13.49 → 15.98 | 3.66e-9 → 5.57e-11 | 9.91e-2 → 1.53e-3 |
+| GC Dopri5 | 29.61 â†’ 41.01 | 5.68e-9 â†’ 1.91e-9 | 1.45e-2 â†’ 1.10e-3 |
+| GC Dopri8 | 35.11 â†’ 44.63 | 1.86e-9 â†’ 1.17e-10 | 3.53e-3 â†’ 2.39e-4 |
+| Lorentz Dopri5 | 29.15 â†’ 40.81 | 9.77e-11 â†’ 9.77e-11 | 3.05e-3 â†’ 2.86e-3 |
+| Lorentz Dopri8 | 13.49 â†’ 15.98 | 3.66e-9 â†’ 5.57e-11 | 9.91e-2 â†’ 1.53e-3 |
 
 Every particle retained its orbit step counts and terminal state to roundoff.
 The compiler's argument/output/temporary buffer estimate increased by only
@@ -2646,28 +3292,28 @@ machine. Run with
 
 | Equilibrium | Code | Method | Run time | Lost | Same fate as SIMPLE and FIRM3D | max \|E/E0 - 1\| |
 |---|---|---|---|---|---|---|
-| QA | ESSOS `trace_boozer` | Dopri8, `dt = 2.1e-07 s` (default) | 19 s | 7.0 ± 1.6% | 100.0% | 1e-05 |
-|  | SIMPLE | symplectic, defaults | 17 s | 7.0 ± 1.6% | - | not reported |
-|  | FIRM3D | RK45, tol 1e-9, `gc_noK` | 48 s | 7.4 ± 1.6% | - | 4e-05 |
-|  | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 17 s | 8.2 ± 1.7% | 85.4% | 5e-05 |
-|  | DESC | Tsit5, tol 1e-7, `L = 24, M = N = 8` | 3859 s | 6.2 ± 4.3% (32) | 100.0% | 2e-05 |
-| ARIES-CS | ESSOS `trace_boozer` | Dopri8, `dt = 1.1e-07 s` (default) | 36 s | 22.7 ± 2.6% | 98.3% | 1e-05 |
-|  | SIMPLE | symplectic, defaults | 24 s | 23.4 ± 2.6% | - | not reported |
-|  | FIRM3D | RK45, tol 1e-9, `gc_noK` | 146 s | 21.5 ± 2.6% | - | 5e-03 |
-|  | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 64 s | 23.8 ± 2.7% | 93.7% | 1e-04 |
-|  | DESC | Tsit5, tol 1e-7, `L = 24, M = N = 8` | 23150 s | 34.4 ± 8.4% (32) | 90.3% | 7e-05 |
-| W7-X | ESSOS `trace_boozer` | Dopri8, `dt = 1.4e-07 s` (default) | 26 s | 25.8 ± 2.7% | 97.1% | 7e-04 |
-|  | SIMPLE | symplectic, defaults | 191 s | 27.3 ± 2.8% | - | not reported |
-|  | FIRM3D | RK45, tol 1e-9, `gc_noK` | 191 s | 27.0 ± 2.8% | - | 3e-03 |
-|  | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 111 s | 28.9 ± 2.8% | 99.6% | 1e-03 |
-|  | DESC | Tsit5, tol 1e-7, `L = 24, M = N = 8` | 21807 s | 40.6 ± 8.7% (32) | 89.7% | 2e-04 |
+| QA | ESSOS `trace_boozer` | Dopri8, `dt = 2.1e-07 s` (default) | 19 s | 7.0 Â± 1.6% | 100.0% | 1e-05 |
+|  | SIMPLE | symplectic, defaults | 17 s | 7.0 Â± 1.6% | - | not reported |
+|  | FIRM3D | RK45, tol 1e-9, `gc_noK` | 48 s | 7.4 Â± 1.6% | - | 4e-05 |
+|  | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 17 s | 8.2 Â± 1.7% | 85.4% | 5e-05 |
+|  | DESC | Tsit5, tol 1e-7, `L = 24, M = N = 8` | 3859 s | 6.2 Â± 4.3% (32) | 100.0% | 2e-05 |
+| ARIES-CS | ESSOS `trace_boozer` | Dopri8, `dt = 1.1e-07 s` (default) | 36 s | 22.7 Â± 2.6% | 98.3% | 1e-05 |
+|  | SIMPLE | symplectic, defaults | 24 s | 23.4 Â± 2.6% | - | not reported |
+|  | FIRM3D | RK45, tol 1e-9, `gc_noK` | 146 s | 21.5 Â± 2.6% | - | 5e-03 |
+|  | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 64 s | 23.8 Â± 2.7% | 93.7% | 1e-04 |
+|  | DESC | Tsit5, tol 1e-7, `L = 24, M = N = 8` | 23150 s | 34.4 Â± 8.4% (32) | 90.3% | 7e-05 |
+| W7-X | ESSOS `trace_boozer` | Dopri8, `dt = 1.4e-07 s` (default) | 26 s | 25.8 Â± 2.7% | 97.1% | 7e-04 |
+|  | SIMPLE | symplectic, defaults | 191 s | 27.3 Â± 2.8% | - | not reported |
+|  | FIRM3D | RK45, tol 1e-9, `gc_noK` | 191 s | 27.0 Â± 2.8% | - | 3e-03 |
+|  | SIMSOPT | RK45, tol 1e-9, `gc_noK` | 111 s | 28.9 Â± 2.8% | 99.6% | 1e-03 |
+|  | DESC | Tsit5, tol 1e-7, `L = 24, M = N = 8` | 21807 s | 40.6 Â± 8.7% (32) | 89.7% | 2e-04 |
 
 The fate agreement is the share of particles lost or confined as in SIMPLE and
 FIRM3D, over the particles on which those two agree. The bar plot scales DESC's
 time from 32 to 256 particles. ESSOS, SIMSOPT and FIRM3D use the same 32x32
 `booz_xform` spectrum (ESSOS keeps modes above its default `1e-6` of `B00` and,
 above 48 modes, evaluates them from a table in the Boozer angles); SIMPLE reads
-the `wout` directly and DESC fits it. ± is the binomial standard error.
+the `wout` directly and DESC fits it. Â± is the binomial standard error.
 
 ## Tracing notes
 

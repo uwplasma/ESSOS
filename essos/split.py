@@ -18,7 +18,8 @@ from .collisions import (CollisionStep, brownian_memory, brownian_propose, brown
                          brownian_sample, brownian_consume, paper_collision_step_size,
                          collision_coefficients, guiding_center_collision_step, particle_collision_step,
                          guiding_center_spatial_increment)
-from .rk import RKStatus, solve_rk, _concrete_check
+from .rk import RKStatus, solve_rk, _concrete_check, _prepare_rhs
+from .rk_rhs import coalesced_rhs
 from .collision_error import CollisionErrorModel
 from .collision_controller import candidate_collision_step_size
 
@@ -55,6 +56,7 @@ class SplitSolution(NamedTuple):
 
 
 class _SplitCheckpointTape(NamedTuple):
+    """Accepted schedules/noise and a flat bank of sparse inner checkpoints."""
     times: jax.Array
     increments: jax.Array
     kicks: jax.Array
@@ -67,6 +69,11 @@ class _SplitCheckpointTape(NamedTuple):
     initial_saves: jax.Array
     saved_count: jax.Array
     status: jax.Array
+    checkpoint_offsets: jax.Array
+    orbit_states: jax.Array
+    orbit_derivatives: jax.Array
+    orbit_endpoints: jax.Array
+    checkpoint_count: jax.Array
 
 
 def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
@@ -79,7 +86,8 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
                 step_limit=None, event_dtmax=None, adjoint="none",
                 adjoint_checkpoint_steps=16, adjoint_orbit_checkpoint_steps=16,
                 adjoint_max_accepted_steps=None, adjoint_max_orbit_steps=None,
-                _record_ad=False, record_event_tangent=False):
+                _record_ad=False, record_event_tangent=False, _orbit_rhs_prepared=False,
+                _collision_state_indices=None):
     """Lie split: orbit(t, t+h), then collisions over h at the orbit endpoint.
 
     ``collision(t, y, h, dW, args)`` returns ``CollisionStep`` with normalized
@@ -122,11 +130,22 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
     ``adjoint="accepted"`` differentiates accepted orbit and collision maps.
     Accepted outer/inner times, Wiener increments, controllers and event
     fractions are frozen; physical collision coefficients remain active.
-    Segment checkpoints bound state storage. ``adjoint_max_accepted_steps``
+    Inner state/FSAL checkpoints are retained from accepted forward trials;
+    reverse rebuilds one inner segment without another outer orbit replay.
+    The bank has at most ``ceil(inner_capacity / inner_segment) + outer_capacity - 1``
+    state/FSAL pairs, plus one full or partial pre-kick endpoint per outer map. It never stores
+    per-stage field geometry. ``adjoint_max_accepted_steps``
     bounds outer-map storage; ``adjoint_max_orbit_steps`` bounds the total
     inner accepted schedule across committed maps, not a per-interval limit.
     Both default to max_steps. A full tape leaves the forward result unchanged
     and raises during reverse AD. The existing forward path is the default.
+    ``_collision_state_indices`` is internal storage metadata: omitted endpoint
+    components must be preserved by the collision map. It does not restrict
+    physical derivatives. Full-orbit tracing supplies velocity indices; GC
+    retains its full endpoint layout to preserve its measured replay speed.
+    The compact full-orbit tape omits each interval's first RHS derivative:
+    reverse linearization already evaluates it. Only later segment-start
+    derivatives need storage, bounded by ``(inner_capacity - 1) // segment``.
     ``record_event_tangent`` propagates the inner RK event's interpolant time
     derivative for the separate first-loss objective. Kick-event tangents are
     NaN: an instantaneous spatial kick has no continuous crossing-time rule.
@@ -158,7 +177,7 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
             adjoint_orbit_checkpoint_steps=adjoint_orbit_checkpoint_steps,
             adjoint_max_accepted_steps=adjoint_max_accepted_steps,
             adjoint_max_orbit_steps=adjoint_max_orbit_steps,
-            record_event_tangent=record_event_tangent)
+            record_event_tangent=record_event_tangent, _collision_state_indices=_collision_state_indices)
     if collision_controller not in ("conservative", "paper", "candidate"):
         raise ValueError("collision_controller must be 'conservative', 'paper' or 'candidate'")
     candidate = adaptive and collision_controller == "candidate"
@@ -176,6 +195,16 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
             raise ValueError(f"{name} must be scalar")
     t0, t1, dt0, dtmin, dtmax, orbit_dt0 = (
         jnp.asarray(x, dtype=y0.dtype) for x in (t0, t1, dt0, dtmin, dtmax, orbit_dt0))
+    # Coalesced parameter arrays belong outside the enclosing collision loop.
+    # Preparing them inside every nested orbit solve can inflate temporaries.
+    # With no redundant views, retain the original inner-solve representation.
+    # AD recorders keep their existing checkpoint/replay layout.
+    orbit_rhs = rhs if _orbit_rhs_prepared else None
+    if not (_record_ad or _orbit_rhs_prepared):
+        graph = jax.make_jaxpr(lambda t, y: rhs(t, y, args))(t0, y0)
+        orbit_rhs = coalesced_rhs(graph, t0, y0)
+    rhs_prepared = orbit_rhs is not None
+    orbit_rhs = orbit_rhs if rhs_prepared else rhs
     if event_dtmax is not None:
         if event is None or jnp.ndim(event_dtmax) != 0:
             raise ValueError("event_dtmax requires an event and a scalar interval")
@@ -228,7 +257,26 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
         outer_capacity = min(max_steps, adjoint_max_accepted_steps or max_steps)
         inner_capacity = adjoint_max_orbit_steps or max_steps
         checkpoints = (outer_capacity + adjoint_checkpoint_steps - 1) // adjoint_checkpoint_steps
-        s.update(ad_times=jnp.zeros((outer_capacity, 2), y0.dtype),
+        inner_segment = adjoint_orbit_checkpoint_steps
+        # Sum ceil(n_map / inner_segment) <= ceil(total / inner_segment) + maps - 1.
+        # Only committed maps consume this flat bank; rejected outer trials
+        # retain their original Brownian bookkeeping and discard trial nodes.
+        if _collision_state_indices is None:
+            node_capacity = (inner_capacity+inner_segment-1)//inner_segment+outer_capacity-1
+        else:
+            # A nonempty map needs at least one inner step. This bounds the
+            # total checkpoints without reserving impossible map/step pairs.
+            nonempty_maps = min(outer_capacity, inner_capacity)
+            node_capacity = nonempty_maps+(inner_capacity-nonempty_maps)//inner_segment
+        endpoint_size = y0.size if _collision_state_indices is None else len(_collision_state_indices)
+        derivative_capacity = (node_capacity if _collision_state_indices is None else
+                               (inner_capacity-1)//inner_segment)
+        s.update(ad_checkpoint_offsets=jnp.zeros((outer_capacity+1,), jnp.int32),
+            ad_orbit_states=jnp.zeros((node_capacity, y0.size), y0.dtype),
+            ad_orbit_derivatives=jnp.zeros((derivative_capacity, y0.size), y0.dtype),
+            ad_orbit_endpoints=jnp.zeros((outer_capacity, endpoint_size), y0.dtype),
+            ad_checkpoint_count=jnp.array(0, jnp.int32),
+            ad_times=jnp.zeros((outer_capacity, 2), y0.dtype),
             ad_dw=jnp.zeros((outer_capacity, noise_dim), y0.dtype),
             ad_kicks=jnp.zeros((outer_capacity,), bool),
             ad_offsets=jnp.zeros((outer_capacity+1,), jnp.int32),
@@ -282,13 +330,15 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
         usable = ~overflow & (h > 0) & (end > s["t"])
 
         def attempt(_):
-            orbit_out = solve_rk(rhs, s["y"], args, t0=s["t"], t1=end,
+            orbit_out = solve_rk(orbit_rhs, s["y"], args, t0=s["t"], t1=end,
                 dt0=jnp.minimum(s["orbit_h"] if reuse_orbit_step and orbit_adaptive else orbit_dt0, h),
                 ts=jnp.empty((0,), y0.dtype),
                 method=method, adaptive=orbit_adaptive, rtol=rtol, atol=atol,
                 error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
                 event=event, root_find=True, max_steps=max_orbit_steps,
-                _record_schedule=_record_ad, record_event_tangent=record_event_tangent)
+                _record_schedule=_record_ad, _record_ad=_record_ad,
+                _ad_compact=True, _ad_checkpoint_steps=adjoint_orbit_checkpoint_steps,
+                record_event_tangent=record_event_tangent, _rhs_prepared=rhs_prepared)
             if _record_ad:
                 orbit, schedule = orbit_out
             else:
@@ -364,7 +414,36 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
                         checkpoint, lambda states: states, state["ad_states"])
                     orbit_times = lax.fori_loop(0, schedule.count,
                         lambda j, rows: rows.at[k+j].set(schedule.times[j]), state["ad_orbit_times"])
+                    node_start = s["ad_checkpoint_count"]
+                    node_count = ((schedule.count+inner_segment-1)//inner_segment).astype(node_start.dtype)
+                    if _collision_state_indices is None:
+                        def node(j, buffers):
+                            states, derivatives = buffers
+                            return (states.at[node_start+j].set(schedule.states[j]),
+                                derivatives.at[node_start+j].set(schedule.derivatives[j]))
+                        nodes, derivatives = lax.fori_loop(0,node_count,node,
+                            (state["ad_orbit_states"],state["ad_orbit_derivatives"]))
+                    else:
+                        nodes = lax.fori_loop(0,node_count,
+                            lambda j, bank:bank.at[node_start+j].set(schedule.states[j]),
+                            state["ad_orbit_states"])
+                        # Every committed interval contains at least one inner
+                        # step. Removing its first derivative leaves this flat
+                        # offset; no second offsets array is needed.
+                        derivative_start = node_start-i
+                        derivative_count = jnp.maximum(node_count-1,0)
+                        derivatives = state["ad_orbit_derivatives"]
+                        if derivatives.shape[0]:
+                            derivatives = lax.fori_loop(0,derivative_count,
+                                lambda j, bank:bank.at[derivative_start+j].set(schedule.derivatives[j+1]),
+                                derivatives)
                     return dict(state,
+                        ad_orbit_states=nodes, ad_orbit_derivatives=derivatives,
+                        ad_checkpoint_offsets=state["ad_checkpoint_offsets"].at[i+1].set(node_start+node_count),
+                        ad_checkpoint_count=node_start+node_count,
+                        ad_orbit_endpoints=state["ad_orbit_endpoints"].at[i].set(
+                            orbit.y if _collision_state_indices is None else
+                            orbit.y[jnp.asarray(_collision_state_indices)]),
                         ad_times=state["ad_times"].at[i].set(jnp.stack([s["t"], state["t"]])),
                         ad_dw=state["ad_dw"].at[i].set(dw),
                         ad_kicks=state["ad_kicks"].at[i].set(accepted),
@@ -421,7 +500,9 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
     if _record_ad:
         return solution, _SplitCheckpointTape(s["ad_times"], s["ad_dw"], s["ad_kicks"],
             s["ad_offsets"], s["ad_orbit_times"], s["ad_fractions"], s["ad_states"],
-            s["ad_count"], s["ad_orbit_count"], initial_saves, s["index"], status)
+            s["ad_count"], s["ad_orbit_count"], initial_saves, s["index"], status,
+            s["ad_checkpoint_offsets"],s["ad_orbit_states"],s["ad_orbit_derivatives"],
+            s["ad_orbit_endpoints"],s["ad_checkpoint_count"])
     return solution
 
 
@@ -559,6 +640,18 @@ def trace_split(field, particles, species, *, model="GuidingCenter", tmax, times
         y0 = jnp.concatenate([jnp.asarray(particles.initial_xyz_fullorbit),
                                jnp.asarray(particles.initial_vxvyvz)], axis=1)
 
+    # Standard RHS preparation can be shared across particles. Doing it inside
+    # their vmap can give invariant coil arrays an unnecessary particle axis.
+    # Keep the coalesced-view path in solve_split: moving that representation
+    # changes GC layouts without reducing its buffers. AD keeps its own setup.
+    shared_rhs = False
+    if not _record_ad and adjoint == "none" and _replay_tapes is None and y0.shape[0]:
+        initial_time = jnp.zeros((), y0.dtype)
+        graph = jax.make_jaxpr(lambda t, y: rhs(t, y, None))(initial_time, y0[0])
+        if coalesced_rhs(graph, initial_time, y0[0]) is None:
+            rhs = _prepare_rhs(rhs, initial_time, y0[0], None)
+            shared_rhs = True
+
     def one(initial, key, replay_tape=None):
         birth = public(initial)
         birth_speed = jnp.sqrt(birth[3]**2+2*birth[4]*magnitude(birth[:3])/mass) if gc else jnp.linalg.norm(birth[3:])
@@ -648,7 +741,10 @@ def trace_split(field, particles, species, *, model="GuidingCenter", tmax, times
             adjoint_orbit_checkpoint_steps=adjoint_orbit_checkpoint_steps,
             adjoint_max_accepted_steps=adjoint_max_accepted_steps,
             adjoint_max_orbit_steps=adjoint_max_orbit_steps, _record_ad=_record_ad,
-            record_event_tangent=record_event_tangent)
+            record_event_tangent=record_event_tangent, _orbit_rhs_prepared=shared_rhs,
+            # Full-orbit kicks preserve position. GC retains its existing
+            # endpoint layout, which was faster in the paired storage audit.
+            _collision_state_indices=tuple(range(3, initial.size)) if not (gc or spatial_diffusion) else None)
         if _record_ad:
             solution, tape = solution
             return solution._replace(ys=jax.vmap(public)(solution.ys), y=public(solution.y)), tape

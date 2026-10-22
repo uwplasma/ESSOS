@@ -1,0 +1,673 @@
+{
+  "complete": true,
+  "case": "diffrax_sde_fixed",
+  "model": "lorentz",
+  "metadata": {
+    "horizon": 2e-06,
+    "fixed_dt": 1.1160714285714285e-09,
+    "requested_fixed_steps": 1792,
+    "parameters": "136 bundled QA coil Fourier/normalized-current DOFs only; fixed reference axis and births",
+    "parameter_labels": [
+      "coil[0].x0",
+      "coil[0].xs(1)",
+      "coil[0].xc(1)",
+      "coil[0].xs(2)",
+      "coil[0].xc(2)",
+      "coil[0].xs(3)",
+      "coil[0].xc(3)",
+      "coil[0].xs(4)",
+      "coil[0].xc(4)",
+      "coil[0].xs(5)",
+      "coil[0].xc(5)",
+      "coil[0].y0",
+      "coil[0].ys(1)",
+      "coil[0].yc(1)",
+      "coil[0].ys(2)",
+      "coil[0].yc(2)",
+      "coil[0].ys(3)",
+      "coil[0].yc(3)",
+      "coil[0].ys(4)",
+      "coil[0].yc(4)",
+      "coil[0].ys(5)",
+      "coil[0].yc(5)",
+      "coil[0].z0",
+      "coil[0].zs(1)",
+      "coil[0].zc(1)",
+      "coil[0].zs(2)",
+      "coil[0].zc(2)",
+      "coil[0].zs(3)",
+      "coil[0].zc(3)",
+      "coil[0].zs(4)",
+      "coil[0].zc(4)",
+      "coil[0].zs(5)",
+      "coil[0].zc(5)",
+      "coil[1].x0",
+      "coil[1].xs(1)",
+      "coil[1].xc(1)",
+      "coil[1].xs(2)",
+      "coil[1].xc(2)",
+      "coil[1].xs(3)",
+      "coil[1].xc(3)",
+      "coil[1].xs(4)",
+      "coil[1].xc(4)",
+      "coil[1].xs(5)",
+      "coil[1].xc(5)",
+      "coil[1].y0",
+      "coil[1].ys(1)",
+      "coil[1].yc(1)",
+      "coil[1].ys(2)",
+      "coil[1].yc(2)",
+      "coil[1].ys(3)",
+      "coil[1].yc(3)",
+      "coil[1].ys(4)",
+      "coil[1].yc(4)",
+      "coil[1].ys(5)",
+      "coil[1].yc(5)",
+      "coil[1].z0",
+      "coil[1].zs(1)",
+      "coil[1].zc(1)",
+      "coil[1].zs(2)",
+      "coil[1].zc(2)",
+      "coil[1].zs(3)",
+      "coil[1].zc(3)",
+      "coil[1].zs(4)",
+      "coil[1].zc(4)",
+      "coil[1].zs(5)",
+      "coil[1].zc(5)",
+      "coil[2].x0",
+      "coil[2].xs(1)",
+      "coil[2].xc(1)",
+      "coil[2].xs(2)",
+      "coil[2].xc(2)",
+      "coil[2].xs(3)",
+      "coil[2].xc(3)",
+      "coil[2].xs(4)",
+      "coil[2].xc(4)",
+      "coil[2].xs(5)",
+      "coil[2].xc(5)",
+      "coil[2].y0",
+      "coil[2].ys(1)",
+      "coil[2].yc(1)",
+      "coil[2].ys(2)",
+      "coil[2].yc(2)",
+      "coil[2].ys(3)",
+      "coil[2].yc(3)",
+      "coil[2].ys(4)",
+      "coil[2].yc(4)",
+      "coil[2].ys(5)",
+      "coil[2].yc(5)",
+      "coil[2].z0",
+      "coil[2].zs(1)",
+      "coil[2].zc(1)",
+      "coil[2].zs(2)",
+      "coil[2].zc(2)",
+      "coil[2].zs(3)",
+      "coil[2].zc(3)",
+      "coil[2].zs(4)",
+      "coil[2].zc(4)",
+      "coil[2].zs(5)",
+      "coil[2].zc(5)",
+      "coil[3].x0",
+      "coil[3].xs(1)",
+      "coil[3].xc(1)",
+      "coil[3].xs(2)",
+      "coil[3].xc(2)",
+      "coil[3].xs(3)",
+      "coil[3].xc(3)",
+      "coil[3].xs(4)",
+      "coil[3].xc(4)",
+      "coil[3].xs(5)",
+      "coil[3].xc(5)",
+      "coil[3].y0",
+      "coil[3].ys(1)",
+      "coil[3].yc(1)",
+      "coil[3].ys(2)",
+      "coil[3].yc(2)",
+      "coil[3].ys(3)",
+      "coil[3].yc(3)",
+      "coil[3].ys(4)",
+      "coil[3].yc(4)",
+      "coil[3].ys(5)",
+      "coil[3].yc(5)",
+      "coil[3].z0",
+      "coil[3].zs(1)",
+      "coil[3].zc(1)",
+      "coil[3].zs(2)",
+      "coil[3].zc(2)",
+      "coil[3].zs(3)",
+      "coil[3].zc(3)",
+      "coil[3].zs(4)",
+      "coil[3].zc(4)",
+      "coil[3].zs(5)",
+      "coil[3].zc(5)",
+      "coil[0].current",
+      "coil[1].current",
+      "coil[2].current",
+      "coil[3].current"
+    ],
+    "birth_xyz": [
+      [
+        1.23,
+        0.0,
+        0.0
+      ],
+      [
+        1.27,
+        0.0,
+        0.0
+      ]
+    ],
+    "birth_pitch": [
+      0.35,
+      0.65
+    ],
+    "energy_ev": 4000.0,
+    "seed": 42,
+    "background": "Hydrogen, 1e20 m^-3, 1 keV; production coefficient model",
+    "spatial_kicks": false,
+    "particle_chunking": false,
+    "solver": "SPaRK",
+    "native_outer_capacity": null,
+    "count_columns": [
+      "steps",
+      "accepted",
+      "rejected"
+    ],
+    "derivative_policy": "Diffrax RecursiveCheckpointAdjoint default checkpoints",
+    "error_control": "fixed SDE step; no rtol/atol controller",
+    "backend": "cpu",
+    "jax": "0.11.2",
+    "diffrax": "0.7.2",
+    "source_sha256": {
+      "essos/split.py": "d1204b34ee330562e82ddb2b88425cacb3d355e7bb0445a064617e30a96a634e",
+      "essos/split_ad.py": "48623af48302b8801a3d4e89685b232844872f064fa7b42b1de070dfc8d9dba9",
+      "essos/collision_ad.py": "3f868041fa5a07162187ff7502e857d22fa37697af457318596af61fd2a04738",
+      "essos/rk.py": "eaa7b5a4cd2689769d9f40787a99c89564e3b26ccb4febc3aff24590a2ce49a8",
+      "essos/rk_ad.py": "bef8469ee793980b0fa75abadf2e5886cf843994407c571a0743c2a9772d746a",
+      "essos/rk_ad_rhs.py": "61d8eb24b38d26532279bd2a45bf811d866942025f07f5d928569fe21dad5aef",
+      "essos/rk_ad_biot_savart.py": "b8f42b476f2ffdbac3bd590c0a3c130c1765d0fe881a506ac112168e03e51049",
+      "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+      "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+      "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+      "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+      "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+      "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+      "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+      "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+      "essos/particle_losses.py": "0128e8ebc6e59ed390b9412dbbea66144e8a182457f08d3f5867d3f800326de3",
+      "essos/surfaces.py": "f9ccae53e0e245e2aa148a358aa45ce6ae9b3721f73cb836e45c1349b47da016",
+      "examples/benchmarks/benchmark_split_ad.py": "b495f0f4b90f98cf50f989bbf65085fc2bd02b5d915bb0d2dccda2d47782a121",
+      "examples/benchmarks/validate_coil_orbit_loss.py": "a862d32fe284f599380db33df18e99fa878a9602c8fa68b64e801b2badcf7cdd",
+      "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+      "essos/electric_field.py": "352b5b07996ba5d26dbfec48ab1e535558fd7222b3b78ad18f5aa3bd1a213cc4",
+      "examples/benchmarks/benchmark_ad_backends.py": "5e1ce4e3f9e2738c6e2155687a15c4b196dcaa808265eb206d9859f0f09b5848"
+    },
+    "input_sha256": "09d8f64ab6c75ab152798b14dec3a6b00a1ca1bb470c822d72aa17005d18003b",
+    "settings": {
+      "output": "/mnt/c/Users/eduar/Github_Codes/ESSOS-split-ad/examples/benchmarks/results/ad_native_diffrax_20261021",
+      "models": [
+        "gc",
+        "lorentz"
+      ],
+      "cases": [
+        "native_orbit",
+        "diffrax_orbit",
+        "native_split_adaptive",
+        "native_split_fixed",
+        "diffrax_sde_fixed"
+      ],
+      "particles": 2,
+      "repeats": 21,
+      "saves": 8,
+      "gc_horizon": 2e-05,
+      "lorentz_horizon": 2e-06,
+      "tolerance": 1e-09,
+      "collision_tolerance": 0.003,
+      "fixed_gc_steps": 224,
+      "fixed_lorentz_steps": 1792,
+      "max_steps": 4096,
+      "max_orbit_steps": 128,
+      "accepted_capacity": 128,
+      "orbit_capacity": 2048,
+      "checkpoint_steps": 16,
+      "worker_case": "diffrax_sde_fixed",
+      "worker_model": "lorentz"
+    },
+    "memory_scope": "Fused peak includes input setup, fused compilation, first and warm execution; measured before separate forward/reverse or FD validation executables exist. Warm RSS includes resident JAX/executables/allocator. Compiler buffers are separate.",
+    "timing_scope": "Warm blocked calls, compilation excluded. Forward is ordinary production solve; linearization is public VJP of jitted cost; reverse reuses its residuals; fused is value_and_grad. No particle chunks."
+  },
+  "setup_peak_rss_bytes": 635662336,
+  "fused_compile_seconds": 18.37705974499977,
+  "fused_compile_peak_rss_bytes": 1230315520,
+  "first_fused_peak_rss_bytes": 1230315520,
+  "value": 0.22426132620865913,
+  "counts_per_particle": [
+    [
+      1792,
+      1792,
+      0
+    ],
+    [
+      1792,
+      1792,
+      0
+    ]
+  ],
+  "status": [
+    0,
+    0
+  ],
+  "gradient_finite": true,
+  "state_finite": true,
+  "gradient": [
+    0.2518396901124421,
+    0.04715862471547021,
+    -0.251404139559942,
+    -0.03379594666566853,
+    0.077755867028539,
+    0.06880220828410373,
+    -0.05399851571894193,
+    -0.047214259495833924,
+    0.052734180145887356,
+    0.046939639494540705,
+    -0.027019087605914077,
+    -0.18301461014564524,
+    -0.1404069214856763,
+    -0.037751459515759825,
+    -0.03784740286658114,
+    -0.011730307247390031,
+    -0.06978796985629315,
+    0.01777051619501038,
+    0.03728405284651441,
+    0.021350258941590372,
+    -0.011970253999661859,
+    0.0029974355324243404,
+    0.023347529970285677,
+    -0.06909640371390167,
+    0.007911084863189715,
+    -0.02213141249623492,
+    -0.04414567623326899,
+    -0.017741897913248483,
+    0.008948004301537346,
+    0.0361740662290503,
+    0.0016412269544535995,
+    -0.018333805890796778,
+    -0.012601739753604062,
+    0.25070972314459894,
+    -0.008712453725408008,
+    -0.0808501118165333,
+    0.08881150087424391,
+    0.05293221387332938,
+    -0.013851617724526935,
+    -0.034761837853361274,
+    0.0059863843280278444,
+    -0.0007119165559574883,
+    -0.012974291259505364,
+    0.003188779060951439,
+    -0.199193939904118,
+    -0.06097208927094219,
+    0.009348632058712161,
+    0.003723880155053226,
+    -0.02151963600877029,
+    -0.0017691793847598707,
+    0.06376083591713387,
+    0.02633855604079917,
+    -0.011138781366967889,
+    -0.003689284212825981,
+    -0.006132907631849613,
+    0.06323062569303836,
+    0.0615237820961898,
+    0.016136674021861273,
+    -0.020807369385776264,
+    -0.04069078593506064,
+    0.01226618716332357,
+    -0.00811803178750456,
+    -0.02028362806883817,
+    -0.024675285965823593,
+    -0.0015903995662891828,
+    0.020607324074627204,
+    0.11317518032675355,
+    -0.026877110374384467,
+    -0.02779964627144233,
+    0.04902306898517274,
+    0.03815780979312776,
+    -0.030085568394184733,
+    -0.021932538625062947,
+    0.01646058733864051,
+    0.009359578141317512,
+    -0.01192844281890139,
+    0.005945741626441726,
+    -0.07032671515037203,
+    -0.01403974322890815,
+    0.045891386299611536,
+    0.022787660593626774,
+    -0.028101233254474535,
+    0.0011511375108729516,
+    0.025723593489552738,
+    0.010150569217567459,
+    -0.01592264012976981,
+    -0.007579812505347972,
+    0.011144741912652618,
+    0.03347048698000728,
+    0.06379225573755871,
+    0.00047238199704902225,
+    -0.00820164064017272,
+    -0.026595371303607666,
+    0.005070471313849468,
+    -0.010713378684304276,
+    -0.018735009797821438,
+    0.011504851317660748,
+    0.019161662594320946,
+    0.004973125492968919,
+    0.027786225482074718,
+    -0.036304360387325936,
+    -0.004412905810887835,
+    0.03650314719247018,
+    0.004074130467354304,
+    -0.016362557249319863,
+    3.678701794810631e-05,
+    0.009217791554856,
+    -0.003297548421741685,
+    0.0018223819414650117,
+    0.001700363126103323,
+    -0.02164361811065104,
+    7.911526932021721e-05,
+    0.03951531156300172,
+    0.004453351479363316,
+    -0.02278166726632626,
+    0.003454046045786873,
+    0.018047591071717793,
+    0.002730449539761483,
+    -0.014161651414172065,
+    0.0017574438810195293,
+    0.0023689672117568525,
+    0.008799751682148756,
+    0.039566770011552774,
+    -0.0012204118358082523,
+    -0.0008516772864658015,
+    -0.000879572687633742,
+    -0.002011266854599158,
+    -0.00627660549800735,
+    0.0016672497377293125,
+    0.00045955812894118205,
+    -0.009568357885581084,
+    -0.006433081315330907,
+    0.27611003776469656,
+    0.14963357136468725,
+    0.06428465584200885,
+    0.035191911139153556
+  ],
+  "gradient_l2": 0.7191023466505568,
+  "saved_positions": [
+    [
+      [
+        1.200939871079387,
+        -1.0995166533829796e-18,
+        3.3770022416498036e-18
+      ],
+      [
+        1.247907508623039,
+        -0.03319665408334875,
+        -0.037079288515362845
+      ],
+      [
+        1.232390089608547,
+        -0.09053279170866729,
+        -0.006434888901778223
+      ],
+      [
+        1.1914813579968424,
+        -0.11208480733623231,
+        -0.05969915542498502
+      ],
+      [
+        1.234020581736642,
+        -0.16301695470351754,
+        -0.0813739454852052
+      ],
+      [
+        1.1907673775856926,
+        -0.20869667386975324,
+        -0.053477490256341846
+      ],
+      [
+        1.1601256125755701,
+        -0.22374635563075007,
+        -0.11582933921125473
+      ],
+      [
+        1.1901765775495394,
+        -0.28453285734025097,
+        -0.11898467801532232
+      ]
+    ],
+    [
+      [
+        1.2451268533721782,
+        -9.541721695110756e-19,
+        2.910878491928463e-18
+      ],
+      [
+        1.2868006207267524,
+        -0.06908256924843269,
+        -0.042083046524403124
+      ],
+      [
+        1.2512409808632006,
+        -0.15089833290273083,
+        -0.025689804886722203
+      ],
+      [
+        1.2248977189911026,
+        -0.20131869794143742,
+        -0.09550193598857394
+      ],
+      [
+        1.2332988208213913,
+        -0.29558039826694416,
+        -0.09438702617614203
+      ],
+      [
+        1.154855489114183,
+        -0.3456879493404804,
+        -0.10771595610037867
+      ],
+      [
+        1.146055680033281,
+        -0.4195437106012311,
+        -0.1628943207949286
+      ],
+      [
+        1.0930488546516208,
+        -0.4900670653999509,
+        -0.13251595731301805
+      ]
+    ]
+  ],
+  "fused_memory": {
+    "bytes": 1265944,
+    "components": {
+      "argument_size_in_bytes": 1088,
+      "output_size_in_bytes": 1968,
+      "temp_size_in_bytes": 1262888,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "warm_fused_baseline_rss_bytes": 1223880704,
+  "fused_samples_ms": [
+    4297.078748000331,
+    4379.6912220000195,
+    4251.590262999798,
+    4346.062115000223,
+    4245.4908360000445,
+    4267.94040599998,
+    4211.173139000039,
+    4137.7526740002395,
+    4221.774038999683,
+    4286.539752999943,
+    4197.532644999683,
+    4342.173126000034,
+    4258.670621999954,
+    4251.496555999893,
+    4318.771987999753,
+    4361.220643999786,
+    4337.734211999759,
+    4392.5238760002685,
+    4127.954100000352,
+    4141.326754000147,
+    4332.3775719995865
+  ],
+  "fused_median_ms": 4267.94040599998,
+  "warm_fused_peak_rss_bytes": 1225805824,
+  "fused_peak_rss_bytes": 1230315520,
+  "reverse_compile_seconds": 7.052696168000239,
+  "reverse_memory": {
+    "bytes": 1377727,
+    "components": {
+      "argument_size_in_bytes": 403031,
+      "output_size_in_bytes": 1088,
+      "temp_size_in_bytes": 973608,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "gradient_max_abs_reverse_fused_difference": 6.938893903907228e-18,
+  "phase_samples_ms": [
+    {
+      "reverse": 4355.610066999816,
+      "linearization": 792.7039639998839,
+      "forward": 741.9146930001261
+    },
+    {
+      "forward": 730.0194459999148,
+      "linearization": 796.0292210000262,
+      "reverse": 3591.7850609998823
+    },
+    {
+      "forward": 719.989225000063,
+      "reverse": 4377.370291000261,
+      "linearization": 786.9250210001155
+    },
+    {
+      "forward": 728.0971860000136,
+      "linearization": 772.9678880000392,
+      "reverse": 3704.482026000278
+    },
+    {
+      "reverse": 3674.992452999959,
+      "forward": 723.9879349999683,
+      "linearization": 776.4389240001037
+    },
+    {
+      "linearization": 784.0001979998306,
+      "reverse": 3596.5363169998454,
+      "forward": 713.5044040001048
+    },
+    {
+      "forward": 729.205869999987,
+      "reverse": 3572.998656999971,
+      "linearization": 762.2917520002375
+    },
+    {
+      "forward": 734.5477230001052,
+      "reverse": 3711.3240300000143,
+      "linearization": 812.8538700002537
+    },
+    {
+      "reverse": 3663.0390509999415,
+      "linearization": 787.207736000255,
+      "forward": 719.054258000142
+    },
+    {
+      "reverse": 3636.5410969997356,
+      "linearization": 783.5135939999418,
+      "forward": 733.1532240000342
+    },
+    {
+      "reverse": 3706.3303840000117,
+      "linearization": 785.1783379996959,
+      "forward": 726.9902979996914
+    },
+    {
+      "reverse": 3532.6708990000952,
+      "forward": 726.8247090000841,
+      "linearization": 801.114711000082
+    },
+    {
+      "reverse": 4376.345294999737,
+      "linearization": 772.099691999756,
+      "forward": 725.9425700003703
+    },
+    {
+      "linearization": 788.6802879997958,
+      "forward": 714.8904969999421,
+      "reverse": 4390.956113999891
+    },
+    {
+      "forward": 715.5107640001006,
+      "linearization": 764.7477900000013,
+      "reverse": 3630.3523040000982
+    },
+    {
+      "reverse": 3706.4598530000694,
+      "forward": 729.7221389999322,
+      "linearization": 780.1005340002121
+    },
+    {
+      "linearization": 780.5128819995844,
+      "reverse": 3609.585005000099,
+      "forward": 721.2614280001617
+    },
+    {
+      "reverse": 4353.33393899964,
+      "forward": 710.0793220001833,
+      "linearization": 771.995589999733
+    },
+    {
+      "reverse": 3653.3227360000637,
+      "linearization": 797.981610000079,
+      "forward": 734.678975999941
+    },
+    {
+      "linearization": 782.9390319998311,
+      "reverse": 3609.3145750000986,
+      "forward": 706.7679980000321
+    },
+    {
+      "reverse": 4368.293387999984,
+      "linearization": 777.2479919999569,
+      "forward": 721.5095279998422
+    }
+  ],
+  "phase_medians_ms": {
+    "forward": 725.9425700003703,
+    "reverse": 3674.992452999959,
+    "linearization": 783.5135939999418
+  },
+  "reverse_over_forward": 5.062373533209499,
+  "fused_over_forward": 5.879170863334,
+  "gradient_oracle": "Fixed-grid, fixed-production-VBT path FD",
+  "directional_fd": [
+    {
+      "epsilon": 1e-05,
+      "ad": 0.020081502144064657,
+      "finite_difference": 0.020081502052904376,
+      "absolute_error": 9.116028071298743e-11,
+      "relative_error": 4.539515025270707e-09
+    },
+    {
+      "epsilon": 3e-06,
+      "ad": 0.020081502144064657,
+      "finite_difference": 0.02008150206770735,
+      "absolute_error": 7.635730589483636e-11,
+      "relative_error": 3.8023702284345664e-09
+    },
+    {
+      "epsilon": 1e-06,
+      "ad": 0.020081502144064657,
+      "finite_difference": 0.020081502044577704,
+      "absolute_error": 9.94869533976761e-11,
+      "relative_error": 4.95415894109698e-09
+    }
+  ],
+  "whole_worker_peak_rss_bytes": 1372024832
+}

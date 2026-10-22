@@ -2,8 +2,9 @@
 
 By default each implementation/model runs in a fresh process; interleaved mode
 compiles both adjoints before alternating warm calls. The baseline split driver
-and adjoint come from a commit; an optional adjoint-source override isolates a
-kinetic-rule change from earlier checkpoint improvements. Physical kernels,
+and adjoint come from a commit; optional source overrides isolate individual
+changes. ``--baseline-kernel-sources`` also restores the reference RK recorder
+and kinetic AD helper for checkpoint recording comparisons. Physical kernels,
 inputs and benchmark code are shared. Peak RSS includes compilation and execution. Linux/WSL
 /proc monitoring reads only the worker spawned by this script, without threads.
 """
@@ -26,8 +27,11 @@ source = sys.argv[1]
 if source:
     import essos
     from pathlib import Path
-    for name in ('split', 'split_ad'):
-        spec = importlib.util.spec_from_file_location('essos.' + name, Path(source)/(name + '.py'))
+    for name in ('rk', 'split', 'collision_ad', 'split_ad'):
+        path = Path(source)/(name + '.py')
+        if not path.exists():
+            continue
+        spec = importlib.util.spec_from_file_location('essos.' + name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules['essos.' + name] = module
         setattr(essos, name, module)
@@ -41,7 +45,8 @@ main()
 def paired(options, sources, output):
     """Compile both adjoints before alternating blocked warm measurements.
 
-    The physical driver must be identical; only the reverse module is replaced.
+    Physical outputs and step statistics must match. The baseline may restore
+    earlier sparse-checkpoint recording, in addition to the reverse module.
     Memory here is executable buffers, since both versions share one process.
     Use the default isolated mode separately for process peak RSS.
     """
@@ -55,13 +60,14 @@ def paired(options, sources, output):
     import jax
     import jax.numpy as jnp
     import numpy as np
+    from . import benchmark_split_ad as benchmark
     from .benchmark_split_ad import build_case, SOURCES
     if jax.default_backend() != "cpu":
         raise ValueError("paired split measurements require CPU")
-    if sources["essos/split.py"] != (ROOT/"essos/split.py").read_bytes():
-        raise ValueError("paired mode requires the identical forward split driver")
+    compared={name:{label:hashlib.sha256(data).hexdigest() for label,data in
+        (("before",source),("after",(ROOT/name).read_bytes()))} for name,source in sources.items()}
     shared = {name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in SOURCES
-              if name != "essos/split_ad.py"}
+              if name not in sources}
     shared["examples/benchmarks/compare_split_reverse.py"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     settings = SimpleNamespace(particles=options.particles,saves=8,method="dopri8",controller="conservative",
         gc_horizon=options.gc_horizon,lorentz_horizon=options.lorentz_horizon,tolerance=1e-9,
@@ -72,17 +78,25 @@ def paired(options, sources, output):
         input_sha256=hashlib.sha256((ROOT/"examples/input_files/ESSOS_biot_savart_LandremanPaulQA.json").read_bytes()).hexdigest(),
         timing="Both versions warmed before seeded alternating blocked calls; compilation excluded; reverse reuses baseline residuals",
         memory="Fused executable buffers; process RSS is not measured in paired mode",no_particle_chunking=True,
-        baseline_source="Explicit source override or baseline commit; hashes below identify the actual reverse code"),rows=[])
+        compared_source_sha256=compared,baseline_revision=options.baseline_revision,
+        baseline_kernel_sources=options.baseline_kernel_sources,
+        baseline_source="Explicit source override or baseline commit; compared hashes identify every restored module"),rows=[])
 
     def save():
         (output/"comparison.json").write_text(json.dumps(report,indent=2,allow_nan=False)+"\n")
 
     def compile_case(path, model):
-        spec=importlib.util.spec_from_file_location("essos.split_ad",path)
-        module=importlib.util.module_from_spec(spec)
-        sys.modules["essos.split_ad"]=module
-        setattr(essos,"split_ad",module)
-        spec.loader.exec_module(module)
+        for name in ('rk','split','collision_ad','split_ad'):
+            candidate=path.parent/(name+'.py')
+            if not candidate.exists():
+                continue
+            spec=importlib.util.spec_from_file_location('essos.'+name,candidate)
+            module=importlib.util.module_from_spec(spec)
+            sys.modules['essos.'+name]=module
+            setattr(essos,name,module)
+            spec.loader.exec_module(module)
+            if name=='split':
+                benchmark.trace_split=module.trace_split
         theta,cost,scale,_=build_case(settings,model,True,"mean_final_radius",None)
         forward=jax.jit(lambda p:cost(p,"none"))
         linear=jax.jit(lambda p:cost(p,"accepted"))
@@ -115,7 +129,8 @@ def paired(options, sources, output):
 
     with tempfile.TemporaryDirectory(prefix="essos-split-paired-") as directory:
         baseline=Path(directory)/"split_ad.py"
-        baseline.write_bytes(sources["essos/split_ad.py"])
+        for name,source in sources.items():
+            (Path(directory)/Path(name).name).write_bytes(source)
         for model in options.models:
             cases=[]
             for label,path in (("before",baseline),("after",ROOT/"essos/split_ad.py")):
@@ -174,8 +189,9 @@ def paired(options, sources, output):
     for name,digest in shared.items():
         if hashlib.sha256((ROOT/name).read_bytes()).hexdigest()!=digest:
             raise RuntimeError(f"shared source changed during benchmark: {name}")
-    if hashlib.sha256((ROOT/"essos/split_ad.py").read_bytes()).hexdigest()!=report["rows"][-1]["after"]["source_sha256"]:
-        raise RuntimeError("reverse source changed during benchmark")
+    for name,hashes in compared.items():
+        if hashlib.sha256((ROOT/name).read_bytes()).hexdigest()!=hashes['after']:
+            raise RuntimeError(f"compared source changed during benchmark: {name}")
     if hashlib.sha256((ROOT/"examples/input_files/ESSOS_biot_savart_LandremanPaulQA.json").read_bytes()).hexdigest()!=report["metadata"]["input_sha256"]:
         raise RuntimeError("physical inputs changed during benchmark")
     report["complete"]=True;save()
@@ -200,6 +216,8 @@ def main(argv=None):
         help="Use this split_ad.py with the committed split.py, to isolate the GC kinetic rule")
     parser.add_argument("--baseline-driver-source",type=Path,
         help="Override baseline split.py as well; use the current driver when comparing reverse implementations only")
+    parser.add_argument("--baseline-kernel-sources",action="store_true",
+        help="Also restore rk.py and collision_ad.py from the baseline commit for checkpoint/kinetic-rule comparisons")
     parser.add_argument("--interleaved",action="store_true",
         help="Compile both adjoints in one process and interleave warm timings; compiler buffers only, not RSS")
     parser.add_argument("--validate-replay",action="store_true",
@@ -217,8 +235,11 @@ def main(argv=None):
         parser.error("choose a new output directory, 1..8 particles, and at least three repeats")
     revision = subprocess.check_output(["git","rev-parse",f"{options.baseline_revision}^{{commit}}"],
         cwd=ROOT,text=True).strip()
+    names=["essos/split.py", "essos/split_ad.py"]
+    if options.baseline_kernel_sources:
+        names.extend(["essos/rk.py","essos/collision_ad.py"])
     reference_sources = {name:subprocess.check_output(["git","show",f"{revision}:{name}"],cwd=ROOT)
-        for name in ("essos/split.py", "essos/split_ad.py")}
+        for name in names}
     if options.baseline_reverse_source is not None:
         if not options.baseline_reverse_source.is_file():
             parser.error("baseline reverse source must be an existing Python file")

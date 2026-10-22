@@ -1,0 +1,1319 @@
+{
+  "complete": true,
+  "metadata": {
+    "backend": "cpu",
+    "jax": "0.11.2",
+    "settings": {
+      "particles": 2,
+      "saves": 8,
+      "method": "dopri8",
+      "controller": "conservative",
+      "gc_horizon": 2e-05,
+      "lorentz_horizon": 2e-06,
+      "tolerance": 1e-09,
+      "collision_tolerance": 0.003,
+      "max_steps": 128,
+      "max_orbit_steps": 128,
+      "checkpoint_steps": 16,
+      "orbit_checkpoint_steps": 16,
+      "accepted_capacity": 128,
+      "orbit_capacity": 2048,
+      "fixed_orbit_steps": 64
+    },
+    "repeats": 21,
+    "shared_source_sha256": {
+      "essos/split.py": "76ae07f5354e56b91107838b48a592d65f6512ba7a2caf4ecaf5f1b1df9d00f9",
+      "essos/collision_ad.py": "3f868041fa5a07162187ff7502e857d22fa37697af457318596af61fd2a04738",
+      "essos/rk.py": "6a6d087c0d5e86afc1f28d01ba6711e004792dc82f30c0575b9607b36bddca5d",
+      "essos/rk_ad.py": "bef8469ee793980b0fa75abadf2e5886cf843994407c571a0743c2a9772d746a",
+      "essos/rk_ad_rhs.py": "61d8eb24b38d26532279bd2a45bf811d866942025f07f5d928569fe21dad5aef",
+      "essos/rk_ad_biot_savart.py": "b8f42b476f2ffdbac3bd590c0a3c130c1765d0fe881a506ac112168e03e51049",
+      "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+      "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+      "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+      "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+      "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+      "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+      "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+      "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+      "essos/particle_losses.py": "0128e8ebc6e59ed390b9412dbbea66144e8a182457f08d3f5867d3f800326de3",
+      "essos/surfaces.py": "f9ccae53e0e245e2aa148a358aa45ce6ae9b3721f73cb836e45c1349b47da016",
+      "examples/benchmarks/benchmark_split_ad.py": "cbc40f3954f33eb5ed9db78f374f2d701adccafaff5751d6e29f44ff26f84939",
+      "examples/benchmarks/validate_coil_orbit_loss.py": "a862d32fe284f599380db33df18e99fa878a9602c8fa68b64e801b2badcf7cdd",
+      "examples/benchmarks/compare_split_reverse.py": "401ce4d375d6751d874db0fd8c69e87155cb335d0a1c8305d28b76160956f119"
+    },
+    "input_sha256": "09d8f64ab6c75ab152798b14dec3a6b00a1ca1bb470c822d72aa17005d18003b",
+    "timing": "Both versions warmed before seeded alternating blocked calls; compilation excluded; reverse reuses baseline residuals",
+    "memory": "Fused executable buffers; process RSS is not measured in paired mode",
+    "no_particle_chunking": true,
+    "baseline_source": "Explicit source override or baseline commit; hashes below identify the actual reverse code",
+    "regression_checks": {
+      "passed": 49,
+      "source_sha256": {
+        "tests/test_split_ad.py": "b98341509f11a514df2c7fd13543cd165dd28f4ae7607dd5d4860e76e31f8f64",
+        "tests/test_collision_ad.py": "a4fea906a0901c1eb425bd5280ec5ea463bca583c20a986ef7e4b542a13dfd9e"
+      }
+    },
+    "baseline_reverse_source_archive": {
+      "sha256": "6a7cfa82000d718bbf802f39a70c4704bdd36cba0bd1b50059167693195ef310",
+      "text": "\"\"\"Checkpointed pathwise reverse AD through accepted orbit/collision maps.\n\nThe production forward solve chooses all times and draws all noise. Replay\nuses only its accepted outer maps, inner RK schedules and Wiener increments.\nEvery collision coefficient, magnetic coordinate transform and physical kick\nretains its physical derivatives. Orbit replay shares the collisionless native\nfield transposes, compact stage caches and segment parameter accumulation.\nControllers, rejected trials, error estimates\nand event-time searches have no derivative path. No Brownian samples are drawn\nin replay. The inner schedule is flat, rather than a product of step limits.\n\"\"\"\nimport equinox as eqx\nimport jax\nimport jax.numpy as jnp\nfrom jax import lax, tree_util\nfrom jax.interpreters import partial_eval\nfrom jax.custom_derivatives import SymbolicZero, custom_vjp_primal_tree_values\n\nfrom .rk import (_trial_step, _C, _A, _ERROR, _C8, _A8, _ERROR8,\n                 _rk45_dense, _dopri8_dense, _partition_graph)\nfrom .rk_ad import (_zeros, _add, _convert_all, _ParameterActivity,\n                    _step_pullback, _trial_with_residuals)\nfrom .rk_ad_rhs import prepare_reverse_rhs, prepare_rhs_linearization\nfrom .split import solve_split, SplitStatus\n\n\ndef _checked_tape(tape):\n    tape = eqx.error_if(tape, tape.status > SplitStatus.EVENT,\n        \"accepted split AD requires a successful/event solve; inspect status and work limits\")\n    tape = eqx.error_if(tape, tape.count > tape.times.shape[0],\n        \"accepted split AD capacity exceeded; increase adjoint_max_accepted_steps\")\n    return eqx.error_if(tape, tape.orbit_count > tape.orbit_times.shape[0],\n        \"accepted orbit AD capacity exceeded; increase adjoint_max_orbit_steps\")\n\n\ndef _partition(function, *examples):\n    \"\"\"Expose closure parameters and hoist parameter-only kernel preparation.\"\"\"\n    graph, shape = jax.make_jaxpr(function, return_shape=True)(*examples)\n    structure = tree_util.tree_structure(shape)\n    setup, stage = _partition_graph(graph, [True] * len(examples))\n\n    def prepare(raw):\n        return jax.core.eval_jaxpr(setup.jaxpr, raw[0]), raw[1]\n\n    def evaluate(arguments, parameters):\n        residuals, constants = parameters\n        out = jax.core.eval_jaxpr(stage.jaxpr, constants, *residuals, *arguments)\n        return tree_util.tree_unflatten(structure, out)\n\n    return (setup.consts, stage.consts), prepare, evaluate\n\n\ndef _state_projection(prepare, evaluate, raw, *examples):\n    \"\"\"Prune collision error-only inputs before transposing parameter setup.\n\n    The forward driver still evaluates the complete production CollisionStep.\n    Reverse replay uses its state result only. Selecting live prepared inputs\n    here avoids differentiating error-only preparation, including expressions\n    whose derivatives can be singular even when the physical kick is regular.\n    \"\"\"\n    parameters = prepare(raw)\n    leaves = tree_util.tree_leaves(parameters)\n    graph = jax.make_jaxpr(lambda arguments,p:evaluate(arguments,p).y)(examples,parameters)\n    nargs = len(tree_util.tree_leaves(examples))\n    state_graph, used = partial_eval.dce_jaxpr(graph.jaxpr,[True],\n        instantiate=[True]*nargs+[False]*len(leaves))\n    live = used[nargs:]\n\n    def prepare_state(values):\n        return tuple(value for value,flag in zip(tree_util.tree_leaves(prepare(values)),live) if flag)\n\n    def state(arguments,values):\n        return jax.core.eval_jaxpr(state_graph,graph.consts,*tree_util.tree_leaves(arguments),*values)[0]\n\n    return prepare_state,state\n\n\ndef _orbit_replay(rhs, initial, parameters, tape, index, method, *, checkpoint_steps=0, workspace=0):\n    \"\"\"Replay one committed orbit, optionally collecting its segment starts.\"\"\"\n    constants = (_C, _A, _ERROR) if method == \"dopri5\" else (_C8, _A8, _ERROR8)\n    dense = _rk45_dense if method == \"dopri5\" else _dopri8_dense\n    start, end = tape.offsets[index], tape.offsets[index+1]\n    count = (workspace + checkpoint_steps - 1) // checkpoint_steps if checkpoint_steps else 0\n    states = jnp.zeros((count, initial.size), initial.dtype)\n    derivatives = jnp.zeros_like(states)\n    f = rhs(tape.orbit_times[start, 0], initial, parameters)\n\n    def step(local):\n        i, y, f, states, derivatives = local\n        if checkpoint_steps:\n            def checkpoint(buffers):\n                states, derivatives = buffers\n                slot = (i-start) // checkpoint_steps\n                return states.at[slot].set(y), derivatives.at[slot].set(f)\n            states, derivatives = lax.cond((i-start) % checkpoint_steps == 0,\n                checkpoint, lambda buffers: buffers, (states, derivatives))\n        t, h = tape.orbit_times[i]\n        trial = _trial_step(rhs, t, y, h, parameters, f, *constants)\n        fraction = jnp.where(i == end-1, tape.fractions[index], 1.)\n        terminal = dense(y, trial.y, trial.increments, fraction)\n        return i+1, terminal, trial.f1, states, derivatives\n\n    _, final, _, states, derivatives = lax.while_loop(\n        lambda local: local[0] < end, step, (start, initial, f, states, derivatives))\n    return final, (states, derivatives)\n\n\ndef replay_accepted_split(rhs, collision, initial, args, tape, ts, *, method=\"dopri8\"):\n    \"\"\"Forward-only frozen-schedule/noise oracle for finite-difference checks.\n\n    New parameters propagate through every orbit and collision map. Recorded\n    checkpoint states are deliberately ignored. No adaptation or noise drawing\n    occurs. Returns (saved_states, terminal_state); ordinary JVPs are supported.\n    \"\"\"\n    tape = _checked_tape(tree_util.tree_map(lax.stop_gradient, tape))\n    ts = lax.stop_gradient(jnp.asarray(ts))\n    rhs_bound = lambda t, y, unused: rhs(t, y, args)\n\n    def advance(local):\n        index, y, saved = local\n        y, _ = _orbit_replay(rhs_bound, y, None, tape, index, method)\n        t, end = tape.times[index]\n        y = lax.cond(tape.kicks[index],\n            lambda y: collision(end, y, end-t, tape.increments[index], args).y,\n            lambda y: y, y)\n        owned = (ts > t) & (ts <= end)\n        return index+1, y, jnp.where(owned[:, None], y, saved)\n\n    _, final, saved = lax.while_loop(lambda local: local[0] < tape.count, advance,\n        (jnp.array(0), initial, jnp.broadcast_to(initial, (len(ts), initial.size))))\n    saved = jnp.where((jnp.arange(len(ts)) >= tape.saved_count)[:, None], final, saved)\n    return saved, final\n\n\ndef solve_accepted_split(rhs, collision, y0, args=None, **options):\n    \"\"\"Attach a discrete reverse rule to the unchanged production split solve.\"\"\"\n    # Kernels receive prepared numerical parameters internally. Control\n    # callbacks retain the user's original args ABI, while their numerical\n    # decisions are frozen by the outer custom VJP.\n    if options.get(\"event\") is not None:\n        options[\"event\"] = tree_util.tree_map(\n            lambda function: lambda t,y,unused,**kw: function(t,y,args,**kw), options[\"event\"])\n    if options.get(\"step_limit\") is not None:\n        step_limit = options[\"step_limit\"]\n        options[\"step_limit\"] = lambda t,y,unused: step_limit(t,y,args)\n    y0 = jnp.asarray(y0, dtype=jnp.result_type(y0, float))\n    t0 = lax.stop_gradient(jnp.asarray(options.get(\"t0\", 0.), y0.dtype))\n    ts = lax.stop_gradient(jnp.asarray(options[\"ts\"], y0.dtype))\n    h0 = jnp.asarray(options[\"dt0\"], y0.dtype)\n    noise = jnp.zeros((options[\"noise_dim\"],), y0.dtype)\n    raw_rhs, prepare_rhs, evaluate_rhs = _partition(lambda t, y: rhs(t, y, args), t0, y0)\n    raw_collision, prepare_collision, evaluate_collision = _partition(\n        lambda t, y, h, dw: collision(t, y, h, dw, args), t0, y0, h0, noise)\n    prepare_collision_state, collision_state = _state_projection(\n        prepare_collision,evaluate_collision,raw_collision,t0,y0,h0,noise)\n\n    def prepare(raw):\n        return prepare_rhs(raw[0]), prepare_collision(raw[1])\n\n    def orbit_rhs(t, y, parameters):\n        return evaluate_rhs((t, y), parameters)\n\n    def forward(initial, parameters):\n        return solve_split(lambda t, y, p: orbit_rhs(t, y, p[0]),\n            lambda t, y, h, dw, p: evaluate_collision((t, y, h, dw), p[1]),\n            initial, parameters, **options, _record_ad=True)\n\n    raw = (raw_rhs, raw_collision)\n    converted_forward, driver_constants = _convert_all(forward, y0, prepare(raw))\n    controls = (driver_constants, ts)\n    outer_segment = int(options.get(\"adjoint_checkpoint_steps\", 16))\n    inner_segment = int(options.get(\"adjoint_orbit_checkpoint_steps\", 16))\n    workspace = min(options.get(\"max_orbit_steps\", 10_000),\n                    options.get(\"adjoint_max_orbit_steps\") or options.get(\"max_steps\", 100_000))\n    method = options.get(\"method\", \"dopri8\")\n    constants = (_C, _A, _ERROR) if method == \"dopri5\" else (_C8, _A8, _ERROR8)\n\n    @jax.custom_vjp\n    def integrate(initial, raw, controls):\n        return converted_forward((initial, prepare(raw)), controls[0])[0]\n\n    def fwd(initial, raw, controls):\n        activity = _ParameterActivity(tuple(leaf.perturbed for leaf in tree_util.tree_leaves(raw)))\n        initial, raw, controls = custom_vjp_primal_tree_values((initial, raw, controls))\n        out, tape = converted_forward((initial, prepare(raw)), controls[0])\n        return out, (initial, raw, controls, tape, activity)\n\n    def bwd(residual, bar):\n        initial, raw, controls, tape, activity = residual\n        tape = _checked_tape(tape)\n        raw_leaves, raw_structure = tree_util.tree_flatten(raw)\n        active = tuple(value for value, flag in zip(raw_leaves, activity.flags) if flag)\n\n        def active_raw(values):\n            iterator = iter(values)\n            return tree_util.tree_unflatten(raw_structure,\n                [next(iterator) if flag else value for value, flag in zip(raw_leaves, activity.flags)])\n\n        backward_prepare, backward_rhs = prepare_reverse_rhs(\n            prepare_rhs, orbit_rhs, t0, initial, raw[0])\n        rp, rhs_setup_pullback = jax.vjp(\n            lambda values: backward_prepare(active_raw(values)[0]), active)\n        cp = prepare_collision(active_raw(active)[1])\n        linearization = prepare_rhs_linearization(backward_rhs, t0, initial, rp)\n        if linearization is not None:\n            linearize, rhs_pullback, initial_cache = linearization\n        else:\n            initial_cache = ()\n        csp, collision_setup_pullback = jax.vjp(\n            lambda values:prepare_collision_state(active_raw(values)[1]),active)\n        ts = controls[1]\n        saved_bar = jnp.zeros((len(ts), initial.size), initial.dtype) if isinstance(bar.ys, SymbolicZero) else bar.ys\n        terminal_bar = jnp.zeros_like(initial) if isinstance(bar.y, SymbolicZero) else bar.y\n        terminal_bar += jnp.sum(jnp.where((jnp.arange(len(ts)) >= tape.saved_count)[:, None], saved_bar, 0.), axis=0)\n\n        def reverse_map(carry, initial):\n            index, by, bp = carry\n            index -= 1\n            orbit_end, checkpoints = _orbit_replay(backward_rhs, initial, rp, tape, index, method,\n                checkpoint_steps=inner_segment, workspace=workspace)\n            t, end = tape.times[index]\n            by += jnp.sum(jnp.where(((ts > t) & (ts <= end))[:, None], saved_bar, 0.), axis=0)\n\n            def kick_reverse(values):\n                by, bp = values\n                _, pullback = jax.vjp(lambda y, values: collision_state(\n                    (end, y, end-t, tape.increments[index]),values),orbit_end,csp)\n                dy, dp = pullback(by)\n                return dy, (bp[0],_add(bp[1],dp))\n\n            by, bp = lax.cond(tape.kicks[index], kick_reverse, lambda values: values, (by, bp))\n            orbit_start, orbit_stop = tape.offsets[index], tape.offsets[index+1]\n            states, derivatives = checkpoints\n            # Each collision starts a new orbit: its initial FSAL cache must\n            # use this map's state, not the trajectory's original birth state.\n            map_initial_cache = (linearize(tape.orbit_times[orbit_start, 0], initial)[1]\n                                 if linearization is not None else ())\n\n            def reverse_orbit_segment(local):\n                stop, by, bf, bp = local\n                segment = jnp.maximum((stop-orbit_start-1) // inner_segment, 0)\n                start = orbit_start + segment*inner_segment\n                y, f = states[segment], derivatives[segment]\n                state_bank = jnp.zeros((inner_segment, initial.size), initial.dtype)\n                endpoint_bank = jnp.zeros_like(state_bank)\n                increment_bank = jnp.zeros((inner_segment, len(constants[2]), initial.size), initial.dtype)\n                cache_bank = tree_util.tree_map(lambda value: jnp.zeros(\n                    (inner_segment, len(constants[2]))+value.shape, value.dtype), initial_cache)\n\n                def reconstruct(values):\n                    i, y, f, state_bank, endpoint_bank, increment_bank, cache_bank = values\n                    slot = i-start\n                    t, h = tape.orbit_times[i]\n                    if linearization is None:\n                        trial = _trial_step(backward_rhs, t, y, h, rp, f, *constants)\n                        residuals = ()\n                    else:\n                        trial, residuals = _trial_with_residuals(\n                            linearize, t, y, h, f, constants, map_initial_cache)\n                    cache_bank = tree_util.tree_map(\n                        lambda buffer,value: buffer.at[slot].set(value), cache_bank, residuals)\n                    return (i+1, trial.y, trial.f1, state_bank.at[slot].set(y),\n                        endpoint_bank.at[slot].set(trial.y), increment_bank.at[slot].set(trial.increments),\n                        cache_bank)\n\n                _, _, _, state_bank, endpoint_bank, increment_bank, cache_bank = lax.while_loop(\n                    lambda values: values[0] < stop, reconstruct,\n                    (start, y, f, state_bank, endpoint_bank, increment_bank, cache_bank))\n\n                def reverse_step(values):\n                    i, by, bf, dp = values\n                    i -= 1\n                    slot = i-start\n                    t, h = tape.orbit_times[i]\n                    fraction = jnp.where(i == orbit_stop-1, tape.fractions[index], 1.)\n                    def cached_pullback(stage, seed):\n                        return rhs_pullback(tree_util.tree_map(\n                            lambda buffer: buffer[slot, stage], cache_bank), seed)\n                    dy, df, contribution = _step_pullback(backward_rhs, state_bank[slot], t, h,\n                        endpoint_bank[slot], increment_bank[slot], rp, fraction,\n                        jnp.empty((0,), initial.dtype), jnp.empty((0,), bool), jnp.empty((0,), bool),\n                        by, bf, jnp.empty((0, initial.size), initial.dtype), method, \"standard\",\n                        initial_fsal=(i == orbit_start),\n                        cached_pullback=cached_pullback if linearization is not None else None)\n                    return i, dy, df, _add(dp, contribution)\n\n                # Share the orbit-only segment policy: transpose parameter\n                # preparation once after summing the segment's prepared bars.\n                i, by, bf, dp = lax.while_loop(lambda values: values[0] > start, reverse_step,\n                    (stop, by, bf, _zeros(rp)))\n                return i, by, bf, (_add(bp[0],rhs_setup_pullback(dp)[0]),bp[1])\n\n            _, by, _, bp = lax.while_loop(lambda values: values[0] > orbit_start,\n                reverse_orbit_segment, (orbit_stop, by, jnp.zeros_like(initial), bp))\n            return index, by, bp\n\n        def reverse(carry):\n            stop = carry[0]\n            segment = jnp.maximum((stop-1) // outer_segment, 0)\n            start = segment*outer_segment\n            initial = tape.states[segment]\n            if outer_segment == 1:\n                return reverse_map(carry, initial)\n            bank = jnp.zeros((outer_segment, initial.size), initial.dtype)\n\n            def reconstruct(values):\n                i, y, bank = values\n                bank = bank.at[i-start].set(y)\n                y, _ = _orbit_replay(backward_rhs, y, rp, tape, i, method)\n                t, end = tape.times[i]\n                y = lax.cond(tape.kicks[i],\n                    lambda y: evaluate_collision((end, y, end-t, tape.increments[i]), cp).y,\n                    lambda y: y, y)\n                return i+1, y, bank\n\n            _, _, bank = lax.while_loop(lambda values: values[0] < stop, reconstruct, (start, initial, bank))\n            return lax.while_loop(lambda values: values[0] > start,\n                lambda values: reverse_map(values, bank[values[0]-1-start]), carry)\n\n        _, by, bp = lax.while_loop(lambda values: values[0] > 0, reverse,\n            (tape.count, terminal_bar, (_zeros(active),_zeros(csp))))\n        has_kick = jnp.any((jnp.arange(tape.kicks.size) < tape.count) & tape.kicks)\n        collision_bar = lax.cond(has_kick,lambda _:collision_setup_pullback(bp[1])[0],\n            lambda _:_zeros(active),None)\n        bp = _add(bp[0],collision_bar)\n        by += jnp.sum(jnp.where((jnp.arange(len(ts)) < tape.initial_saves)[:, None], saved_bar, 0.), axis=0)\n        iterator = iter(bp)\n        raw_bar = tree_util.tree_unflatten(raw_structure,\n            [next(iterator) if flag else _zeros(value) for value, flag in zip(raw_leaves, activity.flags)])\n        return by, raw_bar, _zeros(controls)\n\n    integrate.defvjp(fwd, bwd, symbolic_zeros=True)\n    return integrate(y0, raw, controls)\n",
+      "scope": "Previous working reverse module; use with the identical driver and shared sources fingerprinted in this report"
+    }
+  },
+  "rows": [
+    {
+      "model": "gc",
+      "before": {
+        "value": 0.2794087495679227,
+        "gradient": [
+          -0.33211825849584103,
+          0.18312491859888247,
+          -0.1865194066719338,
+          -0.3469206750654738,
+          -0.34252909177821267,
+          0.13175142994031802,
+          0.04526032847065147,
+          -0.006591636773409331,
+          0.14417558301734476,
+          -0.08973583872139707,
+          -0.07444018883672263,
+          -0.9370342160402569,
+          -0.30857878661311033,
+          -0.5387217597040065,
+          0.27899251836359196,
+          -0.2518668818199405,
+          -0.4709264462845623,
+          0.05817458515234379,
+          0.1032399613878795,
+          0.11062199806487505,
+          0.009859812743809595,
+          -0.08641035454068254,
+          -0.043936142724667594,
+          -0.46834687462324476,
+          -0.11010935292315058,
+          -0.09296328440089266,
+          -0.09536520571879348,
+          -0.18051377395202914,
+          0.05116516223023558,
+          0.1876815956390588,
+          0.03197445947879058,
+          -0.10466676538911353,
+          0.007983218472840992,
+          -0.09613506567444408,
+          0.6829106136911167,
+          0.6674603716768107,
+          -0.2573318723491003,
+          0.3301448137596663,
+          -0.05683632112133233,
+          -0.26132661579817207,
+          0.197595024431163,
+          0.016728821829541576,
+          -0.16526207661984121,
+          0.10484149448346923,
+          -0.8575265533161234,
+          -0.5302436193008909,
+          -0.4012393167894604,
+          0.06845841085896472,
+          -0.2370454964621317,
+          -0.21764299994626574,
+          0.35137661844095885,
+          0.36793462510436886,
+          0.024074374748664706,
+          0.006996697289658778,
+          0.020568685311519716,
+          0.15577756123174008,
+          -0.15331670474350703,
+          -0.21303888693851622,
+          0.13476423228762358,
+          0.010263210866673433,
+          0.013035308791894872,
+          0.1911305765654722,
+          0.06453763896895369,
+          -0.28051145660882526,
+          0.05494830588665762,
+          0.11631224103683144,
+          -0.15608687952174963,
+          0.9619506424571818,
+          0.6361941695812009,
+          -0.16878689952647916,
+          -0.004899137701349477,
+          -0.0968541948750882,
+          -0.10348964875966388,
+          0.044732739997105496,
+          0.24222353173604833,
+          -0.07918922760556192,
+          -0.015173095370704427,
+          -0.5442535853717013,
+          -0.4215991625776942,
+          -0.005186948689252212,
+          0.07925507042024225,
+          0.21544725226361383,
+          -0.15020517104395678,
+          0.09240383319955754,
+          0.4664764685188469,
+          -0.25255378296039344,
+          -0.2497859346974037,
+          -0.0029564922766310096,
+          0.22834334236761156,
+          -0.051384804253529356,
+          -0.18452058324838566,
+          0.30504747660404236,
+          0.14309881238590108,
+          -0.167031729918234,
+          -0.008439141324519298,
+          -0.010861331602720308,
+          -0.3638911854826135,
+          -0.036325724325896425,
+          0.2432912436690168,
+          -0.006617573641195132,
+          1.1308069434957084,
+          0.1829414070219724,
+          -0.1559725484611914,
+          0.0882497949009304,
+          -0.06489040122295531,
+          -0.02211299106747288,
+          0.18478264933935723,
+          -0.0893635342998311,
+          -0.1907702976096716,
+          -0.050570966363957935,
+          -0.6812586143939654,
+          -0.15653543568703476,
+          0.2724794403914011,
+          0.06342078432847376,
+          0.17526915884315297,
+          -0.11890748203109339,
+          0.17880310418919754,
+          0.17568889438311472,
+          -0.5216751555432374,
+          0.011319083529697927,
+          0.29884253940113137,
+          0.10838789900578033,
+          0.11874581947262394,
+          -0.05357756370629558,
+          0.303144017070939,
+          0.05823379196651497,
+          -0.16864035976480507,
+          0.0030050463350397632,
+          -0.28839454526928343,
+          -0.16847728300440265,
+          0.21939265656563034,
+          0.0400014403812008,
+          0.666498673021094,
+          0.054290327960571004,
+          -0.31791631504670304,
+          -0.5016413720668778
+        ],
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            29,
+            52
+          ],
+          "orbit_rejected": [
+            3,
+            3
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.10083804561991146,
+            0.08408395681395082
+          ]
+        },
+        "status": [
+          0,
+          0
+        ],
+        "source_sha256": "6a7cfa82000d718bbf802f39a70c4704bdd36cba0bd1b50059167693195ef310",
+        "compile_seconds": 12.543170611003006,
+        "compiler_buffer_bytes": 1773848,
+        "samples_ms": [
+          {
+            "forward": 41.272529000707436,
+            "reverse": 201.4865450000798,
+            "total": 264.05524400252034
+          },
+          {
+            "forward": 40.40994100068929,
+            "reverse": 203.55388099778793,
+            "total": 263.17483200182323
+          },
+          {
+            "forward": 43.8020459987456,
+            "reverse": 204.03167800031952,
+            "total": 251.11052600186667
+          },
+          {
+            "forward": 40.449021998938406,
+            "reverse": 200.65076199898613,
+            "total": 256.8341109981702
+          },
+          {
+            "forward": 44.0170069996384,
+            "reverse": 213.12553900133935,
+            "total": 280.75286300008884
+          },
+          {
+            "forward": 47.206588002154604,
+            "reverse": 259.2724390015064,
+            "total": 320.66976399801206
+          },
+          {
+            "forward": 42.167708998022135,
+            "reverse": 218.46347500104457,
+            "total": 285.22853200047393
+          },
+          {
+            "forward": 46.71356800099602,
+            "reverse": 230.99031899982947,
+            "total": 292.8049120018841
+          },
+          {
+            "forward": 44.51761200107285,
+            "reverse": 217.30539499912993,
+            "total": 260.6611890005297
+          },
+          {
+            "forward": 42.06703200179618,
+            "reverse": 210.49434100132203,
+            "total": 276.79679400171153
+          },
+          {
+            "forward": 66.85223800013773,
+            "reverse": 289.39651399923605,
+            "total": 315.9904229978565
+          },
+          {
+            "forward": 41.785246998188086,
+            "reverse": 208.4852879997925,
+            "total": 255.26039200121886
+          },
+          {
+            "forward": 39.87512399908155,
+            "reverse": 205.45487600247725,
+            "total": 256.5618490007182
+          },
+          {
+            "forward": 40.150677999918116,
+            "reverse": 201.28627099984442,
+            "total": 257.96014700244996
+          },
+          {
+            "forward": 39.710607001325116,
+            "reverse": 201.99281800159952,
+            "total": 270.6536330006202
+          },
+          {
+            "forward": 40.78982000282849,
+            "reverse": 203.5673760001373,
+            "total": 261.9172670019907
+          },
+          {
+            "forward": 43.38457900303183,
+            "reverse": 200.04171999971732,
+            "total": 261.00038799995673
+          },
+          {
+            "forward": 43.90329699890572,
+            "reverse": 211.8805309983145,
+            "total": 263.5465169987583
+          },
+          {
+            "forward": 43.65240900006029,
+            "reverse": 210.7527480002318,
+            "total": 262.48235200182535
+          },
+          {
+            "forward": 39.601434000360314,
+            "reverse": 208.94530700024916,
+            "total": 264.35618699906627
+          },
+          {
+            "forward": 43.00579299888341,
+            "reverse": 199.41081399883842,
+            "total": 268.6445059989637
+          }
+        ],
+        "medians_ms": {
+          "forward": 42.167708998022135,
+          "reverse": 208.4852879997925,
+          "total": 263.5465169987583
+        },
+        "reverse_over_forward": 4.944192913339718,
+        "total_over_forward": 6.249960532859869
+      },
+      "after": {
+        "value": 0.2794087495679227,
+        "gradient": [
+          -0.33211825849584103,
+          0.18312491859888247,
+          -0.1865194066719338,
+          -0.3469206750654738,
+          -0.34252909177821267,
+          0.13175142994031802,
+          0.04526032847065147,
+          -0.006591636773409331,
+          0.14417558301734476,
+          -0.08973583872139707,
+          -0.07444018883672263,
+          -0.9370342160402569,
+          -0.30857878661311033,
+          -0.5387217597040065,
+          0.27899251836359196,
+          -0.2518668818199405,
+          -0.4709264462845623,
+          0.05817458515234379,
+          0.1032399613878795,
+          0.11062199806487505,
+          0.009859812743809595,
+          -0.08641035454068254,
+          -0.043936142724667594,
+          -0.46834687462324476,
+          -0.11010935292315058,
+          -0.09296328440089266,
+          -0.09536520571879348,
+          -0.18051377395202914,
+          0.05116516223023558,
+          0.1876815956390588,
+          0.03197445947879058,
+          -0.10466676538911353,
+          0.007983218472840992,
+          -0.09613506567444408,
+          0.6829106136911167,
+          0.6674603716768107,
+          -0.2573318723491003,
+          0.3301448137596663,
+          -0.05683632112133233,
+          -0.26132661579817207,
+          0.197595024431163,
+          0.016728821829541576,
+          -0.16526207661984121,
+          0.10484149448346923,
+          -0.8575265533161234,
+          -0.5302436193008909,
+          -0.4012393167894604,
+          0.06845841085896472,
+          -0.2370454964621317,
+          -0.21764299994626574,
+          0.35137661844095885,
+          0.36793462510436886,
+          0.024074374748664706,
+          0.006996697289658778,
+          0.020568685311519716,
+          0.15577756123174008,
+          -0.15331670474350703,
+          -0.21303888693851622,
+          0.13476423228762358,
+          0.010263210866673433,
+          0.013035308791894872,
+          0.1911305765654722,
+          0.06453763896895369,
+          -0.28051145660882526,
+          0.05494830588665762,
+          0.11631224103683144,
+          -0.15608687952174963,
+          0.9619506424571818,
+          0.6361941695812009,
+          -0.16878689952647916,
+          -0.004899137701349477,
+          -0.0968541948750882,
+          -0.10348964875966388,
+          0.044732739997105496,
+          0.24222353173604833,
+          -0.07918922760556192,
+          -0.015173095370704427,
+          -0.5442535853717013,
+          -0.4215991625776942,
+          -0.005186948689252212,
+          0.07925507042024225,
+          0.21544725226361383,
+          -0.15020517104395678,
+          0.09240383319955754,
+          0.4664764685188469,
+          -0.25255378296039344,
+          -0.2497859346974037,
+          -0.0029564922766310096,
+          0.22834334236761156,
+          -0.051384804253529356,
+          -0.18452058324838566,
+          0.30504747660404236,
+          0.14309881238590108,
+          -0.167031729918234,
+          -0.008439141324519298,
+          -0.010861331602720308,
+          -0.3638911854826135,
+          -0.036325724325896425,
+          0.2432912436690168,
+          -0.006617573641195132,
+          1.1308069434957084,
+          0.1829414070219724,
+          -0.1559725484611914,
+          0.0882497949009304,
+          -0.06489040122295531,
+          -0.02211299106747288,
+          0.18478264933935723,
+          -0.0893635342998311,
+          -0.1907702976096716,
+          -0.050570966363957935,
+          -0.6812586143939654,
+          -0.15653543568703476,
+          0.2724794403914011,
+          0.06342078432847376,
+          0.17526915884315297,
+          -0.11890748203109339,
+          0.17880310418919754,
+          0.17568889438311472,
+          -0.5216751555432374,
+          0.011319083529697927,
+          0.29884253940113137,
+          0.10838789900578033,
+          0.11874581947262394,
+          -0.05357756370629558,
+          0.303144017070939,
+          0.05823379196651497,
+          -0.16864035976480507,
+          0.0030050463350397632,
+          -0.28839454526928343,
+          -0.16847728300440265,
+          0.21939265656563034,
+          0.0400014403812008,
+          0.666498673021094,
+          0.054290327960571004,
+          -0.31791631504670304,
+          -0.5016413720668778
+        ],
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            29,
+            52
+          ],
+          "orbit_rejected": [
+            3,
+            3
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.10083804561991146,
+            0.08408395681395082
+          ]
+        },
+        "status": [
+          0,
+          0
+        ],
+        "source_sha256": "68bbec492dc33f082b1b6c39deed99a5afe9618459e75f8d10c6149e4a323e03",
+        "compile_seconds": 12.998326880002423,
+        "compiler_buffer_bytes": 1808168,
+        "samples_ms": [
+          {
+            "forward": 45.72216899759951,
+            "reverse": 158.81040600288543,
+            "total": 206.59375000104774
+          },
+          {
+            "forward": 42.034951999085024,
+            "reverse": 152.79357400140725,
+            "total": 211.9945189988357
+          },
+          {
+            "forward": 40.77788699942175,
+            "reverse": 152.9430099981255,
+            "total": 205.49795199985965
+          },
+          {
+            "forward": 40.587851999589475,
+            "reverse": 149.2249549992266,
+            "total": 207.45250700201723
+          },
+          {
+            "forward": 43.61478799910401,
+            "reverse": 151.66273300201283,
+            "total": 213.6160829977598
+          },
+          {
+            "forward": 43.34069600008661,
+            "reverse": 163.2318900010432,
+            "total": 219.21473600013996
+          },
+          {
+            "forward": 44.10313900007168,
+            "reverse": 180.19418699987,
+            "total": 239.2922439976246
+          },
+          {
+            "forward": 45.74950899768737,
+            "reverse": 171.4276359998621,
+            "total": 217.3299309979484
+          },
+          {
+            "forward": 43.07809699821519,
+            "reverse": 166.45245700055966,
+            "total": 234.20484500093153
+          },
+          {
+            "forward": 45.09727299955557,
+            "reverse": 176.02732600062154,
+            "total": 243.60762200012687
+          },
+          {
+            "forward": 47.465940999245504,
+            "reverse": 185.51380300050369,
+            "total": 281.1403720006638
+          },
+          {
+            "forward": 44.06510800254182,
+            "reverse": 153.75926599881495,
+            "total": 210.0392770007602
+          },
+          {
+            "forward": 43.285894997097785,
+            "reverse": 154.91436999946018,
+            "total": 202.979490000871
+          },
+          {
+            "forward": 44.67858200223418,
+            "reverse": 155.2967739989981,
+            "total": 215.0889449985698
+          },
+          {
+            "forward": 45.5903730035061,
+            "reverse": 158.74146799978917,
+            "total": 210.38974999828497
+          },
+          {
+            "forward": 42.67818199878093,
+            "reverse": 156.13216099882266,
+            "total": 211.84166799866944
+          },
+          {
+            "forward": 40.26996099855751,
+            "reverse": 158.14121800212888,
+            "total": 215.0154190021567
+          },
+          {
+            "forward": 40.7048710003437,
+            "reverse": 161.46555899831583,
+            "total": 215.3302459992119
+          },
+          {
+            "forward": 43.723381000745576,
+            "reverse": 152.4437520020001,
+            "total": 215.13365899954806
+          },
+          {
+            "forward": 41.167253999446984,
+            "reverse": 169.25304500182392,
+            "total": 210.3906629999983
+          },
+          {
+            "forward": 41.871107001497876,
+            "reverse": 154.6643440015032,
+            "total": 207.69167900289176
+          }
+        ],
+        "medians_ms": {
+          "forward": 43.34069600008661,
+          "reverse": 158.14121800212888,
+          "total": 213.6160829977598
+        },
+        "reverse_over_forward": 3.648792765160321,
+        "total_over_forward": 4.928764480324287,
+        "frozen_directional_jvp": -0.3254373259141948,
+        "frozen_directional_fd": [
+          {
+            "epsilon": 1e-05,
+            "ad": -0.32543732591412877,
+            "fd": -0.3254373258820831,
+            "relative_error": 9.846964953196904e-11
+          },
+          {
+            "epsilon": 3e-06,
+            "ad": -0.32543732591412877,
+            "fd": -0.32543732597645203,
+            "relative_error": 1.9150617550938962e-10
+          },
+          {
+            "epsilon": 1e-06,
+            "ad": -0.32543732591412877,
+            "fd": -0.32543732558787397,
+            "relative_error": 1.0025119277164256e-09
+          }
+        ],
+        "max_normalized_replay_difference": 1.8056736661442585e-13
+      },
+      "reverse_speedup": 1.3183488190724943,
+      "total_speedup": 1.2337391141168061,
+      "compiler_buffer_ratio": 1.0193477682416983,
+      "max_abs_gradient_difference": 0.0,
+      "reconstruction_work": {
+        "scope": "Nominal RK step replays; excludes RHS transposes and initial FSAL calls",
+        "checkpoint_node_budget": 23,
+        "all_maps_fit_proven_from_counts": true,
+        "before_orbit_step_replays": [
+          78,
+          147
+        ],
+        "after_orbit_step_replays": [
+          52,
+          98
+        ]
+      },
+      "horizon_set": "long"
+    },
+    {
+      "model": "lorentz",
+      "before": {
+        "value": 0.22139869758676306,
+        "gradient": [
+          0.24638755102175836,
+          0.04629714304983483,
+          -0.24439305218910995,
+          -0.03294972491893236,
+          0.07698054534855313,
+          0.06795022611607801,
+          -0.05312138458262787,
+          -0.04640943981565476,
+          0.05146792378267927,
+          0.046287824977521555,
+          -0.026506957205848083,
+          -0.17745395983961101,
+          -0.13609707149720923,
+          -0.03496591381290846,
+          -0.0365637912623537,
+          -0.012087395432704148,
+          -0.06748681875475132,
+          0.01774456983651181,
+          0.036126321415816946,
+          0.020003028865262486,
+          -0.011627573680459129,
+          0.00341923335413216,
+          0.022440413339438265,
+          -0.06636403183034581,
+          0.00881280338069047,
+          -0.021021489844619275,
+          -0.04362085792569749,
+          -0.01696314058235525,
+          0.009097136983908407,
+          0.03500427527585326,
+          0.0008287983937847669,
+          -0.017897693046056627,
+          -0.011743108323414197,
+          0.241873462888793,
+          -0.00870128569739247,
+          -0.07912358479432918,
+          0.08546979313271513,
+          0.050978576764349,
+          -0.01358838364347975,
+          -0.03374610671807905,
+          0.005682874473088096,
+          -0.0004379148018223752,
+          -0.012391781990707203,
+          0.0029691669786370547,
+          -0.19241306201277164,
+          -0.0587228394680719,
+          0.010220784270388335,
+          0.003856554780916458,
+          -0.02109191659522883,
+          -0.0014778232146846742,
+          0.06184901649554285,
+          0.025355563898539685,
+          -0.011200768106820906,
+          -0.0037052843440791086,
+          -0.005850245891507412,
+          0.06074154803146431,
+          0.059441316715945505,
+          0.015860876416843098,
+          -0.020620923703503498,
+          -0.03960833822530363,
+          0.012005001566236814,
+          -0.007537791880223141,
+          -0.019848871305152234,
+          -0.0238609203561753,
+          -0.0012715524758856297,
+          0.019962450541210403,
+          0.10945023538513445,
+          -0.026098028443962716,
+          -0.027223340988146487,
+          0.04743923029384678,
+          0.03689784327783656,
+          -0.029227004737301387,
+          -0.02130652676866108,
+          0.01597723531580347,
+          0.009051975733992332,
+          -0.011553625661304651,
+          0.005742361927665508,
+          -0.06829019493349867,
+          -0.013640169216200686,
+          0.04444721446418708,
+          0.022021718991742385,
+          -0.027372785843897275,
+          0.0011114616116000026,
+          0.024946891312845502,
+          0.009775300434161954,
+          -0.015498742455074524,
+          -0.0073227384077797185,
+          0.010807248893549188,
+          0.03232997776592063,
+          0.06160916044440187,
+          0.00045881618410899543,
+          -0.008167451232972564,
+          -0.025731686728649818,
+          0.004931006788668963,
+          -0.010261473814473548,
+          -0.01819727456225411,
+          0.011160633722361724,
+          0.018609132189598383,
+          0.00477249401576271,
+          0.026908012251419235,
+          -0.03517049531745626,
+          -0.004318044532976603,
+          0.035377948812742185,
+          0.003945069456422983,
+          -0.015885869962205458,
+          3.798330735282657e-05,
+          0.008935790626615895,
+          -0.0031992770901610275,
+          0.0017566265566212468,
+          0.0016585120287150423,
+          -0.021076717276199412,
+          6.567299808696758e-05,
+          0.03823181205675535,
+          0.0042837490857601255,
+          -0.02214902138159609,
+          0.0033429070918109607,
+          0.017506796482680678,
+          0.0026035869318722883,
+          -0.013706156115380164,
+          0.0016995959696639931,
+          0.002311344322293934,
+          0.00851375797802736,
+          0.038216206176313716,
+          -0.0011862814158311425,
+          -0.0009015189742117807,
+          -0.0008584640837267873,
+          -0.0019468123397613354,
+          -0.006070593998594698,
+          0.0016071787092268278,
+          0.00048044583044016837,
+          -0.00924082408704121,
+          -0.00622893257017043,
+          0.2661150864962868,
+          0.14443647130002618,
+          0.06217478484449005,
+          0.034032395483879783
+        ],
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            69,
+            63
+          ],
+          "orbit_rejected": [
+            2,
+            2
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.020171177131112685,
+            0.009330023495050613
+          ]
+        },
+        "status": [
+          0,
+          0
+        ],
+        "source_sha256": "6a7cfa82000d718bbf802f39a70c4704bdd36cba0bd1b50059167693195ef310",
+        "compile_seconds": 6.957290023001406,
+        "compiler_buffer_bytes": 1201528,
+        "samples_ms": [
+          {
+            "forward": 18.799064000631915,
+            "reverse": 63.031115001649596,
+            "total": 82.83295900037047
+          },
+          {
+            "forward": 17.373615002725273,
+            "reverse": 63.981848001276376,
+            "total": 89.21026299867663
+          },
+          {
+            "forward": 17.61523599998327,
+            "reverse": 61.86729399996693,
+            "total": 87.44541199848754
+          },
+          {
+            "forward": 19.4061359979969,
+            "reverse": 63.83671699950355,
+            "total": 84.38941200074623
+          },
+          {
+            "forward": 19.271074001153465,
+            "reverse": 64.30545100010931,
+            "total": 89.36661400002777
+          },
+          {
+            "forward": 18.222187001811108,
+            "reverse": 62.987863002490485,
+            "total": 86.18442800070625
+          },
+          {
+            "forward": 18.61841600111802,
+            "reverse": 63.011536996782525,
+            "total": 91.30960599941318
+          },
+          {
+            "forward": 18.50371299951803,
+            "reverse": 63.42488799782586,
+            "total": 83.95291699707741
+          },
+          {
+            "forward": 18.843566002033185,
+            "reverse": 63.06873400171753,
+            "total": 80.42637900143745
+          },
+          {
+            "forward": 18.443639997713035,
+            "reverse": 62.64595399989048,
+            "total": 86.70628199979546
+          },
+          {
+            "forward": 17.2863409970887,
+            "reverse": 70.03499700294924,
+            "total": 85.07127200209652
+          },
+          {
+            "forward": 19.582114000513684,
+            "reverse": 64.75903599857702,
+            "total": 79.52260300226044
+          },
+          {
+            "forward": 18.933945000753738,
+            "reverse": 63.57174200093141,
+            "total": 87.06697399975383
+          },
+          {
+            "forward": 18.54241399996681,
+            "reverse": 65.36151000182144,
+            "total": 84.52294900052948
+          },
+          {
+            "forward": 19.531338999513537,
+            "reverse": 64.96250500276801,
+            "total": 96.79526900072233
+          },
+          {
+            "forward": 18.704686997807585,
+            "reverse": 65.65229300031206,
+            "total": 81.21885600121459
+          },
+          {
+            "forward": 17.596210000192514,
+            "reverse": 64.71326099926955,
+            "total": 82.77473799898871
+          },
+          {
+            "forward": 18.058871999528492,
+            "reverse": 63.32494200250949,
+            "total": 90.46793800007435
+          },
+          {
+            "forward": 18.984620000992436,
+            "reverse": 65.71433800127124,
+            "total": 84.12047900128528
+          },
+          {
+            "forward": 20.127029998548096,
+            "reverse": 62.84502699782024,
+            "total": 83.82802299820469
+          },
+          {
+            "forward": 18.811215999448905,
+            "reverse": 64.32383400169783,
+            "total": 82.84307700159843
+          }
+        ],
+        "medians_ms": {
+          "forward": 18.704686997807585,
+          "reverse": 63.83671699950355,
+          "total": 84.52294900052948
+        },
+        "reverse_over_forward": 3.412872773919499,
+        "total_over_forward": 4.518811194778966
+      },
+      "after": {
+        "value": 0.22139869758676306,
+        "gradient": [
+          0.24638755102175836,
+          0.04629714304983483,
+          -0.24439305218910995,
+          -0.03294972491893236,
+          0.07698054534855313,
+          0.06795022611607801,
+          -0.05312138458262787,
+          -0.04640943981565476,
+          0.05146792378267927,
+          0.046287824977521555,
+          -0.026506957205848083,
+          -0.17745395983961101,
+          -0.13609707149720923,
+          -0.03496591381290846,
+          -0.0365637912623537,
+          -0.012087395432704148,
+          -0.06748681875475132,
+          0.01774456983651181,
+          0.036126321415816946,
+          0.020003028865262486,
+          -0.011627573680459129,
+          0.00341923335413216,
+          0.022440413339438265,
+          -0.06636403183034581,
+          0.00881280338069047,
+          -0.021021489844619275,
+          -0.04362085792569749,
+          -0.01696314058235525,
+          0.009097136983908407,
+          0.03500427527585326,
+          0.0008287983937847669,
+          -0.017897693046056627,
+          -0.011743108323414197,
+          0.241873462888793,
+          -0.00870128569739247,
+          -0.07912358479432918,
+          0.08546979313271513,
+          0.050978576764349,
+          -0.01358838364347975,
+          -0.03374610671807905,
+          0.005682874473088096,
+          -0.0004379148018223752,
+          -0.012391781990707203,
+          0.0029691669786370547,
+          -0.19241306201277164,
+          -0.0587228394680719,
+          0.010220784270388335,
+          0.003856554780916458,
+          -0.02109191659522883,
+          -0.0014778232146846742,
+          0.06184901649554285,
+          0.025355563898539685,
+          -0.011200768106820906,
+          -0.0037052843440791086,
+          -0.005850245891507412,
+          0.06074154803146431,
+          0.059441316715945505,
+          0.015860876416843098,
+          -0.020620923703503498,
+          -0.03960833822530363,
+          0.012005001566236814,
+          -0.007537791880223141,
+          -0.019848871305152234,
+          -0.0238609203561753,
+          -0.0012715524758856297,
+          0.019962450541210403,
+          0.10945023538513445,
+          -0.026098028443962716,
+          -0.027223340988146487,
+          0.04743923029384678,
+          0.03689784327783656,
+          -0.029227004737301387,
+          -0.02130652676866108,
+          0.01597723531580347,
+          0.009051975733992332,
+          -0.011553625661304651,
+          0.005742361927665508,
+          -0.06829019493349867,
+          -0.013640169216200686,
+          0.04444721446418708,
+          0.022021718991742385,
+          -0.027372785843897275,
+          0.0011114616116000026,
+          0.024946891312845502,
+          0.009775300434161954,
+          -0.015498742455074524,
+          -0.0073227384077797185,
+          0.010807248893549188,
+          0.03232997776592063,
+          0.06160916044440187,
+          0.00045881618410899543,
+          -0.008167451232972564,
+          -0.025731686728649818,
+          0.004931006788668963,
+          -0.010261473814473548,
+          -0.01819727456225411,
+          0.011160633722361724,
+          0.018609132189598383,
+          0.00477249401576271,
+          0.026908012251419235,
+          -0.03517049531745626,
+          -0.004318044532976603,
+          0.035377948812742185,
+          0.003945069456422983,
+          -0.015885869962205458,
+          3.798330735282657e-05,
+          0.008935790626615895,
+          -0.0031992770901610275,
+          0.0017566265566212468,
+          0.0016585120287150423,
+          -0.021076717276199412,
+          6.567299808696758e-05,
+          0.03823181205675535,
+          0.0042837490857601255,
+          -0.02214902138159609,
+          0.0033429070918109607,
+          0.017506796482680678,
+          0.0026035869318722883,
+          -0.013706156115380164,
+          0.0016995959696639931,
+          0.002311344322293934,
+          0.00851375797802736,
+          0.038216206176313716,
+          -0.0011862814158311425,
+          -0.0009015189742117807,
+          -0.0008584640837267873,
+          -0.0019468123397613354,
+          -0.006070593998594698,
+          0.0016071787092268278,
+          0.00048044583044016837,
+          -0.00924082408704121,
+          -0.00622893257017043,
+          0.2661150864962868,
+          0.14443647130002618,
+          0.06217478484449005,
+          0.034032395483879783
+        ],
+        "stats": {
+          "steps": [
+            7,
+            7
+          ],
+          "accepted": [
+            7,
+            7
+          ],
+          "rejected": [
+            0,
+            0
+          ],
+          "orbit_steps": [
+            69,
+            63
+          ],
+          "orbit_rejected": [
+            2,
+            2
+          ],
+          "peak_pending": [
+            1,
+            1
+          ],
+          "max_accepted_error": [
+            0.020171177131112685,
+            0.009330023495050613
+          ]
+        },
+        "status": [
+          0,
+          0
+        ],
+        "source_sha256": "68bbec492dc33f082b1b6c39deed99a5afe9618459e75f8d10c6149e4a323e03",
+        "compile_seconds": 7.163245331001235,
+        "compiler_buffer_bytes": 1207896,
+        "samples_ms": [
+          {
+            "forward": 18.547754996689036,
+            "reverse": 59.98497299879091,
+            "total": 70.47641100143665
+          },
+          {
+            "forward": 19.592052998632425,
+            "reverse": 49.50065799857839,
+            "total": 74.520403999486
+          },
+          {
+            "forward": 19.06314699954237,
+            "reverse": 48.51188300017384,
+            "total": 76.80229099787539
+          },
+          {
+            "forward": 19.647125001938548,
+            "reverse": 50.37848500069231,
+            "total": 75.27855800071848
+          },
+          {
+            "forward": 16.526565999811282,
+            "reverse": 51.05723200176726,
+            "total": 69.52367499980028
+          },
+          {
+            "forward": 17.60202000150457,
+            "reverse": 49.864085001900094,
+            "total": 67.55840800178703
+          },
+          {
+            "forward": 18.10570099769393,
+            "reverse": 50.211481997394,
+            "total": 72.67692499954137
+          },
+          {
+            "forward": 17.27094299712917,
+            "reverse": 52.90389500078163,
+            "total": 74.43992200205685
+          },
+          {
+            "forward": 19.9067700013984,
+            "reverse": 49.42754099829472,
+            "total": 73.87548000042443
+          },
+          {
+            "forward": 18.666927000595024,
+            "reverse": 50.49917999713216,
+            "total": 71.78658299744711
+          },
+          {
+            "forward": 18.37297899692203,
+            "reverse": 50.564911998662865,
+            "total": 69.36958599908394
+          },
+          {
+            "forward": 18.654393999895547,
+            "reverse": 49.85416699855705,
+            "total": 75.05137299813214
+          },
+          {
+            "forward": 18.314108001504792,
+            "reverse": 50.954007001564605,
+            "total": 75.64192499921774
+          },
+          {
+            "forward": 18.808840999554377,
+            "reverse": 50.735691002046224,
+            "total": 77.61504500012961
+          },
+          {
+            "forward": 19.6134930010885,
+            "reverse": 51.20818199793575,
+            "total": 72.63587800116511
+          },
+          {
+            "forward": 17.6555100006226,
+            "reverse": 51.32065100042382,
+            "total": 72.68632299746969
+          },
+          {
+            "forward": 18.47906600232818,
+            "reverse": 53.681305002101,
+            "total": 75.21378599994932
+          },
+          {
+            "forward": 18.957447999127908,
+            "reverse": 48.994592998496955,
+            "total": 75.11651499953587
+          },
+          {
+            "forward": 21.719450000091456,
+            "reverse": 50.8484909987601,
+            "total": 74.88055499925395
+          },
+          {
+            "forward": 17.86324800195871,
+            "reverse": 52.21189399890136,
+            "total": 69.6021900002961
+          },
+          {
+            "forward": 19.5210500023677,
+            "reverse": 53.990502001397545,
+            "total": 67.68690700118896
+          }
+        ],
+        "medians_ms": {
+          "forward": 18.654393999895547,
+          "reverse": 50.735691002046224,
+          "total": 73.87548000042443
+        },
+        "reverse_over_forward": 2.719771599245213,
+        "total_over_forward": 3.960218702405347,
+        "frozen_directional_jvp": 0.019344275916868534,
+        "frozen_directional_fd": [
+          {
+            "epsilon": 1e-05,
+            "ad": 0.01934427591686553,
+            "fd": 0.01934427591582244,
+            "relative_error": 5.392237117520769e-11
+          },
+          {
+            "epsilon": 3e-06,
+            "ad": 0.01934427591686553,
+            "fd": 0.019344275875576855,
+            "relative_error": 2.134412993601315e-09
+          },
+          {
+            "epsilon": 1e-06,
+            "ad": 0.01934427591686553,
+            "fd": 0.01934427591721022,
+            "relative_error": 1.7818684770202647e-11
+          }
+        ],
+        "max_normalized_replay_difference": 2.0050227205447116e-13
+      },
+      "reverse_speedup": 1.2582211011362583,
+      "total_speedup": 1.1441272395122695,
+      "compiler_buffer_ratio": 1.0052999181042805,
+      "max_abs_gradient_difference": 0.0,
+      "reconstruction_work": {
+        "scope": "Nominal RK step replays; excludes RHS transposes and initial FSAL calls",
+        "checkpoint_node_budget": 23,
+        "all_maps_fit_proven_from_counts": true,
+        "before_orbit_step_replays": [
+          201,
+          183
+        ],
+        "after_orbit_step_replays": [
+          134,
+          122
+        ]
+      },
+      "horizon_set": "long"
+    }
+  ]
+}

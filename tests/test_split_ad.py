@@ -32,11 +32,11 @@ def objective(out):
     return jnp.sum(out.y**2)+jnp.sum(out.ys*jnp.linspace(.1, .7, len(out.ts))[:, None])
 
 
-def test_bounded_checkpoint_reuse_overflow_with_mixed_vmap_lanes():
-    """One lane overflows the scratch budget; the other reuses every map.
+def test_sparse_forward_checkpoints_with_unequal_vmap_paths():
+    """Retained nodes cover unequal paths across multiple outer segments.
 
-    Two outer segments also check that the local checkpoint buffer resets.
     The independent oracle propagates perturbed states through the full path.
+    This case exceeded the former per-segment scratch budget in one lane.
     """
     def rhs(t,y,p):
         return p[0]*jnp.sin(y+.2*t)
@@ -55,10 +55,30 @@ def test_bounded_checkpoint_reuse_overflow_with_mixed_vmap_lanes():
             **options,orbit_dt0=h,key=key,adjoint=adjoint,_record_ad=record))(p,orbit_steps,keys)
     recorded,tapes=jax.jit(lambda p:run(p,record=True))(p)
     np.testing.assert_array_equal(recorded.status,0)
-    # Budget = one orbit's eight checkpoint slots + three other outer maps.
+    # The former per-segment budget was eight nodes plus three outer maps.
     counts=np.diff(np.asarray(tapes.offsets),axis=1)[:,:4]
     nodes=(counts+7)//8
     assert np.sum(nodes[0])>11 and np.sum(nodes[1])<=11
+    for lane in range(2):
+        count=int(tapes.count[lane])
+        inner_counts=np.diff(np.asarray(tapes.offsets[lane]))[:count]
+        expected=(inner_counts+7)//8
+        offsets=np.asarray(tapes.checkpoint_offsets[lane])[:count+1]
+        np.testing.assert_array_equal(np.diff(offsets),expected)
+        assert int(tapes.checkpoint_count[lane])==int(np.sum(expected))
+        for index in range(count):
+            slots=np.arange(offsets[index],offsets[index+1])
+            step_indices=int(tapes.offsets[lane,index])+8*np.arange(expected[index])
+            node_times=np.asarray(tapes.orbit_times[lane])[step_indices,0]
+            states=np.asarray(tapes.orbit_states[lane])[slots]
+            derivatives=np.asarray(tapes.orbit_derivatives[lane])[slots]
+            np.testing.assert_allclose(derivatives,p[lane,0]*np.sin(states+.2*node_times[:,None]),
+                rtol=2e-13,atol=2e-14)
+            if index+1<count:
+                end=np.asarray(tapes.orbit_endpoints[lane,index])
+                following=end+p[lane,1]*np.tanh(end)*np.asarray(tapes.increments[lane,index])
+                np.testing.assert_allclose(tapes.orbit_states[lane,offsets[index+1]],following,
+                    rtol=2e-13,atol=2e-14)
     def metric(saved,final):
         return jnp.sum(final**2)+.3*jnp.sum(saved**2)
     def cost(p):
@@ -94,9 +114,64 @@ def test_recording_keeps_production_forward_and_noise_exact(method):
             np.testing.assert_array_equal(left, right)
     assert recorded.status == SplitStatus.SUCCESS and recorded.stats.rejected > 0
     assert tape.orbit_count >= tape.count and tape.count == recorded.stats.accepted
+    count=int(tape.count)
+    expected=(np.diff(np.asarray(tape.offsets))[:count]+2)//3
+    # Rejected outer trials must not consume any persistent checkpoint nodes.
+    np.testing.assert_array_equal(np.diff(np.asarray(tape.checkpoint_offsets))[:count],expected)
+    assert int(tape.checkpoint_count)==int(np.sum(expected))
     saved, final = jax.jit(lambda: replay_accepted_split(rhs, collision, y0, p, tape, opts['ts'], method=method))()
     np.testing.assert_allclose(saved, recorded.ys, rtol=2e-14, atol=2e-14)
     np.testing.assert_allclose(final, recorded.y, rtol=2e-14, atol=2e-14)
+
+
+@pytest.mark.parametrize("method", ["dopri5", "dopri8"])
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_outer_rhs_views_preserve_split_path_and_accepted_gradients(method, adaptive, monkeypatch):
+    import essos.split as split
+
+    @jax.jit
+    def rhs(t, y, matrix):
+        return matrix @ jnp.sin(y) + matrix[0]*t + matrix[:, 1]*jnp.cos(y)
+
+    def collision(t, y, h, dw, matrix):
+        return CollisionStep(y+.03*jnp.tanh(y)*dw, (h/.13)**2, jnp.array(0.))
+
+    matrix, y0 = jnp.array([[.3, -.1], [.2, .4]]), jnp.array([.7, -.2])
+    opts = dict(settings(method), adaptive=adaptive)
+    original = split.coalesced_rhs
+    prepared = []
+
+    def track(*args):
+        result = original(*args)
+        prepared.append(result is not None)
+        return result
+
+    monkeypatch.setattr(split, "coalesced_rhs", track)
+    ordinary = jax.jit(lambda p: solve_split(rhs, collision, y0, p, **opts))(matrix)
+    assert prepared and all(prepared)
+    monkeypatch.setattr(split, "coalesced_rhs", lambda *args: None)
+    baseline = jax.jit(lambda p: solve_split(rhs, collision, y0, p, **opts))(matrix)
+    recorded, tape = jax.jit(lambda p: solve_split(rhs, collision, y0, p, **opts,
+                                                 _record_ad=True))(matrix)
+    assert ordinary.status == baseline.status == recorded.status == SplitStatus.SUCCESS
+    for other in (baseline, recorded):
+        np.testing.assert_allclose(ordinary.ys, other.ys, rtol=2e-12, atol=2e-13)
+        np.testing.assert_allclose(ordinary.y, other.y, rtol=2e-12, atol=2e-13)
+        np.testing.assert_array_equal(jnp.array(ordinary.stats[:6]), jnp.array(other.stats[:6]))
+
+    def frozen(p):
+        saved, final = replay_accepted_split(rhs, collision, y0, p, tape, opts["ts"], method=method)
+        return jnp.sum(saved**2)+jnp.sum(final**2)
+
+    def accepted(p):
+        out = solve_split(rhs, collision, y0, p, **opts, adjoint="accepted")
+        return jnp.sum(out.ys**2)+jnp.sum(out.y**2)
+
+    value, gradient = jax.jit(jax.value_and_grad(accepted))(matrix)
+    np.testing.assert_allclose(value, frozen(matrix), rtol=2e-12, atol=2e-13)
+    direction = jnp.array([[.3, -.2], [.1, .4]])
+    tangent = jax.jvp(frozen, (matrix,), (direction,))[1]
+    np.testing.assert_allclose(jnp.sum(gradient*direction), tangent, rtol=2e-10, atol=2e-12)
 
 
 @pytest.mark.parametrize("method", ["dopri5", "dopri8"])
@@ -201,12 +276,14 @@ def test_zero_diffusion_maps_have_identity_state_gradient(model):
 
 
 @pytest.mark.parametrize("outer,inner,message", [(1,256,'accepted split AD capacity'), (64,1,'accepted orbit AD capacity')])
-def test_capacity_overflow_preserves_forward_and_rejects_gradient(outer, inner, message):
+@pytest.mark.parametrize("compact", [False, True])
+def test_capacity_overflow_preserves_forward_and_rejects_gradient(outer, inner, message, compact):
     rhs, collision = kernels()
     p = jnp.array([.4,.2,.1,0.])
     opts = settings()
     expected = solve_split(rhs,collision,jnp.array([1.2]),p,**opts)
-    opts.update(adjoint_max_accepted_steps=outer, adjoint_max_orbit_steps=inner)
+    opts.update(adjoint_max_accepted_steps=outer, adjoint_max_orbit_steps=inner,
+                _collision_state_indices=(0,) if compact else None)
     def run(p):
         return solve_split(rhs,collision,jnp.array([1.2]),p,**opts,adjoint="accepted")
     out = jax.jit(run)(p)
@@ -216,18 +293,21 @@ def test_capacity_overflow_preserves_forward_and_rejects_gradient(outer, inner, 
         jax.jit(jax.grad(lambda p:objective(run(p))))(p).block_until_ready()
 
 
-def test_failure_and_zero_span_contract():
+@pytest.mark.parametrize("compact", [False, True])
+def test_failure_and_zero_span_contract(compact):
     def bad(p):
         return solve_split(lambda t,y,a:p*y,
             lambda t,y,h,dw,a:CollisionStep(y,jnp.array(0.),jnp.array(0.)),
             jnp.ones(1),t1=1.,dt0=.1,ts=jnp.array([1.]),key=jax.random.key(0),
-            noise_dim=1,max_steps=1,max_orbit_steps=8,adaptive=False,adjoint="accepted").y[0]
+            noise_dim=1,max_steps=1,max_orbit_steps=8,adaptive=False,adjoint="accepted",
+            _collision_state_indices=(0,) if compact else None).y[0]
     with pytest.raises(Exception,match="successful/event"):
         jax.jit(jax.grad(bad))(.3).block_until_ready()
     empty = lambda y: jnp.sum(solve_split(lambda t,y,a:y,
         lambda t,y,h,dw,a:CollisionStep(y,jnp.array(0.),jnp.array(0.)),
         y,t1=0.,dt0=.1,ts=jnp.array([0.,0.]),key=jax.random.key(0),noise_dim=1,
-        max_steps=1,max_orbit_steps=2,adjoint="accepted").ys)
+        max_steps=1,max_orbit_steps=2,adjoint="accepted",
+        _collision_state_indices=(0,) if compact else None).ys)
     np.testing.assert_array_equal(jax.jit(jax.grad(empty))(jnp.array([2.])), [2.])
 
 
@@ -287,6 +367,9 @@ def test_schedule_allocation_is_flat_and_independently_bounded():
     assert out.status == SplitStatus.SUCCESS
     assert tape.times.shape == (12,2) and tape.orbit_times.shape == (256,2)
     assert tape.states.shape == (4,1) and tape.increments.shape == (12,1)
+    assert tape.orbit_states.shape == (97,1)
+    assert tape.orbit_derivatives.shape == (97,1)
+    assert tape.orbit_endpoints.shape == (12,1)
 
 
 @pytest.mark.parametrize("name,value", [("adjoint","bad"),("adjoint_checkpoint_steps",True),

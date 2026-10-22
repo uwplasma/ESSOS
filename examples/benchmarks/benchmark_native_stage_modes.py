@@ -66,7 +66,7 @@ def kernel_for_compilation(variant, comparison="execution", candidate="trial_pro
         rk._trial_step = derivative_storage_trial
     elif comparison == "rhs_setup":
         if variant == "before":
-            rk._prepare_rhs = lambda rhs, t0, y0, args: rhs
+            rk._prepare_rhs = lambda rhs, t0, y0, args, **kwargs: rhs
     elif comparison == "execution":
         from examples.benchmarks.profile_rk_candidates import candidate_kernel
         if candidate.startswith("trial_"):

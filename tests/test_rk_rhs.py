@@ -12,7 +12,8 @@ jax.config.update("jax_enable_x64", True)
 
 
 @pytest.mark.parametrize("dependence", ["parameters", "time", "state", "both"])
-def test_preparation_keeps_new_times_states_and_parameter_derivatives(dependence):
+@pytest.mark.parametrize("coalesce_views", [False, True])
+def test_preparation_keeps_new_times_states_and_parameter_derivatives(dependence, coalesce_views):
     def observe(x, prepare):
         args = {"parameters": x[6:]}
 
@@ -27,7 +28,8 @@ def test_preparation_keeps_new_times_states_and_parameter_derivatives(dependence
                 value = value * jnp.sin(y)
             return matrix @ value
 
-        prepared = _prepare_rhs(rhs, x[0], x[1:3], args) if prepare else rhs
+        prepared = _prepare_rhs(rhs, x[0], x[1:3], args,
+                                coalesce_views=coalesce_views) if prepare else rhs
         # Evaluation deliberately uses a different time/state from setup.
         return prepared(x[3], x[4:6], args)
 
@@ -43,7 +45,8 @@ def test_preparation_keeps_new_times_states_and_parameter_derivatives(dependence
 
 
 @pytest.mark.parametrize("model", ["gc", "lorentz"])
-def test_prepared_orbit_rhs_keeps_coil_shape_current_and_position_sensitivities(model):
+@pytest.mark.parametrize("coalesce_views", [False, True])
+def test_prepared_orbit_rhs_keeps_coil_shape_current_and_position_sensitivities(model, coalesce_views):
     from essos.coils import Coils, CreateEquallySpacedCurves
     from essos.constants import PROTON_MASS, ELEMENTARY_CHARGE, ONE_EV
     from essos.dynamics import GuidingCenter, Lorentz, Particles
@@ -67,7 +70,7 @@ def test_prepared_orbit_rhs_keeps_coil_shape_current_and_position_sensitivities(
         args = (field, particles, Electric_field_zero()) if model == "gc" else (field, particles)
         rhs = lambda t, y, args: vector_field(t, y, args)
         if prepare:
-            rhs = _prepare_rhs(rhs, jnp.asarray(0.), state, args)
+            rhs = _prepare_rhs(rhs, jnp.asarray(0.), state, args, coalesce_views=coalesce_views)
         return rhs(jnp.asarray(1e-8), state, args) / rhs_scale
 
     prepared, original = lambda x: observe(x, True), lambda x: observe(x, False)
@@ -83,3 +86,34 @@ def test_prepared_orbit_rhs_keeps_coil_shape_current_and_position_sensitivities(
     epsilon = 1e-5
     finite = (prepared(x + epsilon * direction) - prepared(x - epsilon * direction)) / (2 * epsilon)
     np.testing.assert_allclose(tangent, finite, rtol=2e-5, atol=2e-8)
+
+
+def test_coalesced_parameter_views_keep_nested_custom_derivative_rules():
+    @jax.custom_jvp
+    def law(x):
+        return jnp.sin(x)
+
+    @law.defjvp
+    def law_jvp(primals, tangents):
+        x, = primals
+        dx, = tangents
+        # Deliberately differs from the derivative of the primal formula.
+        return law(x), 2*jnp.cos(x)*dx
+
+    @jax.jit
+    def rhs(t, y, matrix):
+        return law(matrix @ y) + matrix[0]*jnp.cos(t) + matrix[:, 1]*y
+
+    def observe(matrix, coalesce):
+        t, y = jnp.array(.3), jnp.array([.2, -.4, .7])
+        prepared = _prepare_rhs(rhs, t, y, matrix, coalesce_views=coalesce)
+        return prepared(t+.2, y+.1, matrix)
+
+    matrix = jnp.arange(9., dtype=float).reshape(3, 3)/10
+    original = lambda matrix: rhs(jnp.array(.5), jnp.array([.3, -.3, .8]), matrix)
+    prepared = lambda matrix: observe(matrix, True)
+    np.testing.assert_allclose(jax.jit(prepared)(matrix), original(matrix), rtol=1e-13, atol=1e-13)
+    np.testing.assert_allclose(jax.jit(jax.jacfwd(prepared))(matrix), jax.jacfwd(original)(matrix),
+                               rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(jax.jit(jax.jacrev(prepared))(matrix), jax.jacrev(original)(matrix),
+                               rtol=1e-12, atol=1e-12)

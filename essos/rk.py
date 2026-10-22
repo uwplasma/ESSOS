@@ -87,10 +87,12 @@ class _RKCheckpointTape(NamedTuple):
 
 
 class _RKSchedule(NamedTuple):
-    """Small accepted-time record for a containing split solve; no states."""
+    """Accepted schedule and optional sparse checkpoints for a containing split solve."""
     times: jax.Array
     fraction: jax.Array
     count: jax.Array
+    states: object = None
+    derivatives: object = None
 
 
 # Dormand--Prince stages, with Shampine's embedded error estimator (1986).
@@ -388,7 +390,7 @@ def _partition_rhs(rhs, t0, y0, args):
     return _partition_graph(graph, [True, True])
 
 
-def _prepare_rhs(rhs, t0, y0, args):
+def _prepare_rhs(rhs, t0, y0, args, *, coalesce_views=False):
     """Separate solve-invariant work from the time/state-dependent RHS.
 
     Time and the whole state are unknown to this JAX partial evaluation.
@@ -401,7 +403,15 @@ def _prepare_rhs(rhs, t0, y0, args):
     resulting setup/stage graphs execute ordinary JAX primitives, including
     when enclosed by jit, vmap, JVP or VJP.
     """
-    setup, stage = _partition_rhs(rhs, t0, y0, args)
+    if coalesce_views:
+        from .rk_rhs import coalesced_rhs
+        graph = jax.make_jaxpr(lambda t, y: rhs(t, y, args))(t0, y0)
+        prepared = coalesced_rhs(graph, t0, y0)
+        if prepared is not None:
+            return prepared
+        setup, stage = _partition_graph(graph, [True, True])
+    else:
+        setup, stage = _partition_rhs(rhs, t0, y0, args)
     residuals = jax.core.eval_jaxpr(setup.jaxpr, setup.consts)
 
     def evaluate(t, y, unused_args):
@@ -427,7 +437,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None,
                adjoint_parameter_accumulation="segment", _record_ad=False,
                _ad_checkpoint_steps=1, _ad_compact=False, _record_schedule=False,
-               record_event_tangent=False):
+               record_event_tangent=False, _rhs_prepared=False):
     """Integrate an array state forward in time with bounded adaptive retries.
 
     ``ts`` is an ordered save grid, independent of the integration steps.
@@ -507,7 +517,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         raise ValueError("adjoint must be 'none' or 'accepted'")
     if adjoint_parameter_accumulation not in ("step", "segment"):
         raise ValueError("adjoint_parameter_accumulation must be 'step' or 'segment'")
-    if _record_schedule and (_record_ad or adjoint != "none"):
+    if _record_schedule and adjoint != "none":
         raise ValueError("schedule recording is an internal forward-only mode")
     for value, name in ((adjoint_checkpoint_steps, "adjoint_checkpoint_steps"),
                         (_ad_checkpoint_steps, "_ad_checkpoint_steps")):
@@ -602,7 +612,13 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                        jnp.where(jnp.isfinite(y0).all() & finite_events(values0),
                                  jnp.where(hit0, RKStatus.EVENT, RKStatus.SUCCESS), RKStatus.NONFINITE),
                        RKStatus.INVALID_INPUT)
-    rhs = _prepare_rhs(rhs, t0, y0, args)
+    # Saved forward traces can avoid storing parameter arrays together with
+    # redundant views. Preserve the existing layout for AD recorders and the
+    # no-save orbit solves nested inside collision splitting: changing those
+    # layouts can inflate temporaries in their enclosing loops.
+    if not _rhs_prepared:
+        rhs = _prepare_rhs(rhs, t0, y0, args,
+            coalesce_views=bool(len(ts)) and not (_record_ad or _record_schedule))
     state = dict(t=t0, y=y0, h=jnp.minimum(h0, dtmax), f=rhs(t0, y0, args),
                  values=values0, hits=initial_hits, status=status0,
                  ys=jnp.full((len(ts),) + y0.shape, jnp.inf, dtype=y0.dtype),
@@ -820,7 +836,9 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                       RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"], state["h"],
                       state["event_tangent"] if record_event_tangent else jnp.zeros_like(y0))
     if _record_schedule:
-        return solution, _RKSchedule(state["schedule"], state["schedule_fraction"], state["accepted"])
+        return solution, _RKSchedule(state["schedule"], state["schedule_fraction"], state["accepted"],
+            state["ad_states"] if _record_ad else None,
+            state["ad_derivatives"] if _record_ad else None)
     if _record_ad:
         if _ad_compact:
             return solution, _RKCheckpointTape(state["ad_steps"], state["ad_times"],

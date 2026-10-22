@@ -1,0 +1,683 @@
+{
+  "complete": true,
+  "case": "diffrax_sde_fixed",
+  "model": "lorentz",
+  "metadata": {
+    "horizon": 2e-06,
+    "fixed_dt": 1.1160714285714285e-09,
+    "requested_fixed_steps": 1792,
+    "parameters": "136 bundled QA coil Fourier/normalized-current DOFs only; fixed reference axis and births",
+    "parameter_labels": [
+      "coil[0].x0",
+      "coil[0].xs(1)",
+      "coil[0].xc(1)",
+      "coil[0].xs(2)",
+      "coil[0].xc(2)",
+      "coil[0].xs(3)",
+      "coil[0].xc(3)",
+      "coil[0].xs(4)",
+      "coil[0].xc(4)",
+      "coil[0].xs(5)",
+      "coil[0].xc(5)",
+      "coil[0].y0",
+      "coil[0].ys(1)",
+      "coil[0].yc(1)",
+      "coil[0].ys(2)",
+      "coil[0].yc(2)",
+      "coil[0].ys(3)",
+      "coil[0].yc(3)",
+      "coil[0].ys(4)",
+      "coil[0].yc(4)",
+      "coil[0].ys(5)",
+      "coil[0].yc(5)",
+      "coil[0].z0",
+      "coil[0].zs(1)",
+      "coil[0].zc(1)",
+      "coil[0].zs(2)",
+      "coil[0].zc(2)",
+      "coil[0].zs(3)",
+      "coil[0].zc(3)",
+      "coil[0].zs(4)",
+      "coil[0].zc(4)",
+      "coil[0].zs(5)",
+      "coil[0].zc(5)",
+      "coil[1].x0",
+      "coil[1].xs(1)",
+      "coil[1].xc(1)",
+      "coil[1].xs(2)",
+      "coil[1].xc(2)",
+      "coil[1].xs(3)",
+      "coil[1].xc(3)",
+      "coil[1].xs(4)",
+      "coil[1].xc(4)",
+      "coil[1].xs(5)",
+      "coil[1].xc(5)",
+      "coil[1].y0",
+      "coil[1].ys(1)",
+      "coil[1].yc(1)",
+      "coil[1].ys(2)",
+      "coil[1].yc(2)",
+      "coil[1].ys(3)",
+      "coil[1].yc(3)",
+      "coil[1].ys(4)",
+      "coil[1].yc(4)",
+      "coil[1].ys(5)",
+      "coil[1].yc(5)",
+      "coil[1].z0",
+      "coil[1].zs(1)",
+      "coil[1].zc(1)",
+      "coil[1].zs(2)",
+      "coil[1].zc(2)",
+      "coil[1].zs(3)",
+      "coil[1].zc(3)",
+      "coil[1].zs(4)",
+      "coil[1].zc(4)",
+      "coil[1].zs(5)",
+      "coil[1].zc(5)",
+      "coil[2].x0",
+      "coil[2].xs(1)",
+      "coil[2].xc(1)",
+      "coil[2].xs(2)",
+      "coil[2].xc(2)",
+      "coil[2].xs(3)",
+      "coil[2].xc(3)",
+      "coil[2].xs(4)",
+      "coil[2].xc(4)",
+      "coil[2].xs(5)",
+      "coil[2].xc(5)",
+      "coil[2].y0",
+      "coil[2].ys(1)",
+      "coil[2].yc(1)",
+      "coil[2].ys(2)",
+      "coil[2].yc(2)",
+      "coil[2].ys(3)",
+      "coil[2].yc(3)",
+      "coil[2].ys(4)",
+      "coil[2].yc(4)",
+      "coil[2].ys(5)",
+      "coil[2].yc(5)",
+      "coil[2].z0",
+      "coil[2].zs(1)",
+      "coil[2].zc(1)",
+      "coil[2].zs(2)",
+      "coil[2].zc(2)",
+      "coil[2].zs(3)",
+      "coil[2].zc(3)",
+      "coil[2].zs(4)",
+      "coil[2].zc(4)",
+      "coil[2].zs(5)",
+      "coil[2].zc(5)",
+      "coil[3].x0",
+      "coil[3].xs(1)",
+      "coil[3].xc(1)",
+      "coil[3].xs(2)",
+      "coil[3].xc(2)",
+      "coil[3].xs(3)",
+      "coil[3].xc(3)",
+      "coil[3].xs(4)",
+      "coil[3].xc(4)",
+      "coil[3].xs(5)",
+      "coil[3].xc(5)",
+      "coil[3].y0",
+      "coil[3].ys(1)",
+      "coil[3].yc(1)",
+      "coil[3].ys(2)",
+      "coil[3].yc(2)",
+      "coil[3].ys(3)",
+      "coil[3].yc(3)",
+      "coil[3].ys(4)",
+      "coil[3].yc(4)",
+      "coil[3].ys(5)",
+      "coil[3].yc(5)",
+      "coil[3].z0",
+      "coil[3].zs(1)",
+      "coil[3].zc(1)",
+      "coil[3].zs(2)",
+      "coil[3].zc(2)",
+      "coil[3].zs(3)",
+      "coil[3].zc(3)",
+      "coil[3].zs(4)",
+      "coil[3].zc(4)",
+      "coil[3].zs(5)",
+      "coil[3].zc(5)",
+      "coil[0].current",
+      "coil[1].current",
+      "coil[2].current",
+      "coil[3].current"
+    ],
+    "birth_xyz": [
+      [
+        1.23,
+        0.0,
+        0.0
+      ],
+      [
+        1.27,
+        0.0,
+        0.0
+      ]
+    ],
+    "birth_pitch": [
+      0.35,
+      0.65
+    ],
+    "energy_ev": 4000.0,
+    "seed": 42,
+    "background": "Hydrogen, 1e20 m^-3, 1 keV; production coefficient model",
+    "spatial_kicks": false,
+    "particle_chunking": false,
+    "solver": "SPaRK",
+    "native_outer_capacity": null,
+    "count_columns": [
+      "steps",
+      "accepted",
+      "rejected"
+    ],
+    "derivative_policy": "Diffrax RecursiveCheckpointAdjoint default checkpoints",
+    "error_control": "fixed SDE step; no rtol/atol controller",
+    "backend": "cpu",
+    "jax": "0.11.2",
+    "diffrax": "0.7.2",
+    "source_sha256": {
+      "essos/split.py": "926a931b16782bbcc095113cf4abdfcd4b4f8324a389d5408a134f3d4b78bd8e",
+      "essos/split_ad.py": "48623af48302b8801a3d4e89685b232844872f064fa7b42b1de070dfc8d9dba9",
+      "essos/collision_ad.py": "3f868041fa5a07162187ff7502e857d22fa37697af457318596af61fd2a04738",
+      "essos/rk.py": "e1b2a454cd0daf938b0a4462bd31b283649430f64ccc13c2ee8cec93d1a33f5c",
+      "essos/rk_rhs.py": "36a4ac3f33968b68ff5f1e05063512d45c0721ee285f7c6a9985390d88f752c0",
+      "essos/rk_ad.py": "bef8469ee793980b0fa75abadf2e5886cf843994407c571a0743c2a9772d746a",
+      "essos/rk_ad_rhs.py": "61d8eb24b38d26532279bd2a45bf811d866942025f07f5d928569fe21dad5aef",
+      "essos/rk_ad_biot_savart.py": "b8f42b476f2ffdbac3bd590c0a3c130c1765d0fe881a506ac112168e03e51049",
+      "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+      "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+      "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+      "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+      "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+      "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+      "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+      "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+      "essos/particle_losses.py": "0128e8ebc6e59ed390b9412dbbea66144e8a182457f08d3f5867d3f800326de3",
+      "essos/surfaces.py": "f9ccae53e0e245e2aa148a358aa45ce6ae9b3721f73cb836e45c1349b47da016",
+      "examples/benchmarks/benchmark_split_ad.py": "eeb6eed8d86af575e9e1a52e1df4b509f427d9c6c6c2d76e7d3898de84480588",
+      "examples/benchmarks/validate_coil_orbit_loss.py": "a862d32fe284f599380db33df18e99fa878a9602c8fa68b64e801b2badcf7cdd",
+      "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+      "essos/electric_field.py": "352b5b07996ba5d26dbfec48ab1e535558fd7222b3b78ad18f5aa3bd1a213cc4",
+      "examples/benchmarks/benchmark_ad_backends.py": "a0a20de164fa1a526789a9792b6ad172fc5e81805ec9b44acff83df4c7a8739f"
+    },
+    "input_sha256": "09d8f64ab6c75ab152798b14dec3a6b00a1ca1bb470c822d72aa17005d18003b",
+    "settings": {
+      "output": "/mnt/c/Users/eduar/Github_Codes/ESSOS-split-ad/examples/benchmarks/results/ad_native_diffrax_forward_views_20261021",
+      "models": [
+        "gc",
+        "lorentz"
+      ],
+      "cases": [
+        "native_orbit",
+        "diffrax_orbit",
+        "native_split_adaptive",
+        "native_split_fixed",
+        "diffrax_sde_fixed"
+      ],
+      "particles": 2,
+      "repeats": 21,
+      "saves": 8,
+      "gc_horizon": 2e-05,
+      "lorentz_horizon": 2e-06,
+      "tolerance": 1e-09,
+      "collision_tolerance": 0.003,
+      "fixed_gc_steps": 224,
+      "fixed_lorentz_steps": 1792,
+      "max_steps": 4096,
+      "max_orbit_steps": 128,
+      "accepted_capacity": 128,
+      "orbit_capacity": 2048,
+      "checkpoint_steps": 16,
+      "worker_case": "diffrax_sde_fixed",
+      "worker_model": "lorentz"
+    },
+    "memory_scope": "Fused peak includes input setup, fused compilation, first and warm execution; measured before separate forward/reverse or FD validation executables exist. Warm RSS includes resident JAX/executables/allocator. Compiler buffers are separate.",
+    "timing_scope": "Warm blocked calls, compilation excluded. Forward is ordinary production solve; linearization is public VJP of jitted cost; reverse reuses its residuals; fused is value_and_grad. No particle chunks."
+  },
+  "setup_peak_rss_bytes": 635658240,
+  "fused_compile_seconds": 19.079375903000255,
+  "fused_compile_peak_rss_bytes": 1232801792,
+  "first_fused_peak_rss_bytes": 1232801792,
+  "value": 0.22426132620865913,
+  "counts_per_particle": [
+    [
+      1792,
+      1792,
+      0
+    ],
+    [
+      1792,
+      1792,
+      0
+    ]
+  ],
+  "status": [
+    0,
+    0
+  ],
+  "gradient_finite": true,
+  "state_finite": true,
+  "gradient": [
+    0.2518396901124421,
+    0.04715862471547021,
+    -0.251404139559942,
+    -0.03379594666566853,
+    0.077755867028539,
+    0.06880220828410373,
+    -0.05399851571894193,
+    -0.047214259495833924,
+    0.052734180145887356,
+    0.046939639494540705,
+    -0.027019087605914077,
+    -0.18301461014564524,
+    -0.1404069214856763,
+    -0.037751459515759825,
+    -0.03784740286658114,
+    -0.011730307247390031,
+    -0.06978796985629315,
+    0.01777051619501038,
+    0.03728405284651441,
+    0.021350258941590372,
+    -0.011970253999661859,
+    0.0029974355324243404,
+    0.023347529970285677,
+    -0.06909640371390167,
+    0.007911084863189715,
+    -0.02213141249623492,
+    -0.04414567623326899,
+    -0.017741897913248483,
+    0.008948004301537346,
+    0.0361740662290503,
+    0.0016412269544535995,
+    -0.018333805890796778,
+    -0.012601739753604062,
+    0.25070972314459894,
+    -0.008712453725408008,
+    -0.0808501118165333,
+    0.08881150087424391,
+    0.05293221387332938,
+    -0.013851617724526935,
+    -0.034761837853361274,
+    0.0059863843280278444,
+    -0.0007119165559574883,
+    -0.012974291259505364,
+    0.003188779060951439,
+    -0.199193939904118,
+    -0.06097208927094219,
+    0.009348632058712161,
+    0.003723880155053226,
+    -0.02151963600877029,
+    -0.0017691793847598707,
+    0.06376083591713387,
+    0.02633855604079917,
+    -0.011138781366967889,
+    -0.003689284212825981,
+    -0.006132907631849613,
+    0.06323062569303836,
+    0.0615237820961898,
+    0.016136674021861273,
+    -0.020807369385776264,
+    -0.04069078593506064,
+    0.01226618716332357,
+    -0.00811803178750456,
+    -0.02028362806883817,
+    -0.024675285965823593,
+    -0.0015903995662891828,
+    0.020607324074627204,
+    0.11317518032675355,
+    -0.026877110374384467,
+    -0.02779964627144233,
+    0.04902306898517274,
+    0.03815780979312776,
+    -0.030085568394184733,
+    -0.021932538625062947,
+    0.01646058733864051,
+    0.009359578141317512,
+    -0.01192844281890139,
+    0.005945741626441726,
+    -0.07032671515037203,
+    -0.01403974322890815,
+    0.045891386299611536,
+    0.022787660593626774,
+    -0.028101233254474535,
+    0.0011511375108729516,
+    0.025723593489552738,
+    0.010150569217567459,
+    -0.01592264012976981,
+    -0.007579812505347972,
+    0.011144741912652618,
+    0.03347048698000728,
+    0.06379225573755871,
+    0.00047238199704902225,
+    -0.00820164064017272,
+    -0.026595371303607666,
+    0.005070471313849468,
+    -0.010713378684304276,
+    -0.018735009797821438,
+    0.011504851317660748,
+    0.019161662594320946,
+    0.004973125492968919,
+    0.027786225482074718,
+    -0.036304360387325936,
+    -0.004412905810887835,
+    0.03650314719247018,
+    0.004074130467354304,
+    -0.016362557249319863,
+    3.678701794810631e-05,
+    0.009217791554856,
+    -0.003297548421741685,
+    0.0018223819414650117,
+    0.001700363126103323,
+    -0.02164361811065104,
+    7.911526932021721e-05,
+    0.03951531156300172,
+    0.004453351479363316,
+    -0.02278166726632626,
+    0.003454046045786873,
+    0.018047591071717793,
+    0.002730449539761483,
+    -0.014161651414172065,
+    0.0017574438810195293,
+    0.0023689672117568525,
+    0.008799751682148756,
+    0.039566770011552774,
+    -0.0012204118358082523,
+    -0.0008516772864658015,
+    -0.000879572687633742,
+    -0.002011266854599158,
+    -0.00627660549800735,
+    0.0016672497377293125,
+    0.00045955812894118205,
+    -0.009568357885581084,
+    -0.006433081315330907,
+    0.27611003776469656,
+    0.14963357136468725,
+    0.06428465584200885,
+    0.035191911139153556
+  ],
+  "gradient_l2": 0.7191023466505568,
+  "saved_positions": [
+    [
+      [
+        1.200939871079387,
+        -1.0995166533829796e-18,
+        3.3770022416498036e-18
+      ],
+      [
+        1.247907508623039,
+        -0.03319665408334875,
+        -0.037079288515362845
+      ],
+      [
+        1.232390089608547,
+        -0.09053279170866729,
+        -0.006434888901778223
+      ],
+      [
+        1.1914813579968424,
+        -0.11208480733623231,
+        -0.05969915542498502
+      ],
+      [
+        1.234020581736642,
+        -0.16301695470351754,
+        -0.0813739454852052
+      ],
+      [
+        1.1907673775856926,
+        -0.20869667386975324,
+        -0.053477490256341846
+      ],
+      [
+        1.1601256125755701,
+        -0.22374635563075007,
+        -0.11582933921125473
+      ],
+      [
+        1.1901765775495394,
+        -0.28453285734025097,
+        -0.11898467801532232
+      ]
+    ],
+    [
+      [
+        1.2451268533721782,
+        -9.541721695110756e-19,
+        2.910878491928463e-18
+      ],
+      [
+        1.2868006207267524,
+        -0.06908256924843269,
+        -0.042083046524403124
+      ],
+      [
+        1.2512409808632006,
+        -0.15089833290273083,
+        -0.025689804886722203
+      ],
+      [
+        1.2248977189911026,
+        -0.20131869794143742,
+        -0.09550193598857394
+      ],
+      [
+        1.2332988208213913,
+        -0.29558039826694416,
+        -0.09438702617614203
+      ],
+      [
+        1.154855489114183,
+        -0.3456879493404804,
+        -0.10771595610037867
+      ],
+      [
+        1.146055680033281,
+        -0.4195437106012311,
+        -0.1628943207949286
+      ],
+      [
+        1.0930488546516208,
+        -0.4900670653999509,
+        -0.13251595731301805
+      ]
+    ]
+  ],
+  "fused_memory": {
+    "bytes": 1265944,
+    "components": {
+      "argument_size_in_bytes": 1088,
+      "output_size_in_bytes": 1968,
+      "temp_size_in_bytes": 1262888,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "warm_fused_baseline_rss_bytes": 1226162176,
+  "fused_samples_ms": [
+    4305.90403899987,
+    4378.8162550008565,
+    4235.711321000053,
+    4351.231843000278,
+    4380.709320999813,
+    4295.471757999621,
+    4420.593495000503,
+    4336.5263039995625,
+    4356.536473998858,
+    4253.074733000176,
+    4384.77996200163,
+    4396.763156000816,
+    4508.325266000611,
+    4289.503504000095,
+    4257.958804000737,
+    4290.000802999202,
+    4348.961584999415,
+    4223.8136129999475,
+    4286.71416600082,
+    4374.50511499992,
+    4438.412112000151
+  ],
+  "fused_median_ms": 4348.961584999415,
+  "warm_fused_peak_rss_bytes": 1228902400,
+  "fused_peak_rss_bytes": 1232801792,
+  "reverse_compile_seconds": 7.713474169000619,
+  "reverse_memory": {
+    "bytes": 1377727,
+    "components": {
+      "argument_size_in_bytes": 403031,
+      "output_size_in_bytes": 1088,
+      "temp_size_in_bytes": 973608,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "forward_memory": {
+    "bytes": 362696,
+    "components": {
+      "argument_size_in_bytes": 1088,
+      "output_size_in_bytes": 872,
+      "temp_size_in_bytes": 360736,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "gradient_max_abs_reverse_fused_difference": 6.938893903907228e-18,
+  "phase_samples_ms": [
+    {
+      "reverse": 3498.7626720012486,
+      "linearization": 799.757557000703,
+      "forward": 719.4854869994742
+    },
+    {
+      "forward": 728.8706910003384,
+      "linearization": 810.185766998984,
+      "reverse": 3688.864105999528
+    },
+    {
+      "forward": 735.047823000059,
+      "reverse": 3555.885750000016,
+      "linearization": 804.9874680000357
+    },
+    {
+      "forward": 744.5647000004101,
+      "linearization": 799.7734439995838,
+      "reverse": 3801.3843790013198
+    },
+    {
+      "reverse": 4454.806703999566,
+      "forward": 742.4135380006192,
+      "linearization": 736.7184459999407
+    },
+    {
+      "linearization": 747.0326540005772,
+      "reverse": 3615.6133390013565,
+      "forward": 723.8087449986779
+    },
+    {
+      "forward": 723.6303929985297,
+      "reverse": 3538.5961120009597,
+      "linearization": 793.1089480007358
+    },
+    {
+      "forward": 708.4546869991755,
+      "reverse": 3671.0523849997116,
+      "linearization": 760.4773160001059
+    },
+    {
+      "reverse": 3646.8173089997435,
+      "linearization": 771.6155870002694,
+      "forward": 719.0165869997145
+    },
+    {
+      "reverse": 3660.3662140005326,
+      "linearization": 773.3131780005351,
+      "forward": 702.9724820004049
+    },
+    {
+      "reverse": 4372.372403999179,
+      "linearization": 769.1371880009683,
+      "forward": 703.4877530004451
+    },
+    {
+      "reverse": 4357.098460000998,
+      "forward": 703.3188179993886,
+      "linearization": 763.2622420005646
+    },
+    {
+      "reverse": 3578.773655999612,
+      "linearization": 769.9769840000954,
+      "forward": 709.9135160005972
+    },
+    {
+      "linearization": 762.8464939989499,
+      "forward": 717.4048990000301,
+      "reverse": 3604.0827899996657
+    },
+    {
+      "forward": 699.9921009992249,
+      "linearization": 767.5702260003163,
+      "reverse": 3645.2202039999975
+    },
+    {
+      "reverse": 3646.250826001051,
+      "forward": 704.5084590008628,
+      "linearization": 775.0092200003564
+    },
+    {
+      "linearization": 784.5135669995216,
+      "reverse": 3785.5848489998607,
+      "forward": 687.7809659999912
+    },
+    {
+      "reverse": 3412.4011730000348,
+      "forward": 706.2609570002678,
+      "linearization": 775.4545650004729
+    },
+    {
+      "reverse": 4402.89026299979,
+      "linearization": 782.1391329998733,
+      "forward": 709.1441449992999
+    },
+    {
+      "linearization": 755.0216950003232,
+      "reverse": 3716.1826570009,
+      "forward": 751.4081850004004
+    },
+    {
+      "reverse": 4462.374867998733,
+      "linearization": 792.2377710001456,
+      "forward": 719.8696819996258
+    }
+  ],
+  "phase_medians_ms": {
+    "forward": 717.4048990000301,
+    "reverse": 3660.3662140005326,
+    "linearization": 773.3131780005351
+  },
+  "reverse_over_forward": 5.102231974025562,
+  "fused_over_forward": 6.062073999022458,
+  "gradient_oracle": "Fixed-grid, fixed-production-VBT path FD",
+  "directional_fd": [
+    {
+      "epsilon": 1e-05,
+      "ad": 0.020081502144064657,
+      "finite_difference": 0.020081502052904376,
+      "absolute_error": 9.116028071298743e-11,
+      "relative_error": 4.539515025270707e-09
+    },
+    {
+      "epsilon": 3e-06,
+      "ad": 0.020081502144064657,
+      "finite_difference": 0.02008150206770735,
+      "absolute_error": 7.635730589483636e-11,
+      "relative_error": 3.8023702284345664e-09
+    },
+    {
+      "epsilon": 1e-06,
+      "ad": 0.020081502144064657,
+      "finite_difference": 0.020081502044577704,
+      "absolute_error": 9.94869533976761e-11,
+      "relative_error": 4.95415894109698e-09
+    }
+  ],
+  "whole_worker_peak_rss_bytes": 1369874432
+}

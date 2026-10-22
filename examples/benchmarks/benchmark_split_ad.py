@@ -35,7 +35,7 @@ from .validate_coil_orbit_loss import reference_wall
 
 ROOT = Path(__file__).resolve().parents[2]
 OBJECTIVES = ("mean_final_radius", "loss_fraction", "loss_location", "heat_proxy")
-SOURCES = ("essos/split.py", "essos/split_ad.py", "essos/collision_ad.py", "essos/rk.py", "essos/rk_ad.py",
+SOURCES = ("essos/split.py", "essos/split_ad.py", "essos/collision_ad.py", "essos/rk.py", "essos/rk_rhs.py", "essos/rk_ad.py",
     "essos/rk_ad_rhs.py", "essos/rk_ad_biot_savart.py",
     "essos/collisions.py", "essos/collision_controller.py", "essos/collision_error.py",
     "essos/background_species.py", "essos/coulomb.py", "essos/fields.py", "essos/coils.py",
@@ -44,6 +44,9 @@ SOURCES = ("essos/split.py", "essos/split_ad.py", "essos/collision_ad.py", "esso
 
 
 def build_case(options, model, adaptive, objective, boundary):
+    # Paired benchmarks load each recorder before building its cost closure.
+    # Keep that exact version for later JIT/JVP traces of the same case.
+    trace = trace_split
     base = Coils.from_json(str(ROOT / "examples/input_files/ESSOS_biot_savart_LandremanPaulQA.json"))
     parameters = jnp.asarray(base.dofs)
     reference = BiotSavart(base)
@@ -63,7 +66,7 @@ def build_case(options, model, adaptive, objective, boundary):
         field = BiotSavart(base.with_dofs(theta))
         birth = Particles(points, initial_vparallel_over_v=pitch, energy=energy, mass=M, charge=Q,
             field=field if model == "lorentz" else None, phase_angle_full_orbit=jnp.pi)
-        out = trace_split(field, birth, background, model=physical_model, tmax=horizon,
+        out = trace(field, birth, background, model=physical_model, tmax=horizon,
             timestep=horizon/(4 if adaptive else 8), collision_dtmax=horizon/(2 if adaptive else 8),
             orbit_dt0=horizon/(4 if adaptive else options.fixed_orbit_steps),
             adaptive=adaptive, orbit_adaptive=adaptive, collision_tolerance=options.collision_tolerance,
