@@ -1,0 +1,402 @@
+{
+  "complete": true,
+  "field": "coils",
+  "model": "gc",
+  "case": "diffrax_sde_fixed",
+  "source_sha256": {
+    "essos/rk.py": "d4732dd607c196a8b47927578d1b99a5067b5a7a9bdab20473146e4a32752f72",
+    "essos/rk_rhs.py": "146ba3766904365f819eea2fac21c870b5715033f60d0020d8a85f0b091a76c9",
+    "essos/rk_dense.py": "865922e75a78b6a51c0f325222ebe5c66aba081a83401526adf8346b58a03600",
+    "essos/rk_dense_high.py": "8a48373b05523c1d9603e17db0f3eaa5403f25836f25b406d63b4bebe4d84b48",
+    "essos/split.py": "89418216bbf7c3e579956146f052e0e9cb723d40eca0a9af989bbd9b7367a2cb",
+    "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+    "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+    "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+    "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+    "essos/boozer.py": "647cea4cc6dbaf0b07ecb0b26a3bede22fc7c59c763217c534564baf08c027b2",
+    "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+    "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+    "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+    "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+    "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+    "essos/electric_field.py": "352b5b07996ba5d26dbfec48ab1e535558fd7222b3b78ad18f5aa3bd1a213cc4",
+    "examples/benchmarks/benchmark_ad_backends.py": "a0a20de164fa1a526789a9792b6ad172fc5e81805ec9b44acff83df4c7a8739f",
+    "examples/benchmarks/forward_field_cases.py": "a0c235aee6e912d5fcc974aaef924dbaf22dd2e88937ebe896949fa6ca1d3453",
+    "examples/benchmarks/benchmark_forward_fields.py": "6364a795476797ed6ee2f0f0e8f9179c822a25895685ae269440f1e77901e568"
+  },
+  "jax": "0.11.2",
+  "diffrax": "0.7.2",
+  "backend": "cpu",
+  "devices": [
+    "cpu:0"
+  ],
+  "particle_chunking": false,
+  "reverse_ad": false,
+  "metadata": {
+    "horizon": 2e-05,
+    "fixed_dt": 8.928571428571429e-08,
+    "requested_fixed_steps": 224,
+    "parameters": "136 bundled QA coil Fourier/normalized-current DOFs only; fixed reference axis and births",
+    "parameter_labels": [
+      "coil[0].x0",
+      "coil[0].xs(1)",
+      "coil[0].xc(1)",
+      "coil[0].xs(2)",
+      "coil[0].xc(2)",
+      "coil[0].xs(3)",
+      "coil[0].xc(3)",
+      "coil[0].xs(4)",
+      "coil[0].xc(4)",
+      "coil[0].xs(5)",
+      "coil[0].xc(5)",
+      "coil[0].y0",
+      "coil[0].ys(1)",
+      "coil[0].yc(1)",
+      "coil[0].ys(2)",
+      "coil[0].yc(2)",
+      "coil[0].ys(3)",
+      "coil[0].yc(3)",
+      "coil[0].ys(4)",
+      "coil[0].yc(4)",
+      "coil[0].ys(5)",
+      "coil[0].yc(5)",
+      "coil[0].z0",
+      "coil[0].zs(1)",
+      "coil[0].zc(1)",
+      "coil[0].zs(2)",
+      "coil[0].zc(2)",
+      "coil[0].zs(3)",
+      "coil[0].zc(3)",
+      "coil[0].zs(4)",
+      "coil[0].zc(4)",
+      "coil[0].zs(5)",
+      "coil[0].zc(5)",
+      "coil[1].x0",
+      "coil[1].xs(1)",
+      "coil[1].xc(1)",
+      "coil[1].xs(2)",
+      "coil[1].xc(2)",
+      "coil[1].xs(3)",
+      "coil[1].xc(3)",
+      "coil[1].xs(4)",
+      "coil[1].xc(4)",
+      "coil[1].xs(5)",
+      "coil[1].xc(5)",
+      "coil[1].y0",
+      "coil[1].ys(1)",
+      "coil[1].yc(1)",
+      "coil[1].ys(2)",
+      "coil[1].yc(2)",
+      "coil[1].ys(3)",
+      "coil[1].yc(3)",
+      "coil[1].ys(4)",
+      "coil[1].yc(4)",
+      "coil[1].ys(5)",
+      "coil[1].yc(5)",
+      "coil[1].z0",
+      "coil[1].zs(1)",
+      "coil[1].zc(1)",
+      "coil[1].zs(2)",
+      "coil[1].zc(2)",
+      "coil[1].zs(3)",
+      "coil[1].zc(3)",
+      "coil[1].zs(4)",
+      "coil[1].zc(4)",
+      "coil[1].zs(5)",
+      "coil[1].zc(5)",
+      "coil[2].x0",
+      "coil[2].xs(1)",
+      "coil[2].xc(1)",
+      "coil[2].xs(2)",
+      "coil[2].xc(2)",
+      "coil[2].xs(3)",
+      "coil[2].xc(3)",
+      "coil[2].xs(4)",
+      "coil[2].xc(4)",
+      "coil[2].xs(5)",
+      "coil[2].xc(5)",
+      "coil[2].y0",
+      "coil[2].ys(1)",
+      "coil[2].yc(1)",
+      "coil[2].ys(2)",
+      "coil[2].yc(2)",
+      "coil[2].ys(3)",
+      "coil[2].yc(3)",
+      "coil[2].ys(4)",
+      "coil[2].yc(4)",
+      "coil[2].ys(5)",
+      "coil[2].yc(5)",
+      "coil[2].z0",
+      "coil[2].zs(1)",
+      "coil[2].zc(1)",
+      "coil[2].zs(2)",
+      "coil[2].zc(2)",
+      "coil[2].zs(3)",
+      "coil[2].zc(3)",
+      "coil[2].zs(4)",
+      "coil[2].zc(4)",
+      "coil[2].zs(5)",
+      "coil[2].zc(5)",
+      "coil[3].x0",
+      "coil[3].xs(1)",
+      "coil[3].xc(1)",
+      "coil[3].xs(2)",
+      "coil[3].xc(2)",
+      "coil[3].xs(3)",
+      "coil[3].xc(3)",
+      "coil[3].xs(4)",
+      "coil[3].xc(4)",
+      "coil[3].xs(5)",
+      "coil[3].xc(5)",
+      "coil[3].y0",
+      "coil[3].ys(1)",
+      "coil[3].yc(1)",
+      "coil[3].ys(2)",
+      "coil[3].yc(2)",
+      "coil[3].ys(3)",
+      "coil[3].yc(3)",
+      "coil[3].ys(4)",
+      "coil[3].yc(4)",
+      "coil[3].ys(5)",
+      "coil[3].yc(5)",
+      "coil[3].z0",
+      "coil[3].zs(1)",
+      "coil[3].zc(1)",
+      "coil[3].zs(2)",
+      "coil[3].zc(2)",
+      "coil[3].zs(3)",
+      "coil[3].zc(3)",
+      "coil[3].zs(4)",
+      "coil[3].zc(4)",
+      "coil[3].zs(5)",
+      "coil[3].zc(5)",
+      "coil[0].current",
+      "coil[1].current",
+      "coil[2].current",
+      "coil[3].current"
+    ],
+    "birth_xyz": [
+      [
+        1.23,
+        0.0,
+        0.0
+      ],
+      [
+        1.27,
+        0.0,
+        0.0
+      ]
+    ],
+    "birth_pitch": [
+      0.35,
+      0.65
+    ],
+    "energy_ev": 4000.0,
+    "seed": 42,
+    "background": "Hydrogen, 1e20 m^-3, 1 keV; production coefficient model",
+    "spatial_kicks": false,
+    "particle_chunking": false,
+    "solver": "StratonovichMilstein",
+    "native_outer_capacity": null,
+    "count_columns": [
+      "steps",
+      "accepted",
+      "rejected"
+    ],
+    "derivative_policy": "Diffrax RecursiveCheckpointAdjoint default checkpoints",
+    "error_control": "fixed SDE step; no rtol/atol controller",
+    "field": "QA BiotSavart coils",
+    "input_sha256": "09d8f64ab6c75ab152798b14dec3a6b00a1ca1bb470c822d72aa17005d18003b"
+  },
+  "setup_rss_bytes": {
+    "VmHWM": 637681664,
+    "VmRSS": 637681664
+  },
+  "compile_seconds": 23.69507329099997,
+  "compiled_memory": {
+    "bytes": 3660136,
+    "components": {
+      "argument_size_in_bytes": 1088,
+      "output_size_in_bytes": 856,
+      "temp_size_in_bytes": 3658192,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "first_execution_seconds": 0.2649117050004861,
+  "first_peak_rss_bytes": {
+    "VmHWM": 1298849792,
+    "VmRSS": 1274195968
+  },
+  "warm_samples_ms": [
+    215.6104810001125,
+    219.29549400010728,
+    226.84435300016048,
+    228.2296369994583,
+    217.4900059999345,
+    225.1322699994489,
+    220.22934500000702
+  ],
+  "warm_median_ms": 220.22934500000702,
+  "warm_baseline_rss_bytes": {
+    "VmHWM": 1298849792,
+    "VmRSS": 1274195968
+  },
+  "warm_peak_rss_bytes": {
+    "VmHWM": 1275109376,
+    "VmRSS": 1275109376
+  },
+  "device_memory_stats": [
+    null
+  ],
+  "memory_scope": "Fresh worker: imports/field setup/one compile/forward executions only. RSS is CPU host memory, not GPU VRAM; compiled buffers are a separate estimate.",
+  "timing_scope": "Blocked warm device calls; compile, host copies, validation and field transform excluded. Scalar objective and normal output reconstruction included.",
+  "value": 0.32594661316563606,
+  "counts_per_particle": [
+    [
+      224,
+      224,
+      0
+    ],
+    [
+      224,
+      224,
+      0
+    ]
+  ],
+  "status": [
+    0,
+    0
+  ],
+  "terminal_times": [
+    2e-05,
+    2e-05
+  ],
+  "finite_states": true,
+  "peak_rss_bytes": 1298849792,
+  "saved_states": [
+    [
+      [
+        1.23,
+        0.0,
+        0.0,
+        153720.55356653695,
+        1.9155583620664253e-15
+      ],
+      [
+        1.1288749891938732,
+        -0.3394455428434837,
+        -0.1356474183880973,
+        119962.33437050313,
+        2.0594141670614033e-15
+      ],
+      [
+        0.9188272178673276,
+        -0.5616616163299072,
+        -0.2002391779335136,
+        87388.24875388527,
+        2.2265842616054672e-15
+      ],
+      [
+        0.6731355269116119,
+        -0.7056120458308152,
+        -0.2065594233128421,
+        97169.82442678943,
+        2.0078813361011646e-15
+      ],
+      [
+        0.403886121257828,
+        -0.8016298655574865,
+        -0.16864000862178222,
+        106572.57981996535,
+        1.760073655663846e-15
+      ],
+      [
+        0.1318764997457826,
+        -0.8564793288579899,
+        -0.10650074625450615,
+        96856.21371204493,
+        1.4764213427573901e-15
+      ],
+      [
+        -0.1485930823096138,
+        -0.8764268177723127,
+        -0.04050355795169075,
+        111492.68771856184,
+        1.4706449866601284e-15
+      ],
+      [
+        -0.4609078456544143,
+        -0.850666410277816,
+        0.009305613944943131,
+        91872.93328615524,
+        1.3505117695268053e-15
+      ]
+    ],
+    [
+      [
+        1.27,
+        0.0,
+        0.0,
+        285481.0280521401,
+        1.330089954481068e-15
+      ],
+      [
+        0.8915337401153697,
+        -0.6784933924324836,
+        -0.19364437656781533,
+        302495.92191694985,
+        1.4277256672330106e-15
+      ],
+      [
+        0.10525005435318356,
+        -0.9816331864558842,
+        -0.11881920944079907,
+        300432.25993418717,
+        1.6183815896904023e-15
+      ],
+      [
+        -0.6937974751327758,
+        -0.9126806140513946,
+        -0.07049711064442635,
+        249157.27710728708,
+        1.4532980773952445e-15
+      ],
+      [
+        -1.1455203300445236,
+        -0.5035806867905421,
+        -0.24320828293063396,
+        217578.0895150215,
+        1.4243962318949464e-15
+      ],
+      [
+        -1.1129775935156963,
+        0.033807641852199706,
+        -0.4259895989490505,
+        206634.68578063123,
+        1.693658795451613e-15
+      ],
+      [
+        -0.7074274672105544,
+        0.4674842746725147,
+        -0.41809886327660584,
+        197012.91490944318,
+        1.64349505980459e-15
+      ],
+      [
+        -0.22585292698008513,
+        0.6848037924140321,
+        -0.24814427963576338,
+        168455.15548942247,
+        1.635484943561927e-15
+      ]
+    ]
+  ],
+  "state_scale": [
+    1.0,
+    1.0,
+    1.0,
+    439201.581618677,
+    6.408706536e-16
+  ],
+  "production_api_check": null
+}

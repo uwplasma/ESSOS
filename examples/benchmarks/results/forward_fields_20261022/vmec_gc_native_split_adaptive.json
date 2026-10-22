@@ -1,0 +1,281 @@
+{
+  "complete": true,
+  "field": "vmec",
+  "model": "gc",
+  "case": "native_split_adaptive",
+  "source_sha256": {
+    "essos/rk.py": "d4732dd607c196a8b47927578d1b99a5067b5a7a9bdab20473146e4a32752f72",
+    "essos/rk_rhs.py": "146ba3766904365f819eea2fac21c870b5715033f60d0020d8a85f0b091a76c9",
+    "essos/rk_dense.py": "865922e75a78b6a51c0f325222ebe5c66aba081a83401526adf8346b58a03600",
+    "essos/rk_dense_high.py": "8a48373b05523c1d9603e17db0f3eaa5403f25836f25b406d63b4bebe4d84b48",
+    "essos/split.py": "89418216bbf7c3e579956146f052e0e9cb723d40eca0a9af989bbd9b7367a2cb",
+    "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+    "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+    "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+    "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+    "essos/boozer.py": "647cea4cc6dbaf0b07ecb0b26a3bede22fc7c59c763217c534564baf08c027b2",
+    "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+    "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+    "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+    "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+    "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+    "essos/electric_field.py": "352b5b07996ba5d26dbfec48ab1e535558fd7222b3b78ad18f5aa3bd1a213cc4",
+    "examples/benchmarks/benchmark_ad_backends.py": "a0a20de164fa1a526789a9792b6ad172fc5e81805ec9b44acff83df4c7a8739f",
+    "examples/benchmarks/forward_field_cases.py": "a0c235aee6e912d5fcc974aaef924dbaf22dd2e88937ebe896949fa6ca1d3453",
+    "examples/benchmarks/benchmark_forward_fields.py": "6364a795476797ed6ee2f0f0e8f9179c822a25895685ae269440f1e77901e568"
+  },
+  "jax": "0.11.2",
+  "diffrax": "0.7.2",
+  "backend": "cpu",
+  "devices": [
+    "cpu:0"
+  ],
+  "particle_chunking": false,
+  "reverse_ad": false,
+  "metadata": {
+    "field": "vmec",
+    "horizon": 2e-05,
+    "energy_ev": 4000.0,
+    "seed": 42,
+    "birth_xyz_or_sthetazeta": [
+      [
+        0.29591836734693877,
+        5.025780198537137,
+        2.799582237927113
+      ],
+      [
+        0.29591836734693877,
+        2.853130707813108,
+        2.310768133469268
+      ]
+    ],
+    "birth_pitch": [
+      -0.5681517129572906,
+      0.6658712922914582
+    ],
+    "birth_mapping_residual": 8.881784197001252e-16,
+    "field_modes": 50,
+    "nyquist_modes": 128,
+    "angular_table": false,
+    "boozer_mode_cut": null,
+    "input_sha256": "ba8dcfaf18d27c99dc9ca4b38116d71b697626d54408de41b47e126676e1e94f",
+    "field_cache_sha256": "5887f673a0f0abd54d0b32097ae647226806fd6480fb2f1f0a8fac4a1accec0d",
+    "background": "Hydrogen, 1e20 m^-3, 1 keV; production NRL coefficients",
+    "fixed_dt": 8.928571428571429e-08,
+    "parameters": "Fixed field and births, no reverse AD",
+    "particle_chunking": false,
+    "spatial_kicks": false,
+    "objective": "mean final s (timed scalar diagnostic); no optimization",
+    "loss_surface": "s=1 in the existing regular chart",
+    "count_columns": [
+      "steps",
+      "accepted",
+      "rejected",
+      "orbit_steps",
+      "orbit_rejected",
+      "peak_pending",
+      "max_accepted_error"
+    ],
+    "solver": "native Dopri8 + production Milstein speed/pitch map",
+    "error_control": "Native physics/chart orbit norm; conservative collision controller"
+  },
+  "setup_rss_bytes": {
+    "VmHWM": 674025472,
+    "VmRSS": 674025472
+  },
+  "compile_seconds": 11.01246537499992,
+  "compiled_memory": {
+    "bytes": 1613632,
+    "components": {
+      "argument_size_in_bytes": 0,
+      "output_size_in_bytes": 920,
+      "temp_size_in_bytes": 1612712,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "first_execution_seconds": 0.022613459000240255,
+  "first_peak_rss_bytes": {
+    "VmHWM": 1048170496,
+    "VmRSS": 1048170496
+  },
+  "warm_samples_ms": [
+    22.612054999626707,
+    20.563725999636517,
+    21.47671700004139,
+    20.495708999987983,
+    19.734919000256923,
+    19.567567999729363,
+    19.50330700037739
+  ],
+  "warm_median_ms": 20.495708999987983,
+  "warm_baseline_rss_bytes": {
+    "VmHWM": 1048170496,
+    "VmRSS": 1048170496
+  },
+  "warm_peak_rss_bytes": {
+    "VmHWM": 1048592384,
+    "VmRSS": 1048592384
+  },
+  "device_memory_stats": [
+    null
+  ],
+  "memory_scope": "Fresh worker: imports/field setup/one compile/forward executions only. RSS is CPU host memory, not GPU VRAM; compiled buffers are a separate estimate.",
+  "timing_scope": "Blocked warm device calls; compile, host copies, validation and field transform excluded. Scalar objective and normal output reconstruction included.",
+  "value": 0.2957635289740726,
+  "counts_per_particle": [
+    [
+      7.0,
+      7.0,
+      0.0,
+      7.0,
+      0.0,
+      1.0,
+      0.1008380402330684
+    ],
+    [
+      7.0,
+      7.0,
+      0.0,
+      7.0,
+      0.0,
+      1.0,
+      0.08408394698389783
+    ]
+  ],
+  "status": [
+    0,
+    0
+  ],
+  "terminal_times": [
+    2e-05,
+    2e-05
+  ],
+  "finite_states": true,
+  "peak_rss_bytes": 1048592384,
+  "saved_states": [
+    [
+      [
+        0.2959183673469387,
+        5.025780198537137,
+        2.799582237927113,
+        -249533.13093020263,
+        7.439036358072951e-17
+      ],
+      [
+        0.2958643474784434,
+        5.000333355696208,
+        2.739021896337792,
+        -248461.73498679942,
+        7.695743357380029e-17
+      ],
+      [
+        0.2958090868804682,
+        4.974171661129059,
+        2.6772939750646403,
+        -262053.0308608406,
+        7.594940164081223e-17
+      ],
+      [
+        0.2957505998991249,
+        4.945572112126064,
+        2.6104915260725763,
+        -289613.4465927967,
+        7.945654470271728e-17
+      ],
+      [
+        0.2956833850516423,
+        4.912637519021677,
+        2.5344681405461778,
+        -276743.42104993074,
+        8.20824530517289e-17
+      ],
+      [
+        0.295617536042,
+        4.879766767667082,
+        2.4595341970101097,
+        -259096.7868202023,
+        8.888480239642733e-17
+      ],
+      [
+        0.29555257238855653,
+        4.84770460782307,
+        2.387263666361708,
+        -257977.11968193096,
+        8.305912196771833e-17
+      ],
+      [
+        0.2954897347971985,
+        4.814542257412725,
+        2.3132135411556005,
+        -289934.6938457651,
+        8.521438064287624e-17
+      ]
+    ],
+    [
+      [
+        0.2959183673469388,
+        2.853130707813108,
+        2.310768133469268,
+        292451.72472888086,
+        5.720135661299046e-17
+      ],
+      [
+        0.2959402874176024,
+        2.8906825521349653,
+        2.393328666913076,
+        295541.7707757884,
+        6.440068899002414e-17
+      ],
+      [
+        0.29596157599111167,
+        2.9263346508780113,
+        2.473850147174275,
+        305635.4537988356,
+        5.948372151958061e-17
+      ],
+      [
+        0.29598125029052463,
+        2.960537145762543,
+        2.5543062728255803,
+        283351.91689963825,
+        6.924899882591439e-17
+      ],
+      [
+        0.2959988532684368,
+        2.9897595688797765,
+        2.6265924919949435,
+        277685.64525793126,
+        5.924316835080068e-17
+      ],
+      [
+        0.29601366345624736,
+        3.016182504771452,
+        2.6955393259697322,
+        257726.10589316604,
+        5.264481750426738e-17
+      ],
+      [
+        0.29602547845623206,
+        3.0388986081754434,
+        2.7580667261326597,
+        283222.9486472433,
+        5.376448029370992e-17
+      ],
+      [
+        0.2960373231509467,
+        3.0620714536989464,
+        2.8253948437937457,
+        307084.8407863728,
+        5.531056269041116e-17
+      ]
+    ]
+  ],
+  "state_scale": [
+    1.0,
+    1.0,
+    1.0,
+    439201.581618677,
+    6.408706536e-16
+  ],
+  "production_api_check": null
+}

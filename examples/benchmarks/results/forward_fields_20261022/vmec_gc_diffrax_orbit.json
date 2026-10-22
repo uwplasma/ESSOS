@@ -1,0 +1,252 @@
+{
+  "complete": true,
+  "field": "vmec",
+  "model": "gc",
+  "case": "diffrax_orbit",
+  "source_sha256": {
+    "essos/rk.py": "d4732dd607c196a8b47927578d1b99a5067b5a7a9bdab20473146e4a32752f72",
+    "essos/rk_rhs.py": "146ba3766904365f819eea2fac21c870b5715033f60d0020d8a85f0b091a76c9",
+    "essos/rk_dense.py": "865922e75a78b6a51c0f325222ebe5c66aba081a83401526adf8346b58a03600",
+    "essos/rk_dense_high.py": "8a48373b05523c1d9603e17db0f3eaa5403f25836f25b406d63b4bebe4d84b48",
+    "essos/split.py": "89418216bbf7c3e579956146f052e0e9cb723d40eca0a9af989bbd9b7367a2cb",
+    "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+    "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+    "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+    "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+    "essos/boozer.py": "647cea4cc6dbaf0b07ecb0b26a3bede22fc7c59c763217c534564baf08c027b2",
+    "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+    "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+    "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+    "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+    "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+    "essos/electric_field.py": "352b5b07996ba5d26dbfec48ab1e535558fd7222b3b78ad18f5aa3bd1a213cc4",
+    "examples/benchmarks/benchmark_ad_backends.py": "a0a20de164fa1a526789a9792b6ad172fc5e81805ec9b44acff83df4c7a8739f",
+    "examples/benchmarks/forward_field_cases.py": "a0c235aee6e912d5fcc974aaef924dbaf22dd2e88937ebe896949fa6ca1d3453",
+    "examples/benchmarks/benchmark_forward_fields.py": "6364a795476797ed6ee2f0f0e8f9179c822a25895685ae269440f1e77901e568"
+  },
+  "jax": "0.11.2",
+  "diffrax": "0.7.2",
+  "backend": "cpu",
+  "devices": [
+    "cpu:0"
+  ],
+  "particle_chunking": false,
+  "reverse_ad": false,
+  "metadata": {
+    "field": "vmec",
+    "horizon": 2e-05,
+    "energy_ev": 4000.0,
+    "seed": 42,
+    "birth_xyz_or_sthetazeta": [
+      [
+        0.29591836734693877,
+        5.025780198537137,
+        2.799582237927113
+      ],
+      [
+        0.29591836734693877,
+        2.853130707813108,
+        2.310768133469268
+      ]
+    ],
+    "birth_pitch": [
+      -0.5681517129572906,
+      0.6658712922914582
+    ],
+    "birth_mapping_residual": 8.881784197001252e-16,
+    "field_modes": 50,
+    "nyquist_modes": 128,
+    "angular_table": false,
+    "boozer_mode_cut": null,
+    "input_sha256": "ba8dcfaf18d27c99dc9ca4b38116d71b697626d54408de41b47e126676e1e94f",
+    "field_cache_sha256": "5887f673a0f0abd54d0b32097ae647226806fd6480fb2f1f0a8fac4a1accec0d",
+    "background": "Hydrogen, 1e20 m^-3, 1 keV; production NRL coefficients",
+    "fixed_dt": 8.928571428571429e-08,
+    "parameters": "Fixed field and births, no reverse AD",
+    "particle_chunking": false,
+    "spatial_kicks": false,
+    "objective": "mean final s (timed scalar diagnostic); no optimization",
+    "loss_surface": "s=1 in the existing regular chart",
+    "count_columns": [
+      "trials",
+      "accepted",
+      "rejected"
+    ],
+    "solver": "Diffrax Dopri8",
+    "error_control": "Production Diffrax scalar rtol/atol; PI (.4,.3)"
+  },
+  "setup_rss_bytes": {
+    "VmHWM": 706273280,
+    "VmRSS": 706273280
+  },
+  "compile_seconds": 8.338814284999899,
+  "compiled_memory": {
+    "bytes": 77824,
+    "components": {
+      "argument_size_in_bytes": 0,
+      "output_size_in_bytes": 712,
+      "temp_size_in_bytes": 77112,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "first_execution_seconds": 0.00892729200040776,
+  "first_peak_rss_bytes": {
+    "VmHWM": 1009893376,
+    "VmRSS": 1009893376
+  },
+  "warm_samples_ms": [
+    8.367716999600816,
+    8.635657000013452,
+    7.59118799942371,
+    7.488588999876811,
+    6.157665000500856,
+    7.9105249997155624,
+    8.071964999544434
+  ],
+  "warm_median_ms": 7.9105249997155624,
+  "warm_baseline_rss_bytes": {
+    "VmHWM": 1009893376,
+    "VmRSS": 1009893376
+  },
+  "warm_peak_rss_bytes": {
+    "VmHWM": 1010216960,
+    "VmRSS": 1010216960
+  },
+  "device_memory_stats": [
+    null
+  ],
+  "memory_scope": "Fresh worker: imports/field setup/one compile/forward executions only. RSS is CPU host memory, not GPU VRAM; compiled buffers are a separate estimate.",
+  "timing_scope": "Blocked warm device calls; compile, host copies, validation and field transform excluded. Scalar objective and normal output reconstruction included.",
+  "value": 0.2957839010448997,
+  "counts_per_particle": [
+    [
+      3,
+      3,
+      0
+    ],
+    [
+      4,
+      4,
+      0
+    ]
+  ],
+  "status": [
+    0,
+    0
+  ],
+  "terminal_times": [
+    2e-05,
+    2e-05
+  ],
+  "finite_states": true,
+  "peak_rss_bytes": 1010216960,
+  "saved_states": [
+    [
+      [
+        0.2959183673469387,
+        5.025780198537137,
+        2.799582237927113,
+        -249533.13093020263
+      ],
+      [
+        0.29586434747866397,
+        5.000333355691744,
+        2.739021896332951,
+        -249084.5508329095
+      ],
+      [
+        0.29580991757789293,
+        4.974103917744225,
+        2.6771352918016404,
+        -248637.21853200847
+      ],
+      [
+        0.2957549920384576,
+        4.946993513587037,
+        2.613794980639442,
+        -248194.61859232193
+      ],
+      [
+        0.2956995300445018,
+        4.9189153813723445,
+        2.548885842174064,
+        -247756.06588589787
+      ],
+      [
+        0.29564354879065213,
+        4.889799699804216,
+        2.4823112812666994,
+        -247317.5409927132
+      ],
+      [
+        0.2955871231808702,
+        4.859603732803122,
+        2.413999816033097,
+        -246875.02593109195
+      ],
+      [
+        0.29553037178528774,
+        4.828323065781083,
+        2.3439112262299604,
+        -246428.20301947594
+      ]
+    ],
+    [
+      [
+        0.2959183673469388,
+        2.853130707813108,
+        2.310768133469268,
+        292451.72472888086
+      ],
+      [
+        0.29594028741832923,
+        2.8906825519709693,
+        2.393328666960366,
+        292280.4970227418
+      ],
+      [
+        0.2959603356505758,
+        2.925961186904661,
+        2.472979400696414,
+        292117.9376898371
+      ],
+      [
+        0.2959787151899523,
+        2.9587408978710923,
+        2.549961523088254,
+        291982.66722633975
+      ],
+      [
+        0.29599560626480637,
+        2.988970228457787,
+        2.6245483936036864,
+        291880.3543946249
+      ],
+      [
+        0.29601110646537454,
+        3.0167537617455156,
+        2.6970285208576468,
+        291804.27282392565
+      ],
+      [
+        0.2960251384515707,
+        3.0423029536312227,
+        2.767694639880307,
+        291744.51318142837
+      ],
+      [
+        0.29603743030451174,
+        3.06589194514612,
+        2.8368375474344165,
+        291695.40176322806
+      ]
+    ]
+  ],
+  "state_scale": [
+    1.0,
+    1.0,
+    1.0,
+    439201.581618677
+  ],
+  "production_api_check": null
+}

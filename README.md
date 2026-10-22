@@ -1015,6 +1015,193 @@ python -m examples.benchmarks.benchmark_ad_backends \
   --output examples/benchmarks/results/ad_native_diffrax_NEW
 ```
 
+#### Native Boozer alpha benchmark at CATAPULT's tolerance values
+
+For a Boozer-field workload on the large machine, run:
+
+```bash
+python -m examples.benchmarks.benchmark_native_boozer_alpha \
+  --output output/native_boozer_alpha_run1
+```
+
+[`benchmark_native_boozer_alpha.py`](examples/benchmarks/benchmark_native_boozer_alpha.py)
+has editable `PARAMETERS` and CLI overrides. Defaults are 8,192 collisionless
+3.52 MeV alpha GCs, 20 ms, 101 saves, native adaptive Dopri8 with I control and
+**`rtol=atol=1e-10`**. The exact CATAPULT revision used by the published comparison
+assigns its input `tol` to both `atol` and `rtol`
+([source](https://github.com/ColumbiaStellaratorTheory/firm3d/blob/4dbeb5e29fdb4fca9179b2111cb897c576ecf42a/src/firm3dpp/cuda_kernel.cu#L1186)).
+Its denominator is `atol_i + rtol*(abs(state_i) + dt*abs(rhs_i))`, with
+`atol_vparallel = atol*birth_speed`. The native Boozer driver retains its existing
+block norm `max(norm(e_u,e_w), abs(e_zeta), abs(e_vparallel)/birth_speed)/(rtol+atol)`.
+The numerical tolerance values match; the acceptance tests differ. No controller,
+RHS or field class is changed by this example.
+
+The bundled reactor-scale QA equilibrium is transformed with `mboz=nboz=32`.
+The field retains 16 modes at the default `mode_cut=1e-4` and uses the existing
+direct Fourier representation and `K=0` equations. Births are uniform in Boozer
+angles over one field period at `s=0.3`, with uniform pitch in `[-1,1]` and seed
+42. These are newly sampled births, not the published CATAPULT birth set.
+The native driver root-finds the equilibrium boundary `s=1` and holds subsequent
+saves there. There is no Cartesian classifier or Biot-Savart evaluation. The
+batch has no compaction, particle chunks or reverse AD. JAX selects its normal
+backend; the script prints the selected devices and never forces CPU.
+
+The script prints setup/compilation/first-execution/warm timings separately,
+then saves `benchmark.json`, the raw transform in `boozer_inputs.npz`,
+`births.npz`, `traces.npz` and `benchmark.png` (loss fraction, energy drift,
+step counts and ten trajectories in the flux chart). Compiled buffer estimates,
+host RSS and backend device-memory statistics are saved where available;
+host RSS is not peak GPU VRAM. Production saved-state energy diagnostics are
+included in the timed kernel; transfers, disk output and plots are excluded.
+Small runs also compare against public `trace_boozer` after the timing and
+memory snapshots. `--setup-only` prepares the inputs without tracing.
+
+For a small CPU smoke test:
+
+```bash
+JAX_PLATFORMS=cpu ESSOS_CPU_DEVICES=1 \
+python -m examples.benchmarks.benchmark_native_boozer_alpha \
+  --particles 2 --horizon 1e-6 --saves 5 --repeats 1 \
+  --output output/native_boozer_alpha_smoke
+```
+
+`--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
+the equilibrium hash and transform resolutions. Births are still generated
+from the requested seed. Select a fresh output directory for each run.
+
+#### Forward-only coil, VMEC and Boozer comparison (CPU, 2026-10-22)
+
+The current native forward drivers are also exercised on VMEC and Boozer
+fields. The unified [CSV table](examples/benchmarks/results/forward_fields_20261022/comparison.csv)
+and [full record](examples/benchmarks/results/forward_fields_20261022/comparison.json)
+contain two-particle forward-only measurements, seven blocked warm repeats,
+eight saves and a 20 microsecond horizon. Orbit tolerances are `1e-9` and the
+native conservative collision tolerance is `0.003`. Fixed collisions use
+224 intervals per particle. Fixed collisionless native Dopri5/Dopri8 and
+specialized Boozer RK4 also use 224 steps (`dt=8.92857143e-8 s`); fixed orbit
+runs do not use the tolerances to reject steps. Native adaptive collisions choose their intervals
+up to half the horizon. Spatial collision kicks and reverse AD are disabled.
+
+Each case runs sequentially in a fresh worker. Warm timings exclude lowering,
+compilation, field transformation, host transfers and validation. Compiler
+buffers and peak host RSS are reported separately. Host peaks include imports,
+field setup and the single forward executable, before validation compiles
+anything else. The earlier AD table measures value/gradient memory; this new
+table measures forward-only memory for every field. No particle batching or
+lost-particle compaction is used.
+
+| GC field | Forward case | Warm time (ms) | Compiled buffers (MiB) | Peak host RSS (MiB) |
+| --- | --- | ---: | ---: | ---: |
+| Coils | Native adaptive Dopri8 orbit | 38.552 | 0.382 | 722.8 |
+| Coils | Diffrax adaptive Dopri8 orbit | 41.911 | 0.342 | 721.8 |
+| Coils | Native adaptive collisions | 47.151 | 0.958 | 803.0 |
+| Coils | Native fixed collisions | 230.995 | 0.958 | 787.3 |
+| Coils | Diffrax fixed collisions | 220.229 | 3.491 | 1238.7 |
+| VMEC | Native adaptive Dopri8 orbit | 6.961 | 0.069 | 867.5 |
+| VMEC | Diffrax adaptive Dopri8 orbit | 7.911 | 0.074 | 963.4 |
+| VMEC | Native fixed Dopri5 orbit | 171.804 | 0.064 | 853.9 |
+| VMEC | Native fixed Dopri8 orbit | 306.262 | 0.065 | 853.6 |
+| VMEC | Native adaptive collisions | 20.496 | 1.539 | 1000.0 |
+| VMEC | Native fixed collisions | 618.146 | 1.539 | 997.4 |
+| VMEC | Diffrax fixed collisions | 102.580 | 0.093 | 1246.2 |
+| Boozer | Native adaptive Dopri8 orbit | 0.461 | 0.008 | 722.4 |
+| Boozer | Diffrax adaptive Dopri8 orbit | 0.463 | 0.009 | 731.7 |
+| Boozer | Native fixed Dopri5 orbit | 11.409 | 0.008 | 722.1 |
+| Boozer | Native fixed Dopri8 orbit | 14.581 | 0.008 | 716.1 |
+| Boozer | Native adaptive collisions | 1.514 | 0.081 | 761.5 |
+| Boozer | Native fixed collisions | 37.824 | 0.081 | 762.2 |
+| Boozer | Specialized fixed RK4 orbit | 1.810 | 0.007 | 692.5 |
+
+All 19 cases completed with finite states and successful statuses. Native
+adaptive VMEC collisionless orbits accepted four steps per particle, versus two/three
+for Boozer. The four fixed native orbit cases accepted 224 steps per particle
+with zero rejections. The original 15 measurements are retained; the four new
+workers reused the exact saved field tables and births. Solver and field
+sources are unchanged; the full record retains separate benchmark-harness
+source snapshots for this extension. Every native adaptive collision case accepted seven outer maps
+per particle, anchored by the seven save intervals, with no rejected collision
+trials. Fixed collision cases accepted 224 maps per particle. The full records
+also retain inner orbit trials/rejections and the maximum accepted collision
+error estimate. The smaller adaptive workload explains much of its timing
+advantage. The fixed native VMEC split path remains a performance target:
+it takes 6.0 times the fixed Diffrax SDE time and 16.5 times its compiled
+buffers here, while its total host peak is lower.
+
+The coil rows retain the previous benchmark's unit-size QA coils and 4 keV
+births. Coordinate-field rows use the bundled reactor-scale QA `wout`, with
+the same two 4 keV alpha births mapped between VMEC and Boozer angles on
+`s=0.2959183673`, seed 42. The original VMEC field retains 50 geometry and
+128 Nyquist modes. A 32-by-32 Boozer transform is prepared once outside the
+measured workers; the production Boozer field retains 16 modes at a `1e-4`
+cutoff, using direct Fourier sums. The saved
+[coordinate inputs](examples/benchmarks/results/forward_fields_20261022/coordinate_inputs.npz)
+retain the transform tables and mapped births. VMEC and Boozer keep their
+existing regular-axis charts and physical RHSs. Boozer uses its existing
+`K=0` approximation. This compares solvers within each field representation;
+the different field approximations and coil/reference scales are recorded.
+
+The native collisionless benchmark kernels, including both fixed methods,
+are checked against their public production tracers (`Tracing` and
+`trace_boozer`) outside the measurements.
+The [validation record](examples/benchmarks/results/forward_fields_20261022/validation.json)
+also records 20 passing existing forward regressions: native Dopri5/Dopri8
+against tighter Diffrax orbits, plus both coordinate split drivers in the
+collision-vacuum limit. Numerical sources and each field's inputs were checked
+for consistency across every measured worker.
+The record also compares saved position/coordinate and velocity differences
+against Diffrax. These are trajectory differences, separate from the local
+embedded tolerance. VMEC keeps its production Diffrax scalar PI controller
+and native Cartesian-position/birth-speed error blocks. Boozer's Diffrax
+orbit reference uses the same block error scales as the native driver with
+PI coefficients `(0.4, 0.3)`; native uses I control.
+
+For the adaptive native versus Diffrax collisionless saved states, the maximum `s`
+differences are `8.75e-13` (VMEC) and `2.05e-11` (Boozer). The maximum parallel
+velocity differences are `2.46e-4 m/s` and `6.83e-5 m/s`, respectively, or
+`5.60e-10` and `1.55e-10` of the birth speed. The complete record includes
+wrapped poloidal-angle and toroidal-angle differences as well. All native
+benchmark kernels agree exactly with their public production tracer outputs
+in this run. For both fixed native methods, the maximum parallel-velocity
+differences from the existing adaptive Diffrax reference are `2.72e-4 m/s`
+(VMEC) and `1.33e-5 m/s` (Boozer), or `6.20e-10` and `3.03e-11` of birth speed.
+
+VMEC includes its existing fixed-step Diffrax collision SDE. Boozer has no
+existing Diffrax SDE entry point; that row is explicitly skipped. Both fields
+use the production Milstein speed/pitch collision map and Brownian rejection
+memory for native split tracing. Equal particle keys do not align stochastic
+paths across native and Diffrax collision schemes. The specialized Boozer
+fixed RK4 collisionless tracer is included as a forward reference. This small
+performance ensemble does not replace the retained statistical physics tests.
+
+Reproduce from the repository root, with the project environment active and
+`booz_xform_jax` installed:
+
+```bash
+python -m examples.benchmarks.benchmark_forward_fields \
+  --fields coils vmec boozer --models gc --repeats 7 \
+  --output examples/benchmarks/results/forward_fields_NEW
+```
+
+To run only the four fixed collisionless cases:
+
+```bash
+python -m examples.benchmarks.benchmark_forward_fields \
+  --fields vmec boozer \
+  --cases native_orbit_fixed_dopri5 native_orbit_fixed_dopri8 \
+  --fixed-gc-steps 224 --repeats 7 \
+  --output examples/benchmarks/results/forward_fixed_NEW
+```
+
+This comparison explicitly selects CPU by default. Add `--platform auto` to
+use JAX's ordinary backend selection. Device-memory statistics are saved when
+the backend exposes them; CPU host RSS is not peak GPU memory. Use
+`--fields vmec boozer` to restrict the matrix to coordinate fields, or
+`--fields coils --models lorentz` for the Cartesian Lorentz cases. Forward
+kernel construction is in
+[`forward_field_cases.py`](examples/benchmarks/forward_field_cases.py); the
+fresh-process timing/memory runner is
+[`benchmark_forward_fields.py`](examples/benchmarks/benchmark_forward_fields.py).
+
 #### Forward setup and collision-cost investigation (CPU, 2026-10-21)
 
 The [investigation record](examples/benchmarks/results/split_efficiency_investigation_20261021.json)

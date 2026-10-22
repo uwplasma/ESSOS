@@ -1,0 +1,255 @@
+{
+  "complete": true,
+  "field": "vmec",
+  "model": "gc",
+  "case": "native_orbit",
+  "source_sha256": {
+    "essos/rk.py": "d4732dd607c196a8b47927578d1b99a5067b5a7a9bdab20473146e4a32752f72",
+    "essos/rk_rhs.py": "146ba3766904365f819eea2fac21c870b5715033f60d0020d8a85f0b091a76c9",
+    "essos/rk_dense.py": "865922e75a78b6a51c0f325222ebe5c66aba081a83401526adf8346b58a03600",
+    "essos/rk_dense_high.py": "8a48373b05523c1d9603e17db0f3eaa5403f25836f25b406d63b4bebe4d84b48",
+    "essos/split.py": "89418216bbf7c3e579956146f052e0e9cb723d40eca0a9af989bbd9b7367a2cb",
+    "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+    "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+    "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+    "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+    "essos/boozer.py": "647cea4cc6dbaf0b07ecb0b26a3bede22fc7c59c763217c534564baf08c027b2",
+    "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+    "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+    "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+    "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+    "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+    "essos/electric_field.py": "352b5b07996ba5d26dbfec48ab1e535558fd7222b3b78ad18f5aa3bd1a213cc4",
+    "examples/benchmarks/benchmark_ad_backends.py": "a0a20de164fa1a526789a9792b6ad172fc5e81805ec9b44acff83df4c7a8739f",
+    "examples/benchmarks/forward_field_cases.py": "a0c235aee6e912d5fcc974aaef924dbaf22dd2e88937ebe896949fa6ca1d3453",
+    "examples/benchmarks/benchmark_forward_fields.py": "6364a795476797ed6ee2f0f0e8f9179c822a25895685ae269440f1e77901e568"
+  },
+  "jax": "0.11.2",
+  "diffrax": "0.7.2",
+  "backend": "cpu",
+  "devices": [
+    "cpu:0"
+  ],
+  "particle_chunking": false,
+  "reverse_ad": false,
+  "metadata": {
+    "field": "vmec",
+    "horizon": 2e-05,
+    "energy_ev": 4000.0,
+    "seed": 42,
+    "birth_xyz_or_sthetazeta": [
+      [
+        0.29591836734693877,
+        5.025780198537137,
+        2.799582237927113
+      ],
+      [
+        0.29591836734693877,
+        2.853130707813108,
+        2.310768133469268
+      ]
+    ],
+    "birth_pitch": [
+      -0.5681517129572906,
+      0.6658712922914582
+    ],
+    "birth_mapping_residual": 8.881784197001252e-16,
+    "field_modes": 50,
+    "nyquist_modes": 128,
+    "angular_table": false,
+    "boozer_mode_cut": null,
+    "input_sha256": "ba8dcfaf18d27c99dc9ca4b38116d71b697626d54408de41b47e126676e1e94f",
+    "field_cache_sha256": "5887f673a0f0abd54d0b32097ae647226806fd6480fb2f1f0a8fac4a1accec0d",
+    "background": "Hydrogen, 1e20 m^-3, 1 keV; production NRL coefficients",
+    "fixed_dt": 8.928571428571429e-08,
+    "parameters": "Fixed field and births, no reverse AD",
+    "particle_chunking": false,
+    "spatial_kicks": false,
+    "objective": "mean final s (timed scalar diagnostic); no optimization",
+    "loss_surface": "s=1 in the existing regular chart",
+    "count_columns": [
+      "trials",
+      "accepted",
+      "rejected"
+    ],
+    "solver": "native Dopri8",
+    "error_control": "Native Cartesian position/birth-speed blocks; I"
+  },
+  "setup_rss_bytes": {
+    "VmHWM": 705998848,
+    "VmRSS": 705998848
+  },
+  "compile_seconds": 6.338700194000012,
+  "compiled_memory": {
+    "bytes": 71960,
+    "components": {
+      "argument_size_in_bytes": 0,
+      "output_size_in_bytes": 712,
+      "temp_size_in_bytes": 71248,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "first_execution_seconds": 0.008636137000394228,
+  "first_peak_rss_bytes": {
+    "VmHWM": 909279232,
+    "VmRSS": 909279232
+  },
+  "warm_samples_ms": [
+    7.739564999610593,
+    5.829421999806073,
+    6.4628640002410975,
+    6.96055200023693,
+    7.033037999462977,
+    7.458301000042411,
+    6.742966999809141
+  ],
+  "warm_median_ms": 6.96055200023693,
+  "warm_baseline_rss_bytes": {
+    "VmHWM": 909279232,
+    "VmRSS": 909279232
+  },
+  "warm_peak_rss_bytes": {
+    "VmHWM": 909598720,
+    "VmRSS": 909598720
+  },
+  "device_memory_stats": [
+    null
+  ],
+  "memory_scope": "Fresh worker: imports/field setup/one compile/forward executions only. RSS is CPU host memory, not GPU VRAM; compiled buffers are a separate estimate.",
+  "timing_scope": "Blocked warm device calls; compile, host copies, validation and field transform excluded. Scalar objective and normal output reconstruction included.",
+  "value": 0.29578390104489766,
+  "counts_per_particle": [
+    [
+      5,
+      4,
+      1
+    ],
+    [
+      4,
+      4,
+      0
+    ]
+  ],
+  "status": [
+    0,
+    0
+  ],
+  "terminal_times": [
+    2e-05,
+    2e-05
+  ],
+  "finite_states": true,
+  "peak_rss_bytes": 909598720,
+  "saved_states": [
+    [
+      [
+        0.2959183673469387,
+        5.025780198537137,
+        2.799582237927113,
+        -249533.13093020263
+      ],
+      [
+        0.29586434747866397,
+        5.000333355691744,
+        2.739021896332951,
+        -249084.5508329095
+      ],
+      [
+        0.29580991757806346,
+        4.974103917864351,
+        2.677135292016947,
+        -248637.21858095998
+      ],
+      [
+        0.29575499203847594,
+        4.946993513387115,
+        2.6137949804133553,
+        -248194.61849876816
+      ],
+      [
+        0.2956995300445213,
+        4.918915381359953,
+        2.548885842604297,
+        -247756.06563998357
+      ],
+      [
+        0.29564354879008475,
+        4.889799700427805,
+        2.482311280865419,
+        -247317.54112065665
+      ],
+      [
+        0.29558712318062164,
+        4.859603733508219,
+        2.413999816209211,
+        -246875.02608130864
+      ],
+      [
+        0.29553037178528724,
+        4.828323065783175,
+        2.3439112262300874,
+        -246428.20301983613
+      ]
+    ],
+    [
+      [
+        0.2959183673469388,
+        2.853130707813108,
+        2.310768133469268,
+        292451.72472888086
+      ],
+      [
+        0.29594028741832923,
+        2.8906825519709693,
+        2.393328666960366,
+        292280.4970227418
+      ],
+      [
+        0.2959603356497876,
+        2.9259611864885855,
+        2.472979400571015,
+        292117.93776369985
+      ],
+      [
+        0.2959787151901621,
+        2.95874089793336,
+        2.5499615231332804,
+        291982.667209667
+      ],
+      [
+        0.2959956062646704,
+        2.988970228415238,
+        2.6245483936793295,
+        291880.3544273351
+      ],
+      [
+        0.29601110646449963,
+        3.0167537615819158,
+        2.697028520850116,
+        291804.2728980047
+      ],
+      [
+        0.2960251384518264,
+        3.04230295365852,
+        2.767694639890539,
+        291744.51316860196
+      ],
+      [
+        0.296037430304508,
+        3.065891945146402,
+        2.836837547433976,
+        291695.40176315
+      ]
+    ]
+  ],
+  "state_scale": [
+    1.0,
+    1.0,
+    1.0,
+    439201.581618677
+  ],
+  "production_api_check": {
+    "max_scaled_state_difference": 0.0,
+    "scope": "Untimed comparison with existing public native Tracing/trace_boozer; finite pre-loss saves"
+  }
+}

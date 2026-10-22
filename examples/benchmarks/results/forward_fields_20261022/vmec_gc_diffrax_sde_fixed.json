@@ -1,0 +1,269 @@
+{
+  "complete": true,
+  "field": "vmec",
+  "model": "gc",
+  "case": "diffrax_sde_fixed",
+  "source_sha256": {
+    "essos/rk.py": "d4732dd607c196a8b47927578d1b99a5067b5a7a9bdab20473146e4a32752f72",
+    "essos/rk_rhs.py": "146ba3766904365f819eea2fac21c870b5715033f60d0020d8a85f0b091a76c9",
+    "essos/rk_dense.py": "865922e75a78b6a51c0f325222ebe5c66aba081a83401526adf8346b58a03600",
+    "essos/rk_dense_high.py": "8a48373b05523c1d9603e17db0f3eaa5403f25836f25b406d63b4bebe4d84b48",
+    "essos/split.py": "89418216bbf7c3e579956146f052e0e9cb723d40eca0a9af989bbd9b7367a2cb",
+    "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+    "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+    "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+    "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+    "essos/boozer.py": "647cea4cc6dbaf0b07ecb0b26a3bede22fc7c59c763217c534564baf08c027b2",
+    "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+    "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+    "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+    "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+    "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+    "essos/electric_field.py": "352b5b07996ba5d26dbfec48ab1e535558fd7222b3b78ad18f5aa3bd1a213cc4",
+    "examples/benchmarks/benchmark_ad_backends.py": "a0a20de164fa1a526789a9792b6ad172fc5e81805ec9b44acff83df4c7a8739f",
+    "examples/benchmarks/forward_field_cases.py": "a0c235aee6e912d5fcc974aaef924dbaf22dd2e88937ebe896949fa6ca1d3453",
+    "examples/benchmarks/benchmark_forward_fields.py": "6364a795476797ed6ee2f0f0e8f9179c822a25895685ae269440f1e77901e568"
+  },
+  "jax": "0.11.2",
+  "diffrax": "0.7.2",
+  "backend": "cpu",
+  "devices": [
+    "cpu:0"
+  ],
+  "particle_chunking": false,
+  "reverse_ad": false,
+  "metadata": {
+    "field": "vmec",
+    "horizon": 2e-05,
+    "energy_ev": 4000.0,
+    "seed": 42,
+    "birth_xyz_or_sthetazeta": [
+      [
+        0.29591836734693877,
+        5.025780198537137,
+        2.799582237927113
+      ],
+      [
+        0.29591836734693877,
+        2.853130707813108,
+        2.310768133469268
+      ]
+    ],
+    "birth_pitch": [
+      -0.5681517129572906,
+      0.6658712922914582
+    ],
+    "birth_mapping_residual": 8.881784197001252e-16,
+    "field_modes": 50,
+    "nyquist_modes": 128,
+    "angular_table": false,
+    "boozer_mode_cut": null,
+    "input_sha256": "ba8dcfaf18d27c99dc9ca4b38116d71b697626d54408de41b47e126676e1e94f",
+    "field_cache_sha256": "5887f673a0f0abd54d0b32097ae647226806fd6480fb2f1f0a8fac4a1accec0d",
+    "background": "Hydrogen, 1e20 m^-3, 1 keV; production NRL coefficients",
+    "fixed_dt": 8.928571428571429e-08,
+    "parameters": "Fixed field and births, no reverse AD",
+    "particle_chunking": false,
+    "spatial_kicks": false,
+    "objective": "mean final s (timed scalar diagnostic); no optimization",
+    "loss_surface": "s=1 in the existing regular chart",
+    "count_columns": [
+      "trials",
+      "accepted",
+      "rejected"
+    ],
+    "solver": "StratonovichMilstein production VMEC SDE",
+    "error_control": "Fixed SDE steps"
+  },
+  "setup_rss_bytes": {
+    "VmHWM": 696610816,
+    "VmRSS": 696610816
+  },
+  "compile_seconds": 14.04700742499972,
+  "compiled_memory": {
+    "bytes": 97592,
+    "components": {
+      "argument_size_in_bytes": 0,
+      "output_size_in_bytes": 856,
+      "temp_size_in_bytes": 96736,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "first_execution_seconds": 0.11479023299943947,
+  "first_peak_rss_bytes": {
+    "VmHWM": 1306345472,
+    "VmRSS": 1306345472
+  },
+  "warm_samples_ms": [
+    107.29988399998547,
+    98.89394299989362,
+    97.42479499982437,
+    102.58010799952899,
+    122.12751400056732,
+    117.02101999981096,
+    100.26301700054319
+  ],
+  "warm_median_ms": 102.58010799952899,
+  "warm_baseline_rss_bytes": {
+    "VmHWM": 1306345472,
+    "VmRSS": 1306345472
+  },
+  "warm_peak_rss_bytes": {
+    "VmHWM": 1306697728,
+    "VmRSS": 1306697728
+  },
+  "device_memory_stats": [
+    null
+  ],
+  "memory_scope": "Fresh worker: imports/field setup/one compile/forward executions only. RSS is CPU host memory, not GPU VRAM; compiled buffers are a separate estimate.",
+  "timing_scope": "Blocked warm device calls; compile, host copies, validation and field transform excluded. Scalar objective and normal output reconstruction included.",
+  "value": 0.295813042427223,
+  "counts_per_particle": [
+    [
+      224,
+      224,
+      0
+    ],
+    [
+      224,
+      224,
+      0
+    ]
+  ],
+  "status": [
+    0,
+    0
+  ],
+  "terminal_times": [
+    2e-05,
+    2e-05
+  ],
+  "finite_states": true,
+  "peak_rss_bytes": 1306697728,
+  "saved_states": [
+    [
+      [
+        0.2959183673469387,
+        5.025780198537137,
+        2.799582237927113,
+        -249533.1309302026,
+        7.439036358072951e-17
+      ],
+      [
+        0.2958691221184048,
+        5.001612258771316,
+        2.74204832787432,
+        -226905.45423918375,
+        6.429639019412097e-17
+      ],
+      [
+        0.2958254690696327,
+        4.978480911401116,
+        2.687411733751188,
+        -205490.50991282615,
+        5.4355171082855594e-17
+      ],
+      [
+        0.295783108302243,
+        4.955540584198311,
+        2.633677750623576,
+        -209080.44482527827,
+        6.208441421165941e-17
+      ],
+      [
+        0.2957384604047036,
+        4.932339723285746,
+        2.579808384468388,
+        -209978.31042332758,
+        7.176946659544801e-17
+      ],
+      [
+        0.2956916137828961,
+        4.909165956766868,
+        2.526481593346459,
+        -192446.74547364112,
+        8.336349655892011e-17
+      ],
+      [
+        0.2956425084325935,
+        4.885294459770659,
+        2.4720362899524635,
+        -210338.00858576738,
+        8.274895374470056e-17
+      ],
+      [
+        0.29558866585422605,
+        4.860129727713521,
+        2.415139388379645,
+        -190521.7987781906,
+        8.638240492912697e-17
+      ]
+    ],
+    [
+      [
+        0.2959183673469388,
+        2.853130707813108,
+        2.310768133469268,
+        292451.72472888086,
+        5.720135661299046e-17
+      ],
+      [
+        0.29594104050538245,
+        2.891506267887842,
+        2.395135870632013,
+        310008.7292819685,
+        6.154399420324218e-17
+      ],
+      [
+        0.29596391301703134,
+        2.928666750040073,
+        2.4791557824602086,
+        311290.3441767388,
+        6.994325481832513e-17
+      ],
+      [
+        0.29598358018329185,
+        2.9620334624514255,
+        2.5577981697775027,
+        266857.1472770764,
+        6.249472191998401e-17
+      ],
+      [
+        0.29599810879624133,
+        2.987802495354415,
+        2.621440454236943,
+        241804.18189772632,
+        6.115927421448945e-17
+      ],
+      [
+        0.2960114252184468,
+        3.010308579934431,
+        2.6796496196060082,
+        239848.0824752215,
+        7.349182313730944e-17
+      ],
+      [
+        0.2960251362952262,
+        3.0328428379219963,
+        2.7408219447702895,
+        243642.8659863014,
+        7.128350791364508e-17
+      ],
+      [
+        0.29603741900021996,
+        3.05354400375884,
+        2.799904668096777,
+        228051.56153037946,
+        7.08167855079611e-17
+      ]
+    ]
+  ],
+  "state_scale": [
+    1.0,
+    1.0,
+    1.0,
+    439201.581618677,
+    6.408706536e-16
+  ],
+  "production_api_check": null
+}

@@ -194,3 +194,6 @@ examples/benchmarks/output/
 !examples/benchmarks/results/ad_native_diffrax_20261021/*.csv
 !examples/benchmarks/results/ad_native_diffrax_forward_views_20261021/*.json
 !examples/benchmarks/results/ad_native_diffrax_forward_views_20261021/*.csv
+!examples/benchmarks/results/forward_fields_20261022/*.json
+!examples/benchmarks/results/forward_fields_20261022/*.csv
+!examples/benchmarks/results/forward_fields_20261022/*.npz

@@ -1,0 +1,23 @@
+{
+  "complete": true,
+  "date": "2026-10-22",
+  "jax": "0.11.2",
+  "backend": "cpu",
+  "benchmark_cases_passed": 19,
+  "forward_regression_tests_passed": 20,
+  "regression_command": "python -m pytest tests/test_native_vmec.py tests/test_boozer.py::test_native_boozer_orbits_match_independent_diffrax tests/test_split_collisions.py::test_boozer_split_vacuum_matches_existing_native_driver tests/test_split_collisions.py::test_vmec_split_vacuum_matches_existing_native_driver -q",
+  "regression_test_source_sha256": {
+    "tests/test_native_vmec.py": "7871744f9a46a802eff4ac074c7b14a0a95680847694175419502b52bb45a3a9",
+    "tests/test_boozer.py": "baca9f4062aceb71e5aac29f5d6c36ed00b47f384d1c46b581fa81291786d8c0",
+    "tests/test_split_collisions.py": "af7a6561f92ddfc82ff61e2498c25417a69af41181a8ed3decb3895715f614c3"
+  },
+  "checks": [
+    "unchanged solver/field source hashes across all 19 workers; benchmark-only extensions retain separate source snapshots",
+    "fixed input hash per field; common saved transform and mapped coordinate births",
+    "all states finite, all particle statuses successful/event",
+    "zero discrepancy with public native VMEC/Boozer production orbit outputs",
+    "maximum accepted adaptive collision error <= 1 in all measured native split cases",
+    "no reverse executables or particle chunking",
+    "four fixed collisionless Dopri5/Dopri8 workers each accepted 224 steps per particle with zero rejections; public production API checked after measurements"
+  ]
+}

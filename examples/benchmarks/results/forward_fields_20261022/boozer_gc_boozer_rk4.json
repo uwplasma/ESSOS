@@ -1,0 +1,269 @@
+{
+  "complete": true,
+  "field": "boozer",
+  "model": "gc",
+  "case": "boozer_rk4",
+  "source_sha256": {
+    "essos/rk.py": "d4732dd607c196a8b47927578d1b99a5067b5a7a9bdab20473146e4a32752f72",
+    "essos/rk_rhs.py": "146ba3766904365f819eea2fac21c870b5715033f60d0020d8a85f0b091a76c9",
+    "essos/rk_dense.py": "865922e75a78b6a51c0f325222ebe5c66aba081a83401526adf8346b58a03600",
+    "essos/rk_dense_high.py": "8a48373b05523c1d9603e17db0f3eaa5403f25836f25b406d63b4bebe4d84b48",
+    "essos/split.py": "89418216bbf7c3e579956146f052e0e9cb723d40eca0a9af989bbd9b7367a2cb",
+    "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+    "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+    "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+    "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+    "essos/boozer.py": "647cea4cc6dbaf0b07ecb0b26a3bede22fc7c59c763217c534564baf08c027b2",
+    "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+    "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+    "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+    "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+    "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+    "essos/electric_field.py": "352b5b07996ba5d26dbfec48ab1e535558fd7222b3b78ad18f5aa3bd1a213cc4",
+    "examples/benchmarks/benchmark_ad_backends.py": "a0a20de164fa1a526789a9792b6ad172fc5e81805ec9b44acff83df4c7a8739f",
+    "examples/benchmarks/forward_field_cases.py": "a0c235aee6e912d5fcc974aaef924dbaf22dd2e88937ebe896949fa6ca1d3453",
+    "examples/benchmarks/benchmark_forward_fields.py": "6364a795476797ed6ee2f0f0e8f9179c822a25895685ae269440f1e77901e568"
+  },
+  "jax": "0.11.2",
+  "diffrax": "0.7.2",
+  "backend": "cpu",
+  "devices": [
+    "cpu:0"
+  ],
+  "particle_chunking": false,
+  "reverse_ad": false,
+  "metadata": {
+    "field": "boozer",
+    "horizon": 2e-05,
+    "energy_ev": 4000.0,
+    "seed": 42,
+    "birth_xyz_or_sthetazeta": [
+      [
+        0.29591836734693877,
+        4.862909272689599,
+        2.6973649175810768
+      ],
+      [
+        0.29591836734693877,
+        2.757554564287996,
+        2.190846276941291
+      ]
+    ],
+    "birth_pitch": [
+      -0.5681517129572906,
+      0.6658712922914582
+    ],
+    "birth_mapping_residual": 8.881784197001252e-16,
+    "field_modes": 16,
+    "nyquist_modes": null,
+    "angular_table": false,
+    "boozer_mode_cut": 0.0001,
+    "input_sha256": "ba8dcfaf18d27c99dc9ca4b38116d71b697626d54408de41b47e126676e1e94f",
+    "field_cache_sha256": "5887f673a0f0abd54d0b32097ae647226806fd6480fb2f1f0a8fac4a1accec0d",
+    "background": "Hydrogen, 1e20 m^-3, 1 keV; production NRL coefficients",
+    "fixed_dt": 8.928571428571429e-08,
+    "parameters": "Fixed field and births, no reverse AD",
+    "particle_chunking": false,
+    "spatial_kicks": false,
+    "objective": "mean final s (timed scalar diagnostic); no optimization",
+    "loss_surface": "s=1 in the existing regular chart",
+    "count_columns": [
+      "trials",
+      "accepted",
+      "rejected"
+    ],
+    "solver": "production specialized Boozer RK4, no compaction",
+    "error_control": "Fixed step; no embedded controller"
+  },
+  "setup_rss_bytes": {
+    "VmHWM": 646406144,
+    "VmRSS": 646406144
+  },
+  "compile_seconds": 0.5068999909999548,
+  "compiled_memory": {
+    "bytes": 6840,
+    "components": {
+      "argument_size_in_bytes": 0,
+      "output_size_in_bytes": 856,
+      "temp_size_in_bytes": 5984,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "first_execution_seconds": 0.003117645000202174,
+  "first_peak_rss_bytes": {
+    "VmHWM": 725897216,
+    "VmRSS": 725897216
+  },
+  "warm_samples_ms": [
+    2.5154810000458383,
+    1.8456120005794219,
+    1.805126999897766,
+    1.8099960007020854,
+    1.82796899935056,
+    1.7998370003624586,
+    1.8032829993899213
+  ],
+  "warm_median_ms": 1.8099960007020854,
+  "warm_baseline_rss_bytes": {
+    "VmHWM": 725897216,
+    "VmRSS": 725897216
+  },
+  "warm_peak_rss_bytes": {
+    "VmHWM": 726118400,
+    "VmRSS": 726118400
+  },
+  "device_memory_stats": [
+    null
+  ],
+  "memory_scope": "Fresh worker: imports/field setup/one compile/forward executions only. RSS is CPU host memory, not GPU VRAM; compiled buffers are a separate estimate.",
+  "timing_scope": "Blocked warm device calls; compile, host copies, validation and field transform excluded. Scalar objective and normal output reconstruction included.",
+  "value": 0.2957842752317718,
+  "counts_per_particle": [
+    [
+      224,
+      224,
+      0
+    ],
+    [
+      224,
+      224,
+      0
+    ]
+  ],
+  "status": [
+    0,
+    0
+  ],
+  "terminal_times": [
+    2.000000000000009e-05,
+    2.000000000000009e-05
+  ],
+  "finite_states": true,
+  "peak_rss_bytes": 726118400,
+  "saved_states": [
+    [
+      [
+        0.29591836734693877,
+        -1.4202760344899874,
+        2.6973649175810768,
+        -249533.13093020263,
+        439201.581618677
+      ],
+      [
+        0.2958641661435318,
+        -1.447761549343962,
+        2.63195328245202,
+        -249089.28485996654,
+        439201.5816186769
+      ],
+      [
+        0.29580966406253656,
+        -1.4752472860491748,
+        2.5665476890914447,
+        -248643.03033569726,
+        439201.5816186769
+      ],
+      [
+        0.2957548093479376,
+        -1.5027329620994676,
+        2.5011487545241224,
+        -248196.15206769167,
+        439201.5816186769
+      ],
+      [
+        0.2956995708609833,
+        -1.5302182937203594,
+        2.4357570730866063,
+        -247750.11247441493,
+        439201.58161867684
+      ],
+      [
+        0.29564394438289576,
+        -1.5577030013825168,
+        2.3703732146987075,
+        -247305.93830588248,
+        439201.5816186768
+      ],
+      [
+        0.2955879555756746,
+        -1.5851868137131035,
+        2.304997727445954,
+        -246864.16067729497,
+        439201.5816186769
+      ],
+      [
+        0.2955316593532362,
+        -1.6126694694533905,
+        2.2396311439628125,
+        -246424.81515760015,
+        439201.58161867684
+      ]
+    ],
+    [
+      [
+        0.29591836734693877,
+        2.757554564287996,
+        2.190846276941291,
+        292451.72472888086,
+        439201.581618677
+      ],
+      [
+        0.2959403942675061,
+        2.7919401740116996,
+        2.2728242270937886,
+        292292.52045886003,
+        439201.58161867695
+      ],
+      [
+        0.29596057097079276,
+        2.8263347361638895,
+        2.354827318798769,
+        292148.3770603866,
+        439201.58161867684
+      ],
+      [
+        0.2959790539573123,
+        2.860737263842356,
+        2.436852765329226,
+        292021.7057850608,
+        439201.58161867666
+      ],
+      [
+        0.2959959477924934,
+        2.8951466682123637,
+        2.518897456794237,
+        291914.3373617792,
+        439201.5816186766
+      ],
+      [
+        0.296011278129749,
+        2.9295617985967324,
+        2.600958085817782,
+        291827.1705277006,
+        439201.58161867654
+      ],
+      [
+        0.29602497810187534,
+        2.9639814960467734,
+        2.6830313153483516,
+        291759.9776908876,
+        439201.58161867666
+      ],
+      [
+        0.2960368911103074,
+        2.9984046511336313,
+        2.7651139595962024,
+        291711.41022574884,
+        439201.5816186768
+      ]
+    ]
+  ],
+  "state_scale": [
+    1.0,
+    1.0,
+    1.0,
+    439201.581618677,
+    439201.581618677
+  ],
+  "production_api_check": null
+}

@@ -1,0 +1,277 @@
+{
+  "complete": true,
+  "field": "boozer",
+  "model": "gc",
+  "case": "native_orbit_fixed_dopri5",
+  "source_sha256": {
+    "essos/rk.py": "d4732dd607c196a8b47927578d1b99a5067b5a7a9bdab20473146e4a32752f72",
+    "essos/rk_rhs.py": "146ba3766904365f819eea2fac21c870b5715033f60d0020d8a85f0b091a76c9",
+    "essos/rk_dense.py": "865922e75a78b6a51c0f325222ebe5c66aba081a83401526adf8346b58a03600",
+    "essos/rk_dense_high.py": "8a48373b05523c1d9603e17db0f3eaa5403f25836f25b406d63b4bebe4d84b48",
+    "essos/split.py": "89418216bbf7c3e579956146f052e0e9cb723d40eca0a9af989bbd9b7367a2cb",
+    "essos/collisions.py": "4d733ea1699d61757aba3b0d4888412e854611ccabd747ce86ff572d636cccf8",
+    "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+    "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+    "essos/dynamics.py": "bc9c6e707fbae046aa6837061c24927365f0b5953f692b1a4a1cde8e5a3599a0",
+    "essos/boozer.py": "647cea4cc6dbaf0b07ecb0b26a3bede22fc7c59c763217c534564baf08c027b2",
+    "essos/fields.py": "88820cb4fb63d669a4bf513836be3c83dc357bfeac6d96d872ee43bb7dc1f44b",
+    "essos/coils.py": "a0bb1217206f477c4bef7ef405bedc6f5c349667e2637364b5485d37c0ab5079",
+    "essos/orbit_error.py": "121f2a92231b58b7b7f1f714c5b4d2844b5fcbfe1e601163da5e5bc9331a25e2",
+    "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+    "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+    "essos/electric_field.py": "352b5b07996ba5d26dbfec48ab1e535558fd7222b3b78ad18f5aa3bd1a213cc4",
+    "examples/benchmarks/benchmark_ad_backends.py": "a0a20de164fa1a526789a9792b6ad172fc5e81805ec9b44acff83df4c7a8739f",
+    "examples/benchmarks/forward_field_cases.py": "acfd4d545223c6a70084721837b08efa60246524826a21deb07c703fb78da814",
+    "examples/benchmarks/benchmark_forward_fields.py": "db62278597177ecff167bfec089bb18bd4b6b84f84ff6db9656d85c358401845"
+  },
+  "jax": "0.11.2",
+  "diffrax": "0.7.2",
+  "backend": "cpu",
+  "devices": [
+    "cpu:0"
+  ],
+  "particle_chunking": false,
+  "reverse_ad": false,
+  "metadata": {
+    "field": "boozer",
+    "horizon": 2e-05,
+    "energy_ev": 4000.0,
+    "seed": 42,
+    "birth_xyz_or_sthetazeta": [
+      [
+        0.29591836734693877,
+        4.862909272689599,
+        2.6973649175810768
+      ],
+      [
+        0.29591836734693877,
+        2.757554564287996,
+        2.190846276941291
+      ]
+    ],
+    "birth_pitch": [
+      -0.5681517129572906,
+      0.6658712922914582
+    ],
+    "birth_mapping_residual": 8.881784197001252e-16,
+    "field_modes": 16,
+    "nyquist_modes": null,
+    "angular_table": false,
+    "boozer_mode_cut": 0.0001,
+    "input_sha256": "ba8dcfaf18d27c99dc9ca4b38116d71b697626d54408de41b47e126676e1e94f",
+    "field_cache_sha256": "5887f673a0f0abd54d0b32097ae647226806fd6480fb2f1f0a8fac4a1accec0d",
+    "background": "Hydrogen, 1e20 m^-3, 1 keV; production NRL coefficients",
+    "fixed_dt": 8.928571428571429e-08,
+    "parameters": "Fixed field and births, no reverse AD",
+    "particle_chunking": false,
+    "spatial_kicks": false,
+    "objective": "mean final s (timed scalar diagnostic); no optimization",
+    "loss_surface": "s=1 in the existing regular chart",
+    "count_columns": [
+      "trials",
+      "accepted",
+      "rejected"
+    ],
+    "orbit_method": "dopri5",
+    "orbit_adaptive": false,
+    "orbit_dt0": 8.928571428571429e-08,
+    "solver": "production Boozer native dopri5 kernel",
+    "error_control": "Fixed step; no error-based rejection"
+  },
+  "setup_rss_bytes": {
+    "VmHWM": 647815168,
+    "VmRSS": 647815168
+  },
+  "compile_seconds": 0.8447332050000114,
+  "compiled_memory": {
+    "bytes": 7976,
+    "components": {
+      "argument_size_in_bytes": 0,
+      "output_size_in_bytes": 856,
+      "temp_size_in_bytes": 7120,
+      "alias_size_in_bytes": 0
+    }
+  },
+  "first_execution_seconds": 0.01381906499955221,
+  "first_peak_rss_bytes": {
+    "VmHWM": 756920320,
+    "VmRSS": 756920320
+  },
+  "warm_samples_ms": [
+    11.409389999244013,
+    11.232380000365083,
+    8.807719000287761,
+    8.590283000557974,
+    12.067628000295372,
+    11.416122999435174,
+    12.243307999597164
+  ],
+  "warm_median_ms": 11.409389999244013,
+  "warm_baseline_rss_bytes": {
+    "VmHWM": 756920320,
+    "VmRSS": 756920320
+  },
+  "warm_peak_rss_bytes": {
+    "VmHWM": 757149696,
+    "VmRSS": 757149696
+  },
+  "device_memory_stats": [
+    null
+  ],
+  "memory_scope": "Fresh worker: imports/field setup/one compile/forward executions only. RSS is CPU host memory, not GPU VRAM; compiled buffers are a separate estimate.",
+  "timing_scope": "Blocked warm device calls; compile, host copies, validation and field transform excluded. Scalar objective and normal output reconstruction included.",
+  "value": 0.29578427523177186,
+  "counts_per_particle": [
+    [
+      224,
+      224,
+      0
+    ],
+    [
+      224,
+      224,
+      0
+    ]
+  ],
+  "status": [
+    0,
+    0
+  ],
+  "terminal_times": [
+    2e-05,
+    2e-05
+  ],
+  "finite_states": true,
+  "peak_rss_bytes": 757149696,
+  "saved_states": [
+    [
+      [
+        0.29591836734693877,
+        -1.4202760344899874,
+        2.6973649175810768,
+        -249533.13093020263,
+        439201.581618677
+      ],
+      [
+        0.2958641661435318,
+        -1.447761549343962,
+        2.63195328245202,
+        -249089.28485996666,
+        439201.58161867695
+      ],
+      [
+        0.29580966406253656,
+        -1.475247286049175,
+        2.5665476890914443,
+        -248643.0303356974,
+        439201.581618677
+      ],
+      [
+        0.2957548093479376,
+        -1.5027329620994678,
+        2.501148754524122,
+        -248196.15206769184,
+        439201.581618677
+      ],
+      [
+        0.2956995708609833,
+        -1.5302182937203597,
+        2.435757073086606,
+        -247750.11247441513,
+        439201.58161867695
+      ],
+      [
+        0.29564394438289576,
+        -1.557703001382517,
+        2.3703732146987075,
+        -247305.93830588268,
+        439201.5816186769
+      ],
+      [
+        0.2955879555756746,
+        -1.585186813713104,
+        2.3049977274459548,
+        -246864.16067729518,
+        439201.581618677
+      ],
+      [
+        0.2955316593532363,
+        -1.6126694694533912,
+        2.2396311439628125,
+        -246424.81515760027,
+        439201.58161867695
+      ]
+    ],
+    [
+      [
+        0.29591836734693877,
+        2.757554564287996,
+        2.190846276941291,
+        292451.72472888086,
+        439201.581618677
+      ],
+      [
+        0.29594039426750623,
+        2.7919401740117,
+        2.2728242270937886,
+        292292.52045886015,
+        439201.581618677
+      ],
+      [
+        0.29596057097079287,
+        2.82633473616389,
+        2.3548273187987676,
+        292148.3770603868,
+        439201.58161867695
+      ],
+      [
+        0.2959790539573124,
+        2.8607372638423567,
+        2.4368527653292253,
+        292021.7057850612,
+        439201.58161867695
+      ],
+      [
+        0.2959959477924935,
+        2.8951466682123645,
+        2.518897456794236,
+        291914.33736177953,
+        439201.58161867684
+      ],
+      [
+        0.2960112781297491,
+        2.9295617985967333,
+        2.600958085817781,
+        291827.170527701,
+        439201.5816186768
+      ],
+      [
+        0.2960249781018754,
+        2.9639814960467747,
+        2.6830313153483507,
+        291759.9776908879,
+        439201.5816186769
+      ],
+      [
+        0.2960368911103075,
+        2.998404651133633,
+        2.765113959596201,
+        291711.4102257491,
+        439201.5816186769
+      ]
+    ]
+  ],
+  "state_scale": [
+    1.0,
+    1.0,
+    1.0,
+    439201.581618677,
+    439201.581618677
+  ],
+  "production_api_check": {
+    "max_scaled_state_difference": 0.0,
+    "scope": "Untimed comparison with existing public native Tracing/trace_boozer; finite pre-loss saves"
+  },
+  "worker_exit_code": 0,
+  "worker_wall_seconds": 18.151940632999867
+}
