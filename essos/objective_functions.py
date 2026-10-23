@@ -231,7 +231,7 @@ def loss_quasi_symmetry(field, surface):
     Scalar objective: smaller means closer to quasi-symmetry.
     """
     QS_residual_xyz = quasi_symmetry_residual_on_surface(field, surface)
-    QS_residual = jnp.mean(jnp.abs(QS_residual_xyz))
+    QS_residual = jnp.sum(jnp.abs(QS_residual_xyz))
     return QS_residual
 
 def loss_iota_approx(field, surface, iota_target):

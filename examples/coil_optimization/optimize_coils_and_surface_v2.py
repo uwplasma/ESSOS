@@ -40,20 +40,20 @@ import datetime
 
 # Exporting results and the folder name
 EXPORT = True
-output_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_islands_01")
+output_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it01_A3D0_QS400")
 os.makedirs(output_filepath, exist_ok=True) # Make the path
 
 # True -> run a fixed-boundary VMEX equilibrium on the exported surface
 RUN_VMEX = True
 
 # True -> skip optimization, load saved dofs from output_filepath
-LOAD_RESULT = True
+LOAD_RESULT = False
 
 # CONTINUATION -----------------------------------------------------------------------
 # False -> start from the initial torus (vmec_input) and equally spaced coils.
 # True -> start from an already optimized surface and coils, at a higher surface resolution (select the folder).
-RESTART_FROM = False
-restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QH_02")
+RESTART_FROM = True
+restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it00")
 SURFACE_MPOL = 2; SURFACE_NTOR = 3   # maximum m and n of the surface (ESSOS convention)
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
@@ -67,7 +67,7 @@ ntheta = 26; nphi = 26 ; Npoints = ntheta * nphi
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
 N_COILS = 4; FOURIER_ORDER = 3;
-LARGE_R = 10; SMALL_R = 5.6; NFP = 3;
+LARGE_R = 10; SMALL_R = 5.6; NFP = 2;
 N_SEGMENTS = 40; STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
@@ -81,15 +81,15 @@ MAJOR_RADIUS_WEIGHT = 0 # The target will be calculated from the initial surface
 
 # Coils ~~~~~~~~~~~~~~~~~~~~
 LENGTH_WEIGHT = 10.; LENGTH_TARGET = 40.;
-CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 0.5
+CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 0.6
 
 # Field ~~~~~~~~~~~~~~~~~~~~
 NORMAL_FIELD_WEIGHT = 1e4;
-QS_WEIGHT = 1e2
+QS_WEIGHT = 400
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e3
-AREA_UNIFORMITY_WEIGHT = 1e2
+AREA_UNIFORMITY_WEIGHT = 1e3
 AREA_UNIFORMITY_TOLERANCE = 0.05     # |A(phi)/<A> - 1| allowed without penalty (~ Amax/Amin <= 1.1)
 
 NORMAL_DISPLACEMENT_WEIGHT = 0. # 1e4  
@@ -104,11 +104,11 @@ ALPHA_KAPPA = 3.
 
 # Non-axisymmetry control: Forces the initial torus to became a stellarator faster
 A3D_MIN = 0.2
-A3D_WEIGHT = 1e2
+A3D_WEIGHT = 0.
 
 # Rotational transform ~~~~~~~~~~~~~~~~~~~~
-IOTA_APPROX_WEIGHT = 1e5    
-IOTA_APPROX_TARGET = 0.8
+IOTA_APPROX_WEIGHT = 1e3    
+IOTA_APPROX_TARGET = 0.4
 
 # dtheta/dphi slope penalty
 SLOPE_MIN = 0.05
