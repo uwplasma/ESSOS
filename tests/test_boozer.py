@@ -42,17 +42,12 @@ def test_explicit_axis_regular_modes_match_analytic_field_and_derivatives():
     r = np.sqrt(s)
     bmnc = np.stack([2 + .1*s, .2*r*(1+.3*s), .08*r**5*np.exp(.2*s)])
     bmns = np.stack([np.zeros_like(s), np.zeros_like(s), .04*r**5*np.exp(.2*s)])
-    args = (s, bmnc, [0, 1, 5], [0, 0, 2], np.full_like(s, .4),
-            np.ones_like(s), np.zeros_like(s), 1., 2)
-    field = BoozerField.from_booz(*args, bmns=bmns, angle_grid=(16, 16),
-                                  axis_regular=True, axis_regular_tolerance=1e-8)
-    assert field.table is None
     booz = SimpleNamespace(s_b=s, bmnc_b=bmnc, bmns_b=bmns, xm_b=np.array([0, 1, 5]),
-                           xn_b=np.array([0, 0, 2]), iota=args[4], Boozer_G=args[5],
-                           Boozer_I=args[6], nfp=2)
-    from_xform = BoozerField.from_booz_xform(booz, 1., axis_regular=True,
-                                             axis_regular_tolerance=1e-8)
-    assert from_xform.axis_regular and from_xform.table is None
+                           xn_b=np.array([0, 0, 2]), iota=np.full_like(s, .4),
+                           Boozer_G=np.ones_like(s), Boozer_I=np.zeros_like(s), nfp=2)
+    field = BoozerField.from_booz_xform(booz, 1., angle_grid=(16, 16),
+                                      axis_regular=True, axis_regular_tolerance=1e-8)
+    assert field.axis_regular and field.table is None
     # Preserve all supplied samples, including sine modes, without a fit.
     sample_theta, sample_zeta = .7, .2
     sample_phase = np.array([0, 1, 5])*sample_theta-np.array([0, 0, 2])*sample_zeta
@@ -65,6 +60,8 @@ def test_explicit_axis_regular_modes_match_analytic_field_and_derivatives():
     harmonic = .08*np.cos(phase)+.04*np.sin(phase)
     angular = -.4*np.sin(phase)+.2*np.cos(phase)
     toroidal = .16*np.sin(phase)-.08*np.cos(phase)
+    evaluate = jax.jit(lambda r, t, z: field.modB_derivatives(r, t, z))
+    radial_grad = jax.jit(jax.grad(lambda x: field.modB_derivatives(x, theta, zeta)[0]))
     for radius in (0., .001, .025, .05, .18, .8):
         actual = np.asarray(field.modB_derivatives(radius, theta, zeta))
         expected = [2+.1*radius**2+.2*radius*(1+.3*radius**2)*np.cos(theta)
@@ -75,11 +72,8 @@ def test_explicit_axis_regular_modes_match_analytic_field_and_derivatives():
                     + radius**4*np.exp(.2*radius**2)*angular,
                     radius**5*np.exp(.2*radius**2)*toroidal]
         np.testing.assert_allclose(actual, expected, rtol=0, atol=2e-12)
-        jit_actual = np.asarray(jax.jit(lambda x, t, z: field.modB_derivatives(x, t, z))(
-            radius, theta, zeta))
-        np.testing.assert_allclose(jit_actual, expected, rtol=0, atol=2e-12)
-        radial_grad = jax.jit(jax.grad(lambda x: field.modB_derivatives(x, theta, zeta)[0]))(radius)
-        assert float(radial_grad) == pytest.approx(expected[1], abs=2e-12)
+        np.testing.assert_allclose(evaluate(radius, theta, zeta), expected, rtol=0, atol=2e-12)
+        assert float(radial_grad(radius)) == pytest.approx(expected[1], abs=2e-12)
 
 
 @pytest.mark.parametrize("sine", [False, True])

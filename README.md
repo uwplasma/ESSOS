@@ -203,9 +203,8 @@ is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
 and its derivatives, together with the flux functions `G`, `I` and `iota`.
 
-For independently qualified smooth near-axis spectra, an explicit alternative
-preserves the regular harmonic form `bc_mn = s**(m/2) a_mn(s)` (and likewise
-for sine coefficients), interpolating `a_mn` with cubic splines in `s`:
+For smooth near-axis spectra, `axis_regular=True` interpolates each harmonic
+as `s**(m/2)` times a cubic spline in `s`, preserving the input samples:
 
 ```python
 field = BoozerField.from_booz_xform(
@@ -213,17 +212,11 @@ field = BoozerField.from_booz_xform(
     axis_regular=True, axis_regular_tolerance=0.01)
 ```
 
-Choose the consistency tolerance for the input before tracing; `0.01` above is
-an example, not a universal accuracy target. This option requires at least five
-positive increasing half-mesh surfaces. For each retained nonzero poloidal
-mode, a quadratic extrapolation of its scaled samples on surfaces 2–5 must
-agree with surface 1 within that relative local-amplitude tolerance, for both
-cosine and sine components. Inconsistent inputs raise `ValueError` with the
-mode and discrepancy. Division by `s**(m/2)` can amplify inner-surface noise;
-passing this local diagnostic does not establish equilibrium convergence or
-bound extrapolation error. The option preserves retained input samples and
-uses direct Fourier sums regardless of `angle_grid`, so it can cost more per
-evaluation. The default radial and angular interpolation stays unchanged.
+Choose the positive consistency tolerance before tracing (`0.01` is an example).
+The option requires at least five positive increasing surfaces and rejects inconsistent
+scaled inner profiles; scaling can amplify noise. Passing this local check does
+not qualify the equilibrium or bound extrapolation error. It uses direct Fourier
+sums regardless of `angle_grid`; the default interpolation is unchanged.
 
 ## Comparison with other codes
 

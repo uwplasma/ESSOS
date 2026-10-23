@@ -86,17 +86,13 @@ class BoozerField(eqx.Module):
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
         every evaluation.
 
-        ``axis_regular=True`` explicitly represents each Fourier coefficient
-        as ``s**(m/2)`` times a cubic spline in ``s`` and uses direct Fourier
-        sums. It requires five or more positive half-mesh surfaces and a
-        caller-supplied ``axis_regular_tolerance``. For each retained m>0
-        mode, quadratic extrapolation of the scaled values from surfaces 2--5
-        must agree with surface 1 within this relative local-amplitude bound.
-        This is an input consistency diagnostic, not equilibrium convergence
-        or a bound on extrapolation error. Scaling can amplify inner-surface
-        noise; independently qualify the input and choose the tolerance before
-        using this option. Sampled coefficients are interpolated, never fitted
-        or clipped. The default representation remains unchanged.
+        ``axis_regular=True`` uses ``s**(m/2)`` times splines in ``s`` and
+        direct Fourier sums. It requires at least five positive increasing
+        surfaces and a positive ``axis_regular_tolerance``: for each retained m>0 component,
+        quadratic extrapolation from scaled surfaces 2--5 must match surface 1
+        within this relative local-amplitude tolerance. Scaling can amplify
+        noise; this diagnostic neither qualifies the input equilibrium nor
+        bounds extrapolation error. Samples and default behavior are unchanged.
         """
         s = np.asarray(s, float)
         bmnc = np.asarray(bmnc, float)
@@ -111,16 +107,17 @@ class BoozerField(eqx.Module):
         if axis_regular:
             if (s.ndim != 1 or len(s) < 5 or not np.isfinite(s).all()
                     or np.any(s <= 0) or np.any(np.diff(s) <= 0) or np.any(xm < 0)):
-                raise ValueError("axis_regular requires five positive increasing surfaces and m >= 0")
+                raise ValueError("axis_regular requires at least five positive increasing surfaces and m >= 0")
             if (axis_regular_tolerance is None or not np.isfinite(axis_regular_tolerance)
                     or axis_regular_tolerance <= 0):
                 raise ValueError("axis_regular requires a positive finite axis_regular_tolerance")
             if np.min(np.log(r)) * np.max(xm) < np.log(np.finfo(float).tiny):
                 raise ValueError("axis_regular mode scaling underflows at the first surface")
-            divisor = r[None, :] ** xm[:, None]
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                scaled = bmnc / divisor
-                scaled_sine = None if sine is None else sine[keep] / divisor
+        divisor = r[None, :] ** (xm[:, None] if axis_regular else (xm[:, None] > 0))
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            scaled = bmnc / divisor
+            scaled_sine = None if sine is None else sine[keep] / divisor
+        if axis_regular:
             for component, values in (("cosine", scaled), ("sine", scaled_sine)):
                 if values is None:
                     continue
@@ -135,15 +132,11 @@ class BoozerField(eqx.Module):
                             f"axis_regular inner profile is unresolved for m={xm[mode]}, "
                             f"n={xn[mode]} ({component} relative discrepancy {residual:.6g} "
                             f"> {axis_regular_tolerance:.6g})")
-            knots, b_coef = _spline(s, scaled.T)
-        else:
-            scaled = np.where(xm[:, None] > 0, bmnc / r, bmnc)
-            knots, b_coef = _spline(r, scaled.T)
+        coordinates = s if axis_regular else r
+        knots, b_coef = _spline(coordinates, scaled.T)
         sine_coef = None
         if sine is not None and np.any(sine[keep]):
-            if not axis_regular:
-                scaled_sine = np.where(xm[:, None] > 0, sine[keep] / r, sine[keep])
-            _, sine_coef = _spline(s if axis_regular else r, scaled_sine.T)
+            _, sine_coef = _spline(coordinates, scaled_sine.T)
         table = None
         if (not axis_regular and angle_grid is not None and np.all(xn % int(nfp) == 0)
                 and (np.ndim(angle_grid) or xm.size > TABLE_MODES)):
