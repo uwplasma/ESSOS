@@ -40,7 +40,7 @@ import datetime
 
 # Exporting results and the folder name
 EXPORT = True
-output_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it01_A3D0_QS400")
+output_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_QSsum10_it00")
 os.makedirs(output_filepath, exist_ok=True) # Make the path
 
 # True -> run a fixed-boundary VMEX equilibrium on the exported surface
@@ -52,9 +52,9 @@ LOAD_RESULT = False
 # CONTINUATION -----------------------------------------------------------------------
 # False -> start from the initial torus (vmec_input) and equally spaced coils.
 # True -> start from an already optimized surface and coils, at a higher surface resolution (select the folder).
-RESTART_FROM = True
+RESTART_FROM = False
 restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it00")
-SURFACE_MPOL = 2; SURFACE_NTOR = 3   # maximum m and n of the surface (ESSOS convention)
+# SURFACE_MPOL = 2; SURFACE_NTOR = 3   # maximum m and n of the surface (ESSOS convention)
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -62,13 +62,13 @@ input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_input = os.path.join(input_filepath, 'input.toroidal_surface_02')
 
 # SURFACE PARAMETERS -----------------------------------------------------------------
-ntheta = 26; nphi = 26 ; Npoints = ntheta * nphi
+ntheta = 22; nphi = 22 ; Npoints = ntheta * nphi
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
-N_COILS = 4; FOURIER_ORDER = 3;
+N_COILS = 4; FOURIER_ORDER = 4;
 LARGE_R = 10; SMALL_R = 5.6; NFP = 2;
-N_SEGMENTS = 40; STELLSYM = True
+N_SEGMENTS = 30; STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 #  CONTROL PARAMETERS FOR THE OPTIMIZATION -------------------------------------------
@@ -81,15 +81,15 @@ MAJOR_RADIUS_WEIGHT = 0 # The target will be calculated from the initial surface
 
 # Coils ~~~~~~~~~~~~~~~~~~~~
 LENGTH_WEIGHT = 10.; LENGTH_TARGET = 40.;
-CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 0.6
+CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 2.
 
 # Field ~~~~~~~~~~~~~~~~~~~~
 NORMAL_FIELD_WEIGHT = 1e4;
-QS_WEIGHT = 400
+QS_WEIGHT = 1
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
-CROSS_SECTIONAL_AREA_WEIGHT = 1e3
-AREA_UNIFORMITY_WEIGHT = 1e3
+CROSS_SECTIONAL_AREA_WEIGHT = 1e5
+AREA_UNIFORMITY_WEIGHT = 0. # 1e3
 AREA_UNIFORMITY_TOLERANCE = 0.05     # |A(phi)/<A> - 1| allowed without penalty (~ Amax/Amin <= 1.1)
 
 NORMAL_DISPLACEMENT_WEIGHT = 0. # 1e4  
@@ -99,7 +99,7 @@ QQ_WEIGHT = 0. # 1e5;
 ALPHA_QQ = 1.
 
 # Cross-sectional curvature control: limit kappa relative to the initial maximum.
-KAPPA_WEIGHT = 1e2 # 1e5;
+KAPPA_WEIGHT = 0. # 1e2 # 1e5;
 ALPHA_KAPPA = 3.
 
 # Non-axisymmetry control: Forces the initial torus to became a stellarator faster
@@ -107,8 +107,8 @@ A3D_MIN = 0.2
 A3D_WEIGHT = 0.
 
 # Rotational transform ~~~~~~~~~~~~~~~~~~~~
-IOTA_APPROX_WEIGHT = 1e3    
-IOTA_APPROX_TARGET = 0.4
+IOTA_APPROX_WEIGHT = 1e4   
+IOTA_APPROX_TARGET = 0.41
 
 # dtheta/dphi slope penalty
 SLOPE_MIN = 0.05
@@ -120,7 +120,7 @@ SCALE_FIELD = 2.18
 SCALE_SURFACE = 1.
 
 # Numerical method parameters --------------------------------------------------------
-MAXITER=3000
+MAXITER=250
 
 
 # ====================================================================================
@@ -273,6 +273,7 @@ L_total.dependencies = { "field": field_init, "surface": surface_init }
 # We assign different scaling factors to the field and surface dofs to balance their characteristic step sizes.
 NN_field_dofs = L_total.dependencies["field"].dofs.size
 NN_surface_dofs = L_total.dependencies["surface"].dofs.size
+print(f"Surface dofs: {NN_surface_dofs}")
 
 
 x_scale_optimization = jnp.concatenate([
@@ -728,47 +729,47 @@ phis = jnp.linspace(0, 2 * jnp.pi / surface_opt.nfp, 64, endpoint=False)
 areas = jax.vmap(lambda p: section_area(surface_opt, p))(phis)
 PHI_NARROW, PHI_WIDE = float(phis[jnp.argmin(areas)]), float(phis[jnp.argmax(areas)])
 
-# --- 3. Rescale currents so |B| ~ 1 (field-line ODE is dx/dt = B) --------------------
-B_mean = jnp.mean(jnp.linalg.norm(B_on_surface(surface_opt, field_opt), axis=-1))
-field_trace = BiotSavart(Coils(curves=opt_coils.curves, currents=opt_coils.dofs_currents_raw / B_mean))
+# # --- 3. Rescale currents so |B| ~ 1 (field-line ODE is dx/dt = B) --------------------
+# B_mean = jnp.mean(jnp.linalg.norm(B_on_surface(surface_opt, field_opt), axis=-1))
+# field_trace = BiotSavart(Coils(curves=opt_coils.curves, currents=opt_coils.dofs_currents_raw / B_mean))
 
-# --- 4. Starting points on phi = 0, Z = 0, from section centre to edge --------------
-R_phi0, _ = surface_section(surface_opt, 0.0)
-R_center = 0.5 * (jnp.max(R_phi0) + jnp.min(R_phi0))
-R_start = jnp.linspace(R_center, R_center + 0.95 * (jnp.max(R_phi0) - R_center), N_FIELDLINES)
-initial_xyz = jnp.stack([R_start, jnp.zeros_like(R_start), jnp.zeros_like(R_start)], axis=1)
+# # --- 4. Starting points on phi = 0, Z = 0, from section centre to edge --------------
+# R_phi0, _ = surface_section(surface_opt, 0.0)
+# R_center = 0.5 * (jnp.max(R_phi0) + jnp.min(R_phi0))
+# R_start = jnp.linspace(R_center, R_center + 0.95 * (jnp.max(R_phi0) - R_center), N_FIELDLINES)
+# initial_xyz = jnp.stack([R_start, jnp.zeros_like(R_start), jnp.zeros_like(R_start)], axis=1)
 
-# --- 5. Trace field lines (time ~ arc length ~ 2*pi*R0 per turn) ---------------------
-R0 = float(surface_opt.rc[0])
-tracing = Tracing(field=field_trace, model='FieldLineAdaptative', initial_conditions=initial_xyz,
-                  maxtime=N_TURNS * 2 * jnp.pi * R0, times_to_trace=N_TURNS * 200,
-                  atol=1e-8, rtol=1e-8)
+# # --- 5. Trace field lines (time ~ arc length ~ 2*pi*R0 per turn) ---------------------
+# R0 = float(surface_opt.rc[0])
+# tracing = Tracing(field=field_trace, model='FieldLineAdaptative', initial_conditions=initial_xyz,
+#                   maxtime=N_TURNS * 2 * jnp.pi * R0, times_to_trace=N_TURNS * 200,
+#                   atol=1e-8, rtol=1e-8)
 
-# --- 6. Poincaré points at any phi0, using field-period symmetry ---------------------
-def poincare_points(traj, phi0, nfp):
-    period = 2 * jnp.pi / nfp
-    X, Y, Z = traj[:, 0], traj[:, 1], traj[:, 2]
-    R = jnp.sqrt(X**2 + Y**2)
-    phi = jnp.unwrap(jnp.arctan2(Y, X))
-    k = jnp.floor((phi - phi0) / period)
-    i = jnp.where(jnp.diff(k) != 0)[0]
-    w = (phi0 + jnp.maximum(k[i], k[i + 1]) * period - phi[i]) / (phi[i + 1] - phi[i])
-    return R[i] + w * (R[i + 1] - R[i]), Z[i] + w * (Z[i + 1] - Z[i])
+# # --- 6. Poincaré points at any phi0, using field-period symmetry ---------------------
+# def poincare_points(traj, phi0, nfp):
+#     period = 2 * jnp.pi / nfp
+#     X, Y, Z = traj[:, 0], traj[:, 1], traj[:, 2]
+#     R = jnp.sqrt(X**2 + Y**2)
+#     phi = jnp.unwrap(jnp.arctan2(Y, X))
+#     k = jnp.floor((phi - phi0) / period)
+#     i = jnp.where(jnp.diff(k) != 0)[0]
+#     w = (phi0 + jnp.maximum(k[i], k[i + 1]) * period - phi[i]) / (phi[i + 1] - phi[i])
+#     return R[i] + w * (R[i + 1] - R[i]), Z[i] + w * (Z[i + 1] - Z[i])
 
-# --- 7. Plot ------------------------------------------------------------------------
-fig, axes = plt.subplots(1, 2, figsize=(11, 5))
-for ax, phi0, title in zip(axes, [PHI_NARROW, PHI_WIDE], ["Narrowest section", "Widest section"]):
-    for traj in tracing.trajectories:
-        ax.scatter(*poincare_points(traj, phi0, surface_opt.nfp), s=1)
-    R_b, Z_b = surface_section(surface_opt, phi0)
-    ax.plot(jnp.append(R_b, R_b[0]), jnp.append(Z_b, Z_b[0]), 'r-', lw=1, label='optimized surface')
-    ax.set_title(f"{title}, phi = {phi0:.3f}")
-    ax.set_xlabel('R'); ax.set_ylabel('Z'); ax.set_aspect('equal')
-axes[0].legend()
+# # --- 7. Plot ------------------------------------------------------------------------
+# fig, axes = plt.subplots(1, 2, figsize=(11, 5))
+# for ax, phi0, title in zip(axes, [PHI_NARROW, PHI_WIDE], ["Narrowest section", "Widest section"]):
+#     for traj in tracing.trajectories:
+#         ax.scatter(*poincare_points(traj, phi0, surface_opt.nfp), s=1)
+#     R_b, Z_b = surface_section(surface_opt, phi0)
+#     ax.plot(jnp.append(R_b, R_b[0]), jnp.append(Z_b, Z_b[0]), 'r-', lw=1, label='optimized surface')
+#     ax.set_title(f"{title}, phi = {phi0:.3f}")
+#     ax.set_xlabel('R'); ax.set_ylabel('Z'); ax.set_aspect('equal')
+# axes[0].legend()
 
-plt.tight_layout()
-plt.savefig(os.path.join(essos_plots_filepath, "poincare_narrow_wide.png"), dpi=200)
-plt.show()
+# plt.tight_layout()
+# plt.savefig(os.path.join(essos_plots_filepath, "poincare_narrow_wide.png"), dpi=200)
+# plt.show()
 
 """ Exporting results """
 

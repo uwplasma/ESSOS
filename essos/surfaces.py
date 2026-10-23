@@ -198,6 +198,7 @@ def surfacerzfourier_from_boundary(rbc, zbs, nfp, ntheta=30, nphi=30,
         return jnp.concatenate((table[ntor:, 0], table[:, 1:].T.ravel()))
     partners = {name: pack(table) for name, table in (('rs', rbs), ('zc', zbc)) if table is not None}
     cls = SurfaceRZFourier if _cls is None else _cls
+    print(f"mpol: {mpol}, ntor: {ntor} on the surface")
     return cls(pack(rbc), pack(zbs), int(nfp), mpol, ntor, ntheta=ntheta, nphi=nphi,
                             close=close, range_torus=range_torus, **partners)
 
