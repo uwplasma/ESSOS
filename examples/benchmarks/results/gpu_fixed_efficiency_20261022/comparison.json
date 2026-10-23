@@ -1,0 +1,70 @@
+{
+  "complete": true,
+  "device": [
+    "NVIDIA GeForce RTX 5060 Laptop GPU"
+  ],
+  "particles": 64,
+  "particle_chunking": false,
+  "scopes": {
+    "boozer": "64 4keV alpha GCs, 20us, fixed dt=1.25e-7s,160steps,9saves,same saved field/births",
+    "gc": "64 4keV alpha GCs,20us,fixed dt=20us/224,224steps,8saves,same coil DOFs/births",
+    "memory": "Cumulative JAX device peak includes setup/compile/runtime. Compiler buffer estimates are separate.",
+    "references": "Original native and Diffrax GC measurements retained from GPU table; RK4 and optimized native runs remeasured."
+  },
+  "rows": [
+    {
+      "case": "Boozer RK4 fixed",
+      "scope": "forward only",
+      "forward_ms": 14.82186700013699,
+      "compile_s": 1.9247042899987719,
+      "compiler_buffers_MiB": 0.0887603759765625,
+      "peak_JAX_GPU_MiB": 80.04052734375
+    },
+    {
+      "case": "Boozer native Dopri8 original fixed",
+      "scope": "forward only",
+      "forward_ms": 109.4012190005742,
+      "compile_s": 2.9053528830008872,
+      "compiler_buffers_MiB": 0.15493011474609375,
+      "peak_JAX_GPU_MiB": 128.032958984375
+    },
+    {
+      "case": "Boozer native Dopri8 optimized fixed",
+      "scope": "forward only",
+      "forward_ms": 45.36644899781095,
+      "compile_s": 8.644580449999921,
+      "compiler_buffers_MiB": 0.15862274169921875,
+      "peak_JAX_GPU_MiB": 208.0390625
+    },
+    {
+      "case": "Coil GC native split original fixed",
+      "scope": "F/R separately; buffers/peak for fused AD",
+      "forward_ms": 2238.3987169996544,
+      "reverse_ms": 3313.1182289998833,
+      "fused_ms": 6066.31975900018,
+      "compile_s": 23.317997214999195,
+      "compiler_buffers_MiB": 39.02587890625,
+      "peak_JAX_GPU_MiB": 128.594970703125
+    },
+    {
+      "case": "Coil GC native split optimized fixed",
+      "scope": "F/R separately; buffers/peak for fused AD",
+      "forward_ms": 1665.4345059978368,
+      "reverse_ms": 3298.3948740002234,
+      "fused_ms": 5991.999803998624,
+      "compile_s": 27.035324799999216,
+      "compiler_buffers_MiB": 39.02880859375,
+      "peak_JAX_GPU_MiB": 128.594970703125
+    },
+    {
+      "case": "Coil GC Diffrax SDE fixed reference",
+      "scope": "F/R separately; buffers/peak for fused AD",
+      "forward_ms": 1689.068731999214,
+      "reverse_ms": 9573.006972999792,
+      "fused_ms": 10168.771658998594,
+      "compile_s": 72.97199693100083,
+      "compiler_buffers_MiB": 176.2370376586914,
+      "peak_JAX_GPU_MiB": 256.080078125
+    }
+  ]
+}

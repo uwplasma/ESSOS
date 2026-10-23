@@ -1,0 +1,84 @@
+{
+  "passed": true,
+  "particles": 64,
+  "fixed_steps": 160,
+  "fixed_dt_s": 1.2500000000000002e-07,
+  "horizon_s": 2e-05,
+  "saved_times": 9,
+  "warm_repeats": 15,
+  "same_field_births_timestep_and_saves": true,
+  "all_64_particles_finished_160_steps": true,
+  "no_rejections_or_failures": true,
+  "component_order": [
+    "s",
+    "theta",
+    "zeta",
+    "v_parallel_m_per_s",
+    "speed_m_per_s"
+  ],
+  "dopri5_new_against_previous": {
+    "bitwise_equal": false,
+    "max_saved_component_difference": [
+      5.551115123125783e-17,
+      1.3877787807814457e-17,
+      5.551115123125783e-17,
+      4.547473508864641e-13,
+      0.0
+    ],
+    "max_scaled_saved_difference": 5.551115123125783e-17,
+    "max_vparallel_difference_m_per_s": 4.547473508864641e-13,
+    "max_vparallel_difference_relative_to_birth_speed": 1.0353955220527512e-18,
+    "max_speed_difference_m_per_s": 0.0
+  },
+  "dopri8_new_against_previous": {
+    "bitwise_equal": true,
+    "max_saved_component_difference": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "max_scaled_saved_difference": 0.0,
+    "max_vparallel_difference_m_per_s": 0.0,
+    "max_vparallel_difference_relative_to_birth_speed": 0.0,
+    "max_speed_difference_m_per_s": 0.0
+  },
+  "dopri5_against_dopri8": {
+    "bitwise_equal": false,
+    "max_saved_component_difference": [
+      1.6653345369377348e-16,
+      4.440892098500626e-16,
+      4.440892098500626e-16,
+      7.275957614183426e-12,
+      5.820766091346741e-11
+    ],
+    "max_scaled_saved_difference": 4.440892098500626e-16,
+    "max_vparallel_difference_m_per_s": 7.275957614183426e-12,
+    "max_vparallel_difference_relative_to_birth_speed": 1.656632835284402e-17,
+    "max_speed_difference_m_per_s": 5.820766091346741e-11
+  },
+  "rk4_against_dopri8": {
+    "bitwise_equal": false,
+    "max_saved_component_difference": [
+      8.326672684688674e-16,
+      1.1546319456101628e-14,
+      7.105427357601002e-15,
+      1.6880221664905548e-09,
+      1.0477378964424133e-09
+    ],
+    "max_scaled_saved_difference": 1.1546319456101628e-14,
+    "max_vparallel_difference_m_per_s": 1.6880221664905548e-09,
+    "max_vparallel_difference_relative_to_birth_speed": 3.843388177859812e-15,
+    "max_speed_difference_m_per_s": 1.0477378964424133e-09
+  },
+  "dopri5_time_decrease_percent": 70.21518781577407,
+  "dopri5_speedup": 3.3574158326558154,
+  "dopri5_over_rk4_time": 1.382748899968125,
+  "dopri8_over_dopri5_time": 1.9286913669284842,
+  "gpu_tests": {
+    "command": "python -m pytest -q tests/test_rk_fixed.py",
+    "passed": 13
+  },
+  "scope": "Production fixed Boozer forward paths, explicit stages; same timestep and complete work. Cross-method differences are saved-coordinate/velocity differences, not global-error bounds. GPU peak includes setup and compilation, excludes CUDA context/driver allocations."
+}

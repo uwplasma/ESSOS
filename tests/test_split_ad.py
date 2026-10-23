@@ -9,6 +9,27 @@ from essos.split import solve_split, trace_split, SplitStatus
 from essos.split_ad import replay_accepted_split
 
 
+@pytest.mark.parametrize("method", ["dopri5", "dopri8"])
+def test_unrolled_orbit_execution_keeps_checkpointed_collision_gradients(method):
+    def rhs(t,y,p):
+        return p[0]*jnp.sin(y+t)
+    def collision(t,y,h,dw,p):
+        return CollisionStep(y+p[1]*(1+.1*y)*dw,jnp.array(0.),jnp.array(0.))
+    options = dict(t1=.4,dt0=.1,ts=jnp.array([0.,.13,.3,.4]),adaptive=False,
+        orbit_adaptive=False,orbit_dt0=.05,orbit_stage_execution="unrolled",method=method,
+        key=jax.random.key(91),noise_dim=1,max_steps=32,max_orbit_steps=16,
+        adjoint_max_accepted_steps=16,adjoint_max_orbit_steps=32,
+        adjoint_checkpoint_steps=3,adjoint_orbit_checkpoint_steps=3)
+    def cost(p,adjoint):
+        out = solve_split(rhs,collision,p[2:],p[:2],adjoint=adjoint,**options)
+        return jnp.sum(out.ys**2)+.3*jnp.sum(out.y**2)
+    p,direction = jnp.array([.3,.05,.7]),jnp.array([.2,-.3,.4])
+    value,gradient = jax.jit(jax.value_and_grad(lambda p:cost(p,"accepted")))(p)
+    ordinary,tangent = jax.jit(lambda p,d:jax.jvp(lambda p:cost(p,"none"),(p,),(d,)))(p,direction)
+    np.testing.assert_allclose(value,ordinary,rtol=2e-13,atol=1e-13)
+    np.testing.assert_allclose(jnp.vdot(gradient,direction),tangent,rtol=2e-11,atol=1e-12)
+
+
 def kernels():
     def rhs(t, y, p):
         return p[0]*jnp.sin(y+12*t)

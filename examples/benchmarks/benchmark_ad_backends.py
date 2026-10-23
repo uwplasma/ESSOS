@@ -1,4 +1,4 @@
-"""Matched CPU timing/memory cases for native and Diffrax orbit/collision AD.
+"""Matched timing/memory cases for native and Diffrax orbit/collision AD.
 
 The parent starts one fresh worker per case, sequentially. Fused objective RAM
 is captured before compiling the separate forward/reverse timing executables.
@@ -18,7 +18,8 @@ import traceback
 
 ROOT = Path(__file__).resolve().parents[2]
 CASES = ('native_orbit', 'diffrax_orbit', 'native_split_adaptive',
-         'native_split_fixed', 'diffrax_sde_fixed')
+         'native_split_fixed', 'diffrax_sde_fixed',
+         'native_orbit_fixed_dopri8', 'diffrax_orbit_fixed_dopri8')
 
 
 def fingerprints():
@@ -70,11 +71,17 @@ def build(options, model, case):
     sde_model = 'GuidingCenterCollisionsMuFixed' if model == 'gc' else 'FullOrbitCollisions'
     drift, noise, sde_solver, noise_dim = _SDE_MODELS[sde_model]
     unit = jnp.array([1.,1.,1.,SPEED_OF_LIGHT,SPEED_OF_LIGHT**2*M]) if model == 'gc' else jnp.ones(6)
-    collisional = case not in ('native_orbit','diffrax_orbit')
+    native_orbit = case in ('native_orbit','native_orbit_fixed_dopri8')
+    diffrax_orbit = case in ('diffrax_orbit','diffrax_orbit_fixed_dopri8')
+    orbit_adaptive = case in ('native_orbit','diffrax_orbit','native_split_adaptive')
+    collisional = not (native_orbit or diffrax_orbit)
     scale = jnp.array([1.,1.,1.,speed,energy] if model == 'gc' and collisional else
                        [1.]*3+[speed]*velocity_components)
     adaptive = case == 'native_split_adaptive'
+    split_integrator = getattr(options,'split_integrator','essos_dopri8')
+    orbit_stage_execution = getattr(options,'stage_execution','loop')
     outer_capacity = options.accepted_capacity if adaptive else steps+2*options.saves
+    orbit_capacity = options.accepted_capacity if orbit_adaptive else steps+2*options.saves
 
     def initialize(parameters):
         field = BiotSavart(base.with_dofs(parameters))
@@ -95,11 +102,11 @@ def build(options, model, case):
         if case.startswith('native_split'):
             out = trace_split(field,birth,background,
                 model='GuidingCenter' if model == 'gc' else 'FullOrbit',
-                integrator='essos_dopri8',tmax=horizon,
+                integrator=split_integrator,tmax=horizon,
                 timestep=horizon/4 if adaptive else dt,
                 collision_dtmax=horizon/2 if adaptive else dt,
                 orbit_dt0=horizon/4 if adaptive else dt,
-                adaptive=adaptive,orbit_adaptive=True,times=times,
+                adaptive=adaptive,orbit_adaptive=adaptive,orbit_stage_execution=orbit_stage_execution,times=times,
                 collision_tolerance=options.collision_tolerance,collision_controller='conservative',
                 rtol=options.tolerance,atol=options.tolerance,max_steps=options.max_steps,
                 max_orbit_steps=options.max_orbit_steps,adjoint=adjoint,
@@ -113,26 +120,28 @@ def build(options, model, case):
                 return mean_final_radius(out[0],*axis),out
             return mean_final_radius(out.ys,*axis),(out.ys,jnp.stack(out.stats,axis=-1),out.status)
 
-        if case == 'native_orbit':
+        if native_orbit:
             if tapes is not None:
                 ys,final = jax.vmap(lambda y,tape:replay_accepted(rhs,y,None,tape,times,
                     method='dopri8'))(initial,tapes)
                 return mean_final_radius(ys,*axis),(ys,final)
             def one(y):
-                return solve_rk(rhs,y,t1=horizon,dt0=horizon/4,ts=times,method='dopri8',
+                return solve_rk(rhs,y,t1=horizon,dt0=horizon/4 if orbit_adaptive else dt,
+                    ts=times,method='dopri8',adaptive=orbit_adaptive,
                     rtol=options.tolerance,atol=options.tolerance,error_norm=norm,max_steps=options.max_steps,
                     adjoint=adjoint,adjoint_checkpoint_steps=options.checkpoint_steps,
-                    adjoint_parameter_accumulation='segment',adjoint_max_accepted_steps=options.accepted_capacity,
+                    adjoint_parameter_accumulation='segment',adjoint_max_accepted_steps=orbit_capacity,
                     _record_ad=record)
             out = jax.vmap(one)(initial)
             if record:
                 return out
             return mean_final_radius(out.ys,*axis),(out.ys,jnp.stack(out.stats,axis=-1),out.status)
 
-        if case == 'diffrax_orbit':
+        if diffrax_orbit:
             def one(y):
                 out = diffrax.diffeqsolve(diffrax.ODETerm(rhs),diffrax.Dopri8(),t0=0.,t1=horizon,
-                    dt0=horizon/4,y0=y,saveat=diffrax.SaveAt(ts=times),stepsize_controller=controller,
+                    dt0=horizon/4 if orbit_adaptive else dt,y0=y,saveat=diffrax.SaveAt(ts=times),
+                    stepsize_controller=controller if orbit_adaptive else diffrax.ConstantStepSize(),
                     adjoint=diffrax.RecursiveCheckpointAdjoint(),max_steps=options.max_steps,throw=False)
                 return out.ys,jnp.array([out.stats[k] for k in
                     ('num_steps','num_accepted_steps','num_rejected_steps')]),jnp.where(
@@ -153,7 +162,7 @@ def build(options, model, case):
                 return out.ys*unit,jnp.array([out.stats[k] for k in
                     ('num_steps','num_accepted_steps','num_rejected_steps')]),jnp.where(
                         out.result == diffrax.RESULTS.successful,0,1)
-        ys,counts,status = jax.vmap(one)(initial) if case == 'diffrax_orbit' else jax.vmap(one)(initial,keys)
+        ys,counts,status = jax.vmap(one)(initial) if diffrax_orbit else jax.vmap(one)(initial,keys)
         return mean_final_radius(ys,*axis),(ys,counts,status)
 
     metadata = dict(horizon=horizon,fixed_dt=dt,requested_fixed_steps=steps,
@@ -161,12 +170,17 @@ def build(options, model, case):
         parameter_labels=list(base.dof_names),birth_xyz=np.asarray(points).tolist(),birth_pitch=np.asarray(pitches).tolist(),
         energy_ev=4000.,seed=42,background='Hydrogen, 1e20 m^-3, 1 keV; production coefficient model',
         spatial_kicks=False,particle_chunking=False,
+        orbit_stepping='adaptive' if orbit_adaptive else 'fixed',
+        collision_stepping='none' if not collisional else 'adaptive' if adaptive else 'fixed',
         solver=('Dopri8' if not collisional else ('native Dopri8 + production Milstein kick' if case.startswith('native') else sde_solver.__name__)),
+        native_split_integrator=split_integrator if case.startswith('native_split') else None,
+        orbit_stage_execution=orbit_stage_execution if case.startswith('native_split') else 'loop',
         native_outer_capacity=outer_capacity if case.startswith('native_split') else None,
         count_columns=list(('steps','accepted','rejected','orbit_steps','orbit_rejected','peak_pending','max_accepted_error')
                            if case.startswith('native_split') else ('steps','accepted','rejected')),
         derivative_policy='accepted maps, frozen controls/noise' if case.startswith('native') else 'Diffrax RecursiveCheckpointAdjoint default checkpoints',
-        error_control='fixed SDE step; no rtol/atol controller' if case == 'diffrax_sde_fixed' else 'matched position/speed blocks, 2*tolerance; native I, Diffrax PI (.4,.3)')
+        error_control=('fixed steps; no rtol/atol controller' if not orbit_adaptive else
+                       'matched position/speed blocks, 2*tolerance; native I, Diffrax PI (.4,.3)'))
     return theta,cost,scale,metadata
 
 
@@ -176,6 +190,13 @@ def memory(executable):
         ('argument_size_in_bytes','output_size_in_bytes','temp_size_in_bytes','alias_size_in_bytes')}
     return dict(bytes=fields['argument_size_in_bytes']+fields['output_size_in_bytes']
                 +fields['temp_size_in_bytes']-fields['alias_size_in_bytes'],components=fields)
+
+
+def device_peak_mib(statistics):
+    """Peak JAX allocator usage per device, excluding driver/context memory."""
+    peaks = [stats['peak_bytes_in_use'] for stats in statistics
+             if stats is not None and stats.get('peak_bytes_in_use') is not None]
+    return max(peaks)/2**20 if peaks else None
 
 
 def resident():
@@ -193,26 +214,31 @@ def worker(options):
     import jax
     import jax.numpy as jnp
     import numpy as np
-    if sys.platform != 'linux' or jax.default_backend() != 'cpu':
-        raise ValueError('Run workers on Linux/WSL CPU')
+    if sys.platform != 'linux':
+        raise ValueError('Run workers on Linux/WSL for process RSS measurements')
     model,case = options.worker_model,options.worker_case
     source_hashes = fingerprints()
     theta,cost,scale,metadata = build(options,model,case)
-    metadata.update(backend='cpu',jax=jax.__version__,diffrax=diffrax.__version__,source_sha256=source_hashes,
+    metadata.update(backend=jax.default_backend(),devices=[str(d) for d in jax.devices()],
+        device_kinds=[d.device_kind for d in jax.devices()],
+        jax=jax.__version__,diffrax=diffrax.__version__,source_sha256=source_hashes,
         input_sha256=hashlib.sha256((ROOT/'examples/input_files/ESSOS_biot_savart_LandremanPaulQA.json').read_bytes()).hexdigest(),
         settings={k:str(v) if isinstance(v,Path) else v for k,v in vars(options).items()},
         memory_scope='Fused peak includes input setup, fused compilation, first and warm execution; measured before separate forward/reverse or FD validation executables exist. Warm RSS includes resident JAX/executables/allocator. Compiler buffers are separate.',
         timing_scope='Warm blocked calls, compilation excluded. Forward is ordinary production solve; linearization is public VJP of jitted cost; reverse reuses its residuals; fused is value_and_grad. No particle chunks.')
     result=dict(complete=False,case=case,model=model,metadata=metadata)
+    print(f"JAX backend: {metadata['backend']}; devices: {metadata['devices']}",flush=True)
     destination=options.output/(model+'_'+case+'.json')
     def save():
         destination.write_text(json.dumps(result,indent=2,allow_nan=False)+'\n')
     save()
     peak=lambda:int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)*1024
     result['setup_peak_rss_bytes']=peak()
+    result['setup_device_memory_stats']=[device.memory_stats() for device in jax.devices()]
     total=jax.jit(jax.value_and_grad(lambda p:cost(p,'accepted'),has_aux=True))
     start=perf_counter();executable=total.lower(theta).compile()
     result['fused_compile_seconds']=perf_counter()-start
+    result['fused_compile_device_memory_stats']=[device.memory_stats() for device in jax.devices()]
     result['fused_compile_peak_rss_bytes']=peak()
     (value,aux),gradient=jax.block_until_ready(total(theta))
     result['first_fused_peak_rss_bytes']=peak()
@@ -221,6 +247,12 @@ def worker(options):
         gradient_finite=bool(np.isfinite(gradient).all()),state_finite=bool(np.isfinite(ys).all()))
     if np.any(status) or not np.isfinite(ys).all() or not np.isfinite(gradient).all():
         raise RuntimeError('Nonfinite/incomplete primal or reverse; see worker report')
+    if metadata['orbit_stepping'] == 'fixed':
+        np.testing.assert_array_equal(counts[:,:3],
+            np.tile([metadata['requested_fixed_steps'],metadata['requested_fixed_steps'],0],(options.particles,1)))
+        if case == 'native_split_fixed':
+            np.testing.assert_array_equal(counts[:,3],metadata['requested_fixed_steps'])
+            np.testing.assert_array_equal(counts[:,4],0)
     result['gradient']=np.asarray(gradient).tolist()
     result['gradient_l2']=float(jnp.linalg.norm(gradient))
     result['saved_positions']=ys[:,:,:3].tolist()
@@ -234,6 +266,7 @@ def worker(options):
     result['fused_samples_ms']=samples
     result['fused_median_ms']=float(np.median(samples))
     result['warm_fused_peak_rss_bytes']=resident()['VmHWM']
+    result['fused_device_memory_stats']=[device.memory_stats() for device in jax.devices()]
     result['fused_peak_rss_bytes']=max(result[k] for k in ('setup_peak_rss_bytes',
         'fused_compile_peak_rss_bytes','first_fused_peak_rss_bytes','warm_fused_peak_rss_bytes'))
     save()
@@ -284,6 +317,7 @@ def worker(options):
         result['gradient_oracle']='Independent frozen accepted-grid/production-noise replay'
     else:
         result['gradient_oracle']=('Fixed-grid, fixed-production-VBT path FD' if case == 'diffrax_sde_fixed'
+                                   else 'Fixed-grid deterministic ODE FD' if case == 'diffrax_orbit_fixed_dopri8'
                                    else 'Adaptive primal FD diagnostic; controller can change the accepted grid')
     direction=jnp.asarray(np.random.default_rng(12).normal(size=theta.size))
     direction/=jnp.linalg.norm(direction)
@@ -303,6 +337,7 @@ def worker(options):
     if source_hashes != fingerprints():
         raise RuntimeError('Numerical sources changed during the worker')
     result['whole_worker_peak_rss_bytes']=max(peak(),resident()['VmHWM'],result['fused_peak_rss_bytes'])
+    result['whole_worker_device_memory_stats']=[device.memory_stats() for device in jax.devices()]
     result['complete']=True
     save()
     print(json.dumps({k:result[k] for k in ('model','case','value','phase_medians_ms','fused_median_ms',
@@ -312,6 +347,10 @@ def worker(options):
 def parser():
     command=argparse.ArgumentParser(description=__doc__)
     command.add_argument('--output',type=Path,required=True,help='New results directory')
+    command.add_argument('--platform',choices=('auto','cpu','cuda'),default='auto',
+        help='auto respects JAX backend selection; cuda requires a working NVIDIA backend')
+    command.add_argument('--split-integrator',choices=('essos_dopri8','essos_rk45'),default='essos_dopri8')
+    command.add_argument('--stage-execution',choices=('loop','unrolled'),default='loop',help='Native split orbit stage layout')
     command.add_argument('--models',nargs='+',choices=('gc','lorentz'),default=['gc','lorentz'])
     command.add_argument('--cases',nargs='+',choices=CASES,default=list(CASES))
     command.add_argument('--particles',type=int,default=2)
@@ -340,18 +379,21 @@ def parent(options):
     options.output.mkdir(parents=True)
     report=dict(complete=False,all_cases_passed=False,
         settings={key:str(value) if isinstance(value,Path) else value for key,value in vars(options).items()},
-        scope='One fresh CPU worker per case, sequential; no chunking. Identical coil DOFs, births, fields, horizons, save times and fixed-axis mean-final-radius objective.',
+        scope='One fresh worker per case, sequential; no chunking. Selected JAX backend is recorded. Identical coil DOFs, births, fields, horizons, save times and fixed-axis mean-final-radius objective.',
         collision_comparison='Production native adaptive/fixed split maps versus production fixed Diffrax SDE. Different Brownian generators/noise bases and integrators; not a pathwise accuracy or gradient-equality comparison.',
         memory_scope='Per-worker fused-objective peak RSS measured before standalone F/R and validation executables are built; includes setup and compilation. Also retain complete-worker peak and compiler buffer estimates.',
         rows=[],comparisons=[],failures=[])
     def save():
         (options.output/'comparison.json').write_text(json.dumps(report,indent=2,allow_nan=False)+'\n')
     save()
-    environment=dict(os.environ,JAX_PLATFORMS='cpu',ESSOS_CPU_DEVICES='1',ESSOS_PROGRESS='0',ESSOS_XLA_CACHE='')
+    environment=dict(os.environ,ESSOS_CPU_DEVICES='1',ESSOS_PROGRESS='0',ESSOS_XLA_CACHE='')
+    environment.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE','false')
+    if options.platform!='auto':
+        environment['JAX_PLATFORMS']=options.platform
     settings=[]
     for name in ('particles','repeats','saves','gc_horizon','lorentz_horizon','tolerance',
                  'collision_tolerance','fixed_gc_steps','fixed_lorentz_steps','max_steps',
-                 'max_orbit_steps','accepted_capacity','orbit_capacity','checkpoint_steps'):
+                 'max_orbit_steps','accepted_capacity','orbit_capacity','checkpoint_steps','platform','split_integrator','stage_execution'):
         settings += ['--'+name.replace('_','-'),str(getattr(options,name))]
     expected_sources=None
     expected_input=None
@@ -415,15 +457,15 @@ def parent(options):
     report['complete']=True
     report['all_cases_passed']=not report['failures']
     save()
-    fields=('model','case','value','forward_ms','linearization_ms','reverse_ms','fused_ms',
+    fields=('model','case','backend','value','forward_ms','linearization_ms','reverse_ms','fused_ms',
         'reverse_over_forward','fused_over_forward','forward_buffers_MiB','fused_buffers_MiB','reverse_buffers_MiB',
-        'fused_peak_MiB','warm_fused_peak_MiB','whole_worker_peak_MiB')
+        'fused_peak_MiB','warm_fused_peak_MiB','whole_worker_peak_MiB','fused_peak_JAX_device_MiB')
     with (options.output/'comparison.csv').open('w',newline='') as stream:
         writer=csv.DictWriter(stream,fieldnames=fields)
         writer.writeheader()
         for row in report['rows']:
             if row['complete']:
-                writer.writerow(dict(model=row['model'],case=row['case'],value=row['value'],
+                writer.writerow(dict(model=row['model'],case=row['case'],backend=row['metadata']['backend'],value=row['value'],
                     **{name+'_ms':row['phase_medians_ms'][name] for name in ('forward','linearization','reverse')},
                     fused_ms=row['fused_median_ms'],reverse_over_forward=row['reverse_over_forward'],
                     fused_over_forward=row['fused_over_forward'],forward_buffers_MiB=row['forward_memory']['bytes']/2**20,
@@ -431,7 +473,8 @@ def parent(options):
                     reverse_buffers_MiB=row['reverse_memory']['bytes']/2**20,
                     fused_peak_MiB=row['fused_peak_rss_bytes']/2**20,
                     warm_fused_peak_MiB=row['warm_fused_peak_rss_bytes']/2**20,
-                    whole_worker_peak_MiB=row['whole_worker_peak_rss_bytes']/2**20))
+                    whole_worker_peak_MiB=row['whole_worker_peak_rss_bytes']/2**20,
+                    fused_peak_JAX_device_MiB=device_peak_mib(row['fused_device_memory_stats'])))
     if report['failures']:
         raise RuntimeError('Some cases failed: '+repr(report['failures']))
 
@@ -440,8 +483,8 @@ def main():
     command=parser()
     options=command.parse_args()
     import math
-    if not 1<=options.particles<=8 or options.repeats<3 or options.saves<2:
-        command.error('Use 1..8 particles, at least three repeats and two saves')
+    if options.particles<1 or options.repeats<3 or options.saves<2:
+        command.error('Use positive particles, at least three repeats and two saves')
     if min(options.fixed_gc_steps,options.fixed_lorentz_steps,options.max_steps,
            options.max_orbit_steps,options.accepted_capacity,options.orbit_capacity,options.checkpoint_steps)<1:
         command.error('Positive work/storage limits required')

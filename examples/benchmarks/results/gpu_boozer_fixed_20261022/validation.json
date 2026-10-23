@@ -1,0 +1,21 @@
+{
+    "complete":  true,
+    "particles":  64,
+    "steps_per_particle":  160,
+    "dt_seconds":  1.2500000000000002E-07,
+    "horizon_seconds":  2E-05,
+    "energy_ev":  4000.0,
+    "field_modes":  16,
+    "identical_field_and_birth_cache":  true,
+    "all_solver_status_success":  true,
+    "rejections":  0,
+    "reverse_ad":  false,
+    "reference_dt":  "Published ESSOS RK4 comparison recorded in README: 1.25e-7 s",
+    "dopri8_over_rk4_warm_time":  7.3411142235279474,
+    "max_saved_flux_difference":  8.3266726846886741E-16,
+    "max_saved_poloidal_angle_difference_radians":  1.1546319456101628E-14,
+    "max_saved_vparallel_difference_m_per_s":  1.6880221664905548E-09,
+    "max_saved_vparallel_difference_relative_to_birth_speed":  3.8433881778598123E-15,
+    "max_saved_speed_difference_m_per_s":  1.0477378964424133E-09,
+    "state_difference_interpretation":  "Differences between two methods on identical inputs, not errors against an independent reference."
+}

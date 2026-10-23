@@ -87,8 +87,10 @@ def _state_projection(prepare, evaluate, raw, *examples):
     return prepare_state,state
 
 
-def _orbit_replay(rhs, initial, parameters, tape, index, method):
+def _orbit_replay(rhs, initial, parameters, tape, index, method, stage_execution="loop"):
     """Forward-only oracle; propagate new physical inputs on the frozen grid."""
+    from .rk import _select_trial_step
+    trial_step = _select_trial_step(stage_execution)
     constants = (_C, _A, _ERROR) if method == "dopri5" else (_C8, _A8, _ERROR8)
     dense = _rk45_dense if method == "dopri5" else _dopri8_dense
     start, end = tape.offsets[index], tape.offsets[index+1]
@@ -97,7 +99,7 @@ def _orbit_replay(rhs, initial, parameters, tape, index, method):
     def step(local):
         i, y, f = local
         t, h = tape.orbit_times[i]
-        trial = _trial_step(rhs, t, y, h, parameters, f, *constants)
+        trial = trial_step(rhs, t, y, h, parameters, f, *constants)
         fraction = jnp.where(i == end-1, tape.fractions[index], 1.)
         terminal = dense(y, trial.y, trial.increments, fraction)
         return i+1, terminal, trial.f1
@@ -107,7 +109,7 @@ def _orbit_replay(rhs, initial, parameters, tape, index, method):
     return final
 
 
-def replay_accepted_split(rhs, collision, initial, args, tape, ts, *, method="dopri8"):
+def replay_accepted_split(rhs, collision, initial, args, tape, ts, *, method="dopri8", stage_execution="loop"):
     """Forward-only frozen-schedule/noise oracle for finite-difference checks.
 
     New parameters propagate through every orbit and collision map. Recorded
@@ -120,7 +122,7 @@ def replay_accepted_split(rhs, collision, initial, args, tape, ts, *, method="do
 
     def advance(local):
         index, y, saved = local
-        y = _orbit_replay(rhs_bound, y, None, tape, index, method)
+        y = _orbit_replay(rhs_bound, y, None, tape, index, method, stage_execution)
         t, end = tape.times[index]
         y = lax.cond(tape.kicks[index],
             lambda y: collision(end, y, end-t, tape.increments[index], args).y,

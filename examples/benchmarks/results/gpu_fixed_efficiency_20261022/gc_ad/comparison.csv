@@ -1,0 +1,2 @@
+model,case,backend,value,forward_ms,linearization_ms,reverse_ms,fused_ms,reverse_over_forward,fused_over_forward,forward_buffers_MiB,fused_buffers_MiB,reverse_buffers_MiB,fused_peak_MiB,warm_fused_peak_MiB,whole_worker_peak_MiB,fused_peak_JAX_device_MiB
+gc,native_split_fixed,gpu,0.4046091810853587,1665.4345059978368,2426.093524998578,3298.3948740002234,5991.999803998624,1.980501101737415,3.597859767177423,32.52153015136719,39.02880859375,55.93874454498291,1658.5703125,1658.5703125,2079.453125,128.594970703125

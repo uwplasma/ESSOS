@@ -1011,7 +1011,7 @@ Reproduce from the repository root using a new output directory:
 
 ```bash
 python -m examples.benchmarks.benchmark_ad_backends \
-  --particles 2 --repeats 21 \
+  --platform cpu --particles 2 --repeats 21 \
   --output examples/benchmarks/results/ad_native_diffrax_NEW
 ```
 
@@ -1055,6 +1055,44 @@ host RSS is not peak GPU VRAM. Production saved-state energy diagnostics are
 included in the timed kernel; transfers, disk output and plots are excluded.
 Small runs also compare against public `trace_boozer` after the timing and
 memory snapshots. `--setup-only` prepares the inputs without tracing.
+
+For an adaptive Dopri5/Dopri8 comparison on the large machine, run both commands
+from the same checkout. `essos_rk45` selects native Dopri5. Both use the same
+8,192 births, field truncation, 20 ms horizon, 101 saves, I controller and
+`rtol=atol=1e-10`. The second run reuses the first run's exact field transform;
+the same seed regenerates identical births, whose array hash is recorded.
+Each command runs one first execution and two warm repetitions in its own
+process. JAX chooses its normal backend; check the printed devices.
+
+```sh
+python -m examples.benchmarks.benchmark_native_boozer_alpha \
+  --integrator essos_rk45 --particles 8192 --horizon 0.02 --saves 101 \
+  --rtol 1e-10 --atol 1e-10 --seed 42 --stage-execution unrolled \
+  --output output/native_boozer_dopri5_8192_run1
+
+python -m examples.benchmarks.benchmark_native_boozer_alpha \
+  --integrator essos_dopri8 --particles 8192 --horizon 0.02 --saves 101 \
+  --rtol 1e-10 --atol 1e-10 --seed 42 --stage-execution unrolled \
+  --field-cache output/native_boozer_dopri5_8192_run1/boozer_inputs.npz \
+  --output output/native_boozer_dopri8_8192_run1
+```
+
+Explicit-stage adaptive solves now use the same component arithmetic
+`essos.rk._component_trial` as the aligned fixed-grid helper. They still use
+the adaptive driver's error test, accept/reject logic and dense output. The
+larger fixed-run gains below also include uniform-grid scheduling and reduced
+driver bookkeeping; those gains do not establish an adaptive speedup. Adaptive
+steps are selected separately by each method's embedded estimate, so equal
+tolerances do not imply equal step counts or equal global errors. Saved reports
+include accepted/rejected counts, energy drift and memory snapshots after
+setup, compilation and execution. These commands prepare a large-machine
+measurement; local short smoke tests do not measure the 8,192-particle workload.
+The shared recurrence passed 39 GPU regression checks, including fixed/adaptive
+event and save handling, state/time/step/parameter/FSAL derivatives, and
+checkpointed reverse derivatives. Four-particle adaptive GPU smoke runs of both
+alpha commands completed with identical births and agreed with public
+`trace_boozer` to 2.23e-16 or better in saved components. Large-run timing and
+memory remain to be measured on the target machine.
 
 For a small CPU smoke test:
 
@@ -1178,7 +1216,7 @@ Reproduce from the repository root, with the project environment active and
 
 ```bash
 python -m examples.benchmarks.benchmark_forward_fields \
-  --fields coils vmec boozer --models gc --repeats 7 \
+  --platform cpu --fields coils vmec boozer --models gc --repeats 7 \
   --output examples/benchmarks/results/forward_fields_NEW
 ```
 
@@ -1186,21 +1224,341 @@ To run only the four fixed collisionless cases:
 
 ```bash
 python -m examples.benchmarks.benchmark_forward_fields \
-  --fields vmec boozer \
+  --platform cpu --fields vmec boozer \
   --cases native_orbit_fixed_dopri5 native_orbit_fixed_dopri8 \
   --fixed-gc-steps 224 --repeats 7 \
   --output examples/benchmarks/results/forward_fixed_NEW
 ```
 
-This comparison explicitly selects CPU by default. Add `--platform auto` to
-use JAX's ordinary backend selection. Device-memory statistics are saved when
-the backend exposes them; CPU host RSS is not peak GPU memory. Use
+The runners now use JAX's ordinary backend selection by default; the commands
+above explicitly select CPU to reproduce the CPU table. `--platform cuda`
+requires a working NVIDIA backend and fails instead of falling back to CPU.
+Larger particle counts are supported for GPU performance measurements. For
+example, run the matched forward matrix with `--platform cuda --particles 256`,
+or the coil AD matrix with `--platform cuda --particles 64 --models gc`.
+Every worker records its actual backend/devices. Cases run sequentially in
+fresh processes with blocked warm calls; no particle chunking is introduced.
+Device allocator statistics and peak JAX device allocation are saved when
+available, separately from host RSS and compiler buffer estimates. The AD
+runner snapshots fused device statistics before separate forward/reverse
+and validation executables are compiled. Allocator peaks exclude CUDA context
+and driver memory. Preallocation defaults off in workers unless the caller
+explicitly configured it. CPU host RSS is not peak GPU memory. Use
 `--fields vmec boozer` to restrict the matrix to coordinate fields, or
 `--fields coils --models lorentz` for the Cartesian Lorentz cases. Forward
 kernel construction is in
 [`forward_field_cases.py`](examples/benchmarks/forward_field_cases.py); the
 fresh-process timing/memory runner is
 [`benchmark_forward_fields.py`](examples/benchmarks/benchmark_forward_fields.py).
+
+#### GPU coil-field AD comparison (2026-10-22)
+
+The [current GPU CSV](examples/benchmarks/results/gpu_fixed_efficiency_20261022/full_ad_comparison.csv)
+combines the [original GPU records](examples/benchmarks/results/gpu_coils_ad_20261022/comparison.json)
+with the [updated fixed GC run](examples/benchmarks/results/gpu_fixed_efficiency_20261022/gc_ad/gc_native_split_fixed.json).
+They
+compare 64 particles in the bundled QA Biot-Savart coil field on an NVIDIA
+GeForce RTX 5060 Laptop GPU, using JAX/JAXlib 0.11.2 and Diffrax 0.7.2.
+Each row retains its worker record, source hashes, timings, gradient checks,
+and memory statistics. These are GPU measurements of the existing checkpoint
+path, without particle chunks. Only the native fixed GC row has subsequently
+been remeasured with the explicit stage layout described below.
+
+The objective is mean final radius about the fixed reference axis, with
+derivatives of all 136 coil Fourier/normalized-current DOFs. Birth energy is
+4 keV; GC duration is 20 microseconds and Lorentz duration is 2 microseconds.
+Adaptive collisionless rows use native Dopri8 with I control and Diffrax
+Dopri8 with PI control, rtol=atol=1e-9. Fixed collisionless rows use Dopri8
+with the same fixed timestep for native and Diffrax. Native adaptive
+collisions use adaptive inner orbits and the conservative collision
+controller with tolerance 0.003. Fixed collision rows use fixed native
+Dopri8 orbit steps and fixed collision intervals: 224 for GC and 1792 for
+Lorentz. Diffrax fixed collisions use the production SDE solver with fixed
+joint orbit/collision steps. Mixed adaptive-orbit/fixed-collision rows are
+excluded. Native runs retain standard dense output and the loop stage layout,
+except the updated fixed GC row, which uses explicit stages of the same formula.
+
+Warm timings exclude compilation and field setup. Peak JAX GPU allocation
+is captured after fused value-and-gradient executions, before separate
+forward/reverse or derivative-validation executables are built. This cumulative
+peak includes setup, compilation, first and warm executions, and excludes
+CUDA context/driver memory. Compiled buffers
+and CPU host RAM are reported separately. Different collision schemes use
+their production noise generators; collision-gradient equality is not an
+accuracy criterion for this engineering comparison.
+
+| Model | Solver | Orbit / collisions | Forward ms | Reverse ms | Value + gradient ms | AD buffers MiB | Peak JAX GPU MiB |
+|---|---|---|---:|---:|---:|---:|---:|
+| GC | Native Dopri8 | Adaptive / none | 427.7 | 693.4 | 1,108.7 | 29.8 | 176.0 |
+| GC | Diffrax Dopri8 | Adaptive / none | 498.7 | 2,330.8 | 2,838.9 | 12.6 | 160.0 |
+| GC | Native Dopri8 | Fixed / none | 1,985.1 | 3,282.7 | 5,106.6 | 29.9 | 176.0 |
+| GC | Diffrax Dopri8 | Fixed / none | 2,271.3 | 11,609.4 | 14,051.9 | 12.2 | 133.5 |
+| GC | Native split | Adaptive / adaptive | 723.0 | 1,431.9 | 2,136.2 | 37.9 | 128.6 |
+| GC | Native split | Fixed / fixed | 1,665.4 | 3,298.4 | 5,992.0 | 39.0 | 128.6 |
+| GC | Diffrax SDE | Fixed / fixed | 1,689.1 | 9,573.0 | 10,168.8 | 176.2 | 256.1 |
+| Lorentz | Native Dopri8 | Adaptive / none | 68.5 | 216.5 | 290.2 | 32.0 | 176.0 |
+| Lorentz | Diffrax Dopri8 | Adaptive / none | 152.5 | 1,203.5 | 1,366.3 | 12.6 | 144.0 |
+| Lorentz | Native Dopri8 | Fixed / none | 1,896.8 | 6,103.6 | 8,329.3 | 43.2 | 176.0 |
+| Lorentz | Diffrax Dopri8 | Fixed / none | 4,504.2 | 38,172.2 | 42,311.5 | 12.2 | 144.0 |
+| Lorentz | Native split | Adaptive / adaptive | 81.2 | 250.9 | 361.9 | 32.1 | 144.0 |
+| Lorentz | Native split | Fixed / fixed | 2,519.6 | 7,928.6 | 11,485.6 | 35.0 | 144.0 |
+| Lorentz | Diffrax SDE | Fixed / fixed | 9,115.5 | 23,300.6 | 32,486.9 | 12.8 | 288.0 |
+
+Remeasure the original loop-stage rows in fresh sequential workers; the
+updated fixed GC row uses the dedicated command in the improvements section:
+
+```sh
+python -m examples.benchmarks.benchmark_ad_backends \
+  --platform cuda --models gc lorentz --particles 64 --repeats 3 \
+  --orbit-capacity 2048 --checkpoint-steps 16 \
+  --output examples/benchmarks/results/gpu_coils_ad_NEW
+```
+
+The archived native split runs use orbit-tape capacity 512, except fixed
+Lorentz collisions, which use 2048 for their 1792 intervals. To reproduce a
+specific allocation, select that model/case and its archived capacity; the
+combined command above uses the larger capacity for all cases.
+
+#### GPU Boozer fixed-step forward baseline (2026-10-22)
+
+The [Boozer CSV](examples/benchmarks/results/gpu_boozer_fixed_20261022/comparison.csv),
+[full record](examples/benchmarks/results/gpu_boozer_fixed_20261022/comparison.json)
+and [validation](examples/benchmarks/results/gpu_boozer_fixed_20261022/validation.json)
+compare the production specialized RK4 kernel with native Dopri8 on the same
+RTX 5060 Laptop GPU. Both use the published ESSOS RK4 benchmark timestep,
+**dt=1.25e-7 s**: 64 collisionless 4 keV alpha GCs, 20 microseconds, 160 fixed
+steps and nine saves. Nine saves keep the legacy RK4 save intervals aligned
+with this timestep. Both methods use the same saved QA Boozer field and births
+(16 retained Fourier modes, direct evaluation, seed 42), with no compaction.
+This archived baseline predates the aligned fixed-grid driver below. It uses
+the standard native stage loop and measures forward
+tracing only. The seven blocked warm calls exclude compilation and field setup.
+
+| Solver | Fixed steps | Warm forward ms | Compiled buffers MiB | Peak JAX GPU MiB |
+|---|---:|---:|---:|---:|
+| Boozer RK4 | 160 | 14.90 | 0.089 | 80.0 |
+| Native Boozer Dopri8 | 160 | 109.40 | 0.155 | 128.0 |
+
+Dopri8 takes 7.34 times the RK4 forward time at the same timestep. Both
+completed every orbit with zero rejections or failures. Peak JAX GPU allocation
+includes setup/compilation and execution, excluding CUDA context/driver memory;
+compiled buffers are a separate estimate. These coordinate-field forward
+measurements are separate from the Biot-Savart reverse-AD table above.
+
+The current solver can run the exact saved field and particle inputs below;
+its timings include the subsequent driver improvement, rather than reproducing
+the archived 109.40 ms implementation:
+
+```sh
+python -m examples.benchmarks.benchmark_forward_fields \
+  --platform cuda --fields boozer --models gc \
+  --cases boozer_rk4 native_orbit_fixed_dopri8 \
+  --particles 64 --gc-horizon 2e-5 --fixed-gc-steps 160 --saves 9 --repeats 7 \
+  --field-cache examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz \
+  --output examples/benchmarks/results/gpu_boozer_fixed_NEW
+```
+
+#### Fixed GPU execution improvements (2026-10-22)
+
+The [updated comparison](examples/benchmarks/results/gpu_fixed_efficiency_20261022/comparison.csv),
+[raw measurements](examples/benchmarks/results/gpu_fixed_efficiency_20261022/comparison.json)
+and [validation](examples/benchmarks/results/gpu_fixed_efficiency_20261022/validation.json)
+retain the original timestep, particles, fields and Dopri8 tableau. These are
+64-particle measurements on the RTX 5060 Laptop GPU, without particle chunks.
+
+For fixed Boozer Dopri8, `rk_fixed.py` groups aligned steps between saves and
+checks loss/failure after every step. The last crossing step is replayed once
+to locate the same standard-polynomial LCFS root after integration stops.
+Only that step's start state and derivative are retained; no trajectory-sized
+stage tape is added. This forward path is selected on GPUs when all saves
+align with the requested fixed timestep and the work limit permits completion.
+Other save grids, adaptive runs and nonstandard output modes keep the shared
+driver. Fields, equations and error controllers are unchanged.
+
+| Boozer, fixed dt=1.25e-7 s, 160 steps | Warm forward ms | Compile s | Compiler buffers MiB | Peak JAX GPU MiB |
+|---|---:|---:|---:|---:|
+| RK4, remeasured | 14.82 | 1.92 | 0.089 | 80.0 |
+| Original native Dopri8 | 109.40 | 2.91 | 0.155 | 128.0 |
+| Native Dopri8, aligned driver and explicit stages | 45.37 | 8.64 | 0.159 | 208.0 |
+
+The measured speedup is 2.41 times; native remains 3.06 times RK4 at identical
+dt. Dopri8 still evaluates 13 new RHS stages per ordinary FSAL step, versus
+four for RK4. Root accuracy is retained: RK4 records a crossing step's endpoint,
+whereas native locates the crossing within the step. All benchmark particles
+survived, so root replay does not contribute to these warm times. Against the
+original native solve, maximum saved parallel-velocity difference is
+2.91e-11 m/s, and maximum flux-coordinate difference is 1.11e-16. Counts and
+statuses agree. These differences test preservation, not absolute global error.
+Mixed lost/surviving lanes, failed stages, invalid roots and production Boozer
+loss holding have separate tests in `tests/test_rk_fixed.py`.
+
+Compilation rises by 5.74 s and its cumulative GPU peak by 80 MiB; compiler
+buffers rise by about 3.8 KiB. The new peak is already reached before execution.
+At this workload, about 90 warm calls amortize the additional compilation time.
+This small-particle result does not establish compilation memory at 8192 particles.
+
+For fixed Biot-Savart GC splitting, explicit stage arithmetic avoids dynamic
+stage-bank indexing. `trace_split` selects this layout by default for fixed
+Dopri8 GC on GPUs; explicit `orbit_stage_execution="loop"` retains the previous
+layout. Other fields, models, adaptive runs and the checkpointed pullback retain
+their previous execution choices. Every outer interval still takes one full
+Dopri8 orbit step followed by the same production collision kick and noise.
+
+| Coil GC, fixed 224 orbit/collision intervals | Forward ms | Reverse ms | Forward + gradient ms | Fused buffers MiB | Fused peak JAX GPU MiB |
+|---|---:|---:|---:|---:|---:|
+| Native, original stage loop | 2238.40 | 3313.12 | 6066.32 | 39.026 | 128.6 |
+| Native, explicit stages | 1665.43 | 3298.39 | 5992.00 | 39.029 | 128.6 |
+| Fixed Diffrax SDE reference | 1689.07 | 9573.01 | 10168.77 | 176.237 | 256.1 |
+
+Forward time falls 25.6%, reaching approximate parity with the saved Diffrax
+reference; reverse and fused time do not regress. The native formula remains
+Dopri8 plus split Milstein, while Diffrax uses its existing GC SDE method, so
+this is a production-method comparison. Native gradient L2 difference from
+the previous implementation is 2.06e-15 relative. A frozen accepted-grid/noise
+JVP agrees with reverse AD, and the best directional finite difference agrees
+to 2.65e-11 relative. Actual step counts and statuses are unchanged; the maximum
+embedded collision estimate differs only by floating-point roundoff.
+
+The [memory phase audit](examples/benchmarks/results/gpu_fixed_efficiency_20261022/memory_phase_audit.json)
+explains the apparent drop in peak memory when collisions are enabled. Its
+compile-only runs reach 176.0 versus 128.6 MiB for GC and 176.0 versus 144.0 MiB
+for Lorentz before any solver executes. Thus the lower cumulative peak is a
+compiler/setup allocation effect, not evidence that adding collisions inherently
+needs less storage. The archived forward compiler estimates increase with
+collisions: GC 4.24 to 32.58 MiB, Lorentz 0.73 to 4.54 MiB.
+
+Fused reverse buffers also depend on checkpoint and temporary reuse, rather
+than simply adding a collision tape to an unchanged program. In the archived
+Lorentz pullbacks, split residual inputs grow from 11.10 to 26.15 MiB, while
+temporary storage falls from 38.48 to 12.74 MiB. The split and orbit-only
+replay/output programs have different allocation lifetimes. This accounts for
+the smaller compiled split reverse workspace; it is not a general monotonic
+memory claim. Peak measurements include compilation/autotuning and exclude CUDA
+context/driver memory. Audit compilation-only buffer estimates are diagnostic;
+the timing tables retain their own executable estimates and capacities.
+
+Reproduce the optimized fixed forward comparison:
+
+```sh
+python -m examples.benchmarks.benchmark_forward_fields \
+  --platform cuda --fields boozer --models gc \
+  --cases boozer_rk4 native_orbit_fixed_dopri8 --stage-execution unrolled \
+  --particles 64 --gc-horizon 2e-5 --fixed-gc-steps 160 --saves 9 --repeats 7 \
+  --field-cache examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz \
+  --output .tmp/boozer_fixed_gpu_NEW
+
+python -m examples.benchmarks.benchmark_ad_backends \
+  --platform cuda --models gc --cases native_split_fixed --stage-execution unrolled \
+  --particles 64 --repeats 3 --max-orbit-steps 128 --orbit-capacity 512 \
+  --checkpoint-steps 16 --output .tmp/gc_fixed_gpu_NEW
+```
+
+Both benchmark runners now save device-memory snapshots after setup and
+compilation as well as after execution. For an orbit-only/split compilation-peak
+audit, select `--cases native_orbit_fixed_dopri8 native_split_fixed` in the AD
+runner; the recorded compilation snapshots precede all solver execution.
+
+#### Fixed Dopri8 component recurrence (2026-10-22)
+
+The [follow-up measurements](examples/benchmarks/results/gpu_boozer_components_20261022/comparison.csv)
+and [validation](examples/benchmarks/results/gpu_boozer_components_20261022/validation.json)
+use the same 64 particles, QA Boozer field, 160 fixed steps, dt=1.25e-7 s,
+20 microsecond horizon and nine saved times. Timings are blocked warm forward
+calls; compilation and setup are excluded. No timestep increase is used.
+
+The explicit-stage path in `rk_fixed.py` now carries state components
+separately between RHS calls and accumulates their finite flags without
+stacking a stage bank for validation. It evaluates the unchanged RHS with its
+usual state vector. The Dopri8 recurrence, embedded estimate, FSAL cache,
+finite checks and standard-polynomial loss root are preserved. Root location
+still replays only the crossing step with the ordinary stage bank. The loop
+layout, field classes, adaptive solver and checkpointed orbit/split AD paths
+retained their previous implementation in these measurements. A later shared
+component recurrence also connects the explicit-stage adaptive path; this
+fixed-grid record does not measure that path's performance.
+
+| Same fixed timestep, 160 steps | Warm forward ms | Per 64-particle step, microseconds | Compile s | Compiler buffers MiB | Peak JAX GPU MiB |
+|---|---:|---:|---:|---:|---:|
+| Boozer RK4, remeasured | 14.82 | 92.62 | 1.84 | 0.089 | 80.0 |
+| Native Dopri8, previous aligned driver | 45.37 | 283.54 | 8.64 | 0.159 | 208.0 |
+| Native Dopri8, component recurrence | 41.13 | 257.06 | 8.66 | 0.183 | 208.0 |
+
+Fixed-step execution time falls 9.3%; native still takes 2.78 times RK4's
+time, so the same-timestep speed target is not met. A separately compiled,
+interleaved 21-repeat check also confirms the gain: 45.97 to 40.20 ms (12.5%).
+That check clears nested JIT caches between implementations; its raw samples
+are in the validation record. Compiler buffers increase
+by about 25.3 KiB; the measured cumulative GPU peak is unchanged. This peak
+includes setup and compilation and excludes CUDA context/driver allocations;
+it is not an isolated warm-execution VRAM measurement. All saved state and
+velocity components are bitwise identical to the previous native record, with
+160 accepted steps per particle and no rejections or failures. Seven GPU
+regression tests pass, covering mixed loss lanes, failed stages, invalid roots,
+held saves, and state/parameter tangents. These preservation checks do not
+establish an absolute global-error bound. Pallas, speculative field caches,
+harmonic rewrites and general RHS layout variants are not part of this change.
+
+Reproduce the two current production rows:
+
+```sh
+python -m examples.benchmarks.benchmark_forward_fields \
+  --platform cuda --fields boozer --models gc \
+  --cases boozer_rk4 native_orbit_fixed_dopri8 --stage-execution unrolled \
+  --particles 64 --gc-horizon 2e-5 --fixed-gc-steps 160 --saves 9 --repeats 9 \
+  --field-cache examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz \
+  --output .tmp/boozer_components_gpu_NEW
+```
+
+#### Fixed Dopri5 with the same execution improvements (2026-10-22)
+
+The [Dopri5 comparison](examples/benchmarks/results/gpu_boozer_dopri5_20261022/comparison.csv)
+uses the same QA Boozer field, 64 particles, 160 fixed steps, dt=1.25e-7 s,
+20 microsecond horizon and nine saved times as the Dopri8 test above. Current
+RK4, Dopri5 and Dopri8 rows are remeasured in separate fresh GPU workers with
+15 blocked warm calls each. Compilation is excluded from warm timings. The
+[previous Dopri5 worker](examples/benchmarks/results/gpu_boozer_dopri5_20261022/dopri5_before.json)
+records its general-driver baseline immediately before this change.
+
+Dopri5 now uses the same aligned-grid driver, component recurrence, FSAL reuse,
+finite checks without a stacked validation stage bank, and deferred replay of
+the crossing step. The shared driver selects Dopri5's own tableau and standard
+quartic loss-event polynomial. Field classes and the physical RHS are unchanged.
+The aligned-grid helper is forward only; checkpoint storage and the reverse
+AD algorithm are unchanged.
+
+| Same fixed timestep, 160 steps | Warm forward ms | Per 64-particle step, microseconds | Compile s | Compiler buffers MiB | Peak JAX GPU MiB |
+|---|---:|---:|---:|---:|---:|
+| Boozer RK4 | 14.70 | 91.91 | 1.75 | 0.089 | 80.0 |
+| Native Dopri5, previous general driver | 68.27 | 426.67 | 3.70 | 0.122 | 176.1 |
+| Native Dopri5, shared optimized driver | 20.33 | 127.08 | 5.06 | 0.131 | 272.0 |
+| Native Dopri8, shared optimized driver | 39.22 | 245.10 | 8.71 | 0.183 | 208.0 |
+
+Dopri5 execution time falls 70.2% (3.36 times faster). It takes 1.38 times
+RK4's time and about half Dopri8's time on this problem, at the same timestep.
+Its compilation time rises from 3.70 to 5.06 s and its cumulative JAX GPU peak
+rises about 96 MiB. Compiler buffers rise about 9.4 KiB. The GPU peak includes
+setup and compilation and excludes CUDA context/driver allocations; these
+measurements do not establish an isolated warm-execution VRAM improvement.
+
+The [validation record](examples/benchmarks/results/gpu_boozer_dopri5_20261022/validation.json)
+confirms 160 accepted steps for every particle, with no rejections or failures.
+Relative to the previous Dopri5 implementation, the maximum saved coordinate
+change is 5.55e-17, the maximum parallel-speed change is 4.55e-13 m/s, and total
+speed is unchanged. Dopri8's saved states remain bitwise identical to its
+previous record. Thirteen GPU regression tests pass for both methods, covering
+loss roots, failed stages, invalid roots, held saves and state/parameter
+tangents. Cross-method state differences are saved in the validation record;
+they are not absolute global-error bounds.
+
+```sh
+python -m examples.benchmarks.benchmark_forward_fields \
+  --platform cuda --fields boozer --models gc \
+  --cases boozer_rk4 native_orbit_fixed_dopri5 native_orbit_fixed_dopri8 \
+  --stage-execution unrolled --particles 64 --gc-horizon 2e-5 \
+  --fixed-gc-steps 160 --saves 9 --repeats 15 \
+  --field-cache examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz \
+  --output .tmp/boozer_dopri5_gpu_NEW
+```
 
 #### Forward setup and collision-cost investigation (CPU, 2026-10-21)
 

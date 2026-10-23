@@ -1,4 +1,4 @@
-"""CATAPULT-sized alpha workload using the production native Boozer Dopri8.
+"""CATAPULT-sized alpha workload using production native Boozer Dopri5/8.
 
 Run as a module from the repository root. Edit PARAMETERS or override by CLI.
 JAX chooses the machine's normal backend. No collisions, AD or compaction.
@@ -25,7 +25,8 @@ ROOT = Path(__file__).resolve().parents[2]
 PARAMETERS = dict(
     particles=8192, horizon=.02, saves=101, energy_ev=3.52e6,
     birth_s=.3, seed=42, timestep=1.25e-7,
-    rtol=1e-10, atol=1e-10, controller="i", max_steps=1_000_000,
+    integrator="essos_dopri8",
+    rtol=1e-10, atol=1e-10, controller="i", stage_execution="unrolled", max_steps=1_000_000,
     mboz=32, nboz=32, mode_cut=1e-4, repeats=2,
     wout=ROOT/"examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
     output=Path("output/native_boozer_alpha"),
@@ -133,6 +134,11 @@ def main(argv=None):
         parser.error("Counts, horizon, energy, timestep and atol must be positive; rtol >= 0")
     if not 0<options.birth_s<1 or options.saves<2 or not 0<=options.mode_cut<1 or options.controller not in ("i","pi"):
         parser.error("Require 0 < birth-s < 1, saves >= 2, 0 <= mode-cut < 1, controller i/pi")
+    if options.stage_execution not in ("loop","unrolled"):
+        parser.error("stage-execution must be loop/unrolled")
+    if options.integrator not in ("essos_rk45", "essos_dopri8"):
+        parser.error("integrator must be essos_rk45 (Dopri5) or essos_dopri8")
+    method = "dopri5" if options.integrator == "essos_rk45" else "dopri8"
     if (options.output/"benchmark.json").exists():
         parser.error("Choose a fresh --output directory")
     options.output.mkdir(parents=True, exist_ok=True)
@@ -146,7 +152,8 @@ def main(argv=None):
         devices=[str(d) for d in jax.devices()], platform=platform.platform(),
         settings={k:str(v) if isinstance(v,Path) else v for k,v in vars(options).items()},
         setup_seconds=perf_counter()-start, collisions=False, reverse_ad=False, particle_chunking=False,
-        particle_compaction=False, integrator="essos_dopri8", adaptive=True,
+        particle_compaction=False, integrator=options.integrator, adaptive=True,
+        component_stage_arithmetic=options.stage_execution == "unrolled",
         field=dict(representation="Production Boozer K=0 GC field from QA equilibrium; no coils",
             modes=int(field.xm.size), nfp=field.nfp, angular_table=field.table is not None,
             wout_sha256=digest(options.wout)),
@@ -156,8 +163,14 @@ def main(argv=None):
         catapult_reference=dict(source=CATAPULT_SOURCE, tolerance=1e-10, atol=1e-10, rtol=1e-10,
             distinction="Same tolerance values, not the same error norm: CATAPULT uses atol_i + rtol*(abs(y_i)+dt*abs(f_i)); native block scales are fixed. This is a CATAPULT-sized workload, not identical field/births or a direct speed comparison."),
         cache_directory=jax.config.jax_compilation_cache_dir,
-        source_sha256={name:digest(ROOT/name) for name in ("essos/boozer.py","essos/rk.py","essos/rk_rhs.py",
+        source_sha256={name:digest(ROOT/name) for name in ("essos/boozer.py","essos/rk.py","essos/rk_fixed.py","essos/rk_rhs.py",
             "essos/rk_dense.py","examples/benchmarks/benchmark_native_boozer_alpha.py")})
+    report["setup_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
+    birth_digest = hashlib.sha256()
+    for name, values in births.items():
+        birth_digest.update(name.encode())
+        birth_digest.update(np.ascontiguousarray(values).tobytes())
+    report["births_sha256"] = birth_digest.hexdigest()
     def save():
         (options.output/"benchmark.json").write_text(json.dumps(report,indent=2,allow_nan=False)+"\n")
     save()
@@ -166,18 +179,19 @@ def main(argv=None):
     print(f"QA Boozer: {report['field']['modes']} retained modes, mode-cut={options.mode_cut:g}; "
           f"{'angular table' if field.table is not None else 'direct Fourier sums'}; K=0",flush=True)
     print(f"{options.particles} alpha GCs, {options.energy_ev:g} eV, s={options.birth_s:g}, "
-          f"{options.horizon:g} s, {options.saves} saves; adaptive native Dopri8 ({options.controller}); "
-          f"rtol={options.rtol:g}, atol={options.atol:g}",flush=True)
+          f"{options.horizon:g} s, {options.saves} saves; adaptive native {method} ({options.controller}); "
+          f"rtol={options.rtol:g}, atol={options.atol:g}; stages={options.stage_execution}",flush=True)
     if options.setup_only:
         print(f"Setup saved in {options.output.resolve()}",flush=True)
         return report
     def run(y0,mu0):
         return _native_orbits(field,y0,mu0,MASS,CHARGE,speed,times,options.timestep,
-            options.rtol,options.atol,"dopri8",True,options.controller,.4,.3,"standard",options.max_steps)
+            options.rtol,options.atol,method,True,options.controller,.4,.3,"standard",options.max_steps,options.stage_execution)
     print("Lowering and compiling the production native Boozer kernel",flush=True)
     start = perf_counter()
     executable = jax.jit(run).lower(initial,mu).compile()
     report["lower_and_compile_seconds"] = perf_counter()-start
+    report["compile_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
     memory = executable.memory_analysis()
     if memory is not None:
         parts = {key:int(getattr(memory,key)) for key in ("argument_size_in_bytes","output_size_in_bytes",
@@ -190,6 +204,7 @@ def main(argv=None):
     start = perf_counter()
     result = jax.block_until_ready(executable(initial,mu))
     report["first_execution_seconds"] = perf_counter()-start
+    report["first_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
     report["first_trace_including_compile_seconds"] = report["lower_and_compile_seconds"]+report["first_execution_seconds"]
     report["first_host_rss_bytes"] = rss()
     print(f"First execution: {report['first_execution_seconds']:.3f} s",flush=True)
@@ -227,7 +242,8 @@ def main(argv=None):
     if options.particles<=8 and options.horizon<=1e-4:
         reference = trace_boozer(field,births["s"],births["theta"],births["zeta"],births["pitch"],
             speed=speed,mass=MASS,charge=CHARGE,tmax=options.horizon,timestep=options.timestep,n_save=options.saves,
-            integrator="essos_dopri8",rtol=options.rtol,atol=options.atol,native_controller=options.controller,
+            integrator=options.integrator,rtol=options.rtol,atol=options.atol,native_controller=options.controller,
+            native_stage_execution=options.stage_execution,
             max_steps=options.max_steps,progress=False,compact=False,devices=[jax.devices()[0]])
         np.testing.assert_allclose(states,reference.states,rtol=0,atol=1e-8)
         np.testing.assert_array_equal(counts,reference.step_stats)

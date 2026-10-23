@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from time import perf_counter
@@ -17,11 +18,12 @@ import traceback
 
 ROOT = Path(__file__).resolve().parents[2]
 CASES = ("native_orbit","diffrax_orbit","native_split_adaptive","native_split_fixed",
-         "diffrax_sde_fixed","boozer_rk4","native_orbit_fixed_dopri5","native_orbit_fixed_dopri8")
+         "diffrax_sde_fixed","boozer_rk4","native_orbit_fixed_dopri5","native_orbit_fixed_dopri8",
+         "diffrax_orbit_fixed_dopri8")
 
 
 def sources():
-    names = ("essos/rk.py","essos/rk_rhs.py","essos/rk_dense.py","essos/rk_dense_high.py",
+    names = ("essos/rk.py","essos/rk_fixed.py","essos/rk_rhs.py","essos/rk_dense.py","essos/rk_dense_high.py",
         "essos/split.py","essos/collisions.py","essos/collision_controller.py","essos/collision_error.py",
         "essos/dynamics.py","essos/boozer.py","essos/fields.py","essos/coils.py","essos/orbit_error.py",
         "essos/background_species.py","essos/coulomb.py","essos/electric_field.py",
@@ -50,7 +52,9 @@ def worker(options):
     target = options.output/f"{field}_{model}_{case}.json"
     report = dict(complete=False,field=field,model=model,case=case,source_sha256=sources(),
         jax=jax.__version__,diffrax=diffrax.__version__,backend=jax.default_backend(),
-        devices=[str(d) for d in jax.devices()],particle_chunking=False,reverse_ad=False)
+        devices=[str(d) for d in jax.devices()],device_kinds=[d.device_kind for d in jax.devices()],
+        particle_chunking=False,reverse_ad=False)
+    print(f"JAX backend: {report['backend']}; devices: {report['devices']}",flush=True)
     def save():
         target.write_text(json.dumps(report,indent=2,allow_nan=False)+"\n")
     save()
@@ -67,16 +71,19 @@ def worker(options):
         parameters,forward,scale,metadata = build(options,field,case)
     report["metadata"] = metadata
     report["setup_rss_bytes"] = resident()
+    report["setup_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
     save()
     function = jax.jit(forward)
     start = perf_counter()
     executable = function.lower(parameters).compile()
     report["compile_seconds"] = perf_counter()-start
+    report["compile_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
     report["compiled_memory"] = memory(executable)
     save()
     start = perf_counter()
     result = jax.block_until_ready(executable(parameters))
     report["first_execution_seconds"] = perf_counter()-start
+    report["first_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
     report["first_peak_rss_bytes"] = resident()
     baseline = resident()
     if sys.platform=="linux":
@@ -106,7 +113,7 @@ def worker(options):
     save()
     if not report["complete"]:
         raise RuntimeError("Incomplete/nonfinite forward solve; inspect statuses")
-    if field!="coils" and (case=="native_orbit" or case.startswith("native_orbit_fixed_")):
+    if options.particles<=8 and field!="coils" and (case=="native_orbit" or case.startswith("native_orbit_fixed_")):
         from .forward_field_cases import WOUT
         from essos.constants import ALPHA_PARTICLE_MASS as M, ALPHA_PARTICLE_CHARGE as Q, ONE_EV
         from essos.dynamics import Particles,Tracing
@@ -135,6 +142,7 @@ def worker(options):
             reference = trace_boozer(actual,*points.T,pitch,speed=float(np.sqrt(2*4000*ONE_EV/M)),mass=M,charge=Q,
                 tmax=options.gc_horizon,timestep=timestep,n_save=options.saves,integrator=integrator,adaptive=adaptive,
                 rtol=options.tolerance,atol=options.tolerance,max_steps=options.max_steps,
+                native_stage_execution=options.stage_execution,
                 progress=False,compact=False,devices=[jax.devices()[0]]).states
         valid = np.isfinite(reference).all(axis=-1)
         delta = np.where(valid[...,None],states-reference,0.)/np.asarray(scale)
@@ -156,8 +164,8 @@ def supported(field,model,case):
         return False,"VMEC/Boozer entry points support GC, not Cartesian Lorentz"
     if case=="boozer_rk4" and field!="boozer":
         return False,"Specialized RK4 tracer exists only in Boozer coordinates"
-    if case.startswith("native_orbit_fixed_") and field=="coils":
-        return False,"Fixed collisionless Dopri5/Dopri8 comparison selects VMEC/Boozer fields"
+    if case=="native_orbit_fixed_dopri5" and field=="coils":
+        return False,"Coil timing comparison selects Dopri8"
     if case=="diffrax_sde_fixed" and field=="boozer":
         return False,"No existing Diffrax Boozer SDE entry point; native Milstein split is retained"
     return True,None
@@ -170,6 +178,7 @@ def parent(options):
     if report_path.exists():
         raise ValueError("Choose a fresh output directory")
     environment = dict(os.environ,ESSOS_CPU_DEVICES="1",ESSOS_PROGRESS="0",ESSOS_XLA_CACHE="")
+    environment.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE","false")
     if options.platform!="auto":
         environment["JAX_PLATFORMS"] = options.platform
     snapshot = sources()
@@ -181,15 +190,28 @@ def parent(options):
     settings = []
     for key in ("particles","repeats","gc_horizon","lorentz_horizon","fixed_gc_steps","fixed_lorentz_steps",
         "saves","tolerance","collision_tolerance","max_steps","max_orbit_steps","accepted_capacity","orbit_capacity",
-        "checkpoint_steps","seed","mboz","nboz","mode_cut"):
+        "checkpoint_steps","seed","mboz","nboz","mode_cut","platform","split_integrator","stage_execution"):
         settings += ["--"+key.replace("_","-"),str(getattr(options,key))]
+    cached_inputs = options.field_cache
     options.field_cache = options.output.resolve()/"coordinate_inputs.npz"
     if any(f!="coils" for f in options.fields):
-        print("Preparing one QA Boozer transform and matched VMEC/Boozer births (outside measurements)",flush=True)
-        command = [sys.executable,"-m","examples.benchmarks.benchmark_forward_fields","--prepare",
-                   "--output",str(options.output.resolve()),"--field-cache",str(options.field_cache),*settings]
-        with (options.output/"setup.log").open("w") as stream:
-            subprocess.run(command,cwd=ROOT,env=environment,stdout=stream,stderr=subprocess.STDOUT,check=True)
+        if cached_inputs is not None:
+            from .forward_field_cases import WOUT
+            with np.load(cached_inputs) as data:
+                if (str(data["wout_sha256"]) != hashlib.sha256(WOUT.read_bytes()).hexdigest()
+                        or len(data["pitch"]) != options.particles
+                        or int(data["seed"]) != options.seed
+                        or int(data["mboz"]) != options.mboz or int(data["nboz"]) != options.nboz):
+                    raise ValueError("Cached coordinate inputs do not match equilibrium/particles/seed/transform settings")
+            if cached_inputs.resolve()!=options.field_cache:
+                shutil.copyfile(cached_inputs,options.field_cache)
+            print("Reusing exact saved coordinate inputs: "+str(cached_inputs),flush=True)
+        else:
+            print("Preparing one QA Boozer transform and matched VMEC/Boozer births (outside measurements)",flush=True)
+            command = [sys.executable,"-m","examples.benchmarks.benchmark_forward_fields","--prepare",
+                       "--output",str(options.output.resolve()),"--field-cache",str(options.field_cache),*settings]
+            with (options.output/"setup.log").open("w") as stream:
+                subprocess.run(command,cwd=ROOT,env=environment,stdout=stream,stderr=subprocess.STDOUT,check=True)
     for field in options.fields:
         for model in options.models:
             for case in options.cases:
@@ -212,7 +234,7 @@ def parent(options):
                 if row["complete"]:
                     if row["source_sha256"] != snapshot:
                         raise RuntimeError("Numerical sources changed during benchmark")
-                    print(f"{name}: {row['warm_median_ms']:.3f} ms; buffers {row['compiled_memory']['bytes']/2**20:.3f} MiB; "
+                    print(f"{name} ({row['backend']}): {row['warm_median_ms']:.3f} ms; buffers {row['compiled_memory']['bytes']/2**20:.3f} MiB; "
                           f"host peak {row['peak_rss_bytes']/2**20:.1f} MiB",flush=True)
                 else:
                     print("FAILED "+name+"; see "+str(options.output/(name+".log")),flush=True)
@@ -235,16 +257,18 @@ def parent(options):
                 interpretation="Same physical RHS/field/births; production controller/norm differences are labelled in each row; these are saved-state global differences, not embedded estimates"))
     report["complete"] = all(r["complete"] for r in report["rows"]) and bool(report["rows"])
     save()
-    fields = ("field","model","case","warm_ms","compile_s","buffers_MiB","peak_host_MiB","warm_peak_host_MiB","accepted_steps","rejected_steps")
+    from .benchmark_ad_backends import device_peak_mib
+    fields = ("field","model","case","backend","warm_ms","compile_s","buffers_MiB","peak_host_MiB","warm_peak_host_MiB","peak_JAX_device_MiB","accepted_steps","rejected_steps")
     with (options.output/"comparison.csv").open("w",newline="") as stream:
         writer = csv.DictWriter(stream,fieldnames=fields)
         writer.writeheader()
         for row in report["rows"]:
             if row["complete"]:
                 counts = np.asarray(row["counts_per_particle"])
-                writer.writerow(dict(field=row["field"],model=row["model"],case=row["case"],warm_ms=row["warm_median_ms"],
+                writer.writerow(dict(field=row["field"],model=row["model"],case=row["case"],backend=row["backend"],warm_ms=row["warm_median_ms"],
                     compile_s=row["compile_seconds"],buffers_MiB=row["compiled_memory"]["bytes"]/2**20,
                     peak_host_MiB=row["peak_rss_bytes"]/2**20,warm_peak_host_MiB=row["warm_peak_rss_bytes"].get("VmHWM",0)/2**20,
+                    peak_JAX_device_MiB=device_peak_mib(row["device_memory_stats"]),
                     accepted_steps=json.dumps(counts[:,1].tolist()),rejected_steps=json.dumps(counts[:,2].tolist())))
     if sources()!=snapshot:
         raise RuntimeError("Sources changed during benchmark")
@@ -258,7 +282,10 @@ def main():
     parser.add_argument("--fields",nargs="+",choices=("coils","vmec","boozer"),default=["coils","vmec","boozer"])
     parser.add_argument("--models",nargs="+",choices=("gc","lorentz"),default=["gc"])
     parser.add_argument("--cases",nargs="+",choices=CASES,default=list(CASES))
-    parser.add_argument("--platform",choices=("cpu","auto"),default="cpu")
+    parser.add_argument("--platform",choices=("cpu","cuda","auto"),default="auto",
+        help="auto respects JAX's normal backend selection; cuda requires a working NVIDIA backend")
+    parser.add_argument("--split-integrator",choices=("essos_dopri8","essos_rk45"),default="essos_dopri8")
+    parser.add_argument("--stage-execution",choices=("loop","unrolled"),default="loop")
     for name,value in dict(particles=2,repeats=7,gc_horizon=2e-5,lorentz_horizon=2e-6,fixed_gc_steps=224,
         fixed_lorentz_steps=1792,saves=8,tolerance=1e-9,collision_tolerance=.003,max_steps=4096,max_orbit_steps=512,
         accepted_capacity=128,orbit_capacity=256,checkpoint_steps=16,seed=42,mboz=32,nboz=32,mode_cut=1e-4).items():
@@ -270,8 +297,8 @@ def main():
     parser.add_argument("--worker-case",choices=CASES,help=argparse.SUPPRESS)
     options = parser.parse_args()
     import math
-    if not 1<=options.particles<=8 or options.repeats<3 or options.saves<2:
-        parser.error("Use 1..8 particles, >=3 repeats and >=2 saves")
+    if options.particles<1 or options.repeats<3 or options.saves<2:
+        parser.error("Use positive particles, >=3 repeats and >=2 saves")
     if any(not math.isfinite(x) or x<=0 for x in (options.gc_horizon,options.lorentz_horizon,options.tolerance,options.collision_tolerance)):
         parser.error("Positive finite horizons/tolerances required")
     if min(options.fixed_gc_steps,options.fixed_lorentz_steps,options.max_steps,options.max_orbit_steps,options.mboz,options.nboz)<1:

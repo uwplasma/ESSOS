@@ -103,13 +103,16 @@ def build(options, field_name, case):
         count_columns=["trials","accepted","rejected"])
     dummy = jnp.asarray(0.)
     native_orbit = case == "native_orbit" or case.startswith("native_orbit_fixed_")
-    orbit_adaptive = case == "native_orbit"
+    orbit_adaptive = case in ("native_orbit","diffrax_orbit")
     orbit_method = "dopri5" if case == "native_orbit_fixed_dopri5" else "dopri8"
     orbit_dt = horizon/4 if orbit_adaptive else dt
+    stage_execution = getattr(options,"stage_execution","loop")
     if native_orbit:
         metadata.update(orbit_method=orbit_method, orbit_adaptive=orbit_adaptive,
-                        orbit_dt0=orbit_dt)
+                        orbit_dt0=orbit_dt,stage_execution=stage_execution)
     collisional = "split" in case or case=="diffrax_sde_fixed"
+    metadata.update(orbit_stepping="adaptive" if orbit_adaptive else "fixed",
+                    collision_stepping="fixed" if collisional else "none")
     state_scale = jnp.array([1.,1.,1.,speed,4000*ONE_EV] if collisional else
                             [1.,1.,1.,speed,speed] if field_name=="boozer" else [1.,1.,1.,speed])
 
@@ -119,13 +122,14 @@ def build(options, field_name, case):
     if case.startswith("native_split"):
         adaptive = case=="native_split_adaptive"
         metadata.update(solver="native Dopri8 + production Milstein speed/pitch map",
+            orbit_stepping="adaptive" if adaptive else "fixed",collision_stepping="adaptive" if adaptive else "fixed",
             count_columns=list(("steps","accepted","rejected","orbit_steps","orbit_rejected","peak_pending","max_accepted_error")),
             error_control="Native physics/chart orbit norm; conservative collision controller")
         def cost(unused):
             out = trace_split(field,birth,background,tmax=horizon,timestep=horizon/4 if adaptive else dt,
-                times=times,integrator="essos_dopri8",adaptive=adaptive,
+                times=times,integrator=getattr(options,"split_integrator","essos_dopri8"),adaptive=adaptive,
                 collision_dtmax=horizon/2 if adaptive else dt,orbit_dt0=horizon/4 if adaptive else dt,
-                orbit_adaptive=True,collision_tolerance=options.collision_tolerance,
+                orbit_adaptive=adaptive,orbit_stage_execution=stage_execution,collision_tolerance=options.collision_tolerance,
                 collision_controller="conservative",rtol=options.tolerance,atol=options.tolerance,
                 max_steps=options.max_steps,max_orbit_steps=options.max_orbit_steps)
             return output(out.ys,out.y,out.t,out.status,jnp.stack(out.stats,axis=-1))
@@ -147,11 +151,15 @@ def build(options, field_name, case):
 
     initial, auxiliary = initial_values()
     if native_orbit and field_name=="boozer":
+        from essos.rk_fixed import aligned_substeps
+        fixed_substeps = (aligned_substeps(horizon, orbit_dt, options.saves, options.max_steps)
+            if not orbit_adaptive and jax.default_backend()=="gpu" else None)
         metadata.update(solver=f"production Boozer native {orbit_method} kernel",
+            fixed_grid_substeps=fixed_substeps,
             error_control="Native Boozer block norm; I controller" if orbit_adaptive else "Fixed step; no error-based rejection")
         def cost(unused):
             states,loss,failed,energy,counts,status = _native_orbits(field,initial,auxiliary,M,Q,speed,times,
-                orbit_dt,options.tolerance,options.tolerance,orbit_method,orbit_adaptive,"i",.4,.3,"standard",options.max_steps)
+                orbit_dt,options.tolerance,options.tolerance,orbit_method,orbit_adaptive,"i",.4,.3,"standard",options.max_steps,stage_execution,fixed_substeps)
             end = jnp.where(loss>=0,loss,jnp.where(failed>=0,failed,horizon))
             return output(states,states[:,-1],end,status,counts)
         return dummy,cost,state_scale,metadata
@@ -181,10 +189,12 @@ def build(options, field_name, case):
             rhs = _axis_regular(lambda t,y,a:GuidingCenter(t,y,(field,birth,electric)))
             metadata.update(solver=f"native {orbit_method}" if native_orbit else "Diffrax Dopri8",
                 error_control=("Native Cartesian position/birth-speed blocks; I" if orbit_adaptive else
-                    "Fixed step; no error-based rejection") if native_orbit else "Production Diffrax scalar rtol/atol; PI (.4,.3)")
+                    "Fixed step; no error-based rejection") if native_orbit else
+                    "Production Diffrax scalar rtol/atol; PI (.4,.3)" if orbit_adaptive else "Fixed Dopri8 steps")
         public = _from_axis_regular
     else:
-        metadata.update(solver="Diffrax Dopri8 on production Boozer RHS",error_control="Matched Boozer block norm; PI (.4,.3)")
+        metadata.update(solver="Diffrax Dopri8 on production Boozer RHS",
+            error_control="Matched Boozer block norm; PI (.4,.3)" if orbit_adaptive else "Fixed Dopri8 steps")
         def public(y):
             s = y[0]**2+y[1]**2
             theta = jnp.arctan2(y[1],y[0])
@@ -199,7 +209,7 @@ def build(options, field_name, case):
                     position_map=lambda y:field.to_xyz(public(y)[:3]))
                 out = solve_rk(orbit_rhs,y,t1=horizon,dt0=orbit_dt,ts=times,method=orbit_method,adaptive=orbit_adaptive,
                     rtol=options.tolerance,atol=options.tolerance,error_norm=norm,event=event,
-                    max_steps=options.max_steps)
+                    max_steps=options.max_steps,stage_execution=stage_execution)
                 saved,terminal,end,status,counts = out.ys,out.y,out.t,out.status,jnp.stack(out.stats)
             else:
                 if case=="diffrax_sde_fixed":
@@ -209,12 +219,14 @@ def build(options, field_name, case):
                     stepper,control = solver(),diffrax.ConstantStepSize()
                 else:
                     terms,stepper = diffrax.ODETerm(orbit_rhs),diffrax.Dopri8()
-                    if field_name=="boozer":
+                    if not orbit_adaptive:
+                        control = diffrax.ConstantStepSize()
+                    elif field_name=="boozer":
                         control = diffrax.PIDController(rtol=0.,atol=jnp.array([1.,1.,1.,speed])*(2*options.tolerance),
                             norm=lambda e:jnp.maximum(jnp.linalg.norm(e[:2]),jnp.maximum(abs(e[2]),abs(e[3]))),pcoeff=.4,icoeff=.3)
                     else:
                         control = diffrax.PIDController(rtol=options.tolerance,atol=options.tolerance,pcoeff=.4,icoeff=.3)
-                out = diffrax.diffeqsolve(terms,stepper,t0=0.,t1=horizon,dt0=dt if case=="diffrax_sde_fixed" else horizon/4,y0=y,
+                out = diffrax.diffeqsolve(terms,stepper,t0=0.,t1=horizon,dt0=horizon/4 if orbit_adaptive else dt,y0=y,
                     saveat=diffrax.SaveAt(subs=[diffrax.SubSaveAt(ts=times),diffrax.SubSaveAt(t1=True)]),
                     stepsize_controller=control,event=diffrax.Event(event,root_finder=_EVENT_ROOT_FINDER),
                     max_steps=options.max_steps,throw=False)

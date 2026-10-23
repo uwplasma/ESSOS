@@ -78,7 +78,7 @@ class _SplitCheckpointTape(NamedTuple):
 
 def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
                 noise_dim, adaptive=True, dtmin=0., dtmax=jnp.inf,
-                method="dopri8", orbit_dt0=None, orbit_adaptive=True, reuse_orbit_step=True,
+                method="dopri8", orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution="loop", reuse_orbit_step=True,
                 collision_controller="conservative", collision_wiener_norm=None,
                 rtol=1e-9, atol=1e-9, error_norm=None, controller="i",
                 pcoeff=.4, icoeff=.3, event=None, max_steps=100_000,
@@ -112,6 +112,8 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
     ``reuse_orbit_step`` carries the next adaptive RK step-size guess across
     kicks and retries. Every solve recomputes its initial derivative; no FSAL
     derivative or PI error history is carried across a collision.
+    ``orbit_stage_execution`` selects the RK loop or unrolled execution layout;
+    it does not change the orbit formula or the collision sampling.
 
     Events are scalar booleans or positive-inside level sets (or their PyTrees).
     Orbit crossings are root-found before a kick. A kick crossing stops at its
@@ -155,6 +157,8 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
             raise ValueError(f"{name} must be a positive integer")
     if adjoint not in ("none", "accepted"):
         raise ValueError("adjoint must be 'none' or 'accepted'")
+    if orbit_stage_execution not in ("loop","unrolled"):
+        raise ValueError("orbit_stage_execution must be 'loop' or 'unrolled'")
     for name, value in (("adjoint_checkpoint_steps", adjoint_checkpoint_steps),
                         ("adjoint_orbit_checkpoint_steps", adjoint_orbit_checkpoint_steps),
                         ("adjoint_max_accepted_steps", adjoint_max_accepted_steps),
@@ -167,7 +171,7 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
         from .split_ad import solve_accepted_split
         return solve_accepted_split(rhs, collision, y0, args, t0=t0, t1=t1, dt0=dt0,
             ts=ts, key=key, noise_dim=noise_dim, adaptive=adaptive, dtmin=dtmin, dtmax=dtmax,
-            method=method, orbit_dt0=orbit_dt0, orbit_adaptive=orbit_adaptive,
+            method=method, orbit_dt0=orbit_dt0, orbit_adaptive=orbit_adaptive, orbit_stage_execution=orbit_stage_execution,
             reuse_orbit_step=reuse_orbit_step, collision_controller=collision_controller,
             collision_wiener_norm=collision_wiener_norm, rtol=rtol, atol=atol,
             error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
@@ -333,7 +337,7 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
             orbit_out = solve_rk(orbit_rhs, s["y"], args, t0=s["t"], t1=end,
                 dt0=jnp.minimum(s["orbit_h"] if reuse_orbit_step and orbit_adaptive else orbit_dt0, h),
                 ts=jnp.empty((0,), y0.dtype),
-                method=method, adaptive=orbit_adaptive, rtol=rtol, atol=atol,
+                method=method, adaptive=orbit_adaptive, rtol=rtol, atol=atol, stage_execution=orbit_stage_execution,
                 error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
                 event=event, root_find=True, max_steps=max_orbit_steps,
                 _record_schedule=_record_ad, _record_ad=_record_ad,
@@ -508,7 +512,7 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0., t1, dt0, ts, key,
 
 def trace_split(field, particles, species, *, model="GuidingCenter", tmax, timestep,
                 times=None, n_save=100, integrator="essos_dopri8", collision_tolerance=1e-3,
-                adaptive=True, collision_dtmax=None, orbit_dt0=None, orbit_adaptive=True,
+                adaptive=True, collision_dtmax=None, orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution=None,
                 reuse_orbit_step=True, collision_controller="conservative",
                 rtol=1e-9, atol=1e-9, controller="i", pcoeff=.4, icoeff=.3,
                 speed_floor=None, spatial_diffusion=False, orbit=True, electric_field=None,
@@ -539,6 +543,10 @@ def trace_split(field, particles, species, *, model="GuidingCenter", tmax, times
     field classes and existing Tracing/trace_boozer entry points are unchanged.
     ``adjoint="accepted"`` enables checkpointed pathwise reverse AD for Cartesian
     GC/Lorentz. VMEC/Boozer reverse AD is deferred. See solve_split for capacities.
+    ``orbit_stage_execution=None`` selects explicit Dopri8 stages for fixed
+    Biot-Savart GC tracing on GPUs, and the original loop elsewhere. Set
+    ``"loop"`` or ``"unrolled"`` to select either layout explicitly. This
+    changes execution only; the RK formula and checkpoint pullback are shared.
 
     Private Cartesian audit hooks leave the default path unchanged:
     ``_record_ad=True`` returns ``(solution, tapes)`` from the production solve;
@@ -567,6 +575,11 @@ def trace_split(field, particles, species, *, model="GuidingCenter", tmax, times
     field = BiotSavart(field) if isinstance(field, Coils) else field
     electric_field = Electric_field_zero() if electric_field is None else electric_field
     boozer, vmec = isinstance(field, BoozerField), isinstance(field, Vmec)
+    if orbit_stage_execution is None:
+        # Measured GPU policy for the fixed Biot-Savart GC map only. Keep
+        # other workloads' existing layout and the same checkpoint pullback.
+        orbit_stage_execution = ("unrolled" if integrator == "essos_dopri8" and model == "GuidingCenter" and isinstance(field, BiotSavart)
+            and not adaptive and not orbit_adaptive and jax.default_backend() == "gpu" else "loop")
     if record_event_tangent and (boozer or vmec):
         raise ValueError("first-loss event tangents currently support Cartesian GC/Lorentz fields only")
     if adjoint == "accepted" and (boozer or vmec):
@@ -726,11 +739,11 @@ def trace_split(field, particles, species, *, model="GuidingCenter", tmax, times
             # No Brownian proposal or adaptive solve is executed here.
             from .split_ad import replay_accepted_split
             return replay_accepted_split(rhs, kick, initial, None, replay_tape, times,
-                method="dopri5" if integrator == "essos_rk45" else "dopri8")
+                method="dopri5" if integrator == "essos_rk45" else "dopri8", stage_execution=orbit_stage_execution)
         solution = solve_split(rhs, kick, initial, t1=tmax, dt0=timestep, ts=times, key=key,
             noise_dim=(5 if spatial_diffusion else 2) if gc else 3,
             dtmax=timestep if collision_dtmax is None else collision_dtmax,
-            adaptive=adaptive, orbit_dt0=orbit_dt0, orbit_adaptive=orbit_adaptive,
+            adaptive=adaptive, orbit_dt0=orbit_dt0, orbit_adaptive=orbit_adaptive, orbit_stage_execution=orbit_stage_execution,
             reuse_orbit_step=reuse_orbit_step,
             collision_controller=collision_controller, collision_wiener_norm=collision_wiener_norm,
             method="dopri5" if integrator == "essos_rk45" else "dopri8",

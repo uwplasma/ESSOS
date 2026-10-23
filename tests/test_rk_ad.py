@@ -11,6 +11,23 @@ jax.config.update("jax_enable_x64", True)
 
 
 @pytest.mark.parametrize("method", ["dopri5", "dopri8"])
+def test_unrolled_execution_checkpointed_reverse_matches_its_fixed_map_jvp(method):
+    def rhs(t,y,p):
+        return p[0]*jnp.array([y[1]+jnp.sin(t),-y[0]**2])+p[1]
+    options = dict(t1=.4,dt0=.025,ts=jnp.array([0.,.13,.31,.4]),adaptive=False,
+        method=method,stage_execution="unrolled",max_steps=64,adjoint_checkpoint_steps=3,
+        adjoint_max_accepted_steps=32)
+    def cost(x,adjoint):
+        out = solve_rk(rhs,x[:2],x[2:],adjoint=adjoint,**options)
+        return jnp.sum(out.ys**2)+.3*jnp.sum(out.y**2)
+    x,direction = jnp.array([.7,-.2,.8,.1]),jnp.array([.2,-.1,.3,.4])
+    value,gradient = jax.jit(jax.value_and_grad(lambda x:cost(x,"accepted")))(x)
+    ordinary,tangent = jax.jit(lambda x,d:jax.jvp(lambda x:cost(x,"none"),(x,),(d,)))(x,direction)
+    np.testing.assert_allclose(value,ordinary,rtol=2e-13,atol=1e-13)
+    np.testing.assert_allclose(jnp.vdot(gradient,direction),tangent,rtol=2e-11,atol=1e-12)
+
+
+@pytest.mark.parametrize("method", ["dopri5", "dopri8"])
 @pytest.mark.parametrize("controller", ["i", "pi"])
 @pytest.mark.parametrize("checkpoint_steps", [1, 3, 16])
 def test_reverse_matches_frozen_accepted_steps_and_dense_saves(method, controller, checkpoint_steps):

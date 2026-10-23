@@ -157,13 +157,15 @@ def _trial_with_residuals(linearize, t, y, h, f0, constants, initial_cache):
     return trial, cache
 
 
-def replay_accepted(rhs, y0, args, tape, ts, *, method="dopri5", dense_output="standard"):
+def replay_accepted(rhs, y0, args, tape, ts, *, method="dopri5", dense_output="standard", stage_execution="loop"):
     """Recompute a recorded accepted grid at new parameters, without adaptation.
 
     Returns (saved_states, terminal_state). This also supplies a direct frozen-
     schedule finite-difference/JVP oracle. Saved checkpoints in ``tape`` are
     deliberately not used as states: the new numerical trajectory propagates.
     """
+    from .rk import _select_trial_step
+    trial_step = _select_trial_step(stage_execution)
     tape = tree_util.tree_map(lax.stop_gradient, tape)
     ts = lax.stop_gradient(jnp.asarray(ts))
     dense = _rk45_dense if method == "dopri5" else _dopri8_dense
@@ -174,7 +176,7 @@ def replay_accepted(rhs, y0, args, tape, ts, *, method="dopri5", dense_output="s
     def advance(carry):
         i, y, f, ys = carry
         t, h = tape.times[i]
-        trial = _trial_step(rhs, t, y, h, args, f, *constants)
+        trial = trial_step(rhs, t, y, h, args, f, *constants)
         fraction = tape.fractions[i]
         terminal = dense(y, trial.y, trial.increments, fraction)
         owned = (indices >= tape.save_start[i]) & (indices < tape.save_end[i])

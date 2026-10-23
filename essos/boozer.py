@@ -460,9 +460,10 @@ def _boozer_error_norm(error, speed, rtol, atol):
         jnp.abs(error[2]), jnp.abs(error[3])/speed)) / (rtol + atol)
 
 
-@partial(jax.jit, static_argnames=("method", "adaptive", "controller", "dense_output", "max_steps"))
+@partial(jax.jit, static_argnames=("method", "adaptive", "controller", "dense_output", "max_steps", "stage_execution", "fixed_substeps"))
 def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
-                   method, adaptive, controller, pcoeff, icoeff, dense_output, max_steps):
+                   method, adaptive, controller, pcoeff, icoeff, dense_output, max_steps,
+                   stage_execution="loop", fixed_substeps=None):
     """One shared native RK solve per orbit, independent of the save grid."""
     from essos.rk import RKStatus, solve_rk
 
@@ -485,11 +486,18 @@ def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
             # a parallel turning point; these are chart errors, not metres.
             return _boozer_error_norm(error, speed, rtol, atol)
 
-        solution = solve_rk(rhs, y0, t1=times[-1], dt0=dt0, ts=times,
-            method=method, adaptive=adaptive, rtol=rtol, atol=atol,
-            error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
-            dense_output=dense_output, max_steps=max_steps,
-            event=lambda t, y, args: 1. - y[0]**2 - y[1]**2)
+        event = lambda t, y, args: 1. - y[0]**2 - y[1]**2
+        if (fixed_substeps is not None and not adaptive and method in ("dopri5", "dopri8")
+                and controller == "i" and dense_output == "standard"):
+            from essos.rk_fixed import solve_fixed_grid
+            solution = solve_fixed_grid(rhs, y0, ts=times, dt0=dt0,
+                substeps=fixed_substeps, event=event, stage_execution=stage_execution, method=method)
+        else:
+            solution = solve_rk(rhs, y0, t1=times[-1], dt0=dt0, ts=times,
+                method=method, adaptive=adaptive, rtol=rtol, atol=atol,
+                error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
+                dense_output=dense_output, max_steps=max_steps, stage_execution=stage_execution,
+                event=event)
 
         def output(y):
             s, _, theta, *_ = _chart(y)
@@ -533,7 +541,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
                  progress=True, compact=True, method=None, tolerance=1e-8,
                  integrator=None, adaptive=True, rtol=1e-9, atol=1e-9,
                  native_controller="i", native_pcoeff=.4, native_icoeff=.3,
-                 native_dense_output="standard", max_steps=MAX_ATTEMPTS):
+                 native_dense_output="standard", native_stage_execution="loop", max_steps=MAX_ATTEMPTS):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The default ``timestep`` is ``R0 / (2 nfp speed)``, with ``R0 = |G| / |B|`` on the
@@ -565,6 +573,9 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     directly, clipping only at tmax. Native controller/PI coefficients and
     ``native_dense_output="standard"`` match the options in ``Tracing``.
     Saves use dense output and do not constrain the orbit steps. The native
+    ``native_stage_execution="unrolled"`` option exposes the same RK stage
+    arithmetic for GPU fusion; ``"loop"`` is the default smaller program.
+    It does not change the physical RHS, tableau or error controller. The native
     error budget is ``max(norm(du,dw), abs(dzeta), abs(dv_par)/speed)/(rtol+atol)``:
     unit flux radius, radians and birth speed, rather than Cartesian metres.
     The drift and field representation are unchanged. Native mode currently
@@ -573,10 +584,15 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     ``step_stats`` and ``solver_status`` are returned on ``BoozerTrace``;
     energy error is measured at saved and terminal states. LCFS events are
     root-found and subsequent saves hold that state; failures are reported.
+    Fixed GPU Dopri5/8 use a lighter driver when every save lies on the requested
+    fixed grid. It preserves the timestep and root-found LCFS event, replaying
+    only the crossing step for root location. Other grids retain dense saves.
     """
     if integrator not in (None, "essos_rk45", "essos_dopri8"):
         raise ValueError("integrator must be None, 'essos_rk45' or 'essos_dopri8'")
     if integrator is not None:
+        if native_stage_execution not in ("loop","unrolled"):
+            raise ValueError("native_stage_execution must be 'loop' or 'unrolled'")
         if method is not None:
             raise ValueError("method selects a legacy Boozer stepper; omit it for a native integrator")
         if species is not None:
@@ -638,9 +654,13 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     y0, mu0, keys = args
     if integrator is not None:
         times = np.linspace(0., float(tmax), n_int + 1)
+        from essos.rk_fixed import aligned_substeps
+        fixed_substeps = (aligned_substeps(float(tmax), float(timestep), len(times), max_steps)
+            if not adaptive and jax.default_backend() == "gpu" else None)
         result = _native_orbits(field, y0, mu0, mass, charge, speed[0], jnp.asarray(times),
             float(timestep), rtol, atol, "dopri5" if integrator == "essos_rk45" else "dopri8",
-            bool(adaptive), native_controller, native_pcoeff, native_icoeff, native_dense_output, max_steps)
+            bool(adaptive), native_controller, native_pcoeff, native_icoeff, native_dense_output, max_steps,
+            native_stage_execution, fixed_substeps)
         states, t_loss, t_fail, err, stats, status = (np.asarray(a)[:n] for a in result)
         if progress is not None:
             progress(n_int, n_int)

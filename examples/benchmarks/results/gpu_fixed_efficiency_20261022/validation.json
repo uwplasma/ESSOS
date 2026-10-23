@@ -1,0 +1,53 @@
+{
+  "boozer": {
+    "max_saved_component_difference": [
+      1.1102230246251565e-16,
+      4.440892098500626e-16,
+      4.440892098500626e-16,
+      2.9103830456733704e-11,
+      0.0
+    ],
+    "component_labels": [
+      "s",
+      "theta_rad_wrapped",
+      "zeta_rad",
+      "vparallel_m_per_s",
+      "speed_m_per_s"
+    ],
+    "counts_equal": true,
+    "status_equal": true,
+    "reference": "Archived original native Dopri8; this checks preservation, not independent global accuracy"
+  },
+  "gc": {
+    "relative_gradient_L2_difference": 2.057030002424884e-15,
+    "max_saved_position_difference": 2.2926105458509483e-14,
+    "directional_fd": [
+      {
+        "epsilon": 1e-05,
+        "ad": -0.2389933241134848,
+        "finite_difference": -0.2389933241198072,
+        "absolute_error": 6.322387058332879e-12,
+        "relative_error": 2.6454241270620056e-11
+      },
+      {
+        "epsilon": 3e-06,
+        "ad": -0.2389933241134848,
+        "finite_difference": -0.23899332414941316,
+        "absolute_error": 3.5928343633528925e-11,
+        "relative_error": 1.503319967676894e-10
+      },
+      {
+        "epsilon": 1e-06,
+        "ad": -0.2389933241134848,
+        "finite_difference": -0.23899332449173194,
+        "absolute_error": 3.7824712806333594e-10,
+        "relative_error": 1.5826681722920738e-09
+      }
+    ],
+    "frozen_directional_jvp": -0.23899332411348456,
+    "gradient_oracle": "Independent frozen accepted-grid/production-noise replay",
+    "work_counts_equal": true,
+    "max_accepted_error_difference": 1.6653345369377348e-16,
+    "status_equal": true
+  }
+}

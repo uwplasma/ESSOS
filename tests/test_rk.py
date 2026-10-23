@@ -17,6 +17,39 @@ def oscillator(t, y, args):
     return jnp.array([y[1], -y[0]])
 
 
+@methods
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_unrolled_execution_preserves_events_dense_saves_and_work(solve, adaptive):
+    def rhs(t,y,args):
+        return jnp.array([.6+.1*jnp.sin(t), -.3*y[1]+.05*jnp.cos(y[0])])
+    options = dict(t1=1.,dt0=.17,ts=jnp.linspace(0.,1.,11),adaptive=adaptive,
+        rtol=1e-9,atol=1e-9,event=lambda t,y,args:.4-y[0],max_steps=128)
+    initial = jnp.array([.2,.5])
+    normal = jax.jit(lambda y:solve(rhs,y,**options))(initial)
+    unrolled = jax.jit(lambda y:solve(rhs,y,stage_execution="unrolled",**options))(initial)
+    assert unrolled.status == normal.status == RKStatus.EVENT
+    np.testing.assert_allclose(unrolled.y,normal.y,rtol=0,atol=2e-12)
+    np.testing.assert_allclose(unrolled.t,normal.t,rtol=0,atol=2e-12)
+    np.testing.assert_allclose(unrolled.ys,normal.ys,rtol=0,atol=2e-12)
+    np.testing.assert_array_equal(unrolled.stats,normal.stats)
+
+
+@methods
+def test_fixed_intervals_at_nonzero_times_do_not_add_roundoff_steps(solve):
+    dt = 2e-5/224
+    starts = jnp.arange(224)*dt
+    ends = (jnp.arange(224)+1)*dt
+    def one(start,end):
+        return solve(lambda t,y,args:jnp.ones_like(y),jnp.zeros(1),
+            t0=start,t1=end,dt0=jnp.minimum(dt,end-start),adaptive=False,max_steps=1)
+    out = jax.jit(jax.vmap(one))(starts,ends)
+    np.testing.assert_array_equal(out.status,RKStatus.SUCCESS)
+    np.testing.assert_array_equal(out.stats.accepted,1)
+    np.testing.assert_array_equal(out.stats.rejected,0)
+    np.testing.assert_array_equal(out.t,ends)
+    np.testing.assert_allclose(out.y[:,0],ends-starts,rtol=0,atol=1e-21)
+
+
 @pytest.mark.parametrize("step_fn, interpolate, solver", [
     (rk45_step, rk45_interpolate, diffrax.Dopri5()),
     (dopri8_step, dopri8_interpolate, diffrax.Dopri8()),

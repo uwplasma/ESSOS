@@ -5,7 +5,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from essos.rk import rk45_step, dopri8_step, _trial_step, _C, _A, _ERROR, _C8, _A8, _ERROR8
+from essos.rk import (rk45_step, dopri8_step, _trial_step, _trial_step_unrolled,
+                     _C, _A, _ERROR, _C8, _A8, _ERROR8)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -31,7 +32,8 @@ def test_state_time_step_parameter_and_fsal_derivatives(step, cached):
 @pytest.mark.parametrize("method", ["dopri5", "dopri8"])
 @pytest.mark.parametrize("cached", [False, True])
 @pytest.mark.parametrize("h", [0., .1])
-def test_forward_trial_and_its_derivatives_match_the_public_map(method, cached, h):
+@pytest.mark.parametrize("trial_step", [_trial_step, _trial_step_unrolled], ids=["loop", "unrolled"])
+def test_forward_trial_and_its_derivatives_match_the_public_map(method, cached, h, trial_step):
     constants = (_C, _A, _ERROR) if method == "dopri5" else (_C8, _A8, _ERROR8)
     public = rk45_step if method == "dopri5" else dopri8_step
     def observe(x, forward):
@@ -39,7 +41,7 @@ def test_forward_trial_and_its_derivatives_match_the_public_map(method, cached, 
         rhs = lambda t, y, args: parameter * jnp.array([jnp.sin(y[1] + t), -y[0]**2 + jnp.cos(t)])
         f0 = x[5:] if cached else None
         if forward:
-            step = _trial_step(rhs, t, y, h, None, f0, *constants)
+            step = trial_step(rhs, t, y, h, None, f0, *constants)
             increments, final = step.increments, step.f1
         else:
             step = public(rhs, t, y, h, f0=f0)

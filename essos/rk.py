@@ -42,6 +42,14 @@ class _RKTrial(NamedTuple):
     f1: jax.Array
 
 
+class _RKComponentTrial(NamedTuple):
+    """The same trial map before packing components into array outputs."""
+    y: tuple
+    error: tuple
+    increments: tuple
+    f1: tuple
+
+
 class RKStats(NamedTuple):
     steps: jax.Array
     accepted: jax.Array
@@ -236,6 +244,53 @@ def _trial_step(rhs, t, y, h, args, f0, nodes, rows, error_weights):
         error = error + error_weights[-1] * (h * final)
     increments = jnp.concatenate([bank, (h * final)[None]])
     return _RKTrial(endpoint, error, increments, final)
+
+
+def _component_trial(rhs, t, y, h, args, f0, nodes, rows, error_weights):
+    """Shared explicit stage arithmetic for fixed and adaptive vector states.
+
+    Components remain separate between RHS evaluations. Callers decide whether
+    the stage increments are needed as an array for interpolation, or only
+    their finite flags are needed for an aligned fixed-grid endpoint.
+    """
+    increments = [tuple(h * value for value in f0)]
+    for c, weights in zip(nodes, rows):
+        point = tuple(value + sum(a * k[i] for a, k in zip(weights, increments) if a != 0)
+                      for i, value in enumerate(y))
+        final = tuple(rhs(t + c * h, jnp.stack(point), args))
+        increments.append(tuple(h * value for value in final))
+    error = tuple(sum(a * k[i] for a, k in zip(error_weights, increments) if a != 0)
+                  for i in range(len(y)))
+    return _RKComponentTrial(point, error, tuple(increments), final)
+
+
+def _trial_step_unrolled(rhs, t, y, h, args, f0, nodes, rows, error_weights):
+    """The same RK recurrence with explicit stage arithmetic for GPU fusion.
+
+    This changes execution layout only. The tableau, FSAL contract and
+    returned stage bank match the loop kernel. Large RHSs may prefer the loop
+    layout; checkpoint/reverse storage does not depend on this choice.
+    """
+    f0 = rhs(t, y, args) if f0 is None else f0
+    if y.ndim == 1:
+        trial = _component_trial(rhs, t, tuple(y), h, args, tuple(f0), nodes, rows, error_weights)
+        return _RKTrial(jnp.stack(trial.y), jnp.stack(trial.error),
+            jnp.stack(tuple(jnp.stack(k) for k in trial.increments)), jnp.stack(trial.f1))
+    increments = [h*f0]
+    for c, weights in zip(nodes, rows):
+        point = y+sum(a*k for a,k in zip(weights,increments) if a != 0)
+        final = rhs(t+c*h,point,args)
+        increments.append(h*final)
+    error = sum(a*k for a,k in zip(error_weights,increments) if a != 0)
+    return _RKTrial(point,error,jnp.stack(increments),final)
+
+
+def _select_trial_step(stage_execution):
+    if stage_execution == "loop":
+        return _trial_step
+    if stage_execution == "unrolled":
+        return _trial_step_unrolled
+    raise ValueError("stage_execution must be 'loop' or 'unrolled'")
 
 
 def rk45_interpolate(y0, h, step, fraction):
@@ -447,7 +502,7 @@ def _first_hit(hits):
 def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                rtol=1e-9, atol=1e-9, event=None, root_find=True,
                max_steps=1_000_000, dtmin=0., dtmax=np.inf, record_steps=False, method="dopri5",
-               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, dense_output="standard",
+               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, dense_output="standard", stage_execution="loop",
                adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None,
                adjoint_parameter_accumulation="segment", _record_ad=False,
                _ad_checkpoint_steps=1, _ad_compact=False, _record_schedule=False,
@@ -513,6 +568,10 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
 
     ``method`` selects ``"dopri5"`` or ``"dopri8"``. The convenience entry points
     ``solve_rk45`` and ``solve_dopri8`` fix this choice.
+    ``stage_execution="unrolled"`` exposes the same RK stages as explicit
+    arithmetic, which can improve GPU fusion for compact RHSs. The default
+    ``"loop"`` retains the smaller program used by the coil checkpoint path.
+    Neither choice changes tolerances, the tableau or checkpoint capacities.
     ``dense_output="optimized"`` selects a coefficient-only Dopri8 save
     polynomial with smaller order-six/seven B-series error norm. It reuses all
     stages and prepares six coefficient vectors once per trial. RK endpoints,
@@ -541,13 +600,14 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             isinstance(adjoint_max_accepted_steps, (bool, np.bool_)) or
             not isinstance(adjoint_max_accepted_steps, (int, np.integer)) or adjoint_max_accepted_steps <= 0):
         raise ValueError("adjoint_max_accepted_steps must be a positive integer or None")
+    trial_step = _select_trial_step(stage_execution)
     if adjoint == "accepted":
         from .rk_ad import solve_accepted
         return solve_accepted(rhs, y0, args, t0=t0, t1=t1, dt0=dt0, ts=ts,
             adaptive=adaptive, rtol=rtol, atol=atol, event=event, root_find=root_find,
             max_steps=max_steps, dtmin=dtmin, dtmax=dtmax, record_steps=record_steps,
             method=method, error_norm=error_norm, controller=controller,
-            pcoeff=pcoeff, icoeff=icoeff, dense_output=dense_output,
+            pcoeff=pcoeff, icoeff=icoeff, dense_output=dense_output, stage_execution=stage_execution,
             adjoint_checkpoint_steps=adjoint_checkpoint_steps,
             adjoint_max_accepted_steps=adjoint_max_accepted_steps,
             adjoint_parameter_accumulation=adjoint_parameter_accumulation,
@@ -689,8 +749,12 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             # Derive fixed times from the step index: repeatedly adding h0 can
             # leave a tiny remainder even when the interval is exactly N*h0.
             end_t = jnp.minimum(t0 + (s["accepted"] + 1) * jnp.minimum(h0, dtmax), t1)
+            # A split orbit restarts at a nonzero t0: t0+h0 and the outer
+            # interval endpoint can differ by roundoff even for one full step.
+            end_t = jnp.where(t1 - end_t <= 8 * jnp.finfo(y.dtype).eps *
+                              jnp.maximum(jnp.abs(t1), jnp.abs(t)), t1, end_t)
             h = end_t - t
-        trial = _trial_step(rhs, t, y, h, args, s["f"], nodes, rows, weights)
+        trial = trial_step(rhs, t, y, h, args, s["f"], nodes, rows, weights)
         finite = (jnp.isfinite(trial.y).all() & jnp.isfinite(trial.increments).all() &
                   jnp.isfinite(trial.f1).all() & jnp.isfinite(trial.error).all())
         if adaptive:
