@@ -461,7 +461,8 @@ def _boozer_error_norm(error, speed, rtol, atol):
 
 
 _NATIVE_ORBIT_STATIC_ARGS = ("method", "adaptive", "controller", "dense_output", "max_steps",
-                             "stage_execution", "fixed_substeps", "_defer_event_root", "_group_rhs_reductions", "_trial_factory")
+                             "stage_execution", "fixed_substeps", "_defer_event_root", "_group_rhs_reductions",
+                             "_trial_factory", "_orbit_solver")
 _CUDA_ORBIT_COMPILER_OPTIONS = {
     "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
     "xla_gpu_graph_min_graph_size": 1,
@@ -484,9 +485,13 @@ def boozer_compiler_options():
 def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                    method, adaptive, controller, pcoeff, icoeff, dense_output, max_steps,
                    stage_execution="loop", fixed_substeps=None, _defer_event_root=None,
-                   _group_rhs_reductions=False, _trial_factory=None):
+                   _group_rhs_reductions=False, _trial_factory=None, _orbit_solver=None):
     """One shared native RK solve per orbit, independent of the save grid."""
     from essos.rk import RKStatus, solve_rk
+
+    if _orbit_solver is not None and (not adaptive or method != "dopri8" or controller != "i" or
+            dense_output != "standard" or _trial_factory is not None or fixed_substeps is not None):
+        raise ValueError("The experimental fused orbit path requires adaptive Dopri8, I control and standard output")
 
     if _defer_event_root is None:
         _defer_event_root = (adaptive and method == "dopri8" and
@@ -518,7 +523,9 @@ def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
             return _boozer_error_norm(error, speed, rtol, atol)
 
         event = lambda t, y, args: 1. - y[0]**2 - y[1]**2
-        if (fixed_substeps is not None and not adaptive and method in ("dopri5", "dopri8")
+        if _orbit_solver is not None:
+            solution = _orbit_solver(y0, mu)
+        elif (fixed_substeps is not None and not adaptive and method in ("dopri5", "dopri8")
                 and controller == "i" and dense_output == "standard"):
             from essos.rk_fixed import solve_fixed_grid
             solution = solve_fixed_grid(rhs, y0, ts=times, dt0=dt0,

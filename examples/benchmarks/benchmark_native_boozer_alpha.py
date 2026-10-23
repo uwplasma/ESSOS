@@ -149,8 +149,11 @@ def main(argv=None):
         parser.add_argument("--"+key.replace("_","-"), type=type(value), default=value)
     parser.add_argument("--field-cache", type=Path, help="Reuse a saved Boozer transform; births are sampled afresh")
     parser.add_argument("--setup-only", action="store_true")
-    parser.add_argument("--experimental-fused-trial", action="store_true",
+    experimental = parser.add_mutually_exclusive_group()
+    experimental.add_argument("--experimental-fused-trial", action="store_true",
         help="Opt-in CUDA Dopri8 stage kernel; forward only, fixed Fourier field, not yet validated at large batch size")
+    experimental.add_argument("--experimental-fused-orbit", action="store_true",
+        help="Opt-in independent adaptive CUDA orbit kernels; Dopri8/I/standard output, fixed Fourier field, forward only")
     options = parser.parse_args(argv)
     positive = (options.particles, options.horizon, options.energy_ev, options.timestep, options.atol,
                 options.max_steps, options.mboz, options.nboz, options.repeats)
@@ -165,6 +168,9 @@ def main(argv=None):
     method = {"essos_rk45": "dopri5", "essos_dopri8": "dopri8", "rk4": "rk4"}[options.integrator]
     if options.experimental_fused_trial and (method != "dopri8" or options.stage_execution != "unrolled"):
         parser.error("The experimental fused trial requires essos_dopri8 with unrolled stages")
+    if options.experimental_fused_orbit and (method != "dopri8" or options.controller != "i" or
+            options.stage_execution != "unrolled"):
+        parser.error("The experimental fused orbit requires essos_dopri8, I control and unrolled stages")
     if (options.output/"benchmark.json").exists():
         parser.error("Choose a fresh --output directory")
     options.output.mkdir(parents=True, exist_ok=True)
@@ -181,7 +187,7 @@ def main(argv=None):
         setup_seconds=perf_counter()-start, collisions=False, reverse_ad=False, particle_chunking=False,
         particle_compaction=False, integrator=options.integrator, adaptive=method != "rk4",
         component_stage_arithmetic=(method != "rk4" and options.stage_execution == "unrolled"
-                                    and not options.experimental_fused_trial),
+                                    and not (options.experimental_fused_trial or options.experimental_fused_orbit)),
         field=dict(representation="Production Boozer K=0 GC field from QA equilibrium; no coils",
             modes=int(field.xm.size), nfp=field.nfp, angular_table=field.table is not None,
             wout_sha256=digest(options.wout)),
@@ -198,9 +204,12 @@ def main(argv=None):
             if method == "dopri8" and options.stage_execution == "unrolled" and jax.default_backend() == "gpu"
             else "fixed RK4 endpoint check" if method == "rk4" else "inline root search"),
         rhs_execution="ordinary stage reductions",
-        trial_kernel="experimental Pallas stage loop" if options.experimental_fused_trial else "standard JAX stages",
+        trial_kernel=("experimental Pallas independent adaptive orbit loops" if options.experimental_fused_orbit else
+            "experimental Pallas stage loop" if options.experimental_fused_trial else "standard JAX stages"),
         source_sha256={name:digest(ROOT/name) for name in ("essos/boozer.py","essos/rk.py","essos/rk_events.py","essos/rk_fixed.py","essos/rk_rhs.py",
             "essos/rk_dense.py","examples/benchmarks/benchmark_native_boozer_alpha.py")})
+    if options.experimental_fused_orbit:
+        report["event_root_strategy"] = "standard interpolant root search inside each independent GPU orbit"
     report["setup_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
     birth_digest = hashlib.sha256()
     for name, values in births.items():
@@ -225,15 +234,21 @@ def main(argv=None):
     if options.setup_only:
         print(f"Setup saved in {options.output.resolve()}",flush=True)
         return report
-    trial_factory = None
+    trial_factory = orbit_solver = None
     if options.experimental_fused_trial:
         from essos.rk_boozer_gpu_trial import prepare_trial_factory
         trial_factory = prepare_trial_factory(field, MASS, CHARGE)
         report["source_sha256"]["essos/rk_boozer_gpu_trial.py"] = digest(ROOT/"essos/rk_boozer_gpu_trial.py")
+    if options.experimental_fused_orbit:
+        from essos.rk_boozer_gpu_orbit import prepare_orbit_solver
+        orbit_solver = prepare_orbit_solver(field, MASS, CHARGE, speed, times,
+            options.timestep, options.rtol, options.atol, options.max_steps)
+        for name in ("rk_boozer_gpu_trial.py", "rk_boozer_gpu_orbit.py"):
+            report["source_sha256"]["essos/"+name] = digest(ROOT/"essos"/name)
     def run(y0,mu0):
         return _native_orbits(field,y0,mu0,MASS,CHARGE,speed,times,options.timestep,
             options.rtol,options.atol,method,True,options.controller,.4,.3,"standard",options.max_steps,options.stage_execution,
-            _trial_factory=trial_factory)
+            _trial_factory=trial_factory, _orbit_solver=orbit_solver)
     if method == "rk4":
         run, actual_dt, grid_steps = standard_rk4_orbits(field, initial, mu, speed, times,
             options.timestep, options.seed)
@@ -273,18 +288,22 @@ def main(argv=None):
         max=int(first_counts[:,i].max())) for i,name in enumerate(("trials","accepted","rejected"))}
     fresh_rhs = {"rk4": 4, "dopri5": 6, "dopri8": 13}[method]
     counted_trials = int(first_counts[:,0].sum())
-    minimum_batch_slots = options.particles*int(first_counts[:,0].max())
+    minimum_batch_slots = (None if options.experimental_fused_orbit else
+                           options.particles*int(first_counts[:,0].max()))
     initial_rhs = 0 if method == "rk4" else options.particles
     report["rhs_work_estimate"] = dict(fresh_rhs_per_trial=fresh_rhs,
         initial_rhs_evaluations=initial_rhs,
         counted_trial_slots=counted_trials,
         minimum_batched_trial_slots=minimum_batch_slots,
         counted_rhs_evaluations=initial_rhs+fresh_rhs*counted_trials,
-        minimum_batched_rhs_evaluations=initial_rhs+fresh_rhs*minimum_batch_slots,
+        minimum_batched_rhs_evaluations=(None if minimum_batch_slots is None else
+                                         initial_rhs+fresh_rhs*minimum_batch_slots),
         active_slot_fraction_upper_bound=(counted_trials/minimum_batch_slots if minimum_batch_slots else None),
-        scope="Logical RHS-lane work estimates for the current vmapped driver, not GPU instruction counts. "
+        scope=("Independent per-particle GPU loops; counted RHS work excludes energy checks and root interpolation; "
+               "no lockstep batch-slot estimate applies." if options.experimental_fused_orbit else
+              "Logical RHS-lane work estimates for the current vmapped driver, not GPU instruction counts. "
               "Root retries can add batch iterations; field-only energy checks are excluded. "
-              "RK4 counts already include held inactive grid slots.")
+              "RK4 counts already include held inactive grid slots."))
     print(f"First-call steps: {report['first_step_counts']}; failures: {int(failed.sum())}", flush=True)
     print(f"RHS work estimate: {report['rhs_work_estimate']}", flush=True)
     report["warm_seconds"] = []

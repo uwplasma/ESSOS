@@ -208,8 +208,10 @@ stage grouping, coefficient layout, element selection and GPU block packing.
 None showed a reliable local reduction over the current fused kernel.
 These candidates remain in ignored scratch files and are not enabled in
 the solver or exposed as production variants. All three production sources
-(`boozer.py`, `rk.py`, `rk_boozer_gpu_trial.py`) retain the hashes recorded in
-the successful A100 short comparison.
+(`boozer.py`, `rk.py`, `rk_boozer_gpu_trial.py`) retained the hashes recorded in
+the successful A100 short comparison at that point. The later opt-in orbit
+experiment below adds a private dispatch in `boozer.py`; its default path,
+`rk.py` and the fused trial kernel retain their existing implementation.
 
 Profiling the local current fused solve with graph capture disabled to
 expose individual launches recorded 76.10 ms in the trial kernel out of
@@ -237,10 +239,8 @@ JAX 0.11.2, 64 particles, 128 recurrences, dt=1.25e-7 s:
 
 All 64 endpoints were finite and inside the equilibrium. The source hashes,
 raw samples and work counts are in the JSON. These local ratios cannot be
-used to predict the A100 workload: applying even the earlier 1.50x local
-trial ratio to 75835 versus 160000 iterations would predict about 0.71x
-RK4's pure recurrence time, which does not explain the observed 2.39x
-full-run time. A same-batch diagnostic on the target machine is required.
+used to predict the A100 workload. The same-batch target diagnostic below
+measured a substantially different ratio.
 
 ```sh
 python -m examples.benchmarks.benchmark_boozer_adaptive_events \
@@ -256,6 +256,126 @@ the equilibrium. Do not use it for confinement or loss-fraction results.
 Its `amortized_us_per_rhs_batch` includes recurrence/loop and data costs
 divided by the RHS count; it is not an isolated single-RHS latency.
 `--case rk4`, `--case dopri8_standard` or `--case dopri8_fused` selects one
-case for separate-process memory measurements. No further speedup on the
-A100 is claimed without its result. Biot-Savart, VMEC, collisions, reverse AD
-and ordinary solver defaults retain their existing implementation.
+case for separate-process memory measurements. Biot-Savart, VMEC, collisions,
+reverse AD and ordinary solver defaults retain their existing implementation.
+
+## A100 equal-count trial diagnostic
+
+The user ran the command above at commit `5b722e0` on an A100-SXM4-40GB,
+JAX 0.7.2. The [unmodified supplied report](a100_trial_work.json) records
+8192 particles, 128 recurrences each, dt=1.25e-7 s and seven interleaved,
+blocked warm samples. Its birth hash matches the earlier A100 short run.
+
+| Recurrence | Warm median, ms | Relative to RK4 | Amortized us / fresh RHS batch | Compile, s | Compiled buffers, MiB |
+|---|---:|---:|---:|---:|---:|
+| Standard RK4 | 14.828 | 1.000x | 28.961 | 1.928 | 3.950 |
+| Ordinary native Dopri8 | 45.471 | 3.067x | 27.327 | 9.578 | 8.549 |
+| Current fused Dopri8 | 39.096 | 2.637x | 23.495 | 1.287 | 5.454 |
+
+Fusion reduces Dopri8 recurrence time by 14.02% on this machine. The fused
+amortized cost per fresh RHS batch is 18.88% lower than RK4's, but it needs
+13 fresh evaluations per trial rather than 4. The resulting 2.64x per-trial
+ratio differs from the local 1.39x. The lower compilation and buffer figures
+in this table belong to these isolated recurrences, not the full tracer.
+
+All 8192 endpoints were finite and inside the equilibrium. This diagnostic
+includes the embedded estimate and trial finite checks, but has no tolerance
+controller or stopping surface. It does not demonstrate orbit convergence
+or equal accuracy with RK4. The allocator's 10.43 MiB peak is cumulative
+across setup and all three executables, not an independent per-case peak.
+
+Multiplying these times by the full runs' minimum batch iteration counts
+(75835 fused trials and 160000 RK4 slots) gives about 23.16 s and 18.53 s.
+The reported full first warm calls were 48.246 s and 20.215 s. This rough
+scaling motivates inspecting the adaptive driver, but does not measure a
+25 s driver cost: particle states, compiler consumers and scheduling differ
+between the recurrence diagnostic and the full integration.
+
+Two additional local saved-output experiments retained every saved value
+and accepted/rejected count exactly. Moving saves to an outer scan slowed
+the 64-particle full adaptive case from 113.35 to 144.63 ms. Explicitly
+masking small particle state and using masked save scatters avoided some
+whole-history selections, but did not show a reliable timing improvement.
+Neither experiment is retained or enabled. These tests do not establish
+which driver operation dominates on the A100; that remains unresolved.
+
+Moving the original finite checks and normalized embedded error inside
+the fused trial also gave no local gain: 113.81 ms before versus 114.03 ms
+after, with 13 interleaved samples. Reordering the norm calculation changed
+some adaptive decisions (28090/4708 accepted/rejected became 28082/4634).
+This candidate is also rejected. No additional solver implementation change
+is retained from these experiments.
+
+## Independent adaptive orbit kernels: local candidate
+
+The later isolated candidate in `essos/rk_boozer_gpu_orbit.py` keeps each
+particle's full adaptive loop inside one CUDA program. It reuses the same
+field/RHS adapter, Dopri8 tableau, Boozer block norm, I controller, standard
+dense polynomial and 52-iteration boundary-root search. An invalid root
+rejects the crossing and retries with .2*h. Saved times do not constrain
+steps. Particles stop independently; there is no chunking or compaction.
+This changes execution scheduling as well as floating-point evaluation order.
+
+The [local controlled report](orbit_fusion_local.json), RTX 5060 Laptop,
+JAX 0.11.2, 64 particles, 0.2 ms, 101 saves, rtol=atol=1e-10, seed 42,
+compares the current fused trial plus ordinary driver with the candidate.
+Fifteen blocked warm samples alternate case order; compilation and two
+independently refined reference solves are outside the warm timing.
+
+| Measurement | Fused trial + ordinary driver | Independent orbit kernels |
+|---|---:|---:|
+| Warm forward median, ms | 115.197 | 91.623 |
+| Lowering/compilation, s | 3.319 | 3.716 |
+| Compiled buffers, bytes | 1524952 | 1464936 |
+| Accepted / rejected trials | 28090 / 4708 | 28082 / 4634 |
+| Maximum trials per particle | 718 | 718 |
+| Lost / failed | 1 / 0 | 1 / 0 |
+| Maximum relative energy drift | 5.177e-10 | 5.165e-10 |
+| Maximum saved flux-chart radial error | 1.774e-7 | 1.898e-8 |
+| Maximum saved zeta error, rad | 6.866e-7 | 9.125e-8 |
+| Maximum saved parallel-velocity error, m/s | 0.4400 | 0.0448 |
+| Parallel-velocity error / birth speed | 3.377e-8 | 3.438e-9 |
+
+Warm time is 20.46% lower in this paired run; earlier paired local comparisons
+showed 19--21% reductions. Compilation increases by 0.40 s in this run.
+Absolute local timings vary between runs, so compare
+the paired rows rather than unrelated earlier local measurements. Total trial
+counts decrease only 0.25%, which cannot explain most of this measured gain.
+Compiled buffers decrease 3.94%; this is not a separate-process peak VRAM result.
+
+The accuracy audit uses common pre-loss saves against independent Diffrax
+Dopri8 at scaled absolute tolerances 1e-12 and 1e-13. The two references differ
+by at most 4.62e-9 rad in zeta and 2.28e-10 in parallel velocity / birth speed.
+All particle statuses agree. The candidate has smaller global saved errors
+in this particular case; rounding changes the adaptive mesh, so this is not
+a general claim of higher accuracy. These errors are not local acceptance
+estimates or errors relative to instantaneous parallel velocity.
+
+The candidate is opt-in, CUDA-only, forward-only and limited to fixed cosine
+Fourier Boozer fields, adaptive Dopri8, I control and standard dense output.
+The ordinary default, Biot-Savart, VMEC, collisions and reverse AD retain their
+existing execution paths. No A100 timing or full 20 ms gain has been measured
+for this candidate. Check the remote JAX 0.7.2 environment and the short
+controlled comparison before a full run:
+
+```sh
+python -m examples.benchmarks.benchmark_boozer_adaptive_events \
+  --comparison orbit_fusion --particles 8192 \
+  --horizon 2e-4 --saves 101 --repeats 5 --audit-reference \
+  --field-cache output/native_boozer_dopri8_8192_event_replay_run1/boozer_inputs.npz \
+  --output output/boozer_fused_orbit_8192_short_run1
+```
+
+Use `--case trial` and `--case orbit` separately, omitting `--audit-reference`,
+for independent-process peak-memory measurements. For the full alpha example,
+`--experimental-fused-orbit` selects this candidate; it is mutually exclusive
+with the earlier stage-only `--experimental-fused-trial` option.
+
+Four focused GPU tests cover independent surviving/lost lanes against an
+analytical linear trajectory, initial edge hits, NaN births, duplicate saves,
+finite/nonfinite rejections and work-limit exits, and unsupported option
+guards. Birth validity is checked once with ordinary JAX before entering the
+persistent kernel; an invalid birth returns immediately. The existing fused
+trial/finite-guard checks and public Boozer entrypoint check also passed.
+These are local JAX 0.11.2 checks, including the earlier missing-primitive
+proxy; they do not substitute for running the new kernel on JAX 0.7.2.

@@ -1,7 +1,7 @@
 """Controlled 64-particle adaptive Dopri8 event or GPU execution comparison.
 
-Both cases use the production Boozer kernel, identical births, physical RHS,
-tableau, I-controller, tolerances and save times. The replay case now retains
+The orbit comparisons use the production Boozer field and physical RHS,
+identical births, tableau, I-controller, tolerances and save times. The replay case now retains
 the crossing stages and retries in the same driver; no RHS replay is needed.
 Use --case inline/replay in
 separate processes for independent peak-memory measurements. This short local
@@ -17,6 +17,8 @@ accuracy check after the timing and memory snapshots.
 ``--comparison trial_work`` measures controlled, equal-count RK recurrences
 without adaptive control, saves or loss handling. It is a kernel diagnostic,
 not an orbit-accuracy or fixed-versus-adaptive production comparison.
+``--comparison orbit_fusion`` compares the fused trial plus ordinary driver
+with one independent adaptive GPU program per orbit, using the same method.
 """
 import argparse
 import hashlib
@@ -203,7 +205,7 @@ def audit_reference(field, initial, mu, speed, times, settings, results):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--comparison", choices=("events", "execution", "reductions", "fusion", "trial_work"), default="events")
+    parser.add_argument("--comparison", choices=("events", "execution", "reductions", "fusion", "trial_work", "orbit_fusion"), default="events")
     parser.add_argument("--case", default="both")
     parser.add_argument("--particles", type=int, default=64)
     parser.add_argument("--horizon", type=float, default=2e-4)
@@ -214,13 +216,13 @@ def main():
     parser.add_argument("--trial-timestep", type=float, default=1.25e-7,
         help="trial_work only: same recurrence timestep for all methods")
     parser.add_argument("--audit-reference", action="store_true",
-        help="Untimed two-refinement Diffrax accuracy audit; fusion comparison with both cases only")
+        help="Untimed two-refinement Diffrax accuracy audit; fusion/orbit_fusion with both cases only")
     parser.add_argument("--field-cache", type=Path, default=ROOT/
         "examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz")
     parser.add_argument("--output", type=Path, default=Path("output/boozer_adaptive_events"))
     options = parser.parse_args()
-    if options.audit_reference and (options.comparison != "fusion" or options.case != "both"):
-        parser.error("--audit-reference requires --comparison fusion --case both")
+    if options.audit_reference and (options.comparison not in ("fusion", "orbit_fusion") or options.case != "both"):
+        parser.error("--audit-reference requires --comparison fusion/orbit_fusion --case both")
     if options.particles < 1 or options.horizon <= 0 or options.saves < 2 or options.repeats < 1:
         parser.error("particles, horizon and repeats must be positive; saves >= 2")
     if options.trial_steps < 1 or not np.isfinite(options.trial_timestep) or options.trial_timestep <= 0:
@@ -232,7 +234,8 @@ def main():
         return benchmark_trial_work(options, field, initial, mu, speed)
     times = jnp.linspace(0., settings.horizon, settings.saves)
     names = {"events": ("inline", "replay"), "execution": ("default", "device_loops"),
-             "reductions": ("separate", "grouped"), "fusion": ("standard", "fused")}[options.comparison]
+             "reductions": ("separate", "grouped"), "fusion": ("standard", "fused"),
+             "orbit_fusion": ("trial", "orbit")}[options.comparison]
     if options.case != "both" and options.case not in names:
         parser.error(f"--case must be both, {names[0]} or {names[1]} for this comparison")
     cases = names if options.case == "both" else (options.case,)
@@ -241,7 +244,7 @@ def main():
         saves=options.saves, repeats=options.repeats, energy_ev=settings.energy_ev,
         seed=settings.seed, rtol=settings.rtol, atol=settings.atol,
         controller=settings.controller, method="dopri8", stage_execution="unrolled",
-        field_modes=int(field.xm.size), particle_chunking=False,
+        field_modes=int(field.xm.size), particle_chunking=False, particle_compaction=False,
         birth_sha256=hashlib.sha256(np.asarray(initial).tobytes()+np.asarray(mu).tobytes()).hexdigest(),
         source_sha256={name: hashlib.sha256((ROOT/"essos"/name).read_bytes()).hexdigest()
                        for name in ("boozer.py", "rk.py", "rk_events.py", "rk_rhs.py")}, rows={})
@@ -249,20 +252,28 @@ def main():
     for name in cases:
         jax.clear_caches()
         compiler_options = boozer_compiler_options() if (name == "device_loops" or
-            options.comparison in ("reductions", "fusion")) else {}
+            options.comparison in ("reductions", "fusion", "orbit_fusion")) else {}
         trial_factory = None
-        if name == "fused":
+        orbit_solver = None
+        if name in ("fused", "trial", "orbit"):
             from essos.rk_boozer_gpu_trial import prepare_trial_factory
-            trial_factory = prepare_trial_factory(field, MASS, CHARGE)
+            if name != "orbit":
+                trial_factory = prepare_trial_factory(field, MASS, CHARGE)
             report["source_sha256"]["rk_boozer_gpu_trial.py"] = hashlib.sha256(
                 (ROOT/"essos/rk_boozer_gpu_trial.py").read_bytes()).hexdigest()
+        if name == "orbit":
+            from essos.rk_boozer_gpu_orbit import prepare_orbit_solver
+            orbit_solver = prepare_orbit_solver(field, MASS, CHARGE, speed, times,
+                settings.timestep, settings.rtol, settings.atol, settings.max_steps)
+            report["source_sha256"]["rk_boozer_gpu_orbit.py"] = hashlib.sha256(
+                (ROOT/"essos/rk_boozer_gpu_orbit.py").read_bytes()).hexdigest()
         def run(y, moment):
             return _native_orbits(field, y, moment, MASS, CHARGE, speed, times, settings.timestep,
                 settings.rtol, settings.atol, "dopri8", True, settings.controller,
                 .4, .3, "standard", settings.max_steps, "unrolled",
                 _defer_event_root=(False if name == "inline" else None),
                 _group_rhs_reductions=(name == "grouped") if options.comparison == "reductions" else None,
-                _trial_factory=trial_factory)
+                _trial_factory=trial_factory, _orbit_solver=orbit_solver)
         print(f"Compiling {name}: {options.particles} particles, adaptive Dopri8", flush=True)
         start = perf_counter()
         executable = jax.jit(run, compiler_options=compiler_options).lower(initial, mu).compile()
@@ -293,7 +304,7 @@ def main():
     if len(cases) == 2:
         before, after = names
         # Check all saved and terminal diagnostics, including both speeds.
-        if options.comparison != "fusion":
+        if options.comparison not in ("fusion", "orbit_fusion"):
             for a, b in zip(results[before], results[after]):
                 np.testing.assert_allclose(a, b, rtol=2e-13, atol=2e-9)
             np.testing.assert_array_equal(results[before][4], results[after][4])

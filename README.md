@@ -1214,10 +1214,30 @@ The same development benchmark also provides `--comparison trial_work`
 to diagnose that remaining gap on the target GPU. It compares production RK4,
 ordinary Dopri8 and fused Dopri8 recurrences at an identical count and dt,
 without adaptive control, saves or loss handling. The local 64-particle
-result is 11.57 / 30.47 / 16.09 ms for 128 recurrences. These local ratios
-do not explain the full A100 timing; the linked result record includes a
-short 8192-particle diagnostic command. Further local layout experiments
-gave no reliable gain and are not retained in the production kernel.
+result is 11.57 / 30.47 / 16.09 ms for 128 recurrences. The subsequent
+[8192-particle A100 diagnostic](examples/benchmarks/results/gpu_boozer_fused_trial_20261023/a100_trial_work.json)
+measures 14.83 / 45.47 / 39.10 ms: fused Dopri8 is 14.0% faster than ordinary
+Dopri8, but costs 2.64x RK4 per recurrence. Its amortized cost per fresh RHS
+is 18.9% lower than RK4; it performs 13 fresh RHS calls per trial versus 4.
+These kernel-only timings do not include the adaptive driver and cannot be
+used as a measured decomposition of the full trace. The local speed ratio
+does not transfer to the A100. Further local layout and saved-buffer
+experiments gave no reliable gain and are not retained in production.
+
+A later opt-in independent-orbit CUDA kernel keeps Dopri8 stages, adaptive
+control, dense saves and edge roots inside each particle's GPU program.
+The [paired 64-particle local check](examples/benchmarks/results/gpu_boozer_fused_trial_20261023/orbit_fusion_local.json)
+measures 115.20 -> 91.62 ms warm (20.5% lower) versus the current fused
+trial plus ordinary driver, with compiled buffers 1524952 -> 1464936 bytes.
+It retains the same RHS, tableau, tolerances and stopping surface; rounding
+changes some adaptive decisions. A twice-refined independent reference audit
+finds no status disagreements and a maximum saved parallel-velocity error
+of 0.045 m/s for the candidate versus 0.440 m/s for its paired control.
+It is forward-only, fixed cosine Fourier Boozer fields only, adaptive
+Dopri8/I/standard output only, and disabled by default. The alpha entrypoint
+selects it with `--experimental-fused-orbit`; the controlled development
+comparison is `--comparison orbit_fusion`. No target A100 or full-horizon
+improvement is claimed yet. The linked record gives the short remote command.
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated
