@@ -14,6 +14,9 @@ with the same CUDA loop command buffers enabled in both cases.
 ``--comparison fusion`` compares the standard trial with an opt-in fused
 CUDA trial. Add --audit-reference for an untimed, twice-refined Diffrax
 accuracy check after the timing and memory snapshots.
+``--comparison trial_work`` measures controlled, equal-count RK recurrences
+without adaptive control, saves or loss handling. It is a kernel diagnostic,
+not an orbit-accuracy or fixed-versus-adaptive production comparison.
 """
 import argparse
 import hashlib
@@ -28,6 +31,104 @@ import numpy as np
 
 from essos.boozer import _native_orbits, boozer_compiler_options
 from .benchmark_native_boozer_alpha import PARAMETERS, ROOT, setup, MASS, CHARGE, rss
+
+
+def benchmark_trial_work(options, field, initial, mu, speed):
+    """Measure recurrence costs on the target GPU instead of extrapolating.
+
+    RK4 calls the production _rk_step; Dopri8 calls the production ordinary
+    or fused trial. Complete Dopri8 trial data are consumed through finite
+    checks and the embedded estimate. All cases execute the same count,
+    including beyond the equilibrium boundary: this diagnostic has no events.
+    """
+    from essos.boozer import _rk_step, _chart, guiding_center_rhs
+    from essos.rk import _prepare_rhs, _trial_step_unrolled, _C8, _A8, _ERROR8
+    from essos.rk_boozer_gpu_trial import prepare_trial_factory
+
+    names = ("rk4", "dopri8_standard", "dopri8_fused")
+    if options.case != "both" and options.case not in names:
+        raise ValueError(f"trial_work --case must be both or one of {names}")
+    cases = names if options.case == "both" else (options.case,)
+    factory = prepare_trial_factory(field, MASS, CHARGE) if "dopri8_fused" in cases else None
+    f0 = jax.vmap(lambda y, m: guiding_center_rhs(field, y, m, MASS, CHARGE))(initial, mu)
+    jax.block_until_ready((initial, mu, f0))
+    dt = jnp.asarray(options.trial_timestep, initial.dtype)
+    units = jnp.asarray([1., 1., 1., speed])
+    report = dict(comparison="trial_work", backend=jax.default_backend(),
+        device=jax.devices()[0].device_kind, jax=jax.__version__, particles=options.particles,
+        trials_per_particle=options.trial_steps, dt_s=options.trial_timestep,
+        recurrence_duration_s=options.trial_steps*options.trial_timestep,
+        seed=PARAMETERS["seed"], energy_ev=PARAMETERS["energy_ev"], field_modes=int(field.xm.size),
+        repeats=options.repeats, particle_chunking=False, collisions=False, reverse_ad=False,
+        scope="Equal-count stage/recurrence diagnostic, no adaptive control, saves, energy diagnostic or loss handling. "
+              "Dopri8 embedded estimates and complete trial finite checks are included. "
+              "The initial FSAL RHS is prepared outside timing. Kernel materialization and loop execution are included.",
+        birth_sha256=hashlib.sha256(np.asarray(initial).tobytes()+np.asarray(mu).tobytes()).hexdigest(),
+        source_sha256={name: hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in
+            ("essos/boozer.py", "essos/rk.py", "essos/rk_boozer_gpu_trial.py",
+             "examples/benchmarks/benchmark_boozer_adaptive_events.py")}, rows={})
+    executables, results = {}, {}
+    for name in cases:
+        def one(point, moment, first):
+            def physical(t, y, unused):
+                value = guiding_center_rhs(field, y, moment, MASS, CHARGE)
+                _, r, theta, *_ = _chart(y)
+                magnetic = field.modB_derivatives(r, theta, y[2])[0]
+                return jnp.where(jnp.isfinite(magnetic) & (magnetic > 0), value, jnp.nan)
+            rhs = _prepare_rhs(physical, 0., point, None, coalesce_views=True) if name == "dopri8_standard" else physical
+            step = factory(moment) if name == "dopri8_fused" else _trial_step_unrolled
+            def advance(index, carry):
+                y, derivative, valid, max_error = carry
+                if name == "rk4":
+                    endpoint = _rk_step(lambda x: guiding_center_rhs(field, x, moment, MASS, CHARGE), y, dt, "rk4")
+                    return endpoint, derivative, valid & jnp.isfinite(endpoint).all(), max_error
+                trial = step(rhs, index*dt, y, dt, None, derivative, _C8, _A8, _ERROR8)
+                finite = (jnp.isfinite(trial.y).all() & jnp.isfinite(trial.error).all() &
+                    jnp.isfinite(trial.increments).all() & jnp.isfinite(trial.f1).all())
+                return trial.y, trial.f1, valid & finite, jnp.maximum(max_error, jnp.max(abs(trial.error/units)))
+            return jax.lax.fori_loop(0, options.trial_steps, advance,
+                (point, first, jnp.asarray(True), jnp.zeros((), point.dtype)))
+        run = jax.jit(jax.vmap(one), compiler_options=boozer_compiler_options())
+        print(f"Compiling trial diagnostic {name}: {options.particles} particles, {options.trial_steps} trials", flush=True)
+        start = perf_counter()
+        executable = run.lower(initial, mu, f0).compile()
+        memory = executable.memory_analysis()
+        row = report["rows"][name] = dict(compile_s=perf_counter()-start, samples_ms=[],
+            compiler_options=boozer_compiler_options(),
+            compiled_buffers_bytes=int(memory.argument_size_in_bytes+memory.output_size_in_bytes+
+                memory.temp_size_in_bytes-memory.alias_size_in_bytes))
+        executables[name] = executable
+        start = perf_counter()
+        results[name] = jax.block_until_ready(executable(initial, mu, f0))
+        row["first_execution_ms"] = 1000*(perf_counter()-start)
+        for _ in range(2):
+            jax.block_until_ready(executable(initial, mu, f0))
+    for repeat in range(options.repeats):
+        for name in (cases if repeat % 2 == 0 else tuple(reversed(cases))):
+            start = perf_counter()
+            jax.block_until_ready(executables[name](initial, mu, f0))
+            report["rows"][name]["samples_ms"].append(1000*(perf_counter()-start))
+    for name, row in report["rows"].items():
+        endpoint, _, finite, error = map(np.asarray, results[name])
+        if not finite.all() or not np.isfinite(endpoint).all():
+            raise AssertionError(f"{name}: nonfinite trial diagnostic")
+        fresh = 4 if name == "rk4" else 13
+        row.update(warm_median_ms=float(np.median(row["samples_ms"])),
+            executed_trial_slots=options.particles*options.trial_steps,
+            fresh_rhs_per_trial=fresh, timed_rhs_calls=options.particles*options.trial_steps*fresh,
+            finite_particles=int(finite.sum()),
+            final_states_outside_equilibrium=int(np.sum(np.sum(endpoint[:, :2]**2, axis=1) >= 1)),
+            max_birth_scaled_embedded_estimate=float(error.max()) if name != "rk4" else None)
+        row["amortized_us_per_trial_batch"] = 1000*row["warm_median_ms"]/options.trial_steps
+        row["amortized_us_per_rhs_batch"] = row["amortized_us_per_trial_batch"]/fresh
+    if "rk4" in report["rows"]:
+        for row in report["rows"].values():
+            row["warm_ratio_to_rk4"] = row["warm_median_ms"]/report["rows"]["rk4"]["warm_median_ms"]
+    report["peak_memory_scope"] = "cumulative across diagnostic executables and setup"
+    report["gpu_memory"] = jax.devices()[0].memory_stats()
+    options.output.mkdir(parents=True, exist_ok=True)
+    (options.output/"trial_work.json").write_text(json.dumps(report, indent=2)+"\n")
+    print(json.dumps(report, indent=2), flush=True)
 
 
 def audit_reference(field, initial, mu, speed, times, settings, results):
@@ -102,12 +203,16 @@ def audit_reference(field, initial, mu, speed, times, settings, results):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--comparison", choices=("events", "execution", "reductions", "fusion"), default="events")
+    parser.add_argument("--comparison", choices=("events", "execution", "reductions", "fusion", "trial_work"), default="events")
     parser.add_argument("--case", default="both")
     parser.add_argument("--particles", type=int, default=64)
     parser.add_argument("--horizon", type=float, default=2e-4)
     parser.add_argument("--saves", type=int, default=101)
     parser.add_argument("--repeats", type=int, default=9)
+    parser.add_argument("--trial-steps", type=int, default=128,
+        help="trial_work only: controlled recurrence count per particle")
+    parser.add_argument("--trial-timestep", type=float, default=1.25e-7,
+        help="trial_work only: same recurrence timestep for all methods")
     parser.add_argument("--audit-reference", action="store_true",
         help="Untimed two-refinement Diffrax accuracy audit; fusion comparison with both cases only")
     parser.add_argument("--field-cache", type=Path, default=ROOT/
@@ -118,9 +223,13 @@ def main():
         parser.error("--audit-reference requires --comparison fusion --case both")
     if options.particles < 1 or options.horizon <= 0 or options.saves < 2 or options.repeats < 1:
         parser.error("particles, horizon and repeats must be positive; saves >= 2")
+    if options.trial_steps < 1 or not np.isfinite(options.trial_timestep) or options.trial_timestep <= 0:
+        parser.error("trial-steps and trial-timestep must be positive")
     settings = SimpleNamespace(**(dict(PARAMETERS) | dict(particles=options.particles,
         horizon=options.horizon, saves=options.saves, field_cache=options.field_cache)))
     field, initial, mu, speed, births, _ = setup(settings)
+    if options.comparison == "trial_work":
+        return benchmark_trial_work(options, field, initial, mu, speed)
     times = jnp.linspace(0., settings.horizon, settings.saves)
     names = {"events": ("inline", "replay"), "execution": ("default", "device_loops"),
              "reductions": ("separate", "grouped"), "fusion": ("standard", "fused")}[options.comparison]

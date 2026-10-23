@@ -11,9 +11,15 @@ or lost-particle compaction. The GPU model was not present in the pasted log.
 | --- | ---: | ---: | ---: |
 | Adaptive Dopri8, separate sums | 14.800 | 54.168 | 54.367 median of two |
 | Adaptive Dopri8, experimental grouped sums | 14.550 | 62.301 | Not supplied |
+| Adaptive Dopri8, experimental fused trial | 4.842 | 48.185 | 48.246, first warm sample |
 | Standard fixed RK4 | 2.653 | 20.259 | 20.215, first warm sample |
 
-The second RK4 warm sample and its final median were not supplied. The RK4
+The second RK4 and fused warm samples and their final medians were not
+supplied. The [fused record](../gpu_boozer_fused_trial_20261023/remote_full_partial.json)
+preserves the full-horizon partial console evidence. The fused first warm
+sample is 11.26% below the earlier ordinary median but still 2.39x RK4's
+first warm sample. Final full-run loss, accuracy and memory diagnostics
+were not supplied for the fused run. The RK4
 log reports no failures and 160,000 executed grid slots per lane. These count
 held inactive lanes as well. The earlier separate-sum Dopri8 run accepted
 350,979,822 steps in total, with a maximum of 70,886 accepted steps per particle;

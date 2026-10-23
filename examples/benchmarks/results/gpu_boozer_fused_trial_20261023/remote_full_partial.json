@@ -1,0 +1,71 @@
+{
+  "evidence": "User-pasted partial console log; full 20 ms solves completed, final report not yet supplied",
+  "particles": 8192,
+  "horizon_s": 0.02,
+  "saves": 101,
+  "energy_ev": 3520000,
+  "birth_s": 0.3,
+  "backend": "gpu",
+  "device_log": "CudaDevice(id=0); GPU model and JAX version not printed in this log",
+  "field": {
+    "modes": 16,
+    "representation": "direct Fourier sums; K=0"
+  },
+  "method": "dopri8",
+  "adaptive": true,
+  "controller": "i",
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "stage_execution": "unrolled",
+  "trial_kernel": "experimental Pallas stage loop",
+  "compiler_options": {
+    "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+    "xla_gpu_graph_min_graph_size": 1
+  },
+  "lower_and_compile_seconds": 4.842,
+  "first_execution_seconds": 48.185,
+  "warm_seconds": [
+    48.246
+  ],
+  "warm_median_seconds": null,
+  "warm_samples_expected": 2,
+  "final_summary_available": false,
+  "first_step_counts": {
+    "trials": {
+      "total": 413240174,
+      "min": 96,
+      "median": 54556.5,
+      "max": 75835
+    },
+    "accepted": {
+      "total": 351031456,
+      "min": 64,
+      "median": 44800,
+      "max": 70887
+    },
+    "rejected": {
+      "total": 62208718,
+      "min": 29,
+      "median": 8461,
+      "max": 21300
+    }
+  },
+  "failed_particles": 0,
+  "rhs_work_estimate": {
+    "fresh_rhs_per_trial": 13,
+    "initial_rhs_evaluations": 8192,
+    "counted_trial_slots": 413240174,
+    "minimum_batched_trial_slots": 621240320,
+    "counted_rhs_evaluations": 5372130454,
+    "minimum_batched_rhs_evaluations": 8076132352,
+    "active_slot_fraction_upper_bound": 0.6651856949658387,
+    "scope": "Logical RHS-lane work estimates for the current vmapped driver, not GPU instruction counts. Root retries can add batch iterations; field-only energy checks are excluded. RK4 counts already include held inactive grid slots."
+  },
+  "unavailable": [
+    "second warm timing",
+    "final warm median",
+    "final loss count",
+    "energy/trajectory accuracy",
+    "full-run compiled buffers and peak-memory statistics"
+  ]
+}

@@ -1202,7 +1202,22 @@ to 0.448 m/s; floating-point changes also change some step decisions. It is
 CUDA-only, forward-only, limited to fixed cosine Fourier fields and disabled
 by default. The result record includes an accuracy audit and a short
 8192-particle target-machine comparison command. The alpha entrypoint selects
-it only with `--experimental-fused-trial`. No remote speedup is established.
+it only with `--experimental-fused-trial`. The subsequent 8192-particle A100
+comparison over 0.2 ms measured 600.3 -> 553.3 ms warm (7.8%), with paired
+compilation 14.35 -> 5.04 s and effectively unchanged compiled buffers.
+The subsequent full 20 ms fused run reports 48.185 s first execution and
+48.246 s for its first warm call, versus the earlier ordinary median of
+54.367 s (11.3% lower). Compilation is 4.842 s. The second warm timing,
+final median, full-run accuracy and memory statistics have not been supplied.
+
+The same development benchmark also provides `--comparison trial_work`
+to diagnose that remaining gap on the target GPU. It compares production RK4,
+ordinary Dopri8 and fused Dopri8 recurrences at an identical count and dt,
+without adaptive control, saves or loss handling. The local 64-particle
+result is 11.57 / 30.47 / 16.09 ms for 128 recurrences. These local ratios
+do not explain the full A100 timing; the linked result record includes a
+short 8192-particle diagnostic command. Further local layout experiments
+gave no reliable gain and are not retained in the production kernel.
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated
