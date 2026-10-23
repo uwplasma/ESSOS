@@ -32,6 +32,9 @@ pip install essos
 - **Boozer-coordinate tracing.** Guiding-centre diagnostics from the Boozer
   `|B|` spectrum and flux functions `iota`, `G` and `I`, with fixed-step
   (RK4, Dopri5, Dopri8) or adaptive Dormand-Prince stepping and optional collisions.
+- **Thermal-helium residence.** Source-weighted core residence from supplied
+  transport coefficients, with checked SOLVAX solves and JAX derivatives.
+  See [inputs and example](#thermal-helium-residence).
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
 - **Fields.** Biot-Savart from coils, VMEC equilibria (stellarator-symmetric or
@@ -140,6 +143,34 @@ print(tracing.loss_fractions)
 
 More in [`examples/particle_tracing`](examples/particle_tracing), including
 full-orbit, collisional and electric-field variants.
+
+## Thermal-helium residence
+
+Install `pip install 'essos[ash]'` and enable JAX float64. `essos.ash` solves
+`Gamma=-D*dn/dr+V*n` with supplied transport, geometry, source and boundary data.
+The forward/backward equations are `K n = M S` and `K.T T = M c`;
+`(M c).T n / sum(M S) = (M S).T T / sum(M S)` gives source-weighted occupation.
+Cost `c=1` gives mean core residence; recycling and pumping need separate models.
+
+Face arrays D [m²/s], V [m/s] and W=dV/dr [m²] have n+1 entries; cell volumes
+[m³], source [m⁻³/s] and dimensionless cost have n entries. Use consistent
+physical radial coordinates, positive D and a reflecting axis at r=0.
+Positive finite `boundary_kappa_m_s` imposes `Gamma=kappa*n`, including half-cell
+resistance; +infinity absorbs. Shape errors raise `ValueError`; invalid values
+or failed discrete checks give `valid=False` and NaN outputs.
+`check_helium_residence` raises outside JIT. These checks do not establish mesh
+convergence or kinetic validity; gradients include only supplied dependencies.
+
+Run the [example](examples/particle_tracing/helium_ash_removal.py) with
+`--manufactured`, or `--wout path/to/wout.nc --coefficients path/to/response.json`.
+Its loader documents the required coefficient/provenance bundle and checks the
+WOUT hash and modeled radius; the provider must qualify volumes and transport.
+
+`trace_response` fits matched gradient/flux probes; `convection_from_marker_drift`
+converts marker drift away from the axis. `restricted_residence` estimates
+`E[min(T,H)]`, using +infinity for survivors and rejecting numerical failures.
+Its uncertainty assumes independent markers with fixed weights; it omits the
+unobserved tail and correlated-marker uncertainty.
 
 ## Tracing to the wall
 

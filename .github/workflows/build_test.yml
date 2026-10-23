@@ -34,7 +34,7 @@ jobs:
     - name: Install ESSOS and test tools
       run: |
         python -m pip install --upgrade pip
-        pip install . flake8 pytest pytest-cov pytest-xdist
+        pip install ".[ash]" flake8 pytest pytest-cov pytest-xdist
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         echo "JAX_VERSION=$(python -c 'import jax; print(jax.__version__)')" >> $GITHUB_ENV
     - name: Cache JAX compilations
