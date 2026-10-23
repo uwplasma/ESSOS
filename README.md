@@ -1157,10 +1157,31 @@ groups independent small sums inside the prepared physical RHS before RK stage
 expansion. With command buffers enabled in both cases, the same 64-particle
 adaptive workload decreased from 194.8 to 171.9 ms warm (11.7%), with identical
 saved states, energy errors and step counts. Compiled buffers increased by
-1 KiB. This preparation is now automatic for GPU adaptive Boozer Dopri8 with
-unrolled stages. It leaves the field class, equations and other solver paths
-unchanged. Reproduce with `--comparison reductions`; the remote 8192-particle
-benefit remains unmeasured.
+1 KiB. The subsequent remote first execution increased from 54.168 to 62.301 s
+(about 15%); its new warm times and step counts were not yet supplied.
+Grouping is therefore disabled by default and retained only for explicit
+`--comparison reductions` experiments. Command buffers remain enabled.
+The grouped compiled array also retains a duplicate sum (five rows rather
+than four unique sums), a concrete issue to address before reconsidering it.
+
+The same alpha entrypoint supports the existing standard fixed-step RK4
+tracer, with the same field cache, 3.52 MeV energy, seed and births:
+
+```sh
+python -m examples.benchmarks.benchmark_native_boozer_alpha \
+  --integrator rk4 --particles 8192 --horizon 0.02 --saves 101 \
+  --timestep 1.25e-7 --seed 42 \
+  --field-cache output/native_boozer_dopri8_8192_event_replay_run1/boozer_inputs.npz \
+  --output output/boozer_rk4_alpha_8192_run1
+```
+
+This calls the existing production RK4 driver with no collisions or
+compaction, using the same CUDA loop compiler options as Dopri8. It has no
+embedded tolerance controller. Losses use the existing RK4 endpoint check;
+Dopri8 refines the crossing to the boundary. The report records the actual
+fixed timestep and grid slots, which include inactive held RK4 lanes.
+Both compilation and blocked solve timings are reported separately. A local
+64-particle smoke check matched the public production RK4 tracer.
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated

@@ -1,12 +1,12 @@
 Adaptive Boozer Dopri8: grouped stage reductions, 2026-10-23
 =========================================================
 
-The production solver groups independent small floating-point sums in the
+The experimental solver preparation groups independent small floating-point sums in the
 prepared RHS before expanding the RK stages. This exposes the joint sums to
 the GPU compiler at every stage. The field class, physical RHS, tableau,
 controller, tolerances, dense output and event handling are unchanged.
 Custom derivative rules remain opaque. Parameter, state and time derivatives
-are checked against the original map. This preparation is enabled only for
+are checked against the original map. This preparation was enabled for
 the GPU adaptive Boozer Dopri8 forward path with unrolled stages; the coil,
 split-collision and accepted-step reverse paths retain their existing setup.
 
@@ -32,7 +32,14 @@ a paired measurement, not independent cold-process compilation. The GPU and
 host peaks in `both.json` are cumulative across both executables, not a claim
 of separate per-case peaks or whole-process VRAM use.
 
-This is a local result. The 8192-particle remote benefit remains unmeasured.
+This is a local result. The user's subsequent 8192-particle run regressed on
+its first execution: **54.168 -> 62.301 s**, with compilation 14.800 -> 14.550 s.
+The new warm samples and step counts were not supplied. Grouping is now
+disabled by default; command buffers remain enabled. It is available only
+through the explicit comparison below. Local compiled HLO also shows five
+stacked sum operands with one duplicated operand, rather than four unique
+sums. This is a concrete flaw, not a measurement of the entire remote cause.
+
 The preceding command-buffer-only change did not speed up that remote run;
 see the [remote measurements](../gpu_boozer_device_loops_20261023/README.md).
 Do not extrapolate this local percentage to the remote machine.
@@ -45,10 +52,11 @@ python -m examples.benchmarks.benchmark_boozer_adaptive_events \
   --repeats 9 --output output/boozer_stage_reductions_64
 ```
 
-The large-run entrypoint enables the new preparation automatically and prints
-`RHS execution: grouped independent stage reductions` alongside the unchanged
-GPU execution options. Its run settings and output source hashes record the
-actual implementation. `both.json` contains the local raw samples and hashes.
+The ordinary large-run entrypoint again uses separate reductions and prints
+`RHS execution: ordinary stage reductions` alongside the unchanged GPU execution
+options. Its run settings and output source hashes record the actual
+implementation. `both.json` preserves the historical local raw samples and
+hashes from before the default was disabled.
 
 Eight targeted checks passed: values and forward/reverse derivatives of the
 prepared RHS, dependent reduction groups, opaque custom derivatives, the

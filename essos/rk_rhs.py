@@ -75,8 +75,9 @@ def grouped_reductions_rhs(rhs, t0, y0, args):
     """Group independent small floating-point sums before RK stage expansion.
 
     The prepared physical RHS is unchanged. Stack independent operands so the
-    GPU compiler can evaluate their sums together, avoiding separate temporary
-    arrays and repeated work. Reduction depth prevents the regrouping from
+    GPU compiler can evaluate their sums together. This changes layout, not
+    the arithmetic count, and remains experimental after a large-batch timing
+    regression. Reduction depth prevents the regrouping from
     introducing dependencies between groups. Custom AD rules and effects stay
     opaque; all parameter values retain their ordinary JAX derivatives.
     """

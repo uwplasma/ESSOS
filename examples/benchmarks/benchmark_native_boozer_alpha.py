@@ -1,9 +1,10 @@
-"""CATAPULT-sized alpha workload using production native Boozer Dopri5/8.
+"""CATAPULT-sized alpha workload using native Dopri5/8 or standard Boozer RK4.
 
 Run as a module from the repository root. Edit PARAMETERS or override by CLI.
 JAX chooses the machine's normal backend. No collisions, AD or compaction.
-The tolerance values match the published CATAPULT comparison; the native
-error norm, field representation and newly sampled births are recorded.
+The adaptive tolerance values match the published CATAPULT comparison; RK4
+uses a fixed timestep without tolerance control. Field representation, error
+norm and newly sampled births are recorded.
 """
 import argparse
 import hashlib
@@ -17,7 +18,8 @@ import jax.numpy as jnp
 import numpy as np
 from netCDF4 import Dataset
 
-from essos.boozer import BoozerField, _native_orbits, boozer_compiler_options, psi0_from_vmec, trace_boozer
+from essos.boozer import (BoozerField, _native_orbits, _start, _advance,
+                         boozer_compiler_options, psi0_from_vmec, trace_boozer)
 from essos.constants import ALPHA_PARTICLE_MASS as MASS, ALPHA_PARTICLE_CHARGE as CHARGE, ONE_EV
 from essos.rk import RKStatus
 
@@ -121,6 +123,26 @@ def plots(folder, times, states, loss_times, errors, counts):
     plt.close(fig)
 
 
+def standard_rk4_orbits(field, initial, mu, speed, times, timestep, seed):
+    """Call the existing production RK4 driver; no new RK or field formula."""
+    intervals = len(times)-1
+    n_sub = max(1, int(np.ceil(float(times[-1])/(intervals*timestep)-1e-9)))
+    dt = float(times[-1])/(intervals*n_sub)
+    keys = jax.random.split(jax.random.PRNGKey(seed), len(initial))
+
+    def run(y0, mu0):
+        carry, first = _start(field, y0, mu0)
+        carry, values = _advance(field, dt, n_sub, MASS, CHARGE, None, 1.5,
+            carry, keys, 0, intervals, "rk4", 1e-10)
+        states = jnp.concatenate((first[:, None], values), axis=1)
+        status = jnp.where(carry[6] >= 0, RKStatus.NONFINITE,
+            jnp.where(carry[4] >= 0, RKStatus.EVENT, RKStatus.SUCCESS))
+        counts = jnp.stack((carry[10], carry[10], jnp.zeros_like(carry[10])), axis=-1)
+        return states, carry[4], carry[6], carry[7], counts, status
+
+    return run, dt, n_sub*intervals
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for key,value in PARAMETERS.items():
@@ -136,9 +158,9 @@ def main(argv=None):
         parser.error("Require 0 < birth-s < 1, saves >= 2, 0 <= mode-cut < 1, controller i/pi")
     if options.stage_execution not in ("loop","unrolled"):
         parser.error("stage-execution must be loop/unrolled")
-    if options.integrator not in ("essos_rk45", "essos_dopri8"):
-        parser.error("integrator must be essos_rk45 (Dopri5) or essos_dopri8")
-    method = "dopri5" if options.integrator == "essos_rk45" else "dopri8"
+    if options.integrator not in ("essos_rk45", "essos_dopri8", "rk4"):
+        parser.error("integrator must be essos_rk45 (Dopri5), essos_dopri8 or rk4")
+    method = {"essos_rk45": "dopri5", "essos_dopri8": "dopri8", "rk4": "rk4"}[options.integrator]
     if (options.output/"benchmark.json").exists():
         parser.error("Choose a fresh --output directory")
     options.output.mkdir(parents=True, exist_ok=True)
@@ -149,26 +171,28 @@ def main(argv=None):
     times = jnp.linspace(0.,options.horizon,options.saves)
     jax.block_until_ready((field,initial,mu,times))
     report = dict(complete=False, jax=jax.__version__, backend=jax.default_backend(),
-        devices=[str(d) for d in jax.devices()], platform=platform.platform(),
+        devices=[str(d) for d in jax.devices()], device_kinds=[d.device_kind for d in jax.devices()],
+        platform=platform.platform(),
         settings={k:str(v) if isinstance(v,Path) else v for k,v in vars(options).items()},
         setup_seconds=perf_counter()-start, collisions=False, reverse_ad=False, particle_chunking=False,
-        particle_compaction=False, integrator=options.integrator, adaptive=True,
-        component_stage_arithmetic=options.stage_execution == "unrolled",
+        particle_compaction=False, integrator=options.integrator, adaptive=method != "rk4",
+        component_stage_arithmetic=method != "rk4" and options.stage_execution == "unrolled",
         field=dict(representation="Production Boozer K=0 GC field from QA equilibrium; no coils",
             modes=int(field.xm.size), nfp=field.nfp, angular_table=field.table is not None,
             wout_sha256=digest(options.wout)),
         births="Fixed s shell; uniform Boozer theta, zeta over one field period; uniform pitch [-1,1]; seed recorded",
-        stopping="Root-found exit at s=1; later saves hold the boundary state; inactive lanes are not compacted",
-        error_norm="max(norm(e_u,e_w), abs(e_zeta), abs(e_vpar)/birth_speed)/(rtol+atol), u/w=sqrt(s)*cos/sin(theta)",
+        stopping=("Standard RK4 endpoint exit at s>=1; later saves hold that state; no compaction"
+            if method == "rk4" else "Root-found exit at s=1; later saves hold the boundary state; inactive lanes are not compacted"),
+        error_norm=("Fixed RK4: no embedded error control; rtol/atol are unused" if method == "rk4" else
+            "max(norm(e_u,e_w), abs(e_zeta), abs(e_vpar)/birth_speed)/(rtol+atol), u/w=sqrt(s)*cos/sin(theta)"),
         catapult_reference=dict(source=CATAPULT_SOURCE, tolerance=1e-10, atol=1e-10, rtol=1e-10,
-            distinction="Same tolerance values, not the same error norm: CATAPULT uses atol_i + rtol*(abs(y_i)+dt*abs(f_i)); native block scales are fixed. This is a CATAPULT-sized workload, not identical field/births or a direct speed comparison."),
+            distinction=("Standard fixed RK4, no tolerance controller. This matches the current native field/births, not the exact published CATAPULT inputs."
+                if method == "rk4" else "Same tolerance values, not the same error norm: CATAPULT uses atol_i + rtol*(abs(y_i)+dt*abs(f_i)); native block scales are fixed. This is a CATAPULT-sized workload, not identical field/births or a direct speed comparison.")),
         cache_directory=jax.config.jax_compilation_cache_dir,
         event_root_strategy=("retained crossing stages; retry in the same adaptive loop"
             if method == "dopri8" and options.stage_execution == "unrolled" and jax.default_backend() == "gpu"
-            else "inline root search"),
-        rhs_execution=("grouped independent stage reductions"
-            if method == "dopri8" and options.stage_execution == "unrolled" and jax.default_backend() == "gpu"
-            else "ordinary stage reductions"),
+            else "fixed RK4 endpoint check" if method == "rk4" else "inline root search"),
+        rhs_execution="ordinary stage reductions",
         source_sha256={name:digest(ROOT/name) for name in ("essos/boozer.py","essos/rk.py","essos/rk_events.py","essos/rk_fixed.py","essos/rk_rhs.py",
             "essos/rk_dense.py","examples/benchmarks/benchmark_native_boozer_alpha.py")})
     report["setup_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
@@ -184,9 +208,11 @@ def main(argv=None):
     np.savez_compressed(options.output/"births.npz", **births)
     print(f"QA Boozer: {report['field']['modes']} retained modes, mode-cut={options.mode_cut:g}; "
           f"{'angular table' if field.table is not None else 'direct Fourier sums'}; K=0",flush=True)
+    stepping = (f"fixed standard RK4; requested dt={options.timestep:g}; no tolerance controller"
+        if method == "rk4" else f"adaptive native {method} ({options.controller}); "
+        f"rtol={options.rtol:g}, atol={options.atol:g}; stages={options.stage_execution}")
     print(f"{options.particles} alpha GCs, {options.energy_ev:g} eV, s={options.birth_s:g}, "
-          f"{options.horizon:g} s, {options.saves} saves; adaptive native {method} ({options.controller}); "
-          f"rtol={options.rtol:g}, atol={options.atol:g}; stages={options.stage_execution}",flush=True)
+          f"{options.horizon:g} s, {options.saves} saves; {stepping}",flush=True)
     print(f"Loss roots: {report['event_root_strategy']}", flush=True)
     print(f"RHS execution: {report['rhs_execution']}", flush=True)
     if options.setup_only:
@@ -195,11 +221,18 @@ def main(argv=None):
     def run(y0,mu0):
         return _native_orbits(field,y0,mu0,MASS,CHARGE,speed,times,options.timestep,
             options.rtol,options.atol,method,True,options.controller,.4,.3,"standard",options.max_steps,options.stage_execution)
-    compiler_options = (boozer_compiler_options() if method == "dopri8" and
-                        options.stage_execution == "unrolled" else {})
+    if method == "rk4":
+        run, actual_dt, grid_steps = standard_rk4_orbits(field, initial, mu, speed, times,
+            options.timestep, options.seed)
+        report.update(fixed_dt=actual_dt, fixed_grid_steps=grid_steps,
+            count_semantics="RK4 executed grid slots per lane, including inactive held lanes; no error rejections",
+            energy_check_scope="Standard production RK4 checks every executed active step")
+        print(f"RK4 actual dt: {actual_dt:g} s; grid slots per lane: {grid_steps}", flush=True)
+    compiler_options = (boozer_compiler_options() if method == "rk4" or
+                        (method == "dopri8" and options.stage_execution == "unrolled") else {})
     report["compiler_options"] = compiler_options
     print(f"GPU execution options: {compiler_options}", flush=True)
-    print("Lowering and compiling the production native Boozer kernel",flush=True)
+    print("Lowering and compiling the production Boozer kernel",flush=True)
     start = perf_counter()
     executable = jax.jit(run, compiler_options=compiler_options).lower(initial,mu).compile()
     report["lower_and_compile_seconds"] = perf_counter()-start
@@ -221,6 +254,11 @@ def main(argv=None):
     report["first_host_rss_bytes"] = rss()
     print(f"First execution: {report['first_execution_seconds']:.3f} s",flush=True)
     failed = np.asarray(result[2]) >= 0
+    first_counts = np.asarray(result[4])
+    report["first_step_counts"] = {name:dict(total=int(first_counts[:,i].sum()),
+        min=int(first_counts[:,i].min()), median=float(np.median(first_counts[:,i])),
+        max=int(first_counts[:,i].max())) for i,name in enumerate(("trials","accepted","rejected"))}
+    print(f"First-call steps: {report['first_step_counts']}; failures: {int(failed.sum())}", flush=True)
     report["warm_seconds"] = []
     report["timing_scope"] = "Blocked device-resident solve calls; setup, output transfers and plots excluded. First trace adds lowering/compilation; persistent cache may be hit. Production saved-state energy diagnostics are included."
     save()
@@ -251,15 +289,21 @@ def main(argv=None):
     save()
     if not report["complete"]:
         raise RuntimeError("Incomplete/nonfinite traces; warm repeats skipped on failure. Inspect benchmark.json/traces.npz")
-    if options.particles<=8 and options.horizon<=1e-4:
+    if options.horizon<=1e-4 and (options.particles<=8 or
+            (method == "rk4" and options.particles<=64)):
         reference = trace_boozer(field,births["s"],births["theta"],births["zeta"],births["pitch"],
             speed=speed,mass=MASS,charge=CHARGE,tmax=options.horizon,timestep=options.timestep,n_save=options.saves,
-            integrator=options.integrator,rtol=options.rtol,atol=options.atol,native_controller=options.controller,
+            integrator=None if method == "rk4" else options.integrator,
+            method="rk4" if method == "rk4" else None,
+            rtol=options.rtol,atol=options.atol,native_controller=options.controller,
             native_stage_execution=options.stage_execution,
             max_steps=options.max_steps,progress=False,compact=False,devices=[jax.devices()[0]])
         np.testing.assert_allclose(states,reference.states,rtol=0,atol=1e-8)
-        np.testing.assert_array_equal(counts,reference.step_stats)
-        np.testing.assert_array_equal(status,reference.solver_status)
+        np.testing.assert_allclose(loss_times,reference.loss_times,rtol=0,atol=1e-13)
+        np.testing.assert_allclose(failed_times,reference.failed_times,rtol=0,atol=1e-13)
+        if method != "rk4":
+            np.testing.assert_array_equal(counts,reference.step_stats)
+            np.testing.assert_array_equal(status,reference.solver_status)
         report["production_api_check"] = dict(max_state_difference=float(np.max(abs(states-reference.states))),
             scope="Untimed public trace_boozer check after timing and memory snapshots; small runs only")
         save()

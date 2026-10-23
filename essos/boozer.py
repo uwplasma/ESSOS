@@ -484,16 +484,13 @@ def boozer_compiler_options():
 def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                    method, adaptive, controller, pcoeff, icoeff, dense_output, max_steps,
                    stage_execution="loop", fixed_substeps=None, _defer_event_root=None,
-                   _group_rhs_reductions=None):
+                   _group_rhs_reductions=False):
     """One shared native RK solve per orbit, independent of the save grid."""
     from essos.rk import RKStatus, solve_rk
 
     if _defer_event_root is None:
         _defer_event_root = (adaptive and method == "dopri8" and
                             stage_execution == "unrolled" and jax.default_backend() == "gpu")
-    if _group_rhs_reductions is None:
-        _group_rhs_reductions = (adaptive and method == "dopri8" and
-                                stage_execution == "unrolled" and jax.default_backend() == "gpu")
 
     def one(y0, mu):
         def magnetic_field(y):
