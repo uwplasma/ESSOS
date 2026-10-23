@@ -579,13 +579,11 @@ if __name__ == "__main__":
 
 @pytest.mark.parametrize("integrator", ["diffrax", "essos_rk45", "essos_dopri8"])
 def test_tracing_max_steps_is_configurable_and_bounded(monkeypatch, integrator):
-    """The Diffrax ceiling used to be 1e10, so a trace that could not finish ran
-    until the process was killed rather than returning."""
+    """Keep a bounded default and forward explicit limits to each backend."""
     import inspect
     from types import SimpleNamespace
 
     import essos.dynamics as dynamics
-    from essos.dynamics import Tracing
 
     default = inspect.signature(Tracing).parameters["max_steps"].default
     assert default == 1_000_000
@@ -593,10 +591,8 @@ def test_tracing_max_steps_is_configurable_and_bounded(monkeypatch, integrator):
     class BackendCalled(Exception):
         pass
 
-    forwarded = []
-
     def backend(*args, **kwargs):
-        forwarded.append(kwargs["max_steps"])
+        assert kwargs["max_steps"] == 3
         raise BackendCalled
 
     # Stop before either backend integrates; exercise each dispatch branch.
@@ -613,7 +609,6 @@ def test_tracing_max_steps_is_configurable_and_bounded(monkeypatch, integrator):
     with pytest.raises(BackendCalled):
         tracing._solve(terms=None, solver=None, controller=False, t0=0.,
                        y0=jnp.zeros(1), args=None, event=event)
-    assert forwarded == [3]
 
 
 
