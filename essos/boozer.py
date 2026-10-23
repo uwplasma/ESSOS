@@ -1,7 +1,8 @@
 """Fixed-step K=0 Boozer guiding-centre tracing (White, 2014).
 
-Interpolate the |B| spectrum in sqrt(s), with m>=1 coefficients divided by
-sqrt(s) for axis regularity; interpolate iota, G and I in s. Explicit RK runs in
+By default interpolate the |B| spectrum in sqrt(s), with m>=1 coefficients
+divided by sqrt(s). An explicit axis-regular option uses s**(m/2) times
+splines in s; interpolate iota, G and I in s. Explicit RK runs in
 sqrt(s)*(cos(theta), sin(theta)). LCFS crossings are lost; nonfinite steps
 are failed. Optional Euler-Maruyama collisions apply pitch scattering,
 slowing down and energy diffusion (Boozer & Kuo-Petravic, 1981).
@@ -53,7 +54,7 @@ TABLE_MODES = 48  # below about 48 modes the direct sum is cheaper than the tabl
 class BoozerField(eqx.Module):
     """``|B|`` spectrum and ``iota, G, I`` profiles in Boozer coordinates."""
 
-    r_knots: jax.Array
+    r_knots: jax.Array  # sqrt(s), or s with axis_regular=True
     b_coef: jax.Array  # (nint, modes, 4)
     s_knots: jax.Array
     profile_coef: jax.Array  # (nint, 3, 4): iota, G, I
@@ -63,10 +64,11 @@ class BoozerField(eqx.Module):
     nfp: int = eqx.field(static=True)
     sine_coef: jax.Array | None = None
     table: jax.Array | None = None  # (nint, ntheta + DEGREE, nzeta + DEGREE, 2, 4)
+    axis_regular: bool = eqx.field(static=True, default=False)
 
     @classmethod
     def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6, *, bmns=None,
-                  angle_grid=6):
+                  angle_grid=6, axis_regular=False, axis_regular_tolerance=None):
         """Build from half-mesh Boozer tables.
 
         ``bmnc`` and optional sine coefficients ``bmns`` are ``(modes, len(s))``;
@@ -83,6 +85,14 @@ class BoozerField(eqx.Module):
         used only above ``TABLE_MODES`` modes, below which the sum is cheaper. ``angle_grid=None``, or a
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
         every evaluation.
+
+        ``axis_regular=True`` uses ``s**(m/2)`` times splines in ``s`` and
+        direct Fourier sums. It requires at least five positive increasing
+        surfaces and a positive ``axis_regular_tolerance``: for each retained m>0 component,
+        quadratic extrapolation from scaled surfaces 2--5 must match surface 1
+        within this relative local-amplitude tolerance. Scaling can amplify
+        noise; this diagnostic neither qualifies the input equilibrium nor
+        bounds extrapolation error. Samples and default behavior are unchanged.
         """
         s = np.asarray(s, float)
         bmnc = np.asarray(bmnc, float)
@@ -94,14 +104,41 @@ class BoozerField(eqx.Module):
         keep = amplitude > mode_tolerance * amplitude.max()
         bmnc, xm, xn = bmnc[keep], xm[keep], np.asarray(xn, int)[keep]
         r = np.sqrt(s)
-        scaled = np.where(xm[:, None] > 0, bmnc / r, bmnc)
-        r_knots, b_coef = _spline(r, scaled.T)
+        if axis_regular:
+            if (s.ndim != 1 or len(s) < 5 or not np.isfinite(s).all()
+                    or np.any(s <= 0) or np.any(np.diff(s) <= 0) or np.any(xm < 0)):
+                raise ValueError("axis_regular requires at least five positive increasing surfaces and m >= 0")
+            if (axis_regular_tolerance is None or not np.isfinite(axis_regular_tolerance)
+                    or axis_regular_tolerance <= 0):
+                raise ValueError("axis_regular requires a positive finite axis_regular_tolerance")
+            if np.min(np.log(r)) * np.max(xm) < np.log(np.finfo(float).tiny):
+                raise ValueError("axis_regular mode scaling underflows at the first surface")
+        divisor = r[None, :] ** (xm[:, None] if axis_regular else (xm[:, None] > 0))
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            scaled = bmnc / divisor
+            scaled_sine = None if sine is None else sine[keep] / divisor
+        if axis_regular:
+            for component, values in (("cosine", scaled), ("sine", scaled_sine)):
+                if values is None:
+                    continue
+                if not np.isfinite(values).all():
+                    raise ValueError("axis_regular scaling is not finite")
+                for mode in np.flatnonzero(xm > 0):
+                    row = values[mode, :5]
+                    estimate = np.polyval(np.polyfit(s[1:5], row[1:5], 2), s[0])
+                    residual = abs(row[0] - estimate) / max(np.max(np.abs(row)), np.finfo(float).tiny)
+                    if residual > axis_regular_tolerance:
+                        raise ValueError(
+                            f"axis_regular inner profile is unresolved for m={xm[mode]}, "
+                            f"n={xn[mode]} ({component} relative discrepancy {residual:.6g} "
+                            f"> {axis_regular_tolerance:.6g})")
+        coordinates = s if axis_regular else r
+        knots, b_coef = _spline(coordinates, scaled.T)
         sine_coef = None
         if sine is not None and np.any(sine[keep]):
-            scaled_sine = np.where(xm[:, None] > 0, sine[keep] / r, sine[keep])
-            _, sine_coef = _spline(r, scaled_sine.T)
+            _, sine_coef = _spline(coordinates, scaled_sine.T)
         table = None
-        if (angle_grid is not None and np.all(xn % int(nfp) == 0)
+        if (not axis_regular and angle_grid is not None and np.all(xn % int(nfp) == 0)
                 and (np.ndim(angle_grid) or xm.size > TABLE_MODES)):
             nt, nz = ((max(16, angle_grid * int(np.abs(xm).max())),
                        max(16, angle_grid * int(np.abs(xn).max()) // int(nfp)))
@@ -115,18 +152,20 @@ class BoozerField(eqx.Module):
         s_prof = np.concatenate([[0.0], s])
         profiles = np.vstack([axis, profiles])
         s_knots, profile_coef = _spline(s_prof, profiles)
-        return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
-                   float(psi0), int(nfp), sine_coef, table)
+        return cls(knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
+                   float(psi0), int(nfp), sine_coef, table, bool(axis_regular))
 
     @classmethod
-    def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6, angle_grid=6):
+    def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6, angle_grid=6, *,
+                        axis_regular=False, axis_regular_tolerance=None):
         """Build from a run ``Booz_xform`` (every surface computed)."""
         sine = getattr(booz, "bmns_b", None)
         if bool(getattr(booz, "asym", False)) and sine is None:
             raise ValueError("Asymmetric Boozer transform requires bmns_b")
         return cls.from_booz(booz.s_b, booz.bmnc_b, booz.xm_b, booz.xn_b, booz.iota,
                              booz.Boozer_G, booz.Boozer_I, psi0, int(booz.nfp), mode_tolerance,
-                             bmns=sine, angle_grid=angle_grid)
+                             bmns=sine, angle_grid=angle_grid, axis_regular=axis_regular,
+                             axis_regular_tolerance=axis_regular_tolerance)
 
     def profiles(self, s):
         """``(iota, G, I)`` and their ``s`` derivatives."""
@@ -136,6 +175,22 @@ class BoozerField(eqx.Module):
         """``|B|``, ``d|B|/dr``, ``(d|B|/dtheta)/r`` and ``d|B|/dzeta``."""
         if self.table is not None:
             return _table_derivatives(self.r_knots, self.table, self.nfp, r, theta, zeta)
+        if self.axis_regular:
+            a, da = _evaluate(self.r_knots, self.b_coef, r*r)
+            phase = self.xm * theta - self.xn * zeta
+            c, s = jnp.cos(phase), jnp.sin(phase)
+            power = r ** self.xm
+            angular_power = r ** jnp.maximum(self.xm - 1, 0)
+            df = self.xm * angular_power * a + 2*r*power*da
+            values = (jnp.sum(power*a*c), jnp.sum(df*c),
+                      -jnp.sum(self.xm*angular_power*a*s), jnp.sum(self.xn*power*a*s))
+            if self.sine_coef is not None:
+                a, da = _evaluate(self.r_knots, self.sine_coef, r*r)
+                df = self.xm * angular_power * a + 2*r*power*da
+                values = tuple(x+y for x, y in zip(values, (
+                    jnp.sum(power*a*s), jnp.sum(df*s),
+                    jnp.sum(self.xm*angular_power*a*c), -jnp.sum(self.xn*power*a*c))))
+            return values
         a, da = _evaluate(self.r_knots, self.b_coef, r)
         phase = self.xm * theta - self.xn * zeta
         c, s = jnp.cos(phase), jnp.sin(phase)

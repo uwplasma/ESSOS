@@ -1,6 +1,7 @@
 """Boozer-coordinate guiding-centre tracing and Monte Carlo collisions."""
 
 import dataclasses
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -34,6 +35,98 @@ def test_field_reproduces_the_spectrum_and_is_regular_on_the_axis():
         assert float(field.modB(s, theta, 0.3)) == pytest.approx(B0 * (1 - EPS * np.sqrt(s) * np.cos(theta)), rel=1e-10)
     iota, G_s, I_s = (float(x) for x in field.profiles(0.0)[0])
     assert (iota, G_s, I_s) == pytest.approx((IOTA, G, 0.0))
+
+
+def test_explicit_axis_regular_modes_match_analytic_field_and_derivatives():
+    s = np.linspace(.0025, .9975, 200)
+    r = np.sqrt(s)
+    bmnc = np.stack([2 + .1*s, .2*r*(1+.3*s), .08*r**5*np.exp(.2*s)])
+    bmns = np.stack([np.zeros_like(s), np.zeros_like(s), .04*r**5*np.exp(.2*s)])
+    booz = SimpleNamespace(s_b=s, bmnc_b=bmnc, bmns_b=bmns, xm_b=np.array([0, 1, 5]),
+                           xn_b=np.array([0, 0, 2]), iota=np.full_like(s, .4),
+                           Boozer_G=np.ones_like(s), Boozer_I=np.zeros_like(s), nfp=2)
+    field = BoozerField.from_booz_xform(booz, 1., angle_grid=(16, 16),
+                                      axis_regular=True, axis_regular_tolerance=1e-8)
+    assert field.axis_regular and field.table is None
+    # Preserve all supplied samples, including sine modes, without a fit.
+    sample_theta, sample_zeta = .7, .2
+    sample_phase = np.array([0, 1, 5])*sample_theta-np.array([0, 0, 2])*sample_zeta
+    expected_samples = bmnc.T@np.cos(sample_phase)+bmns.T@np.sin(sample_phase)
+    np.testing.assert_allclose(jax.vmap(field.modB)(s, jnp.full_like(s, sample_theta),
+                                                  jnp.full_like(s, sample_zeta)),
+                               expected_samples, rtol=2e-15, atol=2e-15)
+    theta, zeta = .7, .2
+    phase = 5*theta-2*zeta
+    harmonic = .08*np.cos(phase)+.04*np.sin(phase)
+    angular = -.4*np.sin(phase)+.2*np.cos(phase)
+    toroidal = .16*np.sin(phase)-.08*np.cos(phase)
+    evaluate = jax.jit(lambda r, t, z: field.modB_derivatives(r, t, z))
+    radial_grad = jax.jit(jax.grad(lambda x: field.modB_derivatives(x, theta, zeta)[0]))
+    for radius in (0., .001, .025, .05, .18, .8):
+        actual = np.asarray(field.modB_derivatives(radius, theta, zeta))
+        expected = [2+.1*radius**2+.2*radius*(1+.3*radius**2)*np.cos(theta)
+                    + radius**5*np.exp(.2*radius**2)*harmonic,
+                    .2*radius+.2*(1+.9*radius**2)*np.cos(theta)
+                    + (5*radius**4+.4*radius**6)*np.exp(.2*radius**2)*harmonic,
+                    -.2*(1+.3*radius**2)*np.sin(theta)
+                    + radius**4*np.exp(.2*radius**2)*angular,
+                    radius**5*np.exp(.2*radius**2)*toroidal]
+        np.testing.assert_allclose(actual, expected, rtol=0, atol=2e-12)
+        np.testing.assert_allclose(evaluate(radius, theta, zeta), expected, rtol=0, atol=2e-12)
+        assert float(radial_grad(radius)) == pytest.approx(expected[1], abs=2e-12)
+
+
+@pytest.mark.parametrize("sine", [False, True])
+def test_axis_regular_option_rejects_unresolved_inner_mode(sine):
+    s = np.linspace(.0025, .9975, 200)
+    r = np.sqrt(s)
+    mode = r**5
+    mode[0] *= 2
+    bmnc = np.stack([2+0*s, 0*s if sine else mode])
+    bmns = np.stack([0*s, mode]) if sine else None
+    with pytest.raises(ValueError, match="inner profile is unresolved for m=5"):
+        BoozerField.from_booz(s, bmnc, [0, 5], [0, 0],
+                              .4+0*s, 1+0*s, 0*s, 1., 1, axis_regular=True,
+                              axis_regular_tolerance=.01, bmns=bmns)
+
+
+@pytest.mark.parametrize("tolerance", [None, 0., -1., np.inf, np.nan])
+def test_axis_regular_option_requires_explicit_finite_positive_tolerance(tolerance):
+    s = np.linspace(.0025, .9975, 200)
+    with pytest.raises(ValueError, match="positive finite axis_regular_tolerance"):
+        BoozerField.from_booz(s, np.stack([8+0*s, s**2.5]), [0, 5], [0, 0],
+                              .4+0*s, 1+0*s, 0*s, 1., 1, axis_regular=True,
+                              axis_regular_tolerance=tolerance)
+
+
+def test_axis_regular_option_removes_manufactured_forbidden_linear_harmonic():
+    # Smooth Cartesian polynomial Re((x+iy)**5), exact noiseless half-mesh data.
+    s = np.linspace(.0025, .9975, 200)
+    args = (s, np.stack([8+0*s, s**2.5]), [0, 5], [0, 0],
+            .4+0*s, 1+0*s, 0*s, 1., 1)
+    default = BoozerField.from_booz(*args, angle_grid=None)
+    regular = BoozerField.from_booz(*args, axis_regular=True, axis_regular_tolerance=1e-12)
+    assert abs(float(default.modB_derivatives(0., 0., 0.)[1])) > 5e-5
+    for radius in (0., 1e-8, 1e-6, .001, .025, .9):
+        np.testing.assert_allclose(regular.modB_derivatives(radius, 0., 0.),
+                                   [8+radius**5, 5*radius**4, 0., 0.], atol=1e-14)
+
+
+def test_axis_regular_manufactured_inner_extrapolation_converges_under_refinement():
+    # Divide out known powers only in the oracle error to expose the small m=5
+    # harmonic rather than hiding it in an O(1) axisymmetric field tolerance.
+    radii = np.array([.02, .06, .15])
+    errors = []
+    for count in (16, 32, 64, 128):
+        s = (np.arange(count)+.5)/count
+        field = BoozerField.from_booz(s, (s**2.5*np.exp(3*s))[None, :], [5], [0],
+                                      .4+0*s, 1+0*s, 0*s, 1., 1, axis_regular=True,
+                                      axis_regular_tolerance=.01)
+        actual = np.asarray(jax.vmap(lambda r: jnp.array(field.modB_derivatives(r, 0., 0.)))(radii))
+        expected = np.exp(3*radii**2)
+        errors.append(max(np.max(np.abs(actual[:, 0]/radii**5-expected)),
+                          np.max(np.abs(actual[:, 1]/radii**4-(5+6*radii**2)*expected))))
+    assert np.all(np.array(errors[:-1])/errors[1:] > 8), errors
 
 
 def test_angle_table_matches_the_mode_sum():
