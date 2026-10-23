@@ -1234,10 +1234,39 @@ changes some adaptive decisions. A twice-refined independent reference audit
 finds no status disagreements and a maximum saved parallel-velocity error
 of 0.045 m/s for the candidate versus 0.440 m/s for its paired control.
 It is forward-only, fixed cosine Fourier Boozer fields only, adaptive
-Dopri8/I/standard output only, and disabled by default. The alpha entrypoint
+Dopri5/8 with I control and standard output only, and disabled by default. The alpha entrypoint
 selects it with `--experimental-fused-orbit`; the controlled development
-comparison is `--comparison orbit_fusion`. No target A100 or full-horizon
-improvement is claimed yet. The linked record gives the short remote command.
+comparison is `--comparison orbit_fusion`. The subsequent
+[8192-particle A100 comparison](examples/benchmarks/results/gpu_boozer_fused_trial_20261023/a100_orbit_fusion.json)
+over 0.2 ms measures 552.30 -> 187.44 ms warm (66.1% lower, 2.95x), with
+compiled buffers 149.09 -> 96.11 MiB and compilation 4.97 -> 5.18 s.
+Both paths lose 49 particles and report zero failures. Their worst saved
+parallel-velocity errors are both about 71.6 m/s (5.50e-6 of birth speed)
+against the tighter reference; the local 64-particle error does not describe
+the larger batch. These are global saved errors, not embedded acceptance
+estimates. The subsequent [full 20 ms run](examples/benchmarks/results/gpu_boozer_fused_trial_20261023/remote_full_orbit_console.json)
+completes with a warm median of 18.448 s (two samples), compilation 5.069 s,
+111 lost particles and zero failures. This is 61.8% below the earlier fused
+trial's 48.246 s warm sample and 8.7% below fixed RK4's 20.215 s sample;
+these are separate runs with different error control and boundary localization.
+The earlier ordinary adaptive Dopri8 median was 54.367 s. Full-run trajectory
+errors and memory were not printed in the supplied console log. This kernel
+has no checkpoint tape or custom reverse rule; these forward results do not
+establish reverse-AD timing or memory gains.
+
+The [Dopri5 GPU extension and accuracy audit](examples/benchmarks/results/gpu_boozer_dopri5_20261023/README.md)
+apply the same execution layout to the original Dopri5 tableau, embedded
+estimator and quartic dense output. In paired local 64-particle tests, stage
+fusion reduces warm time 292.64 -> 197.68 ms, and whole-orbit fusion reduces
+194.87 -> 115.10 ms, with identical accepted/rejected counts. Dopri8 outputs
+remain bitwise identical to the earlier implementation in the regression test.
+The alpha command selects Dopri5 with `--integrator essos_rk45` and the same
+`--experimental-fused-orbit` flag. No Dopri5 A100 gain is claimed yet.
+The development comparison accepts `--method dopri5`;
+`--audit-reference --audit-rk4` measures actual saved-point errors for RK4 at dt, dt/2 and dt/4
+and for native Dopri5/8 against two tighter reference solves. Fixed RK4 has
+no tolerance controller; the linked record separates achieved global errors
+from local embedded tolerances and includes the full run commands.
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated

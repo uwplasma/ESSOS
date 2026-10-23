@@ -1,0 +1,151 @@
+{
+  "comparison": "orbit_fusion",
+  "backend": "gpu",
+  "device": "NVIDIA A100-SXM4-40GB",
+  "jax": "0.7.2",
+  "particles": 8192,
+  "horizon_s": 0.0002,
+  "saves": 101,
+  "repeats": 5,
+  "energy_ev": 3520000.0,
+  "seed": 42,
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "controller": "i",
+  "method": "dopri8",
+  "stage_execution": "unrolled",
+  "field_modes": 16,
+  "particle_chunking": false,
+  "particle_compaction": false,
+  "birth_sha256": "6d1beaf1660d59c23c08a8c91e2b28d3648320e8d691fd8adb5d231e57d9c79a",
+  "source_sha256": {
+    "boozer.py": "a39ff7374646e98967dba9f267e14edd75dd210ee41e82abca0789f4fa3c56b7",
+    "rk.py": "62b9197b7aa80ec8478316ba1f98522f8a82ba5c6e2ecc8d14e74f9ee4ee07e7",
+    "rk_events.py": "bc002e8666d14a1e27a04b608d609e6836c19fe332f0b0c0cc69113e4b4a8514",
+    "rk_rhs.py": "99f3b4a9d54eb1ffd23426d08b4e1a06a6cf923068bfcfe011ae8c75e78501c6",
+    "rk_boozer_gpu_trial.py": "90db59ced126997355c89487104e1d8773862f69b97f07657b3fdb3c53f68969",
+    "rk_boozer_gpu_orbit.py": "81ff81486b171d73cb95f2fd31ab7582b58cbdd382edb2f699a8590e4b59a8fc"
+  },
+  "rows": {
+    "trial": {
+      "compile_s": 4.97144809800011,
+      "samples_ms": [
+        551.1143570001877,
+        552.3004829992715,
+        554.7589740017429,
+        552.2429960001318,
+        554.5452090009348
+      ],
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "compiled_buffers_bytes": 156336088,
+      "first_execution_ms": 578.8265509982011,
+      "warm_median_ms": 552.3004829992715,
+      "trials": 4168068,
+      "accepted": 3539670,
+      "rejected": 628398,
+      "max_trials": 759,
+      "lost": 49,
+      "failed": 0,
+      "max_relative_energy_error": 8.491390923737185e-10
+    },
+    "orbit": {
+      "compile_s": 5.180351672999677,
+      "samples_ms": [
+        187.40398199952324,
+        187.43640499815228,
+        188.02976100050728,
+        189.6113190014148,
+        186.98700400273083
+      ],
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "compiled_buffers_bytes": 100780392,
+      "first_execution_ms": 224.48415899998508,
+      "warm_median_ms": 187.43640499815228,
+      "trials": 4169494,
+      "accepted": 3539926,
+      "rejected": 629568,
+      "max_trials": 764,
+      "lost": 49,
+      "failed": 0,
+      "max_relative_energy_error": 1.1462261140238184e-09
+    }
+  },
+  "max_saved_component_difference": [
+    6.065412205824572e-08,
+    9.031397196768153e-07,
+    1.2779366223014677e-06,
+    0.7993937702849507,
+    0.009844943881034851
+  ],
+  "max_scaled_saved_difference": 1.2779366223014677e-06,
+  "counts_identical": false,
+  "time_decrease_percent": 66.06260346174648,
+  "peak_memory_scope": "cumulative across both executables",
+  "gpu_memory": {
+    "num_allocs": 282,
+    "bytes_in_use": 67481600,
+    "peak_bytes_in_use": 223490304,
+    "largest_alloc_size": 122454016,
+    "bytes_limit": 31724126208,
+    "bytes_reserved": 0,
+    "peak_bytes_reserved": 0,
+    "largest_free_block_bytes": 0,
+    "pool_bytes": 31724126208,
+    "peak_pool_bytes": 31724126208
+  },
+  "host_memory": {
+    "VmHWM": 2062032896,
+    "VmRSS": 2000146432
+  },
+  "accuracy_audit": {
+    "reference": "Independent Diffrax Dopri8, PI p=.4/i=.3; two refinements",
+    "reference_error_norm": "RMS with rtol=0 and atol=tolerance*(1,1,1,birth_speed)",
+    "diagnostic": "Common saved times before corresponding first loss; regular flux chart, not metres",
+    "velocity_scale": "birth speed; not relative to instantaneous parallel velocity",
+    "saved_errors_are_global": true,
+    "rows": {
+      "trial": {
+        "max_chart_radial_error": 3.70585097061871e-05,
+        "max_zeta_error_rad": 0.00011742847169138315,
+        "max_birth_speed_scaled_parallel_velocity_error": 5.4958455664166905e-06,
+        "max_parallel_velocity_error_m_s": 71.60440692714636,
+        "reference_status_disagreements": 0
+      },
+      "orbit": {
+        "max_chart_radial_error": 3.7058509689413515e-05,
+        "max_zeta_error_rad": 0.00011742847171625215,
+        "max_birth_speed_scaled_parallel_velocity_error": 5.495847194114667e-06,
+        "max_parallel_velocity_error_m_s": 71.60442813413749,
+        "reference_status_disagreements": 0
+      }
+    },
+    "reference_refinement_difference": [
+      5.274852032943755e-07,
+      6.300564553418653e-07,
+      2.0218634979585204e-06,
+      9.463024064348957e-08
+    ],
+    "reference_refinement_components": [
+      "u",
+      "w",
+      "zeta",
+      "v_parallel/birth_speed"
+    ],
+    "reference_work": {
+      "1e-12": {
+        "accepted": 7800940,
+        "rejected": 715708
+      },
+      "1e-13": {
+        "accepted": 11216624,
+        "rejected": 1226791
+      }
+    }
+  }
+}

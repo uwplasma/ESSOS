@@ -354,9 +354,9 @@ estimates or errors relative to instantaneous parallel velocity.
 The candidate is opt-in, CUDA-only, forward-only and limited to fixed cosine
 Fourier Boozer fields, adaptive Dopri8, I control and standard dense output.
 The ordinary default, Biot-Savart, VMEC, collisions and reverse AD retain their
-existing execution paths. No A100 timing or full 20 ms gain has been measured
-for this candidate. Check the remote JAX 0.7.2 environment and the short
-controlled comparison before a full run:
+existing execution paths. The subsequent short A100 and full 20 ms results
+are recorded below. Reproduce the short controlled
+comparison with:
 
 ```sh
 python -m examples.benchmarks.benchmark_boozer_adaptive_events \
@@ -378,4 +378,129 @@ guards. Birth validity is checked once with ordinary JAX before entering the
 persistent kernel; an invalid birth returns immediately. The existing fused
 trial/finite-guard checks and public Boozer entrypoint check also passed.
 These are local JAX 0.11.2 checks, including the earlier missing-primitive
-proxy; they do not substitute for running the new kernel on JAX 0.7.2.
+proxy. The subsequent A100 run below also completed on JAX 0.7.2.
+
+## A100 independent-orbit comparison: 8192 particles, 0.2 ms
+
+The user ran the command above on an A100-SXM4-40GB with JAX 0.7.2.
+The [unmodified supplied report](a100_orbit_fusion.json) has the same birth
+hash as the earlier 8192-particle results. All six solver source hashes
+match the locally validated candidate. Both paths use 16 direct Fourier
+modes, 101 saves, seed 42, adaptive Dopri8/I, and rtol=atol=1e-10.
+Five blocked warm samples alternate case order; compilation and the two
+independently refined reference solves are outside the warm timings.
+
+| Measurement | Fused trial + ordinary driver | Independent orbit kernels |
+|---|---:|---:|
+| Warm forward median, ms | 552.300 | 187.436 |
+| Lowering/compilation, s | 4.971 | 5.180 |
+| First execution, ms | 578.827 | 224.484 |
+| Compiled buffers, MiB | 149.094 | 96.112 |
+| Accepted / rejected trials | 3539670 / 628398 | 3539926 / 629568 |
+| Maximum trials per particle | 759 | 764 |
+| Lost / failed | 49 / 0 | 49 / 0 |
+| Maximum relative energy drift | 8.491e-10 | 1.146e-9 |
+| Maximum saved flux-chart radial error | 3.706e-5 | 3.706e-5 |
+| Maximum saved zeta error, rad | 1.174e-4 | 1.174e-4 |
+| Maximum saved parallel-velocity error, m/s | 71.6044 | 71.6044 |
+| Parallel-velocity error / birth speed | 5.496e-6 | 5.496e-6 |
+
+Warm time decreases 66.06% (2.947x); compiled buffers decrease 35.54%.
+Compilation increases by 0.209 s. Total trials increase by 0.034%, so this
+speedup cannot be attributed to fewer accepted/rejected trials. The execution
+layout keeps the adaptive loop and output inside each particle's GPU program,
+avoiding the outer lockstep driver. The numerical method is unchanged, with
+ordinary rounding differences in adaptive decisions.
+
+The accuracy audit does not show a new worst-case orbit-error regression:
+both methods have essentially the same maximum saved errors and agree with
+the reference statuses for every particle. Between the two methods the largest
+saved parallel-velocity difference is 0.799 m/s and zeta difference is 1.278e-6
+rad. The candidate's maximum energy drift is somewhat larger, as shown above.
+The worst-case global errors in this 8192-particle batch are substantially
+larger than in the local 64-particle batch. They are not a 1e-10 global-error
+guarantee. These results alone do not identify whether accumulated integration
+error, dense interpolation or sensitivity of particular trajectories dominates.
+
+The two independent reference refinements differ by up to 2.022e-6 rad in
+zeta and 9.463e-8 of birth speed in parallel velocity (about 1.23 m/s).
+Their difference is smaller than the native worst errors but is not a rigorous
+bound on reference error. The two reference norms also differ from the native
+block norm; they are independent refined solutions, not matched-step controls.
+
+The reported JAX allocator peak (223490304 bytes) is cumulative across both
+executables and setup, before the untimed references. It cannot establish
+a per-case peak VRAM reduction. The 31.72 GB pool reservation is not actual
+bytes in use. Keep compiled buffers and allocator peaks separate.
+
+The A100/JAX 0.7.2 short workload completed successfully. Do not extrapolate
+this 0.2 ms timing or compare it directly with the earlier 20.215 s full-horizon
+RK4 result. The subsequent full run below used this command:
+
+```sh
+python -m examples.benchmarks.benchmark_native_boozer_alpha \
+  --integrator essos_dopri8 --experimental-fused-orbit \
+  --particles 8192 --horizon 0.02 --saves 101 --repeats 2 \
+  --rtol 1e-10 --atol 1e-10 \
+  --controller i --stage-execution unrolled --seed 42 \
+  --field-cache output/native_boozer_dopri8_8192_event_replay_run1/boozer_inputs.npz \
+  --output output/native_boozer_dopri8_8192_fused_orbit_run1
+```
+
+## Full 20 ms independent-orbit run
+
+The user supplied the completed console output for the full command above.
+The [console evidence record](remote_full_orbit_console.json) preserves the
+printed timings, settings and counts; `benchmark.json` and `traces.npz` were
+not supplied. Setup is excluded from tracing timings. This log prints
+`CudaDevice(id=0)` without independently identifying the GPU model or JAX
+version; the preceding short run was on A100/JAX 0.7.2.
+
+| Full workload: 8192 particles, 20 ms, 101 saves | Compile, s | First solve, s | Warm result, s | Warm basis |
+|---|---:|---:|---:|---|
+| Ordinary adaptive Dopri8 | 14.800 | 54.168 | 54.367 | Median of two |
+| Fused trial + ordinary adaptive driver | 4.842 | 48.185 | 48.246 | First warm sample supplied |
+| Independent adaptive orbit kernels | 5.069 | 18.680 | 18.448 | Median of two |
+| Standard fixed RK4, dt=1.25e-7 s | 2.653 | 20.259 | 20.215 | First warm sample supplied |
+
+The new warm samples are 18.359 s and 18.536 s; the printed median is
+18.448 s. It is 61.76% lower than the earlier fused-trial sample (2.615x),
+66.07% lower than the ordinary Dopri8 median (2.947x), and 8.74% lower than
+the RK4 sample. These are separate full runs, not a paired interleaved
+comparison. Compilation is 0.227 s above the earlier fused trial. This
+establishes the observed full-workload improvement; it does not establish
+a faster intrinsic Dopri8 step than RK4 or equal accuracy between methods.
+
+The new solver completes 413252254 trials (351025279 accepted, 62226975
+rejected), only 0.0029% more than the earlier fused-trial run's 413240174.
+The active integration effort is essentially unchanged. Both execution
+layouts were JIT-compiled and ran on the GPU. The new layout keeps adaptive
+control, saves and roots inside each particle's GPU program, removing repeated
+kernel transitions and external lockstep bookkeeping. Its counted fresh RHS
+work is 5372287494, including the 8192 initial evaluations; no lockstep padded
+slot estimate applies. The log does not isolate individual overhead costs.
+
+There are 111 lost particles (1.355%) and zero failures. Earlier ordinary
+Dopri8 reported 110 lost; the earlier fused-trial final loss count was not
+supplied. This is a net count difference, not proof that exactly one particle's
+classification changed. Comparing lost identities and times needs the saved
+particle outputs. Full-horizon energy and trajectory-error diagnostics were
+not printed; the short audit does not validate all 20 ms trajectories.
+
+Full-run compiled buffers and allocator peaks were not printed either. The
+short run's 35.54% compiled-buffer reduction is not a measured full-run peak
+VRAM reduction. All other field, collision and reverse-AD paths remain unchanged.
+
+This kernel remains forward-only: it records no accepted-step checkpoint tape
+and supplies no custom reverse rule. Reverse AD would require accepted-step
+logging/checkpointing and segment replay with controller/rejection decisions
+frozen, plus derivative rules and validation. Forward speed and buffer gains
+do not establish reverse-time or AD-memory gains.
+
+The later [Dopri5 extension](../gpu_boozer_dopri5_20261023/README.md) shares
+this driver while selecting method-specific stages, controller order and
+dense output. The recorded Dopri8 A100 hashes above precede that extension.
+A 64-particle before/after check against `e291a7c` preserves all Dopri8
+outputs and counts bitwise, with unchanged compiled buffers and timings.
+The new record also audits fixed RK4 step refinement against both native
+methods; the full target-machine Dopri5 result remains unmeasured.

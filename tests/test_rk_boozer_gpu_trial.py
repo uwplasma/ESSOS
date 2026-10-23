@@ -6,9 +6,10 @@ import numpy as np
 import pytest
 
 
-def test_fused_trial_matches_original_dopri8_at_axis_and_spline_edges(monkeypatch):
+@pytest.mark.parametrize("method", ["dopri5", "dopri8"])
+def test_fused_trial_matches_original_at_axis_and_spline_edges(monkeypatch, method):
     from essos.boozer import boozer_compiler_options, guiding_center_rhs
-    from essos.rk import _trial_step, _C8, _A8, _ERROR8
+    from essos.rk import _trial_step, _C, _A, _ERROR, _C8, _A8, _ERROR8
     from essos.rk_boozer_gpu_trial import prepare_trial_factory
     from examples.benchmarks.benchmark_native_boozer_alpha import PARAMETERS, ROOT, setup, MASS, CHARGE
     if not boozer_compiler_options():
@@ -26,13 +27,14 @@ def test_fused_trial_matches_original_dopri8_at_axis_and_spline_edges(monkeypatc
     pitch = jnp.linspace(-.9,.9,64)
     y = jnp.stack((jnp.sqrt(s)*jnp.cos(theta),jnp.sqrt(s)*jnp.sin(theta),zeta,speed*pitch),axis=1)
     mu = speed**2*(1-pitch**2)/(2*jax.vmap(field.modB)(s,theta,zeta))
-    factory = prepare_trial_factory(field,MASS,CHARGE)
+    factory = prepare_trial_factory(field,MASS,CHARGE,method=method)
+    nodes,rows,weights=(_C,_A,_ERROR) if method=="dopri5" else (_C8,_A8,_ERROR8)
     h = jnp.asarray(1e-10)
     def one(point,moment,fused):
         rhs = lambda t,y,a:guiding_center_rhs(field,y,moment,MASS,CHARGE)
         f0 = rhs(0.,point,None)
         step = factory(moment) if fused else _trial_step
-        return step(rhs,0.,point,h,None,f0,_C8,_A8,_ERROR8)
+        return step(rhs,0.,point,h,None,f0,nodes,rows,weights)
     ordinary = jax.jit(jax.vmap(lambda y,m:one(y,m,False)))(y,mu)
     fused = jax.jit(jax.vmap(lambda y,m:one(y,m,True)))(y,mu)
     scale = jnp.array([1.,1.,1.,speed])

@@ -1,4 +1,4 @@
-"""Experimental forward-only CUDA Dopri8 trial for fixed Boozer fields.
+"""Experimental forward-only CUDA Dopri5/8 trial for fixed Boozer fields.
 
 The adaptive driver, error norm, controller, dense output and event handling
 remain in rk.py. This module places the same RK stages and physical RHS in
@@ -13,7 +13,7 @@ from jax.experimental.pallas import triton as plt
 from jax.extend.core import Literal
 
 from .boozer import BoozerField, guiding_center_rhs, _chart
-from .rk import _A8, _ERROR8, _RKTrial, _evaluate_inline, _bind_primitive
+from .rk import _A, _ERROR, _A8, _ERROR8, _RKTrial, _evaluate_inline, _bind_primitive
 
 
 def _padded_spline(knots, coefficients):
@@ -140,8 +140,10 @@ def _kernel_rhs(model, y0, moment, mass, charge):
     return evaluate
 
 
-def prepare_trial_factory(field, mass, charge):
+def prepare_trial_factory(field, mass, charge, *, method="dopri8"):
     """Prepare an opt-in trial factory outside jit for a fixed Fourier field."""
+    if method not in ("dopri5", "dopri8"):
+        raise ValueError("The fused trial method must be dopri5 or dopri8")
     if jax.default_backend() != "gpu" or "cuda" not in jax.devices()[0].client.platform_version.lower():
         raise ValueError("The experimental fused trial requires CUDA")
     if field.table is not None or field.sine_coef is not None:
@@ -153,38 +155,41 @@ def prepare_trial_factory(field, mass, charge):
     xn = jnp.pad(field.xn, (0, modes-len(field.xn)))
     arrays = (radial, b, flux, profiles, xm, xn)
     psi0 = float(field.psi0)
-    matrix = np.zeros((16, 16))
-    for i, row in enumerate(_A8, 1):
+    tableau, embedded = (_A, _ERROR) if method == "dopri5" else (_A8, _ERROR8)
+    stages = len(embedded)
+    bank_size = 1 << (stages-1).bit_length()
+    matrix = np.zeros((bank_size, bank_size))
+    for i, row in enumerate(tableau, 1):
         matrix[i, :len(row)] = row
     coefficients = jnp.asarray(matrix)
-    error_weights = jnp.asarray(tuple(_ERROR8)+(0., 0.))
+    error_weights = jnp.asarray(tuple(embedded)+(0.,)*(bank_size-stages))
 
     def factory(moment):
         def step(rhs, t, y, h, args, f0, nodes, rows, weights):
             del rhs, t, args, nodes, rows
-            if len(weights) != 14:
-                raise ValueError("The fused trial implements Dopri8 only")
+            if len(weights) != stages:
+                raise ValueError(f"The fused trial was configured for {method}")
             def kernel(yref, fref, href, mref, *refs):
                 *field_refs, aref, eref, yout, eout, kout, fout = refs
                 model = _KernelField(field_refs, psi0)
                 point, h = yref[...], href[...]
                 evaluate = _kernel_rhs(model, point, mref[...], mass, charge)
                 first = fref[...]
-                index = jnp.arange(16)[:, None]
-                bank = jnp.where(index == 0, h*first[None, :], jnp.zeros((16, 4), point.dtype))
+                index = jnp.arange(bank_size)[:, None]
+                bank = jnp.where(index == 0, h*first[None, :], jnp.zeros((bank_size, 4), point.dtype))
                 def stage(i, carry):
                     bank, _, _ = carry
                     point_i = point+jnp.sum(aref[i, :][:, None]*bank, axis=0)
                     final = evaluate(point_i)
                     bank = jnp.where(index == i, h*final[None, :], bank)
                     return bank, point_i, final
-                bank, endpoint, final = jax.lax.fori_loop(1, 14, stage, (bank, point, first))
+                bank, endpoint, final = jax.lax.fori_loop(1, stages, stage, (bank, point, first))
                 error = jnp.sum(eref[...][:, None]*bank, axis=0)
                 yout[...], eout[...], fout[...] = endpoint, error, final
-                for i in range(14):
+                for i in range(stages):
                     kout[i, :] = _select_one(bank, i, 0).reshape(4)
             shapes = (jax.ShapeDtypeStruct((4,), y.dtype), jax.ShapeDtypeStruct((4,), y.dtype),
-                jax.ShapeDtypeStruct((14, 4), y.dtype), jax.ShapeDtypeStruct((4,), y.dtype))
+                jax.ShapeDtypeStruct((stages, 4), y.dtype), jax.ShapeDtypeStruct((4,), y.dtype))
             values = pl.pallas_call(kernel, out_shape=shapes, grid=(),
                 compiler_params=plt.CompilerParams(num_warps=1))(
                     y, f0, h, moment, *arrays, coefficients, error_weights)

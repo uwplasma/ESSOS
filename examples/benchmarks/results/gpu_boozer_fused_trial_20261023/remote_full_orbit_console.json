@@ -1,0 +1,60 @@
+{
+  "evidence": "User-pasted completed console output; benchmark.json and traces.npz were not supplied",
+  "remote_output_directory": "/home/exouser/ESSOS/output/native_boozer_dopri8_8192_fused_orbit_run1",
+  "console_run_completed": true,
+  "raw_report_supplied": false,
+  "particles": 8192,
+  "horizon_s": 0.02,
+  "saves": 101,
+  "energy_ev": 3520000,
+  "birth_s": 0.3,
+  "seed": 42,
+  "backend": "gpu",
+  "device_log": "CudaDevice(id=0); GPU model and JAX version not printed in this full log. The preceding short comparison used an A100-SXM4-40GB and JAX 0.7.2.",
+  "field_cache": "output/native_boozer_dopri8_8192_event_replay_run1/boozer_inputs.npz",
+  "field": {"modes": 16, "mode_cut": 0.0001, "representation": "QA Boozer direct Fourier sums; K=0"},
+  "integrator": "essos_dopri8",
+  "adaptive": true,
+  "controller": "i",
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "stage_execution": "unrolled",
+  "trial_kernel": "experimental Pallas independent adaptive orbit loops",
+  "experimental_fused_orbit": true,
+  "collisions": false,
+  "reverse_ad": false,
+  "particle_chunking": false,
+  "particle_compaction": false,
+  "compiler_options": {
+    "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+    "xla_gpu_graph_min_graph_size": 1
+  },
+  "lower_and_compile_seconds": 5.069,
+  "first_execution_seconds": 18.680,
+  "warm_seconds": [18.359, 18.536],
+  "warm_median_seconds": 18.448,
+  "timing_precision": "Console seconds rounded to three decimals; retain the printed median rather than recomputing it from rounded samples",
+  "lost_particles": 111,
+  "failed_particles": 0,
+  "first_step_counts": {
+    "trials": {"total": 413252254, "min": 105, "median": 54548.0, "max": 75842},
+    "accepted": {"total": 351025279, "min": 68, "median": 44798.5, "max": 70875},
+    "rejected": {"total": 62226975, "min": 29, "median": 8458.5, "max": 21336}
+  },
+  "rhs_work_estimate": {
+    "fresh_rhs_per_trial": 13,
+    "initial_rhs_evaluations": 8192,
+    "counted_trial_slots": 413252254,
+    "minimum_batched_trial_slots": null,
+    "counted_rhs_evaluations": 5372287494,
+    "minimum_batched_rhs_evaluations": null,
+    "active_slot_fraction_upper_bound": null,
+    "scope": "Independent per-particle GPU loops; counted RHS work excludes energy checks and root interpolation; no lockstep batch-slot estimate applies."
+  },
+  "unavailable": [
+    "full-run source and birth hashes from benchmark.json",
+    "full-run energy and independent trajectory-error diagnostics",
+    "compiled-buffer and peak-memory statistics",
+    "per-particle comparison of lost identities and loss times"
+  ]
+}

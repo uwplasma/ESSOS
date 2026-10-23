@@ -12,6 +12,7 @@ or lost-particle compaction. The GPU model was not present in the pasted log.
 | Adaptive Dopri8, separate sums | 14.800 | 54.168 | 54.367 median of two |
 | Adaptive Dopri8, experimental grouped sums | 14.550 | 62.301 | Not supplied |
 | Adaptive Dopri8, experimental fused trial | 4.842 | 48.185 | 48.246, first warm sample |
+| Adaptive Dopri8, independent orbit kernels | 5.069 | 18.680 | 18.448, median of two |
 | Standard fixed RK4 | 2.653 | 20.259 | 20.215, first warm sample |
 
 The second RK4 and fused warm samples and their final medians were not
@@ -19,7 +20,13 @@ supplied. The [fused record](../gpu_boozer_fused_trial_20261023/remote_full_part
 preserves the full-horizon partial console evidence. The fused first warm
 sample is 11.26% below the earlier ordinary median but still 2.39x RK4's
 first warm sample. Final full-run loss, accuracy and memory diagnostics
-were not supplied for the fused run. The RK4
+were not supplied for the stage-only fused run. The subsequent
+[independent-orbit run](../gpu_boozer_fused_trial_20261023/remote_full_orbit_console.json)
+completed both warm calls (18.359 s, 18.536 s), losing 111 particles with no
+failures. Its median is 61.76% below the earlier fused-trial sample and
+8.74% below the RK4 sample. This compares adaptive and fixed methods from
+separate runs; it does not establish equal accuracy or a lower per-step cost.
+Full-run accuracy and memory were not printed for the new run. The RK4
 log reports no failures and 160,000 executed grid slots per lane. These count
 held inactive lanes as well. The earlier separate-sum Dopri8 run accepted
 350,979,822 steps in total, with a maximum of 70,886 accepted steps per particle;
@@ -28,7 +35,7 @@ included in the pasted summary. Grouping remains disabled by default.
 
 The step counts are not equal-cost units. RK4 makes four fresh RHS calls per
 fixed step. Native Dopri8 makes thirteen per trial, reusing its initial FSAL
-derivative. The vmapped adaptive loop executes until its slowest lane finishes;
+derivative. The older vmapped adaptive loop executes until its slowest lane finishes;
 masked lanes still incur stage computation in the existing driver. Consequently,
 even ignoring rejections, the observed maximum accepted count implies at least
 70,886*13 = 921,518 RHS evaluations per lane in that execution layout, compared

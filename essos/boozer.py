@@ -489,9 +489,11 @@ def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
     """One shared native RK solve per orbit, independent of the save grid."""
     from essos.rk import RKStatus, solve_rk
 
-    if _orbit_solver is not None and (not adaptive or method != "dopri8" or controller != "i" or
+    if _orbit_solver is not None and (not adaptive or method not in ("dopri5", "dopri8") or controller != "i" or
             dense_output != "standard" or _trial_factory is not None or fixed_substeps is not None):
-        raise ValueError("The experimental fused orbit path requires adaptive Dopri8, I control and standard output")
+        raise ValueError("The experimental fused orbit path requires adaptive Dopri5/8, I control and standard output")
+    if _orbit_solver is not None and getattr(_orbit_solver, "method", method) != method:
+        raise ValueError("The prepared fused orbit method does not match the requested method")
 
     if _defer_event_root is None:
         _defer_event_root = (adaptive and method == "dopri8" and

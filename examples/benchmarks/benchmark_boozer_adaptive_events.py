@@ -1,4 +1,4 @@
-"""Controlled 64-particle adaptive Dopri8 event or GPU execution comparison.
+"""Controlled 64-particle adaptive Dopri5/8 GPU execution comparison.
 
 The orbit comparisons use the production Boozer field and physical RHS,
 identical births, tableau, I-controller, tolerances and save times. The replay case now retains
@@ -19,6 +19,9 @@ without adaptive control, saves or loss handling. It is a kernel diagnostic,
 not an orbit-accuracy or fixed-versus-adaptive production comparison.
 ``--comparison orbit_fusion`` compares the fused trial plus ordinary driver
 with one independent adaptive GPU program per orbit, using the same method.
+Use --method dopri5 with fusion/orbit_fusion to select Dopri5. Add
+--audit-rk4 with --audit-reference to measure fixed RK4 trajectory errors at
+the benchmark timestep and two halvings; these are untimed accuracy solves.
 """
 import argparse
 import hashlib
@@ -133,7 +136,7 @@ def benchmark_trial_work(options, field, initial, mu, speed):
     print(json.dumps(report, indent=2), flush=True)
 
 
-def audit_reference(field, initial, mu, speed, times, settings, results):
+def audit_reference(field, initial, mu, speed, times, settings, results, *, rk4_timestep=None, native_method="dopri8"):
     """Compare common pre-loss saves with two independently refined solves.
 
     Positions are measured in the regular flux chart, not Cartesian metres.
@@ -143,6 +146,36 @@ def audit_reference(field, initial, mu, speed, times, settings, results):
     import diffrax
     from essos.boozer import guiding_center_rhs
     from essos.dynamics import _EVENT_ROOT_FINDER
+
+    results = dict(results)
+    rk4_rows = {}
+    if rk4_timestep is not None:
+        from .benchmark_native_boozer_alpha import standard_rk4_orbits
+        if native_method == "dopri5":
+            from essos.rk_boozer_gpu_orbit import prepare_orbit_solver
+            d8_solver = prepare_orbit_solver(field, MASS, CHARGE, speed, times,
+                settings.timestep, settings.rtol, settings.atol, settings.max_steps, method="dopri8")
+            def d8_run(y, moment):
+                return _native_orbits(field, y, moment, MASS, CHARGE, speed, times,
+                    settings.timestep, settings.rtol, settings.atol, "dopri8", True, "i", .4, .3,
+                    "standard", settings.max_steps, "unrolled", _orbit_solver=d8_solver)
+            print("Untimed native Dopri8 control for the RK4/Dopri5 accuracy audit", flush=True)
+            control = jax.block_until_ready(jax.jit(
+                d8_run, compiler_options=boozer_compiler_options())(initial, mu))
+            if not np.isfinite(np.asarray(control[0])).all() or not np.isin(np.asarray(control[5]), [0, 1]).all():
+                raise AssertionError("Native Dopri8 accuracy control failed")
+            results["dopri8_orbit"] = control
+        for name, divisor in (("rk4_dt", 1), ("rk4_half_dt", 2), ("rk4_quarter_dt", 4)):
+            run, dt, slots = standard_rk4_orbits(field, initial, mu, speed, times,
+                rk4_timestep/divisor, settings.seed)
+            print(f"Untimed RK4 accuracy solve: {name}, actual dt={dt:g}, {slots} grid steps", flush=True)
+            output = jax.block_until_ready(jax.jit(run, compiler_options=boozer_compiler_options())(initial, mu))
+            if not np.isfinite(np.asarray(output[0])).all() or not np.isin(np.asarray(output[5]), [0, 1]).all():
+                raise AssertionError(f"{name}: fixed RK4 accuracy solve failed")
+            results[name] = output
+            rk4_rows[name] = dict(requested_dt_s=rk4_timestep/divisor, actual_dt_s=dt,
+                grid_steps_per_particle=slots, lost=int(np.sum(np.asarray(output[1]) >= 0)),
+                failed=int(np.sum(np.asarray(output[2]) >= 0)), scope="Untimed trajectory-accuracy solve")
 
     units = jnp.array([1., 1., 1., speed])
     def reference(y0, moments, tolerance):
@@ -200,6 +233,11 @@ def audit_reference(field, initial, mu, speed, times, settings, results):
     audit["reference_refinement_components"] = ["u", "w", "zeta", "v_parallel/birth_speed"]
     audit["reference_work"] = {str(k): dict(accepted=int(v[3][:, 1].sum()),
         rejected=int(v[3][:, 2].sum())) for k, v in refs.items()}
+    if rk4_rows:
+        audit["rk4_refinement"] = dict(rows=rk4_rows,
+            scope="Same births, fields, horizon and common pre-loss saves; no timing comparison or tolerance guarantee",
+            rk4_error_control="Fixed steps have no rtol/atol controller",
+            reference_uncertainty="The two tighter-reference differences are diagnostics, not rigorous error bounds")
     return audit
 
 
@@ -207,6 +245,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--comparison", choices=("events", "execution", "reductions", "fusion", "trial_work", "orbit_fusion"), default="events")
     parser.add_argument("--case", default="both")
+    parser.add_argument("--method", choices=("dopri5", "dopri8"), default="dopri8")
     parser.add_argument("--particles", type=int, default=64)
     parser.add_argument("--horizon", type=float, default=2e-4)
     parser.add_argument("--saves", type=int, default=101)
@@ -217,12 +256,18 @@ def main():
         help="trial_work only: same recurrence timestep for all methods")
     parser.add_argument("--audit-reference", action="store_true",
         help="Untimed two-refinement Diffrax accuracy audit; fusion/orbit_fusion with both cases only")
+    parser.add_argument("--audit-rk4", action="store_true",
+        help="With --audit-reference: untimed fixed RK4 accuracy at dt, dt/2 and dt/4")
     parser.add_argument("--field-cache", type=Path, default=ROOT/
         "examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz")
     parser.add_argument("--output", type=Path, default=Path("output/boozer_adaptive_events"))
     options = parser.parse_args()
     if options.audit_reference and (options.comparison not in ("fusion", "orbit_fusion") or options.case != "both"):
         parser.error("--audit-reference requires --comparison fusion/orbit_fusion --case both")
+    if options.audit_rk4 and not options.audit_reference:
+        parser.error("--audit-rk4 requires --audit-reference")
+    if options.method == "dopri5" and options.comparison not in ("fusion", "orbit_fusion"):
+        parser.error("--method dopri5 is supported for fusion/orbit_fusion")
     if options.particles < 1 or options.horizon <= 0 or options.saves < 2 or options.repeats < 1:
         parser.error("particles, horizon and repeats must be positive; saves >= 2")
     if options.trial_steps < 1 or not np.isfinite(options.trial_timestep) or options.trial_timestep <= 0:
@@ -243,7 +288,7 @@ def main():
         jax=jax.__version__, particles=options.particles, horizon_s=options.horizon,
         saves=options.saves, repeats=options.repeats, energy_ev=settings.energy_ev,
         seed=settings.seed, rtol=settings.rtol, atol=settings.atol,
-        controller=settings.controller, method="dopri8", stage_execution="unrolled",
+        controller=settings.controller, method=options.method, stage_execution="unrolled",
         field_modes=int(field.xm.size), particle_chunking=False, particle_compaction=False,
         birth_sha256=hashlib.sha256(np.asarray(initial).tobytes()+np.asarray(mu).tobytes()).hexdigest(),
         source_sha256={name: hashlib.sha256((ROOT/"essos"/name).read_bytes()).hexdigest()
@@ -258,23 +303,23 @@ def main():
         if name in ("fused", "trial", "orbit"):
             from essos.rk_boozer_gpu_trial import prepare_trial_factory
             if name != "orbit":
-                trial_factory = prepare_trial_factory(field, MASS, CHARGE)
+                trial_factory = prepare_trial_factory(field, MASS, CHARGE, method=options.method)
             report["source_sha256"]["rk_boozer_gpu_trial.py"] = hashlib.sha256(
                 (ROOT/"essos/rk_boozer_gpu_trial.py").read_bytes()).hexdigest()
         if name == "orbit":
             from essos.rk_boozer_gpu_orbit import prepare_orbit_solver
             orbit_solver = prepare_orbit_solver(field, MASS, CHARGE, speed, times,
-                settings.timestep, settings.rtol, settings.atol, settings.max_steps)
+                settings.timestep, settings.rtol, settings.atol, settings.max_steps, method=options.method)
             report["source_sha256"]["rk_boozer_gpu_orbit.py"] = hashlib.sha256(
                 (ROOT/"essos/rk_boozer_gpu_orbit.py").read_bytes()).hexdigest()
         def run(y, moment):
             return _native_orbits(field, y, moment, MASS, CHARGE, speed, times, settings.timestep,
-                settings.rtol, settings.atol, "dopri8", True, settings.controller,
+                settings.rtol, settings.atol, options.method, True, settings.controller,
                 .4, .3, "standard", settings.max_steps, "unrolled",
                 _defer_event_root=(False if name == "inline" else None),
                 _group_rhs_reductions=(name == "grouped") if options.comparison == "reductions" else None,
                 _trial_factory=trial_factory, _orbit_solver=orbit_solver)
-        print(f"Compiling {name}: {options.particles} particles, adaptive Dopri8", flush=True)
+        print(f"Compiling {name}: {options.particles} particles, adaptive {options.method}", flush=True)
         start = perf_counter()
         executable = jax.jit(run, compiler_options=compiler_options).lower(initial, mu).compile()
         memory = executable.memory_analysis()
@@ -320,7 +365,8 @@ def main():
     report["gpu_memory"] = jax.devices()[0].memory_stats()
     report["host_memory"] = rss()
     if options.audit_reference:
-        report["accuracy_audit"] = audit_reference(field, initial, mu, speed, times, settings, results)
+        report["accuracy_audit"] = audit_reference(field, initial, mu, speed, times, settings, results,
+            rk4_timestep=options.trial_timestep if options.audit_rk4 else None, native_method=options.method)
     options.output.mkdir(parents=True, exist_ok=True)
     (options.output/f"{options.case}.json").write_text(json.dumps(report, indent=2)+"\n")
     print(json.dumps(report, indent=2), flush=True)

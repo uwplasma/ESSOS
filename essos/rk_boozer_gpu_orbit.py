@@ -1,6 +1,6 @@
 """Opt-in forward-only CUDA execution of independent adaptive Boozer orbits.
 
-Each GPU program keeps one orbit's Dopri8 stages, I controller, dense saves
+Each GPU program keeps one orbit's Dopri5/8 stages, I controller, dense saves
 and edge root search together. The field and RHS are the same as the fused
 trial implementation. This module has no collision or reverse-AD rule.
 """
@@ -10,20 +10,22 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plt
 
-from .rk import _A8, _ERROR8, _DENSE8, RKSolution, RKStats
+from .rk import _A, _ERROR, _MID, _A8, _ERROR8, _DENSE8, RKSolution, RKStats
 from .rk_boozer_gpu_trial import (
     _padded_spline, _KernelField, _kernel_rhs, _kernel_is_finite, _select_one)
 
 
-def prepare_orbit_solver(field, mass, charge, speed, times, dt0, rtol, atol, max_steps):
+def prepare_orbit_solver(field, mass, charge, speed, times, dt0, rtol, atol, max_steps, *, method="dopri8"):
     """Prepare a fixed-field CUDA solver outside jit; return solve(y0, mu).
 
-    The supported map is adaptive Dopri8 with the ordinary Boozer block error
+    The supported map is adaptive Dopri5/8 with the ordinary Boozer block error
     norm, I control, standard dense output and the s=1 stopping surface. Save
     times do not constrain steps. Each particle stops independently; there is
     no particle chunking or compaction. Numerical equivalence is subject to
     ordinary floating-point changes from a different compiler execution path.
     """
+    if method not in ("dopri5", "dopri8"):
+        raise ValueError("The fused orbit method must be dopri5 or dopri8")
     if jax.default_backend() != "gpu" or "cuda" not in jax.devices()[0].client.platform_version.lower():
         raise ValueError("The experimental fused orbit solver requires CUDA")
     if field.table is not None or field.sine_coef is not None:
@@ -43,13 +45,20 @@ def prepare_orbit_solver(field, mass, charge, speed, times, dt0, rtol, atol, max
     modes = b.shape[1]
     xm = jnp.pad(field.xm, (0, modes-len(field.xm)))
     xn = jnp.pad(field.xn, (0, modes-len(field.xn)))
-    matrix = np.zeros((16, 16))
-    for i, row in enumerate(_A8, 1):
+    rows, weights, order = (_A, _ERROR, 5) if method == "dopri5" else (_A8, _ERROR8, 8)
+    stages = len(weights)
+    bank_size = 1 << (stages-1).bit_length()
+    matrix = np.zeros((bank_size, bank_size))
+    for i, row in enumerate(rows, 1):
         matrix[i, :len(row)] = row
     coefficients = jnp.asarray(matrix)
-    error_weights = jnp.asarray(tuple(_ERROR8)+(0., 0.))
-    dense_matrix = np.zeros((len(_DENSE8[0]), 16))
-    dense_matrix[:, :14] = np.asarray(_DENSE8).T
+    error_weights = jnp.asarray(tuple(weights)+(0.,)*(bank_size-stages))
+    if method == "dopri5":
+        dense_matrix = np.zeros((1, bank_size))
+        dense_matrix[0, :stages] = np.asarray(_MID)
+    else:
+        dense_matrix = np.zeros((len(_DENSE8[0]), bank_size))
+        dense_matrix[:, :stages] = np.asarray(_DENSE8).T
     dense_coefficients = jnp.asarray(dense_matrix)
     tmax = float(times[-1])
     # Load float64 scalars explicitly. Nested Pallas loops must not infer
@@ -87,7 +96,19 @@ def prepare_orbit_solver(field, mass, charge, speed, times, dt0, rtol, atol, max
                 return 1.-scalar(value, 0)**2-scalar(value, 1)**2
 
             def dense(y, endpoint, bank, fraction):
-                weights = jnp.zeros((16,), point.dtype)
+                if method == "dopri5":
+                    # Same quartic extension as rk._rk45_dense; the padded
+                    # bank's last row is not the final FSAL stage.
+                    first = _select_one(bank, 0, 0).reshape(4)
+                    last = _select_one(bank, stages-1, 0).reshape(4)
+                    midpoint = jnp.sum(dref[0, :][:, None]*bank, axis=0)
+                    delta = endpoint-y
+                    a = 2*(last-first)-8*delta+16*midpoint
+                    b = 5*first-3*last+14*delta-32*midpoint
+                    c = last-4*first-5*delta+16*midpoint
+                    value = y+fraction*(first+fraction*(c+fraction*(b+fraction*a)))
+                    return jnp.where(fraction == 0, y, jnp.where(fraction == 1, endpoint, value))
+                weights = jnp.zeros((bank_size,), point.dtype)
                 for power in range(dense_matrix.shape[0]):
                     weights = weights*fraction+dref[power, :]
                 value = y+jnp.sum((weights*fraction)[:, None]*bank, axis=0)
@@ -109,7 +130,7 @@ def prepare_orbit_solver(field, mass, charge, speed, times, dt0, rtol, atol, max
 
             index = jax.lax.while_loop(lambda i: (status == 0) & (i < nsave) &
                 (tsref[jnp.minimum(i, nsave-1)] == 0), initial_save, jnp.asarray(0, jnp.int32))
-            indexbank = jnp.arange(16)[:, None]
+            indexbank = jnp.arange(bank_size)[:, None]
             # Time, state, FSAL derivative, proposal, event value, status,
             # next save index, trials, accepted trials, rejected trials.
             initial = (zero, point, evaluate(point), initial_h, initial_level, status, index,
@@ -122,7 +143,7 @@ def prepare_orbit_solver(field, mass, charge, speed, times, dt0, rtol, atol, max
                 # 0 <= t <= final_t, so max(abs(t), abs(final_t)) is final_t.
                 h = jnp.where(remaining-h <= roundoff, remaining, h)
                 end_t = jnp.where(h == remaining, final_t, t+h)
-                bank = jnp.where(indexbank == 0, h*f0[None, :], jnp.zeros((16, 4), point.dtype))
+                bank = jnp.where(indexbank == 0, h*f0[None, :], jnp.zeros((bank_size, 4), point.dtype))
 
                 def stage(i, stage_carry):
                     bank, _, _ = stage_carry
@@ -130,7 +151,7 @@ def prepare_orbit_solver(field, mass, charge, speed, times, dt0, rtol, atol, max
                     fi = evaluate(yi)
                     return jnp.where(indexbank == i, h*fi[None, :], bank), yi, fi
 
-                bank, endpoint, f1 = jax.lax.fori_loop(1, 14, stage, (bank, y, f0))
+                bank, endpoint, f1 = jax.lax.fori_loop(1, stages, stage, (bank, y, f0))
                 embedded = jnp.sum(eref[...][:, None]*bank, axis=0)
                 e0, e1, e2, e3 = (scalar(embedded, i) for i in range(4))
                 error = jnp.maximum(jnp.sqrt(e0*e0+e1*e1),
@@ -140,7 +161,7 @@ def prepare_orbit_solver(field, mass, charge, speed, times, dt0, rtol, atol, max
                     _kernel_is_finite(error) & (error >= 0) & _kernel_is_finite(new_value))
                 accept = valid & (error <= 1) & (end_t > t)
                 crossing = accept & (((old_value > 0) != (new_value > 0)) | (new_value == 0))
-                factor = jnp.where(valid, jnp.clip(.9*jnp.maximum(error, 1e-16)**(-1/8), .2, 5.), .2)
+                factor = jnp.where(valid, jnp.clip(.9*jnp.maximum(error, 1e-16)**(-1/order), .2, 5.), .2)
                 proposed = h*jnp.where(accept, factor, jnp.minimum(factor, .9))
                 stuck = (end_t <= t) | (~accept & ((h <= 0) | (t+proposed <= t)))
                 new_status = jnp.where(stuck, jnp.where(valid, 3, 4), 0).astype(jnp.int32)
@@ -197,4 +218,5 @@ def prepare_orbit_solver(field, mass, charge, speed, times, dt0, rtol, atol, max
         return RKSolution(saved, ys, t, y, status, status == 1,
             RKStats(counts[0], counts[1], counts[2]), jnp.zeros((0,), y0.dtype), h, jnp.zeros_like(y0))
 
+    solve.method = method
     return solve

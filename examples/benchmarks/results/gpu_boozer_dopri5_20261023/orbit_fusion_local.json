@@ -1,0 +1,230 @@
+{
+  "comparison": "orbit_fusion",
+  "backend": "gpu",
+  "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "jax": "0.11.2",
+  "particles": 64,
+  "horizon_s": 0.0002,
+  "saves": 101,
+  "repeats": 15,
+  "energy_ev": 3520000.0,
+  "seed": 42,
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "controller": "i",
+  "method": "dopri5",
+  "stage_execution": "unrolled",
+  "field_modes": 16,
+  "particle_chunking": false,
+  "particle_compaction": false,
+  "birth_sha256": "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+  "source_sha256": {
+    "boozer.py": "06fd5a88533377bf99baf5e59f33159514846944d8c4aa214acfb0a3a9ad9076",
+    "rk.py": "62b9197b7aa80ec8478316ba1f98522f8a82ba5c6e2ecc8d14e74f9ee4ee07e7",
+    "rk_events.py": "bc002e8666d14a1e27a04b608d609e6836c19fe332f0b0c0cc69113e4b4a8514",
+    "rk_rhs.py": "99f3b4a9d54eb1ffd23426d08b4e1a06a6cf923068bfcfe011ae8c75e78501c6",
+    "rk_boozer_gpu_trial.py": "6331b9c9fce8e84875a807c6ea5e37e2e9e20a3cba7d6bd21a88c2a012717387",
+    "rk_boozer_gpu_orbit.py": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1"
+  },
+  "rows": {
+    "trial": {
+      "compile_s": 3.4689568069989036,
+      "samples_ms": [
+        221.72403700096766,
+        197.9953279987967,
+        193.79823800045415,
+        195.93446299768402,
+        193.7367539976549,
+        196.0340379991976,
+        192.46948100044392,
+        193.01849499970558,
+        195.95191500047804,
+        198.61051500265603,
+        192.43769099921337,
+        194.87166999897454,
+        192.9697439991287,
+        201.0513169989281,
+        194.7259690023202
+      ],
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "compiled_buffers_bytes": 1522072,
+      "first_execution_ms": 210.648358999606,
+      "warm_median_ms": 194.87166999897454,
+      "trials": 76239,
+      "accepted": 71401,
+      "rejected": 4838,
+      "max_trials": 1931,
+      "lost": 1,
+      "failed": 0,
+      "max_relative_energy_error": 1.6668035840439188e-09
+    },
+    "orbit": {
+      "compile_s": 3.889588096000807,
+      "samples_ms": [
+        116.64673899940681,
+        114.242091000051,
+        114.50968099961756,
+        115.62320799930603,
+        115.11098299888545,
+        115.1022070007457,
+        114.38279499998316,
+        115.02634399948874,
+        113.87279300106457,
+        114.99158999868087,
+        117.39214699991862,
+        114.3040179995296,
+        115.65815299763926,
+        115.66456500077038,
+        115.53799999819603
+      ],
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "compiled_buffers_bytes": 1464936,
+      "first_execution_ms": 124.81125699923723,
+      "warm_median_ms": 115.1022070007457,
+      "trials": 76239,
+      "accepted": 71401,
+      "rejected": 4838,
+      "max_trials": 1931,
+      "lost": 1,
+      "failed": 0,
+      "max_relative_energy_error": 1.6668024738208942e-09
+    }
+  },
+  "max_saved_component_difference": [
+    3.7692071686024065e-13,
+    2.113198505071523e-12,
+    6.284750497798086e-12,
+    3.995373845100403e-06,
+    7.078051567077637e-08
+  ],
+  "max_scaled_saved_difference": 6.284750497798086e-12,
+  "counts_identical": true,
+  "time_decrease_percent": 40.934355926979336,
+  "peak_memory_scope": "cumulative across both executables",
+  "gpu_memory": {
+    "num_allocs": 608,
+    "bytes_in_use": 602880,
+    "peak_bytes_in_use": 218501120,
+    "largest_alloc_size": 33554432,
+    "bytes_limit": 6410993664,
+    "bytes_reserved": 0,
+    "peak_bytes_reserved": 0,
+    "largest_free_block_bytes": 134217728,
+    "pool_bytes": 270532608,
+    "peak_pool_bytes": 270532608
+  },
+  "host_memory": {
+    "VmHWM": 964874240,
+    "VmRSS": 964874240
+  },
+  "accuracy_audit": {
+    "reference": "Independent Diffrax Dopri8, PI p=.4/i=.3; two refinements",
+    "reference_error_norm": "RMS with rtol=0 and atol=tolerance*(1,1,1,birth_speed)",
+    "diagnostic": "Common saved times before corresponding first loss; regular flux chart, not metres",
+    "velocity_scale": "birth speed; not relative to instantaneous parallel velocity",
+    "saved_errors_are_global": true,
+    "rows": {
+      "trial": {
+        "max_chart_radial_error": 1.1677176156668546e-07,
+        "max_zeta_error_rad": 4.5036378182317094e-07,
+        "max_birth_speed_scaled_parallel_velocity_error": 2.2171694868955427e-08,
+        "max_parallel_velocity_error_m_s": 0.2888711195530048,
+        "reference_status_disagreements": 0
+      },
+      "orbit": {
+        "max_chart_radial_error": 1.1677015279417955e-07,
+        "max_zeta_error_rad": 4.5035749707267314e-07,
+        "max_birth_speed_scaled_parallel_velocity_error": 2.2171388225356026e-08,
+        "max_parallel_velocity_error_m_s": 0.28886712434738854,
+        "reference_status_disagreements": 0
+      },
+      "dopri8_orbit": {
+        "max_chart_radial_error": 1.8973981191825483e-08,
+        "max_zeta_error_rad": 9.124940181237662e-08,
+        "max_birth_speed_scaled_parallel_velocity_error": 3.43771960897854e-09,
+        "max_parallel_velocity_error_m_s": 0.04478944519236632,
+        "reference_status_disagreements": 0
+      },
+      "rk4_dt": {
+        "max_chart_radial_error": 7.46557804118821e-06,
+        "max_zeta_error_rad": 2.5592129873075464e-06,
+        "max_birth_speed_scaled_parallel_velocity_error": 6.794069595805752e-08,
+        "max_parallel_velocity_error_m_s": 0.8851873986455879,
+        "reference_status_disagreements": 0
+      },
+      "rk4_half_dt": {
+        "max_chart_radial_error": 4.788681408107232e-07,
+        "max_zeta_error_rad": 1.4396908909475314e-07,
+        "max_birth_speed_scaled_parallel_velocity_error": 4.282119214771285e-09,
+        "max_parallel_velocity_error_m_s": 0.055790979396997835,
+        "reference_status_disagreements": 0
+      },
+      "rk4_quarter_dt": {
+        "max_chart_radial_error": 3.0328520149537604e-08,
+        "max_zeta_error_rad": 8.497892167724785e-09,
+        "max_birth_speed_scaled_parallel_velocity_error": 2.6883339998562406e-10,
+        "max_parallel_velocity_error_m_s": 0.0035025831667846088,
+        "reference_status_disagreements": 0
+      }
+    },
+    "reference_refinement_difference": [
+      3.0515793503216315e-09,
+      1.2953726979958446e-09,
+      1.2038192664931557e-08,
+      5.889932430669376e-10
+    ],
+    "reference_refinement_components": [
+      "u",
+      "w",
+      "zeta",
+      "v_parallel/birth_speed"
+    ],
+    "reference_work": {
+      "1e-12": {
+        "accepted": 62260,
+        "rejected": 5734
+      },
+      "1e-13": {
+        "accepted": 89551,
+        "rejected": 9819
+      }
+    },
+    "rk4_refinement": {
+      "rows": {
+        "rk4_dt": {
+          "requested_dt_s": 1.25e-07,
+          "actual_dt_s": 1.25e-07,
+          "grid_steps_per_particle": 1600,
+          "lost": 1,
+          "failed": 0,
+          "scope": "Untimed trajectory-accuracy solve"
+        },
+        "rk4_half_dt": {
+          "requested_dt_s": 6.25e-08,
+          "actual_dt_s": 6.25e-08,
+          "grid_steps_per_particle": 3200,
+          "lost": 1,
+          "failed": 0,
+          "scope": "Untimed trajectory-accuracy solve"
+        },
+        "rk4_quarter_dt": {
+          "requested_dt_s": 3.125e-08,
+          "actual_dt_s": 3.125e-08,
+          "grid_steps_per_particle": 6400,
+          "lost": 1,
+          "failed": 0,
+          "scope": "Untimed trajectory-accuracy solve"
+        }
+      },
+      "scope": "Same births, fields, horizon and common pre-loss saves; no timing comparison or tolerance guarantee",
+      "rk4_error_control": "Fixed steps have no rtol/atol controller",
+      "reference_uncertainty": "The two tighter-reference differences are diagnostics, not rigorous error bounds"
+    }
+  }
+}

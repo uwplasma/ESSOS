@@ -151,9 +151,9 @@ def main(argv=None):
     parser.add_argument("--setup-only", action="store_true")
     experimental = parser.add_mutually_exclusive_group()
     experimental.add_argument("--experimental-fused-trial", action="store_true",
-        help="Opt-in CUDA Dopri8 stage kernel; forward only, fixed Fourier field, not yet validated at large batch size")
+        help="Opt-in CUDA Dopri5/8 stage kernel; forward only, fixed Fourier field")
     experimental.add_argument("--experimental-fused-orbit", action="store_true",
-        help="Opt-in independent adaptive CUDA orbit kernels; Dopri8/I/standard output, fixed Fourier field, forward only")
+        help="Opt-in independent adaptive CUDA orbit kernels; Dopri5/8, I control, standard output, fixed Fourier field, forward only")
     options = parser.parse_args(argv)
     positive = (options.particles, options.horizon, options.energy_ev, options.timestep, options.atol,
                 options.max_steps, options.mboz, options.nboz, options.repeats)
@@ -166,11 +166,11 @@ def main(argv=None):
     if options.integrator not in ("essos_rk45", "essos_dopri8", "rk4"):
         parser.error("integrator must be essos_rk45 (Dopri5), essos_dopri8 or rk4")
     method = {"essos_rk45": "dopri5", "essos_dopri8": "dopri8", "rk4": "rk4"}[options.integrator]
-    if options.experimental_fused_trial and (method != "dopri8" or options.stage_execution != "unrolled"):
-        parser.error("The experimental fused trial requires essos_dopri8 with unrolled stages")
-    if options.experimental_fused_orbit and (method != "dopri8" or options.controller != "i" or
+    if options.experimental_fused_trial and (method not in ("dopri5", "dopri8") or options.stage_execution != "unrolled"):
+        parser.error("The experimental fused trial requires essos_rk45/essos_dopri8 with unrolled stages")
+    if options.experimental_fused_orbit and (method not in ("dopri5", "dopri8") or options.controller != "i" or
             options.stage_execution != "unrolled"):
-        parser.error("The experimental fused orbit requires essos_dopri8, I control and unrolled stages")
+        parser.error("The experimental fused orbit requires essos_rk45/essos_dopri8, I control and unrolled stages")
     if (options.output/"benchmark.json").exists():
         parser.error("Choose a fresh --output directory")
     options.output.mkdir(parents=True, exist_ok=True)
@@ -237,12 +237,12 @@ def main(argv=None):
     trial_factory = orbit_solver = None
     if options.experimental_fused_trial:
         from essos.rk_boozer_gpu_trial import prepare_trial_factory
-        trial_factory = prepare_trial_factory(field, MASS, CHARGE)
+        trial_factory = prepare_trial_factory(field, MASS, CHARGE, method=method)
         report["source_sha256"]["essos/rk_boozer_gpu_trial.py"] = digest(ROOT/"essos/rk_boozer_gpu_trial.py")
     if options.experimental_fused_orbit:
         from essos.rk_boozer_gpu_orbit import prepare_orbit_solver
         orbit_solver = prepare_orbit_solver(field, MASS, CHARGE, speed, times,
-            options.timestep, options.rtol, options.atol, options.max_steps)
+            options.timestep, options.rtol, options.atol, options.max_steps, method=method)
         for name in ("rk_boozer_gpu_trial.py", "rk_boozer_gpu_orbit.py"):
             report["source_sha256"]["essos/"+name] = digest(ROOT/"essos"/name)
     def run(y0,mu0):
@@ -256,7 +256,7 @@ def main(argv=None):
             count_semantics="RK4 executed grid slots per lane, including inactive held lanes; no error rejections",
             energy_check_scope="Standard production RK4 checks every executed active step")
         print(f"RK4 actual dt: {actual_dt:g} s; grid slots per lane: {grid_steps}", flush=True)
-    compiler_options = (boozer_compiler_options() if method == "rk4" or
+    compiler_options = (boozer_compiler_options() if method == "rk4" or options.experimental_fused_orbit or options.experimental_fused_trial or
                         (method == "dopri8" and options.stage_execution == "unrolled") else {})
     report["compiler_options"] = compiler_options
     print(f"GPU execution options: {compiler_options}", flush=True)
