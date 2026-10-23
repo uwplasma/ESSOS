@@ -168,3 +168,25 @@ def test_first_jitted_call_does_not_cache_traced_starting_dofs():
     loss.dependencies = {'x': jnp.array([2., 3.]), 'y': jnp.array([4.])}
     np.testing.assert_allclose(loss(jnp.array([2., 3., 4.])), 17.)
     np.testing.assert_allclose(loss.starting_dofs + 0., jnp.array([2., 3., 4.]))
+
+
+@pytest.mark.parametrize('first_access', ['call', 'starting_dofs'])
+def test_composite_first_jit_access_preserves_dofs_and_dependency_gradients(first_access):
+    import jax
+
+    quadratic = custom_loss(lambda x, y: jnp.sum(x*x) + jnp.sum(y), 'x', 'y')
+    coupling = custom_loss(lambda x: x[0]*x[1], 'x')
+    total = quadratic + coupling
+    total.dependencies = {'x': jnp.array([2., 3.]), 'y': jnp.array([4.]),
+                          'unused': jnp.array([99.])}
+    # Dictionary pytrees flatten their keys in sorted order.
+    dofs = jnp.array([99., 2., 3., 4.])
+    if first_access == 'call':
+        np.testing.assert_allclose(total(dofs), 23.)
+    else:
+        np.testing.assert_allclose(jax.jit(lambda: total.starting_dofs)(), dofs)
+    # The cached vector must remain usable outside the initial JIT trace.
+    np.testing.assert_allclose(total.starting_dofs + 0., dofs)
+    np.testing.assert_allclose(total(dofs), 23.)
+    np.testing.assert_allclose(total.grad(dofs), jnp.array([0., 7., 8., 1.]))
+    np.testing.assert_allclose(jax.grad(total)(dofs), total.grad(dofs))
