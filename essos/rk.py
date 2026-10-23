@@ -506,7 +506,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None,
                adjoint_parameter_accumulation="segment", _record_ad=False,
                _ad_checkpoint_steps=1, _ad_compact=False, _record_schedule=False,
-               record_event_tangent=False, _rhs_prepared=False):
+               record_event_tangent=False, _rhs_prepared=False, _defer_event_root=False):
     """Integrate an array state forward in time with bounded adaptive retries.
 
     ``ts`` is an ordered save grid, independent of the integration steps.
@@ -680,6 +680,11 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         return jnp.all(jnp.asarray(tuple(jnp.isfinite(v) for v in values), dtype=bool))
 
     values0 = events(t0, y0)
+    # Opted into by the GPU Boozer forward wrapper only. Recorders and higher
+    # order output retain the inline event path, including their AD metadata.
+    defer_root = (_defer_event_root and root_find and bool(functions) and
+                  not (_record_ad or _record_schedule or record_event_tangent) and
+                  dense_output == "standard")
     initial_hits = _first_hit(tuple(v if v.dtype == jnp.bool_ else v == 0 for v in values0))
     hit0 = jnp.any(jnp.asarray(initial_hits, dtype=bool))
     status0 = jnp.where(valid_input,
@@ -733,6 +738,9 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         return lax.while_loop(lambda s: ~hit0 & (s["index"] < len(ts)) &
                               (ts[jnp.minimum(s["index"], len(ts) - 1)] == t0), body, s)
 
+    if defer_root:
+        state.update(last_y=y0, last_f=state["f"], last_t=t0, last_h=h0,
+                     last_triggered=tuple(jnp.asarray(False) for _ in functions))
     state = save_initial(state)
     initial_saves = state["index"]
 
@@ -776,7 +784,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         fractions = []
         valid_roots = []
         for f, old, new, hit in zip(functions, s["values"], new_values, triggered):
-            if root_find and old.dtype != jnp.bool_:
+            if root_find and not defer_root and old.dtype != jnp.bool_:
                 def bisect(c):
                     lo, hi, iteration, valid = c
                     mid = (lo + hi) / 2
@@ -799,7 +807,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         has_event = jnp.isfinite(first) & accept
         fraction = jnp.minimum(first, 1.)
         stop_t = jnp.where(has_event, t + fraction * h, end_t)
-        stop_y = interpolate(y, h, trial, fraction)
+        stop_y = trial.y if defer_root else interpolate(y, h, trial, fraction)
         hits = _first_hit(tuple(hit & accept & (fraction_i == first) for hit, fraction_i in zip(triggered, fractions)))
         if record_event_tangent:
             continuous_event = has_event & root_find & jnp.any(jnp.asarray(
@@ -833,6 +841,11 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                        values=tuple(jnp.where(accept, new, old) for old, new in zip(s["values"], new_values)),
                        hits=hits, status=status, steps=s["steps"] + 1,
                        accepted=s["accepted"] + accept.astype(int), rejected=s["rejected"] + (~accept).astype(int))
+        if defer_root:
+            updated.update(last_y=jnp.where(accept, y, s["last_y"]),
+                last_f=jnp.where(accept, s["f"], s["last_f"]),
+                last_t=jnp.where(accept, t, s["last_t"]),
+                last_h=jnp.where(accept, h, s["last_h"]), last_triggered=triggered)
         if record_event_tangent:
             updated["event_tangent"] = jnp.where(has_event, event_tangent, s["event_tangent"])
         if adaptive and controller == "pi":
@@ -908,11 +921,30 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
 
     state = lax.while_loop(lambda s: (s["t"] < t1) & (s["status"] == RKStatus.SUCCESS) &
                            (s["steps"] < max_steps), advance, state)
+    if defer_root:
+        from .rk_events import finish_event_root
+        state, root_valid = finish_event_root(rhs, args, state,
+            trial_step=trial_step, nodes=nodes, rows=rows, weights=weights,
+            functions=functions, events=events, interpolate=interpolate, ts=ts,
+            record_steps=record_steps)
     status = jnp.where((state["t"] < t1) & (state["status"] == RKStatus.SUCCESS), RKStatus.MAX_STEPS, state["status"])
     solution = RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
                       tree_util.tree_unflatten(structure, state["hits"]),
                       RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"], state["h"],
                       state["event_tangent"] if record_event_tangent else jnp.zeros_like(y0))
+    if defer_root:
+        def retry_with_inline_roots(carry):
+            # A nonfinite interior event evaluation must retain the ordinary
+            # rejection/retry semantics, rather than accepting a bad crossing.
+            fallback = solve_rk(rhs, y0, args, t0=t0, t1=t1, dt0=dt0, ts=ts,
+                adaptive=adaptive, rtol=rtol, atol=atol, event=event, root_find=root_find,
+                max_steps=max_steps, dtmin=dtmin, dtmax=dtmax, record_steps=record_steps,
+                method=method, error_norm=error_norm, controller=controller,
+                pcoeff=pcoeff, icoeff=icoeff, dense_output=dense_output,
+                stage_execution=stage_execution, _rhs_prepared=True)
+            return jnp.asarray(False), fallback
+        _, solution = lax.while_loop(lambda carry: carry[0], retry_with_inline_roots,
+                                     (~root_valid, solution))
     if _record_schedule:
         return solution, _RKSchedule(state["schedule"], state["schedule_fraction"], state["accepted"],
             state["ad_states"] if _record_ad else None,

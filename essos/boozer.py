@@ -460,12 +460,16 @@ def _boozer_error_norm(error, speed, rtol, atol):
         jnp.abs(error[2]), jnp.abs(error[3])/speed)) / (rtol + atol)
 
 
-@partial(jax.jit, static_argnames=("method", "adaptive", "controller", "dense_output", "max_steps", "stage_execution", "fixed_substeps"))
+@partial(jax.jit, static_argnames=("method", "adaptive", "controller", "dense_output", "max_steps", "stage_execution", "fixed_substeps", "_defer_event_root"))
 def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                    method, adaptive, controller, pcoeff, icoeff, dense_output, max_steps,
-                   stage_execution="loop", fixed_substeps=None):
+                   stage_execution="loop", fixed_substeps=None, _defer_event_root=None):
     """One shared native RK solve per orbit, independent of the save grid."""
     from essos.rk import RKStatus, solve_rk
+
+    if _defer_event_root is None:
+        _defer_event_root = (adaptive and method == "dopri8" and
+                            stage_execution == "unrolled" and jax.default_backend() == "gpu")
 
     def one(y0, mu):
         def magnetic_field(y):
@@ -497,7 +501,7 @@ def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                 method=method, adaptive=adaptive, rtol=rtol, atol=atol,
                 error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
                 dense_output=dense_output, max_steps=max_steps, stage_execution=stage_execution,
-                event=event)
+                event=event, _defer_event_root=_defer_event_root)
 
         def output(y):
             s, _, theta, *_ = _chart(y)

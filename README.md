@@ -1103,6 +1103,33 @@ python -m examples.benchmarks.benchmark_native_boozer_alpha \
   --output output/native_boozer_alpha_smoke
 ```
 
+The 64-particle GPU adaptive Dopri8 development comparison is reproducible with
+[`benchmark_boozer_adaptive_events.py`](examples/benchmarks/benchmark_boozer_adaptive_events.py):
+
+```sh
+python -m examples.benchmarks.benchmark_boozer_adaptive_events \
+  --particles 64 --horizon 2e-4 --saves 101 --repeats 9 \
+  --output output/boozer_adaptive_events
+```
+
+It compares ordinary inline event searches with the production default using
+identical QA Boozer fields, 3.52 MeV births, `rtol=atol=1e-10`, I control and
+standard dense output. GPU adaptive Dopri8 with explicit stages now stops on
+the first accepted endpoint crossing, replays that final step, and root-finds
+the same `s=1` boundary with the original interpolant. Saves after the refined
+loss time remain unreached and the wrapper holds the root state. Nonfinite
+interior roots fall back to the original rejection/retry algorithm.
+This reduces adaptive event bookkeeping; it does not reduce the RK stage count
+or change the RHS, field class, controller or accepted-step reverse method.
+The option is internal to the Boozer forward wrapper; other solver paths keep
+their existing defaults. No particle chunks are used.
+
+[Saved results and memory measurements](examples/benchmarks/results/gpu_boozer_adaptive_20261023/README.md)
+report interleaved warm timings, compilation, compiled buffers and independent
+process peaks. This is a 64-particle, 0.2 ms local workload, not a measurement
+of the 8,192-particle, 20 ms run. Use `--case inline` and `--case replay` in
+separate processes to reproduce the independent memory measurements.
+
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated
 from the requested seed. Select a fresh output directory for each run.
