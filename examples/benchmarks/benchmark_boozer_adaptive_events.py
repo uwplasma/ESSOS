@@ -9,6 +9,8 @@ workload does not predict the 8192-particle, 20 ms benchmark runtime.
 ``--comparison execution`` compares compiler defaults with GPU loop command
 buffers, using retained crossing stages in both cases. The default event
 comparison holds compiler options at their defaults to isolate event handling.
+``--comparison reductions`` compares separate and grouped stage reductions
+with the same CUDA loop command buffers enabled in both cases.
 """
 import argparse
 import hashlib
@@ -27,7 +29,7 @@ from .benchmark_native_boozer_alpha import PARAMETERS, ROOT, setup, MASS, CHARGE
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--comparison", choices=("events", "execution"), default="events")
+    parser.add_argument("--comparison", choices=("events", "execution", "reductions"), default="events")
     parser.add_argument("--case", default="both")
     parser.add_argument("--particles", type=int, default=64)
     parser.add_argument("--horizon", type=float, default=2e-4)
@@ -43,7 +45,8 @@ def main():
         horizon=options.horizon, saves=options.saves, field_cache=options.field_cache)))
     field, initial, mu, speed, births, _ = setup(settings)
     times = jnp.linspace(0., settings.horizon, settings.saves)
-    names = ("inline", "replay") if options.comparison == "events" else ("default", "device_loops")
+    names = {"events": ("inline", "replay"), "execution": ("default", "device_loops"),
+             "reductions": ("separate", "grouped")}[options.comparison]
     if options.case != "both" and options.case not in names:
         parser.error(f"--case must be both, {names[0]} or {names[1]} for this comparison")
     cases = names if options.case == "both" else (options.case,)
@@ -55,16 +58,18 @@ def main():
         field_modes=int(field.xm.size), particle_chunking=False,
         birth_sha256=hashlib.sha256(np.asarray(initial).tobytes()+np.asarray(mu).tobytes()).hexdigest(),
         source_sha256={name: hashlib.sha256((ROOT/"essos"/name).read_bytes()).hexdigest()
-                       for name in ("boozer.py", "rk.py", "rk_events.py")}, rows={})
+                       for name in ("boozer.py", "rk.py", "rk_events.py", "rk_rhs.py")}, rows={})
     executables, results = {}, {}
     for name in cases:
         jax.clear_caches()
-        compiler_options = boozer_compiler_options() if name == "device_loops" else {}
+        compiler_options = boozer_compiler_options() if (name == "device_loops" or
+            options.comparison == "reductions") else {}
         def run(y, moment):
             return _native_orbits(field, y, moment, MASS, CHARGE, speed, times, settings.timestep,
                 settings.rtol, settings.atol, "dopri8", True, settings.controller,
                 .4, .3, "standard", settings.max_steps, "unrolled",
-                _defer_event_root=(False if name == "inline" else None))
+                _defer_event_root=(False if name == "inline" else None),
+                _group_rhs_reductions=(name == "grouped") if options.comparison == "reductions" else None)
         print(f"Compiling {name}: {options.particles} particles, adaptive Dopri8", flush=True)
         start = perf_counter()
         executable = jax.jit(run, compiler_options=compiler_options).lower(initial, mu).compile()

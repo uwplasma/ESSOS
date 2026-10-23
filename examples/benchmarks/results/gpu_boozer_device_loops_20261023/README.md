@@ -52,6 +52,37 @@ exact large-run benchmark entrypoint, still with 64 particles: 6.258 s compile,
 confirms the compiler options are enabled by the existing Dopri8 command.
 This does not establish the gain for the remote 8192-particle, 20 ms run.
 
+Remote result reported after this change
+---------------------------------------
+
+The existing large-machine command enabled the CUDA options, as confirmed by
+its printed execution options. The user reported the following first-call
+measurements for 8192 particles and a 20 ms horizon (JAX/JAXlib 0.7.2):
+
+| Implementation | Lowering/compilation, s | First execution, s | Warm median, s |
+| --- | ---: | ---: | ---: |
+| Earlier ordinary implementation | 16.009 | 57.831 | 57.704 |
+| Previous terminal-replay implementation | 38.325 | 54.192 | 54.257 |
+| Retained crossing stages and CUDA loop command buffers | 14.800 | 54.168 | 54.367 |
+
+The warm median increased by 0.110 s, or 0.20%, from two warm calls per run.
+The latest samples were 54.300 and 54.435 s; the preceding samples were 54.249
+and 54.264 s. Both runs accepted 350,979,822 steps, lost 110 particles and had
+no failures. Compilation recovered, but there is **no demonstrated tracing
+speedup** from the latest change. The 46.18% local benefit did not transfer
+to this run. These remote numbers were pasted by the user; no new remote
+memory measurements were supplied with them.
+
+A subsequent diagnostic kept the local count at 64 but extended the horizon
+to the full 20 ms, with the same tolerances and 101 saves. Ordinary compilation
+took 30.379 s warm versus 17.571 s with CUDA loop command buffers. All output
+arrays were bitwise equal: 2,796,996 accepted and 470,474 rejected steps,
+one loss and no failures. This was one warm call per case, intended to isolate
+the horizon rather than establish precise timings. Thus extending the horizon
+alone does not explain the missing remote improvement. Particle count, GPU
+and JAX version remain different; their contributions have not been isolated.
+Do not extrapolate the local reduction to the large-machine case.
+
 Reproduce from the repository root in the normal GPU JAX environment:
 
 ```sh

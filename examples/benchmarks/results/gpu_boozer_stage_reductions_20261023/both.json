@@ -1,0 +1,109 @@
+{
+  "comparison": "reductions",
+  "backend": "gpu",
+  "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "jax": "0.11.2",
+  "particles": 64,
+  "horizon_s": 0.0002,
+  "saves": 101,
+  "repeats": 9,
+  "energy_ev": 3520000.0,
+  "seed": 42,
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "controller": "i",
+  "method": "dopri8",
+  "stage_execution": "unrolled",
+  "field_modes": 16,
+  "particle_chunking": false,
+  "birth_sha256": "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+  "source_sha256": {
+    "boozer.py": "4fcb71bd3deda70a4578567bfff8b9e482c521f6a41c31974704ae6a9186af91",
+    "rk.py": "4a4dbf46c2a985e52b55eeba534e431eef484344fa0e2706ad7828834a197d9b",
+    "rk_events.py": "bc002e8666d14a1e27a04b608d609e6836c19fe332f0b0c0cc69113e4b4a8514",
+    "rk_rhs.py": "f7d75d84b4ff5497c2755548ceb3fdca6a2e458cb0290491853c6f15c1abbb6a"
+  },
+  "rows": {
+    "separate": {
+      "compile_s": 6.399376277000556,
+      "samples_ms": [
+        199.32340200011822,
+        195.18119499934983,
+        194.19707999986713,
+        196.16304699957254,
+        194.7805479994713,
+        194.71930399959092,
+        194.54294499973912,
+        194.1888849996758,
+        195.29007799974352
+      ],
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "compiled_buffers_bytes": 1537504,
+      "first_execution_ms": 225.72161599964602,
+      "warm_median_ms": 194.7805479994713,
+      "trials": 32769,
+      "accepted": 28084,
+      "rejected": 4685,
+      "max_trials": 718,
+      "lost": 1,
+      "failed": 0,
+      "max_relative_energy_error": 4.789336705002256e-10
+    },
+    "grouped": {
+      "compile_s": 6.212050958000873,
+      "samples_ms": [
+        173.4986410001511,
+        171.7565419994571,
+        172.36594799942395,
+        171.41525600072782,
+        171.5646150005341,
+        172.60834100034117,
+        171.44509099944116,
+        172.36076900007902,
+        171.92616900047142
+      ],
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "compiled_buffers_bytes": 1538528,
+      "first_execution_ms": 200.15222700021695,
+      "warm_median_ms": 171.92616900047142,
+      "trials": 32769,
+      "accepted": 28084,
+      "rejected": 4685,
+      "max_trials": 718,
+      "lost": 1,
+      "failed": 0,
+      "max_relative_energy_error": 4.789336705002256e-10
+    }
+  },
+  "max_saved_component_difference": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "time_decrease_percent": 11.73339906563048,
+  "peak_memory_scope": "cumulative across both executables",
+  "gpu_memory": {
+    "num_allocs": 486,
+    "bytes_in_use": 560128,
+    "peak_bytes_in_use": 218457856,
+    "largest_alloc_size": 33554432,
+    "bytes_limit": 6410993664,
+    "bytes_reserved": 0,
+    "peak_bytes_reserved": 0,
+    "largest_free_block_bytes": 134217728,
+    "pool_bytes": 270532608,
+    "peak_pool_bytes": 270532608
+  },
+  "host_memory": {
+    "VmHWM": 1222787072,
+    "VmRSS": 1222787072
+  }
+}

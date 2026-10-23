@@ -166,6 +166,9 @@ def main(argv=None):
         event_root_strategy=("retained crossing stages; retry in the same adaptive loop"
             if method == "dopri8" and options.stage_execution == "unrolled" and jax.default_backend() == "gpu"
             else "inline root search"),
+        rhs_execution=("grouped independent stage reductions"
+            if method == "dopri8" and options.stage_execution == "unrolled" and jax.default_backend() == "gpu"
+            else "ordinary stage reductions"),
         source_sha256={name:digest(ROOT/name) for name in ("essos/boozer.py","essos/rk.py","essos/rk_events.py","essos/rk_fixed.py","essos/rk_rhs.py",
             "essos/rk_dense.py","examples/benchmarks/benchmark_native_boozer_alpha.py")})
     report["setup_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
@@ -185,6 +188,7 @@ def main(argv=None):
           f"{options.horizon:g} s, {options.saves} saves; adaptive native {method} ({options.controller}); "
           f"rtol={options.rtol:g}, atol={options.atol:g}; stages={options.stage_execution}",flush=True)
     print(f"Loss roots: {report['event_root_strategy']}", flush=True)
+    print(f"RHS execution: {report['rhs_execution']}", flush=True)
     if options.setup_only:
         print(f"Setup saved in {options.output.resolve()}",flush=True)
         return report

@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from essos.rk import _prepare_rhs
+from essos.rk_rhs import grouped_reductions_rhs
 
 jax.config.update("jax_enable_x64", True)
 
@@ -159,3 +160,58 @@ def test_coalesced_parameter_views_keep_nested_custom_derivative_rules():
                                rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(jax.jit(jax.jacrev(prepared))(matrix), jax.jacrev(original)(matrix),
                                rtol=1e-12, atol=1e-12)
+
+
+def test_grouping_preserves_values_state_and_parameter_derivatives():
+    def original(t, y, p):
+        x = p*jnp.sin(y[0]+t)
+        return jnp.stack((jnp.sum(x), jnp.sum(x*x), jnp.sum(jnp.cos(x))))
+
+    def run(t, y, p, grouped):
+        rhs = lambda t, y, unused: original(t, y, p)
+        if grouped:
+            rhs = grouped_reductions_rhs(rhs, t, y, None)
+        return rhs(t, y, None)
+
+    args = (jnp.asarray(.2), jnp.array([.3, .7]), jnp.linspace(.1, .9, 16))
+    for transform in (None, jax.jacfwd, jax.jacrev):
+        outputs = []
+        for group in (False, True):
+            function = lambda t, y, p: run(t, y, p, group)
+            if transform is not None:
+                function = transform(function, argnums=(0,1,2))
+            outputs.append(jax.jit(function)(*args))
+        ordinary, grouped = outputs
+        for actual, expected in zip(jax.tree_util.tree_leaves(grouped), jax.tree_util.tree_leaves(ordinary)):
+            np.testing.assert_allclose(actual, expected, rtol=2e-13, atol=2e-13)
+
+
+def test_dependent_reduction_groups_do_not_create_cycles():
+    def rhs(t, y, unused):
+        a = jnp.sum(jnp.arange(4.)*y[0])
+        c = jnp.sum(jnp.arange(3.)*a)
+        d = jnp.sum(jnp.arange(3.)*y[1])
+        b = jnp.sum(jnp.arange(4.)*d)
+        e = jnp.sum(jnp.arange(4.)*y[2])
+        return jnp.stack((a+b+c, e))
+    y = jnp.array([.2,.3,.4])
+    def run(y):
+        return grouped_reductions_rhs(rhs, 0., y, None)(0., y, None)
+    np.testing.assert_array_equal(jax.jit(run)(y), jax.jit(rhs)(0., y, None))
+
+
+def test_custom_derivative_rules_remain_opaque():
+    @jax.custom_jvp
+    def special(x):
+        return jnp.sum(x*x)
+    @special.defjvp
+    def rule(primals, tangents):
+        x, = primals
+        dx, = tangents
+        return special(x), 7*jnp.sum(x*dx)
+    def rhs(t,y,args):
+        return jnp.stack((special(y), special(y+1)))
+    y = jnp.array([.2,.4])
+    assert grouped_reductions_rhs(rhs, 0., y, None) is rhs
+    np.testing.assert_array_equal(jax.jacrev(lambda y: grouped_reductions_rhs(rhs,0.,y,None)(0.,y,None))(y),
+                                  jax.jacrev(lambda y: rhs(0.,y,None))(y))

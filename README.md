@@ -1140,13 +1140,27 @@ measures 358.7 -> 193.0 ms warm on the same 64-particle workload, with identical
 saved states and step counts, unchanged compiled buffers and unchanged JAX
 allocator peak. It retains the ordinary RK stages, RHS and controller; this
 is GPU execution of the existing control-flow graph. Fresh-process compilation
-is similar: 6.17 s without loop capture and 6.31 s with it. The 8192-particle
-gain has not yet been measured.
+is similar: 6.17 s without loop capture and 6.31 s with it. The user's subsequent
+8192-particle, 20 ms run took 54.367 s warm versus 54.257 s before this change
+(0.20% slower); compilation decreased from 38.325 to 14.800 s. The local
+tracing speedup did not transfer to that large run. Extending the local
+64-particle diagnostic to 20 ms still showed a reduction (30.379 to 17.571 s,
+one warm call per case), so the horizon alone does not explain the difference.
 Public single-device CUDA tracing uses the same policy for adaptive Dopri8
 with explicit stages. The large-run script prints and records the selected
 `GPU execution options`; the existing run command enables them automatically.
 For the small controlled comparison, add `--comparison execution` to the
 benchmark command above. CPU and non-CUDA backends retain their defaults.
+
+The subsequent [stage-reduction comparison](examples/benchmarks/results/gpu_boozer_stage_reductions_20261023/README.md)
+groups independent small sums inside the prepared physical RHS before RK stage
+expansion. With command buffers enabled in both cases, the same 64-particle
+adaptive workload decreased from 194.8 to 171.9 ms warm (11.7%), with identical
+saved states, energy errors and step counts. Compiled buffers increased by
+1 KiB. This preparation is now automatic for GPU adaptive Boozer Dopri8 with
+unrolled stages. It leaves the field class, equations and other solver paths
+unchanged. Reproduce with `--comparison reductions`; the remote 8192-particle
+benefit remains unmeasured.
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated
