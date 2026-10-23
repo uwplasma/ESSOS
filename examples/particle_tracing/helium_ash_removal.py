@@ -1,15 +1,13 @@
-"""Explicit exported-coefficient/WOUT helium residence example (no DKX import).
+"""Helium residence from exported coefficients or a manufactured cylinder.
 
     python examples/particle_tracing/helium_ash_removal.py --manufactured
     python examples/particle_tracing/helium_ash_removal.py \
         --wout path/to/wout.nc --coefficients path/to/helium_response.json
 
-An exporter supplies ``coefficients`` matching evaluate_helium_residence kwargs
-and ``metadata`` with the required keys below. JSON null kappa means absorbing.
-Coefficients must cover the declared physical radial domain; this example does
-not extrapolate a sparse kinetic calculation to the LCFS. WOUT identifies and
-checks the geometry; it supplies no missing profiles, electric field or D/V.
-The manufactured mode checks the numerical pipeline only, without an equilibrium.
+Supply JSON ``coefficients`` matching evaluate_helium_residence kwargs and
+``metadata`` with _REQUIRED_METADATA keys. Null kappa means absorbing.
+Coefficients must cover the modeled radius; WOUT supplies geometry identity,
+not missing transport or profiles. Manufactured mode tests the pipeline only.
 """
 import argparse
 import hashlib

@@ -3,7 +3,7 @@
 Supply transport coefficients, consistent radial volumes, a source and a boundary
 condition. JIT/AD-compatible functions return valid=False and NaN outputs for
 invalid values; shape errors raise ValueError. Core residence excludes recycling
-and pumping. See docs/helium_residence.rst for the model and input contract.
+and pumping. See the README for the model and input contract.
 """
 from typing import NamedTuple
 
