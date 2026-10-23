@@ -1,9 +1,14 @@
-"""Controlled 64-particle adaptive Dopri8 comparison of inline and deferred roots.
+"""Controlled 64-particle adaptive Dopri8 event or GPU execution comparison.
 
 Both cases use the production Boozer kernel, identical births, physical RHS,
-tableau, I-controller, tolerances and save times. Use --case inline/replay in
+tableau, I-controller, tolerances and save times. The replay case now retains
+the crossing stages and retries in the same driver; no RHS replay is needed.
+Use --case inline/replay in
 separate processes for independent peak-memory measurements. This short local
 workload does not predict the 8192-particle, 20 ms benchmark runtime.
+``--comparison execution`` compares compiler defaults with GPU loop command
+buffers, using retained crossing stages in both cases. The default event
+comparison holds compiler options at their defaults to isolate event handling.
 """
 import argparse
 import hashlib
@@ -16,13 +21,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from essos.boozer import _native_orbits
+from essos.boozer import _native_orbits, boozer_compiler_options
 from .benchmark_native_boozer_alpha import PARAMETERS, ROOT, setup, MASS, CHARGE, rss
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=("both", "inline", "replay"), default="both")
+    parser.add_argument("--comparison", choices=("events", "execution"), default="events")
+    parser.add_argument("--case", default="both")
     parser.add_argument("--particles", type=int, default=64)
     parser.add_argument("--horizon", type=float, default=2e-4)
     parser.add_argument("--saves", type=int, default=101)
@@ -37,8 +43,11 @@ def main():
         horizon=options.horizon, saves=options.saves, field_cache=options.field_cache)))
     field, initial, mu, speed, births, _ = setup(settings)
     times = jnp.linspace(0., settings.horizon, settings.saves)
-    cases = ("inline", "replay") if options.case == "both" else (options.case,)
-    report = dict(backend=jax.default_backend(), device=jax.devices()[0].device_kind,
+    names = ("inline", "replay") if options.comparison == "events" else ("default", "device_loops")
+    if options.case != "both" and options.case not in names:
+        parser.error(f"--case must be both, {names[0]} or {names[1]} for this comparison")
+    cases = names if options.case == "both" else (options.case,)
+    report = dict(comparison=options.comparison, backend=jax.default_backend(), device=jax.devices()[0].device_kind,
         jax=jax.__version__, particles=options.particles, horizon_s=options.horizon,
         saves=options.saves, repeats=options.repeats, energy_ev=settings.energy_ev,
         seed=settings.seed, rtol=settings.rtol, atol=settings.atol,
@@ -50,20 +59,23 @@ def main():
     executables, results = {}, {}
     for name in cases:
         jax.clear_caches()
+        compiler_options = boozer_compiler_options() if name == "device_loops" else {}
         def run(y, moment):
             return _native_orbits(field, y, moment, MASS, CHARGE, speed, times, settings.timestep,
                 settings.rtol, settings.atol, "dopri8", True, settings.controller,
                 .4, .3, "standard", settings.max_steps, "unrolled",
-                _defer_event_root=(None if name == "replay" else False))
+                _defer_event_root=(False if name == "inline" else None))
         print(f"Compiling {name}: {options.particles} particles, adaptive Dopri8", flush=True)
         start = perf_counter()
-        executable = jax.jit(run).lower(initial, mu).compile()
+        executable = jax.jit(run, compiler_options=compiler_options).lower(initial, mu).compile()
         memory = executable.memory_analysis()
-        report["rows"][name] = dict(compile_s=perf_counter()-start, samples_ms=[],
+        report["rows"][name] = dict(compile_s=perf_counter()-start, samples_ms=[], compiler_options=compiler_options,
             compiled_buffers_bytes=int(memory.argument_size_in_bytes+memory.output_size_in_bytes+
                                       memory.temp_size_in_bytes-memory.alias_size_in_bytes))
         executables[name] = executable
+        start = perf_counter()
         results[name] = jax.block_until_ready(executable(initial, mu))
+        report["rows"][name]["first_execution_ms"] = 1000*(perf_counter()-start)
         for _ in range(2):
             jax.block_until_ready(executable(initial, mu))
     for repeat in range(options.repeats):
@@ -81,15 +93,16 @@ def main():
             lost=int(np.sum(losses >= 0)), failed=int(np.sum(failures >= 0)),
             max_relative_energy_error=float(energy.max()))
     if len(cases) == 2:
+        before, after = names
         # Check all saved and terminal diagnostics, including both speeds.
-        for a, b in zip(results["inline"], results["replay"]):
+        for a, b in zip(results[before], results[after]):
             np.testing.assert_allclose(a, b, rtol=2e-13, atol=2e-9)
-        np.testing.assert_array_equal(results["inline"][4], results["replay"][4])
-        np.testing.assert_array_equal(results["inline"][5], results["replay"][5])
-        delta = np.asarray(results["inline"][0])-np.asarray(results["replay"][0])
+        np.testing.assert_array_equal(results[before][4], results[after][4])
+        np.testing.assert_array_equal(results[before][5], results[after][5])
+        delta = np.asarray(results[before][0])-np.asarray(results[after][0])
         report.update(max_saved_component_difference=np.max(abs(delta), axis=(0, 1)).tolist(),
-            time_decrease_percent=100*(1-report["rows"]["replay"]["warm_median_ms"]/
-                                      report["rows"]["inline"]["warm_median_ms"]))
+            time_decrease_percent=100*(1-report["rows"][after]["warm_median_ms"]/
+                                      report["rows"][before]["warm_median_ms"]))
     report["peak_memory_scope"] = "independent process" if len(cases) == 1 else "cumulative across both executables"
     report["gpu_memory"] = jax.devices()[0].memory_stats()
     report["host_memory"] = rss()

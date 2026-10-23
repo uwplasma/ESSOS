@@ -1114,21 +1114,39 @@ python -m examples.benchmarks.benchmark_boozer_adaptive_events \
 
 It compares ordinary inline event searches with the production default using
 identical QA Boozer fields, 3.52 MeV births, `rtol=atol=1e-10`, I control and
-standard dense output. GPU adaptive Dopri8 with explicit stages now stops on
-the first accepted endpoint crossing, replays that final step, and root-finds
-the same `s=1` boundary with the original interpolant. Saves after the refined
-loss time remain unreached and the wrapper holds the root state. Nonfinite
-interior roots fall back to the original rejection/retry algorithm.
+standard dense output. GPU adaptive Dopri8 with explicit stages retains the
+first acceptable crossing trial's RK increments and root-finds the same `s=1`
+boundary outside the trial loop with the original interpolant. It then saves
+only through the refined loss time; the wrapper holds the root state afterwards.
+For a nonfinite interior root it restores the preceding state, saved prefix,
+FSAL derivative and PI history, rejects the trial, and resumes the same loop.
+No separate fallback solver or final RHS replay is compiled.
 This reduces adaptive event bookkeeping; it does not reduce the RK stage count
 or change the RHS, field class, controller or accepted-step reverse method.
 The option is internal to the Boozer forward wrapper; other solver paths keep
 their existing defaults. No particle chunks are used.
 
-[Saved results and memory measurements](examples/benchmarks/results/gpu_boozer_adaptive_20261023/README.md)
+[Current results and memory measurements](examples/benchmarks/results/gpu_boozer_adaptive_trial_reuse_20261023/README.md)
 report interleaved warm timings, compilation, compiled buffers and independent
 process peaks. This is a 64-particle, 0.2 ms local workload, not a measurement
 of the 8,192-particle, 20 ms run. Use `--case inline` and `--case replay` in
 separate processes to reproduce the independent memory measurements.
+The [earlier event-replay record](examples/benchmarks/results/gpu_boozer_adaptive_20261023/README.md)
+documents the superseded version that compiled a complete fallback solver.
+
+The CUDA adaptive Dopri8 example now enables loop command buffers on its
+outermost JAX compilation. The [controlled GPU execution comparison](examples/benchmarks/results/gpu_boozer_device_loops_20261023/README.md)
+measures 358.7 -> 193.0 ms warm on the same 64-particle workload, with identical
+saved states and step counts, unchanged compiled buffers and unchanged JAX
+allocator peak. It retains the ordinary RK stages, RHS and controller; this
+is GPU execution of the existing control-flow graph. Fresh-process compilation
+is similar: 6.17 s without loop capture and 6.31 s with it. The 8192-particle
+gain has not yet been measured.
+Public single-device CUDA tracing uses the same policy for adaptive Dopri8
+with explicit stages. The large-run script prints and records the selected
+`GPU execution options`; the existing run command enables them automatically.
+For the small controlled comparison, add `--comparison execution` to the
+benchmark command above. CPU and non-CUDA backends retain their defaults.
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated

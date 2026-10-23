@@ -1,6 +1,11 @@
 64-particle adaptive Boozer Dopri8, GPU, 2026-10-23
 ================================================
 
+Historical event-replay implementation. It has been superseded by
+[retained crossing stages and retry in one adaptive driver](../gpu_boozer_adaptive_trial_reuse_20261023/README.md),
+which removes the additional RHS replay and separately compiled fallback.
+The measurements and source hashes below describe the earlier implementation.
+
 The complete production forward kernel is timed, including saved-state energy
 diagnostics. This is a local development workload: 64 collisionless 3.52 MeV
 alpha guiding centres, QA Boozer field with 16 direct Fourier modes, births at

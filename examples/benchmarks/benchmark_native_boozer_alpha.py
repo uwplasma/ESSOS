@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 from netCDF4 import Dataset
 
-from essos.boozer import BoozerField, _native_orbits, psi0_from_vmec, trace_boozer
+from essos.boozer import BoozerField, _native_orbits, boozer_compiler_options, psi0_from_vmec, trace_boozer
 from essos.constants import ALPHA_PARTICLE_MASS as MASS, ALPHA_PARTICLE_CHARGE as CHARGE, ONE_EV
 from essos.rk import RKStatus
 
@@ -163,7 +163,10 @@ def main(argv=None):
         catapult_reference=dict(source=CATAPULT_SOURCE, tolerance=1e-10, atol=1e-10, rtol=1e-10,
             distinction="Same tolerance values, not the same error norm: CATAPULT uses atol_i + rtol*(abs(y_i)+dt*abs(f_i)); native block scales are fixed. This is a CATAPULT-sized workload, not identical field/births or a direct speed comparison."),
         cache_directory=jax.config.jax_compilation_cache_dir,
-        source_sha256={name:digest(ROOT/name) for name in ("essos/boozer.py","essos/rk.py","essos/rk_fixed.py","essos/rk_rhs.py",
+        event_root_strategy=("retained crossing stages; retry in the same adaptive loop"
+            if method == "dopri8" and options.stage_execution == "unrolled" and jax.default_backend() == "gpu"
+            else "inline root search"),
+        source_sha256={name:digest(ROOT/name) for name in ("essos/boozer.py","essos/rk.py","essos/rk_events.py","essos/rk_fixed.py","essos/rk_rhs.py",
             "essos/rk_dense.py","examples/benchmarks/benchmark_native_boozer_alpha.py")})
     report["setup_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
     birth_digest = hashlib.sha256()
@@ -181,15 +184,20 @@ def main(argv=None):
     print(f"{options.particles} alpha GCs, {options.energy_ev:g} eV, s={options.birth_s:g}, "
           f"{options.horizon:g} s, {options.saves} saves; adaptive native {method} ({options.controller}); "
           f"rtol={options.rtol:g}, atol={options.atol:g}; stages={options.stage_execution}",flush=True)
+    print(f"Loss roots: {report['event_root_strategy']}", flush=True)
     if options.setup_only:
         print(f"Setup saved in {options.output.resolve()}",flush=True)
         return report
     def run(y0,mu0):
         return _native_orbits(field,y0,mu0,MASS,CHARGE,speed,times,options.timestep,
             options.rtol,options.atol,method,True,options.controller,.4,.3,"standard",options.max_steps,options.stage_execution)
+    compiler_options = (boozer_compiler_options() if method == "dopri8" and
+                        options.stage_execution == "unrolled" else {})
+    report["compiler_options"] = compiler_options
+    print(f"GPU execution options: {compiler_options}", flush=True)
     print("Lowering and compiling the production native Boozer kernel",flush=True)
     start = perf_counter()
-    executable = jax.jit(run).lower(initial,mu).compile()
+    executable = jax.jit(run, compiler_options=compiler_options).lower(initial,mu).compile()
     report["lower_and_compile_seconds"] = perf_counter()-start
     report["compile_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
     memory = executable.memory_analysis()

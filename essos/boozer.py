@@ -460,7 +460,27 @@ def _boozer_error_norm(error, speed, rtol, atol):
         jnp.abs(error[2]), jnp.abs(error[3])/speed)) / (rtol + atol)
 
 
-@partial(jax.jit, static_argnames=("method", "adaptive", "controller", "dense_output", "max_steps", "stage_execution", "fixed_substeps", "_defer_event_root"))
+_NATIVE_ORBIT_STATIC_ARGS = ("method", "adaptive", "controller", "dense_output", "max_steps",
+                             "stage_execution", "fixed_substeps", "_defer_event_root")
+_CUDA_ORBIT_COMPILER_OPTIONS = {
+    "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+    "xla_gpu_graph_min_graph_size": 1,
+}
+
+
+def boozer_compiler_options():
+    """GPU loop command buffers for a top-level native Boozer compilation.
+
+    Apply these options to the outermost jit when embedding ``_native_orbits``.
+    They affect execution of the existing JAX graph, not the RHS or RK method.
+    CPU and non-CUDA backends retain their normal compiler defaults.
+    """
+    if jax.default_backend() == "gpu" and "cuda" in jax.devices()[0].client.platform_version.lower():
+        return dict(_CUDA_ORBIT_COMPILER_OPTIONS)
+    return {}
+
+
+@partial(jax.jit, static_argnames=_NATIVE_ORBIT_STATIC_ARGS)
 def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                    method, adaptive, controller, pcoeff, icoeff, dense_output, max_steps,
                    stage_execution="loop", fixed_substeps=None, _defer_event_root=None):
@@ -538,6 +558,12 @@ def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                 jnp.where(output_failed, RKStatus.NONFINITE, solution.status))
 
     return jax.vmap(one)(y0, mu0)
+
+
+# Public host-side tracing calls this as a top-level jit. Keep _native_orbits
+# composable inside an outer jit, where nonempty compiler options are invalid.
+_native_orbits_cuda = jax.jit(_native_orbits.__wrapped__, static_argnames=_NATIVE_ORBIT_STATIC_ARGS,
+                             compiler_options=dict(_CUDA_ORBIT_COMPILER_OPTIONS))
 
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep=None,
@@ -661,7 +687,9 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         from essos.rk_fixed import aligned_substeps
         fixed_substeps = (aligned_substeps(float(tmax), float(timestep), len(times), max_steps)
             if not adaptive and jax.default_backend() == "gpu" else None)
-        result = _native_orbits(field, y0, mu0, mass, charge, speed[0], jnp.asarray(times),
+        native = (_native_orbits_cuda if ndev == 1 and adaptive and integrator == "essos_dopri8" and
+                  native_stage_execution == "unrolled" and boozer_compiler_options() else _native_orbits)
+        result = native(field, y0, mu0, mass, charge, speed[0], jnp.asarray(times),
             float(timestep), rtol, atol, "dopri5" if integrator == "essos_rk45" else "dopri8",
             bool(adaptive), native_controller, native_pcoeff, native_icoeff, native_dense_output, max_steps,
             native_stage_execution, fixed_substeps)
