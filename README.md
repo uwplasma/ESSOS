@@ -144,17 +144,14 @@ full-orbit, collisional and electric-field variants.
 ## Cartesian collision coefficients
 
 `essos.collisions.maxwellian_cartesian_coefficients` returns Maxwellian
-test-particle Ito drift, diffusion and symmetric noise in Cartesian coordinates.
-Use SI units, temperatures in eV, and explicit positive pair Coulomb logs.
-Logs may also be a differentiable function of speed squared; their derivatives
-are included in the drift. The function docstring specifies shapes and units.
+test-particle Ito drift, diffusion and symmetric noise. Use SI units, eV
+temperatures and positive pair Coulomb logs (values or differentiable functions
+of speed squared). See its docstring for shapes, units and conventions.
 
-For `coeff = maxwellian_cartesian_coefficients(...)`, the collision step is
-`dV = coeff.ito_drift*dt + coeff.noise@dW`, with
-`coeff.noise @ coeff.noise.T == 2*coeff.diffusion`.
-Add the Lorentz force separately and use a general-noise Ito integrator.
-These coefficients describe a prescribed bath; they exclude field-particle
-response and the guiding-center coordinate transformation.
+For returned `coeff`, use `dV = coeff.ito_drift*dt + coeff.noise@dW`, where
+`coeff.noise @ coeff.noise.T == 2*coeff.diffusion`, with a general-noise Ito
+integrator. Add the Lorentz force separately. The prescribed bath excludes
+field-particle response and the guiding-center coordinate transformation.
 
 ## Tracing to the wall
 

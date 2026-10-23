@@ -11,17 +11,11 @@ from scipy.integrate import quad
 from essos.collisions import maxwellian_cartesian_coefficients as coefficients
 from essos.constants import (
     ALPHA_PARTICLE_CHARGE as CHARGE,
-)
-from essos.constants import (
     ALPHA_PARTICLE_MASS as MASS,
-)
-from essos.constants import (
     ELECTRON_MASS,
+    ELEMENTARY_CHARGE as E,
     EPSILON_0,
     PROTON_MASS,
-)
-from essos.constants import (
-    ELEMENTARY_CHARGE as E,
 )
 
 MB = np.array([2 * PROTON_MASS, 3 * PROTON_MASS, ELECTRON_MASS, MASS])
@@ -42,26 +36,15 @@ def independent_ab(speed, temperature=TB, logs=LOGS):
     """Rosenbluth radial-potential integrals, independent of erf/series helper."""
     vt = np.sqrt(2 * temperature * E / MB)
     gamma = CHARGE**2 * QB**2 * logs / (4 * np.pi * EPSILON_0**2 * MASS**2)
-    a = []
-    b = []
+    a, b = [], []
+    factor = 2 / np.sqrt(np.pi)
     for vb, g, n in zip(vt, gamma, NB):
         x = speed / vb
-        c = (
-            2
-            / np.sqrt(np.pi)
-            * quad(lambda r: r * r * np.exp(-r * r), 0, x, epsabs=1e-13)[0]
-            / x**3
-            if x
-            else 2 / (3 * np.sqrt(np.pi))
-        )
-        e = (
-            2
-            / np.sqrt(np.pi)
-            * quad(lambda r: np.exp(-r * r), 0, x, epsabs=1e-13)[0]
-            / x
-            if x
-            else 2 / np.sqrt(np.pi)
-        )
+        if x:
+            c = factor * quad(lambda r: r * r * np.exp(-r * r), 0, x, epsabs=1e-13)[0] / x**3
+            e = factor * quad(lambda r: np.exp(-r * r), 0, x, epsabs=1e-13)[0] / x
+        else:
+            c, e = factor / 3, factor
         a.append(g * n / vb * c)
         b.append(g * n / vb * (e - c) / 2)
     return np.asarray(a), np.asarray(b)
