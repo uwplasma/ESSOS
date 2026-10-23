@@ -1,4 +1,5 @@
 import pytest
+import numpy as np
 from unittest.mock import MagicMock, patch
 import essos.objective_functions as objf
 from essos.losses import custom_loss
@@ -151,3 +152,19 @@ def test_plots_without_plotly_raise_clear_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "plotly", None)
     with pytest.raises(ImportError, match="essos\\[multiobjective\\]"):
         MultiObjectiveOptimizer.plot_param_importances(None)
+
+
+
+def test_scaling_an_initialized_custom_loss_preserves_dependencies():
+    loss = custom_loss(lambda x: jnp.sum(x*x), 'x')
+    loss.dependencies = {'x': jnp.array([2., 3.])}
+    scaled = 3*loss
+    np.testing.assert_allclose(scaled(scaled.starting_dofs), 39.)
+    np.testing.assert_allclose(scaled.grad(scaled.starting_dofs), jnp.array([12., 18.]))
+
+
+def test_first_jitted_call_does_not_cache_traced_starting_dofs():
+    loss = custom_loss(lambda x, y: jnp.sum(x*x)+jnp.sum(y), 'x', 'y')
+    loss.dependencies = {'x': jnp.array([2., 3.]), 'y': jnp.array([4.])}
+    np.testing.assert_allclose(loss(jnp.array([2., 3., 4.])), 17.)
+    np.testing.assert_allclose(loss.starting_dofs + 0., jnp.array([2., 3., 4.]))
