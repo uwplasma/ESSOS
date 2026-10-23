@@ -136,6 +136,19 @@ class BiotSavart(MagneticField):
         return jnp.mean(dB_sum, axis=0)
 
     @jit
+    def A(self, points):
+        """Cartesian filament vector potential [T m] at a point [m].
+
+        Uses the same periodic coil quadrature and currents as :meth:`B`,
+        so ``curl(A) = B`` and shape/current derivatives remain traceable.
+        """
+        distance = jnp.linalg.norm(jnp.asarray(points) - self.coils.gamma, axis=-1)
+        tangent_over_distance = self.coils.gamma_dash / distance[..., None]
+        potential = jnp.einsum('i,ijk->jk', self.coils.currents * 1e-7,
+                               tangent_over_distance)
+        return jnp.mean(potential, axis=0)
+
+    @jit
     def b_cyl(self, R, phi, Z):
         """Return ``(B_R, B_phi, B_Z)`` on broadcast cylindrical arrays.
 
