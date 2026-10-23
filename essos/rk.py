@@ -506,7 +506,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None,
                adjoint_parameter_accumulation="segment", _record_ad=False,
                _ad_checkpoint_steps=1, _ad_compact=False, _record_schedule=False,
-               record_event_tangent=False, _rhs_prepared=False, _defer_event_root=False):
+               record_event_tangent=False, _rhs_prepared=False, _defer_event_root=False, _trial_override=None):
     """Integrate an array state forward in time with bounded adaptive retries.
 
     ``ts`` is an ordered save grid, independent of the integration steps.
@@ -600,7 +600,9 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             isinstance(adjoint_max_accepted_steps, (bool, np.bool_)) or
             not isinstance(adjoint_max_accepted_steps, (int, np.integer)) or adjoint_max_accepted_steps <= 0):
         raise ValueError("adjoint_max_accepted_steps must be a positive integer or None")
-    trial_step = _select_trial_step(stage_execution)
+    trial_step = _select_trial_step(stage_execution) if _trial_override is None else _trial_override
+    if _trial_override is not None and (adjoint != "none" or _record_ad or _record_schedule):
+        raise ValueError("Experimental trial overrides are forward-only")
     if adjoint == "accepted":
         from .rk_ad import solve_accepted
         return solve_accepted(rhs, y0, args, t0=t0, t1=t1, dt0=dt0, ts=ts,

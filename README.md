@@ -1183,6 +1183,27 @@ fixed timestep and grid slots, which include inactive held RK4 lanes.
 Both compilation and blocked solve timings are reported separately. A local
 64-particle smoke check matched the public production RK4 tracer.
 
+The [user's large-machine RK4 run](examples/benchmarks/results/gpu_boozer_rk4_remote_20261023/README.md)
+compiled in 2.653 s and took 20.215 s for its first warm call, versus 54.367 s
+warm median for ordinary adaptive Dopri8. These methods have different error
+control and boundary localization. RK4 executes 640000 fresh RHS calls per
+lane; the adaptive batch's maximum of 70886 accepted steps already requires
+at least 921518 fresh calls per lane before rejected trials. Accepted-step
+totals alone therefore understate its batched stage work. New alpha reports
+include logical RHS-work estimates alongside the trial counts.
+
+An [experimental fused trial](examples/benchmarks/results/gpu_boozer_fused_trial_20261023/README.md)
+reduces local 64-particle adaptive time from 198.5 to 116.2 ms (41.4%), with
+the same maximum of 718 trials and unchanged tolerance/controller settings.
+It places the original Dopri8 stages and physical Boozer RHS inside a Pallas
+kernel, while retaining the existing adaptive driver. Its maximum saved
+velocity error against a tighter independent reference increases from 0.316
+to 0.448 m/s; floating-point changes also change some step decisions. It is
+CUDA-only, forward-only, limited to fixed cosine Fourier fields and disabled
+by default. The result record includes an accuracy audit and a short
+8192-particle target-machine comparison command. The alpha entrypoint selects
+it only with `--experimental-fused-trial`. No remote speedup is established.
+
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated
 from the requested seed. Select a fresh output directory for each run.

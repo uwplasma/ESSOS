@@ -461,7 +461,7 @@ def _boozer_error_norm(error, speed, rtol, atol):
 
 
 _NATIVE_ORBIT_STATIC_ARGS = ("method", "adaptive", "controller", "dense_output", "max_steps",
-                             "stage_execution", "fixed_substeps", "_defer_event_root", "_group_rhs_reductions")
+                             "stage_execution", "fixed_substeps", "_defer_event_root", "_group_rhs_reductions", "_trial_factory")
 _CUDA_ORBIT_COMPILER_OPTIONS = {
     "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
     "xla_gpu_graph_min_graph_size": 1,
@@ -484,7 +484,7 @@ def boozer_compiler_options():
 def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                    method, adaptive, controller, pcoeff, icoeff, dense_output, max_steps,
                    stage_execution="loop", fixed_substeps=None, _defer_event_root=None,
-                   _group_rhs_reductions=False):
+                   _group_rhs_reductions=False, _trial_factory=None):
     """One shared native RK solve per orbit, independent of the save grid."""
     from essos.rk import RKStatus, solve_rk
 
@@ -528,7 +528,8 @@ def _native_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                 method=method, adaptive=adaptive, rtol=rtol, atol=atol,
                 error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
                 dense_output=dense_output, max_steps=max_steps, stage_execution=stage_execution,
-                event=event, _defer_event_root=_defer_event_root, _rhs_prepared=bool(_group_rhs_reductions))
+                event=event, _defer_event_root=_defer_event_root, _rhs_prepared=bool(_group_rhs_reductions),
+                _trial_override=None if _trial_factory is None else _trial_factory(mu))
 
         def output(y):
             s, _, theta, *_ = _chart(y)

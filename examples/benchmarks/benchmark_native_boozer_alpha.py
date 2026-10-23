@@ -149,6 +149,8 @@ def main(argv=None):
         parser.add_argument("--"+key.replace("_","-"), type=type(value), default=value)
     parser.add_argument("--field-cache", type=Path, help="Reuse a saved Boozer transform; births are sampled afresh")
     parser.add_argument("--setup-only", action="store_true")
+    parser.add_argument("--experimental-fused-trial", action="store_true",
+        help="Opt-in CUDA Dopri8 stage kernel; forward only, fixed Fourier field, not yet validated at large batch size")
     options = parser.parse_args(argv)
     positive = (options.particles, options.horizon, options.energy_ev, options.timestep, options.atol,
                 options.max_steps, options.mboz, options.nboz, options.repeats)
@@ -161,6 +163,8 @@ def main(argv=None):
     if options.integrator not in ("essos_rk45", "essos_dopri8", "rk4"):
         parser.error("integrator must be essos_rk45 (Dopri5), essos_dopri8 or rk4")
     method = {"essos_rk45": "dopri5", "essos_dopri8": "dopri8", "rk4": "rk4"}[options.integrator]
+    if options.experimental_fused_trial and (method != "dopri8" or options.stage_execution != "unrolled"):
+        parser.error("The experimental fused trial requires essos_dopri8 with unrolled stages")
     if (options.output/"benchmark.json").exists():
         parser.error("Choose a fresh --output directory")
     options.output.mkdir(parents=True, exist_ok=True)
@@ -176,7 +180,8 @@ def main(argv=None):
         settings={k:str(v) if isinstance(v,Path) else v for k,v in vars(options).items()},
         setup_seconds=perf_counter()-start, collisions=False, reverse_ad=False, particle_chunking=False,
         particle_compaction=False, integrator=options.integrator, adaptive=method != "rk4",
-        component_stage_arithmetic=method != "rk4" and options.stage_execution == "unrolled",
+        component_stage_arithmetic=(method != "rk4" and options.stage_execution == "unrolled"
+                                    and not options.experimental_fused_trial),
         field=dict(representation="Production Boozer K=0 GC field from QA equilibrium; no coils",
             modes=int(field.xm.size), nfp=field.nfp, angular_table=field.table is not None,
             wout_sha256=digest(options.wout)),
@@ -193,6 +198,7 @@ def main(argv=None):
             if method == "dopri8" and options.stage_execution == "unrolled" and jax.default_backend() == "gpu"
             else "fixed RK4 endpoint check" if method == "rk4" else "inline root search"),
         rhs_execution="ordinary stage reductions",
+        trial_kernel="experimental Pallas stage loop" if options.experimental_fused_trial else "standard JAX stages",
         source_sha256={name:digest(ROOT/name) for name in ("essos/boozer.py","essos/rk.py","essos/rk_events.py","essos/rk_fixed.py","essos/rk_rhs.py",
             "essos/rk_dense.py","examples/benchmarks/benchmark_native_boozer_alpha.py")})
     report["setup_device_memory_stats"] = [d.memory_stats() for d in jax.devices()]
@@ -215,12 +221,19 @@ def main(argv=None):
           f"{options.horizon:g} s, {options.saves} saves; {stepping}",flush=True)
     print(f"Loss roots: {report['event_root_strategy']}", flush=True)
     print(f"RHS execution: {report['rhs_execution']}", flush=True)
+    print(f"Trial kernel: {report['trial_kernel']}", flush=True)
     if options.setup_only:
         print(f"Setup saved in {options.output.resolve()}",flush=True)
         return report
+    trial_factory = None
+    if options.experimental_fused_trial:
+        from essos.rk_boozer_gpu_trial import prepare_trial_factory
+        trial_factory = prepare_trial_factory(field, MASS, CHARGE)
+        report["source_sha256"]["essos/rk_boozer_gpu_trial.py"] = digest(ROOT/"essos/rk_boozer_gpu_trial.py")
     def run(y0,mu0):
         return _native_orbits(field,y0,mu0,MASS,CHARGE,speed,times,options.timestep,
-            options.rtol,options.atol,method,True,options.controller,.4,.3,"standard",options.max_steps,options.stage_execution)
+            options.rtol,options.atol,method,True,options.controller,.4,.3,"standard",options.max_steps,options.stage_execution,
+            _trial_factory=trial_factory)
     if method == "rk4":
         run, actual_dt, grid_steps = standard_rk4_orbits(field, initial, mu, speed, times,
             options.timestep, options.seed)
@@ -258,7 +271,22 @@ def main(argv=None):
     report["first_step_counts"] = {name:dict(total=int(first_counts[:,i].sum()),
         min=int(first_counts[:,i].min()), median=float(np.median(first_counts[:,i])),
         max=int(first_counts[:,i].max())) for i,name in enumerate(("trials","accepted","rejected"))}
+    fresh_rhs = {"rk4": 4, "dopri5": 6, "dopri8": 13}[method]
+    counted_trials = int(first_counts[:,0].sum())
+    minimum_batch_slots = options.particles*int(first_counts[:,0].max())
+    initial_rhs = 0 if method == "rk4" else options.particles
+    report["rhs_work_estimate"] = dict(fresh_rhs_per_trial=fresh_rhs,
+        initial_rhs_evaluations=initial_rhs,
+        counted_trial_slots=counted_trials,
+        minimum_batched_trial_slots=minimum_batch_slots,
+        counted_rhs_evaluations=initial_rhs+fresh_rhs*counted_trials,
+        minimum_batched_rhs_evaluations=initial_rhs+fresh_rhs*minimum_batch_slots,
+        active_slot_fraction_upper_bound=(counted_trials/minimum_batch_slots if minimum_batch_slots else None),
+        scope="Logical RHS-lane work estimates for the current vmapped driver, not GPU instruction counts. "
+              "Root retries can add batch iterations; field-only energy checks are excluded. "
+              "RK4 counts already include held inactive grid slots.")
     print(f"First-call steps: {report['first_step_counts']}; failures: {int(failed.sum())}", flush=True)
+    print(f"RHS work estimate: {report['rhs_work_estimate']}", flush=True)
     report["warm_seconds"] = []
     report["timing_scope"] = "Blocked device-resident solve calls; setup, output transfers and plots excluded. First trace adds lowering/compilation; persistent cache may be hit. Production saved-state energy diagnostics are included."
     save()
@@ -289,7 +317,7 @@ def main(argv=None):
     save()
     if not report["complete"]:
         raise RuntimeError("Incomplete/nonfinite traces; warm repeats skipped on failure. Inspect benchmark.json/traces.npz")
-    if options.horizon<=1e-4 and (options.particles<=8 or
+    if not options.experimental_fused_trial and options.horizon<=1e-4 and (options.particles<=8 or
             (method == "rk4" and options.particles<=64)):
         reference = trace_boozer(field,births["s"],births["theta"],births["zeta"],births["pitch"],
             speed=speed,mass=MASS,charge=CHARGE,tmax=options.horizon,timestep=options.timestep,n_save=options.saves,
