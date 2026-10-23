@@ -52,8 +52,7 @@ def test_angle_table_matches_the_mode_sum():
 
 
 def test_angle_table_preserves_radial_polynomial_across_knots():
-    # A global cubic is reproduced exactly by the radial spline. Constant
-    # angles remove angular interpolation error from this independent oracle.
+    # Constant angles isolate the cubic radial spline.
     r = np.array([.07, .135, .24, .37, .49, .61, .74, .88, .96])
     s = r**2
     polynomial = lambda x: np.pi + .23*x - .31*x**2 + .071*x**3
@@ -73,8 +72,7 @@ def test_angle_table_preserves_radial_polynomial_across_knots():
     for derivative, tolerance in enumerate([2e-12, 2e-11, 2e-10]):
         np.testing.assert_allclose(actual[..., derivative], expected[..., derivative],
                                    rtol=0, atol=tolerance)
-        # Subtract the known smooth variation before measuring the C0/C1/C2
-        # jump. Independently rounded pieces need not meet at a shared knot.
+        # Remove the known smooth variation to measure each knot jump.
         jump = np.diff(actual[..., derivative]-expected[..., derivative], axis=1)
         np.testing.assert_allclose(jump, 0., rtol=0, atol=tolerance)
 
@@ -108,8 +106,7 @@ def test_angle_table_orbit_conserves_analytic_energy_across_radial_knots():
     table_B = np.asarray(jax.vmap(field.modB)(jnp.asarray(radius**2),
                                            jnp.asarray(theta), jnp.asarray(zeta)))
     table_energy = .5*y[:, 3]**2+mu*table_B
-    # Both Hamiltonians matter: the analytic oracle checks the orbit, while
-    # the interpolated Hamiltonian also detects discontinuous field values.
+    # Check the independent analytic energy and continuity of the table energy.
     errors = [np.max(np.abs(h/h[0]-1)) for h in (analytic_energy, table_energy)]
     assert max(errors) < 1e-9, errors
 
