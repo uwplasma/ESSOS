@@ -6,13 +6,17 @@ import numpy as np
 import pytest
 
 
-def test_fused_trial_matches_original_dopri8_at_axis_and_spline_edges():
+def test_fused_trial_matches_original_dopri8_at_axis_and_spline_edges(monkeypatch):
     from essos.boozer import boozer_compiler_options, guiding_center_rhs
     from essos.rk import _trial_step, _C8, _A8, _ERROR8
     from essos.rk_boozer_gpu_trial import prepare_trial_factory
     from examples.benchmarks.benchmark_native_boozer_alpha import PARAMETERS, ROOT, setup, MASS, CHARGE
     if not boozer_compiler_options():
         pytest.skip("CUDA-only kernel")
+    # Emulate the missing lowering from the remote JAX 0.7.2 stack. This
+    # exercises the complete RK kernel, including all nested stage operations.
+    from jax._src.pallas.triton import lowering
+    monkeypatch.delitem(lowering.triton_lowering_rules, jax.lax.is_finite_p, raising=False)
     settings = SimpleNamespace(**(dict(PARAMETERS) | dict(particles=64,
         field_cache=ROOT/"examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz")))
     field, _, _, speed, _, _ = setup(settings)
@@ -35,6 +39,29 @@ def test_fused_trial_matches_original_dopri8_at_axis_and_spline_edges():
     for actual,expected in zip(fused[:3],ordinary[:3]):
         np.testing.assert_allclose(actual/scale,expected/scale,rtol=3e-12,atol=3e-12)
     np.testing.assert_allclose(fused.f1/(scale/h),ordinary.f1/(scale/h),rtol=3e-12,atol=3e-12)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_kernel_finite_guard_preserves_nan_infinity_and_finite_values(dtype, monkeypatch):
+    from essos.boozer import boozer_compiler_options
+    from essos.rk_boozer_gpu_trial import _kernel_is_finite
+    from jax.experimental import pallas as pl
+    from jax.experimental.pallas import triton as plt
+    if not boozer_compiler_options():
+        pytest.skip("CUDA-only kernel")
+    from jax._src.pallas.triton import lowering
+    monkeypatch.delitem(lowering.triton_lowering_rules, jax.lax.is_finite_p, raising=False)
+    limit = np.finfo(dtype)
+    # Sixteen values also keep the Triton block size a power of two.
+    values = np.asarray([0., -0., 1., -1., limit.max, -limit.max,
+        limit.tiny, -limit.tiny, limit.smallest_subnormal, -limit.smallest_subnormal,
+        np.inf, -np.inf, np.nan, -np.nan, .5, -.5], dtype=dtype)
+    def kernel(xref, outref):
+        outref[...] = _kernel_is_finite(xref[...])
+    run = jax.jit(pl.pallas_call(kernel,
+        out_shape=jax.ShapeDtypeStruct(values.shape, jnp.bool_), grid=(),
+        compiler_params=plt.CompilerParams(num_warps=1)))
+    np.testing.assert_array_equal(run(jnp.asarray(values)), np.isfinite(values))
 
 
 def test_experimental_trial_override_cannot_enter_reverse_replay():

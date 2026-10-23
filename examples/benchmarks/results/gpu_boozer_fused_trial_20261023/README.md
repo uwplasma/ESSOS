@@ -94,6 +94,27 @@ or `--case fused` in separate processes for independent memory snapshots.
 
 ## Target-machine check before another long run
 
+The first remote attempt failed during fused-kernel compilation with
+`Unimplemented primitive in Pallas GPU lowering: is_finite`; it produced no
+fused solve timing. The kernel adapter now expresses this guard through an
+exact IEEE exponent-bit check. JAX 0.7.2's Triton lowering supports the
+required [bitcast](https://github.com/jax-ml/jax/blob/jax-v0.7.2/jax/_src/pallas/triton/lowering.py#L2702)
+and [integer mask/comparison](https://github.com/jax-ml/jax/blob/jax-v0.7.2/jax/_src/pallas/triton/lowering.py#L1209)
+operations. All ordinary solver and field checks retain their implementation.
+
+Four local GPU checks pass with the `is_finite` lowering deliberately
+removed: the complete Dopri8 trial across 64 axis/spline-edge states,
+float32 and float64 finite guards (including signed zero, subnormals,
+maximum finite values, infinities and NaNs), and the reverse replay guard.
+This reproduces the specific missing-primitive restriction; it is not a
+full test of the remote JAX environment. The remote timing comparison still
+needs to be retried after updating the checkout.
+
+The [post-fix full adaptive check](compatibility.json), with 64 particles
+and three interleaved warm repeats, measured 194.29 ms standard versus
+115.62 ms fused (40.5% reduction). Accepted/rejected counts, statuses and
+maximum energy drift are identical to the earlier local fused result.
+
 Keep the remote workload's full 8192-particle batch shape, but use 0.2 ms
 instead of 20 ms. Both cases use command buffers and the same input cache:
 

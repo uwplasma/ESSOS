@@ -49,6 +49,24 @@ def _select_one(value, index, axis):
     return jax.lax.bitcast_convert_type(selected, value.dtype)
 
 
+def _kernel_is_finite(value):
+    """Exact IEEE finite test using primitives supported by older Pallas.
+
+    JAX 0.7.2's Triton backend cannot lower lax.is_finite. Inspecting the
+    exponent preserves NaN/infinity rejection without changing the RHS guard.
+    Integer bit operations also avoid assumptions about fast float comparisons.
+    """
+    if value.dtype == jnp.float64:
+        unsigned, exponent = jnp.uint64, 0x7ff0000000000000
+    elif value.dtype == jnp.float32:
+        unsigned, exponent = jnp.uint32, 0x7f800000
+    else:
+        raise TypeError("The fused trial finite guard supports float32/float64")
+    bits = jax.lax.bitcast_convert_type(value, unsigned)
+    mask = jnp.asarray(exponent, dtype=unsigned)
+    return jax.lax.bitwise_and(bits, mask) != mask
+
+
 class _KernelField:
     """Kernel-local Ref adapter; evaluation uses the original field methods."""
     table = sine_coef = None
@@ -111,6 +129,8 @@ def _kernel_rhs(model, y0, moment, mass, charge):
             elif name == "le_to":
                 # Positive finite knots followed by +inf; NaN queries sort last.
                 result = [jnp.less_equal(values[0], values[1]) | jnp.isnan(values[1])]
+            elif name == "is_finite":
+                result = [_kernel_is_finite(values[0])]
             else:
                 result = _bind_primitive(equation.primitive, values, equation.params)
                 if not equation.primitive.multiple_results:
