@@ -1276,8 +1276,18 @@ The final [target-GPU RHS diagnostic](examples/benchmarks/benchmark_boozer_rhs_f
 requires no Nsight installation. It compares ordinary and precision-corrected
 division in both 128-trial stage recurrences and complete short adaptive solves,
 checking every output and step count bitwise. The linked result record includes
-the command and a 64-particle local smoke test; no additional solver optimization
-is enabled by this diagnostic.
+the command and a 64-particle local smoke test. The completed
+[A100 check](examples/benchmarks/results/gpu_boozer_dopri5_20261023/rhs_final_a100_console.json)
+found corrected division 8.5% slower for the short adaptive solve and 18.3%
+slower for equal-count trials; the candidate is rejected.
+
+The separate [baseline profiling workflow](examples/benchmarks/results/gpu_boozer_profile_20261023/README.md)
+captures an actual JAX/CUPTI GPU timeline with existing packages and reports
+per-kernel durations and available launch resources. It excludes compilation
+and warmup, checks bitwise output agreement and rejects host-only captures.
+Launch registers and theoretical occupancy are distinguished from unmeasured
+instruction stalls, spill traffic and achieved occupancy. No solver arithmetic
+or default changes are enabled by either diagnostic.
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated

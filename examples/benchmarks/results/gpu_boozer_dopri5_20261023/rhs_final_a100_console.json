@@ -1,0 +1,30 @@
+{
+  "evidence": "User-pasted completed console output; raw comparison.json was not supplied",
+  "remote_output_directory": "/home/exouser/ESSOS/output/boozer_dopri8_rhs_final_a100_run1",
+  "console_run_completed": true,
+  "raw_report_supplied": false,
+  "device_context": "A100 machine from preceding session; model/version not printed in this pasted console",
+  "settings_source": "Preceding documented run command",
+  "particles": 8192,
+  "horizon_s": 0.0002,
+  "saves": 101,
+  "repeats": 9,
+  "method": "dopri8",
+  "controller": "i",
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "trial_steps": 128,
+  "collisions": false,
+  "reverse_ad": false,
+  "hardware_counters_measured": false,
+  "rows": {
+    "orbit_baseline": {"warm_median_ms": 186.523, "bitwise_equal_to_baseline": true},
+    "orbit_corrected": {"warm_median_ms": 202.319, "bitwise_equal_to_baseline": true},
+    "trials_baseline": {"warm_median_ms": 39.163, "bitwise_equal_to_baseline": true},
+    "trials_corrected": {"warm_median_ms": 46.311, "bitwise_equal_to_baseline": true}
+  },
+  "orbit_time_increase_percent": 8.46866070136123,
+  "trials_time_increase_percent": 18.251921456476783,
+  "decision": "Reject corrected-reciprocal candidate; retain unchanged baseline",
+  "unavailable": ["individual samples", "compile times", "compiled buffers", "peak memory", "hardware counters"]
+}

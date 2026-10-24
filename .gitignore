@@ -216,6 +216,7 @@ examples/benchmarks/output/
 !examples/benchmarks/results/gpu_boozer_dopri5_20261022/*.csv
 !examples/benchmarks/results/gpu_boozer_dopri5_20261022/*.npz
 !examples/benchmarks/results/gpu_boozer_dopri5_20261023/*.json
+!examples/benchmarks/results/gpu_boozer_profile_20261023/*.json
 !examples/benchmarks/results/gpu_boozer_stage_reductions_20261023/*.json
 !examples/benchmarks/results/gpu_boozer_stage_reductions_20261023/*.csv
 !examples/benchmarks/results/gpu_boozer_fused_trial_20261023/*.json

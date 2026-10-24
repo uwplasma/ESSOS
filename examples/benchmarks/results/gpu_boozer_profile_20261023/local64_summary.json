@@ -1,0 +1,1068 @@
+{
+  "complete": true,
+  "capture": "jax_cupti",
+  "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "jax": "0.11.2",
+  "particles": 64,
+  "horizon_s": 0.0002,
+  "saves": 101,
+  "field_cache": "/mnt/c/Users/eduar/Github_Codes/ESSOS-split-ad/examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz",
+  "field_modes": 16,
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "timestep": 1.25e-07,
+  "energy_ev": 3520000.0,
+  "birth_s": 0.3,
+  "seed": 42,
+  "method": "dopri8",
+  "controller": "i",
+  "dense_output": "standard",
+  "independent_orbits": true,
+  "collisions": false,
+  "reverse_ad": false,
+  "particle_chunking": false,
+  "arithmetic_changes": false,
+  "compiler_options": {
+    "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+    "xla_gpu_graph_min_graph_size": 1
+  },
+  "hardware_stall_counters_measured": false,
+  "resource_scope": "Launch registers/shared memory and theoretical occupancy, when provided by CUPTI; not achieved occupancy, executed spill traffic or instruction stalls.",
+  "birth_sha256": "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+  "source_sha256": {
+    "essos/boozer.py": "06fd5a88533377bf99baf5e59f33159514846944d8c4aa214acfb0a3a9ad9076",
+    "essos/rk_boozer_gpu_orbit.py": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+    "essos/rk_boozer_gpu_trial.py": "6331b9c9fce8e84875a807c6ea5e37e2e9e20a3cba7d6bd21a88c2a012717387"
+  },
+  "compile_s": 4.32912253899849,
+  "compiled_buffers_bytes": 1464936,
+  "unprofiled_warm_ms": [
+    92.93178699954296,
+    91.07130600023083,
+    91.43478400073946
+  ],
+  "unprofiled_warm_median_ms": 91.43478400073946,
+  "profiled_call_wall_ms": 93.48257199962973,
+  "trace_path": "output/boozer_dopri8_profile_local64_final_20261023/trace/plugins/profile/2026_10_23_19_24_15/EduardoNetoPC.trace.json.gz",
+  "gpu_trace": {
+    "gpu_stream_events_present": true,
+    "gpu_processes": [
+      "/device:GPU:0"
+    ],
+    "kernels": [
+      {
+        "name": "kernel",
+        "calls": 1,
+        "total_ms": 79.33395399999999,
+        "median_ms": 79.33395399999999,
+        "percent_of_summed_kernel_time": 99.6317526205468,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+            "theoretical_occupancy_pct": "33.3333"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 128,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              64,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 33.3333
+          }
+        ]
+      },
+      {
+        "name": "loop_select_fusion",
+        "calls": 101,
+        "total_ms": 0.08875799999999999,
+        "median_ms": 0.000865,
+        "percent_of_summed_kernel_time": 0.11146696531846241,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_30",
+            "kernel_details": "regs:18 static_shared:0 dynamic_shared:0 grid:3,1,1 block:128,1,1 occ_pct:100",
+            "name": "jit(run)/jit(_native_orbits)",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 18,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              3,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_and_fusion",
+        "calls": 101,
+        "total_ms": 0.06528400000000001,
+        "median_ms": 0.000641,
+        "percent_of_summed_kernel_time": 0.08198708132056268,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_30",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:0 grid:1,1,1 block:64,1,1 occ_pct:100",
+            "name": "jit(run)/jit(_native_orbits)",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              64,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_add_fusion",
+        "calls": 101,
+        "total_ms": 0.062978,
+        "median_ms": 0.000609,
+        "percent_of_summed_kernel_time": 0.07909108521852821,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_36",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:0 grid:1,1,1 block:1,1,1 occ_pct:1.5625",
+            "name": "jit(run)/jit(_native_orbits)",
+            "theoretical_occupancy_pct": "1.5625"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              1,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 1.5625
+          }
+        ]
+      },
+      {
+        "name": "input_reduce_fusion_1",
+        "calls": 1,
+        "total_ms": 0.023437,
+        "median_ms": 0.023437,
+        "percent_of_summed_kernel_time": 0.029433417451596524,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:255 static_shared:0 dynamic_shared:1024 grid:51,1,1 block:128,1,1 occ_pct:16.6667",
+            "theoretical_occupancy_pct": "16.6667"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 255,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 1024,
+            "grid_blocks": [
+              51,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 16.6667
+          }
+        ]
+      },
+      {
+        "name": "loop_add_fusion_1",
+        "calls": 1,
+        "total_ms": 0.006307,
+        "median_ms": 0.006307,
+        "percent_of_summed_kernel_time": 0.007920662365798492,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:40 static_shared:0 dynamic_shared:0 grid:202,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 40,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              202,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_transpose_fusion",
+        "calls": 1,
+        "total_ms": 0.006084,
+        "median_ms": 0.006084,
+        "percent_of_summed_kernel_time": 0.007640607235376252,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:18 static_shared:0 dynamic_shared:0 grid:253,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 18,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              253,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_reduce_fusion_2",
+        "calls": 1,
+        "total_ms": 0.004163,
+        "median_ms": 0.004163,
+        "percent_of_summed_kernel_time": 0.005228114385416065,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:30 static_shared:0 dynamic_shared:64 grid:16,1,1 block:64,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 30,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 64,
+            "grid_blocks": [
+              16,
+              1,
+              1
+            ],
+            "block_threads": [
+              64,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_atan2_select_sqrt_fusion",
+        "calls": 1,
+        "total_ms": 0.00365,
+        "median_ms": 0.00365,
+        "percent_of_summed_kernel_time": 0.0045838620001846355,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:33 static_shared:0 dynamic_shared:0 grid:51,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 33,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              51,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_multiply_fusion",
+        "calls": 1,
+        "total_ms": 0.002977,
+        "median_ms": 0.002977,
+        "percent_of_summed_kernel_time": 0.003738673198506756,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:40 static_shared:0 dynamic_shared:0 grid:8,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 40,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              8,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_add_and_fusion",
+        "calls": 1,
+        "total_ms": 0.002977,
+        "median_ms": 0.002977,
+        "percent_of_summed_kernel_time": 0.003738673198506756,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:38 static_shared:0 dynamic_shared:0 grid:51,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 38,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              51,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_multiply_fusion_1",
+        "calls": 1,
+        "total_ms": 0.0029449999999999997,
+        "median_ms": 0.0029449999999999997,
+        "percent_of_summed_kernel_time": 0.003698485915217466,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:40 static_shared:0 dynamic_shared:0 grid:8,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 40,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              8,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_concatenate_fusion_1",
+        "calls": 1,
+        "total_ms": 0.002657,
+        "median_ms": 0.002657,
+        "percent_of_summed_kernel_time": 0.003336800365613856,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:33 static_shared:0 dynamic_shared:0 grid:1,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 33,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_concatenate_fusion",
+        "calls": 1,
+        "total_ms": 0.002529,
+        "median_ms": 0.002529,
+        "percent_of_summed_kernel_time": 0.0031760512324566963,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:33 static_shared:0 dynamic_shared:0 grid:1,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 33,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_reduce_fusion",
+        "calls": 1,
+        "total_ms": 0.002146,
+        "median_ms": 0.002146,
+        "percent_of_summed_kernel_time": 0.0026950596855880075,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:40 static_shared:0 dynamic_shared:128 grid:208,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 40,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 128,
+            "grid_blocks": [
+              208,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_reduce_fusion_6",
+        "calls": 1,
+        "total_ms": 0.001986,
+        "median_ms": 0.001986,
+        "percent_of_summed_kernel_time": 0.0024941232691415576,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:25 static_shared:0 dynamic_shared:0 grid:8,1,1 block:256,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 25,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              8,
+              1,
+              1
+            ],
+            "block_threads": [
+              256,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_reduce_fusion_8",
+        "calls": 2,
+        "total_ms": 0.001666,
+        "median_ms": 0.000833,
+        "percent_of_summed_kernel_time": 0.0020922504362486582,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:22 static_shared:0 dynamic_shared:0 grid:32,1,1 block:32,1,1 occ_pct:50",
+            "theoretical_occupancy_pct": "50"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 22,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              32,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 50.0
+          }
+        ]
+      },
+      {
+        "name": "loop_select_fusion_1",
+        "calls": 1,
+        "total_ms": 0.001601,
+        "median_ms": 0.001601,
+        "percent_of_summed_kernel_time": 0.002010620017067288,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:38 static_shared:0 dynamic_shared:0 grid:1,1,1 block:64,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 38,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              64,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_convert_sqrt_fusion",
+        "calls": 1,
+        "total_ms": 0.001217,
+        "median_ms": 0.001217,
+        "percent_of_summed_kernel_time": 0.0015283726175958085,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:24 static_shared:0 dynamic_shared:0 grid:1,1,1 block:64,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 24,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              64,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_reduce_fusion_7",
+        "calls": 1,
+        "total_ms": 0.001185,
+        "median_ms": 0.001185,
+        "percent_of_summed_kernel_time": 0.0014881853343065186,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:0 grid:1,1,1 block:256,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              256,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_reduce_fusion_5",
+        "calls": 1,
+        "total_ms": 0.001121,
+        "median_ms": 0.001121,
+        "percent_of_summed_kernel_time": 0.0014078107677279385,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:520 grid:32,1,1 block:32,1,1 occ_pct:50",
+            "theoretical_occupancy_pct": "50"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 520,
+            "grid_blocks": [
+              32,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 50.0
+          }
+        ]
+      },
+      {
+        "name": "wrapped_transpose_1",
+        "calls": 1,
+        "total_ms": 0.0010249999999999999,
+        "median_ms": 0.0010249999999999999,
+        "percent_of_summed_kernel_time": 0.0012872489178600687,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_37",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:0 grid:253,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              253,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_reduce_fusion_3",
+        "calls": 1,
+        "total_ms": 0.000992,
+        "median_ms": 0.000992,
+        "percent_of_summed_kernel_time": 0.0012458057819679886,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:0 grid:51,1,1 block:256,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              51,
+              1,
+              1
+            ],
+            "block_threads": [
+              256,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_sqrt_fusion",
+        "calls": 1,
+        "total_ms": 0.0009599999999999999,
+        "median_ms": 0.0009599999999999999,
+        "percent_of_summed_kernel_time": 0.0012056184986786985,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:18 static_shared:0 dynamic_shared:0 grid:1,1,1 block:64,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 18,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              64,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "wrapped_transpose",
+        "calls": 1,
+        "total_ms": 0.000865,
+        "median_ms": 0.000865,
+        "percent_of_summed_kernel_time": 0.001086312501413619,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:27 static_shared:0 dynamic_shared:2048 grid:4,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 27,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 2048,
+            "grid_blocks": [
+              4,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_subtract_fusion",
+        "calls": 1,
+        "total_ms": 0.000833,
+        "median_ms": 0.000833,
+        "percent_of_summed_kernel_time": 0.0010461252181243291,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:0 grid:51,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              51,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_reduce_fusion_4",
+        "calls": 1,
+        "total_ms": 0.000833,
+        "median_ms": 0.000833,
+        "percent_of_summed_kernel_time": 0.0010461252181243291,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:26 static_shared:0 dynamic_shared:0 grid:32,1,1 block:32,1,1 occ_pct:50",
+            "theoretical_occupancy_pct": "50"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 26,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              32,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 50.0
+          }
+        ]
+      },
+      {
+        "name": "loop_broadcast_fusion_1",
+        "calls": 1,
+        "total_ms": 0.000769,
+        "median_ms": 0.000769,
+        "percent_of_summed_kernel_time": 0.0009657506515457492,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:0 grid:253,1,1 block:128,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              253,
+              1,
+              1
+            ],
+            "block_threads": [
+              128,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "input_concatenate_fusion_2",
+        "calls": 1,
+        "total_ms": 0.000768,
+        "median_ms": 0.000768,
+        "percent_of_summed_kernel_time": 0.0009644947989429589,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_37",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:0 grid:1,1,1 block:64,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              64,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      },
+      {
+        "name": "loop_broadcast_fusion",
+        "calls": 1,
+        "total_ms": 0.000512,
+        "median_ms": 0.000512,
+        "percent_of_summed_kernel_time": 0.0006429965326286393,
+        "launch_metadata": [
+          {
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1",
+            "kernel_details": "regs:16 static_shared:0 dynamic_shared:0 grid:1,1,1 block:64,1,1 occ_pct:100",
+            "theoretical_occupancy_pct": "100"
+          }
+        ],
+        "launch_resources": [
+          {
+            "registers_per_thread": 16,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              1,
+              1,
+              1
+            ],
+            "block_threads": [
+              64,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 100.0
+          }
+        ]
+      }
+    ],
+    "summed_kernel_time_ms": 79.627179,
+    "kernel_interval_union_ms": 79.62583199999985,
+    "first_to_last_kernel_ms": 91.315147,
+    "time_without_a_kernel_within_span_ms": 11.68931500000015,
+    "gap_scope": "Gaps can include copies, launch/synchronization overhead and idle time; not measured instruction stalls.",
+    "memcpy_or_memset_events": 102,
+    "memcpy_or_memset_sum_ms": 0.08301900000000001,
+    "scope": "GPU stream durations; kernel sums can overlap. No instruction-stall, executed-spill or throughput counters."
+  },
+  "profiled_outputs_bitwise_equal": true,
+  "counts": {
+    "trials": 32716,
+    "accepted": 28082,
+    "rejected": 4634
+  },
+  "lost": 1,
+  "failed": 0,
+  "max_relative_energy_error": 5.165119443262256e-10,
+  "validation_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false (local validation command only)",
+  "summary_scope": "Reprocessed the existing raw trace; no additional GPU solve",
+  "summary_source_sha256": "d72b484629e2a6ae6de0e2f8d825777eb7baad7ce8a421547aec528e42c62501"
+}

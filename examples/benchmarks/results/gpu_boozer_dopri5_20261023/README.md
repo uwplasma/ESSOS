@@ -227,9 +227,9 @@ All cases report 1464936 compiled-buffer bytes; these estimates do not establish
 equal per-case peak VRAM or register-spill use.
 
 No production solver change is retained from this investigation. The observed
-full remote Dopri8 median remains 18.448 s; none of these local candidates
-was run on the large machine. Its next hardware-specific investigation needs
-target-GPU profiling rather than extrapolated local percentages.
+full remote Dopri8 median remains 18.448 s. The corrected-reciprocal candidate
+was subsequently checked on the large machine as recorded below. The other
+local candidates have no target-machine result.
 
 Final target-GPU RHS check without Nsight
 ----------------------------------------
@@ -261,10 +261,19 @@ is deliberately retained as negative evidence:
 | Adaptive orbit, 0.2 ms and 101 saves | 94.373 | 96.506 | Yes, all six output arrays |
 | 128 stage trials | 16.389 | 17.257 | Yes, all four output arrays |
 
-The local result does not demonstrate a speedup. The final target-machine test
-checks whether the A100's FP64 execution changes that outcome. It does not need
-Nsight, extra packages or administrator privileges. It reports compiled buffers,
-but does not measure achieved occupancy, hardware stalls or per-case peak VRAM.
+The local result does not demonstrate a speedup. The completed
+[A100 console record](rhs_final_a100_console.json) also rejects this candidate:
+
+| Case, 8192 particles | Baseline warm, ms | Corrected warm, ms | Time increase | Bitwise equality |
+|---|---:|---:|---:|---|
+| Adaptive orbit, 0.2 ms and 101 saves | 186.523 | 202.319 | 8.5% | Yes |
+| 128 stage trials | 39.163 | 46.311 | 18.3% | Yes |
+
+These are paired arithmetic benchmarks, not hardware profiles. They establish
+that the corrected division is slower; they do not identify instruction stalls,
+executed spill traffic, achieved occupancy or per-case peak VRAM. Only the
+completed console was supplied; raw samples, compilation and memory values
+remain unavailable for this target-machine run.
 
 ```sh
 python -m examples.benchmarks.benchmark_boozer_rhs_final \
@@ -276,6 +285,10 @@ python -m examples.benchmarks.benchmark_boozer_rhs_final \
 The four-row timing table is printed and saved to `comparison.json`. This is
 a short target-GPU diagnostic, not another 20 ms full-horizon performance run.
 Do not combine its milliseconds with full-horizon seconds in one timing row.
+
+The separate [baseline profiling workflow](../gpu_boozer_profile_20261023/README.md)
+now captures an actual JAX/CUPTI GPU timeline and launch resources without
+installing Nsight or changing solver arithmetic.
 
 Consistency of the full 18.448 s result
 -------------------------------------
