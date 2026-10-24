@@ -20,17 +20,20 @@ def _cacheable(*values):
 
 @jit
 def toroidal_flux(surface, field, idx=0) -> jnp.ndarray:
-    curve = surface.gamma[idx]    
-    dl = jnp.roll(curve, -1, axis=0) - curve
-    A_vals = vmap(field.A)(curve)
-    Adl = jnp.sum(A_vals * dl, axis=1) 
-    tf = jnp.sum(Adl)
-    #curve = surface.gamma[idx]    
-    #dl = surface.gammadash_theta[idx]
-    #A_vals = vmap(field.A)(curve)
-    #Adl = jnp.sum(A_vals * dl, axis=1)/surface.ntheta 
-    #tf = jnp.sum(Adl)    
-    return tf
+    """Signed magnetic flux through the poloidal loop at toroidal grid index idx.
+
+    Integrate ``A . dx`` using the analytic theta tangent and periodic
+    quadrature. For ``R = R0 + a cos(theta), Z = b sin(theta)`` the loop
+    normal points in the negative toroidal direction: positive B_phi gives
+    negative flux. The vector potential must be single-valued on the loop.
+    """
+    count = surface.ntheta - int(surface.close)
+    if count < 2:
+        raise ValueError('Toroidal flux requires at least two distinct theta points')
+    curve = surface.gamma[idx, :count]
+    tangent = surface.gammadash_theta[idx, :count]
+    return 2 * jnp.pi * jnp.mean(jnp.sum(vmap(field.A)(curve) * tangent, axis=-1))
+
 
 @jit
 def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
@@ -89,44 +92,71 @@ def B_contravariant_theta_phi_on_surface(surface, field):
     # The final index selects theta (0) or phi (1).
     return jnp.stack((B_contra_theta, B_contra_phi), axis=-1)
 
-def iota_approx_on_surface(surface, field, regularization=1e-10):
+def iota_approx_on_surface(surface, field, regularization=1e-10, *,
+                           lambda_mpol=None, lambda_ntor=None, return_diagnostics=False):
+    r"""Fit ``theta* = theta + lambda`` and a constant rotational transform.
+
+    This is a surface PDE fit, not a field-line measurement. It requires a flux
+    surface and nonzero B^phi. Resolve lambda independently of boundary shape:
+    even a circular boundary can need high lambda harmonics. Defaults preserve
+    the boundary's Fourier basis; supply both cutoffs to test convergence.
+    The fit does not enforce invertibility of theta*. Optional diagnostics give
+    the RMS PDE residual and minimum ``1 + d(lambda)/d(theta)``; a small residual
+    alone does not establish a valid straight-field-line coordinate system.
     """
-    Rotational transform (iota) on the surface.
-    Only meaningful when B.n ~ 0 (the surface is a flux surface).
-    """
+    if (lambda_mpol is None) != (lambda_ntor is None):
+        raise ValueError("Specify both lambda_mpol and lambda_ntor, or neither")
+    if lambda_mpol is None:
+        xm, xn = surface.xm[1:], surface.xn[1:]
+    else:
+        if lambda_mpol < 0 or lambda_ntor < 0:
+            raise ValueError("Lambda Fourier cutoffs must be nonnegative")
+        modes = [(m, n * surface.nfp) for m in range(lambda_mpol + 1)
+                 for n in range(-lambda_ntor, lambda_ntor + 1)
+                 if m > 0 or n > 0]
+        xm = jnp.asarray([m for m, _ in modes])
+        xn = jnp.asarray([n for _, n in modes])
+    angles = (xm[:, None, None] * surface.theta2d
+              - xn[:, None, None] * surface.phi2d).reshape(xm.size, surface.nphi * surface.ntheta).T
+    contra = B_contravariant_theta_phi_on_surface(surface, field)
+    slope = (contra[..., 0] / contra[..., 1]).ravel()
+    derivative = xm[None, :] * slope[:, None] - xn[None, :]
+    columns = -derivative * jnp.cos(angles)
+    theta_derivative_columns = xm[None, :] * jnp.cos(angles)
+    if surface.rs is not None or surface.zc is not None:
+        # Cosine lambda modes are needed when stellarator symmetry is absent.
+        columns = jnp.concatenate((columns, derivative * jnp.sin(angles)), axis=1)
+        theta_derivative_columns = jnp.concatenate(
+            (theta_derivative_columns, -xm[None, :] * jnp.sin(angles)), axis=1)
+    A = jnp.concatenate((jnp.ones((slope.size, 1)), columns), axis=1)
 
-    # --- 1. Local field-line slope on the surface -------------------------------------
-    # A field line tangent to the surface moves as dtheta/dphi = B^theta / B^phi.
-    # This slope depends on how theta is parametrized, so it is NOT iota yet.
-    B_contra = B_contravariant_theta_phi_on_surface(surface, field)
-    slope = ( B_contra[..., 0] / B_contra[..., 1] ).ravel()          # shape (nphi*ntheta,)
-
-    # --- 2. Basis for lambda, reusing the surface's own Fourier modes ------------------
-    # Straight-field-line angle: theta* = theta + lambda(theta, phi), where iota is constant.
-    # Stellarator symmetry -> lambda = sum_mn l_mn sin(m theta - xn phi).
-    # Drop mode (0,0): sin(0) = 0 has no effect.
-    xm = surface.xm[1:]
-    xn = surface.xn[1:]
-    angles = surface.angles[1:].reshape(xm.size, -1).T                 # shape (npoints, nmodes)
-
-    # --- 3. Linear system: one equation per grid point ---------------------------------
-    # Along a field line, d(theta*)/dphi = iota  ->  slope*(1 + dlambda/dtheta) + dlambda/dphi = iota
-    # With dlambda/dtheta = sum l m cos(.),  dlambda/dphi = -sum l xn cos(.):
-    #     iota - sum_mn l_mn (m*slope - xn) cos(angle) = slope
-    # Unknowns: x = [iota, l_mn]. Linear in x.
-    lambda_columns = -( xm[None, :] * slope[:, None] - xn[None, :] ) * jnp.cos(angles)
-    A = jnp.concatenate([ jnp.ones((slope.size, 1)), lambda_columns ], axis=1)
-
-    # --- 4. Least-squares solution (normal equations) ----------------------------------
-    # Small system (1 + nmodes unknowns), cheap and differentiable with JAX.
-    # The tiny regularization only avoids a singular matrix.
-    AtA = A.T @ A + regularization * jnp.eye(A.shape[1])
-    Ats = A.T @ slope
-    solution = jnp.linalg.solve(AtA, Ats)
-
-    # --- 5. iota is the first unknown ---------------------------------------------------
-    iota = solution[0]
-    return iota
+    # Apply the same endpoint quadrature as surface integrals. Normalize it so
+    # regularization has the same meaning at every grid resolution.
+    weights = jnp.ones((surface.nphi, surface.ntheta))
+    if surface.close:
+        weights = weights.at[:, -1].set(0.0)
+        if surface.range_torus == "full torus":
+            weights = weights.at[-1, :].set(0.0)
+        else:
+            weights = weights.at[jnp.array([0, -1]), :].multiply(0.5)
+    weights = weights.ravel() / jnp.sum(weights)
+    sqrt_weights = jnp.sqrt(weights)
+    # Ridge only the coordinate correction, leaving a constant iota unbiased.
+    # QR avoids squaring the condition number as the normal equations did.
+    ridge = jnp.sqrt(regularization) * jnp.eye(A.shape[1]).at[0, 0].set(0.0)
+    design = jnp.concatenate((sqrt_weights[:, None] * A, ridge), axis=0)
+    rhs = jnp.concatenate((sqrt_weights * slope, jnp.zeros(A.shape[1])))
+    Q, R = jnp.linalg.qr(design, mode="reduced")
+    solution = jnp.linalg.solve(R, Q.T @ rhs)
+    if return_diagnostics:
+        mean_squared_residual = jnp.sum(weights * (A @ solution - slope)**2)
+        angle_jacobian = 1 + theta_derivative_columns @ solution[1:]
+        return {"iota": solution[0],
+                "mean_squared_residual": mean_squared_residual,
+                "rms_residual": jnp.sqrt(mean_squared_residual),
+                "angle_jacobian": angle_jacobian.reshape(surface.nphi, surface.ntheta),
+                "minimum_angle_jacobian": jnp.min(angle_jacobian)}
+    return solution[0]
 
 @jit
 def BdotN(surface, field):
@@ -325,32 +355,68 @@ class SurfaceRZFourier:
 
 
     @classmethod
-    def from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus'):
-        """Read indexed boundary coefficients; truncate outside MPOL/NTOR as VMEC does."""
+    def from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus',
+                        *, mpol=None, ntor=None, max_mode=None):
+        """Read a boundary independently of the VMEC solver's MPOL and NTOR.
+
+        By default the surface contains the nonzero boundary modes (including
+        asymmetric partners when LASYM is true). Explicit ``mpol`` and ``ntor``
+        are maximum surface mode numbers: smaller limits truncate the boundary,
+        while larger limits pad it with zeros. ``max_mode`` sets both limits.
+        """
         from f90nml import Parser
         nml = Parser().read(file)['indata']
 
-        nfp, mpol, ntor = int(nml.get('nfp', 1)), int(nml.get('mpol', 6)) - 1, int(nml.get('ntor', 0))
-        if mpol < 0 or ntor < 0:
-            raise ValueError('Require MPOL >= 1 and NTOR >= 0')
-        def coefficients(name):
-            matrix = np.zeros((mpol + 1, 2 * ntor + 1))
-            if name not in nml:
-                return jnp.asarray(matrix.T)
-            n0, m0 = nml.start_index[name]
-            for i, row in enumerate(nml[name]):
-                for j, value in enumerate(row or []):
-                    m, n = m0 + i, n0 + j
-                    if value is not None and 0 <= m <= mpol and abs(n) <= ntor:
+        def mode_limit(value, name):
+            if value is not None and (isinstance(value, bool) or
+                                      not isinstance(value, (int, np.integer)) or value < 0):
+                raise ValueError(f'{name} must be a non-negative integer')
+            return int(value) if value is not None else None
+
+        mpol, ntor = mode_limit(mpol, 'mpol'), mode_limit(ntor, 'ntor')
+        max_mode = mode_limit(max_mode, 'max_mode')
+        if max_mode is not None:
+            if any(value is not None and value != max_mode for value in (mpol, ntor)):
+                raise ValueError('max_mode conflicts with mpol or ntor')
+            mpol = ntor = max_mode
+
+        # f90nml reverses Fortran's axes: rows vary m, entries within a row
+        # vary n. Each family can have its own lower bounds and ragged rows.
+        names = ['rbc', 'zbs']
+        if nml.get('lasym', False):
+            names += [name for name in ('rbs', 'zbc') if name in nml]
+        tables = {}
+        for name in names:
+            table = {}
+            if name in nml:
+                n0, m0 = nml.start_index[name]
+                for i, row in enumerate(nml[name]):
+                    for j, value in enumerate(row or []):
+                        m, n = m0 + i, n0 + j
+                        if value is None or m < 0:
+                            continue
+                        # The m=0 negative-n modes duplicate positive-n modes.
                         sign = -1 if m == 0 and n < 0 and name in ('rbs', 'zbs') else 1
                         n = abs(n) if m == 0 else n
-                        matrix[m, n + ntor] += sign * value
-            return jnp.asarray(matrix.T)
-        partners = {name: coefficients(name) for name in ('rbs', 'zbc')
-                    if nml.get('lasym', False) and name in nml}
-        return surfacerzfourier_from_boundary(coefficients('rbc'), coefficients('zbs'), nfp,
+                        table[m, n] = table.get((m, n), 0.0) + sign * value
+            tables[name] = table
+        support = [(m, n) for table in tables.values() for (m, n), value in table.items() if value != 0]
+        if mpol is None:
+            mpol = max((m for m, n in support), default=0)
+        if ntor is None:
+            ntor = max((abs(n) for m, n in support), default=0)
+
+        def coefficients(name):
+            matrix = np.zeros((2 * ntor + 1, mpol + 1))
+            for (m, n), value in tables[name].items():
+                if m <= mpol and abs(n) <= ntor:
+                    matrix[n + ntor, m] = value
+            return jnp.asarray(matrix)
+
+        partners = {name: coefficients(name) for name in ('rbs', 'zbc') if name in tables}
+        return surfacerzfourier_from_boundary(coefficients('rbc'), coefficients('zbs'), int(nml.get('nfp', 1)),
                                              ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus, _cls=cls, **partners)
-    
+
     @classmethod
     def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus', offset=0.):
         """Flux surface ``s`` of a VMEC field; ``offset`` [m] grows its m = 1, n = 0 modes, e.g. a wall that far outside the LCFS."""
@@ -896,12 +962,27 @@ class SurfaceRZFourier:
             pointData = {**pointData, **extra_data}
         gridToVTK(str(filename), x, y, z, pointData=pointData)
 
-    def to_vmec(self, filename):
-        """Write a VMEC boundary namelist, including any asymmetric partners."""
+    def to_vmec(self, filename, *, mpol=None, ntor=None,
+                ftol_array=(1e-12,), ns_array=(51,), niter_array=(3500,)):
+        """Write a vacuum VMEC input, including any asymmetric boundary partners.
+
+        Solver MPOL/NTOR default to the surface mode maxima plus two. They can
+        be overridden independently of the boundary representation; MPOL is a
+        count (VMEC retains m < MPOL), while NTOR is a maximum mode number.
+        The default zero-current constraint lets VMEC compute vacuum iota.
+        """
         families = {'RBC': self.rc, 'ZBS': self.zs, 'RBS': self.rs, 'ZBC': self.zc}
         asym = self.rs is not None or self.zc is not None
+        solver_mpol = self.mpol + 2 if mpol is None else mpol
+        solver_ntor = self.ntor + 2 if ntor is None else ntor
+        if (not isinstance(solver_mpol, (int, np.integer)) or solver_mpol <= self.mpol or
+                not isinstance(solver_ntor, (int, np.integer)) or solver_ntor < self.ntor):
+            raise ValueError('Solver MPOL/NTOR must retain all surface modes')
         lines = ['&INDATA', f'LASYM = .{str(asym).upper()}.', f'NFP = {self.nfp}',
-                 f'MPOL = {self.mpol + 1}', f'NTOR = {self.ntor}']
+                 f'MPOL = {solver_mpol}', f'NTOR = {solver_ntor}',
+                 'NCURR = 1', 'CURTOR = 0.0', 'AC = 0.0', 'AM = 0.0']
+        for name, values in (('FTOL_ARRAY', ftol_array), ('NS_ARRAY', ns_array), ('NITER_ARRAY', niter_array)):
+            lines.append(f'{name} = ' + ', '.join(str(value) for value in np.atleast_1d(values)))
         for m, xn, i in zip(self.xm, self.xn, range(len(self.xm))):
             if int(xn) % self.nfp:
                 raise ValueError('Toroidal mode numbers must be multiples of nfp')
