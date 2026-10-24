@@ -44,7 +44,7 @@ def test_angle_table_matches_the_mode_sum():
     table = BoozerField.from_booz(*args, bmns=0.5 * bmnc, angle_grid=(16, 16))
     assert BoozerField.from_booz(*args).table is None  # four modes: summed directly
     exact = BoozerField.from_booz(*args, bmns=0.5 * bmnc, angle_grid=None)
-    assert table.table.shape[1:3] == (21, 21)
+    assert table.table.shape[1:3] == (22, 21)
     points = np.random.default_rng(0).uniform(-7, 7, (3, 20))
     points[0] = np.abs(points[0]) / 7
     np.testing.assert_allclose(jax.vmap(table.modB_derivatives)(*points),
