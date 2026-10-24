@@ -38,7 +38,32 @@ executables and setup, not separate per-case peak VRAM measurements.
 All three Dopri5 paths complete 71401 accepted and 4838 rejected trials,
 with maximum 1931 trials per particle, one lost particle and zero failures.
 The improvements do not result from fewer active integration trials.
-No Dopri5 A100 or full 8192-particle timing is claimed yet.
+The later full target-machine result is recorded below; these local paired
+reductions should not be substituted for the remote timings.
+
+Full target-machine result
+--------------------------
+
+The user's [completed console log](remote_full_orbit_console.json) reports
+8192 particles over 20 ms with the same cached fields, births, saves and
+native tolerances. Device model and JAX version were not printed in this
+full log. The earlier short Dopri8 run identified an A100 and JAX 0.7.2.
+
+| Method | Compile, s | Warm median, s | Accepted steps | Rejected trials | Lost / failed |
+|---|---:|---:|---:|---:|---:|
+| Independent adaptive Dopri5 | 4.247 | 21.554 | 895113025 | 63143676 | 110 / 0 |
+| Independent adaptive Dopri8, earlier run | 5.069 | 18.448 | 351025279 | 62226975 | 111 / 0 |
+| Fixed RK4, completed run 3 | 2.728 | 20.244 | 1310720000 grid slots | 0 | 108 / 0 |
+
+Dopri5's warm samples are 21.321 and 21.787 s. It takes 2.55 times as many
+accepted steps as Dopri8 and about 7.0% more fresh RHS evaluations in total,
+despite needing only six per trial versus thirteen. Its runtime is 16.8%
+longer. The rejection fraction is smaller (6.6% versus 15.1%); smaller accepted
+steps at the tight tolerance dominate this comparison. These are separate
+runs, not a paired interleaved test. RK4 grid counts include held inactive
+lanes, and the methods do not have identical stopping resolution or proven
+equal full-horizon accuracy. Full-run peak memory and independent error
+diagnostics were not supplied.
 
 Achieved trajectory errors: RK4 versus Dopri5 and Dopri8
 ------------------------------------------------------
@@ -101,9 +126,9 @@ one accepted step, unsupported method/controller guards and the ordinary
 Boozer public entrypoint. The normal alpha CLI also completes for Dopri5
 with 64 particles, one lost and zero failed.
 
-The A100/JAX 0.7.2 Dopri8 result remains historical evidence. This generalized
-Dopri5 kernel has not yet run on that stack. The existing finite-guard proxy
-tests do not replace a target-machine test. Biot-Savart, VMEC, collisions and
+The A100/JAX 0.7.2 short Dopri8 result remains historical evidence. The later
+full Dopri5 console result above confirms completion on the large machine,
+without printing its exact software stack. Biot-Savart, VMEC, collisions and
 the checkpointed reverse solver retain their existing paths.
 
 Reproduction
@@ -159,3 +184,111 @@ python -m examples.benchmarks.benchmark_native_boozer_alpha \
   --field-cache output/native_boozer_dopri8_8192_event_replay_run1/boozer_inputs.npz \
   --output output/boozer_rk4_alpha_8192_run2
 ```
+
+Further Dopri8 tuning: no retained solver change
+-----------------------------------------------
+
+The [local follow-up record](dopri8_followup_local.json) preserves discarded
+experiments on the same 64-particle, 0.2 ms, 101-save case. Each paired
+comparison uses 15 interleaved blocked warm samples, with identical fields,
+births, method, controller and rtol=atol=1e-10. Production source modules were
+not modified; variants were generated in a task-local scratch harness.
+
+Stage grouping, two warps per orbit, bit-preserving selection alternatives,
+Fourier recurrences, explicit field-value caching and a transposed stage bank
+did not improve warm execution. Full stage unrolling was interrupted after
+excessive compilation and has no timing result. These variants are not added
+to the production API or CLI.
+
+The promising change replaces FP64 division by multiplication with a shared
+reciprocal, falling back to the original RHS when reciprocals are not finite
+and normal. The same physical equations, tableau, tolerances and error norm
+are retained; ordinary floating-point rounding changes the adaptive mesh.
+The final decision pair and its untimed two-refinement Diffrax audit show:
+
+| Version | Warm median, ms | Compile, s | Trials | Max radial chart error | Max parallel-velocity error, m/s |
+|---|---:|---:|---:|---:|---:|
+| Current independent orbit kernel | 92.383 | 4.481 | 32716 | 1.898e-8 | 0.04480 |
+| Dead-code pruning only | 92.138 | 4.001 | 32716 | 1.898e-8 | 0.04480 |
+| Guarded reciprocal multiplication | 85.092 | 5.383 | 32854 | 7.720e-8 | 0.19009 |
+
+The faster candidate saves 7.89% in this pair but has about 4.24 times the
+maximum saved parallel-velocity error. This single-case difference is not
+proof of systematic bias or violation of the embedded local tolerance; it
+does not establish an equal-accuracy speedup either. All three have one lost
+particle, zero failures and no disagreement with reference loss statuses.
+
+Adding explicit fused rounding correction reproduces all six result arrays
+bitwise, including saved states and step counts, but changes warm execution
+91.326 -> 93.248 ms and compilation 4.249 -> 6.118 s in its own pair. Applying
+that correction only to live/shared denominators also fails to improve time.
+Dead-code pruning's 0.27% timing difference is not a useful demonstrated gain.
+All cases report 1464936 compiled-buffer bytes; these estimates do not establish
+equal per-case peak VRAM or register-spill use.
+
+No production solver change is retained from this investigation. The observed
+full remote Dopri8 median remains 18.448 s; none of these local candidates
+was run on the large machine. Its next hardware-specific investigation needs
+target-GPU profiling rather than extrapolated local percentages.
+
+Final target-GPU RHS check without Nsight
+----------------------------------------
+
+When Nsight is unavailable, run the standalone
+[paired RHS diagnostic](../../benchmark_boozer_rhs_final.py). It uses the
+current independent-orbit Dopri8 solver and its original field classes.
+The candidate caches reciprocals, corrects each quotient with two explicit
+FP64 fused operations, and falls back to ordinary division for exceptional
+denominators or overflowing initial quotients. Overrides are confined to
+sequential tracing inside this diagnostic and restored after each compilation.
+There is no production solver change or new solver default.
+
+The diagnostic measures both the complete short adaptive solve and an
+equal-count 128-trial recurrence. Only the adaptive test includes controller,
+saves, energy diagnostics and stopping. The stage test includes the embedded
+estimate and finite checks. Both use the same fields, births and stage formula;
+the initial FSAL derivative is excluded from stage timings. Every saved state,
+diagnostic and count must agree bitwise with its baseline. Timings alternate
+case order and block on GPU completion. The optional candidate is not promoted
+automatically; the reported retention screen requires bitwise equality and at
+least 3% lower adaptive warm median, followed by review of samples and memory.
+
+The [64-particle local smoke result](rhs_final_local.json), with nine repeats,
+is deliberately retained as negative evidence:
+
+| Case | Baseline warm, ms | Corrected warm, ms | Bitwise equality |
+|---|---:|---:|---|
+| Adaptive orbit, 0.2 ms and 101 saves | 94.373 | 96.506 | Yes, all six output arrays |
+| 128 stage trials | 16.389 | 17.257 | Yes, all four output arrays |
+
+The local result does not demonstrate a speedup. The final target-machine test
+checks whether the A100's FP64 execution changes that outcome. It does not need
+Nsight, extra packages or administrator privileges. It reports compiled buffers,
+but does not measure achieved occupancy, hardware stalls or per-case peak VRAM.
+
+```sh
+python -m examples.benchmarks.benchmark_boozer_rhs_final \
+  --particles 8192 --horizon 2e-4 --saves 101 --repeats 9 \
+  --field-cache output/native_boozer_dopri8_8192_event_replay_run1/boozer_inputs.npz \
+  --output output/boozer_dopri8_rhs_final_a100_run1
+```
+
+The four-row timing table is printed and saved to `comparison.json`. This is
+a short target-GPU diagnostic, not another 20 ms full-horizon performance run.
+Do not combine its milliseconds with full-horizon seconds in one timing row.
+
+Consistency of the full 18.448 s result
+-------------------------------------
+
+The earlier [A100 stage diagnostic](../gpu_boozer_fused_trial_20261023/a100_trial_work.json)
+measured 39.096 ms for 128 fused Dopri8 trials across 8192 particles. Scaling
+that throughput by the full independent run's 413252254 active trials gives
+39.096e-3 * 413252254 / (8192*128) = 15.408 s. The observed 18.448 s is about
+19.7% larger. Controller work, output/event handling and workload imbalance
+are plausible additional costs, but this is not a measured decomposition:
+the stage diagnostic and the independent-orbit solver have different execution
+layouts and varying field access patterns. The estimate is not a lower bound
+or a guaranteed optimization target. It does show that 18.448 s is consistent
+with the measured order of stage cost, without evidence of the former large
+outer-driver overhead. The 16 ms trial figure from earlier discussion was not
+this recorded A100 measurement.

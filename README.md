@@ -1247,7 +1247,7 @@ the larger batch. These are global saved errors, not embedded acceptance
 estimates. The subsequent [full 20 ms run](examples/benchmarks/results/gpu_boozer_fused_trial_20261023/remote_full_orbit_console.json)
 completes with a warm median of 18.448 s (two samples), compilation 5.069 s,
 111 lost particles and zero failures. This is 61.8% below the earlier fused
-trial's 48.246 s warm sample and 8.7% below fixed RK4's 20.215 s sample;
+trial's 48.246 s warm sample and 8.9% below fixed RK4's completed 20.244 s median;
 these are separate runs with different error control and boundary localization.
 The earlier ordinary adaptive Dopri8 median was 54.367 s. Full-run trajectory
 errors and memory were not printed in the supplied console log. This kernel
@@ -1261,12 +1261,23 @@ fusion reduces warm time 292.64 -> 197.68 ms, and whole-orbit fusion reduces
 194.87 -> 115.10 ms, with identical accepted/rejected counts. Dopri8 outputs
 remain bitwise identical to the earlier implementation in the regression test.
 The alpha command selects Dopri5 with `--integrator essos_rk45` and the same
-`--experimental-fused-orbit` flag. No Dopri5 A100 gain is claimed yet.
+`--experimental-fused-orbit` flag. The completed large-machine Dopri5 run
+has a warm median of 21.554 s, 110 lost particles and no failures. It takes
+2.55 times as many accepted steps as Dopri8 at rtol=atol=1e-10 and is 16.8%
+slower. The linked record preserves the console evidence and counts;
+full-run peak memory and independent trajectory errors were not supplied.
 The development comparison accepts `--method dopri5`;
 `--audit-reference --audit-rk4` measures actual saved-point errors for RK4 at dt, dt/2 and dt/4
 and for native Dopri5/8 against two tighter reference solves. Fixed RK4 has
 no tolerance controller; the linked record separates achieved global errors
 from local embedded tolerances and includes the full run commands.
+
+The final [target-GPU RHS diagnostic](examples/benchmarks/benchmark_boozer_rhs_final.py)
+requires no Nsight installation. It compares ordinary and precision-corrected
+division in both 128-trial stage recurrences and complete short adaptive solves,
+checking every output and step count bitwise. The linked result record includes
+the command and a 64-particle local smoke test; no additional solver optimization
+is enabled by this diagnostic.
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated

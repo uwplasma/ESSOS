@@ -13,10 +13,19 @@ or lost-particle compaction. The GPU model was not present in the pasted log.
 | Adaptive Dopri8, experimental grouped sums | 14.550 | 62.301 | Not supplied |
 | Adaptive Dopri8, experimental fused trial | 4.842 | 48.185 | 48.246, first warm sample |
 | Adaptive Dopri8, independent orbit kernels | 5.069 | 18.680 | 18.448, median of two |
-| Standard fixed RK4 | 2.653 | 20.259 | 20.215, first warm sample |
+| Standard fixed RK4, completed run 3 | 2.728 | 20.296 | 20.244, median of two |
 
-The second RK4 and fused warm samples and their final medians were not
-supplied. The [fused record](../gpu_boozer_fused_trial_20261023/remote_full_partial.json)
+The completed RK4 run 3 has warm samples 20.247 s and 20.241 s, with a printed
+median of 20.244 s, 108 lost particles and zero failures. It executes
+1,310,720,000 grid slots in total (160,000 per lane), reporting the same count
+for accepted slots and zero rejected slots. This includes held inactive
+lanes; it is not an active-particle step count. The logical RHS work estimate
+is 5,242,880,000 evaluations. GPU model, full-run accuracy and memory were not
+printed in this console output. The earlier RK4 run supplied only its first
+warm sample (20.215 s); its final median remains unavailable.
+
+The second fused warm sample and its final median were not supplied.
+The [fused record](../gpu_boozer_fused_trial_20261023/remote_full_partial.json)
 preserves the full-horizon partial console evidence. The fused first warm
 sample is 11.26% below the earlier ordinary median but still 2.39x RK4's
 first warm sample. Final full-run loss, accuracy and memory diagnostics
@@ -24,7 +33,7 @@ were not supplied for the stage-only fused run. The subsequent
 [independent-orbit run](../gpu_boozer_fused_trial_20261023/remote_full_orbit_console.json)
 completed both warm calls (18.359 s, 18.536 s), losing 111 particles with no
 failures. Its median is 61.76% below the earlier fused-trial sample and
-8.74% below the RK4 sample. This compares adaptive and fixed methods from
+8.87% below the completed RK4 run 3 median. This compares adaptive and fixed methods from
 separate runs; it does not establish equal accuracy or a lower per-step cost.
 Full-run accuracy and memory were not printed for the new run. The RK4
 log reports no failures and 160,000 executed grid slots per lane. These count
@@ -59,4 +68,5 @@ Existing remote output folders:
 ```text
 output/native_boozer_dopri8_8192_device_loops_run1
 output/boozer_rk4_alpha_8192_run1
+output/boozer_rk4_alpha_8192_run3
 ```

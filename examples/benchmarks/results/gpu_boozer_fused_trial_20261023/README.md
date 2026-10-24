@@ -503,4 +503,5 @@ dense output. The recorded Dopri8 A100 hashes above precede that extension.
 A 64-particle before/after check against `e291a7c` preserves all Dopri8
 outputs and counts bitwise, with unchanged compiled buffers and timings.
 The new record also audits fixed RK4 step refinement against both native
-methods; the full target-machine Dopri5 result remains unmeasured.
+methods. The later full target-machine Dopri5 result is 21.554 s warm versus
+18.448 s for Dopri8; the linked record preserves the complete printed counts.
