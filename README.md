@@ -1288,6 +1288,25 @@ and warmup, checks bitwise output agreement and rejects host-only captures.
 Launch registers and theoretical occupancy are distinguished from unmeasured
 instruction stalls, spill traffic and achieved occupancy. No solver arithmetic
 or default changes are enabled by either diagnostic.
+The completed [A100 profile console](examples/benchmarks/results/gpu_boozer_profile_20261023/a100_console.json)
+puts 185.928 ms in the orbit kernel within a 187.915 ms captured device span;
+the main remaining target is work inside that kernel. Native XPlane stats
+recover 128 registers/thread, 32 threads/block and 8192 blocks, consistent with
+its 25% theoretical occupancy. Those resources were absent from the JSON
+export; the profiler now reads the native file automatically. Achieved
+occupancy and executed-spill/stall counters remain unmeasured.
+The final [local register-scheduling attempt](examples/benchmarks/results/gpu_boozer_profile_20261023/final_register_try_local.json)
+preserved outputs bitwise but increased registers/thread from 128 to 146 and
+changed warm execution from 91.523 to 92.693 ms. It is rejected; the production
+kernel remains unchanged.
+The additional [pipeline/loading/carry comparison](examples/benchmarks/results/gpu_boozer_profile_20261023/final_alternatives_local.json)
+tests four more candidates on the same local case. None reduces registers or
+demonstrates a useful speedup; these variants are also rejected.
+The [paired target-GPU driver](examples/benchmarks/benchmark_boozer_register_final.py)
+reproduces those five cases together on A100, with separate warm/compile
+timings, compiled buffers, native register counts and bitwise-output checks.
+Its default short horizon is 0.2 ms and it does not modify the production
+solver; see the [run command](examples/benchmarks/results/gpu_boozer_profile_20261023/README.md#reproduce-the-alternatives-on-a100).
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated

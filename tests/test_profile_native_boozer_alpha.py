@@ -4,7 +4,9 @@ import json
 
 import pytest
 
-from examples.benchmarks.profile_native_boozer_alpha import summarize_trace
+import jax.profiler
+
+from examples.benchmarks.profile_native_boozer_alpha import summarize_trace, xplane_resources
 
 
 def write_trace(tmp_path, events):
@@ -75,3 +77,38 @@ def test_resources_preserve_missing_values_and_deduplicate_launch_ids(tmp_path):
         static_shared_bytes=0, dynamic_shared_bytes=16, grid_blocks=[8192,1,1],
         block_threads=[32,1,1], theoretical_occupancy_pct=25.)]
     assert report["kernels"][1]["launch_resources"] == [{}]
+
+
+def test_native_xplane_recovers_details_missing_from_json(tmp_path):
+    reader = jax.profiler.ProfileData
+    if reader is None:
+        pytest.skip("Native reader is not included in this jaxlib build")
+    text = '''planes {
+      id: 0 name: "/device:GPU:0"
+      lines { id: 10 name: "Stream #10"
+        events { metadata_id: 1 duration_ps: 1000000
+          stats { metadata_id: 1 str_value: "regs:128 static_shared:0 dynamic_shared:0 grid:8192,1,1 block:32,1,1 occ_pct:25" }
+          stats { metadata_id: 2 double_value: 25 }
+        }
+      }
+      event_metadata { key: 1 value { id: 1 name: "kernel__1" } }
+      stat_metadata { key: 1 value { id: 1 name: "kernel_details" } }
+      stat_metadata { key: 2 value { id: 2 name: "theoretical_occupancy_pct" } }
+    }'''
+    path = tmp_path/"test.xplane.pb"
+    path.write_bytes(reader.text_proto_to_serialized_xspace(text))
+    report = xplane_resources(path)
+    assert report["available"]
+    assert len(report["launches"]) == 1
+    launch = report["launches"][0]
+    assert launch["name"] == "kernel__1"
+    assert launch["resources"] == dict(registers_per_thread=128, static_shared_bytes=0,
+        dynamic_shared_bytes=0, grid_blocks=[8192,1,1], block_threads=[32,1,1],
+        theoretical_occupancy_pct=25.)
+
+
+def test_absent_native_reader_is_reported_without_fabricated_resources(monkeypatch, tmp_path):
+    monkeypatch.setattr(jax.profiler, "ProfileData", None)
+    report = xplane_resources(tmp_path/"absent.xplane.pb")
+    assert not report["available"]
+    assert not report["launches"]

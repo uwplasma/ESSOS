@@ -1,0 +1,398 @@
+{
+  "complete": true,
+  "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "jax": "0.11.2",
+  "particles": 64,
+  "horizon_s": 0.0002,
+  "saves": 101,
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "repeats": 15,
+  "controller": "i",
+  "method": "dopri8",
+  "particle_chunking": false,
+  "production_changes": false,
+  "scope": "Same QA field/births, equations, Dopri8 tableau, controller and stopping; lean carry repeats the endpoint sum after the loop",
+  "birth_sha256": "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+  "candidate_source_sha256": {
+    "pipeline1": "d2e6d94704c37353d37f6d49a5bfee2de50b829f754899b89cc966f1a8a712f0",
+    "pipeline2": "fd0b0c63bba8230cff500957ba53dccc6674990ac20a939f47ef40122ee8e4d4",
+    "lazy_constants": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+    "lean_carry": "b375342512b7f13c02413591c10ab283203be612e640ee77df143a23c9c554b0"
+  },
+  "timing_scope": "15 blocked warm samples per case; rotating start order and alternating forward/reverse order. Compilation, three warmups, comparisons and profiles excluded.",
+  "memory_scope": "Compiled buffers per executable; runtime peak VRAM and executed spill traffic were not measured separately.",
+  "decision": "No demonstrated speedup or register reduction. All candidates rejected; production kernel retained.",
+  "remote_test": false,
+  "source_report": "output/boozer_alternatives_final_local64_20261023/comparison.json",
+  "experiment_harness": ".tmp/final_boozer_alternatives_20261023.py (local scratch, not a production/API variant)",
+  "experiment_harness_sha256": "1d7728ebf94f31ce197155bda292499eaf8ea0068c543b041c5f4e76eac9389b",
+  "candidates": {
+    "pipeline1": "Same kernel; compiler software-pipeline depth 1 instead of default 3",
+    "pipeline2": "Same kernel; compiler software-pipeline depth 2 instead of default 3",
+    "lazy_constants": "Kernel-private field adapter reads immutable constants nearer use rather than retaining entry loads; public field unchanged",
+    "lean_carry": "Stage loop carries bank and exact FSAL derivative, then recomputes the endpoint sum outside the stage loop"
+  },
+  "source_sha256": {
+    "essos/rk_boozer_gpu_orbit.py": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+    "essos/rk_boozer_gpu_trial.py": "6331b9c9fce8e84875a807c6ea5e37e2e9e20a3cba7d6bd21a88c2a012717387",
+    "essos/boozer.py": "06fd5a88533377bf99baf5e59f33159514846944d8c4aa214acfb0a3a9ad9076"
+  },
+  "rows": {
+    "baseline": {
+      "compile_s": 3.7144885329980752,
+      "samples_ms": [
+        92.18773299653549,
+        91.50334700098028,
+        91.85956999863265,
+        92.27300199563615,
+        91.82362499996088,
+        91.44471799663734,
+        92.18751200387487,
+        90.83589199872222,
+        91.63324900146108,
+        91.06442800111836,
+        92.23003299848642,
+        92.19987599499291,
+        91.34191600605845,
+        91.70481199544156,
+        91.91979400202399
+      ],
+      "compiled_buffers_bytes": 1464936,
+      "bitwise_equal": true,
+      "counts": [
+        32716,
+        28082,
+        4634
+      ],
+      "failed": 0,
+      "finite": true,
+      "max_saved_component_difference": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_relative_energy_error": 5.165119443262256e-10,
+      "warm_median_ms": 91.82362499996088,
+      "time_decrease_percent": 0.0,
+      "orbit_launches": [
+        {
+          "device": "/device:GPU:0",
+          "name": "kernel",
+          "calls": 1,
+          "launch_metadata": {
+            "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+            "theoretical_occupancy_pct": 33.333333333333336,
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1"
+          },
+          "resources": {
+            "registers_per_thread": 128,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              64,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 33.333333333333336
+          }
+        }
+      ],
+      "warm_q25_ms": 91.47403249880881,
+      "warm_q75_ms": 92.18762250020518,
+      "paired_median_ratio": 1.0
+    },
+    "pipeline1": {
+      "compile_s": 3.115524490000098,
+      "samples_ms": [
+        91.43729399511358,
+        91.93580300052417,
+        92.30248800304253,
+        90.53207500255667,
+        92.84630099864444,
+        91.64117299951613,
+        90.95066599547863,
+        92.27792199817486,
+        91.54995399876498,
+        92.42730100231711,
+        92.50101799989352,
+        91.40922100050375,
+        92.14366100059124,
+        90.39006099919789,
+        92.33663199847797
+      ],
+      "compiled_buffers_bytes": 1464936,
+      "bitwise_equal": true,
+      "counts": [
+        32716,
+        28082,
+        4634
+      ],
+      "failed": 0,
+      "finite": true,
+      "max_saved_component_difference": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_relative_energy_error": 5.165119443262256e-10,
+      "warm_median_ms": 91.93580300052417,
+      "time_decrease_percent": -0.12216681770442772,
+      "orbit_launches": [
+        {
+          "device": "/device:GPU:0",
+          "name": "kernel",
+          "calls": 1,
+          "launch_metadata": {
+            "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+            "theoretical_occupancy_pct": 33.333333333333336,
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1"
+          },
+          "resources": {
+            "registers_per_thread": 128,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              64,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 33.333333333333336
+          }
+        }
+      ],
+      "warm_q25_ms": 91.42325749780866,
+      "warm_q75_ms": 92.31956000076025,
+      "paired_median_ratio": 1.002938142735041
+    },
+    "pipeline2": {
+      "compile_s": 3.1614177629962796,
+      "samples_ms": [
+        92.22973199939588,
+        91.61284100264311,
+        91.78841900575208,
+        91.79516100266483,
+        92.37583500362234,
+        92.51403200323693,
+        90.83529000054114,
+        92.05693999683717,
+        92.89233799790964,
+        91.3235199986957,
+        91.48360999824945,
+        91.26888900209451,
+        92.29110600426793,
+        91.41816799819935,
+        91.83032900182297
+      ],
+      "compiled_buffers_bytes": 1464936,
+      "bitwise_equal": true,
+      "counts": [
+        32716,
+        28082,
+        4634
+      ],
+      "failed": 0,
+      "finite": true,
+      "max_saved_component_difference": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_relative_energy_error": 5.165119443262256e-10,
+      "warm_median_ms": 91.79516100266483,
+      "time_decrease_percent": 0.03099855543283736,
+      "orbit_launches": [
+        {
+          "device": "/device:GPU:0",
+          "name": "kernel",
+          "calls": 1,
+          "launch_metadata": {
+            "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+            "theoretical_occupancy_pct": 33.333333333333336,
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1"
+          },
+          "resources": {
+            "registers_per_thread": 128,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              64,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 33.333333333333336
+          }
+        }
+      ],
+      "warm_q25_ms": 91.4508889982244,
+      "warm_q75_ms": 92.2604190018319,
+      "paired_median_ratio": 1.0004555812524643
+    },
+    "lazy_constants": {
+      "compile_s": 3.600041436002357,
+      "samples_ms": [
+        93.56098500575172,
+        91.7622190027032,
+        95.2803620020859,
+        92.65852100361371,
+        92.76286599924788,
+        93.46397400076967,
+        93.19682599743828,
+        93.62155800045002,
+        92.40306400170084,
+        92.29382099874783,
+        92.99909699620912,
+        94.3681810022099,
+        93.72680299566127,
+        92.73897200182546,
+        91.81262700440129
+      ],
+      "compiled_buffers_bytes": 1464936,
+      "bitwise_equal": true,
+      "counts": [
+        32716,
+        28082,
+        4634
+      ],
+      "failed": 0,
+      "finite": true,
+      "max_saved_component_difference": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_relative_energy_error": 5.165119443262256e-10,
+      "warm_median_ms": 92.99909699620912,
+      "time_decrease_percent": -1.2801411360624515,
+      "orbit_launches": [
+        {
+          "device": "/device:GPU:0",
+          "name": "kernel",
+          "calls": 1,
+          "launch_metadata": {
+            "kernel_details": "regs:152 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:25",
+            "theoretical_occupancy_pct": 25.0,
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1"
+          },
+          "resources": {
+            "registers_per_thread": 152,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              64,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 25.0
+          }
+        }
+      ],
+      "warm_q25_ms": 92.53079250265728,
+      "warm_q75_ms": 93.59127150310087,
+      "paired_median_ratio": 1.0112770527945176
+    },
+    "lean_carry": {
+      "compile_s": 3.330965331006155,
+      "samples_ms": [
+        91.66259299672674,
+        91.6326879960252,
+        92.69324599881656,
+        92.18340599909425,
+        91.30227199784713,
+        90.72756899695378,
+        92.72150899778353,
+        89.99389100063127,
+        91.42631299619097,
+        91.34698399429908,
+        93.54726899618981,
+        91.83767100330442,
+        91.21476899599656,
+        92.1524080040399,
+        91.00164999836124
+      ],
+      "compiled_buffers_bytes": 1464936,
+      "bitwise_equal": true,
+      "counts": [
+        32716,
+        28082,
+        4634
+      ],
+      "failed": 0,
+      "finite": true,
+      "max_saved_component_difference": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_relative_energy_error": 5.165119443262256e-10,
+      "warm_median_ms": 91.6326879960252,
+      "time_decrease_percent": 0.20793886533642114,
+      "orbit_launches": [
+        {
+          "device": "/device:GPU:0",
+          "name": "kernel",
+          "calls": 1,
+          "launch_metadata": {
+            "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+            "theoretical_occupancy_pct": 33.333333333333336,
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1"
+          },
+          "resources": {
+            "registers_per_thread": 128,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              64,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 33.333333333333336
+          }
+        }
+      ],
+      "warm_q25_ms": 91.25852049692185,
+      "warm_q75_ms": 92.16790700156707,
+      "paired_median_ratio": 0.9986080102583631
+    }
+  }
+}

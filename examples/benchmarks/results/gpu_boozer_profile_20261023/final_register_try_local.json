@@ -1,0 +1,176 @@
+{
+  "complete": true,
+  "scope": "64-particle local adaptive Dopri8; same field, method, I control, saves, event and tolerances",
+  "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "jax": "0.11.2",
+  "particles": 64,
+  "horizon_s": 0.0002,
+  "saves": 101,
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "repeats": 15,
+  "particle_chunking": false,
+  "arithmetic_change": false,
+  "production_changes": false,
+  "birth_sha256": "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+  "schedule_evidence": [
+    {
+      "equations": 320,
+      "effects": 3,
+      "original_estimated_live_bytes": 2504,
+      "candidate_estimated_live_bytes": 2512
+    },
+    {
+      "equations": 320,
+      "effects": 3,
+      "original_estimated_live_bytes": 2504,
+      "candidate_estimated_live_bytes": 2512
+    }
+  ],
+  "time_decrease_percent": -1.2787448673222679,
+  "candidate": "Greedy last-use scheduling of independent pure RHS JAXPR equations; original primitives/operands retained, effects remain ordered barriers",
+  "decision": "Rejected: higher register count, lower theoretical occupancy, no demonstrated speedup. Current production kernel retained.",
+  "timing_scope": "15 interleaved blocked warm samples per case, after compilation and three warmups. Profiling and comparisons excluded.",
+  "resource_scope": "Native XPlane launch resources from separate untimed captures. Compiled-buffer estimates are not separate runtime peak VRAM or spill-traffic measurements.",
+  "remote_test": false,
+  "source_report": "output/boozer_register_final_local64_20261023/comparison.json",
+  "experiment_harness": ".tmp/final_boozer_register_try_20261023.py (local scratch, not a production/API variant)",
+  "experiment_harness_sha256": "f31ea91f7f088d69dd23ef6c5cc4214294e9d609953610f387273a5ff5ceb556",
+  "source_sha256": {
+    "essos/rk_boozer_gpu_orbit.py": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+    "essos/rk_boozer_gpu_trial.py": "6331b9c9fce8e84875a807c6ea5e37e2e9e20a3cba7d6bd21a88c2a012717387",
+    "essos/boozer.py": "06fd5a88533377bf99baf5e59f33159514846944d8c4aa214acfb0a3a9ad9076"
+  },
+  "rows": {
+    "baseline": {
+      "compile_s": 3.750463459000457,
+      "samples_ms": [
+        92.01611000025878,
+        92.00954700645525,
+        90.5754409977817,
+        90.02762799354969,
+        91.5229480015114,
+        91.93923699785955,
+        91.44193700194592,
+        92.51940999820363,
+        92.02533799543744,
+        90.77243100182386,
+        92.86806000454817,
+        91.43606900033774,
+        91.91175600426504,
+        91.4531509988592,
+        90.73470099974656
+      ],
+      "compiled_buffers_bytes": 1464936,
+      "counts": [
+        32716,
+        28082,
+        4634
+      ],
+      "failed": 0,
+      "bitwise_equal": true,
+      "max_saved_component_difference": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "warm_median_ms": 91.5229480015114,
+      "orbit_launches": [
+        {
+          "device": "/device:GPU:0",
+          "name": "kernel",
+          "calls": 1,
+          "launch_metadata": {
+            "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+            "theoretical_occupancy_pct": 33.333333333333336,
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1"
+          },
+          "resources": {
+            "registers_per_thread": 128,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              64,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 33.333333333333336
+          }
+        }
+      ]
+    },
+    "scheduled": {
+      "compile_s": 3.191475002000516,
+      "samples_ms": [
+        92.69329300150275,
+        92.54588800104102,
+        92.48684799968032,
+        92.05006300180685,
+        93.28777199698379,
+        91.87204999761889,
+        94.81564400630305,
+        92.89063300093403,
+        92.94875100022182,
+        91.89373299886938,
+        92.7797050026129,
+        92.37380800186656,
+        93.16749800200341,
+        92.64014499785844,
+        93.1246380059747
+      ],
+      "compiled_buffers_bytes": 1464936,
+      "counts": [
+        32716,
+        28082,
+        4634
+      ],
+      "failed": 0,
+      "bitwise_equal": true,
+      "max_saved_component_difference": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "warm_median_ms": 92.69329300150275,
+      "orbit_launches": [
+        {
+          "device": "/device:GPU:0",
+          "name": "kernel",
+          "calls": 1,
+          "launch_metadata": {
+            "kernel_details": "regs:146 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:25",
+            "theoretical_occupancy_pct": 25.0,
+            "hlo_module": "jit_run",
+            "hlo_op": "command_buffer_1"
+          },
+          "resources": {
+            "registers_per_thread": 146,
+            "static_shared_bytes": 0,
+            "dynamic_shared_bytes": 0,
+            "grid_blocks": [
+              64,
+              1,
+              1
+            ],
+            "block_threads": [
+              32,
+              1,
+              1
+            ],
+            "theoretical_occupancy_pct": 25.0
+          }
+        }
+      ]
+    }
+  }
+}

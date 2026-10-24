@@ -45,6 +45,38 @@ def kernel_resources(metadata):
     return result
 
 
+def xplane_resources(path):
+    """Recover launch resources that older JSON trace exporters can omit."""
+    reader = jax.profiler.ProfileData
+    if reader is None:
+        return dict(available=False, reason="This jaxlib has no native profile reader", launches=[])
+    try:
+        profile = reader.from_file(str(path))
+        grouped = {}
+        for plane in profile.planes:
+            if not re.search(r"(?:/device:GPU:|\bGPU\b)", plane.name, re.IGNORECASE):
+                continue
+            for line in plane.lines:
+                if not re.search(r"\bstream\b", line.name, re.IGNORECASE):
+                    continue
+                for event in line.events:
+                    stats = dict(event.stats)
+                    resources = kernel_resources(stats)
+                    if not resources:
+                        continue
+                    keys = ("kernel_details", "theoretical_occupancy_pct", "hlo_module", "hlo_op")
+                    metadata = {key:stats[key] for key in keys if key in stats}
+                    key = (plane.name, event.name, json.dumps(metadata, sort_keys=True))
+                    if key not in grouped:
+                        grouped[key] = dict(device=plane.name, name=event.name, calls=0,
+                            launch_metadata=metadata, resources=resources)
+                    grouped[key]["calls"] += 1
+        return dict(available=True, path=str(path), launches=list(grouped.values()),
+                    scope="Native GPU stream launch resources; not measured instruction stalls or executed spills")
+    except (OSError, RuntimeError, ValueError, AttributeError, TypeError) as error:
+        return dict(available=False, reason=f"{type(error).__name__}: {error}", launches=[])
+
+
 def summarize_trace(path):
     """Summarize actual GPU stream events; never count host launches as kernels."""
     with gzip.open(path, "rt") as stream:
@@ -196,6 +228,9 @@ def main(argv=None):
         raise RuntimeError(f"Expected one JAX trace, found {len(paths)}; inspect {options.output/'trace'}")
     report["trace_path"] = str(paths[0])
     report["gpu_trace"] = summarize_trace(paths[0])
+    native_paths = list((options.output/"trace").rglob("*.xplane.pb"))
+    report["native_xplane_resources"] = (xplane_resources(native_paths[0]) if len(native_paths) == 1 else
+        dict(available=False, reason=f"Expected one native profile, found {len(native_paths)}", launches=[]))
     states, losses, failures, energy, counts, status = map(np.asarray, result)
     report["profiled_outputs_bitwise_equal"] = all(np.array_equal(a,b) for a,b in zip(baseline,result))
     report["counts"] = {key:int(counts[:,i].sum()) for i,key in enumerate(("trials", "accepted", "rejected"))}
@@ -209,7 +244,10 @@ def main(argv=None):
     for row in report["gpu_trace"]["kernels"][:8]:
         print(f"GPU {row['total_ms']:.3f} ms ({row['percent_of_summed_kernel_time']:.1f}% of kernel sum), "
               f"{row['calls']} call(s): {row['name']}", flush=True)
-        print(f"  Launch resources: {row['launch_resources']}", flush=True)
+        native = [item["resources"] for item in report["native_xplane_resources"]["launches"]
+                  if item["name"] == row["name"]]
+        source = "native XPlane" if native else "JSON trace"
+        print(f"  Launch resources ({source}): {native or row['launch_resources']}", flush=True)
     trace = report["gpu_trace"]
     print(f"GPU kernel interval union: {trace['kernel_interval_union_ms']:.3f} ms; "
           f"first-to-last kernel span: {trace['first_to_last_kernel_ms']} ms; "
