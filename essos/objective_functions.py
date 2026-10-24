@@ -7,7 +7,7 @@ from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart,BiotSavart_from_gamma
-from essos.surfaces import BdotN_over_B, B_contravariant_theta_phi_on_surface, iota_approx_on_surface
+from essos.surfaces import BdotN_over_B, B_contravariant_theta_phi_on_surface, iota_approx_on_surface, _surface_mean
 from essos.coils import Curves, Coils
 from essos.constants import mu_0
 from essos.coil_perturbation import perturb_curves, perturb_curves_systematic, perturb_curves_statistic
@@ -192,6 +192,11 @@ def _sqrt_sum_positive(u):
     total = jnp.sum(jnp.maximum(u, 0.0))
     return jnp.where(total > 0, jnp.sqrt(jnp.where(total > 0, total, 1.0)), 0.0)
 
+def loss_BdotN_mean_squared(field, surface):
+    """Mean squared normal field, with periodic endpoint quadrature."""
+    return _surface_mean(surface, jnp.square(BdotN_over_B(surface, field)))
+
+
 @partial(jit, static_argnames=['target_tol'])
 def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
     bdotn_over_b = BdotN_over_B(surface, field)
@@ -200,54 +205,74 @@ def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
 
 ########################### QUASI-SYMMETRY LOSS ########################### gftd13@gmail.com
 
-def quasi_symmetry_residual_on_surface( field , surface ):
+def quasi_symmetry_residual_on_surface(field, surface):
+    r"""Dimensionless surface triple-product residual, shape ``(nphi, ntheta)``.
+
+    The numerator is ``(n x grad|B|).grad(B.grad|B|)``. On a flux surface,
+    replacing grad(psi) by its unit direction preserves the QS zero condition
+    (Rodriguez, Paul & Bhattacharjee, JPP 88, 905880109, 2022, section 2.3).
+    It does not select a helicity or prove QS when the supplied surface is not
+    a flux surface, so this objective must accompany a normal-field constraint.
+
+    Multiplication by ``L_B**3 / |B|**3``, with
+    ``L_B = sqrt(2)|B| / ||grad B||_F``, makes the residual dimensionless.
+    Evaluate the cancelled expression directly. A relative gradient floor of
+    1e-14 times the RMS field divided by the RMS surface extent keeps constant
+    fields differentiable while preserving field-amplitude and length scaling.
+    A magnetic null or a collapsed surface is outside this diagnostic's domain.
     """
-    Return a pointwise quasi-symmetry residual on the surface.
-    Shape is usually (nphi, ntheta) or flattened to (npoints,).
-    """
-    # 1. get surface points
-    surf_xyz = surface.gamma.reshape(-1, 3)
+    points = surface.gamma.reshape(-1, 3)
+    normals = surface.unitnormal.reshape(-1, 3)
+    grad_magnitude = jax.vmap(field.dAbsB_by_dX)(points)
+    grad_parallel_derivative = jax.vmap(jax.grad(
+        lambda x: jnp.dot(field.B(x), field.dAbsB_by_dX(x))))(points)
+    triple_product = jnp.sum(jnp.cross(normals, grad_magnitude)
+                             * grad_parallel_derivative, axis=-1)
 
-    # 2. field and gradient of |B|
-    # BBvec_xyz = jax.vmap(field.B)(surf_xyz)
-    BBmod_xyz = jax.vmap(field.AbsB)(surf_xyz)
-    gradB_xyz = jax.vmap(field.dAbsB_by_dX)(surf_xyz)
-
-    # 3. surface normal
-    unitnormal_xyz = surface.unitnormal.reshape(-1, 3)
-
-    # 4. compute L_B and normalize the quasi-symmetry residual: L_B = sqrt(2) * |B| / ||grad(B)||_F   
-    LB_xyz = jax.vmap(field.L_gradB)(surf_xyz)
-    norm_factor = LB_xyz**3 / BBmod_xyz**3
-
-    # 5. quasi-symmetry condition
-    # 5.1. Compute grad(B · grad|B|) = grad(B · grad|B|)
-    grad_B_dot_gradB_xyz = jax.vmap(jax.grad(lambda x: jnp.dot(field.B(x), field.dAbsB_by_dX(x))))(surf_xyz)
-
-    # 5.2. Compute (n x grad|B|) · grad(B · grad|B|) and normalized quasi-symmetry residual
-    QS_residual_xyz = norm_factor * jnp.sum(jnp.cross(unitnormal_xyz, gradB_xyz) * grad_B_dot_gradB_xyz, axis=1)
-
-    return QS_residual_xyz
+    jacobian = jax.vmap(field.dB_by_dX)(points)
+    gradient_squared = jnp.sum(jacobian**2, axis=(-2, -1))
+    field_squared = jnp.mean(jax.vmap(field.AbsB)(points)**2)
+    extent_squared = jnp.mean(jnp.sum((points - jnp.mean(points, axis=0))**2, axis=-1))
+    denominator = (gradient_squared + 1e-28 * field_squared / extent_squared)**1.5
+    residual = 2 * jnp.sqrt(2.0) * triple_product / denominator
+    return residual.reshape(surface.gamma.shape[:-1])
 
 
 def loss_quasi_symmetry(field, surface):
-    """
-    Scalar objective: smaller means closer to quasi-symmetry.
-    """
-    QS_residual_xyz = quasi_symmetry_residual_on_surface(field, surface)
-    QS_residual = jnp.sum(jnp.abs(QS_residual_xyz))
-    return QS_residual
+    """Mean squared normalized triple product, independent of grid-point count.
 
-def loss_iota_approx(field, surface, iota_target):
+    This replaces the former sum of absolute residuals. Existing optimization
+    weights for that objective need to be retuned.
+    """
+    residual = quasi_symmetry_residual_on_surface(field, surface)
+    return _surface_mean(surface, residual**2)
+
+def loss_iota_approx(field, surface, iota_target, *, lambda_mpol=None, lambda_ntor=None):
     """
     Penalize the distance between the surface rotational transform and a target.
     iota is dimensionless, so no normalization is needed.
     """
     # Rotational transform from the straight-field-line fit on the surface.
-    iota = iota_approx_on_surface(surface, field)
+    iota = iota_approx_on_surface(surface, field, lambda_mpol=lambda_mpol, lambda_ntor=lambda_ntor)
 
     # Quadratic penalty: smooth, with gradient -> 0 only at the target.
     return jnp.square(iota - iota_target)
+
+
+def loss_straight_field_line_residual(field, surface, *, lambda_mpol=None,
+                                      lambda_ntor=None, min_jacobian=0.1):
+    r"""Penalize the PDE residual and folds of the fitted straight-field angle.
+
+    A target iota alone permits a large, noninvertible coordinate correction.
+    The squared PDE residual controls fit error, while a squared hinge below
+    ``min_jacobian`` enforces positive ``1 + d(lambda)/d(theta)`` on the sampled
+    grid. Use with normal-field and target-iota objectives, and independently
+    check both diagnostics on a finer grid. This is not a field-line estimate.
+    """
+    diagnostics = iota_approx_on_surface(surface, field, lambda_mpol=lambda_mpol,
+                                         lambda_ntor=lambda_ntor, return_diagnostics=True)
+    deficit = jnp.maximum(min_jacobian - diagnostics["angle_jacobian"], 0.0)
+    return diagnostics["mean_squared_residual"] + _surface_mean(surface, deficit**2)
 
 def loss_poloidal_slope_min(field, surface, slope_min, B_phi_reference, phi_floor_fraction):
     """Penalize insufficient positive poloidal slope and small B^phi."""
@@ -411,10 +436,14 @@ def loss_coil_curvature(coils, max_coil_curvature=0):
     return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
 
 # Adapter for optimization losses that use "field" as their dependency.
-@partial(jit, static_argnames=["max_coil_curvature"])
-def loss_coil_curvature_from_field(field, max_coil_curvature=0):
-    coil_losses = loss_coil_curvature( field.coils , max_coil_curvature=max_coil_curvature )
-    return jnp.mean(coil_losses)
+@partial(jit, static_argnames=["max_coil_curvature", "n_segments"])
+def loss_coil_curvature_from_field(field, max_coil_curvature=0, *, n_segments=None):
+    """Curvature penalty; Fourier coils can use independent curvature sampling."""
+    geometry = field.coils
+    if n_segments is not None:
+        geometry = field.coils.curves.copy()
+        geometry.n_segments = n_segments
+    return jnp.mean(loss_coil_curvature(geometry, max_coil_curvature=max_coil_curvature))
 
 def compute_candidates(coils, min_separation):
     centers = coils.curves.curves[:, :, 0]
