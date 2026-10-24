@@ -104,3 +104,24 @@ def test_dense_saves_reproduce_polynomial_trajectory_with_one_accepted_step(monk
     np.testing.assert_array_equal(result.stats.accepted,1)
     np.testing.assert_array_equal(result.stats.rejected,0)
     np.testing.assert_array_equal(result.status,0)
+
+
+@pytest.mark.parametrize("check", ["exit", "finite_rejection", "nonfinite_rejection", "dense"])
+@pytest.mark.parametrize("case", ["lean_dense_loop", "lean_dense_roots"])
+def test_looped_dense_candidate_analytical_checks(monkeypatch, check, case):
+    """Reuse the analytical maps for the isolated compilation candidate."""
+    _, module = field_and_module()
+    from examples.benchmarks.benchmark_boozer_register_final import _factories
+    prepare = _factories()[0][case]
+    # Existing checks replace the production module's RHS with analytical
+    # maps; forward those replacements into the isolated candidate namespace.
+    monkeypatch.setitem(prepare.__globals__, "_kernel_rhs",
+        lambda *args, **kwargs: module._kernel_rhs(*args, **kwargs))
+    monkeypatch.setattr(module, "prepare_orbit_solver", prepare)
+    if check == "exit":
+        test_independent_lanes_initial_events_analytic_exit_and_duplicate_saves(monkeypatch, "dopri8")
+    elif check == "dense":
+        test_dense_saves_reproduce_polynomial_trajectory_with_one_accepted_step(monkeypatch, "dopri8")
+    else:
+        test_rejections_preserve_state_and_saved_prefix_at_work_limit(
+            monkeypatch, check == "nonfinite_rejection", "dopri8")

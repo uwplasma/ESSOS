@@ -1,4 +1,4 @@
-"""Paired target-GPU check of four Dopri8 register-allocation alternatives.
+"""Paired target-GPU check of Dopri8 compilation and register alternatives.
 
 Uses the production independent-orbit baseline and isolated diagnostic copies
 of that kernel. No public solver, field class or default is modified. GPU
@@ -21,6 +21,11 @@ import essos.rk_boozer_gpu_orbit as orbit_module
 import essos.rk_boozer_gpu_trial as trial_module
 from .benchmark_native_boozer_alpha import PARAMETERS, ROOT, MASS, CHARGE, setup, digest
 from .profile_native_boozer_alpha import xplane_resources
+
+
+DEFAULT_CASES = ('baseline', 'pipeline1', 'pipeline2', 'lazy_constants', 'lean_carry')
+CASES = DEFAULT_CASES + ('lean_pipeline1', 'lean_dense_loop', 'lean_dense_loop2',
+    'lean_dense_loop4', 'lean_dense_roots')
 
 
 class _LazyField(trial_module._KernelField):
@@ -68,13 +73,47 @@ def _factories():
         raise RuntimeError("Kernel source changed; review diagnostic replacements before running")
     factories = dict(baseline=orbit_module.prepare_orbit_solver)
     hashes = dict(baseline=hashlib.sha256(original.encode()).hexdigest())
-    for name in ('pipeline1', 'pipeline2', 'lazy_constants', 'lean_carry'):
+    for name in CASES[1:]:
         source = original
         if name.startswith('pipeline'):
             source = source.replace('plt.CompilerParams(num_warps=1)',
                 f'plt.CompilerParams(num_warps=1, num_stages={name[-1]})')
-        elif name == 'lean_carry':
+        elif name == 'lean_pipeline1':
+            source = source.replace('plt.CompilerParams(num_warps=1)',
+                'plt.CompilerParams(num_warps=1, num_stages=1)')
+        if name.startswith('lean_'):
             source = source.replace(before, after)
+        if name.startswith('lean_dense_loop') or name == 'lean_dense_roots':
+            dense_before = '''                for power in range(dense_matrix.shape[0]):
+                    weights = weights*fraction+dref[power, :]'''
+            dense_after = '''                def horner(power, weights):
+                    return weights*fraction+dref[power, :]
+                weights = jax.lax.fori_loop(0, dense_matrix.shape[0], horner, weights)'''
+            if source.count(dense_before) != 1:
+                raise RuntimeError('Dense-output source changed; review diagnostic replacement')
+            if name == 'lean_dense_roots':
+                source = source.replace('def dense(y, endpoint, bank, fraction):',
+                    'def dense(y, endpoint, bank, fraction, root_search=False):')
+                source = source.replace('dense(y, endpoint, bank, mid)',
+                    'dense(y, endpoint, bank, mid, root_search=True)')
+                source = source.replace('dense(y, endpoint, bank, fraction), lambda _: endpoint',
+                    'dense(y, endpoint, bank, fraction, root_search=True), lambda _: endpoint')
+                dense_after = ('                if root_search:\n'+
+                    '\n'.join('    '+line for line in dense_after.splitlines())+
+                    '\n                else:\n'+
+                    '\n'.join('    '+line for line in dense_before.splitlines()))
+            elif name != 'lean_dense_loop':
+                width = int(name[-1])
+                # Pallas Triton requires scan unroll=1. Express fixed-size
+                # Horner blocks explicitly, retaining the operation order.
+                dense_after = f'''                def horner(block, weights):
+                    for offset in range({width}):
+                        weights = weights*fraction+dref[block*{width}+offset, :]
+                    return weights
+                weights = jax.lax.fori_loop(0, dense_matrix.shape[0]//{width}, horner, weights)
+                for power in range({width}*(dense_matrix.shape[0]//{width}), dense_matrix.shape[0]):
+                    weights = weights*fraction+dref[power, :]'''
+            source = source.replace(dense_before, dense_after)
         namespace = dict(__name__='essos._register_diagnostic_'+name, __package__='essos')
         exec(compile(source, orbit_module.__file__, 'exec'), namespace)
         if name == 'lazy_constants':
@@ -91,6 +130,8 @@ def main(argv=None):
     parser.add_argument('--horizon', type=float, default=2e-4)
     parser.add_argument('--saves', type=int, default=101)
     parser.add_argument('--repeats', type=int, default=15)
+    parser.add_argument('--cases', nargs='+', choices=CASES, default=DEFAULT_CASES,
+        help='Cases to compare; baseline is always run first (default: original five cases)')
     parser.add_argument('--field-cache', type=Path, default=ROOT/
         'examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz')
     parser.add_argument('--output', type=Path, default=Path('output/boozer_register_alternatives'))
@@ -106,11 +147,17 @@ def main(argv=None):
     if not compiler_options:
         parser.error("This comparison requires the machine's normal JAX backend to be CUDA")
     factories, hashes = _factories()
+    selected = tuple(dict.fromkeys(('baseline', *options.cases)))
+    factories = {name:factories[name] for name in selected}
+    hashes = {name:hashes[name] for name in selected}
     options.output.mkdir(parents=True, exist_ok=True)
     settings = SimpleNamespace(**(dict(PARAMETERS) | dict(particles=options.particles,
         horizon=options.horizon, saves=options.saves, field_cache=options.field_cache)))
     print(f'{jax.devices()[0].device_kind}; JAX {jax.__version__}; {options.particles} particles; '
           f'{options.horizon:g} s; {options.saves} saves; {options.repeats} warm repeats/case', flush=True)
+    print(f'{len(factories)} cases, each with 3 warmups, {options.repeats} timed solves '
+          f'and 1 profiling solve: {len(factories)*(options.repeats+4)} full-horizon solves total',
+          flush=True)
     field, initial, mu, speed, _, _ = setup(settings)
     times = jnp.linspace(0., settings.horizon, settings.saves)
     jax.block_until_ready((initial, mu, times))
@@ -119,6 +166,9 @@ def main(argv=None):
         repeats=options.repeats, rtol=settings.rtol, atol=settings.atol, timestep=settings.timestep,
         energy_ev=settings.energy_ev, birth_s=settings.birth_s, seed=settings.seed,
         field_modes=int(field.xm.size), method='dopri8', controller='i', dense_output='standard',
+        selected_cases=selected,
+        persistent_compilation_cache=bool(jax.config.jax_enable_compilation_cache),
+        cache_directory=jax.config.jax_compilation_cache_dir,
         collisions=False, reverse_ad=False, particle_chunking=False, production_changes=False,
         field_cache=str(options.field_cache), field_cache_sha256=digest(options.field_cache),
         compiler_options=compiler_options, candidate_source_sha256=hashes,
@@ -127,11 +177,19 @@ def main(argv=None):
             'essos/rk_boozer_gpu_orbit.py', 'essos/rk_boozer_gpu_trial.py',
             'examples/benchmarks/benchmark_boozer_register_final.py')},
         timing_scope='Blocked device-resident calls after compilation and three warmups; rotating start order and alternating forward/reverse order. Transfers, comparisons and profiles excluded.',
-        memory_scope='Compiled buffers per executable. Device allocator peaks are cumulative across all five cases, not per-case peak VRAM. No executed-spill or instruction-stall counters.',
+        compilation_timing_scope='trace_and_lower_s includes JIT construction, tracing and lowering; executable_compile_s times lowered.compile(). Legacy compile_s is their total. These wall times are not guaranteed cold compilation.',
+        memory_scope='Compiled buffers per executable. Device allocator peaks are cumulative across selected cases, not per-case peak VRAM. No executed-spill or instruction-stall counters.',
         candidates=dict(pipeline1='Compiler pipeline depth 1 instead of default 3; unchanged RK stage count',
             pipeline2='Compiler pipeline depth 2 instead of default 3; unchanged RK stage count',
             lazy_constants='Kernel-private adapter loads immutable constants nearer use',
-            lean_carry='Smaller stage carry, followed by a repeated endpoint sum'), rows={})
+            lean_carry='Smaller stage carry, followed by a repeated endpoint sum',
+            lean_pipeline1='Smaller stage carry combined with compiler pipeline depth 1',
+            lean_dense_loop='Smaller stage carry with looped dense-output Horner recurrence',
+            lean_dense_loop2='Smaller stage carry with dense-output Horner loop unrolled by 2',
+            lean_dense_loop4='Smaller stage carry with dense-output Horner loop unrolled by 4',
+            lean_dense_roots='Smaller stage carry; looped Horner at loss roots, ordinary unrolled saves'), rows={})
+    report['candidates'] = {name:description for name,description in report['candidates'].items()
+                            if name in factories}
 
     def save():
         (options.output/'comparison.json').write_text(json.dumps(report,indent=2,allow_nan=False)+'\n')
@@ -152,14 +210,23 @@ def main(argv=None):
 
             print('Compiling '+name, flush=True)
             started = perf_counter()
-            executable = jax.jit(run,compiler_options=compiler_options).lower(initial,mu).compile()
-            row['compile_s'] = perf_counter()-started
+            lowered = jax.jit(run,compiler_options=compiler_options).lower(initial,mu)
+            lowered_at = perf_counter()
+            executable = lowered.compile()
+            compiled_at = perf_counter()
+            row['trace_and_lower_s'] = lowered_at-started
+            row['executable_compile_s'] = compiled_at-lowered_at
+            row['compile_s'] = compiled_at-started
+            print(f"{name}: trace/lower {row['trace_and_lower_s']:.3f} s, "
+                  f"executable compile {row['executable_compile_s']:.3f} s, "
+                  f"total {row['compile_s']:.3f} s", flush=True)
             memory = executable.memory_analysis()
             row['compiled_buffer_components'] = {key:int(getattr(memory,key)) for key in
                 ('argument_size_in_bytes','output_size_in_bytes','temp_size_in_bytes','alias_size_in_bytes')}
             row['compiled_buffers_bytes'] = int(memory.argument_size_in_bytes+memory.output_size_in_bytes+
                 memory.temp_size_in_bytes-memory.alias_size_in_bytes)
-            for _ in range(3):
+            for warmup in range(3):
+                print(f'{name}: warmup {warmup+1}/3', flush=True)
                 result = jax.block_until_ready(executable(initial,mu))
             arrays = tuple(np.asarray(array) for array in result)
             if name == 'baseline':
@@ -187,13 +254,29 @@ def main(argv=None):
             raise RuntimeError('Baseline failed; inspect comparison.json')
 
     names = list(executables)
-    for repeat in range(options.repeats):
-        offset = repeat % len(names)
-        order = names[offset:]+names[:offset]
-        for name in order if repeat % 2 == 0 else reversed(order):
-            started = perf_counter()
-            jax.block_until_ready(executables[name](initial,mu))
-            report['rows'][name]['samples_ms'].append(1000*(perf_counter()-started))
+    total_timings = options.repeats*len(names)
+    completed_timings = 0
+    print(f'Starting {total_timings} timed solves; each spans {options.horizon:g} s '
+          'of physical time. Printing and partial-result writes are outside timing.', flush=True)
+    try:
+        for repeat in range(options.repeats):
+            offset = repeat % len(names)
+            order = names[offset:]+names[:offset]
+            for name in order if repeat % 2 == 0 else reversed(order):
+                started = perf_counter()
+                jax.block_until_ready(executables[name](initial,mu))
+                elapsed_ms = 1000*(perf_counter()-started)
+                report['rows'][name]['samples_ms'].append(elapsed_ms)
+                completed_timings += 1
+                save()
+                print(f'Timed solve {completed_timings}/{total_timings}: {name}, '
+                      f'repeat {repeat+1}/{options.repeats}, {elapsed_ms:.3f} ms', flush=True)
+    except KeyboardInterrupt:
+        report['interrupted_phase'] = 'warm_timings'
+        save()
+        print(f'Interrupted; completed samples saved to {options.output/"comparison.json"}',
+              flush=True)
+        raise
     baseline_times = np.asarray(report['rows']['baseline']['samples_ms'])
     for name in names:
         row = report['rows'][name]
@@ -203,8 +286,9 @@ def main(argv=None):
         row['time_decrease_percent'] = 100*(1-row['warm_median_ms']/float(np.median(baseline_times)))
         save()
     # Capture resources only after every unprofiled timing has finished.
-    for name in names:
+    for index,name in enumerate(names,1):
         row = report['rows'][name]
+        print(f'Profiling {index}/{len(names)}: {name} (one additional solve)', flush=True)
         try:
             profiler_options = jax.profiler.ProfileOptions()
             profiler_options.python_tracer_level = 0
@@ -222,7 +306,7 @@ def main(argv=None):
     report['all_outputs_bitwise_equal'] = all(row.get('bitwise_equal',False) for row in report['rows'].values())
     report['device_allocator_stats_cumulative'] = jax.devices()[0].memory_stats()
     save()
-    print('\nCase                 Warm ms   Compile s   Buffers MiB   Regs/thread   Equal',flush=True)
+    print('\nCase                 Warm ms   Trace/lower s   Compile s   Total s   Buffers MiB   Regs/thread   Equal',flush=True)
     for name,row in report['rows'].items():
         if 'warm_median_ms' not in row:
             print(f'{name:20} FAILED: {row.get("error","unknown error")}',flush=True)
@@ -230,7 +314,8 @@ def main(argv=None):
         registers = sorted({item['resources']['registers_per_thread'] for item in row.get('orbit_launches',[])
                             if 'registers_per_thread' in item['resources']})
         regs = ','.join(map(str,registers)) or 'unavailable'
-        print(f"{name:20} {row['warm_median_ms']:8.3f} {row['compile_s']:11.3f} "
+        print(f"{name:20} {row['warm_median_ms']:8.3f} {row['trace_and_lower_s']:15.3f} "
+              f"{row['executable_compile_s']:11.3f} {row['compile_s']:9.3f} "
               f"{row['compiled_buffers_bytes']/2**20:13.3f} {regs:>13} {str(row['bitwise_equal']):>7}",flush=True)
     print('Saved '+str((options.output/'comparison.json').resolve()),flush=True)
     if not report['complete']:

@@ -258,11 +258,209 @@ All individual warm samples, quartiles, paired ratios, physical parameters,
 field/birth/source hashes and native launch resources are saved. Compiled
 buffers are per executable; allocator peaks collected in this shared process
 are cumulative across all five cases, not separate per-case peak VRAM.
-The four alternative kernels remain diagnostic-only pending target-machine
-evidence. No A100 result from this driver has yet been supplied.
+The four alternative kernels remain diagnostic-only. The completed A100
+comparison is recorded below.
 The packaged driver was validated locally with 64 particles and three warm
 repeats per case: all five completed, all six outputs matched bitwise and
 native resource extraction recovered the expected 128/152 register counts.
 
+## Completed A100 alternatives comparison
+
+The [console evidence](final_alternatives_a100_console.json) records the
+completed 8192-particle, 0.2 ms run on A100-SXM4-40GB with JAX 0.7.2. All five
+cases produce bitwise-identical outputs and the same counts: 4,169,494 trials,
+3,539,926 accepted steps and 629,568 rejections.
+
+| Case | Warm median, ms | Change from baseline | Compile, s | Compiled buffers, MiB | Registers/thread |
+|---|---:|---:|---:|---:|---:|
+| Baseline | 187.365 | 0% | 4.979 | 96.112 | 128 |
+| Pipeline depth 1 | 187.680 | +0.17% | 4.745 | 96.112 | 128 |
+| Pipeline depth 2 | 188.467 | +0.59% | 4.853 | 96.112 | 128 |
+| Load constants nearer use | 192.641 | +2.82% | 5.228 | 96.112 | 124 |
+| Smaller stage carry | 186.170 | -0.64% | 4.896 | 96.112 | 128 |
+
+Smaller stage carry has a 1.195 ms lower reported median, without reducing
+registers or compiled buffers. The supplied console does not include the
+15 timing samples or quartiles needed to assess variability. Loading constants
+nearer use reduces registers by four on this GPU but runs slower; lower
+register count alone does not establish a throughput gain. Buffer figures
+are rounded compiler estimates, not measured per-case peak VRAM.
+
+Retain the production baseline. The short comparison establishes no substantial
+gain from these alternatives and does not predict a full 20 ms speedup. Ten
+TensorFlow Python-hook warnings did not prevent completion or native register
+extraction. No new packages are needed to interpret these results.
+
+## Completed full 20 ms A100 comparison
+
+The [full-horizon console record](final_alternatives_a100_full_console.json)
+uses the same 8192 particles, 101 saves, 15 warm samples per case and
+rtol=atol=1e-10 over 20 ms. Every case agrees bitwise and reports 413,252,254
+trials, 351,025,279 accepted steps and 62,226,975 rejections.
+
+| Case | Warm median, s | Change from baseline | Compile, s | Compiled buffers, MiB | Registers/thread |
+|---|---:|---:|---:|---:|---:|
+| Baseline | 18.459165 | 0% | 5.034 | 96.112 | 128 |
+| Pipeline depth 1 | 18.359990 | -0.54% | 4.789 | 96.112 | 128 |
+| Pipeline depth 2 | 18.430769 | -0.15% | 4.928 | 96.112 | 128 |
+| Load constants nearer use | 18.997608 | +2.92% | 5.081 | 96.112 | 124 |
+| Smaller stage carry | 18.337851 | -0.66% | 4.909 | 96.112 | 128 |
+
+Smaller stage carry has the lowest warm median in both short and full runs.
+In the full run it saves 0.121314 s per warm call and 0.125 s of reported
+compilation versus baseline, without changing the printed buffer estimate or
+register count. It is the preferred candidate for repeated tracing if one
+alternative is retained. The gain remains small; the supplied console has no
+individual samples or quartiles for assessing variability.
+
+For a single call, reported compilation plus one warm median is 23.148990 s
+for pipeline depth 1, 23.246851 s for smaller stage carry and 23.493165 s for
+baseline. These are estimates, not measured first-execution totals. Pipeline
+depth 1 compiles 0.120 s faster than smaller carry, but each warm solve is
+0.022139 s slower. Smaller carry overtakes it from the sixth call using these
+point estimates. Pipeline depth 2 and near-use loading offer no advantage over
+these two candidates. Production remains unchanged by this diagnostic.
+
+### Full-horizon runtime and progress
+
+Changing `--horizon` from `2e-4` to `2e-2` gives every solve the full 20 ms
+physical horizon. It does not divide the horizon across repeats. Five cases
+with three warmups, 15 timed calls and one profiling call each execute 95
+full solves. At approximately 18-19 seconds per solve, expect roughly
+29-30 minutes plus compilation and other overhead. After all five initial
+output checks print, 75 timed solves still remain (about 23 minutes), followed
+by five profiling solves. This accounts for a long GPU-busy interval without
+new console output in the original driver.
+
+The driver now prints the solve budget, each warmup, each completed timing
+and each profiling call. It saves completed samples after each timed call
+and on a timing-loop interruption. These messages and file writes occur
+outside the measured interval. Existing running processes retain the old
+logging behavior; updating the file does not add progress to a running job.
+The completed full-horizon table is preserved above.
+
+## Combined smaller carry and pipeline depth 1
+
+The [local combined-candidate record](lean_pipeline_local.json) compares
+baseline, pipeline depth 1, smaller stage carry and their combination using
+64 particles on RTX 5060 Laptop/JAX 0.11.2. The workload is 0.2 ms, 101 saves,
+rtol=atol=1e-10 and 15 rotating/alternating blocked warm samples per case.
+Persistent JAX compilation caching was disabled for this invocation; other
+compiler caches and initialization effects are not guaranteed absent.
+
+The driver now separates tracing/lowering from `lowered.compile()`. The
+existing JSON `compile_s` field remains their combined wall time for comparison
+with older records; `trace_and_lower_s` and `executable_compile_s` hold the two
+phases. Field setup and preparation are outside those timers.
+
+| Local case | Trace/lower, s | Executable compile, s | Combined, s | Warm median, ms |
+|---|---:|---:|---:|---:|
+| Baseline | 1.607 | 2.195 | 3.803 | 91.906 |
+| Pipeline depth 1 | 1.495 | 1.618 | 3.113 | 91.658 |
+| Smaller stage carry | 1.456 | 1.689 | 3.145 | 91.825 |
+| Smaller carry + pipeline depth 1 | 1.484 | 1.714 | 3.198 | 91.944 |
+
+All six output arrays and per-particle counts agree bitwise, with 32,716
+trials, 28,082 accepted steps and 4,634 rejections in every case. All four use
+1,464,936 compiled-buffer bytes and 128 registers/thread; all report no
+failures. Combining the changes does not improve the measured compilation
+time over smaller carry alone, and the warm medians differ by only 0.13%.
+These compilation phase measurements are one pass, not repeated cold-process
+statistics. There is no demonstrated benefit from promoting the combination.
+Production kernels and field classes remain unchanged. No A100 measurement
+of this combination has been supplied.
+
+The original five default cases are preserved. Select only these four cases
+for a short target-machine check with:
+
+```sh
+python -m examples.benchmarks.benchmark_boozer_register_final \
+  --cases baseline pipeline1 lean_carry lean_pipeline1 \
+  --particles 8192 --horizon 2e-4 --saves 101 --repeats 15 \
+  --field-cache output/native_boozer_dopri8_8192_event_replay_run1/boozer_inputs.npz \
+  --output output/boozer_lean_pipeline_a100_run1
+```
+
+This command uses the machine's existing cache configuration, which is recorded
+in the report. A local validation run used the same options with 64 particles
+and command-only `JAX_ENABLE_COMPILATION_CACHE=false` and
+`XLA_PYTHON_CLIENT_PREALLOCATE=false`; script defaults are unchanged. The new
+`--cases` option always includes baseline first, and prints the selected solve
+budget before compilation. A full 20 ms horizon would again multiply the cost
+of every warmup, timed call and profile; the command above retains 0.2 ms.
+
 API and scope references: [JAX 0.7.2 profiling source](https://github.com/jax-ml/jax/blob/jax-v0.7.2/jax/_src/profiler.py),
 [JAX GPU profiling guidance](https://docs.jax.dev/en/latest/201/profiling.html).
+
+## Further lean-carry compilation experiments
+
+The [local evidence](lean_compile_local.json) preserves four 64-particle
+comparison passes on RTX 5060 Laptop/JAX 0.11.2. Each successful case uses
+15 blocked warm samples, the same 0.2 ms QA workload, 101 saves, Dopri8,
+rtol=atol=1e-10 and I control. Persistent JAX compilation caching is disabled
+for these invocations; compiler caches and first-case initialization effects
+are not guaranteed absent. Compilations are single measurements per case per
+pass, not repeated independent cold-process statistics.
+
+The main candidate evaluates the existing dense-output polynomial using a
+Horner loop rather than expanding its coefficients in a Python loop. It
+retains the coefficients, evaluation order and interpolant. A second candidate
+loops only the two loss-root evaluations and keeps ordinary saved output
+unrolled. Both include the smaller RK stage carry; neither changes the
+physical RHS, tableau, error estimator, I controller or requested saves.
+
+| Final pass, local 64 particles | Trace/lower, s | Executable compile, s | Combined, s | Warm median, ms |
+|---|---:|---:|---:|---:|
+| Baseline | 1.623 | 2.139 | 3.761 | 91.818 |
+| Smaller stage carry | 1.490 | 1.672 | 3.162 | 91.466 |
+| Loop polynomial only at loss roots | 1.323 | 1.481 | 2.804 | 92.000 |
+| Loop polynomial for saves and roots | 1.252 | 1.343 | 2.595 | 92.323 |
+
+Compared with smaller carry in this pass, root-only looping saves about 11%
+of combined compilation with a 0.6% higher warm median; looping at every dense
+evaluation saves about 18% with a 0.9% higher warm median. The fully looped
+candidate's compilation saving ranges from 12% to 18% over four passes, with
+warm median increases of about 0.7-1.0%. The record retains individual samples,
+quartiles and paired ratios, including their timing variation.
+
+All successful physical cases agree bitwise in all six returned arrays and
+per-particle counts: 32,716 trials, 28,082 accepted steps and 4,634 rejections.
+All report zero failures, 1,464,936 compiled-buffer bytes and 128
+registers/thread. These buffer estimates do not measure separate peak VRAM.
+The two promising candidates also pass four existing analytical checks each:
+linear stopping with initial events and duplicate saves, finite rejection at
+the work limit, nonfinite rejection and polynomial dense saves. Reproduce the
+eight checks with:
+
+```sh
+python -m pytest -q tests/test_rk_boozer_gpu_orbit.py \
+  -k looped_dense_candidate_analytical_checks
+```
+
+Other attempts are rejected: removing the nested JIT wrapper has no compilation
+gain; boolean finite-mask reduction cannot lower through Pallas Triton;
+generic `fori_loop(unroll=2/4)` also cannot lower on this backend. Those
+unsupported forms were removed. Explicit fixed-size Horner blocks of two
+and four do compile and preserve outputs, but offer no better tradeoff than
+the candidates above. The explicit-block cases remain diagnostic-only for
+reproducing the saved measurements.
+
+These are compilation/runtime tradeoffs on the local GPU, not A100 gains.
+Production remains unchanged. The short workload saves 101 points over
+0.2 ms; the full benchmark saves the same number over 20 ms, so dense-output
+frequency relative to RK work differs. A full-run runtime penalty cannot be
+inferred directly from these short timings. Test the two candidates against
+their controls on A100 before choosing one:
+
+```sh
+JAX_ENABLE_COMPILATION_CACHE=false python -m examples.benchmarks.benchmark_boozer_register_final \
+  --cases baseline lean_carry lean_dense_roots lean_dense_loop \
+  --particles 8192 --horizon 2e-4 --saves 101 --repeats 15 \
+  --field-cache output/native_boozer_dopri8_8192_event_replay_run1/boozer_inputs.npz \
+  --output output/boozer_lean_compile_a100_run1
+```
+
+The cache override affects only this invocation, without selecting a device
+or changing solver defaults. This is four cases over the short horizon,
+not another full-horizon 30-minute sweep. No A100 result for these candidates
+has been supplied, and neither implements a reverse rule.

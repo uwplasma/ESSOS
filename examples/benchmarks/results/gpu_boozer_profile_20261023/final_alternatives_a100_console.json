@@ -1,0 +1,78 @@
+{
+  "evidence": "User-pasted completed five-way comparison console; remote comparison.json and raw traces were not supplied",
+  "remote_output_directory": "/home/exouser/ESSOS/output/boozer_register_alternatives_a100_run1",
+  "console_run_completed": true,
+  "raw_report_supplied": false,
+  "device": "NVIDIA A100-SXM4-40GB",
+  "jax": "0.7.2",
+  "particles": 8192,
+  "horizon_s": 0.0002,
+  "saves": 101,
+  "repeats_per_case": 15,
+  "warmups_per_case": 3,
+  "method": "dopri8",
+  "controller": "i",
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "settings_source": "Device, JAX, particles, horizon, saves and repeats printed in console; method, controller and tolerances from the invoked driver's fixed settings",
+  "field_cache": "output/native_boozer_dopri8_8192_event_replay_run1/boozer_inputs.npz",
+  "independent_orbits": true,
+  "collisions": false,
+  "reverse_ad": false,
+  "production_changes": false,
+  "counts_order": ["trials", "accepted", "rejected"],
+  "timing_scope": "Blocked warm calls, excluding compilation, three warmups per case, transfers, output comparisons and later profiling",
+  "memory_scope": "Compiled buffers rounded to three decimals in MiB; separate per-case runtime peak VRAM is not available",
+  "rows": {
+    "baseline": {
+      "warm_median_ms": 187.365,
+      "compile_s": 4.979,
+      "compiled_buffers_mib": 96.112,
+      "registers_per_thread": 128,
+      "bitwise_equal": true,
+      "counts": [4169494, 3539926, 629568]
+    },
+    "pipeline1": {
+      "warm_median_ms": 187.680,
+      "compile_s": 4.745,
+      "compiled_buffers_mib": 96.112,
+      "registers_per_thread": 128,
+      "bitwise_equal": true,
+      "counts": [4169494, 3539926, 629568]
+    },
+    "pipeline2": {
+      "warm_median_ms": 188.467,
+      "compile_s": 4.853,
+      "compiled_buffers_mib": 96.112,
+      "registers_per_thread": 128,
+      "bitwise_equal": true,
+      "counts": [4169494, 3539926, 629568]
+    },
+    "lazy_constants": {
+      "warm_median_ms": 192.641,
+      "compile_s": 5.228,
+      "compiled_buffers_mib": 96.112,
+      "registers_per_thread": 124,
+      "bitwise_equal": true,
+      "counts": [4169494, 3539926, 629568]
+    },
+    "lean_carry": {
+      "warm_median_ms": 186.170,
+      "compile_s": 4.896,
+      "compiled_buffers_mib": 96.112,
+      "registers_per_thread": 128,
+      "bitwise_equal": true,
+      "counts": [4169494, 3539926, 629568]
+    }
+  },
+  "warnings": ["Can't import tensorflow.python.profiler.trace (ten messages); native resource extraction still returned register counts for all five cases"],
+  "decision": "Retain the production baseline. Lean carry is 0.64% lower by the reported short-run medians, without register or compiled-buffer reduction; timing samples are needed to assess variability. All other candidates are slower. No full-horizon candidate speedup is established.",
+  "unavailable": [
+    "individual timing samples and quartiles",
+    "paired timing ratios",
+    "full native launch resources and achieved occupancy",
+    "separate per-case peak VRAM and executed spill traffic",
+    "loss counts and energy-error diagnostics",
+    "source, field and birth hashes from remote comparison.json"
+  ]
+}

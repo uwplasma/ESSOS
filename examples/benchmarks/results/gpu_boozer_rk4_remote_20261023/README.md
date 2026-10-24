@@ -1,19 +1,32 @@
 Matched alpha RK4 and adaptive Dopri8: remote GPU evidence, 2026-10-23
 ===================================================================
 
-These measurements were pasted by the user from the large machine. Both
+These measurements were pasted by the user from the large machine. The
 commands use the current QA Boozer transform cache (16 direct Fourier modes),
 8192 alpha GCs at 3.52 MeV, s=0.3, seed 42, a 20 ms horizon and 101 saves.
-Both enable the same CUDA loop command-buffer options. There are no collisions
+commands enable the same CUDA loop command-buffer options. There are no collisions
 or lost-particle compaction. The GPU model was not present in the pasted log.
 
-| Path | Lowering/compilation, s | First solve, s | Warm result, s |
-| --- | ---: | ---: | ---: |
-| Adaptive Dopri8, separate sums | 14.800 | 54.168 | 54.367 median of two |
-| Adaptive Dopri8, experimental grouped sums | 14.550 | 62.301 | Not supplied |
-| Adaptive Dopri8, experimental fused trial | 4.842 | 48.185 | 48.246, first warm sample |
-| Adaptive Dopri8, independent orbit kernels | 5.069 | 18.680 | 18.448, median of two |
-| Standard fixed RK4, completed run 3 | 2.728 | 20.296 | 20.244, median of two |
+| Path | Lowering/compilation, s | First solve, s | Compile + first solve, s | Warm result, s |
+| --- | ---: | ---: | ---: | ---: |
+| Adaptive Dopri8, separate sums, rtol=atol=1e-10 | 14.800 | 54.168 | 68.968 | 54.367 median of two |
+| Adaptive Dopri8, experimental grouped sums, rtol=atol=1e-10 | 14.550 | 62.301 | 76.851 | Not supplied |
+| Adaptive Dopri8, experimental fused trial, rtol=atol=1e-10 | 4.842 | 48.185 | 53.027 | 48.246, first warm sample |
+| Adaptive Dopri8, independent orbit kernels, rtol=atol=1e-10 | 5.069 | 18.680 | 23.749 | 18.448, median of two |
+| Standard fixed RK4, dt=1.25e-7 s, completed run 3 | 2.728 | 20.296 | 23.024 | 20.244, median of two |
+| Adaptive Dopri8, independent orbit kernels, rtol=atol=1e-8 | 4.985 | 9.265 | 14.250 | 9.223, median of two |
+
+Compilation plus first solve excludes field/birth preparation. It sums the
+reported lowering/compilation and first execution, without substituting a warm
+sample. The new [1e-8 console record](../gpu_boozer_fused_trial_20261023/remote_full_orbit_tol1e8_console.json)
+reports warm samples of 9.166 s and 9.279 s, 106 lost particles and zero failures.
+It executes 197,168,756 trials (189,259,503 accepted, 7,909,253 rejected), with
+2,563,202,020 counted fresh RHS evaluations. Compared with the independent-orbit
+1e-10 run, trials decrease by 52.3% and warm time by 50.0%. This is consistent
+with less integration work at the looser tolerance; it does not demonstrate
+a faster individual step. These are separate runs, without supplied full-run
+trajectory errors or memory measurements. The loss counts (106 at 1e-8,
+111 at 1e-10, 108 for RK4) do not establish equivalent trajectory accuracy.
 
 The completed RK4 run 3 has warm samples 20.247 s and 20.241 s, with a printed
 median of 20.244 s, 108 lost particles and zero failures. It executes
@@ -69,4 +82,5 @@ Existing remote output folders:
 output/native_boozer_dopri8_8192_device_loops_run1
 output/boozer_rk4_alpha_8192_run1
 output/boozer_rk4_alpha_8192_run3
+output/native_boozer_dopri8_8192_fused_orbit_run2
 ```

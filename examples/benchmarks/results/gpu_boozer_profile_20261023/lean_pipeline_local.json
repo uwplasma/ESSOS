@@ -1,0 +1,403 @@
+{
+    "complete":  true,
+    "device":  "NVIDIA GeForce RTX 5060 Laptop GPU",
+    "jax":  "0.11.2",
+    "particles":  64,
+    "horizon_s":  0.0002,
+    "saves":  101,
+    "repeats":  15,
+    "rtol":  1E-10,
+    "atol":  1E-10,
+    "timestep":  1.25E-07,
+    "energy_ev":  3520000.0,
+    "birth_s":  0.3,
+    "seed":  42,
+    "field_modes":  16,
+    "method":  "dopri8",
+    "controller":  "i",
+    "dense_output":  "standard",
+    "selected_cases":  [
+                           "baseline",
+                           "pipeline1",
+                           "lean_carry",
+                           "lean_pipeline1"
+                       ],
+    "persistent_compilation_cache":  false,
+    "cache_directory":  null,
+    "collisions":  false,
+    "reverse_ad":  false,
+    "particle_chunking":  false,
+    "production_changes":  false,
+    "field_cache":  "/mnt/c/Users/eduar/Github_Codes/ESSOS-split-ad/examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz",
+    "field_cache_sha256":  "c2109db7fd5db19a6aa1ddc91c90b788d61a84500dab0023b3587a05a2fef9cd",
+    "compiler_options":  {
+                             "xla_gpu_enable_command_buffer":  "FUSION,WHILE,CONDITIONAL",
+                             "xla_gpu_graph_min_graph_size":  1
+                         },
+    "candidate_source_sha256":  {
+                                    "baseline":  "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+                                    "pipeline1":  "d2e6d94704c37353d37f6d49a5bfee2de50b829f754899b89cc966f1a8a712f0",
+                                    "lean_carry":  "b375342512b7f13c02413591c10ab283203be612e640ee77df143a23c9c554b0",
+                                    "lean_pipeline1":  "00929b4b848872a003d0c0ae74774c7fc3d508c47f52fb20b10ab6ed5716e8ab"
+                                },
+    "birth_sha256":  "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+    "source_sha256":  {
+                          "essos/boozer.py":  "06fd5a88533377bf99baf5e59f33159514846944d8c4aa214acfb0a3a9ad9076",
+                          "essos/rk_boozer_gpu_orbit.py":  "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+                          "essos/rk_boozer_gpu_trial.py":  "6331b9c9fce8e84875a807c6ea5e37e2e9e20a3cba7d6bd21a88c2a012717387",
+                          "examples/benchmarks/benchmark_boozer_register_final.py":  "94c7d0bed98d65a46eff45613d7a5efcfa1d7381511939c79b618fffe0e5755b"
+                      },
+    "timing_scope":  "Blocked device-resident calls after compilation and three warmups; rotating start order and alternating forward/reverse order. Transfers, comparisons and profiles excluded.",
+    "compilation_timing_scope":  "trace_and_lower_s includes JIT construction, tracing and lowering; executable_compile_s times lowered.compile(). Legacy compile_s is their total. These wall times are not guaranteed cold compilation.",
+    "memory_scope":  "Compiled buffers per executable. Device allocator peaks are cumulative across selected cases, not per-case peak VRAM. No executed-spill or instruction-stall counters.",
+    "candidates":  {
+                       "pipeline1":  "Compiler pipeline depth 1 instead of default 3; unchanged RK stage count",
+                       "lean_carry":  "Smaller stage carry, followed by a repeated endpoint sum",
+                       "lean_pipeline1":  "Smaller stage carry combined with compiler pipeline depth 1"
+                   },
+    "rows":  {
+                 "baseline":  {
+                                  "samples_ms":  [
+                                                     92.19150999706471,
+                                                     91.7498689959757,
+                                                     91.99617899867008,
+                                                     90.97938099876046,
+                                                     91.16749299573712,
+                                                     91.44621200539405,
+                                                     91.33766000013566,
+                                                     90.2607110037934,
+                                                     92.12570900126593,
+                                                     91.63053600059357,
+                                                     92.34949700476136,
+                                                     92.40106300421758,
+                                                     91.90551900246646,
+                                                     93.3765429945197,
+                                                     92.94661099556834
+                                                 ],
+                                  "trace_and_lower_s":  1.6073205540014897,
+                                  "executable_compile_s":  2.1952010299937683,
+                                  "compile_s":  3.802521583995258,
+                                  "compiled_buffer_components":  {
+                                                                     "argument_size_in_bytes":  2560,
+                                                                     "output_size_in_bytes":  261168,
+                                                                     "temp_size_in_bytes":  1201208,
+                                                                     "alias_size_in_bytes":  0
+                                                                 },
+                                  "compiled_buffers_bytes":  1464936,
+                                  "bitwise_equal":  true,
+                                  "counts":  [
+                                                 32716,
+                                                 28082,
+                                                 4634
+                                             ],
+                                  "counts_identical":  true,
+                                  "lost":  1,
+                                  "failed":  0,
+                                  "finite":  true,
+                                  "status_valid":  true,
+                                  "max_relative_energy_error":  5.165119443262256E-10,
+                                  "max_saved_component_difference":  [
+                                                                         0.0,
+                                                                         0.0,
+                                                                         0.0,
+                                                                         0.0,
+                                                                         0.0
+                                                                     ],
+                                  "warm_median_ms":  91.90551900246646,
+                                  "warm_q25_ms":  91.39193600276485,
+                                  "warm_q75_ms":  92.27050350091304,
+                                  "paired_median_ratio":  1.0,
+                                  "time_decrease_percent":  0.0,
+                                  "orbit_launches":  [
+                                                         {
+                                                             "device":  "/device:GPU:0",
+                                                             "name":  "kernel",
+                                                             "calls":  1,
+                                                             "launch_metadata":  {
+                                                                                     "kernel_details":  "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                                                                                     "theoretical_occupancy_pct":  33.333333333333336,
+                                                                                     "hlo_module":  "jit_run",
+                                                                                     "hlo_op":  "command_buffer_1"
+                                                                                 },
+                                                             "resources":  {
+                                                                               "registers_per_thread":  128,
+                                                                               "static_shared_bytes":  0,
+                                                                               "dynamic_shared_bytes":  0,
+                                                                               "grid_blocks":  [
+                                                                                                   64,
+                                                                                                   1,
+                                                                                                   1
+                                                                                               ],
+                                                                               "block_threads":  [
+                                                                                                     32,
+                                                                                                     1,
+                                                                                                     1
+                                                                                                 ],
+                                                                               "theoretical_occupancy_pct":  33.333333333333336
+                                                                           }
+                                                         }
+                                                     ]
+                              },
+                 "pipeline1":  {
+                                   "samples_ms":  [
+                                                      92.0778310028254,
+                                                      90.65282299707178,
+                                                      93.3152979996521,
+                                                      90.75543400103925,
+                                                      91.97685299295699,
+                                                      91.47302299970761,
+                                                      91.43056399625493,
+                                                      89.62837299623061,
+                                                      91.68057999340817,
+                                                      91.70800099673215,
+                                                      91.22054099861998,
+                                                      91.65845800453098,
+                                                      93.42377099528676,
+                                                      90.92477099329699,
+                                                      92.38113700121175
+                                                  ],
+                                   "trace_and_lower_s":  1.4947425790014677,
+                                   "executable_compile_s":  1.618180230994767,
+                                   "compile_s":  3.1129228099962347,
+                                   "compiled_buffer_components":  {
+                                                                      "argument_size_in_bytes":  2560,
+                                                                      "output_size_in_bytes":  261168,
+                                                                      "temp_size_in_bytes":  1201208,
+                                                                      "alias_size_in_bytes":  0
+                                                                  },
+                                   "compiled_buffers_bytes":  1464936,
+                                   "bitwise_equal":  true,
+                                   "counts":  [
+                                                  32716,
+                                                  28082,
+                                                  4634
+                                              ],
+                                   "counts_identical":  true,
+                                   "lost":  1,
+                                   "failed":  0,
+                                   "finite":  true,
+                                   "status_valid":  true,
+                                   "max_relative_energy_error":  5.165119443262256E-10,
+                                   "max_saved_component_difference":  [
+                                                                          0.0,
+                                                                          0.0,
+                                                                          0.0,
+                                                                          0.0,
+                                                                          0.0
+                                                                      ],
+                                   "warm_median_ms":  91.65845800453098,
+                                   "warm_q25_ms":  91.07265599595848,
+                                   "warm_q75_ms":  92.0273419978912,
+                                   "paired_median_ratio":  0.9975384862453146,
+                                   "time_decrease_percent":  0.26882063299032977,
+                                   "orbit_launches":  [
+                                                          {
+                                                              "device":  "/device:GPU:0",
+                                                              "name":  "kernel",
+                                                              "calls":  1,
+                                                              "launch_metadata":  {
+                                                                                      "kernel_details":  "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                                                                                      "theoretical_occupancy_pct":  33.333333333333336,
+                                                                                      "hlo_module":  "jit_run",
+                                                                                      "hlo_op":  "command_buffer_1"
+                                                                                  },
+                                                              "resources":  {
+                                                                                "registers_per_thread":  128,
+                                                                                "static_shared_bytes":  0,
+                                                                                "dynamic_shared_bytes":  0,
+                                                                                "grid_blocks":  [
+                                                                                                    64,
+                                                                                                    1,
+                                                                                                    1
+                                                                                                ],
+                                                                                "block_threads":  [
+                                                                                                      32,
+                                                                                                      1,
+                                                                                                      1
+                                                                                                  ],
+                                                                                "theoretical_occupancy_pct":  33.333333333333336
+                                                                            }
+                                                          }
+                                                      ]
+                               },
+                 "lean_carry":  {
+                                    "samples_ms":  [
+                                                       92.212682000536,
+                                                       91.18335200037109,
+                                                       90.79724200273631,
+                                                       92.01901099731913,
+                                                       91.19812000426464,
+                                                       92.54114500072319,
+                                                       91.82524999778252,
+                                                       90.86328499688534,
+                                                       91.35305900417734,
+                                                       92.5013209998724,
+                                                       92.20882500085281,
+                                                       92.5912180027808,
+                                                       92.83196700562257,
+                                                       91.46988599968608,
+                                                       91.59259499574546
+                                                   ],
+                                    "trace_and_lower_s":  1.4560374270004104,
+                                    "executable_compile_s":  1.6885415770011605,
+                                    "compile_s":  3.144579004001571,
+                                    "compiled_buffer_components":  {
+                                                                       "argument_size_in_bytes":  2560,
+                                                                       "output_size_in_bytes":  261168,
+                                                                       "temp_size_in_bytes":  1201208,
+                                                                       "alias_size_in_bytes":  0
+                                                                   },
+                                    "compiled_buffers_bytes":  1464936,
+                                    "bitwise_equal":  true,
+                                    "counts":  [
+                                                   32716,
+                                                   28082,
+                                                   4634
+                                               ],
+                                    "counts_identical":  true,
+                                    "lost":  1,
+                                    "failed":  0,
+                                    "finite":  true,
+                                    "status_valid":  true,
+                                    "max_relative_energy_error":  5.165119443262256E-10,
+                                    "max_saved_component_difference":  [
+                                                                           0.0,
+                                                                           0.0,
+                                                                           0.0,
+                                                                           0.0,
+                                                                           0.0
+                                                                       ],
+                                    "warm_median_ms":  91.82524999778252,
+                                    "warm_q25_ms":  91.27558950422099,
+                                    "warm_q75_ms":  92.3570015002042,
+                                    "paired_median_ratio":  1.0003359422039713,
+                                    "time_decrease_percent":  0.08733861203894522,
+                                    "orbit_launches":  [
+                                                           {
+                                                               "device":  "/device:GPU:0",
+                                                               "name":  "kernel",
+                                                               "calls":  1,
+                                                               "launch_metadata":  {
+                                                                                       "kernel_details":  "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                                                                                       "theoretical_occupancy_pct":  33.333333333333336,
+                                                                                       "hlo_module":  "jit_run",
+                                                                                       "hlo_op":  "command_buffer_1"
+                                                                                   },
+                                                               "resources":  {
+                                                                                 "registers_per_thread":  128,
+                                                                                 "static_shared_bytes":  0,
+                                                                                 "dynamic_shared_bytes":  0,
+                                                                                 "grid_blocks":  [
+                                                                                                     64,
+                                                                                                     1,
+                                                                                                     1
+                                                                                                 ],
+                                                                                 "block_threads":  [
+                                                                                                       32,
+                                                                                                       1,
+                                                                                                       1
+                                                                                                   ],
+                                                                                 "theoretical_occupancy_pct":  33.333333333333336
+                                                                             }
+                                                           }
+                                                       ]
+                                },
+                 "lean_pipeline1":  {
+                                        "samples_ms":  [
+                                                           92.7882559990394,
+                                                           91.9438200071454,
+                                                           93.1498610007111,
+                                                           92.7862329990603,
+                                                           91.74187399912626,
+                                                           91.52830600214656,
+                                                           91.72753799794009,
+                                                           91.25553700141609,
+                                                           90.2560730028199,
+                                                           90.8925600015209,
+                                                           92.42929700121749,
+                                                           91.96131399949081,
+                                                           93.06777799793053,
+                                                           91.94618600304238,
+                                                           91.60698299820069
+                                                       ],
+                                        "trace_and_lower_s":  1.4842610889973002,
+                                        "executable_compile_s":  1.7140718349983217,
+                                        "compile_s":  3.198332923995622,
+                                        "compiled_buffer_components":  {
+                                                                           "argument_size_in_bytes":  2560,
+                                                                           "output_size_in_bytes":  261168,
+                                                                           "temp_size_in_bytes":  1201208,
+                                                                           "alias_size_in_bytes":  0
+                                                                       },
+                                        "compiled_buffers_bytes":  1464936,
+                                        "bitwise_equal":  true,
+                                        "counts":  [
+                                                       32716,
+                                                       28082,
+                                                       4634
+                                                   ],
+                                        "counts_identical":  true,
+                                        "lost":  1,
+                                        "failed":  0,
+                                        "finite":  true,
+                                        "status_valid":  true,
+                                        "max_relative_energy_error":  5.165119443262256E-10,
+                                        "max_saved_component_difference":  [
+                                                                               0.0,
+                                                                               0.0,
+                                                                               0.0,
+                                                                               0.0,
+                                                                               0.0
+                                                                           ],
+                                        "warm_median_ms":  91.9438200071454,
+                                        "warm_q25_ms":  91.56764450017363,
+                                        "warm_q75_ms":  92.6077650001389,
+                                        "paired_median_ratio":  1.002113910497008,
+                                        "time_decrease_percent":  -0.041674324996643364,
+                                        "orbit_launches":  [
+                                                               {
+                                                                   "device":  "/device:GPU:0",
+                                                                   "name":  "kernel",
+                                                                   "calls":  1,
+                                                                   "launch_metadata":  {
+                                                                                           "kernel_details":  "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                                                                                           "theoretical_occupancy_pct":  33.333333333333336,
+                                                                                           "hlo_module":  "jit_run",
+                                                                                           "hlo_op":  "command_buffer_1"
+                                                                                       },
+                                                                   "resources":  {
+                                                                                     "registers_per_thread":  128,
+                                                                                     "static_shared_bytes":  0,
+                                                                                     "dynamic_shared_bytes":  0,
+                                                                                     "grid_blocks":  [
+                                                                                                         64,
+                                                                                                         1,
+                                                                                                         1
+                                                                                                     ],
+                                                                                     "block_threads":  [
+                                                                                                           32,
+                                                                                                           1,
+                                                                                                           1
+                                                                                                       ],
+                                                                                     "theoretical_occupancy_pct":  33.333333333333336
+                                                                                 }
+                                                               }
+                                                           ]
+                                    }
+             },
+    "all_outputs_bitwise_equal":  true,
+    "device_allocator_stats_cumulative":  {
+                                              "num_allocs":  922,
+                                              "bytes_in_use":  487936,
+                                              "peak_bytes_in_use":  218504704,
+                                              "largest_alloc_size":  33554432,
+                                              "bytes_limit":  6410993664,
+                                              "bytes_reserved":  0,
+                                              "peak_bytes_reserved":  0,
+                                              "largest_free_block_bytes":  134217728,
+                                              "pool_bytes":  270532608,
+                                              "peak_pool_bytes":  270532608
+                                          },
+    "source_report":  "output/boozer_lean_pipeline_local64_20261023_run1/comparison.json",
+    "curation":  "Retains all timing samples, compilation phases, buffers, output checks, hashes and orbit launch resources; omits unrelated GPU-kernel resource listings. The full raw report remains in the local output directory."
+}

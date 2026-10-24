@@ -1251,6 +1251,12 @@ trial's 48.246 s warm sample and 8.9% below fixed RK4's completed 20.244 s media
 these are separate runs with different error control and boundary localization.
 The earlier ordinary adaptive Dopri8 median was 54.367 s. Full-run trajectory
 errors and memory were not printed in the supplied console log. This kernel
+also completes the [full 1e-8 tolerance run](examples/benchmarks/results/gpu_boozer_fused_trial_20261023/remote_full_orbit_tol1e8_console.json)
+with compilation 4.985 s, first execution 9.265 s (14.250 s combined), and warm
+median 9.223 s. It reports 106 lost particles and zero failures; the 1e-10 run
+reports 111 lost. The [full-run comparison](examples/benchmarks/results/gpu_boozer_rk4_remote_20261023/README.md)
+records timings for both tolerances and fixed RK4; equal trajectory accuracy
+has not been established from these console logs. This kernel
 has no checkpoint tape or custom reverse rule; these forward results do not
 establish reverse-AD timing or memory gains.
 
@@ -1307,6 +1313,39 @@ reproduces those five cases together on A100, with separate warm/compile
 timings, compiled buffers, native register counts and bitwise-output checks.
 Its default short horizon is 0.2 ms and it does not modify the production
 solver; see the [run command](examples/benchmarks/results/gpu_boozer_profile_20261023/README.md#reproduce-the-alternatives-on-a100).
+The completed [A100 alternatives check](examples/benchmarks/results/gpu_boozer_profile_20261023/final_alternatives_a100_console.json)
+reports 187.365 ms for baseline and 186.170 ms for smaller stage carry (0.64%
+lower), with unchanged 96.112 MiB compiled buffers and 128 registers/thread.
+Other variants are slower, despite the loading variant using 124 registers.
+The [full 20 ms comparison](examples/benchmarks/results/gpu_boozer_profile_20261023/final_alternatives_a100_full_console.json)
+reports warm medians of 18.459165 s for baseline and 18.337851 s for smaller
+stage carry (0.66% lower), with compilation 5.034 s and 4.909 s respectively.
+All outputs and counts agree bitwise, with unchanged compiled buffers and
+register count. Smaller carry is the preferred repeated-call candidate;
+pipeline depth 1 has the lowest compile-plus-one-warm-solve estimate, with
+smaller carry becoming cheaper from the sixth call using reported medians.
+The diagnostic leaves production unchanged. At a full
+20 ms horizon, this five-case, 15-repeat diagnostic executes 95 full solves,
+roughly 29-30 minutes at the observed baseline speed. It now prints progress
+and saves partial timing samples outside the measured intervals.
+The [combined carry/pipeline check](examples/benchmarks/results/gpu_boozer_profile_20261023/lean_pipeline_local.json)
+separates tracing/lowering and executable compilation. On the local 64-particle
+case, smaller carry plus pipeline depth 1 takes 3.198 s combined versus
+3.145 s for smaller carry alone, with bitwise-identical results and unchanged
+buffers/registers. This combination has no demonstrated compilation gain and
+is not promoted; its A100 result is unmeasured. Use `--cases baseline pipeline1
+lean_carry lean_pipeline1` to select the focused diagnostic.
+Further [lean compilation experiments](examples/benchmarks/results/gpu_boozer_profile_20261023/lean_compile_local.json)
+keep the same interpolant but evaluate its coefficients in a loop. In the
+final local 64-particle pass, combined tracing/lowering and compilation falls
+from 3.162 s for smaller carry to 2.595 s with looped dense output, while
+the warm median rises from 91.466 to 92.323 ms. Looping only at loss roots
+gives 2.804 s and 92.000 ms. All outputs/counts agree bitwise, compiled buffers
+and registers are unchanged, and four analytical checks pass for each
+candidate. These optional diagnostics expose a compilation/runtime tradeoff;
+production is unchanged and A100 gains are not yet measured. The linked
+[workflow](examples/benchmarks/results/gpu_boozer_profile_20261023/README.md#further-lean-carry-compilation-experiments)
+records the successful and rejected attempts and the short A100 command.
 
 `--field-cache path/to/boozer_inputs.npz` reuses the transform after checking
 the equilibrium hash and transform resolutions. Births are still generated

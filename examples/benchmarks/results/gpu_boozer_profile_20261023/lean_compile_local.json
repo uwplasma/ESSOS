@@ -1,0 +1,1697 @@
+{
+  "evidence": "Locally executed 64-particle GPU comparisons; complete raw reports remain in ignored output directories",
+  "scope": "Forward-only fixed QA Boozer field, unchanged Dopri8 tableau, embedded error, I controller, save times and stopping surface; all successful cases agree bitwise",
+  "production_changes": false,
+  "compiler_measurements": "One tracing/lowering and executable-compilation measurement per case per pass. Persistent JAX compilation cache disabled; other compiler caches and initialization effects are not guaranteed absent.",
+  "curation": "Retains every timing sample, phase, compiled-buffer estimate, check, source hash, error and orbit launch resource; omits unrelated GPU resource listings.",
+  "earlier_failures": "Pass 1 includes an unsupported boolean reduce_and candidate; pass 2 includes unsupported scan-unroll parameters. Those forms were removed from the driver. Explicit fixed-size Horner blocks succeeded in pass 3.",
+  "analytical_validation": {
+    "source": "tests/test_rk_boozer_gpu_orbit.py",
+    "method": "dopri8",
+    "particles_per_check": 64,
+    "cases": [
+      "lean_dense_loop",
+      "lean_dense_roots"
+    ],
+    "checks_per_case": 4,
+    "checks": [
+      "linear exit, initial events and duplicate saves",
+      "finite rejection at work limit",
+      "nonfinite rejection at work limit",
+      "polynomial dense saves"
+    ],
+    "actual_runs": [
+      {
+        "selection": "looped_dense_candidate_analytical_checks before adding roots parameter",
+        "passed": 4
+      },
+      {
+        "selection": "lean_dense_roots",
+        "passed": 4
+      }
+    ]
+  },
+  "passes": [
+    {
+      "complete": false,
+      "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+      "jax": "0.11.2",
+      "particles": 64,
+      "horizon_s": 0.0002,
+      "saves": 101,
+      "repeats": 15,
+      "rtol": 1e-10,
+      "atol": 1e-10,
+      "timestep": 1.25e-07,
+      "energy_ev": 3520000.0,
+      "birth_s": 0.3,
+      "seed": 42,
+      "field_modes": 16,
+      "method": "dopri8",
+      "controller": "i",
+      "dense_output": "standard",
+      "selected_cases": [
+        "baseline",
+        "lean_carry",
+        "lean_dense_loop",
+        "lean_finite",
+        "lean_direct"
+      ],
+      "persistent_compilation_cache": false,
+      "cache_directory": null,
+      "collisions": false,
+      "reverse_ad": false,
+      "particle_chunking": false,
+      "production_changes": false,
+      "field_cache": "/mnt/c/Users/eduar/Github_Codes/ESSOS-split-ad/examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz",
+      "field_cache_sha256": "c2109db7fd5db19a6aa1ddc91c90b788d61a84500dab0023b3587a05a2fef9cd",
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "candidate_source_sha256": {
+        "baseline": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+        "lean_carry": "b375342512b7f13c02413591c10ab283203be612e640ee77df143a23c9c554b0",
+        "lean_dense_loop": "27097c0c0edb165fa1eb8d5a825674034c823558c14ca88156bd93c44415f394",
+        "lean_finite": "76e64c72bb2b49d9515d6bd44bbc4250992619a41665c2aa7f9ea15d29729aeb",
+        "lean_direct": "5e510110bd1b7844bab11fc0cd64adfb3f2a5617c6fa1d72e8b7be9c7a4f966e"
+      },
+      "birth_sha256": "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+      "source_sha256": {
+        "essos/boozer.py": "06fd5a88533377bf99baf5e59f33159514846944d8c4aa214acfb0a3a9ad9076",
+        "essos/rk_boozer_gpu_orbit.py": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+        "essos/rk_boozer_gpu_trial.py": "6331b9c9fce8e84875a807c6ea5e37e2e9e20a3cba7d6bd21a88c2a012717387",
+        "examples/benchmarks/benchmark_boozer_register_final.py": "511dd900a0bc6df695a1cbe5dceac93d76236ab0388a0aa8f8098c5f6a7bcc3f"
+      },
+      "timing_scope": "Blocked device-resident calls after compilation and three warmups; rotating start order and alternating forward/reverse order. Transfers, comparisons and profiles excluded.",
+      "compilation_timing_scope": "trace_and_lower_s includes JIT construction, tracing and lowering; executable_compile_s times lowered.compile(). Legacy compile_s is their total. These wall times are not guaranteed cold compilation.",
+      "memory_scope": "Compiled buffers per executable. Device allocator peaks are cumulative across selected cases, not per-case peak VRAM. No executed-spill or instruction-stall counters.",
+      "candidates": {
+        "lean_carry": "Smaller stage carry, followed by a repeated endpoint sum",
+        "lean_dense_loop": "Smaller stage carry with looped dense-output Horner recurrence",
+        "lean_finite": "Smaller stage carry with boolean reduction of the same IEEE finite mask",
+        "lean_direct": "Smaller stage carry; outer JIT directly calls the ordinary native wrapper body"
+      },
+      "rows": {
+        "baseline": {
+          "samples_ms": [
+            92.06404599535745,
+            90.57839599699946,
+            90.89255100116134,
+            91.8502369968337,
+            92.70326899422798,
+            90.87531899422174,
+            91.67906799848424,
+            92.45449399895733,
+            91.60423299908871,
+            91.20748300483683,
+            91.52359200379578,
+            92.8570399992168,
+            90.56666700053029,
+            92.26187899912475,
+            92.23037100309739
+          ],
+          "trace_and_lower_s": 1.5703596389939776,
+          "executable_compile_s": 2.1464225190065918,
+          "compile_s": 3.7167821580005693,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.67906799848424,
+          "warm_q25_ms": 91.05001700299908,
+          "warm_q75_ms": 92.24612500111107,
+          "paired_median_ratio": 1.0,
+          "time_decrease_percent": 0.0,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": -18.91980813584553,
+          "warm_change_percent_vs_lean": -0.2664234239383556
+        },
+        "lean_carry": {
+          "samples_ms": [
+            91.73060400644317,
+            91.2888800012297,
+            91.8141900037881,
+            91.92397500009974,
+            92.07865299686091,
+            93.38761500112014,
+            91.64514500298537,
+            92.68735899968306,
+            91.57227399555268,
+            92.89235500182258,
+            91.68450300057884,
+            91.9917350038304,
+            92.00169399991864,
+            92.19173799647251,
+            91.64611099549802
+          ],
+          "trace_and_lower_s": 1.4533840229996713,
+          "executable_compile_s": 1.6720685120017151,
+          "compile_s": 3.1254525350013864,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.92397500009974,
+          "warm_q25_ms": 91.66530699803843,
+          "warm_q75_ms": 92.13519549666671,
+          "paired_median_ratio": 1.0008028068917076,
+          "time_decrease_percent": -0.2671351345102657,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 0.0,
+          "warm_change_percent_vs_lean": 0.0
+        },
+        "lean_dense_loop": {
+          "samples_ms": [
+            92.61360100208549,
+            91.65896099875681,
+            92.42517999518896,
+            92.73592999670655,
+            92.48298799502663,
+            92.72697299456922,
+            92.25272799812956,
+            92.3533259992837,
+            92.68257399526192,
+            92.88213699619519,
+            92.97435799817322,
+            92.97162399889203,
+            93.45368399954168,
+            92.2119559982093,
+            92.46989799430594
+          ],
+          "trace_and_lower_s": 1.261271449002379,
+          "executable_compile_s": 1.3371018640027614,
+          "compile_s": 2.5983733130051405,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 92.61360100208549,
+          "warm_q25_ms": 92.38925299723633,
+          "warm_q75_ms": 92.80903349645087,
+          "paired_median_ratio": 1.009642794932618,
+          "time_decrease_percent": -1.0193526439608913,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 16.86409299432897,
+          "warm_change_percent_vs_lean": 0.7502134258064785
+        },
+        "lean_finite": {
+          "samples_ms": [],
+          "error": "NotImplementedError: Unimplemented primitive in Pallas Triton lowering: reduce_and. Please file an issue at https://github.com/jax-ml/jax/issues/new/choose."
+        },
+        "lean_direct": {
+          "samples_ms": [
+            91.25777299777837,
+            91.56245100166416,
+            90.58389600249939,
+            92.4090199987404,
+            92.04649399907794,
+            91.01597099652281,
+            91.95912099676207,
+            92.32906000397634,
+            91.78856699872995,
+            90.77061700372724,
+            91.79332700296072,
+            92.36320899799466,
+            92.50453199638287,
+            92.26612799830036,
+            91.5681160040549
+          ],
+          "trace_and_lower_s": 1.4775653530014097,
+          "executable_compile_s": 1.7298858740032301,
+          "compile_s": 3.20745122700464,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.79332700296072,
+          "warm_q25_ms": 91.41011199972127,
+          "warm_q75_ms": 92.29759400113835,
+          "paired_median_ratio": 1.0000460536813438,
+          "time_decrease_percent": -0.12462932594206055,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": -2.6235782205925373,
+          "warm_change_percent_vs_lean": -0.14212613971369414
+        }
+      },
+      "all_outputs_bitwise_equal": false,
+      "device_allocator_stats_cumulative": {
+        "num_allocs": 944,
+        "bytes_in_use": 536064,
+        "peak_bytes_in_use": 218504704,
+        "largest_alloc_size": 33554432,
+        "bytes_limit": 6410993664,
+        "bytes_reserved": 0,
+        "peak_bytes_reserved": 0,
+        "largest_free_block_bytes": 134217728,
+        "pool_bytes": 270532608,
+        "peak_pool_bytes": 270532608
+      },
+      "raw_report": "output/boozer_lean_compile_local64_20261023_run1/comparison.json"
+    },
+    {
+      "complete": false,
+      "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+      "jax": "0.11.2",
+      "particles": 64,
+      "horizon_s": 0.0002,
+      "saves": 101,
+      "repeats": 15,
+      "rtol": 1e-10,
+      "atol": 1e-10,
+      "timestep": 1.25e-07,
+      "energy_ev": 3520000.0,
+      "birth_s": 0.3,
+      "seed": 42,
+      "field_modes": 16,
+      "method": "dopri8",
+      "controller": "i",
+      "dense_output": "standard",
+      "selected_cases": [
+        "baseline",
+        "lean_dense_loop",
+        "lean_dense_loop2",
+        "lean_dense_loop4",
+        "lean_carry"
+      ],
+      "persistent_compilation_cache": false,
+      "cache_directory": null,
+      "collisions": false,
+      "reverse_ad": false,
+      "particle_chunking": false,
+      "production_changes": false,
+      "field_cache": "/mnt/c/Users/eduar/Github_Codes/ESSOS-split-ad/examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz",
+      "field_cache_sha256": "c2109db7fd5db19a6aa1ddc91c90b788d61a84500dab0023b3587a05a2fef9cd",
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "candidate_source_sha256": {
+        "baseline": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+        "lean_dense_loop": "27097c0c0edb165fa1eb8d5a825674034c823558c14ca88156bd93c44415f394",
+        "lean_dense_loop2": "ae67b3ce6f240fdaabf7462f17a64ffe9e2a2e53eefdb17d7ade8693ec60f29e",
+        "lean_dense_loop4": "9a6f447051bf450dbc654505ed7483ad8f417e88abd70712efaa7006a50f0dab",
+        "lean_carry": "b375342512b7f13c02413591c10ab283203be612e640ee77df143a23c9c554b0"
+      },
+      "birth_sha256": "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+      "source_sha256": {
+        "essos/boozer.py": "06fd5a88533377bf99baf5e59f33159514846944d8c4aa214acfb0a3a9ad9076",
+        "essos/rk_boozer_gpu_orbit.py": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+        "essos/rk_boozer_gpu_trial.py": "6331b9c9fce8e84875a807c6ea5e37e2e9e20a3cba7d6bd21a88c2a012717387",
+        "examples/benchmarks/benchmark_boozer_register_final.py": "3f62bca5fd5581f19f354517b27dfe44e924660f2e74b1724ded7d558496c0e0"
+      },
+      "timing_scope": "Blocked device-resident calls after compilation and three warmups; rotating start order and alternating forward/reverse order. Transfers, comparisons and profiles excluded.",
+      "compilation_timing_scope": "trace_and_lower_s includes JIT construction, tracing and lowering; executable_compile_s times lowered.compile(). Legacy compile_s is their total. These wall times are not guaranteed cold compilation.",
+      "memory_scope": "Compiled buffers per executable. Device allocator peaks are cumulative across selected cases, not per-case peak VRAM. No executed-spill or instruction-stall counters.",
+      "candidates": {
+        "lean_carry": "Smaller stage carry, followed by a repeated endpoint sum",
+        "lean_dense_loop": "Smaller stage carry with looped dense-output Horner recurrence",
+        "lean_dense_loop2": "Smaller stage carry with dense-output Horner loop unrolled by 2",
+        "lean_dense_loop4": "Smaller stage carry with dense-output Horner loop unrolled by 4"
+      },
+      "rows": {
+        "baseline": {
+          "samples_ms": [
+            91.92994000477483,
+            91.29563500027871,
+            91.16405899840174,
+            90.87674499460263,
+            89.56101999501698,
+            91.51056800328661,
+            90.94593400368467,
+            92.47648000018671,
+            93.4349269955419,
+            91.50216200214345,
+            91.78747000260046,
+            91.77887799887685,
+            91.00905099330703,
+            92.3597000000882,
+            91.25509099976625
+          ],
+          "trace_and_lower_s": 1.673800951000885,
+          "executable_compile_s": 2.3827075570006855,
+          "compile_s": 4.056508508001571,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.50216200214345,
+          "warm_q25_ms": 91.08655499585439,
+          "warm_q75_ms": 91.85870500368765,
+          "paired_median_ratio": 1.0,
+          "time_decrease_percent": 0.0,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": -19.434312127796318,
+          "warm_change_percent_vs_lean": 0.07502606997844552
+        },
+        "lean_dense_loop": {
+          "samples_ms": [
+            93.37771600257838,
+            92.29342899925541,
+            91.83868899708614,
+            92.17551900655963,
+            92.4091920023784,
+            92.10120899660978,
+            90.07459900021786,
+            93.07566799543565,
+            94.12643600080628,
+            91.70525000081398,
+            92.34118700260296,
+            92.47108799900161,
+            92.42236700083595,
+            92.62686900183326,
+            92.19171800214099
+          ],
+          "trace_and_lower_s": 1.437994008003443,
+          "executable_compile_s": 1.5398530730017228,
+          "compile_s": 2.977847081005166,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 92.34118700260296,
+          "warm_q25_ms": 92.1383640015847,
+          "warm_q75_ms": 92.54897850041743,
+          "paired_median_ratio": 1.0074009690754868,
+          "time_decrease_percent": -0.9169455476252697,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 12.324325946790193,
+          "warm_change_percent_vs_lean": 0.9926595658119375
+        },
+        "lean_dense_loop2": {
+          "samples_ms": [],
+          "error": "NotImplementedError: "
+        },
+        "lean_dense_loop4": {
+          "samples_ms": [],
+          "error": "NotImplementedError: "
+        },
+        "lean_carry": {
+          "samples_ms": [
+            91.18088999821339,
+            90.62128499499522,
+            91.81942799477838,
+            91.43356299318839,
+            90.30746300413739,
+            91.16655600519152,
+            90.20571399742039,
+            92.16247299627867,
+            93.09208799822954,
+            91.26358600042295,
+            92.42907099542208,
+            90.89354699972318,
+            91.99036099744262,
+            91.79098000458907,
+            91.72127000056207
+          ],
+          "trace_and_lower_s": 1.5907834929967066,
+          "executable_compile_s": 1.805651280003076,
+          "compile_s": 3.3964347729997826,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.43356299318839,
+          "warm_q25_ms": 91.03005150245735,
+          "warm_q75_ms": 91.9048944961105,
+          "paired_median_ratio": 0.996604466304217,
+          "time_decrease_percent": 0.07496982306653965,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 0.0,
+          "warm_change_percent_vs_lean": 0.0
+        }
+      },
+      "all_outputs_bitwise_equal": false,
+      "device_allocator_stats_cumulative": {
+        "num_allocs": 792,
+        "bytes_in_use": 535552,
+        "peak_bytes_in_use": 218504704,
+        "largest_alloc_size": 33554432,
+        "bytes_limit": 6410993664,
+        "bytes_reserved": 0,
+        "peak_bytes_reserved": 0,
+        "largest_free_block_bytes": 134217728,
+        "pool_bytes": 270532608,
+        "peak_pool_bytes": 270532608
+      },
+      "raw_report": "output/boozer_lean_compile_local64_20261023_run2/comparison.json"
+    },
+    {
+      "complete": true,
+      "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+      "jax": "0.11.2",
+      "particles": 64,
+      "horizon_s": 0.0002,
+      "saves": 101,
+      "repeats": 15,
+      "rtol": 1e-10,
+      "atol": 1e-10,
+      "timestep": 1.25e-07,
+      "energy_ev": 3520000.0,
+      "birth_s": 0.3,
+      "seed": 42,
+      "field_modes": 16,
+      "method": "dopri8",
+      "controller": "i",
+      "dense_output": "standard",
+      "selected_cases": [
+        "baseline",
+        "lean_carry",
+        "lean_dense_loop",
+        "lean_dense_loop2",
+        "lean_dense_loop4"
+      ],
+      "persistent_compilation_cache": false,
+      "cache_directory": null,
+      "collisions": false,
+      "reverse_ad": false,
+      "particle_chunking": false,
+      "production_changes": false,
+      "field_cache": "/mnt/c/Users/eduar/Github_Codes/ESSOS-split-ad/examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz",
+      "field_cache_sha256": "c2109db7fd5db19a6aa1ddc91c90b788d61a84500dab0023b3587a05a2fef9cd",
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "candidate_source_sha256": {
+        "baseline": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+        "lean_carry": "b375342512b7f13c02413591c10ab283203be612e640ee77df143a23c9c554b0",
+        "lean_dense_loop": "27097c0c0edb165fa1eb8d5a825674034c823558c14ca88156bd93c44415f394",
+        "lean_dense_loop2": "5bf496126534a8a42db0cb701c709a0764e8846c4087fd4ca07d67fd5e9100bc",
+        "lean_dense_loop4": "904aeed169617d9af7a700f4294b6240f558196719de163b82d4a423dba886c8"
+      },
+      "birth_sha256": "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+      "source_sha256": {
+        "essos/boozer.py": "06fd5a88533377bf99baf5e59f33159514846944d8c4aa214acfb0a3a9ad9076",
+        "essos/rk_boozer_gpu_orbit.py": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+        "essos/rk_boozer_gpu_trial.py": "6331b9c9fce8e84875a807c6ea5e37e2e9e20a3cba7d6bd21a88c2a012717387",
+        "examples/benchmarks/benchmark_boozer_register_final.py": "145c63bf0099f4f8f4028786aac26f0c944874eb55d3788d49edf735b27496af"
+      },
+      "timing_scope": "Blocked device-resident calls after compilation and three warmups; rotating start order and alternating forward/reverse order. Transfers, comparisons and profiles excluded.",
+      "compilation_timing_scope": "trace_and_lower_s includes JIT construction, tracing and lowering; executable_compile_s times lowered.compile(). Legacy compile_s is their total. These wall times are not guaranteed cold compilation.",
+      "memory_scope": "Compiled buffers per executable. Device allocator peaks are cumulative across selected cases, not per-case peak VRAM. No executed-spill or instruction-stall counters.",
+      "candidates": {
+        "lean_carry": "Smaller stage carry, followed by a repeated endpoint sum",
+        "lean_dense_loop": "Smaller stage carry with looped dense-output Horner recurrence",
+        "lean_dense_loop2": "Smaller stage carry with dense-output Horner loop unrolled by 2",
+        "lean_dense_loop4": "Smaller stage carry with dense-output Horner loop unrolled by 4"
+      },
+      "rows": {
+        "baseline": {
+          "samples_ms": [
+            92.8956779971486,
+            91.0128470059135,
+            91.24165400135098,
+            91.46938799676718,
+            90.506912994897,
+            90.98673400148982,
+            90.81485900242114,
+            92.65718599635875,
+            91.82275900093373,
+            91.88697900390252,
+            90.70212899678154,
+            90.29014100087807,
+            91.83948999998393,
+            91.56435699696885,
+            91.38138599519152
+          ],
+          "trace_and_lower_s": 1.557977866003057,
+          "executable_compile_s": 2.2158591970001,
+          "compile_s": 3.773837063003157,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.38138599519152,
+          "warm_q25_ms": 90.90079650195548,
+          "warm_q75_ms": 91.83112450045883,
+          "paired_median_ratio": 1.0,
+          "time_decrease_percent": 0.0,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": -17.943708184495534,
+          "warm_change_percent_vs_lean": -0.2346938375871077
+        },
+        "lean_carry": {
+          "samples_ms": [
+            93.44814900396159,
+            91.86197000235552,
+            90.31360199878691,
+            90.74834300554357,
+            90.90315299545182,
+            92.0005689986283,
+            91.59635700052604,
+            91.49027899547946,
+            91.43607800069731,
+            91.47752499848139,
+            91.66722900408786,
+            92.20021300279768,
+            91.42057900317013,
+            91.79451599629829,
+            92.60844399977941
+          ],
+          "trace_and_lower_s": 1.5183142929963651,
+          "executable_compile_s": 1.6813791210006457,
+          "compile_s": 3.199693413997011,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.59635700052604,
+          "warm_q25_ms": 91.42832850193372,
+          "warm_q75_ms": 91.93126950049191,
+          "paired_median_ratio": 1.004378008126044,
+          "time_decrease_percent": -0.2352459453239586,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 0.0,
+          "warm_change_percent_vs_lean": 0.0
+        },
+        "lean_dense_loop": {
+          "samples_ms": [
+            93.48354400572134,
+            92.08729999954812,
+            93.03556899976684,
+            91.27473500120686,
+            91.48977599397767,
+            92.25547399546485,
+            90.98555800301256,
+            92.74527999514248,
+            91.61788699566387,
+            92.2062539975741,
+            92.29037100158166,
+            92.12381100223865,
+            92.34505300264573,
+            92.96918700420065,
+            91.67183800309431
+          ],
+          "trace_and_lower_s": 1.2644631680013845,
+          "executable_compile_s": 1.3993139719968894,
+          "compile_s": 2.663777139998274,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 92.2062539975741,
+          "warm_q25_ms": 91.64486249937909,
+          "warm_q75_ms": 92.5451664988941,
+          "paired_median_ratio": 1.0063282385278547,
+          "time_decrease_percent": -0.9026652347185582,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 16.74898825163621,
+          "warm_change_percent_vs_lean": 0.6658528974515354
+        },
+        "lean_dense_loop2": {
+          "samples_ms": [
+            92.70795799966436,
+            92.26518200011924,
+            91.47794399905251,
+            91.47487799782539,
+            91.17873600189341,
+            92.75590800098144,
+            91.45669599820394,
+            94.3134339977405,
+            93.64978699886706,
+            91.80914299940923,
+            91.88385300512891,
+            92.19156699691666,
+            91.74512400204549,
+            92.65356899413746,
+            92.20601400011219
+          ],
+          "trace_and_lower_s": 1.341839415996219,
+          "executable_compile_s": 1.4319211280017043,
+          "compile_s": 2.7737605439979234,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 92.19156699691666,
+          "warm_q25_ms": 91.611534000549,
+          "warm_q75_ms": 92.68076349690091,
+          "paired_median_ratio": 1.009024026019523,
+          "time_decrease_percent": -0.8865930330360428,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 13.311677554350998,
+          "warm_change_percent_vs_lean": 0.6498184162359255
+        },
+        "lean_dense_loop4": {
+          "samples_ms": [
+            92.18275799503317,
+            91.56665099726524,
+            91.2967159965774,
+            90.70614400116028,
+            91.59830799762858,
+            92.0710600039456,
+            91.0634329993627,
+            90.88412900018739,
+            91.25946900167037,
+            91.89734800020233,
+            90.86526300234254,
+            91.01053499762202,
+            90.87886899942532,
+            93.4196080052061,
+            92.24677900056122
+          ],
+          "trace_and_lower_s": 1.494723032003094,
+          "executable_compile_s": 1.860713816000498,
+          "compile_s": 3.355436848003592,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.2967159965774,
+          "warm_q25_ms": 90.9473319989047,
+          "warm_q75_ms": 91.98420400207397,
+          "paired_median_ratio": 1.001798568648447,
+          "time_decrease_percent": 0.09265562969089647,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": -4.867448653839257,
+          "warm_change_percent_vs_lean": -0.32713201022493976
+        }
+      },
+      "all_outputs_bitwise_equal": true,
+      "device_allocator_stats_cumulative": {
+        "num_allocs": 1096,
+        "bytes_in_use": 535808,
+        "peak_bytes_in_use": 218504704,
+        "largest_alloc_size": 33554432,
+        "bytes_limit": 6410993664,
+        "bytes_reserved": 0,
+        "peak_bytes_reserved": 0,
+        "largest_free_block_bytes": 134217728,
+        "pool_bytes": 270532608,
+        "peak_pool_bytes": 270532608
+      },
+      "raw_report": "output/boozer_lean_compile_local64_20261023_run3/comparison.json"
+    },
+    {
+      "complete": true,
+      "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+      "jax": "0.11.2",
+      "particles": 64,
+      "horizon_s": 0.0002,
+      "saves": 101,
+      "repeats": 15,
+      "rtol": 1e-10,
+      "atol": 1e-10,
+      "timestep": 1.25e-07,
+      "energy_ev": 3520000.0,
+      "birth_s": 0.3,
+      "seed": 42,
+      "field_modes": 16,
+      "method": "dopri8",
+      "controller": "i",
+      "dense_output": "standard",
+      "selected_cases": [
+        "baseline",
+        "lean_carry",
+        "lean_dense_roots",
+        "lean_dense_loop"
+      ],
+      "persistent_compilation_cache": false,
+      "cache_directory": null,
+      "collisions": false,
+      "reverse_ad": false,
+      "particle_chunking": false,
+      "production_changes": false,
+      "field_cache": "/mnt/c/Users/eduar/Github_Codes/ESSOS-split-ad/examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz",
+      "field_cache_sha256": "c2109db7fd5db19a6aa1ddc91c90b788d61a84500dab0023b3587a05a2fef9cd",
+      "compiler_options": {
+        "xla_gpu_enable_command_buffer": "FUSION,WHILE,CONDITIONAL",
+        "xla_gpu_graph_min_graph_size": 1
+      },
+      "candidate_source_sha256": {
+        "baseline": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+        "lean_carry": "b375342512b7f13c02413591c10ab283203be612e640ee77df143a23c9c554b0",
+        "lean_dense_roots": "4fd458c7f9efd38eeee4486fef74965261a37b95a2cd203d85ac6d1c3d8cd371",
+        "lean_dense_loop": "27097c0c0edb165fa1eb8d5a825674034c823558c14ca88156bd93c44415f394"
+      },
+      "birth_sha256": "96487be6521a4d0d2433cb509f1501030355c37b218bee4baec6512078ef6ac0",
+      "source_sha256": {
+        "essos/boozer.py": "06fd5a88533377bf99baf5e59f33159514846944d8c4aa214acfb0a3a9ad9076",
+        "essos/rk_boozer_gpu_orbit.py": "944b42f3605422ff394eb1ffe1f983ba36d7bcf22dd041e0fba470796544cdf1",
+        "essos/rk_boozer_gpu_trial.py": "6331b9c9fce8e84875a807c6ea5e37e2e9e20a3cba7d6bd21a88c2a012717387",
+        "examples/benchmarks/benchmark_boozer_register_final.py": "525d1fef988d13a95584de020261337b3bf0e714c8a08edaf8b2cd10b847b764"
+      },
+      "timing_scope": "Blocked device-resident calls after compilation and three warmups; rotating start order and alternating forward/reverse order. Transfers, comparisons and profiles excluded.",
+      "compilation_timing_scope": "trace_and_lower_s includes JIT construction, tracing and lowering; executable_compile_s times lowered.compile(). Legacy compile_s is their total. These wall times are not guaranteed cold compilation.",
+      "memory_scope": "Compiled buffers per executable. Device allocator peaks are cumulative across selected cases, not per-case peak VRAM. No executed-spill or instruction-stall counters.",
+      "candidates": {
+        "lean_carry": "Smaller stage carry, followed by a repeated endpoint sum",
+        "lean_dense_loop": "Smaller stage carry with looped dense-output Horner recurrence",
+        "lean_dense_roots": "Smaller stage carry; looped Horner at loss roots, ordinary unrolled saves"
+      },
+      "rows": {
+        "baseline": {
+          "samples_ms": [
+            93.11460699973395,
+            91.5851450045011,
+            92.91033600311494,
+            90.51622999686515,
+            91.81768800044665,
+            91.21628799766768,
+            92.54399299970828,
+            91.56237199931638,
+            91.6407969998545,
+            92.83770200272556,
+            92.05401100189192,
+            91.53212799719768,
+            93.43007799907355,
+            91.23887999885483,
+            92.25598799821455
+          ],
+          "trace_and_lower_s": 1.6225153480045265,
+          "executable_compile_s": 2.1385013309991336,
+          "compile_s": 3.76101667900366,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.81768800044665,
+          "warm_q25_ms": 91.54724999825703,
+          "warm_q75_ms": 92.69084750121692,
+          "paired_median_ratio": 1.0,
+          "time_decrease_percent": 0.0,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": -18.943021508593038,
+          "warm_change_percent_vs_lean": 0.3848832829639104
+        },
+        "lean_carry": {
+          "samples_ms": [
+            91.46565199625911,
+            91.71303299808642,
+            92.79571200022474,
+            90.51514000020688,
+            91.19173100043554,
+            91.29749800194986,
+            91.19220200227574,
+            92.98121900064871,
+            90.86428699811222,
+            91.50028799922438,
+            91.8116579996422,
+            91.28945400152588,
+            92.52699199714698,
+            91.0593360022176,
+            91.7742290039314
+          ],
+          "trace_and_lower_s": 1.4900883559967042,
+          "executable_compile_s": 1.6719438770014676,
+          "compile_s": 3.162032232998172,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 91.46565199625911,
+          "warm_q25_ms": 91.19196650135564,
+          "warm_q75_ms": 91.7929435017868,
+          "paired_median_ratio": 0.9973487561036577,
+          "time_decrease_percent": 0.38340761116292255,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 0.0,
+          "warm_change_percent_vs_lean": 0.0
+        },
+        "lean_dense_roots": {
+          "samples_ms": [
+            93.19641999900341,
+            92.59802399901673,
+            92.93595399503829,
+            91.70555900345789,
+            92.10254999925382,
+            92.00035899993964,
+            90.502135004499,
+            91.65299999585841,
+            92.21767599956365,
+            91.7406669977936,
+            91.86380499886582,
+            92.62858199508628,
+            93.12428800330963,
+            91.60614600114059,
+            90.93097499862779
+          ],
+          "trace_and_lower_s": 1.3230808029984473,
+          "executable_compile_s": 1.480528330001107,
+          "compile_s": 2.8036091329995543,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 92.00035899993964,
+          "warm_q25_ms": 91.67927949965815,
+          "warm_q75_ms": 92.6133029970515,
+          "paired_median_ratio": 1.0009897952025828,
+          "time_decrease_percent": -0.19894968330296248,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 11.335213356088037,
+          "warm_change_percent_vs_lean": 0.5845986903393996
+        },
+        "lean_dense_loop": {
+          "samples_ms": [
+            92.46245100075612,
+            91.54194400616689,
+            93.02983899397077,
+            91.42954400158487,
+            93.16195599967614,
+            91.56777200405486,
+            92.40869100176496,
+            92.55859100085218,
+            92.18431299814256,
+            92.05759699398186,
+            92.48656799900346,
+            92.91599800053518,
+            92.32298300048569,
+            91.66886100138072,
+            91.84192500106292
+          ],
+          "trace_and_lower_s": 1.251726055998006,
+          "executable_compile_s": 1.343110200999945,
+          "compile_s": 2.594836256997951,
+          "compiled_buffer_components": {
+            "argument_size_in_bytes": 2560,
+            "output_size_in_bytes": 261168,
+            "temp_size_in_bytes": 1201208,
+            "alias_size_in_bytes": 0
+          },
+          "compiled_buffers_bytes": 1464936,
+          "bitwise_equal": true,
+          "counts": [
+            32716,
+            28082,
+            4634
+          ],
+          "counts_identical": true,
+          "lost": 1,
+          "failed": 0,
+          "finite": true,
+          "status_valid": true,
+          "max_relative_energy_error": 5.165119443262256e-10,
+          "max_saved_component_difference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "warm_median_ms": 92.32298300048569,
+          "warm_q25_ms": 91.75539300122182,
+          "warm_q75_ms": 92.52257949992782,
+          "paired_median_ratio": 1.0038533031117882,
+          "time_decrease_percent": -0.5503242469322212,
+          "orbit_launches": [
+            {
+              "device": "/device:GPU:0",
+              "name": "kernel",
+              "calls": 1,
+              "launch_metadata": {
+                "kernel_details": "regs:128 static_shared:0 dynamic_shared:0 grid:64,1,1 block:32,1,1 occ_pct:33.3333",
+                "theoretical_occupancy_pct": 33.333333333333336,
+                "hlo_module": "jit_run",
+                "hlo_op": "command_buffer_1"
+              },
+              "resources": {
+                "registers_per_thread": 128,
+                "static_shared_bytes": 0,
+                "dynamic_shared_bytes": 0,
+                "grid_blocks": [
+                  64,
+                  1,
+                  1
+                ],
+                "block_threads": [
+                  32,
+                  1,
+                  1
+                ],
+                "theoretical_occupancy_pct": 33.333333333333336
+              }
+            }
+          ],
+          "compile_decrease_percent_vs_lean": 17.937703799509276,
+          "warm_change_percent_vs_lean": 0.9373256359246795
+        }
+      },
+      "all_outputs_bitwise_equal": true,
+      "device_allocator_stats_cumulative": {
+        "num_allocs": 922,
+        "bytes_in_use": 487936,
+        "peak_bytes_in_use": 218504704,
+        "largest_alloc_size": 33554432,
+        "bytes_limit": 6410993664,
+        "bytes_reserved": 0,
+        "peak_bytes_reserved": 0,
+        "largest_free_block_bytes": 134217728,
+        "pool_bytes": 270532608,
+        "peak_pool_bytes": 270532608
+      },
+      "raw_report": "output/boozer_lean_compile_local64_20261023_run4/comparison.json"
+    }
+  ]
+}
