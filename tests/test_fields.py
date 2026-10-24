@@ -477,7 +477,7 @@ def test_asymmetric_surface_sparse_input_coefficients(tmp_path):
                         'ZBS(0,1)=.8, ZBS(-1,0)=-.1, ZBS(1,0)=.2, '
                         'RBS(-1,1)=.2, RBS(-1,0)=.4, RBS(1,0)=.5, '
                         'ZBC(0,0)=.1, ZBC(-1,0)=.2, ZBC(1,0)=.1 /')
-    surface = SurfaceRZFourier.from_input_file(filename, ntheta=5, nphi=7, close=False)
+    surface = SurfaceRZFourier.from_input_file(filename, ntheta=5, nphi=7, close=False, mpol=1, ntor=1)
     np.testing.assert_allclose(surface.rc, [3, .3, 0, 0, .7], atol=1e-14)
     np.testing.assert_allclose(surface.zs, [0, .3, 0, .8, 0], atol=1e-14)
     np.testing.assert_allclose(surface.rs, [0, .1, .2, 0, 0], atol=1e-14)
@@ -499,11 +499,11 @@ def test_asymmetric_surface_sparse_input_coefficients(tmp_path):
     assert (symmetric.nfp, symmetric.mpol, symmetric.ntor) == (1, 1, 0)
     filename.write_text('&INDATA RBC(0,0)=3 /')
     default = SurfaceRZFourier.from_input_file(filename)
-    assert (default.nfp, default.mpol, default.ntor) == (1, 5, 0)
-    np.testing.assert_array_equal(default.zs, np.zeros(6))
+    assert (default.nfp, default.mpol, default.ntor) == (1, 0, 0)
+    np.testing.assert_array_equal(default.zs, np.zeros(1))
     filename.write_text('&INDATA MPOL=0, NTOR=0 /')
-    with pytest.raises(ValueError, match='MPOL >= 1'):
-        SurfaceRZFourier.from_input_file(filename)
+    with pytest.raises(ValueError, match='mpol must be a non-negative integer'):
+        SurfaceRZFourier.from_input_file(filename, mpol=-1)
 
 
 @pytest.mark.parametrize('phase', [0.0, 0.37])
@@ -541,7 +541,7 @@ def test_surface_vmec_export_preserves_multimode_geometry(tmp_path, asymmetric):
     surface.to_vmec(filename)
     text = filename.read_text()
     assert f'LASYM = .{str(asymmetric).upper()}.' in text
-    assert 'MPOL = 3' in text and 'NTOR = 1' in text and 'RBC(1,1)' in text
+    assert 'MPOL = 4' in text and 'NTOR = 3' in text and 'RBC(1,1)' in text
     rebuilt = SurfaceRZFourier.from_input_file(filename, ntheta=8, nphi=9, close=False)
     for name in ('rc', 'zs', 'rs', 'zc'):
         value = getattr(surface, name)
