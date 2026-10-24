@@ -44,11 +44,71 @@ def test_angle_table_matches_the_mode_sum():
     table = BoozerField.from_booz(*args, bmns=0.5 * bmnc, angle_grid=(16, 16))
     assert BoozerField.from_booz(*args).table is None  # four modes: summed directly
     exact = BoozerField.from_booz(*args, bmns=0.5 * bmnc, angle_grid=None)
-    assert table.table.shape[1:3] == (21, 21)
+    assert table.table.shape[1:3] == (22, 21)
     points = np.random.default_rng(0).uniform(-7, 7, (3, 20))
     points[0] = np.abs(points[0]) / 7
     np.testing.assert_allclose(jax.vmap(table.modB_derivatives)(*points),
                                jax.vmap(exact.modB_derivatives)(*points), atol=1e-4 * B0)
+
+
+def test_angle_table_preserves_radial_polynomial_across_knots():
+    # Constant angles isolate the cubic radial spline.
+    r = np.array([.07, .135, .24, .37, .49, .61, .74, .88, .96])
+    s = r**2
+    polynomial = lambda x: np.pi + .23*x - .31*x**2 + .071*x**3
+    field = BoozerField.from_booz(
+        s, polynomial(r)[None, :], [0], [0], np.full_like(s, .43),
+        np.ones_like(s), np.zeros_like(s), 1., 2, angle_grid=(16, 16))
+    points = np.stack([r[1:-1]-1e-11, r[1:-1]+1e-11], axis=1)
+
+    def evaluate(x):
+        value, slope = field.modB_derivatives(x, .381, .197)[:2]
+        curvature = jax.grad(lambda t: field.modB_derivatives(t, .381, .197)[1])(x)
+        return jnp.array([value, slope, curvature])
+
+    actual = np.asarray(jax.jit(jax.vmap(jax.vmap(evaluate)))(jnp.asarray(points)))
+    expected = np.stack([polynomial(points), .23-.62*points+.213*points**2,
+                         -.62+.426*points], axis=-1)
+    for derivative, tolerance in enumerate([2e-12, 2e-11, 2e-10]):
+        np.testing.assert_allclose(actual[..., derivative], expected[..., derivative],
+                                   rtol=0, atol=tolerance)
+        # Remove the known smooth variation to measure each knot jump.
+        jump = np.diff(actual[..., derivative]-expected[..., derivative], axis=1)
+        np.testing.assert_allclose(jump, 0., rtol=0, atol=tolerance)
+
+
+def test_angle_table_orbit_conserves_analytic_energy_across_radial_knots():
+    from diffrax import Dopri8, ODETerm, PIDController, SaveAt, diffeqsolve
+
+    r = np.linspace(.08, .95, 49)
+    s, nfp = r**2, 2
+    bmnc = np.stack([1.7+.11*r**2, .06*r*(1+.13*r**2), .017*r, .008*r**2])
+    bmns = np.stack([np.zeros_like(r), .011*r, np.zeros_like(r), .003*r**2])
+    field = BoozerField.from_booz(
+        s, bmnc, [0, 1, 1, 2], [0, 0, nfp, nfp], np.full_like(s, .43),
+        np.ones_like(s), np.zeros_like(s), 1., nfp, bmns=bmns, angle_grid=(64, 64))
+    mu = .23
+    initial = jnp.array([.55*np.cos(.7), .55*np.sin(.7), .13, .9])
+    sol = diffeqsolve(
+        ODETerm(lambda t, y, args: guiding_center_rhs(field, y, mu, 1., 1.)),
+        Dopri8(), t0=0., t1=30., dt0=.01, y0=initial,
+        saveat=SaveAt(ts=jnp.linspace(0., 30., 1001)),
+        stepsize_controller=PIDController(rtol=1e-11, atol=1e-13), max_steps=10000)
+    y = np.asarray(sol.ys)
+    radius = np.hypot(y[:, 0], y[:, 1])
+    theta, zeta = np.arctan2(y[:, 1], y[:, 0]), y[:, 2]
+    assert np.count_nonzero(np.diff(np.searchsorted(r, radius))) >= 10
+    # Closed Fourier polynomial, independent of the table's value routine.
+    B = (1.7+.11*radius**2 + .06*radius*(1+.13*radius**2)*np.cos(theta)
+         + .017*radius*np.cos(theta-nfp*zeta) + .008*radius**2*np.cos(2*theta-nfp*zeta)
+         + .011*radius*np.sin(theta) + .003*radius**2*np.sin(2*theta-nfp*zeta))
+    analytic_energy = .5*y[:, 3]**2+mu*B
+    table_B = np.asarray(jax.vmap(field.modB)(jnp.asarray(radius**2),
+                                           jnp.asarray(theta), jnp.asarray(zeta)))
+    table_energy = .5*y[:, 3]**2+mu*table_B
+    # Check the independent analytic energy and continuity of the table energy.
+    errors = [np.max(np.abs(h/h[0]-1)) for h in (analytic_energy, table_energy)]
+    assert max(errors) < 1e-9, errors
 
 
 def test_vmec_flux_sign_sets_the_analytic_radial_drift():
