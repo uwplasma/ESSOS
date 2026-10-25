@@ -15,8 +15,6 @@ from jax import lax, tree_util
 from jax.interpreters import partial_eval
 import numpy as np
 
-from .rk_dense import DOPRI8_OUTPUT
-from .rk_dense_high import HIGHER_ORDER
 
 
 class RKStatus(IntEnum):
@@ -202,6 +200,19 @@ def _trial_step(rhs, t, y, h, args, f0, nodes, rows, error_weights):
     return _RKTrial(endpoint, error, increments, final)
 
 
+def _trial_unrolled(rhs, t, y, h, args, f0, nodes, rows, weights):
+    """Explicit component arithmetic exposes independent operations to XLA."""
+    increments = [tuple(h * value for value in f0)]
+    for node, row in zip(nodes, rows):
+        point = tuple(value + sum(a*k[i] for a,k in zip(row,increments) if a)
+                      for i,value in enumerate(y))
+        final = tuple(rhs(t+node*h, jnp.stack(point), args))
+        increments.append(tuple(h*value for value in final))
+    error = tuple(sum(a*k[i] for a,k in zip(weights,increments) if a) for i in range(len(y)))
+    return _RKTrial(jnp.stack(point), jnp.stack(error),
+                    jnp.stack(tuple(jnp.stack(k) for k in increments)), jnp.stack(final))
+
+
 def rk45_interpolate(y0, h, step, fraction):
     """Quartic dense output on an accepted step, for 0 <= fraction <= 1."""
     return _rk45_dense(y0, step.y, h * step.stages, fraction)
@@ -228,45 +239,6 @@ def _dopri8_dense(y0, y1, k, fraction):
     coefficients = jnp.asarray(_DENSE8, dtype=y0.dtype)
     weights = jax.vmap(jnp.polyval, in_axes=(0, None))(coefficients, fraction) * fraction
     value = y0 + jnp.tensordot(weights, k, axes=1)
-    return jnp.where(fraction == 0, y0, jnp.where(fraction == 1, y1, value))
-
-
-def _dopri8_output_coefficients(increments):
-    """Prepare the optional save polynomial once, reusing the trial stages."""
-    return jnp.asarray(DOPRI8_OUTPUT, dtype=increments.dtype).T @ increments
-
-
-def _higher_order_output_coefficients(rhs, t, y, h, increments, args, method):
-    """Output-only RK stages: continuous order five (DP5) or seven (PD8).
-
-    The original increments are read-only. The added derivatives are never
-    used for the endpoint, embedded error, controller, or FSAL cache. A static
-    stage loop gives this map ordinary JAX forward/reverse derivatives. Keep
-    its storage local to the current step and reuse the polynomial for saves.
-    """
-    nodes, rows, output = HIGHER_ORDER[method]
-    original, extra = len(increments), len(nodes)
-    coefficients = np.zeros((extra, original + extra))
-    for i, row in enumerate(rows):
-        coefficients[i, :len(row)] = row
-    coefficients = jnp.asarray(coefficients, dtype=y.dtype)
-    nodes = jnp.asarray(nodes, dtype=y.dtype)
-    bank = jnp.pad(increments, ((0, extra), (0, 0)))
-
-    def stage(i, bank):
-        state = y + jnp.tensordot(coefficients[i], bank, axes=1)
-        increment = h * rhs(t + nodes[i]*h, state, args)
-        return lax.dynamic_update_index_in_dim(bank, increment, original+i, axis=0)
-
-    bank = lax.fori_loop(0, extra, stage, bank)
-    return jnp.asarray(output, dtype=y.dtype).T @ bank
-
-
-def _polynomial_dense(y0, y1, coefficients, fraction):
-    value = coefficients[0]
-    for coefficient in coefficients[1:]:
-        value = coefficient + fraction * value
-    value = y0 + fraction * value
     return jnp.where(fraction == 0, y0, jnp.where(fraction == 1, y1, value))
 
 
@@ -312,7 +284,7 @@ def _first_hit(hits):
 def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                rtol=1e-9, atol=1e-9, event=None, root_find=True,
                max_steps=1_000_000, dtmin=0., dtmax=np.inf, record_steps=False, method="dopri5",
-               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, dense_output="standard"):
+               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, stage_execution="unrolled"):
     """Integrate an array state forward in time with bounded adaptive retries.
 
     ``ts`` is an ordered save grid, independent of the integration steps.
@@ -349,20 +321,10 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
 
     ``method`` selects ``"dopri5"`` or ``"dopri8"``. The convenience entry points
     ``solve_rk45`` and ``solve_dopri8`` fix this choice.
-    ``dense_output="optimized"`` selects a coefficient-only Dopri8 save
-    polynomial with smaller order-six/seven B-series error norm. It reuses all
-    stages and prepares six coefficient vectors once per trial. RK endpoints,
-    acceptance and event-root interpolation are unaffected. Formal dense order
-    remains five; error reduction is problem-dependent. Dopri5 keeps its
-    standard quartic for either setting.
-    ``dense_output="higher_order"`` adds two output-only RHS evaluations for
-    Dopri5 (continuous order five) or three for Dopri8 (continuous order seven).
-    They run once per accepted step containing an interior save, and share
-    their polynomial across all saves in that step. Events retain the standard
-    interpolant. A non-finite output evaluation returns NONFINITE without
-    retrying or changing the accepted orbit step. These maps support ordinary
-    AD; the adaptive driver still has no reverse-mode replay rule.
     """
+    if stage_execution not in ("loop", "unrolled"):
+        raise ValueError("stage_execution must be 'loop' or 'unrolled'")
+    trial_step = _trial_step if stage_execution == "loop" else _trial_unrolled
     if method == "dopri5":
         nodes, rows, weights, dense, error_order = _C, _A, _ERROR, _rk45_dense, 5
     elif method == "dopri8":
@@ -371,8 +333,6 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         raise ValueError("method must be 'dopri5' or 'dopri8'")
     if controller not in ("i", "pi"):
         raise ValueError("controller must be 'i' or 'pi'")
-    if dense_output not in ("standard", "optimized", "higher_order"):
-        raise ValueError("dense_output must be 'standard', 'optimized' or 'higher_order'")
     if controller == "pi":
         for value, name, positive in ((pcoeff, "pcoeff", False), (icoeff, "icoeff", True)):
             if jnp.asarray(value).ndim != 0:
@@ -383,7 +343,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         return dense(y, trial.y, trial.increments, fraction)
     if isinstance(max_steps, (bool, np.bool_)) or not isinstance(max_steps, (int, np.integer)) or max_steps <= 0:
         raise ValueError("max_steps must be a positive integer")
-    y0 = jnp.asarray(y0, dtype=jnp.result_type(y0, float))
+    y0 = jnp.asarray(y0)
+    y0 = y0.astype(jnp.result_type(y0, float))
     if y0.ndim != 1 or not y0.size:
         raise ValueError("y0 must be a nonempty one-dimensional array")
     if not jnp.issubdtype(y0.dtype, jnp.floating):
@@ -474,7 +435,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             # leave a tiny remainder even when the interval is exactly N*h0.
             end_t = jnp.minimum(t0 + (s["accepted"] + 1) * jnp.minimum(h0, dtmax), t1)
             h = end_t - t
-        trial = _trial_step(rhs, t, y, h, args, s["f"], nodes, rows, weights)
+        trial = trial_step(rhs, t, y, h, args, s["f"], nodes, rows, weights)
         finite = (jnp.isfinite(trial.y).all() & jnp.isfinite(trial.increments).all() &
                   jnp.isfinite(trial.f1).all() & jnp.isfinite(trial.error).all())
         if adaptive:
@@ -553,38 +514,11 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             updated["history"] = lax.cond(accept, lambda history: history.at[updated["accepted"]].set(stop_t),
                                           lambda history: history, s["history"])
         if len(ts):
-            output_finite = jnp.asarray(True)
-            if dense_output == "higher_order":
-                degree = 5 if method == "dopri5" else 7
-                next_save = ts[jnp.minimum(s["index"], len(ts)-1)]
-                needed = (accept & (s["index"] < len(ts)) & (next_save > t) &
-                          (next_save < end_t) & (next_save <= stop_t))
-                def prepare_output(carry):
-                    coefficients = _higher_order_output_coefficients(
-                        rhs, t, y, h, trial.increments, args, method)
-                    return (jnp.asarray(False), coefficients, jnp.all(jnp.isfinite(coefficients)))
-                # A single-iteration while skips output work under vmap when
-                # no particle needs it. vmap(cond) evaluates both branches.
-                _, coefficients, output_finite = lax.while_loop(lambda carry: carry[0], prepare_output,
-                    (needed, jnp.zeros((degree,) + y.shape, dtype=y.dtype), output_finite))
-                updated["status"] = jnp.where(output_finite, updated["status"], RKStatus.NONFINITE)
-                def save_value(fraction):
-                    return _polynomial_dense(y, trial.y, coefficients, fraction)
-            elif dense_output == "optimized" and method == "dopri8":
-                coefficients = _dopri8_output_coefficients(trial.increments)
-                def save_value(fraction):
-                    return _polynomial_dense(y, trial.y, coefficients, fraction)
-            else:
-                def save_value(fraction):
-                    return interpolate(y, h, trial, fraction)
             def save(s):
                 i = s["index"]
-                value = save_value((ts[i] - t) / h)
-                if dense_output == "higher_order":
-                    # The event terminal state belongs to the event interpolant.
-                    value = jnp.where(has_event & (ts[i] == stop_t), stop_y, value)
+                value = interpolate(y, h, trial, (ts[i] - t) / h)
                 return dict(s, ys=s["ys"].at[i].set(value), saved_ts=s["saved_ts"].at[i].set(ts[i]), index=i + 1)
-            updated = lax.while_loop(lambda s: accept & output_finite & (s["index"] < len(ts)) &
+            updated = lax.while_loop(lambda s: accept & (s["index"] < len(ts)) &
                                      (ts[jnp.minimum(s["index"], len(ts) - 1)] <= stop_t), save, updated)
         return updated
 

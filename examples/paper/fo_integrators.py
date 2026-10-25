@@ -39,20 +39,16 @@ fig, ax = plt.subplots(figsize=(9, 6))
 # Adaptive Runge-Kutta solvers: for each solver, sweep the integration tolerance
 # and record (computation time, energy error). Tighter tolerance -> smaller error
 # but longer runtime, which traces out each curve in the time-vs-error plot.
-adaptive_solvers = [('Tsit5', {'solver': diffrax.Tsit5()}),
-                    ('Dopri5', {'solver': diffrax.Dopri5()}),
-                    ('Dopri8', {'solver': diffrax.Dopri8()}),
-                    ('ESSOS RK45', {'integrator': 'essos_rk45'}),
-                    ('ESSOS Dopri8', {'integrator': 'essos_dopri8'})]
-for method_name, options in adaptive_solvers:
+adaptive_solvers = [('Tsit5', diffrax.Tsit5), ('Dopri5', diffrax.Dopri5), ('Dopri8', diffrax.Dopri8)]
+for method_name, solver_class in adaptive_solvers:
     energies = []
     tracing_times = []
     for trace_tolerance in [1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15]:
         time0 = time()
-        tracing = Tracing(field=field, model='FullOrbitAdaptative', particles=particles,
+        tracing = Tracing(field=field, model='FullOrbit', particles=particles,
                           maxtime=tmax, timestep=1e-9,
                           atol=trace_tolerance, rtol=trace_tolerance,
-                          **options)
+                          solver=solver_class())
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
 

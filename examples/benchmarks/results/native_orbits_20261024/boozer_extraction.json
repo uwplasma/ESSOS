@@ -1,0 +1,54 @@
+{
+  "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "jax": "0.11.2",
+  "particles": 64,
+  "horizon_s": 0.0002,
+  "rtol": 1e-10,
+  "atol": 1e-10,
+  "scope": "Paired extraction check against the full-work archive; only import/result adapters changed to load the archived kernel",
+  "rows": {
+    "archived_lean": {
+      "compile_s": 2.9498038960000486,
+      "buffers_bytes": 266464,
+      "samples_ms": [
+        80.2269020005042,
+        79.8580230002699,
+        79.97355800034711,
+        79.9759230003474,
+        79.57584599989787,
+        79.69202299955214,
+        79.88978199955454,
+        80.07237299989356,
+        79.94427400080895
+      ],
+      "warm_ms": 79.94427400080895,
+      "counts": [
+        32716,
+        28082,
+        4634
+      ]
+    },
+    "extracted": {
+      "compile_s": 2.898541196000224,
+      "buffers_bytes": 266464,
+      "samples_ms": [
+        80.10998299960193,
+        79.97500200053764,
+        80.01844200043706,
+        79.59971199943539,
+        79.73620599932474,
+        80.23736100039969,
+        80.13731400023971,
+        79.78326299962646,
+        80.50056100000802
+      ],
+      "warm_ms": 80.01844200043706,
+      "counts": [
+        32716,
+        28082,
+        4634
+      ]
+    }
+  },
+  "all_leaves_equal": true
+}
