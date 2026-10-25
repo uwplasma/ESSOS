@@ -304,7 +304,7 @@ def main():
         "examples/benchmarks/validate_beam_relaxation.py", "examples/benchmarks/thermal_relaxation_reference.py",
         "examples/benchmarks/validate_collision_physics.py", "essos/split.py",
         "essos/background_species.py",
-        "essos/coulomb.py", "examples/benchmarks/nonrelativistic_collision_reference.py")}
+        "examples/benchmarks/nonrelativistic_collision_reference.py")}
     report["interpretation"] = "CDF and moment screens test statistical consistency, not a numerical-accuracy bound; compare both caps and report achieved uncertainty."
     report["complete"] = True
     save()

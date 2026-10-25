@@ -1,4 +1,5 @@
 {
+  "source_layout_change": "After these measurements, the unchanged Coulomb helpers moved from essos/coulomb.py into essos/background_species.py. Original measurement hashes are preserved; timings were not rerun for this organizational change.",
   "scope": "64 particles; fresh process per case; blocked warm calls; default GPU backend; no AD or chunking",
   "fixed": "Identical orbit/collision timestep within each row; 224 GC or 1792 Lorentz intervals, eight saves",
   "adaptive": "Native orbit I control, collision conservative; both adaptive; no adaptive reference SDE",

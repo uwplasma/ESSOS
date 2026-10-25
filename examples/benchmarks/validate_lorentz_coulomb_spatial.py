@@ -160,7 +160,7 @@ def main():
     report["source_sha256"] = {name: hashlib.sha256((root/name).read_bytes()).hexdigest() for name in (
         "examples/benchmarks/validate_lorentz_coulomb_spatial.py", "examples/benchmarks/lorentz_spatial_reference.py",
         "examples/benchmarks/thermal_relaxation_reference.py", "essos/split.py", "essos/background_species.py",
-        "essos/coulomb.py", "examples/benchmarks/nonrelativistic_collision_reference.py",
+        "examples/benchmarks/nonrelativistic_collision_reference.py",
         "examples/benchmarks/validate_beam_relaxation.py")}
     report["complete"] = True
     save()

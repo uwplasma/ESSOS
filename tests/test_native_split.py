@@ -162,7 +162,7 @@ def test_controller_lookahead_retains_probes_and_respects_boundaries():
 
 
 def test_impact_cutoffs_screening_and_vacuum_are_explicit():
-    from essos.coulomb import debye_inverse_squared, impact_parameters, impact_coulomb_logarithm
+    from essos.background_species import debye_inverse_squared, impact_parameters, impact_coulomb_logarithm
     for ma, qa, mb, qb in ((M, Q, M, Q), (4*M, 2*Q, 12*M, 6*Q)):
         v = 1e5; reduced = ma*mb/(ma+mb)
         bmin, bmax = impact_parameters(ma, qa, mb, qb, v, 0., 1e-4)

@@ -6,6 +6,10 @@ controller and interpolation experiments are excluded. Original measurements
 remain identifiable by their source hashes and original-file hashes. No AD
 benchmark or reverse rule belongs to this PR.
 
+Impact-parameter Coulomb helpers now live in `essos/background_species.py`.
+Archived source hashes retain the earlier `essos/coulomb.py` filename because
+those measurements predate this move; the helper formulas are unchanged.
+
 ## Fixed forward timing and memory
 
 64 alpha particles, 4 keV, seed 42, eight saves, RTX 5060 Laptop GPU,

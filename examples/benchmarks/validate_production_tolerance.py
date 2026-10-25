@@ -116,7 +116,7 @@ def main():
         plot_reference=dict(times=grid.tolist(), cdf=reference.cdf(grid).tolist(),
             histogram_edges=edges.tolist()), rows=[])
     root = Path(__file__).resolve().parents[2]
-    names = ("essos/split.py", "essos/coulomb.py", "essos/background_species.py",
+    names = ("essos/split.py", "essos/background_species.py",
         "examples/benchmarks/validate_production_tolerance.py", "examples/benchmarks/validate_collisional_slowing_down.py",
         "examples/benchmarks/nonrelativistic_collision_reference.py")
     report["source_sha256"] = {name: hashlib.sha256((root/name).read_bytes()).hexdigest() for name in names}
