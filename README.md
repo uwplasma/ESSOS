@@ -311,6 +311,9 @@ variants select adaptive steps. The default remains Diffrax. Native defaults
 are I control and `rtol=atol=1e-9`; PI is available with
 `native_controller="pi"`, `native_pcoeff=.4`, `native_icoeff=.3`.
 
+All native stepping, GPU execution and private field adapters live in
+[`essos/rk.py`](essos/rk.py).
+
 Both native methods share the same stepping driver, FSAL reuse, standard
 dense output, bounded retries and root-found stopping events. Their standard
 interpolants match the corresponding Diffrax methods. Saves do not constrain
@@ -324,7 +327,7 @@ Boozer uses flux-radius, toroidal-radian and birth-speed blocks. These are
 local normalized estimates, **not global trajectory-error guarantees**.
 `native_error_control="standard"` selects the usual componentwise RMS budget.
 
-`essos.native_orbit.prepare_solver(..., execution="cuda")` exposes the
+`essos.rk.prepare_solver(..., execution="cuda")` exposes the
 independent GPU loops for fixed-field Biot–Savart GC/Lorentz and VMEC GC;
 it returns a scalar solver for `jax.jit(jax.vmap(solve))`. Cartesian states
 are `(x,y,z,vpar)` or `(x,y,z,vx,vy,vz)`; VMEC uses ESSOS's existing
@@ -392,6 +395,9 @@ predates this extraction. A paired 64-particle, 0.2 ms check of the extracted
 kernel against the archived lean implementation was bitwise equal across all
 results, with identical buffers and 79.94/80.02 ms warm times
 ([record](examples/benchmarks/results/native_orbits_20261024/boozer_extraction.json)).
+Consolidation into one module also preserved bitwise-identical results and
+identical compiler buffers in paired 64-particle coil GC/Lorentz, VMEC and
+Boozer checks ([record](examples/benchmarks/results/native_orbits_20261024/consolidation.json)).
 The full A100 workload has not been rerun after extraction. RK4 has no
 embedded tolerance controller and checks loss at endpoints; native methods
 refine the LCFS crossing. The differing loss counts are not an accuracy proof.

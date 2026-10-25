@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 from netCDF4 import Dataset
 from essos.boozer import BoozerField, _start, _advance, psi0_from_vmec
-from essos.native_boozer import _native_orbits
+from essos.rk import _boozer_batch as _native_orbits
 from essos.constants import ALPHA_PARTICLE_MASS as MASS, ALPHA_PARTICLE_CHARGE as CHARGE, ONE_EV
 from essos.rk import RKStatus
 
@@ -164,7 +164,7 @@ def main(argv=None):
         solve=None
         if execution=='cuda':
             if options.controller!='i': parser.error('CUDA execution requires I control')
-            from essos.rk_boozer_gpu_orbit import prepare_orbit_solver
+            from essos.rk import _prepare_boozer_gpu as prepare_orbit_solver
             solve=prepare_orbit_solver(field,MASS,CHARGE,speed,np.asarray(times),options.timestep,
                                       options.rtol,options.atol,options.max_steps,method=method)
         function=lambda y,m:_native_orbits(field,y,m,MASS,CHARGE,speed,times,options.timestep,

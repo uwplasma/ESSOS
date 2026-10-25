@@ -901,7 +901,7 @@ class Tracing():
                  orbit_length_scale=1., orbit_speed_scale=None,
                  native_controller="i", native_pcoeff=.4, native_icoeff=.3):
 
-        from essos.native_orbit import configure
+        from essos.rk import _configure_tracing as configure
         configure(self, integrator, model, solver, native_error_control, orbit_length_scale,
                   orbit_speed_scale, native_controller, native_pcoeff, native_icoeff)
 
@@ -1244,7 +1244,7 @@ class Tracing():
     def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False, *, exterior=False, flag=False):
         """Integrate to maxtime, saving at self.times (clipped to t0) and at the end."""
         if self.integrator != "diffrax":
-            from essos.native_orbit import solve_trace
+            from essos.rk import _solve_tracing as solve_trace
             return solve_trace(self, terms, controller, t0, y0, args, event, throw, exterior, flag)
         import warnings
         warnings.simplefilter("ignore", category=FutureWarning)  # see https://github.com/patrick-kidger/diffrax/issues/445

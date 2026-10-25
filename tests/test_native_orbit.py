@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from essos import rk
-from essos.orbit_error import OrbitErrorNorm
+from essos.rk import OrbitErrorNorm
 
 jax.config.update('jax_enable_x64', True)
 
@@ -162,7 +162,7 @@ def test_tracing_native_dispatch_matches_analytic_and_diffrax(model):
         with pytest.raises(ValueError):
             Tracing(**(opts|options))
     standard=Tracing(**opts,integrator='essos_rk45',native_error_control='standard')
-    from essos.native_orbit import error_norm
+    from essos.rk import _trace_error_norm as error_norm
     assert error_norm(standard) is None
     end=out._solve(*out._terms(None),0.,out.initial_conditions[0],out.args,diffrax.Event(lambda t,y,a:False),throw=True)
     assert end.result==diffrax.RESULTS.successful
@@ -175,7 +175,7 @@ def coil_field():
 
 
 def test_private_coil_field_and_rhs_match_public_equations():
-    from essos.rk_coils import geometry,field_values,rhs_values
+    from essos.rk import _coil_geometry as geometry, _coil_field_values as field_values, _coil_rhs_values as rhs_values
     from essos.dynamics import Particles,GuidingCenter,Lorentz
     from essos.electric_field import Electric_field_zero
     field=coil_field(); arrays,nc,nq=geometry(field); x=jnp.array([1.,.03,.01])
@@ -198,7 +198,7 @@ def tokamak():
 
 def test_boozer_public_native_outputs_and_failures(monkeypatch):
     from essos.boozer import trace_boozer
-    from essos.native_boozer import native_orbits
+    from essos.rk import trace_boozer_orbits as native_orbits
     field=tokamak()
     for method in ('essos_rk45','essos_dopri8'):
         out=trace_boozer(field,[.3],[.4],[0.],[.2],speed=1.,mass=1.,charge=1.,tmax=.01,
@@ -212,9 +212,9 @@ def test_boozer_public_native_outputs_and_failures(monkeypatch):
     assert np.isfinite(legacy.states).all() and legacy.step_stats is None
     for change in (dict(integrator='x'),dict(method='rk4'),dict(species=object()),dict(adaptive='yes'),dict(rtol=-1.),dict(atol=0.)):
         with pytest.raises(ValueError): trace_boozer(field,[.3],[.4],[0.],[.2],**(kwargs|change))
-    from essos import rk_boozer_gpu_orbit as module
-    original=module.prepare_orbit_solver
-    monkeypatch.setattr(module,'prepare_orbit_solver',lambda *a,**k:original(*a,**k,interpret=True))
+    from essos import rk as module
+    original=module._prepare_boozer_gpu
+    monkeypatch.setattr(module,'_prepare_boozer_gpu',lambda *a,**k:original(*a,**k,interpret=True))
     out=trace_boozer(field,[.3],[.4],[0.],[.2],**(kwargs|dict(native_execution='cuda',progress=lambda *a:None)))
     assert not out.failed.any()
     with pytest.raises(ValueError,match='I control'):
@@ -225,7 +225,7 @@ def test_boozer_public_native_outputs_and_failures(monkeypatch):
 
 def test_vmec_private_values_match_current_main():
     from essos.fields import Vmec
-    from essos.rk_vmec import prepare,quantities,rhs_values,xyz_values
+    from essos.rk import _prepare_vmec_data as prepare, _vmec_quantities as quantities, _vmec_rhs_values as rhs_values, _vmec_xyz_values as xyz_values
     from essos.dynamics import GuidingCenter,Particles,_axis_regular,_to_axis_regular
     from essos.electric_field import Electric_field_zero
     filename=Path(__file__).resolve().parents[1]/'examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc'
@@ -239,7 +239,7 @@ def test_vmec_private_values_match_current_main():
     np.testing.assert_allclose(rhs_values(prepared.arrays,y,prepared.tables,1.,1.,.5)[:5],
         _axis_regular(GuidingCenter)(0.,y[:5],(field,p,Electric_field_zero())),atol=3e-12)
     np.testing.assert_allclose(xyz_values(prepared.arrays,y,prepared.tables),field.to_xyz(x),atol=3e-12)
-    from essos.native_orbit import prepare_solver
+    from essos.rk import prepare_solver
     args=dict(mass=1.,charge=1.,energy=.5,times=np.array([0.,.001]),dt0=.001,max_steps=8)
     reference=jax.jit(prepare_solver(field,**args))(y[:5])
     gpu=jax.jit(prepare_solver(field,execution='cuda',interpret=True,**args))(y[:5])
@@ -265,8 +265,8 @@ def test_vmec_private_values_match_current_main():
 
 @pytest.mark.parametrize('method',['dopri5','dopri8'])
 def test_independent_gpu_loop_on_cpu(method):
-    from essos.rk_gpu import prepare_gpu_solver
-    from essos.rk_gpu_utils import _select_one
+    from essos.rk import _prepare_gpu_solver as prepare_gpu_solver
+    from essos.rk import _select_one
     def factory(refs,point,invariant):
         scalar=lambda y:_select_one(y,0,0).reshape(())
         return (lambda y:jnp.ones_like(y),lambda y,e,v:jnp.max(jnp.abs(e)),lambda y:.3-scalar(y))
@@ -294,7 +294,10 @@ def test_independent_gpu_loop_on_cpu(method):
 
 
 def test_rhs_preparation_and_gpu_helpers_preserve_values(monkeypatch):
-    from essos.rk_gpu_utils import _select_one,_kernel_is_finite,_bind_primitive
+    # Some supported JAX releases omit this deprecated facade export (CI).
+    from jax.interpreters import partial_eval as facade
+    monkeypatch.delattr(facade,'partial_eval_jaxpr_nounits',raising=False)
+    from essos.rk import _select_one, _kernel_is_finite, _bind_primitive
     for dtype in (jnp.float32,jnp.float64):
         values=jnp.array([1.,np.inf,np.nan,-np.inf,-0.],dtype=dtype)
         np.testing.assert_array_equal(_kernel_is_finite(values),jnp.isfinite(values))
@@ -309,23 +312,24 @@ def test_rhs_preparation_and_gpu_helpers_preserve_values(monkeypatch):
         return prepared(.2,jnp.array([2.,3.]),None).sum()
     np.testing.assert_allclose(jax.grad(value)(.3),5*np.cos(.3),atol=2e-14)
     with pytest.raises(TypeError): _kernel_is_finite(jnp.array([1],dtype=jnp.int32))
-    import essos.rk_gpu_utils as module
+    import essos.rk as module
+    from essos import boozer as boozer_module
     model=SimpleNamespace(modB_derivatives=lambda *a:(1.,0.,0.,0.))
     for f in (lambda field,y,*a:jnp.concatenate((y[:2],y[:2])),
               lambda field,y,*a:jnp.concatenate((jax.lax.dynamic_slice(y,(y[0].astype(jnp.int32),),(2,)),jnp.ones(2)))):
-        monkeypatch.setattr(module,'guiding_center_rhs',f)
+        monkeypatch.setattr(boozer_module,'guiding_center_rhs',f)
         with pytest.raises(ValueError,match='slice'):
             module._kernel_rhs(model,jnp.ones(4),.1,1.,1.)(jnp.ones(4))
 
 
 def test_fixed_field_adapter_solvers_on_cpu():
-    from essos.native_orbit import prepare_solver
-    from essos.rk_boozer_gpu_orbit import prepare_orbit_solver
-    from essos.native_boozer import _native_orbits
+    from essos.rk import prepare_solver
+    from essos.rk import _prepare_boozer_gpu as prepare_orbit_solver
+    from essos.rk import _boozer_batch as _native_orbits
     field=coil_field()
     args=dict(mass=1.,charge=1.,energy=.5,times=np.array([0.,.001]),dt0=.001,max_steps=8)
     with pytest.raises(ValueError): prepare_solver(UniformField(),execution='cuda',**args)
-    from essos.rk_coils import prepare_orbit_solver as coil_solver
+    from essos.rk import _prepare_coils_gpu as coil_solver
     with pytest.raises(ValueError): coil_solver(field,1.,1.,.5,1.,[0.,.001],.001,1e-9,1e-9,8,model='x',interpret=True)
     for model,y in (('gc',jnp.array([1.,.03,.01,.3])),
                     ('lorentz',jnp.array([1.,.03,.01,.2,.1,.3]))):

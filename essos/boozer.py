@@ -564,7 +564,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     y0, mu0, keys = args
     if integrator is not None:
         times = np.linspace(0., float(tmax), n_int + 1)
-        from essos.native_boozer import native_orbits
+        from essos.rk import trace_boozer_orbits as native_orbits
         result = native_orbits(field, y0, mu0, mass, charge, speed[0], jnp.asarray(times),
             float(timestep), rtol, atol, "dopri5" if integrator == "essos_rk45" else "dopri8",
             bool(adaptive), native_controller, native_pcoeff, native_icoeff, max_steps, execution=native_execution)

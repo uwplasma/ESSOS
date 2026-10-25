@@ -3,6 +3,7 @@
 These records belong to the forward-only native orbit PR. They contain no
 collision stepping, reverse AD, particle chunking or compaction. The private
 GPU adapters leave the public field classes intact.
+The implementation, including those adapters, lives in `essos/rk.py`.
 
 `forward.csv` and the eight per-workload JSON reports contain fresh local
 measurements on an RTX 5060 Laptop GPU/JAX 0.11.2. Each report compares identical
@@ -78,6 +79,10 @@ evidence. Those measurements predate extraction, and their full traces and
 peak-memory reports were not supplied. They are not a rerun of this PR.
 `boozer_extraction.json` is the paired, bitwise-equal 64-particle check against
 the archived lean implementation, including counts, buffers and nine samples.
+`consolidation.json` compares the subsequent single-module implementation
+against the saved nine-module version. All four 64-particle field/model
+cases produce bitwise-identical results and identical compiler buffers;
+five interleaved warm samples show essentially unchanged execution time.
 
 ## CI validation
 
@@ -85,6 +90,9 @@ the archived lean implementation, including counts, buffers and nine samples.
 output against Diffrax, analytic orbits, I/PI control, rejections, independent
 events, failure bounds, physical error budgets, field values/derivatives and
 the GPU loop through Pallas CPU interpretation. No GPU is required.
+The RHS preparation test also removes the legacy public JAX partial-evaluation
+export to reproduce the CI compatibility failure; the solver imports the
+helper from its defining module.
 `validation.json` records local line/branch coverage and source hashes.
 The coverage command uses `pytest-cov`, which GitHub Actions installs; the
 same tests run without coverage by omitting the `--cov` options.

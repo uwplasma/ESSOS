@@ -21,9 +21,9 @@ from essos.fields import BiotSavart, Vmec
 from essos.dynamics import Particles, GuidingCenter, Lorentz, _axis_regular, _to_axis_regular, _from_axis_regular
 from essos.electric_field import Electric_field_zero
 from essos.boozer import guiding_center_rhs
-from essos.native_orbit import prepare_solver
-from essos.native_boozer import _boozer_error_norm
-from essos.orbit_error import OrbitErrorNorm
+from essos.rk import prepare_solver
+from essos.rk import _boozer_error_norm
+from essos.rk import OrbitErrorNorm
 from essos.rk import solve_rk
 from .benchmark_native_boozer_alpha import PARAMETERS, setup, compiler_options, compiled_bytes
 
@@ -80,7 +80,7 @@ def functions(options,data,method,tolerance=None):
         norm=lambda y0,y1,e:original(y0,y1,e)*(options.rtol+options.atol)/(rtol+atol)
     if options.field=='boozer':
         if options.execution=='cuda' and tolerance is None:
-            from essos.rk_boozer_gpu_orbit import prepare_orbit_solver
+            from essos.rk import _prepare_boozer_gpu as prepare_orbit_solver
             solve=prepare_orbit_solver(field,M,Q,speed,times,dt,rtol,atol,options.max_steps,
                                        method=method,adaptive=adaptive)
         else:
