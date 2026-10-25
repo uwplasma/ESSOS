@@ -11,17 +11,15 @@ import json
 import os
 from pathlib import Path
 
-os.environ.setdefault("ESSOS_CPU_DEVICES", "1")
 os.environ.setdefault("ESSOS_PROGRESS", "0")
 os.environ.setdefault("ESSOS_XLA_CACHE", "")
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from essos.collisions import particle_collision_step
+from essos.split import particle_collision_step
 from essos.split import solve_split
 from .thermal_relaxation_reference import PhysicalRelaxationReference, RelaxationReference, impact_coefficients
 from .lorentz_spatial_reference import guiding_center_msd
@@ -161,7 +159,7 @@ def main():
     root = Path(__file__).resolve().parents[2]
     report["source_sha256"] = {name: hashlib.sha256((root/name).read_bytes()).hexdigest() for name in (
         "examples/benchmarks/validate_lorentz_coulomb_spatial.py", "examples/benchmarks/lorentz_spatial_reference.py",
-        "examples/benchmarks/thermal_relaxation_reference.py", "essos/collisions.py", "essos/split.py", "essos/background_species.py",
+        "examples/benchmarks/thermal_relaxation_reference.py", "essos/split.py", "essos/background_species.py",
         "essos/coulomb.py", "examples/benchmarks/nonrelativistic_collision_reference.py",
         "examples/benchmarks/validate_beam_relaxation.py")}
     report["complete"] = True

@@ -99,148 +99,6 @@ def test_tableau_matches_diffrax_and_preserves_derivatives(method):
     np.testing.assert_allclose(jax.jacfwd(step)(y), rotation, rtol=1e-11, atol=1e-11)
 
 
-@pytest.fixture(scope="module", params=[None, (24, 24)], ids=["Fourier", "angle_table"])
-def native_boozer_reference(request):
-    """Independent tight Diffrax integration of the same Boozer drift."""
-    import diffrax
-    grid = np.linspace(.005, .995, 50)
-    cosine = np.stack([np.full_like(grid, B0), -B0*EPS*np.sqrt(grid), .04*np.sqrt(grid), .02*grid])
-    sine = np.zeros_like(cosine)
-    sine[2:] = .3*cosine[2:]
-    field = BoozerField.from_booz(grid, cosine, [0, 1, 1, 2], [0, 0, 1, -2],
-        np.full_like(grid, IOTA), np.full_like(grid, G), .02*grid, PSI0, 1,
-        bmns=sine, angle_grid=request.param)
-    s, theta, zeta, pitch = map(jnp.asarray, ([.3, .1, 0.], [.7, -1., .2], [.2, -.3, .1], [.6, -.4, .2]))
-    r = jnp.sqrt(s)
-    y0 = jnp.stack([r*jnp.cos(theta), r*jnp.sin(theta), zeta, pitch*V0], axis=1)
-    mu = V0**2*(1-pitch**2)/(2*jax.vmap(field.modB)(s, theta, zeta))
-    times = jnp.linspace(0., 1e-5, 13)
-    def one(y, moment):
-        return diffrax.diffeqsolve(diffrax.ODETerm(
-            lambda t, y, args: guiding_center_rhs(field, y, moment, M, Q)),
-            diffrax.Dopri8(), t0=0., t1=times[-1], dt0=2e-8, y0=y,
-            saveat=diffrax.SaveAt(ts=times), stepsize_controller=diffrax.PIDController(
-                rtol=0., atol=1e-12*jnp.array([1., 1., 1., V0]))).ys
-    reference = np.asarray(jax.jit(jax.vmap(one))(y0, mu))
-    return field, (s, theta, zeta, pitch), reference
-
-
-def native_boozer_chart(states):
-    s, theta, zeta, vpar = np.moveaxis(states[..., :4], -1, 0)
-    return np.stack([np.sqrt(s)*np.cos(theta), np.sqrt(s)*np.sin(theta), zeta, vpar/V0], axis=-1)
-
-
-@pytest.mark.parametrize("integrator", ["essos_rk45", "essos_dopri8"])
-@pytest.mark.parametrize("adaptive,controller", [(False, "i"), (True, "i"), (True, "pi")])
-def test_native_boozer_orbits_match_independent_diffrax(native_boozer_reference, integrator, adaptive, controller):
-    field, births, reference = native_boozer_reference
-    out = trace_boozer(field, *births, speed=V0, mass=M, charge=Q,
-        tmax=1e-5, timestep=2e-8, n_save=13, integrator=integrator,
-        adaptive=adaptive, native_controller=controller, progress=False)
-    expected = reference/np.array([1., 1., 1., V0])
-    np.testing.assert_allclose(native_boozer_chart(out.states), expected, atol=3e-8, rtol=0.)
-    assert not out.failed.any() and not out.lost.any()
-    assert out.step_stats.shape == (3, 3) and np.all(out.solver_status == 0)
-    assert np.max(out.energy_error) < 3e-8
-    if not adaptive:
-        np.testing.assert_array_equal(out.step_stats[:, 1], 500)
-    # The orbit initially on the axis must leave it smoothly.
-    assert out.states[2, -1, 0] > 0
-
-
-@pytest.mark.parametrize("integrator", ["essos_rk45", "essos_dopri8"])
-def test_native_boozer_saves_do_not_change_steps_and_standard_is_default(integrator, monkeypatch):
-    import essos.boozer as boozer
-    import diffrax
-    def forbidden(*args, **kwargs):
-        raise AssertionError("native Boozer path called a legacy or Diffrax stepper")
-    monkeypatch.setattr(boozer, "_advance", forbidden)
-    monkeypatch.setattr(diffrax, "diffeqsolve", forbidden)
-    args = (tokamak(), [.3, .2], [.4, -.5], [.1, .2], [.6, -.4])
-    options = dict(speed=V0, mass=M, charge=Q, tmax=1e-5, timestep=1e-8,
-                   integrator=integrator, progress=False)
-    coarse = trace_boozer(*args, n_save=5, **options)
-    dense = trace_boozer(*args, n_save=29, native_dense_output="standard", **options)
-    np.testing.assert_array_equal(coarse.step_stats, dense.step_stats)
-    np.testing.assert_allclose(native_boozer_chart(coarse.states[:, -1:]),
-                               native_boozer_chart(dense.states[:, -1:]), atol=2e-11, rtol=0.)
-    explicit = trace_boozer(*args, n_save=5, native_dense_output="standard", **options)
-    np.testing.assert_array_equal(coarse.states, explicit.states)
-    calls = []
-    progressed = trace_boozer(*args, n_save=5, **(options | dict(
-        progress=lambda done, total: calls.append((done, total)), compact=False)))
-    np.testing.assert_array_equal(coarse.states, progressed.states)
-    assert calls == [(4, 4)]
-
-
-@pytest.mark.parametrize("integrator", ["essos_rk45", "essos_dopri8"])
-def test_native_boozer_uses_current_field_coefficients(integrator):
-    field = tokamak()
-    changed = eqx.tree_at(lambda f: f.b_coef, field, field.b_coef*1.03)
-    options = dict(speed=V0, mass=M, charge=Q, tmax=1e-5, timestep=1e-8,
-                   integrator=integrator, n_save=5, progress=False)
-    births = ([.3], [.4], [.1], [.6])
-    first, second, repeated = [trace_boozer(f, *births, **options) for f in (field, changed, field)]
-    assert np.max(np.abs(native_boozer_chart(first.states)-native_boozer_chart(second.states))) > 1e-5
-    np.testing.assert_array_equal(first.states, repeated.states)
-
-
-def test_native_boozer_error_budget_covers_each_block_without_dilution():
-    from essos.boozer import _boozer_error_norm
-    rtol, atol, speed = .1, .01, 10.
-    for error in ([.11, 0., 0., 0.], [0., 0., .11, 0.], [0., 0., 0., 1.1], [.11, 0., .11, 1.1]):
-        assert _boozer_error_norm(jnp.array(error), speed, rtol, atol) == pytest.approx(1.)
-    assert _boozer_error_norm(jnp.array([.11, .11, 0., 0.]), speed, rtol, atol) > 1.
-    assert _boozer_error_norm(jnp.array([0., 0., 0., 1.1]), 10., rtol, atol) == pytest.approx(
-        float(_boozer_error_norm(jnp.array([0., 0., 0., .11]), 1., rtol, atol)))
-
-
-@pytest.mark.parametrize("integrator", ["essos_rk45", "essos_dopri8"])
-@pytest.mark.parametrize("adaptive", [False, True])
-def test_native_boozer_lcfs_is_root_found_and_held(integrator, adaptive):
-    field = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
-    out = trace_boozer(field, [.999], [np.pi/2], [0.], [0.], speed=V0, mass=M, charge=Q,
-        tmax=1e-7, timestep=1e-7, n_save=7, integrator=integrator, adaptive=adaptive, progress=False)
-    assert out.lost[0] and not out.failed[0]
-    assert 0 < out.loss_times[0] < out.times[-1]
-    np.testing.assert_allclose(out.states[0, out.times >= out.loss_times[0], 0], 1., atol=2e-13, rtol=0.)
-    assert out.loss_fractions()[-1] == 1.
-
-
-@pytest.mark.parametrize("integrator", ["essos_rk45", "essos_dopri8"])
-def test_native_boozer_failure_is_not_reported_as_confined(integrator):
-    from essos.rk import RKStatus
-    singular = eqx.tree_at(lambda f: f.psi0, tokamak(), 0.)
-    out = trace_boozer(singular, [.3], [0.], [0.], [.2], speed=V0, mass=M, charge=Q,
-        tmax=1e-6, timestep=1e-7, n_save=3, adaptive=False, integrator=integrator, progress=False)
-    assert out.failed[0] and not out.lost[0] and out.failed_times[0] == 0.
-    assert out.solver_status[0] == RKStatus.NONFINITE
-    assert np.isfinite(out.states).all() and np.isinf(out.energy_error[0])
-    with pytest.raises(RuntimeError, match="trajectories fail"):
-        out.loss_fractions()
-    bounded = trace_boozer(tokamak(), [.3], [0.], [0.], [.2], speed=V0, mass=M, charge=Q,
-        tmax=1e-6, timestep=1e-8, n_save=3, adaptive=False, integrator=integrator, max_steps=1, progress=False)
-    assert bounded.failed[0] and bounded.solver_status[0] == RKStatus.MAX_STEPS
-    assert bounded.step_stats[0, 0] == 1 and np.isfinite(bounded.states).all()
-
-
-@pytest.mark.parametrize("options,match", [
-    (dict(integrator="unknown"), "integrator"),
-    (dict(method="rk4"), "omit"),
-    (dict(species=object()), "collisionless"),
-    (dict(adaptive="yes"), "adaptive"),
-    (dict(rtol=-1.), "rtol"),
-    (dict(atol=0.), "atol"),
-    (dict(native_controller="unknown"), "controller"),
-    (dict(native_dense_output="unknown"), "dense_output"),
-    (dict(max_steps=0), "max_steps"),
-])
-def test_native_boozer_invalid_options_raise(options, match):
-    with pytest.raises(ValueError, match=match):
-        trace_boozer(tokamak(), [.3], [0.], [0.], [.2], **(dict(speed=V0, mass=M, charge=Q,
-            tmax=1e-6, timestep=1e-8, n_save=3, integrator="essos_dopri8", progress=False) | options))
-
-
 def test_loss_fraction_accepts_finite_drift_and_rejects_failed_states():
     out = BoozerTrace(np.array([0.0, 1.0]), np.ones((2, 2, 5)),
                       np.array([0.5, -1.0]), np.full(2, -1.0), np.array([0.002, 0.0]))
@@ -268,7 +126,7 @@ def test_nonfinite_step_is_reported_as_failed_not_confined():
         legacy.loss_fractions()
 
 
-@pytest.mark.parametrize("method", ["rk4", "dopri5", "essos_rk45", "essos_dopri8"])
+@pytest.mark.parametrize("method", ["rk4", "dopri5"])
 def test_crossing_with_invalid_field_is_failed_not_lost(method):
     """A finite LCFS crossing cannot hide an invalid outside-field evaluation."""
     base = eqx.tree_at(lambda f: f.psi0, tokamak(), -PSI0)
@@ -288,13 +146,11 @@ def test_crossing_with_invalid_field_is_failed_not_lost(method):
             return self.base.profiles(s)
 
     args = ([0.999], [np.pi / 2], [0.0], [0.0])
-    native = method.startswith("essos_")
-    kw = dict(speed=V0, mass=M, charge=Q, tmax=1e-7, timestep=1e-7, n_save=2)
-    kw.update(dict(integrator=method, adaptive=False) if native else dict(method=method))
+    kw = dict(speed=V0, mass=M, charge=Q, tmax=1e-7, timestep=1e-7, n_save=2, method=method)
     assert trace_boozer(base, *args, **kw).lost[0]
     out = trace_boozer(BadOutside(base, -PSI0), *args, **kw)
     assert not out.lost[0] and out.failed[0]
-    assert out.failed_times[0] == pytest.approx(0. if native else 1e-7)
+    assert out.failed_times[0] == pytest.approx(1e-7)
     assert np.isfinite(out.states).all() and np.isinf(out.energy_error[0])
     with pytest.raises(RuntimeError, match="trajectories fail"):
         out.loss_fractions()

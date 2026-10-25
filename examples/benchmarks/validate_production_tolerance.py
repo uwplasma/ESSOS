@@ -1,39 +1,29 @@
-"""First-stopping tolerance comparison using the production Brownian memory.
+"""Source-free first stopping with production collision maps and Brownian memory.
 
-Reuse the original native benchmark wrapper unchanged: solve_split generates
-and retains every Wiener increment and passes it directly to the collision
-maps. Replay saved fixed/base-tolerance ensembles before reuse, then run only
-the tighter tolerance. No common-path sampler or paired-error claim is used.
+Fresh fixed/base/tight ensembles use the same cap and event resolution. Keys
+are repeatable; different adaptive meshes need not produce common paths.
+Reports retain CDF/histogram and moment summaries, not raw particle histories.
 """
 import argparse
-import csv
 import hashlib
 import json
-import os
 from pathlib import Path
-
-for name, value in (("JAX_PLATFORMS", "cpu"), ("ESSOS_CPU_DEVICES", "1"),
-        ("ESSOS_PROGRESS", "0"), ("ESSOS_XLA_CACHE", ""), ("MPLBACKEND", "Agg")):
-    os.environ.setdefault(name, value)
-
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-from essos.constants import PROTON_MASS, ELEMENTARY_CHARGE
 from .nonrelativistic_collision_reference import ProtonBackground, proton_first_passage, passage_statistics
 from .validate_collisional_slowing_down import native_solver
-from .validate_collision_physics import run_batches, work, spatial_statistics
+from .validate_collision_physics import run_batches, work
 from .validate_beam_relaxation import estimate
 
 
 def plot(report, reference, output):
     import matplotlib.pyplot as plt
     meta = report["metadata"]
-    grid = np.linspace(0., meta["horizon"], 1601)
+    grid = np.asarray(report["plot_reference"]["times"])
     cdf = reference.cdf(grid)
-    right = float(np.ceil(np.interp(.995, cdf, grid)))
-    edges = np.linspace(0., right, 46)
+    edges = np.asarray(report["plot_reference"]["histogram_edges"])
+    right = edges[-1]
     density = np.diff(reference.cdf(edges))/np.diff(edges)
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
     moments, moment_axes = plt.subplots(2, 2, figsize=(11, 7.5), constrained_layout=True)
@@ -42,20 +32,11 @@ def plot(report, reference, output):
     for i, model in enumerate(("gc", "lorentz")):
         rows = [row for row in report["rows"] if row["model"] == model]
         for j, row in enumerate(rows):
-            samples = np.asarray(row["times"])
-            if len(samples) != meta["particles"] or row["statistics"]["censored"]:
-                raise ValueError("plots require complete uncensored ensembles")
-            np.testing.assert_allclose([samples.mean(), samples.var(ddof=1)],
-                [row["mean"]["value"], row["variance"]["value"]], rtol=1e-12)
             color, style = f"C{j}", ("-", "--", "-.")[j]
-            axes[i, 0].step(np.r_[0., np.sort(samples)],
-                np.r_[0., np.arange(1, len(samples)+1)/len(samples)], where="post",
-                color=color, ls=style, label=labels[j].replace("\n", ", "))
-            hist = np.histogram(samples, bins=edges)[0]/(len(samples)*np.diff(edges))
-            axes[i, 1].stairs(hist, edges, color=color, ls=style,
-                label=labels[j].replace("\n", ", "))
-            row["plot"] = dict(histogram_density=hist.tolist(),
-                fraction_beyond_display=float(np.mean(samples > right)))
+            axes[i, 0].step(grid, row["empirical_cdf"], where="post", color=color,
+                ls=style, label=labels[j].replace("\n", ", "))
+            axes[i, 1].stairs(row["plot"]["histogram_density"], edges, color=color,
+                ls=style, label=labels[j].replace("\n", ", "))
             for k, name in enumerate(("mean", "variance")):
                 moment_axes[i, k].errorbar(j, row[name]["value"],
                     yerr=row[name]["half95"], fmt="o", color=color, capsize=5)
@@ -75,7 +56,7 @@ def plot(report, reference, output):
                 xticks=range(3), xticklabels=labels, xlim=(-.4, 2.4),
                 ylabel=r"$\tau\nu_0$" if k == 0 else r"$(\tau\nu_0)^2$")
             ax.grid(alpha=.2)
-    subtitle = (f"Production Brownian sampler; CPU; N={meta['particles']:,} per configuration; "
+    subtitle = (f"Production Brownian sampler; {meta.get('backend', 'unspecified')}; N={meta['particles']:,} per configuration; "
         f"ceiling {meta['cap']:g} unchanged")
     fig.suptitle("First slowing down: E=5T to first E<=2T; no source\n"+subtitle)
     moments.suptitle("First-stopping mean and variance; empirical 95% sampling intervals\n"+subtitle)
@@ -93,124 +74,81 @@ def plot(report, reference, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--particles", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--seed", type=int, default=3706)
+    parser.add_argument("--cap", type=float, default=.00078125)
+    parser.add_argument("--base-tolerance", type=float, default=.001)
     parser.add_argument("--tight-tolerance", type=float, default=.00025)
+    parser.add_argument("--horizon", type=float, default=40.)
+    parser.add_argument("--event-interval", type=float, default=1.220703125e-5)
     parser.add_argument("--plot-only", action="store_true")
     args = parser.parse_args()
-    if jax.default_backend() != "cpu":
-        parser.error("CPU only")
     p = ProtonBackground(coulomb_log_model="impact")
     reference = proton_first_passage(p, nodes=1536)
     if args.plot_only:
         report = json.loads(args.output.read_text())
-        if not report.get("complete"):
-            parser.error("plot-only requires a complete report")
+        if not report.get("complete"): parser.error("plot-only requires a complete report")
         plot(report, reference, args.output)
-        args.output.write_text(json.dumps(report, indent=2)+"\n")
         return
-    if args.output.exists():
-        parser.error("use a fresh output path")
-    baseline = json.loads(args.baseline.read_text())
-    old = baseline["metadata"]
-    if not baseline.get("complete") or old["coulomb_log_model"] != "impact":
-        parser.error("a complete production impact-model baseline is required")
-    if args.seed not in old["seeds"] or not 0 < args.tight_tolerance < old["tolerance"]:
-        parser.error("reuse an existing seed and choose a tighter positive tolerance")
-    n, batch = old["particles_per_seed"], old["batch_size"]
-    if not 2 <= n <= 2000 or n % batch:
-        parser.error("at most 2000 particles per configuration, preserving the original batch size")
-    root = Path(__file__).resolve().parents[2]
-    hashes = {}
-    for name, expected in baseline["source_sha256"].items():
-        hashes[name] = hashlib.sha256((root/name).read_bytes()).hexdigest()
-        if hashes[name] != expected:
-            raise ValueError(f"production baseline source changed: {name}")
-    own = "examples/benchmarks/validate_production_tolerance.py"
-    hashes[own] = hashlib.sha256((root/own).read_bytes()).hexdigest()
-    raw = reference.restricted_moments(old["horizon"])
-    np.testing.assert_allclose([raw[0], raw[1]-raw[0]**2],
-        [baseline["reference"]["restricted_mean"], baseline["reference"]["restricted_variance"]], rtol=1e-10)
-    metadata = dict(particles=n, batch_size=batch, seed=args.seed, backend=jax.default_backend(),
-        jax_version=jax.__version__, cap=old["cap"], initial_step=old["cap"],
-        horizon=old["horizon"], event_interval=old["event_interval"], save_times=old["save_times"],
-        base_tolerance=old["tolerance"], tight_tolerance=args.tight_tolerance,
+    n, batch = args.particles, args.batch_size
+    if not 2 <= n <= 2000 or not 2 <= batch <= n or n % batch:
+        parser.error("use 2..2000 particles and a dividing batch size >=2")
+    values = (args.cap, args.base_tolerance, args.tight_tolerance, args.horizon, args.event_interval)
+    if not all(np.isfinite(x) and x > 0 for x in values) or args.tight_tolerance >= args.base_tolerance:
+        parser.error("require positive finite parameters and tight tolerance < base tolerance")
+    if args.output.exists(): parser.error("use a fresh output path")
+    times = np.r_[np.linspace(0., min(10.370951771498717, args.horizon), 21), args.horizon]
+    times = np.unique(times)
+    grid = np.linspace(0., args.horizon, 201)
+    right = float(np.ceil(np.interp(.995, reference.cdf(grid), grid)))
+    edges = np.linspace(0., right, 46)
+    raw = reference.restricted_moments(args.horizon)
+    report = dict(complete=False, metadata=dict(particles=n, batch_size=batch, seed=args.seed,
+        backend=jax.default_backend(), jax_version=jax.__version__, cap=args.cap, horizon=args.horizon,
+        initial_step=args.cap, event_interval=args.event_interval, save_times=times.tolist(),
+        base_tolerance=args.base_tolerance, tight_tolerance=args.tight_tolerance,
         coulomb_log_model="impact", controller="conservative", orbit=False,
-        framework="Unchanged native_solver -> solve_split -> production brownian_propose/brownian_accept; direct driver dW, SI units",
-        noise_dimensions=dict(gc=5, lorentz=3),
-        scope="Collision-only first-passage diagnostic; original save anchors and event hooks retained; no custom Wiener process",
-        uncertainty="Empirical marginal 95% sampling intervals; same ordered keys across tolerances do not guarantee the same Wiener paths; no paired-error inference")
-    report = dict(complete=False, metadata=metadata, source_sha256=hashes,
-        baseline=dict(path=str(args.baseline), sha256=hashlib.sha256(args.baseline.read_bytes()).hexdigest()),
-        reference=dict(baseline["reference"]), replay_controls=[], rows=[])
+        framework="native_solver -> solve_split -> production retained Brownian memory; SI coefficients",
+        uncertainty="Independent particles; marginal 95% intervals; common seeds do not imply identical Wiener paths"),
+        reference=dict(restricted_mean=float(raw[0]), restricted_variance=float(raw[1]-raw[0]**2)),
+        plot_reference=dict(times=grid.tolist(), cdf=reference.cdf(grid).tolist(),
+            histogram_edges=edges.tolist()), rows=[])
+    root = Path(__file__).resolve().parents[2]
+    names = ("essos/split.py", "essos/coulomb.py", "essos/background_species.py",
+        "examples/benchmarks/validate_production_tolerance.py", "examples/benchmarks/validate_collisional_slowing_down.py",
+        "examples/benchmarks/nonrelativistic_collision_reference.py")
+    report["source_sha256"] = {name: hashlib.sha256((root/name).read_bytes()).hexdigest() for name in names}
     args.output.parent.mkdir(parents=True, exist_ok=True)
-
-    def save():
-        args.output.write_text(json.dumps(report, indent=2)+"\n")
-
-    save()
-    keys = jax.vmap(lambda i: jax.random.fold_in(jax.random.key(args.seed), i))(
-        jnp.arange(n)).reshape((-1, batch))
-    base_params = tuple(map(jnp.asarray, (old["tolerance"], old["cap"], old["cap"])))
+    save = lambda: args.output.write_text(json.dumps(report, indent=2)+"\n")
+    keys = jax.vmap(lambda i: jax.random.fold_in(jax.random.key(args.seed), i))(jnp.arange(n)).reshape((-1, batch))
     for model in ("gc", "lorentz"):
-        for method in ("fixed", "conservative"):
-            previous = next(row for row in baseline["rows"]
-                if (row["model"], row["method"], row["seed"]) == (model, method, args.seed))
-            print(f"Compiling production {model}/{method}; replaying {batch} baseline paths", flush=True)
-            fn = native_solver(model, "conservative", method != "fixed", p, old["horizon"], 2.,
-                spatial=model == "gc", times=old["save_times"], event_interval=old["event_interval"])
-            executable = fn.lower(keys[0], *base_params).compile()
-            checks = jax.device_get(jax.block_until_ready(executable(keys[0], *base_params)))
-            np.testing.assert_array_equal(checks.status, np.ones(batch, int))
-            np.testing.assert_allclose(checks.t, previous["times"][:batch], rtol=0., atol=2e-10)
-            if model == "gc":
-                rho = p.sigma*PROTON_MASS/ELEMENTARY_CHARGE
-                np.testing.assert_allclose(checks.y[:, 5]/rho**2,
-                    previous["spatial"]["integral_samples"][:batch], rtol=2e-9, atol=2e-9)
-                np.testing.assert_allclose(np.sum(checks.y[:, :2]**2, axis=1)/rho**2,
-                    previous["spatial"]["displacement2_samples"][:batch], rtol=2e-9, atol=2e-9)
-            report["replay_controls"].append(dict(model=model, method=method, paths=batch,
-                max_time_difference=float(np.max(abs(checks.t-np.asarray(previous["times"][:batch]))))))
-            row = dict(previous, tolerance=None if method == "fixed" else old["tolerance"], reused=True)
-            # Recompute the same CDF screen level for all six displayed rows.
-            row["statistics"] = passage_statistics(row["times"], row["hit"], reference, old["horizon"], alpha=.01/6)
-            report["rows"].append(row)
-            save()
-            print(f"Production baseline replay passed: {model}/{method}", flush=True)
-            if method == "fixed":
-                continue
-            params = tuple(map(jnp.asarray, (args.tight_tolerance, old["cap"], old["cap"])))
-            print(f"Running production {model}: N={n}, tolerance={args.tight_tolerance:g}, unchanged cap={old['cap']:g}", flush=True)
-            out, elapsed = run_batches(executable, [(key,) for key in keys], params)
-            if np.any(out.status != 1) or np.max(out.stats.max_accepted_error) > 1:
-                raise RuntimeError("incomplete first passage or invalid collision acceptance")
-            row = dict(model=model, method="conservative", seed=args.seed,
-                tolerance=args.tight_tolerance, reused=False, elapsed_seconds=elapsed,
-                **work(out), times=out.t.tolist(), hit=(out.status == 1).tolist(),
-                mean=estimate(out.t, float(raw[0])), variance=estimate(out.t, float(raw[1]-raw[0]**2), variance=True),
-                statistics=passage_statistics(out.t, out.status == 1, reference, old["horizon"], alpha=.01/6))
-            if model == "gc":
-                rho = p.sigma*PROTON_MASS/ELEMENTARY_CHARGE
-                row["spatial"] = spatial_statistics(out.y[:, 5]/rho**2,
-                    np.sum(out.y[:, :2]**2, axis=1)/rho**2, report["reference"]["spatial_mean"])
-            report["rows"].append(row)
-            save()
-            print(json.dumps({name: row[name] for name in ("model", "tolerance", "elapsed_seconds", "mean", "variance", "statistics")}), flush=True)
-    plot(report, reference, args.output)
-    table = [dict(model=r["model"], method=r["method"], tolerance=r["tolerance"],
-        particles=n, cap=old["cap"], mean=r["mean"]["value"], mean_half95=r["mean"]["half95"],
-        variance=r["variance"]["value"], variance_half95=r["variance"]["half95"],
-        accepted_mean=r["accepted_mean"], rejected_mean=r["rejected_mean"], reused=r["reused"]) for r in report["rows"]]
-    with args.output.with_suffix(".csv").open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(table[0]))
-        writer.writeheader()
-        writer.writerows(table)
-    report["complete"] = True
-    save()
-    print(json.dumps(dict(complete=True, production_sampler=True, configurations=len(table),
-        replayed_paths=sum(r["paths"] for r in report["replay_controls"]), new_ensembles=2)), flush=True)
+        for adaptive in (False, True):
+            function = native_solver(model, "conservative", adaptive, p, args.horizon, 2.,
+                spatial=model=="gc", times=times, event_interval=args.event_interval)
+            parameters = tuple(map(jnp.asarray, (args.base_tolerance, args.cap, args.cap)))
+            executable = function.lower(keys[0], *parameters).compile()
+            tolerances = (args.base_tolerance, args.tight_tolerance) if adaptive else (args.base_tolerance,)
+            for tolerance in tolerances:
+                print(f"Running {model}: adaptive={adaptive}, tolerance={tolerance:g}, N={n}", flush=True)
+                parameters = tuple(map(jnp.asarray, (tolerance, args.cap, args.cap)))
+                out, elapsed = run_batches(executable, [(key,) for key in keys], parameters)
+                if np.any(out.status != 1):
+                    raise RuntimeError("first-stopping plot requires complete uncensored trajectories; increase horizon")
+                if adaptive and np.max(out.stats.max_accepted_error) > 1:
+                    raise RuntimeError("accepted collision estimate exceeds one")
+                samples = np.asarray(out.t)
+                row = dict(model=model, method="conservative" if adaptive else "fixed",
+                    tolerance=tolerance if adaptive else None, elapsed_seconds=elapsed, **work(out),
+                    mean=estimate(samples,float(raw[0])), variance=estimate(samples,float(raw[1]-raw[0]**2),variance=True),
+                    statistics=passage_statistics(samples, out.status==1, reference, args.horizon, alpha=.01/6),
+                    empirical_cdf=(np.searchsorted(np.sort(samples),grid,side="right")/n).tolist(),
+                    plot=dict(histogram_density=(np.histogram(samples,edges)[0]/(n*np.diff(edges))).tolist(),
+                        fraction_beyond_display=float(np.mean(samples>right))))
+                report["rows"].append(row); save()
+    report["complete"] = True; save(); plot(report, reference, args.output)
+    print("Saved "+str(args.output), flush=True)
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()

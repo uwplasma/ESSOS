@@ -38,17 +38,15 @@ tmax = 1e-4
 # Two figures: energy error vs computation time, and energy error vs tolerance.
 fig, ax = plt.subplots(figsize=(9, 6))
 fig_tol, ax_tol = plt.subplots(figsize=(9, 6))
-markers = ["o-", "^-", "*-", "s-", "d-", "v-"]
+markers = ["o-", "^-", "*-", "s-"]
 # For each adaptive solver, sweep the integration tolerance and record both the
 # resulting energy error and the wall-clock time. Kvaerno5 is implicit; the
 # others are explicit Runge-Kutta methods.
-solvers = [('Tsit5', {'solver': diffrax.Tsit5()}),
-           ('Dopri5', {'solver': diffrax.Dopri5()}),
-           ('Dopri8', {'solver': diffrax.Dopri8()}),
-           ('Kvaerno5', {'solver': diffrax.Kvaerno5()}),
-           ('ESSOS RK45', {'integrator': 'essos_rk45'}),
-           ('ESSOS Dopri8', {'integrator': 'essos_dopri8'})]
-for (method, options), marker in zip(solvers, markers):
+solvers = [('Tsit5', diffrax.Tsit5),
+           ('Dopri5', diffrax.Dopri5),
+           ('Dopri8', diffrax.Dopri8),
+           ('Kvaerno5', diffrax.Kvaerno5)]
+for (method, solver_class), marker in zip(solvers, markers):
     energies = []
     tracing_times = []
     tolerances = [1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16]
@@ -57,7 +55,7 @@ for (method, options), marker in zip(solvers, markers):
         tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
                           maxtime=tmax, timestep=1e-7,
                           atol=tolerance, rtol=tolerance,
-                          **options)
+                          solver=solver_class())
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
 

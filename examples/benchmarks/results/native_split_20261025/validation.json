@@ -1,0 +1,50 @@
+{
+  "new_split_tests": 19,
+  "coverage": {
+    "essos/split.py": {
+      "added_executable_lines": 1015,
+      "covered_added_lines": 1015,
+      "covered_file_lines": 1015,
+      "executable_file_lines": 1015
+    },
+    "essos/coulomb.py": {
+      "added_executable_lines": 22,
+      "covered_added_lines": 22,
+      "covered_file_lines": 22,
+      "executable_file_lines": 22
+    },
+    "essos/background_species.py": {
+      "added_executable_lines": 16,
+      "covered_added_lines": 16,
+      "covered_file_lines": 111,
+      "executable_file_lines": 119
+    },
+    "essos/rk.py": {
+      "added_executable_lines": 12,
+      "covered_added_lines": 12,
+      "covered_file_lines": 905,
+      "executable_file_lines": 905
+    }
+  },
+  "tests": {
+    "split_only": "19 passed in 80.14 s",
+    "native_orbit_and_split": "38 passed in 153.43 s",
+    "existing_collision_regressions": "48 passed in 45.63 s",
+    "earlier_legacy_split_diagnostics": "96 passed in 156.88 s",
+    "final_nonzero_noise_field_map_parity": "1 passed in 19.13 s; private coil GC/Lorentz, VMEC and Boozer kicks/errors match the public maps"
+  },
+  "physics": "New 2000-particle production multirate run complete; archived accepted families compacted without rerunning",
+  "source_sha256": {
+    "essos/split.py": "40c36bc2fd4ed4f0edd9686dffd3bef8dbbc55fa048ba05dd9081b0166e4e5d6",
+    "essos/coulomb.py": "59c7e87974aed74af425d7a372611ce4b9a09d5b4998df51683bf7006bffaab5",
+    "essos/background_species.py": "d8e907fd5cc49b44b4aed70deb314d0c6539e067a81c63f0da69bc71e04e1835",
+    "essos/rk.py": "1bc21c226b317d7629842bdfbfeaafee1d862e5a5ddcd8558d6b32e3b3fd4649"
+  },
+  "preserved_full_work": [
+    "ESSOS-split-ad",
+    "ESSOS-split-ad-snapshot-20261024"
+  ],
+  "public_field_and_tracer_edits_vs_orbit_branch": false,
+  "local_full_collection": "416 tests collected, plus an import error in existing test_multiobjectives.py because optional optuna is absent. Full suite not run.",
+  "example_checks": "All retained parser/import checks pass; all accepted plots regenerate from compact reports; two-particle fresh first-stopping reproducer completes all six configurations; two-particle thermalization reproducer completes at the default horizon. Smoke ensembles are not statistical validation."
+}

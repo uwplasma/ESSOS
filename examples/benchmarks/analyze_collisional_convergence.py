@@ -22,5 +22,3 @@ def conditional_spatial_statistics(msd, integral):
     return dict(ratio=ratio.tolist(), mean=float(ratio.mean()),
         mean_se_under_null=float(1/np.sqrt(len(ratio))), ks_distance=float(ks.statistic),
         ks_pvalue=float(ks.pvalue), marginal_99_dkw_limit=float(np.sqrt(np.log(200)/(2*len(ratio)))))
-
-

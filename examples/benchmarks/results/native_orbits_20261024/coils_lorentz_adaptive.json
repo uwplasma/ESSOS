@@ -1,0 +1,67 @@
+{
+  "settings": {
+    "field": "coils",
+    "model": "lorentz",
+    "stepping": "adaptive",
+    "execution": "cuda",
+    "cases": [
+      "native_dopri8",
+      "diffrax_dopri8"
+    ],
+    "particles": 64,
+    "horizon": 2e-06,
+    "saves": 8,
+    "steps": 160,
+    "repeats": 3,
+    "seed": 42,
+    "energy_ev": 4000.0,
+    "rtol": 1e-09,
+    "atol": 1e-09,
+    "max_steps": 4096,
+    "mboz": 32,
+    "nboz": 32,
+    "mode_cut": 0.0001,
+    "wout": "/mnt/c/Users/eduar/Github_Codes/ESSOS-native-orbit/examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
+    "field_cache": null,
+    "output": "output/pr_forward_coils_lorentz_adaptive"
+  },
+  "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "jax": "0.11.2",
+  "collisions": false,
+  "reverse_ad": false,
+  "rows": {
+    "native_dopri8": {
+      "compile_s": 3.038762915999996,
+      "compiled_buffers_bytes": 73824,
+      "warm_ms": [
+        29.3354850000469,
+        29.678243000034854,
+        29.429009000068618
+      ],
+      "warm_median_ms": 29.429009000068618,
+      "accepted": 3804,
+      "rejected": 129,
+      "failed": 0,
+      "lost": 0,
+      "max_position_or_chart_error": 2.632901286956881e-09,
+      "max_velocity_error_over_birth_speed": 8.219843987050026e-08
+    },
+    "diffrax_dopri8": {
+      "compile_s": 5.398535368000012,
+      "compiled_buffers_bytes": 766880,
+      "warm_ms": [
+        69.6541850002177,
+        70.42585499993947,
+        71.12911600006555
+      ],
+      "warm_median_ms": 70.42585499993947,
+      "accepted": 3712,
+      "rejected": 236,
+      "failed": 0,
+      "lost": 0,
+      "max_position_or_chart_error": 2.5343430324903933e-09,
+      "max_velocity_error_over_birth_speed": 7.90099399946233e-08
+    }
+  },
+  "peak_scope": "cumulative across setup, compilation, all cases and reference; not a per-solver peak"
+}

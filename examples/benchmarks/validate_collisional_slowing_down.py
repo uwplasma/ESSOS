@@ -13,10 +13,8 @@ import os
 from pathlib import Path
 from time import perf_counter
 
-os.environ.setdefault("ESSOS_CPU_DEVICES", "1")
 os.environ.setdefault("ESSOS_PROGRESS", "0")
 os.environ.setdefault("ESSOS_XLA_CACHE", "")
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 import jax
@@ -24,7 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from essos.background_species import BackgroundSpecies
-from essos.collisions import (collision_coefficients, guiding_center_collision_step, particle_collision_step,
+from essos.split import (collision_coefficients, guiding_center_collision_step, particle_collision_step,
     guiding_center_spatial_diffusion, guiding_center_spatial_increment)
 from essos.constants import PROTON_MASS as M, ELEMENTARY_CHARGE as Q
 from essos.split import solve_split, SplitStatus
@@ -209,7 +207,7 @@ def main():
         raise RuntimeError(f"reference not sufficiently converged: {refinement}")
     raw = reference.restricted_moments(horizon)
     root = Path(__file__).resolve().parents[2]
-    sources = ("essos/collisions.py", "essos/split.py", "essos/collision_controller.py", "essos/collision_error.py",
+    sources = ("essos/split.py",
                "examples/benchmarks/nonrelativistic_collision_reference.py", "examples/benchmarks/validate_collisional_slowing_down.py")
     report = dict(complete=False, metadata=dict(paths=args.paths, controllers=args.controllers,
         horizon=horizon, nu0_per_second=physical.nu, initial_energy_over_T=5., threshold_energy_over_T=2.,

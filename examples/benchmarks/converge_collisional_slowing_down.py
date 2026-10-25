@@ -11,14 +11,14 @@ import json
 from pathlib import Path
 from time import perf_counter
 
-# Import this first to configure the CPU and plotting environment before JAX.
+# Share the production collision/Brownian wrapper; JAX selects the backend.
 from .validate_collisional_slowing_down import native_solver
 import jax
 import jax.numpy as jnp
 import numpy as np
 from scipy.stats import t as student_t, kstest, chi2
 
-from essos.collisions import (CollisionCoefficients, guiding_center_spatial_diffusion,
+from essos.split import (CollisionCoefficients, guiding_center_spatial_diffusion,
     guiding_center_spatial_increment)
 from essos.constants import PROTON_MASS as M, ELEMENTARY_CHARGE as Q
 from essos.split import SplitStatus
@@ -253,7 +253,7 @@ def main():
         raise RuntimeError(f"reference not converged: {checks}")
     raw = reference.restricted_moments(horizon)
     root = Path(__file__).resolve().parents[2]
-    sources = ["essos/"+s for s in ("collisions.py", "split.py", "collision_controller.py", "collision_error.py")]
+    sources = ["essos/split.py"]
     sources += ["examples/benchmarks/"+s for s in ("nonrelativistic_collision_reference.py", "spatial_collision_reference.py",
         "validate_collisional_slowing_down.py", "converge_collisional_slowing_down.py")]
     report = dict(complete=False, metadata=dict(paths=args.paths, batch_size=args.batch_size,

@@ -1,0 +1,193 @@
+{
+  "complete": true,
+  "metadata": {
+    "paths": 512,
+    "batch_size": 64,
+    "seed": 1706,
+    "timing_repeats": 3,
+    "controllers": [
+      "conservative",
+      "paper",
+      "candidate"
+    ],
+    "backend": "cpu",
+    "jax": "0.11.2",
+    "horizon": 10.370951771498717,
+    "nu0_per_second": 2587.6686243929857,
+    "sigma_m_per_second": 309496.90072670573,
+    "magnetic_field_tesla": 1.0,
+    "rho_sigma_m": 0.003231050125710394,
+    "initial_energy_over_T": 5.0,
+    "threshold_energy_over_T": 2.0,
+    "pitch": 0.6,
+    "save_times": [
+      0.0,
+      0.5185475885749359,
+      1.0370951771498718,
+      1.5556427657248078,
+      2.0741903542997435,
+      2.5927379428746793,
+      3.1112855314496155,
+      3.6298331200245513,
+      4.148380708599487,
+      4.666928297174423,
+      5.185475885749359,
+      5.704023474324295,
+      6.222571062899231,
+      6.741118651474166,
+      7.2596662400491025,
+      7.778213828624038,
+      8.296761417198974,
+      8.81530900577391,
+      9.333856594348847,
+      9.852404182923781,
+      10.370951771498717
+    ],
+    "uncertainty": "Independent particles; shared ordered keys across settings, not identical Brownian paths; exploratory marginal intervals, not simultaneous rankings",
+    "sampling": "Nested 32/128/512-particle prefixes and disjoint execution blocks; timing repeats reuse keys",
+    "spatial": "GC Eq. (36)/(69), uniform B along z; collision-only perpendicular displacement, frozen after thermal-band entry",
+    "lorentz": "Velocity-space slowing down only; no Lorentz orbit/spatial-transport claim",
+    "stepping": "Save times force common split boundaries; endpoint-detected crossings, no Brownian crossing correction; no source",
+    "settings": {
+      "tol_loose": [
+        0.01,
+        0.05
+      ],
+      "base": [
+        0.003,
+        0.05
+      ],
+      "tol_tight": [
+        0.001,
+        0.05
+      ],
+      "cap_mid": [
+        0.003,
+        0.0125
+      ],
+      "cap_fine": [
+        0.003,
+        0.003125
+      ],
+      "joint_fine": [
+        0.001,
+        0.003125
+      ]
+    },
+    "families": {
+      "tolerance": [
+        "tol_loose",
+        "base",
+        "tol_tight"
+      ],
+      "cap": [
+        "base",
+        "cap_mid",
+        "cap_fine"
+      ]
+    },
+    "source_sha256": {
+      "essos/collisions.py": "8baacb2f2b6deefcf7263adec4116310dfab485b8ae3047ba0083c49ac0c16ce",
+      "essos/split.py": "fb33a4f951fbd7281182e1b07e956b78fdbf545a0dd633b2f402aab7259eab66",
+      "essos/collision_controller.py": "0de89dd5aac34b6e0dc7291ed197a2efd7296ad0827787d73fe3cf67820b1dbf",
+      "essos/collision_error.py": "797a86922c6e289ab7019a663f079fc0b56ace1cd24165130a017ba0cfb3ac27",
+      "examples/benchmarks/nonrelativistic_collision_reference.py": "3071c27f1723ff80704a29c05dc8a0d63712bf131dd4b7f7d248e8668f8a96ba",
+      "examples/benchmarks/spatial_collision_reference.py": "c6cba5e33f766ffcc8d5c66277646d54d6e82ddfbcc3bc1dcca83cb1511390aa",
+      "examples/benchmarks/validate_collisional_slowing_down.py": "edf8df39eb8770713729c62265647aed7b16070d6aa08d1bde536bb27b27b1c0",
+      "examples/benchmarks/converge_collisional_slowing_down.py": "0f642b193d3c753129e2795bddf9d186391fc66e19612127cbf5064d3580e457"
+    }
+  },
+  "reference": {
+    "mean": 1.7284919619164527,
+    "variance": 2.281431078028462,
+    "restricted_mean": 1.7229518217533955,
+    "restricted_variance": 2.1598330671997785,
+    "cdf_at_horizon": 0.9975084204709296,
+    "refinement": {
+      "spatial_mesh_relative_max": 4.02407752325517e-05,
+      "spatial_upper_relative_max": 7.971904860914774e-13,
+      "passage_mean_mesh_relative": 2.473963147531233e-05,
+      "passage_cdf_mesh_max": 7.365161489159e-05,
+      "passage_cdf_upper_max": 4.580780199603396e-13,
+      "passage_mean_quadrature_relative": 9.547430053102879e-06
+    },
+    "spatial_msd": [
+      0.0,
+      1.3125126133060045,
+      2.3392412694594946,
+      3.0186153126380644,
+      3.467933468934115,
+      3.7714635582906046,
+      3.980887835199738,
+      4.1280434605804475,
+      4.233051680713692,
+      4.308970655665027,
+      4.3644773713240586,
+      4.405456262598553,
+      4.43596836221326,
+      4.458858896164175,
+      4.476147553422102,
+      4.489284548874899,
+      4.499321787426202,
+      4.507029163725218,
+      4.512974731928648,
+      4.517580681796705,
+      4.521162871391223
+    ]
+  },
+  "frozen_spatial": {
+    "paths": 512,
+    "h_seconds": 3.864482455648971e-06,
+    "field_tesla": 1.0,
+    "local_D_m2_per_second": 0.016888421645229752,
+    "component_variance_theory_m2": 1.3053001830318542e-07,
+    "component_mean": {
+      "mean": [
+        -1.2443500250077235e-05,
+        -1.6097242503565513e-05,
+        0.0
+      ],
+      "se": [
+        1.630998395748435e-05,
+        1.7024228479956846e-05,
+        0.0
+      ],
+      "half95": [
+        3.2042875378806344e-05,
+        3.344609246861096e-05,
+        0.0
+      ],
+      "interval95": [
+        [
+          -4.448637562888358e-05,
+          1.959937512872911e-05
+        ],
+        [
+          -4.954333497217647e-05,
+          1.7348849965045446e-05
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    "component_second_moment_ratio": [
+      1.0425862353953137,
+      1.1365919404778027,
+      0.0
+    ],
+    "component_cross_moment_ratio": -0.04164497402637284,
+    "parallel_max_abs_m": 0.0,
+    "paired_double_B_displacement_residual_m": 0.0,
+    "chi_square_1_ks_distance": 0.04340243170053004,
+    "chi_square_1_ks_pvalue": 0.28152269957019327
+  },
+  "archive": {
+    "original_file": "collisional_convergence_512_20261016.json",
+    "original_sha256": "d8802cc4431acca349de21cbc578117a12ff2263d25cd0900beb03a29e27ff54",
+    "scope": "Archived measurements, not rerun after forward extraction; per-particle samples removed; original source hashes retained"
+  },
+  "table": "controller_convergence.csv",
+  "scope": "All 42 model/controller/tolerance/cap summaries retained in CSV; raw particle/prefix/paired-contrast dumps excluded. Regenerate with converge_collisional_slowing_down."
+}

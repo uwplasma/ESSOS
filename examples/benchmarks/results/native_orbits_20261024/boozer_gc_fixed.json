@@ -1,0 +1,69 @@
+{
+  "settings": {
+    "field": "boozer",
+    "model": "gc",
+    "stepping": "fixed",
+    "execution": "cuda",
+    "cases": [
+      "native_dopri8",
+      "diffrax_dopri8"
+    ],
+    "particles": 64,
+    "horizon": 2e-05,
+    "saves": 8,
+    "steps": 160,
+    "repeats": 3,
+    "seed": 42,
+    "energy_ev": 4000.0,
+    "rtol": 1e-09,
+    "atol": 1e-09,
+    "max_steps": 4096,
+    "mboz": 32,
+    "nboz": 32,
+    "mode_cut": 0.0001,
+    "wout": "/mnt/c/Users/eduar/Github_Codes/ESSOS-native-orbit/examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
+    "field_cache": "../ESSOS-split-ad/examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz",
+    "output": "output/pr_forward_boozer_fixed"
+  },
+  "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "jax": "0.11.2",
+  "collisions": false,
+  "reverse_ad": false,
+  "rows": {
+    "native_dopri8": {
+      "compile_s": 1.4935438929996963,
+      "compiled_buffers_bytes": 27744,
+      "warm_ms": [
+        19.025698999939777,
+        18.149182999877667,
+        18.057693000628205
+      ],
+      "warm_median_ms": 18.149182999877667,
+      "accepted": 10240,
+      "rejected": 0,
+      "failed": 0,
+      "lost": 0,
+      "max_position_or_chart_error": 1.3243776562985046e-11,
+      "max_velocity_error_m_s": 2.2092426661401987e-06,
+      "max_velocity_error_over_birth_speed": 5.0301336757441465e-12
+    },
+    "diffrax_dopri8": {
+      "compile_s": 8.208284369000467,
+      "compiled_buffers_bytes": 161264,
+      "warm_ms": [
+        51.0322370000722,
+        49.81426599988481,
+        50.54813500009914
+      ],
+      "warm_median_ms": 50.54813500009914,
+      "accepted": 10240,
+      "rejected": 0,
+      "failed": 0,
+      "lost": 0,
+      "max_position_or_chart_error": 1.3243786771687229e-11,
+      "max_velocity_error_m_s": 2.2092426661401987e-06,
+      "max_velocity_error_over_birth_speed": 5.0301336757441465e-12
+    }
+  },
+  "peak_scope": "cumulative across setup, compilation, all cases and reference; not a per-solver peak"
+}

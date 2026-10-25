@@ -1,0 +1,32 @@
+{
+  "new_collected_tests": 19,
+  "execution": "CPU; Pallas interpretation, no GPU requirement",
+  "modules": {
+    "essos/rk.py": {
+      "covered_lines": 901,
+      "num_statements": 901,
+      "percent_covered": 99.55555555555556,
+      "percent_covered_display": "99",
+      "missing_lines": 0,
+      "excluded_lines": 0,
+      "percent_statements_covered": 100.0,
+      "percent_statements_covered_display": "100",
+      "num_branches": 224,
+      "num_partial_branches": 5,
+      "covered_branches": 219,
+      "missing_branches": 5,
+      "percent_branches_covered": 97.76785714285714,
+      "percent_branches_covered_display": "98"
+    }
+  },
+  "source_sha256": {
+    "essos/rk.py": "daece5364261f09cc85c9838ccd4172eac5dab72fa1579a2c6ecab518b257ff1"
+  },
+  "tests_sha256": {
+    "tests/test_native_orbit.py": "b1c608cdbbafa94989036cdfdcc3fd3d94894db4d48e5544c8753f6c007bcb34"
+  },
+  "base_main": "0870949e1fa27fc0f530623c0969209f7e333515",
+  "field_classes_equal_main": true,
+  "boozer_field_class_equal_main": true,
+  "compatibility_regression": "RHS preparation and parameter gradient with jax.interpreters.partial_eval.partial_eval_jaxpr_nounits removed"
+}

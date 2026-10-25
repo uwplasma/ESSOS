@@ -1,0 +1,105 @@
+{
+  "settings": {
+    "field": "boozer",
+    "model": "gc",
+    "stepping": "adaptive",
+    "execution": "cuda",
+    "cases": [
+      "native_dopri5",
+      "diffrax_dopri5",
+      "native_dopri8",
+      "diffrax_dopri8"
+    ],
+    "particles": 64,
+    "horizon": 2e-05,
+    "saves": 8,
+    "steps": 160,
+    "repeats": 3,
+    "seed": 42,
+    "energy_ev": 4000.0,
+    "rtol": 1e-09,
+    "atol": 1e-09,
+    "max_steps": 4096,
+    "mboz": 32,
+    "nboz": 32,
+    "mode_cut": 0.0001,
+    "wout": "/mnt/c/Users/eduar/Github_Codes/ESSOS-native-orbit/examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc",
+    "field_cache": "../ESSOS-split-ad/examples/benchmarks/results/gpu_boozer_fixed_20261022/coordinate_inputs.npz",
+    "output": "output/pr_forward_boozer_adaptive"
+  },
+  "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "jax": "0.11.2",
+  "collisions": false,
+  "reverse_ad": false,
+  "rows": {
+    "native_dopri5": {
+      "compile_s": 1.3318899460000466,
+      "compiled_buffers_bytes": 27744,
+      "warm_ms": [
+        1.8577450000520912,
+        1.5382390001832391,
+        1.4393249994100188
+      ],
+      "warm_median_ms": 1.5382390001832391,
+      "accepted": 205,
+      "rejected": 4,
+      "failed": 0,
+      "lost": 0,
+      "max_position_or_chart_error": 2.868462081542146e-09,
+      "max_velocity_error_m_s": 0.003463426372036338,
+      "max_velocity_error_over_birth_speed": 7.885732923073463e-09
+    },
+    "diffrax_dopri5": {
+      "compile_s": 8.425105276999602,
+      "compiled_buffers_bytes": 128224,
+      "warm_ms": [
+        2.729721999457979,
+        1.6332760005752789,
+        1.3858339998478186
+      ],
+      "warm_median_ms": 1.6332760005752789,
+      "accepted": 204,
+      "rejected": 4,
+      "failed": 0,
+      "lost": 0,
+      "max_position_or_chart_error": 3.057027282612226e-09,
+      "max_velocity_error_m_s": 0.0034634264302439988,
+      "max_velocity_error_over_birth_speed": 7.88573305560409e-09
+    },
+    "native_dopri8": {
+      "compile_s": 2.9055708659998345,
+      "compiled_buffers_bytes": 27744,
+      "warm_ms": [
+        1.5050370002427371,
+        1.322156000242103,
+        1.459473000068101
+      ],
+      "warm_median_ms": 1.459473000068101,
+      "accepted": 150,
+      "rejected": 2,
+      "failed": 0,
+      "lost": 0,
+      "max_position_or_chart_error": 2.1884042946863453e-09,
+      "max_velocity_error_m_s": 0.0010525829857215285,
+      "max_velocity_error_over_birth_speed": 2.396582867125011e-09
+    },
+    "diffrax_dopri8": {
+      "compile_s": 2.238268120000612,
+      "compiled_buffers_bytes": 158680,
+      "warm_ms": [
+        2.037929999460175,
+        1.9856230001096264,
+        2.0586399996318505
+      ],
+      "warm_median_ms": 2.037929999460175,
+      "accepted": 150,
+      "rejected": 2,
+      "failed": 0,
+      "lost": 0,
+      "max_position_or_chart_error": 2.1884038611376763e-09,
+      "max_velocity_error_m_s": 0.0010525829857215285,
+      "max_velocity_error_over_birth_speed": 2.396582867125011e-09
+    }
+  },
+  "peak_scope": "cumulative across setup, compilation, all cases and reference; not a per-solver peak"
+}

@@ -17,7 +17,6 @@ from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
 from time import perf_counter
-from typing import NamedTuple
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
@@ -28,8 +27,6 @@ from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
 from essos.plot import fix_matplotlib_3d
-from essos.rk import solve_rk, RKStatus
-from essos.orbit_error import OrbitErrorNorm
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu_D_ab
 
 
@@ -894,13 +891,6 @@ def _wall_function(field, wall):
     return getattr(wall, "evaluate_xyz", wall)
 
 
-class _NativeOrbitSolution(NamedTuple):
-    ys: object
-    ts: object
-    event_mask: object
-    result: object
-
-
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
@@ -909,26 +899,11 @@ class Tracing():
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None, integrator="diffrax", native_error_control="physics",
                  orbit_length_scale=1., orbit_speed_scale=None,
-                 native_controller="i", native_pcoeff=.4, native_icoeff=.3, native_dense_output="standard"):
+                 native_controller="i", native_pcoeff=.4, native_icoeff=.3):
 
-        if integrator not in ("diffrax", "essos_rk45", "essos_dopri8"):
-            raise ValueError("integrator must be 'diffrax', 'essos_rk45' or 'essos_dopri8'")
-        if integrator != "diffrax":
-            if model not in ('GuidingCenter', 'GuidingCenterAdaptative', 'FullOrbit', 'FullOrbitAdaptative'):
-                raise ValueError("native integrators currently support collisionless guiding-center and full-orbit models only")
-            if solver is not None:
-                raise ValueError("solver selects a Diffrax solver; omit it when using a native integrator")
-        self.integrator = integrator
-        if native_error_control not in ("physics", "standard"):
-            raise ValueError("native_error_control must be 'physics' or 'standard'")
-        self.native_error_control = native_error_control
-        if native_controller not in ("i", "pi"):
-            raise ValueError("native_controller must be 'i' or 'pi'")
-        self.native_controller, self.native_pcoeff, self.native_icoeff = native_controller, native_pcoeff, native_icoeff
-        if native_dense_output not in ("standard", "optimized", "higher_order"):
-            raise ValueError("native_dense_output must be 'standard', 'optimized' or 'higher_order'")
-        self.native_dense_output = native_dense_output
-        self.orbit_length_scale, self.orbit_speed_scale = orbit_length_scale, orbit_speed_scale
+        from essos.rk import _configure_tracing as configure
+        configure(self, integrator, model, solver, native_error_control, orbit_length_scale,
+                  orbit_speed_scale, native_controller, native_pcoeff, native_icoeff)
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")
@@ -1266,42 +1241,11 @@ class Tracing():
                                        dtmin=dt0 if model == 'FullOrbitCollisions' else None)
         return terms, solver, controller
 
-    def _native_error_norm(self, *, exterior=False, flag=False):
-        """Physical blocks only; keep coordinates/diagnostics out of the RK map."""
-        if self.native_error_control == "standard":
-            return None
-        position_map = None
-        if self._axis_regular and not exterior:
-            def position_map(y):
-                state = y[:-1] if flag else y
-                return self.field.to_xyz(_from_axis_regular(state)[:3])
-        return OrbitErrorNorm(
-            rtol=self.rtol, atol=self.atol, length_scale=self.orbit_length_scale,
-            speed_scale=self.particles.total_speed if self.orbit_speed_scale is None else self.orbit_speed_scale,
-            velocity_components=3 if self.model.startswith("FullOrbit") else 1,
-            position_map=position_map)
-
     def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False, *, exterior=False, flag=False):
         """Integrate to maxtime, saving at self.times (clipped to t0) and at the end."""
         if self.integrator != "diffrax":
-            solution = solve_rk(
-                terms, y0, args, t0=t0, t1=self.maxtime, dt0=self.timestep,
-                ts=jnp.clip(self.times, t0, self.maxtime), adaptive=controller,
-                rtol=self.rtol, atol=self.atol, event=event.cond_fn,
-                root_find=event.root_finder is not None, max_steps=self.max_steps,
-                method="dopri8" if self.integrator == "essos_dopri8" else "dopri5",
-                error_norm=self._native_error_norm(exterior=exterior, flag=flag),
-                controller=self.native_controller, pcoeff=self.native_pcoeff, icoeff=self.native_icoeff,
-                dense_output=self.native_dense_output)
-            ys = solution.ys
-            if throw:
-                import equinox as eqx
-                ys = eqx.error_if(ys, solution.status > RKStatus.EVENT, "native RK solve failed; inspect solve_rk status/stats")
-            result = diffrax.RESULTS.where(solution.status == RKStatus.SUCCESS, diffrax.RESULTS.successful,
-                       diffrax.RESULTS.where(solution.status == RKStatus.EVENT, diffrax.RESULTS.event_occurred,
-                                             diffrax.RESULTS.max_steps_reached))
-            return _NativeOrbitSolution((ys, solution.y[None]), (solution.ts, solution.t[None]),
-                                        solution.event_mask, result)
+            from essos.rk import _solve_tracing as solve_trace
+            return solve_trace(self, terms, controller, t0, y0, args, event, throw, exterior, flag)
         import warnings
         warnings.simplefilter("ignore", category=FutureWarning)  # see https://github.com/patrick-kidger/diffrax/issues/445
         return diffeqsolve(terms, solver, t0=t0, t1=self.maxtime, dt0=self.timestep, y0=y0, args=args,

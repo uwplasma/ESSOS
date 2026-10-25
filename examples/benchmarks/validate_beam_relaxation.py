@@ -13,10 +13,8 @@ import json
 import os
 from pathlib import Path
 
-os.environ.setdefault("ESSOS_CPU_DEVICES", "1")
 os.environ.setdefault("ESSOS_PROGRESS", "0")
 os.environ.setdefault("ESSOS_XLA_CACHE", "")
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 import jax
@@ -55,7 +53,7 @@ def statistics(r, xi, reference):
 
 def physical_native_coefficients(coulomb_log_model="nrl"):
     from essos.background_species import BackgroundSpecies
-    from essos.collisions import collision_coefficients, CollisionCoefficients
+    from essos.split import collision_coefficients, CollisionCoefficients
     from essos.constants import PROTON_MASS, ELEMENTARY_CHARGE
     from .nonrelativistic_collision_reference import ProtonBackground
     p = ProtonBackground(coulomb_log_model=coulomb_log_model)
@@ -177,9 +175,13 @@ def plot(report, output):
             edges = np.asarray(ref[name+"_edges"])
             for method in sorted({r["method"] for r in rows}):
                 row = min((r for r in rows if r["method"] == method), key=lambda r: r["cap"])
-                values = row["final_"+name]
-                counts = np.histogram(values, edges)[0]
-                axes[i, j].stairs(counts/(len(values)*np.diff(edges)), edges, label=method)
+                if "histograms" in row:
+                    counts = np.asarray(row["histograms"][name]["counts"])
+                    count = row["histograms"][name]["particles"]
+                else:
+                    values = row["final_"+name]
+                    counts, count = np.histogram(values, edges)[0], len(values)
+                axes[i, j].stairs(counts/(count*np.diff(edges)), edges, label=method)
             axes[i, j].stairs(ref[name+"_density"], edges, color="k", lw=2, label="Independent final-time theory")
             axes[i, j].set(title=f"{model.upper()}: final {name} distribution", ylabel="Probability density",
                 xlabel=r"$v/\sqrt{T/m}$" if name == "speed" else r"$\xi$")
@@ -300,8 +302,8 @@ def main():
     root = Path(__file__).resolve().parents[2]
     report["source_sha256"] = {name: hashlib.sha256((root/name).read_bytes()).hexdigest() for name in (
         "examples/benchmarks/validate_beam_relaxation.py", "examples/benchmarks/thermal_relaxation_reference.py",
-        "examples/benchmarks/validate_collision_physics.py", "essos/collisions.py", "essos/split.py",
-        "essos/collision_controller.py", "essos/collision_error.py", "essos/background_species.py",
+        "examples/benchmarks/validate_collision_physics.py", "essos/split.py",
+        "essos/background_species.py",
         "essos/coulomb.py", "examples/benchmarks/nonrelativistic_collision_reference.py")}
     report["interpretation"] = "CDF and moment screens test statistical consistency, not a numerical-accuracy bound; compare both caps and report achieved uncertainty."
     report["complete"] = True

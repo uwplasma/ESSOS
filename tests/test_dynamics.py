@@ -438,14 +438,13 @@ def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature()
     assert np.all(np.abs(energy.mean(axis=0) - 1) < 4 * error)
 
 
-@pytest.mark.parametrize("integrator", ["diffrax", "essos_rk45", "essos_dopri8"])
-def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch, integrator):
+def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch):
     """The orbit born at s = 1e-7 used to stop at once, at s <= axis_threshold = 1e-6."""
     monkeypatch.delenv("ESSOS_PROGRESS")  # default progress must not break the vmapped segment loop
     particles = _near_axis_particles()
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
                       particles=particles, maxtime=2e-5, timestep=1e-9, times_to_trace=200,
-                      atol=1e-9, rtol=1e-9, integrator=integrator)
+                      atol=1e-9, rtol=1e-9)
     s = tracing.trajectories[:, :, 0]
     assert not tracing.axis_hits.any() and not tracing.boundary_hits.any()
     assert jnp.isfinite(tracing.trajectories).all()
@@ -455,14 +454,13 @@ def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch, integrator):
     assert jnp.abs(tracing.energy() / particles.energy - 1).max() < 1e-5
 
 
-@pytest.mark.parametrize("integrator", ["diffrax", "essos_rk45", "essos_dopri8"])
-def test_vmec_guiding_center_condition_sees_flux_coordinates(integrator):
+def test_vmec_guiding_center_condition_sees_flux_coordinates():
     def below(t, y, args, **kwargs):
         return y[0] < 5e-3
 
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
                       particles=_near_axis_particles(), maxtime=2e-5, timestep=1e-9, times_to_trace=200,
-                      atol=1e-9, rtol=1e-9, condition=below, integrator=integrator)
+                      atol=1e-9, rtol=1e-9, condition=below)
     s = tracing.trajectories[:, :, 0]
     stopped = ~jnp.isfinite(s[:, -1])
     assert stopped.all()
@@ -1043,9 +1041,8 @@ def test_wall_given_as_a_gap_or_a_surface():
     assert _wall_function(vmec, None) is None
 
 
-@pytest.mark.parametrize("integrator", ["diffrax", "essos_rk45", "essos_dopri8"])
-def test_vmec_lcfs_crossings_are_exact(integrator):
-    tracing = _edge_tracing("GuidingCenterAdaptative", 0.975, 50, atol=1e-9, rtol=1e-9, integrator=integrator)
+def test_vmec_lcfs_crossings_are_exact():
+    tracing = _edge_tracing("GuidingCenterAdaptative", 0.975, 50, atol=1e-9, rtol=1e-9)
     crossed = jnp.isfinite(tracing.lcfs_times)
     assert crossed.any() and jnp.all(crossed == tracing.boundary_hits)
     assert jnp.all(tracing.status[crossed] == 1) and jnp.all(tracing.status[~crossed] == 0)
@@ -1057,9 +1054,8 @@ def test_vmec_lcfs_crossings_are_exact(integrator):
     assert jnp.all(tracing.region[crossed, -1] == -1)
 
 
-@pytest.mark.parametrize("integrator", ["diffrax", "essos_rk45", "essos_dopri8"])
-def test_vmec_orbits_continue_outside_and_strike_the_wall_exactly(integrator):
-    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6, integrator=integrator)
+def test_vmec_orbits_continue_outside_and_strike_the_wall_exactly():
+    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6)
     struck = tracing.wall_hits
     assert struck.all()
     assert jnp.abs(jax.vmap(tracing.field.boundary_distance)(jnp.asarray(tracing.wall_positions)) + 0.05).max() < 1e-10
@@ -1072,10 +1068,9 @@ def test_vmec_orbits_continue_outside_and_strike_the_wall_exactly(integrator):
         assert jnp.isfinite(tracing.trajectories_xyz[i][region >= 0]).all()
 
 
-@pytest.mark.parametrize("integrator", ["diffrax", "essos_rk45", "essos_dopri8"])
-def test_vmec_orbits_that_come_back_inside_return_to_flux_coordinates(integrator):
+def test_vmec_orbits_that_come_back_inside_return_to_flux_coordinates():
     xyz, vpar = [[0.9037, 1.2536, 3.6827]], [0.9639]
-    tracing = _exterior_tracing(xyz, vpar, maxtime=5e-6, integrator=integrator)
+    tracing = _exterior_tracing(xyz, vpar, maxtime=5e-6)
     assert tracing.returns[0] == 1 and tracing.status[0] == 0
     region = np.asarray(tracing.region[0])
     changes = np.flatnonzero(np.diff(region))
@@ -1083,7 +1078,7 @@ def test_vmec_orbits_that_come_back_inside_return_to_flux_coordinates(integrator
     # Inside again, the flux-coordinate trajectory resumes with its energy.
     later = region[changes[1] + 1:] == 0
     assert jnp.abs(tracing.energy()[0][changes[1] + 1:][later] / tracing.particles.energy - 1).max() < 1e-5
-    capped = _exterior_tracing(xyz, vpar, maxtime=5e-6, max_returns=0, integrator=integrator)
+    capped = _exterior_tracing(xyz, vpar, maxtime=5e-6, max_returns=0)
     assert capped.status[0] == 5 and capped.returns[0] == 0
 
 
@@ -1099,14 +1094,13 @@ def test_vmec_collisional_orbits_continue_outside(model):
     assert jnp.isfinite(tracing.lost_energies[struck]).all()
 
 
-@pytest.mark.parametrize("integrator", ["diffrax", "essos_rk45", "essos_dopri8"])
-def test_vmec_non_finite_steps_are_reported(integrator):
+def test_vmec_non_finite_steps_are_reported():
     """An exterior field that turns non-finite above the midplane stops those orbits as failed."""
     def toroidal(xyz):
         R2 = xyz[:, 0]**2 + xyz[:, 1]**2
         return jnp.where(xyz[:, 2:] > 0.0, jnp.nan, 60.0 * jnp.stack([-xyz[:, 1] / R2, xyz[:, 0] / R2, 0 * R2], 1))
 
-    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6, exterior_field=toroidal, wall=None, integrator=integrator)
+    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6, exterior_field=toroidal, wall=None)
     failed = tracing.failed
     assert failed.any() and jnp.all(tracing.status[failed] == 4)
     assert jnp.all(tracing.failure_times[failed] >= tracing.lcfs_times[failed])
