@@ -62,7 +62,7 @@ class BoozerField(eqx.Module):
     psi0: float
     nfp: int = eqx.field(static=True)
     sine_coef: jax.Array | None = None
-    table: jax.Array | None = None  # (nint, ntheta + DEGREE, nzeta + DEGREE, 2, 4)
+    table: jax.Array | None = None  # theta row 0: m=0; remaining rows: m>0
 
     @classmethod
     def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6, *, bmns=None,
@@ -78,7 +78,7 @@ class BoozerField(eqx.Module):
         With ``angle_grid`` (default 6 points per shortest wavelength, or a
         ``(ntheta, nzeta)`` pair) the spectrum is summed once on a uniform grid in
         ``theta`` and one field period of ``zeta``, and evaluated by periodic
-        quintic B-splines in the angles, keeping the radial splines exact. A step
+        quintic B-splines in the angles with continuous radial splines. A step
         then costs the same for any number of modes; a scalar ``angle_grid`` is
         used only above ``TABLE_MODES`` modes, below which the sum is cheaper. ``angle_grid=None``, or a
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
@@ -177,8 +177,9 @@ def _angle_table(b_coef, sine_coef, xm, xn, nfp, nt, nz):
     for axis in (1, 2):
         table = spline_filter1d(table, DEGREE, axis=axis, mode="grid-wrap")
     pad = ((DEGREE - 1) // 2, (DEGREE + 1) // 2)
-    # float32 halves the per-device copy; its rounding is far below the interpolation error
-    return jnp.asarray(np.pad(table, ((0, 0), pad, pad, (0, 0), (0, 0)), mode="wrap"), jnp.float32)
+    # Keep radial pieces continuous; float32 rounding introduces knot jumps.
+    table = np.pad(table, ((0, 0), pad, pad, (0, 0), (0, 0)), mode="wrap")
+    return jnp.asarray(np.concatenate([table[:, :1, :, 0], table[:, :, :, 1]], axis=1))
 
 
 def _bspline_matrix():
@@ -202,20 +203,24 @@ def _bspline(t):
 def _table_derivatives(knots, table, nfp, r, theta, zeta):
     k = jnp.clip(jnp.searchsorted(knots, r, side="right", method="compare_all") - 1, 0, knots.size - 2)
     d = r - knots[k]
-    n = jnp.array(table.shape[1:3]) - DEGREE
+    n = jnp.array(table.shape[1:3]) - jnp.array([DEGREE + 1, DEGREE])
     h = jnp.array([2 * np.pi, 2 * np.pi / nfp]) / n
     x = jnp.mod(jnp.stack([theta, zeta]), n * h) / h
     i = jnp.minimum(jnp.floor(x), n - 1).astype(k.dtype)
     (wt, dt), (wz, dz) = _bspline(x[0] - i[0]), _bspline(x[1] - i[1])
-    block = jax.lax.dynamic_slice(table, (k, i[0], i[1], 0 * k, 0 * k),
-                                  (1, DEGREE + 1, DEGREE + 1, 2, 4))[0].astype(d.dtype)
+    m0 = jax.lax.dynamic_slice(table, (k, 0*k, i[1], 0*k),
+                               (1, 1, DEGREE+1, 4))[0, 0].astype(d.dtype)
+    mp = jax.lax.dynamic_slice(table, (k, i[0]+1, i[1], 0*k),
+                               (1, DEGREE+1, DEGREE+1, 4))[0].astype(d.dtype)
     one = jnp.ones_like(d)
-    value = block @ jnp.stack([d**3, d**2, d, one])  # radial sums: (theta, zeta, channel)
-    slope = block @ jnp.stack([3 * d**2, 2 * d, one, 0 * d])
-    z_value, z_slope = jnp.einsum("bcq,c->bq", value, wz), jnp.einsum("bcq,c->bq", slope, wz)
-    v, vr, vt = wt @ z_value, wt @ z_slope, dt @ z_value / h[0]
-    vz = wt @ jnp.einsum("bcq,c->bq", value, dz) / h[1]
-    return v[0] + r * v[1], vr[0] + v[1] + r * vr[1], vt[1], vz[0] + r * vz[1]
+    powers, deriv = jnp.stack([d**3, d**2, d, one]), jnp.stack([3*d**2, 2*d, one, 0*d])
+    a, b = m0 @ powers, mp @ powers
+    v0, v1 = wz @ a, wt @ (b @ wz)
+    vr0, vr1 = wz @ (m0 @ deriv), wt @ ((mp @ deriv) @ wz)
+    vt = dt @ (b @ wz) / h[0]
+    vz0, vz1 = dz @ a / h[1], wt @ (b @ dz) / h[1]
+    return v0 + r*v1, vr0 + v1 + r*vr1, vt, vz0 + r*vz1
+
 
 
 def _chart(y):
@@ -313,12 +318,19 @@ class BoozerTrace:
     """Result of :func:`trace_boozer` (NumPy arrays).
 
     ``states`` is ``(particles, n_save, 5)``: ``s, theta, zeta, v_par`` and the
-    speed ``v``, held at the loss, axis-stop or thermalisation point afterwards.
+    speed ``v``. Every saved state lies inside the plasma: after a loss it is
+    held at the last interior state, after thermalisation at that point.
     ``loss_times`` is ``-1`` for particles that were not lost;
     ``thermalized_times`` and ``failed_times`` likewise. A failed orbit
     is frozen at its last finite state and is not counted as confined.
     ``axis_stop_times`` likewise uses -1 for no inner-boundary encounter;
     these stops are distinct from LCFS exits and numerical failures.
+
+    ``energy_error`` covers interior steps only. The step that crosses the
+    LCFS ends outside the field tables, where ``|B|`` is an extrapolation, so
+    its end point and energy error are kept apart in ``terminal_states``
+    (``(particles, 5)``, as ``states``) and ``terminal_energy_error``; both are
+    NaN for particles that were not lost and neither is a physical diagnostic.
     """
 
     times: np.ndarray
@@ -329,6 +341,8 @@ class BoozerTrace:
     failed_times: np.ndarray | None = None
     kinetic_energy_change: np.ndarray | None = None  # max |Ekin/Ekin0-1| with waves
     axis_stop_times: np.ndarray | None = None  # singular-mode inner boundary, not an LCFS exit
+    terminal_states: np.ndarray | None = None
+    terminal_energy_error: np.ndarray | None = None
 
     @property
     def lost(self):
@@ -419,8 +433,9 @@ def _start(field, y0, mu0, axis_stop_s=None):
         e0 = 0.5 * y[3] ** 2 + mu * field.modB_derivatives(r, theta, y[2])[0]
         first = jnp.array([s, theta, y[2], y[3], jnp.sqrt(2 * e0)])
         axis = jnp.asarray(False) if axis_stop_s is None else (axis_stop_s > 0) & (s <= axis_stop_s)
+        nan = jnp.full(5, jnp.nan)
         return (y, mu, 0.0, ~axis, -1.0, -1.0, -1.0, 0.0, e0, -1.0, 0,
-                jnp.where(axis, 0., -1.)), first
+                jnp.where(axis, 0., -1.), nan, jnp.nan), first
 
     return jax.vmap(one)(y0, mu0)
 
@@ -431,7 +446,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
     def one(carry, key):
         def finish(carry, y1, h):
             """Accept ``y1`` after a step of ``h``: energy, collisions, loss and failure."""
-            y, mu, t, alive, t_loss, t_therm, t_fail, err, e0, h_next, k, t_axis = carry
+            y, mu, t, alive, t_loss, t_therm, t_fail, err, e0, h_next, k, t_axis, terminal, terminal_err = carry
             axis, fraction = (jnp.asarray(False), 1.) if axis_stop_s is None else _axis_intersection(y, y1, axis_stop_s)
             axis &= alive
             y1 = jnp.where(axis, y+fraction*(y1-y), y1)
@@ -439,7 +454,8 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             s1, r1, th1, *_ = _chart(y1)
             B1 = field.modB_derivatives(r1, th1, y1[2])[0]
             e_orbit = 0.5 * y1[3] ** 2 + mu * B1
-            err = jnp.where(alive, jnp.maximum(err, jnp.abs(e_orbit / e0 - 1)), err)
+            step_err = jnp.abs(e_orbit / e0 - 1)
+            exterior = jnp.array([s1, th1, y1[2], y1[3], jnp.sqrt(2 * e_orbit)])
             thermal = jnp.asarray(False)
             if species is not None:
                 def kick(_):
@@ -467,15 +483,19 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             failed = alive & ~lost & ~finite
             t_axis = jnp.where(axis, stopped_at, t_axis)
             t_fail = jnp.where(failed, t + h, t_fail)
+            err = jnp.where(alive & finite & ~lost, jnp.maximum(err, step_err), err)
             err = jnp.where(alive & ~finite, jnp.inf, err)
+            terminal = jnp.where(lost, exterior, terminal)
+            terminal_err = jnp.where(lost, step_err, terminal_err)
             therm = alive & ~lost & finite & thermal
             t_loss = jnp.where(lost, t + h, t_loss)
             t_therm = jnp.where(therm, t + h, t_therm)
             keep = alive & ~therm & finite
-            y = jnp.where(keep | lost, y1, y)
-            mu = jnp.where(keep, mu1, mu)
-            e0 = jnp.where(keep, e0_new, e0)
-            return (y, mu, t + h, keep & ~lost & ~axis, t_loss, t_therm, t_fail, err, e0, h_next, k + 1, t_axis)
+            y = jnp.where(keep & ~lost, y1, y)
+            mu = jnp.where(keep & ~lost, mu1, mu)
+            e0 = jnp.where(keep & ~lost, e0_new, e0)
+            return (y, mu, t + h, keep & ~lost & ~axis, t_loss, t_therm, t_fail, err, e0, h_next, k + 1, t_axis,
+                    terminal, terminal_err)
 
         def rhs_of(carry):
             mu = carry[1]
@@ -646,7 +666,9 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     chunk = n_int if progress is None and not compact else -(-n_int // 10)
     states = np.empty((n, n_int + 1, 5), dtype=np.asarray(first).dtype)
     states[:, 0] = np.asarray(first)[:n]
-    status = [np.full(n, -1.0), np.full(n, -1.0), np.full(n, -1.0), np.zeros(n), np.full(n, -1.0)]
+    # loss, thermalisation, failure and axis-stop times, interior energy error, terminal (exterior) state and its error
+    status = [np.full(n, -1.0), np.full(n, -1.0), np.full(n, -1.0), np.zeros(n), np.full(n, -1.0),
+              np.full((n, 5), np.nan), np.full(n, np.nan)]
     selected = np.arange(n)
     for start in range(0, n_int, chunk):
         count = min(chunk, n_int - start)
@@ -663,7 +685,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         last = start + count == n_int
         if last or (compact and size < carry[3].shape[0]):
             done = slice(None) if last else ~alive
-            for result, i in zip(status, (4, 5, 6, 7, 11)):
+            for result, i in zip(status, (4, 5, 6, 7, 11, 12, 13)):
                 result[selected[done]] = np.asarray(carry[i])[:selected.size][done]
         if not last and compact and size < carry[3].shape[0]:
             # drop stopped particles and rebalance the survivors over the devices
@@ -678,7 +700,8 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
             carry, keys = jax.tree.map(lambda x: x[rows], (carry, keys))
             if ndev > 1:
                 carry, keys = jax.device_put((carry, keys), sharding)
-    t_loss, t_therm, t_fail, err, t_axis = status
+    t_loss, t_therm, t_fail, err, t_axis, terminal, terminal_err = status
     return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm,
                        err if perturbation is None else None, t_fail,
-                       err if perturbation is not None else None, t_axis)
+                       err if perturbation is not None else None, t_axis,
+                       terminal_states=terminal, terminal_energy_error=terminal_err)

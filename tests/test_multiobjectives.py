@@ -144,3 +144,10 @@ def test_weighted_loss_then_jitted_loss_keeps_static_currents_scale():
     direct = optimizer._call_loss_fn(loss_coil_length_sum, optimizer._build_available_inputs(x))
     assert jnp.isfinite(weighted)
     assert jnp.allclose(weighted, direct)
+
+
+def test_plots_without_plotly_raise_clear_error(monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "plotly", None)
+    with pytest.raises(ImportError, match="essos\\[multiobjective\\]"):
+        MultiObjectiveOptimizer.plot_param_importances(None)
