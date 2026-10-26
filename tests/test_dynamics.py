@@ -603,7 +603,8 @@ def test_tracing_max_steps_is_configurable_and_bounded(monkeypatch, integrator):
         integrator=integrator, max_steps=3, maxtime=1., timestep=.1,
         times=jnp.array([0., 1.]), rtol=1e-7, atol=1e-7,
         native_error_control="standard", native_controller="i",
-        native_pcoeff=.4, native_icoeff=.3, native_dense_output="standard",
+        native_pcoeff=.4, native_icoeff=.3, native_dense_output="standard", native_adjoint="none",
+        native_adjoint_checkpoint_steps=16, native_adjoint_max_accepted_steps=None,
         progress_meter=None)
     event = SimpleNamespace(cond_fn=lambda *args: False, root_finder=None)
     with pytest.raises(BackendCalled):
