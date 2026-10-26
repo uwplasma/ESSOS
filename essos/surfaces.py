@@ -190,17 +190,17 @@ def _surface_mean(surface, values):
 
 @jit
 def _squared_flux_local(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
-                          * surface.area_element)
+    return 0.5 * _surface_mean(surface, BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
+                                       * surface.area_element)
 
 @jit
 def _squared_flux_global(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element)
+    return 0.5 * _surface_mean(surface, BdotN(surface, field)**2 * surface.area_element)
 
 @jit
 def _squared_flux_normalized(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element) / \
-                 jnp.mean(jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
+    return 0.5 * _surface_mean(surface, BdotN(surface, field)**2 * surface.area_element) / \
+                 _surface_mean(surface, jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
 
 def SquaredFlux(surface, field, definition='local'):
     if definition == 'local':
@@ -832,28 +832,14 @@ class SurfaceRZFourier:
 
     @property
     def volume(self):
-
-        xyz = self.gamma  # shape: (nphi, ntheta, 3)
-        n = self.normal    # shape: (nphi, ntheta, 3)
-
-        integrand = jnp.sum(xyz * n, axis=2)  # dot(x, n), shape: (nphi, ntheta)
-        volume = jnp.mean(integrand) / 3.0
-        return volume
+        """Enclosed volume, ``(1/3) |integral of x . n dtheta dphi|``."""
+        integrand = jnp.sum(self.gamma * self.normal, axis=2)
+        return jnp.abs(_surface_mean(self, integrand)) * (2 * jnp.pi)**2 / 3.0
 
     @property
     def area(self):
-        #n = self.normal  # (nphi, ntheta, 3)
-        #norm_n = jnp.linalg.norm(n, axis=2)  # shape: (nphi, ntheta)
-        #avg_area = jnp.mean(norm_n)
-        #return avg_area
-        n = self.normal  # shape: (nphi, ntheta, 3)
-        norm_n = jnp.linalg.norm(n, axis=2)  
-
-        dphi = 2 * jnp.pi / self.nphi
-        dtheta = 2 * jnp.pi / self.ntheta
-
-        area = jnp.sum(norm_n) * dphi * dtheta
-        return area
+        """Surface area, ``integral of |n| dtheta dphi``."""
+        return _surface_mean(self, jnp.linalg.norm(self.normal, axis=2)) * (2 * jnp.pi)**2
 
     # def change_resolution(self, mpol: int, ntor: int, ntheta=None, nphi=None,close=True):
     #     """
@@ -1068,6 +1054,21 @@ class SurfaceRZFourier:
 
         # The square root gives the measure the same length units as rc and zs.
         return jnp.sqrt(amplitude_squared)
+
+    def mean_cross_sectional_area(self):
+        """Mean over phi of the constant-phi cross-section area ``int R dZ/dtheta dtheta``.
+
+        ``dZ/dtheta`` at fixed cylindrical phi is ``Z_theta - Z_u phi_theta / phi_u``
+        (u the surface toroidal angle); the phi average uses ``_surface_mean``.
+        """
+        x, y = self.gamma[..., 0], self.gamma[..., 1]
+        d_phi, d_theta = self.gammadash_phi, self.gammadash_theta
+        r2 = x**2 + y**2
+        phi_u = (x * d_phi[..., 1] - y * d_phi[..., 0]) / r2
+        phi_theta = (x * d_theta[..., 1] - y * d_theta[..., 0]) / r2
+        # R dZ/dtheta times the Jacobian phi_u of the change of toroidal angle.
+        integrand = jnp.sqrt(r2) * (d_theta[..., 2] * phi_u - d_phi[..., 2] * phi_theta)
+        return 2 * jnp.pi * jnp.abs(_surface_mean(self, integrand))
 
     def _tree_flatten(self):
         tables = (self._rc, self._zs, self._rs, self._zc)
