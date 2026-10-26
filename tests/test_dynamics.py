@@ -1,3 +1,4 @@
+import sys
 import pytest
 from pathlib import Path
 import jax
@@ -417,6 +418,7 @@ def _near_axis_particles():
     return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([0.9, 0.9, 0.9, -0.9, 0.9]))
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
 def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature():
     """Without the noise-induced drift sigma_ik d_j sigma_jk / 2 a thermal
     ensemble heated to <E> ~ 1.35 (3T/2) within two slowing-down times."""
