@@ -20,7 +20,7 @@ WOUT = Path(__file__).resolve().parents[1]/"examples/input_files/wout_LandremanP
 
 @pytest.fixture(scope="module")
 def transformed():
-    from booz_xform_jax import Booz_xform
+    Booz_xform = pytest.importorskip("booz_xform_jax").Booz_xform
     from netCDF4 import Dataset
     booz = Booz_xform(verbose=0, mboz=16, nboz=16)
     booz.read_wout(str(WOUT), flux=False)
