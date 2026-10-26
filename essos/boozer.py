@@ -62,7 +62,7 @@ class BoozerField(eqx.Module):
     psi0: float
     nfp: int = eqx.field(static=True)
     sine_coef: jax.Array | None = None
-    table: jax.Array | None = None  # (nint, ntheta + DEGREE, nzeta + DEGREE, 2, 4)
+    table: jax.Array | None = None  # theta row 0: m=0; remaining rows: m>0
 
     @classmethod
     def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6, *, bmns=None,
@@ -78,7 +78,7 @@ class BoozerField(eqx.Module):
         With ``angle_grid`` (default 6 points per shortest wavelength, or a
         ``(ntheta, nzeta)`` pair) the spectrum is summed once on a uniform grid in
         ``theta`` and one field period of ``zeta``, and evaluated by periodic
-        quintic B-splines in the angles, keeping the radial splines exact. A step
+        quintic B-splines in the angles with continuous radial splines. A step
         then costs the same for any number of modes; a scalar ``angle_grid`` is
         used only above ``TABLE_MODES`` modes, below which the sum is cheaper. ``angle_grid=None``, or a
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
@@ -177,8 +177,9 @@ def _angle_table(b_coef, sine_coef, xm, xn, nfp, nt, nz):
     for axis in (1, 2):
         table = spline_filter1d(table, DEGREE, axis=axis, mode="grid-wrap")
     pad = ((DEGREE - 1) // 2, (DEGREE + 1) // 2)
-    # float32 halves the per-device copy; its rounding is far below the interpolation error
-    return jnp.asarray(np.pad(table, ((0, 0), pad, pad, (0, 0), (0, 0)), mode="wrap"), jnp.float32)
+    # Keep radial pieces continuous; float32 rounding introduces knot jumps.
+    table = np.pad(table, ((0, 0), pad, pad, (0, 0), (0, 0)), mode="wrap")
+    return jnp.asarray(np.concatenate([table[:, :1, :, 0], table[:, :, :, 1]], axis=1))
 
 
 def _bspline_matrix():
@@ -202,20 +203,24 @@ def _bspline(t):
 def _table_derivatives(knots, table, nfp, r, theta, zeta):
     k = jnp.clip(jnp.searchsorted(knots, r, side="right", method="compare_all") - 1, 0, knots.size - 2)
     d = r - knots[k]
-    n = jnp.array(table.shape[1:3]) - DEGREE
+    n = jnp.array(table.shape[1:3]) - jnp.array([DEGREE + 1, DEGREE])
     h = jnp.array([2 * np.pi, 2 * np.pi / nfp]) / n
     x = jnp.mod(jnp.stack([theta, zeta]), n * h) / h
     i = jnp.minimum(jnp.floor(x), n - 1).astype(k.dtype)
     (wt, dt), (wz, dz) = _bspline(x[0] - i[0]), _bspline(x[1] - i[1])
-    block = jax.lax.dynamic_slice(table, (k, i[0], i[1], 0 * k, 0 * k),
-                                  (1, DEGREE + 1, DEGREE + 1, 2, 4))[0].astype(d.dtype)
+    m0 = jax.lax.dynamic_slice(table, (k, 0*k, i[1], 0*k),
+                               (1, 1, DEGREE+1, 4))[0, 0].astype(d.dtype)
+    mp = jax.lax.dynamic_slice(table, (k, i[0]+1, i[1], 0*k),
+                               (1, DEGREE+1, DEGREE+1, 4))[0].astype(d.dtype)
     one = jnp.ones_like(d)
-    value = block @ jnp.stack([d**3, d**2, d, one])  # radial sums: (theta, zeta, channel)
-    slope = block @ jnp.stack([3 * d**2, 2 * d, one, 0 * d])
-    z_value, z_slope = jnp.einsum("bcq,c->bq", value, wz), jnp.einsum("bcq,c->bq", slope, wz)
-    v, vr, vt = wt @ z_value, wt @ z_slope, dt @ z_value / h[0]
-    vz = wt @ jnp.einsum("bcq,c->bq", value, dz) / h[1]
-    return v[0] + r * v[1], vr[0] + v[1] + r * vr[1], vt[1], vz[0] + r * vz[1]
+    powers, deriv = jnp.stack([d**3, d**2, d, one]), jnp.stack([3*d**2, 2*d, one, 0*d])
+    a, b = m0 @ powers, mp @ powers
+    v0, v1 = wz @ a, wt @ (b @ wz)
+    vr0, vr1 = wz @ (m0 @ deriv), wt @ ((mp @ deriv) @ wz)
+    vt = dt @ (b @ wz) / h[0]
+    vz0, vz1 = dz @ a / h[1], wt @ (b @ dz) / h[1]
+    return v0 + r*v1, vr0 + v1 + r*vr1, vt, vz0 + r*vz1
+
 
 
 def _chart(y):
