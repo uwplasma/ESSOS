@@ -577,19 +577,38 @@ if __name__ == "__main__":
     pytest.main()
 
 
-def test_tracing_max_steps_is_configurable_and_bounded():
-    """The Diffrax ceiling used to be 1e10, so a trace that could not finish ran
-    until the process was killed rather than returning."""
+@pytest.mark.parametrize("integrator", ["diffrax", "essos_rk45", "essos_dopri8"])
+def test_tracing_max_steps_is_configurable_and_bounded(monkeypatch, integrator):
+    """Keep a bounded default and forward explicit limits to each backend."""
     import inspect
+    from types import SimpleNamespace
 
-    from essos.dynamics import Tracing
+    import essos.dynamics as dynamics
 
     default = inspect.signature(Tracing).parameters["max_steps"].default
     assert default == 1_000_000
 
-    source = inspect.getsource(Tracing)
-    assert "max_steps=10000000000" not in source
-    assert source.count("max_steps=self.max_steps") == 1  # every solve goes through Tracing._solve
+    class BackendCalled(Exception):
+        pass
+
+    def backend(*args, **kwargs):
+        assert kwargs["max_steps"] == 3
+        raise BackendCalled
+
+    # Stop before either backend integrates; exercise each dispatch branch.
+    monkeypatch.setattr(dynamics, "diffeqsolve", backend)
+    monkeypatch.setattr(dynamics, "solve_rk", backend)
+    tracing = object.__new__(Tracing)
+    tracing.__dict__.update(
+        integrator=integrator, max_steps=3, maxtime=1., timestep=.1,
+        times=jnp.array([0., 1.]), rtol=1e-7, atol=1e-7,
+        native_error_control="standard", native_controller="i",
+        native_pcoeff=.4, native_icoeff=.3, native_dense_output="standard",
+        progress_meter=None)
+    event = SimpleNamespace(cond_fn=lambda *args: False, root_finder=None)
+    with pytest.raises(BackendCalled):
+        tracing._solve(terms=None, solver=None, controller=False, t0=0.,
+                       y0=jnp.zeros(1), args=None, event=event)
 
 
 
