@@ -10,7 +10,7 @@ from essos.fields import BiotSavart, MagneticField
 from essos.losses import custom_loss
 from essos.objective_functions import (
     loss_BdotN_mean_squared, loss_coil_curvature_from_field, loss_coil_length_max,
-    loss_iota_approx, loss_quasi_symmetry, loss_straight_field_line_residual,
+    loss_iota_approx, loss_quasi_symmetry, loss_quasi_axisymmetry, loss_straight_field_line_residual,
     quasi_symmetry_residual_on_surface,
 )
 from essos.surfaces import (BdotN_over_B, B_contravariant_theta_phi_on_surface,
@@ -50,6 +50,9 @@ class StraightAngleField(eqx.Module):
     correction: jax.Array
     harmonic: int = eqx.field(static=True, default=2)
     amplitude: float = 1.
+
+    def dAbsB_by_dX(self, x):
+        return jax.grad(lambda p: jnp.linalg.norm(self.B(p)))(x)
 
     def B(self, x):
         R = jnp.hypot(x[0], x[1])
@@ -177,7 +180,8 @@ def test_actual_biot_savart_coil_and_surface_directional_derivatives():
 
 
 @pytest.mark.parametrize('active', [False, True])
-def test_individual_coil_penalties_and_gradients_on_circle(active):
+@pytest.mark.parametrize('squared', [False, True])
+def test_individual_coil_penalties_and_gradients_on_circle(active, squared):
     def circle_field(radius):
         coefficients = jnp.zeros((1, 3, 3)).at[0, 0, 2].set(radius).at[0, 1, 1].set(radius)
         return BiotSavart(Coils(Curves(coefficients, n_segments=16, stellsym=False), jnp.array([1e5])))
@@ -185,9 +189,9 @@ def test_individual_coil_penalties_and_gradients_on_circle(active):
     length_target, curvature_target = (3., 1.) if active else (10., 10.)
     def penalties(x):
         field = circle_field(x[0])
-        return jnp.stack((loss_coil_length_max(field, length_target),
+        return jnp.stack((loss_coil_length_max(field, length_target, squared=squared),
                           loss_coil_curvature_from_field(field, curvature_target)))
-    expected = np.array([max(2*np.pi*radius-length_target, 0.),
+    expected = np.array([max(2*np.pi*radius-length_target, 0.)**(2 if squared else 1),
                           max(1/radius-curvature_target, 0.)**2*2*np.pi*radius])
     np.testing.assert_allclose(penalties(jnp.array([radius])), expected, rtol=1e-12)
     jacobian = jax.jacrev(penalties)(jnp.array([radius]))[:, 0]
@@ -244,4 +248,31 @@ def test_curvature_sampling_is_independent_of_field_quadrature():
         np.testing.assert_allclose(a, b, rtol=1e-12, atol=1e-12)
     assert not np.isclose(float(resolved(coefficients)), float(penalty(coefficients, 8)))
     directional_check(resolved, coefficients)
+
+
+def test_vacuum_qa_axisymmetry_scaling_and_periodic_quadrature():
+    surface = torus(ntheta=16, nphi=12)
+    for amplitude in (1., -3., 1e-12):
+        assert float(loss_quasi_axisymmetry(ToroidalField(jnp.array(amplitude)), surface,
+                                             lambda_mpol=2, lambda_ntor=1)) < 1e-24
+    field = StraightAngleField(jnp.array(.4), jnp.array(.2))
+    values = [loss_quasi_axisymmetry(field, torus(ntheta=nt, nphi=np_, close=close),
+                                      lambda_mpol=3, lambda_ntor=0)
+              for nt, np_, close in [(32, 12, False), (33, 13, True)]]
+    np.testing.assert_allclose(values, values[0], rtol=1e-12, atol=1e-14)
+    for amplitude in (-3., 1e-12):
+        scaled = StraightAngleField(jnp.array(.4), jnp.array(.2), amplitude=amplitude)
+        np.testing.assert_allclose(loss_quasi_axisymmetry(scaled, torus(ntheta=32, nphi=12),
+                                                         lambda_mpol=3, lambda_ntor=0),
+                                   values[0], rtol=1e-12, atol=1e-14)
+
+
+def test_vacuum_qa_coil_and_surface_derivatives():
+    coefficients = jnp.array([[[2., 0., .8], [0., 0., 0.], [0., .8, 0.]]])
+    field = BiotSavart(Coils(Curves(coefficients, n_segments=16, nfp=4, stellsym=False),
+                             jnp.array([1e5])))
+    objective = custom_loss(loss_quasi_axisymmetry, 'field', 'surface',
+                            lambda_mpol=2, lambda_ntor=1)
+    objective.dependencies = {'field': field, 'surface': torus(ntheta=8, nphi=7)}
+    directional_check(objective, objective.starting_dofs, rtol=3e-5, step=1e-6)
 

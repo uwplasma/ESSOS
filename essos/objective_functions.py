@@ -7,7 +7,7 @@ from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart,BiotSavart_from_gamma
-from essos.surfaces import BdotN_over_B, B_contravariant_theta_phi_on_surface, iota_approx_on_surface, _surface_mean
+from essos.surfaces import BdotN_over_B, B_on_surface, B_contravariant_theta_phi_on_surface, iota_approx_on_surface, _surface_mean
 from essos.coils import Curves, Coils
 from essos.constants import mu_0
 from essos.coil_perturbation import perturb_curves, perturb_curves_systematic, perturb_curves_statistic
@@ -244,6 +244,32 @@ def loss_quasi_symmetry(field, surface):
     residual = quasi_symmetry_residual_on_surface(field, surface)
     return _surface_mean(surface, residual**2)
 
+
+def loss_quasi_axisymmetry(field, surface, *, lambda_mpol=6, lambda_ntor=6):
+    """Vacuum two-term QA residual with VMEC flux-surface quadrature.
+
+    On a flux surface, grad(psi) = B^phi (e_theta x e_phi)/(1+lambda_theta)
+    and the vacuum covariant current functions are I=0, G=<B.e_phi>.
+    This selects QA, unlike the helicity-free triple product. Use together
+    with normal-field and straight-angle validity penalties; the reconstruction
+    requires nonzero B^phi and an invertible fitted angle. The Jacobian floor
+    only keeps invalid trial coordinates finite, not physically acceptable.
+    """
+    fit = iota_approx_on_surface(surface, field, lambda_mpol=lambda_mpol,
+                                 lambda_ntor=lambda_ntor, return_diagnostics=True)
+    B = B_on_surface(surface, field)
+    grad = jax.vmap(field.dAbsB_by_dX)(surface.gamma.reshape(-1, 3)).reshape(B.shape)
+    etheta, ephi = surface.gammadash_theta, surface.gammadash_phi
+    btheta, bphi = jnp.sum(B * etheta, axis=-1), jnp.sum(B * ephi, axis=-1)
+    dtheta, dphi = jnp.sum(grad * etheta, axis=-1), jnp.sum(grad * ephi, axis=-1)
+    Bphi = B_contravariant_theta_phi_on_surface(surface, field)[..., 1]
+    jacobian = jnp.maximum(fit['angle_jacobian'], 0.1)
+    cross_flux = Bphi / jacobian * (btheta * dphi - bphi * dtheta)
+    G = _surface_mean(surface, bphi)
+    residual = (-fit['iota'] * cross_flux - G * jnp.sum(B * grad, axis=-1)) / jnp.linalg.norm(B, axis=-1)**3
+    weight = jacobian / jnp.abs(Bphi)
+    return _surface_mean(surface, weight * residual**2) / _surface_mean(surface, weight)
+
 def loss_iota_approx(field, surface, iota_target, *, lambda_mpol=None, lambda_ntor=None):
     """
     Penalize the distance between the surface rotational transform and a target.
@@ -422,9 +448,10 @@ def loss_coil_length(coils, max_coil_length=0):
     return jnp.square(coils.length/max_coil_length - 1)
 
 # Penalize only if the coil is longer than the target.
-@partial(jit, static_argnames=["max_coil_length"])
-def loss_coil_length_max(field, max_coil_length=0):
-    return jnp.mean(jnp.maximum(0.0, field.coils.length - max_coil_length) )
+@partial(jit, static_argnames=["max_coil_length", "squared"])
+def loss_coil_length_max(field, max_coil_length=0, *, squared=False):
+    excess = jnp.maximum(0.0, field.coils.length - max_coil_length)
+    return jnp.mean(excess**2 if squared else excess)
 
 
 @partial(jit, static_argnames=['max_coil_curvature'])
