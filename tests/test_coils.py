@@ -373,47 +373,79 @@ def test_axis_coil_viewer_builds_closed_full_torus_without_changing_target(monke
                             add_legend=lambda: None, view_isometric=lambda: None)
     surface = _small_surface(); surface.range_torus = 'half period'
     final = Coils(CreateCoilsAroundAxis(1, 1, .6, surface=surface, stellsym=True, n_segments=8), [1.])
-    orbits = np.arange(36., dtype=float).reshape(2, 6, 3)
-    plot_pyvista(surface, final, scene, 'QA', orbits)
+    orbits = np.arange(180., dtype=float).reshape(10, 6, 3)
+    labels = [f'wout-gc: {"trapped" if i < 5 else "passing"} {i+1}' for i in range(10)]
+    plot_pyvista(surface, final, scene, 'QA', orbits, labels)
     assert surface.range_torus == 'half period' and not surface.close
     assert surface.nphi == 8 and surface.ntheta == 10
     boundary = meshes[0][0]
     np.testing.assert_allclose(boundary[0], boundary[-1], atol=1e-14)
     np.testing.assert_allclose(boundary[:, 0], boundary[:, -1], atol=1e-14)
     assert meshes[0][1]['opacity'] == .30
-    assert len(meshes) == 3 + len(final)
-    for (mesh, style), expected in zip(meshes[1:-2], final.gamma):
+    assert len(meshes) == 11 + len(final)
+    for (mesh, style), expected in zip(meshes[1:-10], final.gamma):
         np.testing.assert_array_equal(mesh[:-1], expected)
         np.testing.assert_array_equal(mesh[0], mesh[-1])
         assert style['color'] == 'gold'
-    for (mesh, style), expected in zip(meshes[-2:], orbits):
+    for (mesh, style), expected, label in zip(meshes[-10:], orbits, labels):
         np.testing.assert_array_equal(mesh, expected)  # Particle paths must not be closed like coils.
-        assert 'Wout trapped orbit' in style['label']
+        assert style['label'] == label
+    assert len({style['color'] for _, style in meshes[-10:]}) == 10
 
 
-def test_wout_orbit_overlay_rejects_passing_lost_and_nonfinite_traces(monkeypatch):
+def test_orbit_overlay_classifies_both_models_and_rejects_failed_traces(monkeypatch):
     from types import SimpleNamespace
-    import essos.fields as fields
     import essos.dynamics as dynamics
-    from examples.coil_optimization.optimize_axis_coils_alm import trace_trapped_orbits
-    monkeypatch.setattr(fields, 'Vmec', lambda *a, **k: SimpleNamespace(
-        nfp=2, AbsB=lambda x: 2. + .1*jnp.cos(x[1])))
-    states = np.zeros((2, 16, 4)); states[..., 0] = .3
-    states[..., 3] = 1e5*np.cos(np.linspace(0., 4*np.pi, 16))
-    xyz = np.arange(96., dtype=float).reshape(2, 16, 3)
-    monkeypatch.setattr(dynamics, 'Tracing', lambda **k: SimpleNamespace(
-        trajectories=states, trajectories_xyz=xyz, status=np.zeros(2)))
-    np.testing.assert_array_equal(trace_trapped_orbits('unused'), xyz)
-    for change in ('passing', 'lost', 'nonfinite', 'failed'):
+    from examples.coil_optimization import optimize_axis_coils_alm as example
+    equilibrium = SimpleNamespace(nfp=2, AbsB=lambda x: 2. + .1*jnp.cos(x[1]),
+        to_xyz=lambda x: jnp.array([3*jnp.cos(x[2]), 3*jnp.sin(x[2]), x[0]]), boundary_distance=lambda x: jnp.array(1.))
+    uniform = SimpleNamespace(B=lambda x: jnp.array([0., 0., 5.86]),
+                              B_contravariant=lambda x: jnp.array([0., 0., 5.86]), AbsB=lambda x: jnp.array(5.86))
+    monkeypatch.setattr(example, 'BiotSavart', lambda c: uniform)
+    states = np.zeros((10, 64, 4)); states[..., 0] = .3
+    states[..., 2] = np.linspace(0., 4*np.pi, 64)
+    states[:5, :, 3] = 1e6*np.cos(np.linspace(0., 4*np.pi, 64)); states[5:, :, 3] = 1e7
+    xyz = np.stack((np.cos(states[..., 2]), np.sin(states[..., 2]), states[..., 0]), axis=-1)
+    def tracing(**kwargs):
+        assert kwargs['solver'].__class__.__name__ == 'Dopri8'
+        if kwargs['model'] == 'FullOrbitAdaptative':
+            p = kwargs['particles']
+            np.testing.assert_allclose(np.linalg.norm(p.initial_vxvyvz, axis=1), p.total_speed, rtol=1e-13)
+            np.testing.assert_allclose(p.initial_vxvyvz[:, 2]/p.total_speed, [.1]*5 + [.95, -.95, .95, -.95, .95])
+            omega = p.charge*5.86/p.mass
+            np.testing.assert_allclose(p.initial_xyz_fullorbit - jnp.cross(jnp.array([0., 0., 1.]), p.initial_vxvyvz)/omega,
+                                       p.initial_xyz, atol=1e-14)
+            assert kwargs['timestep'] <= 2*np.pi/omega/16
+            full = np.zeros((10, 64, 6)); full[..., :3] = xyz; full[..., 5] = states[..., 3]
+            return SimpleNamespace(trajectories=full, trajectories_xyz=xyz)
+        return SimpleNamespace(trajectories=states, trajectories_xyz=xyz, status=np.zeros(10))
+    monkeypatch.setattr(dynamics, 'Tracing', tracing)
+    for model in ('wout-gc', 'coils-lorentz'):
+        actual, labels = example.trace_orbits(equilibrium, None, model)
+        np.testing.assert_array_equal(actual, xyz)
+        assert sum(': trapped ' in label for label in labels) == sum(': passing ' in label for label in labels) == 5
+    for change in ('nonfinite', 'failed'):
         with monkeypatch.context() as patch:
             bad = states.copy()
-            if change == 'passing': bad[..., 3] = 1e5
-            elif change == 'lost': bad[0, -1, 0] = 1.
-            elif change == 'nonfinite': bad[0, -1, 3] = np.nan
+            if change == 'nonfinite': bad[0, -1, 3] = np.nan
             patch.setattr(dynamics, 'Tracing', lambda **k: SimpleNamespace(
-                trajectories=bad, trajectories_xyz=xyz, status=np.full(2, 4 if change == 'failed' else 0)))
-            with pytest.raises(RuntimeError, match='Could not verify'):
-                trace_trapped_orbits('unused')
+                trajectories=bad, trajectories_xyz=xyz, status=np.full(10, 4 if change == 'failed' else 0)))
+            with pytest.raises(RuntimeError, match='Incomplete orbit trace'):
+                example.trace_orbits(equilibrium, None)
+    states[:5, :, 3] = 1e7
+    _, labels = example.trace_orbits(equilibrium, None)
+    assert all(': passing ' in label for label in labels)  # Do not preserve assumed seed labels.
+    states[..., 2] = 0.
+    _, labels = example.trace_orbits(equilibrium, None)
+    assert all(': unresolved ' in label for label in labels)
+    stopped, stopped_xyz = states.copy(), xyz.copy()
+    stopped[0, 20:], stopped_xyz[0, 20:] = np.inf, np.nan
+    monkeypatch.setattr(dynamics, 'Tracing', lambda **k: SimpleNamespace(
+        trajectories=stopped, trajectories_xyz=stopped_xyz, status=np.r_[1, np.zeros(9)],
+        lcfs_states=states[:, 19], lcfs_positions=xyz[:, 19]))
+    actual, labels = example.trace_orbits(equilibrium, None)
+    assert np.isfinite(actual).all() and '(LCFS exit)' in labels[0]
+    np.testing.assert_array_equal(actual[0, -1], xyz[0, 19])
 
 
 def test_axis_coil_metrics_report_absolute_field_error_and_physical_geometry(monkeypatch, capsys):
@@ -449,7 +481,7 @@ def test_axis_alm_reports_after_autodiff_keep_cache_metadata_static(monkeypatch,
     from types import SimpleNamespace
     from examples.coil_optimization import optimize_axis_coils_alm as example
     surface = _small_surface(); surface.nphi = surface.ntheta = 4
-    monkeypatch.setattr(example.SurfaceRZFourier, 'from_wout_file', lambda *a, **k: surface)
+    monkeypatch.setattr(example.SurfaceRZFourier, 'from_vmec', lambda *a, **k: surface)
     def checked_coils(*args, **kwargs):
         coils = Coils(*args, **kwargs)
         assert isinstance(coils._tree_flatten()[1]['currents_scale'], float), 'tracer in static JIT cache metadata'
@@ -462,3 +494,42 @@ def test_axis_alm_reports_after_autodiff_keep_cache_metadata_static(monkeypatch,
     output = capsys.readouterr().out
     assert 'Initial: max' in output and 'Final: max' in output
     assert final.curves.n_base_curves == 1 and len(history) == 2 and np.isfinite(history).all()
+
+
+def test_reactor_scaling_preserves_vmec_geometry_and_field_units_and_normalizes_coils(monkeypatch):
+    from essos.fields import Vmec, BiotSavart, VMEC_WOUT_PARTNERS
+    from essos.coils import CreateCoilsAroundAxis
+    from examples.coil_optimization import optimize_axis_coils_alm as example
+    s = jnp.linspace(0., 1., 5); rh = jnp.sqrt(jnp.r_[0., s[1:]-.125])
+    table = lambda a, b: jnp.stack((jnp.full_like(s, a), b), axis=-1)
+    arrays = dict(nfp=1, ns=5, xm=jnp.array([0, 1]), xn=jnp.array([0, 0]),
+                  xm_nyq=jnp.array([0, 1]), xn_nyq=jnp.array([0, 0]), Aminor_p=1.,
+                  rmnc=table(3., jnp.sqrt(s)), zmns=table(0., jnp.sqrt(s)),
+                  bmnc=table(3., rh), gmnc=table(1.5, .5*rh), bsubsmns=table(0., .02*s),
+                  bsubumnc=table(.1, .02*rh), bsubvmnc=table(9., rh),
+                  bsupumnc=table(.01, .001*rh), bsupvmnc=table(1., .01*rh))
+    arrays.update({partner: .03*arrays[name].at[:, 0].set(0.) for name, partner in VMEC_WOUT_PARTNERS.items()})
+    source = Vmec.from_arrays(**arrays, ntheta=3, nphi=3)
+    class Reader:
+        def __new__(cls, *a, **k): return source
+        from_arrays = staticmethod(Vmec.from_arrays)
+    monkeypatch.setattr(example, 'Vmec', Reader)
+    scaled = example.reactor_equilibrium('in_memory', 1.7, 5.86)
+    point = jnp.array([.43, 1.2, .7]); L = 1.7; B = float(scaled.bmnc[2, 0]/source.bmnc[2, 0])
+    np.testing.assert_allclose(scaled.Aminor_p, 1.7)
+    for method, factor in (('to_xyz', L), ('B', B), ('AbsB', B), ('B_covariant', B*L),
+                           ('B_contravariant', B/L), ('sqrtg', L**3), ('curl_B', B/L**2)):
+        np.testing.assert_allclose(getattr(scaled, method)(point), getattr(source, method)(point)*factor, rtol=2e-12, atol=1e-14)
+    np.testing.assert_allclose(source.rmnc, arrays['rmnc'])
+    # Independent dense midpoint integration, including asymmetric Fourier partners.
+    rr, tt, pp = jnp.meshgrid((jnp.arange(12)+.5)/12, jnp.arange(24)*2*jnp.pi/24,
+                               jnp.arange(24)*2*jnp.pi/24, indexing='ij')
+    grid = jnp.stack((rr, tt, pp), axis=-1).reshape(-1, 3)
+    weight = np.asarray(jax.lax.map(lambda q: jnp.abs(scaled.sqrtg(q)), grid, batch_size=32))
+    norm = np.asarray(jax.lax.map(scaled.AbsB, grid, batch_size=32))
+    np.testing.assert_allclose(np.average(norm, weights=weight), 5.86, rtol=3e-3)
+    coils = Coils(CreateCoilsAroundAxis(2, 1, 2.8, surface=scaled.surface, stellsym=True, n_segments=32), [-1., -1.], currents_scale=1.)
+    final = example.reactor_coils(scaled, coils)
+    norm = np.asarray(jax.lax.map(lambda q: BiotSavart(final).AbsB(scaled.to_xyz(q)), grid, batch_size=32))
+    np.testing.assert_allclose(np.average(norm, weights=weight), 5.86, rtol=3e-3)
+    np.testing.assert_array_equal(final.gamma, coils.gamma)

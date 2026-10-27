@@ -117,13 +117,37 @@ their wouts. `--outer-steps`, `--inner-steps` and `--grid` control the work.
 The example writes no files; `--plot` displays interactive figures.
 For the JAX-branch ParaView-style view, install `pyvista` and use `--pyvista`:
 it displays a full-torus boundary with optimized coils in gold, in one panel
-per case. Both viewers show a transparent boundary (opacity 0.30) and only
-the optimized coils, plus two trapped alpha-particle orbits in the **wout
-equilibrium field** (red/cyan). Each orbit must remain confined, complete
-successfully and show at least two parallel-velocity reversals. Defaults are
-4 keV and 2 ms, set by `--orbit-energy-kev` and `--orbit-time`; `--no-orbits`
-hides particles and skips tracing. Initial coils stay hidden. Meshes and
-orbits stay in memory; no VTK files are written.
+per case. Both viewers show the entire closed torus (opacity 0.30) and only
+the optimized coils, plus ten alpha-particle paths: five low-pitch trapped
+seeds (warm colors) and five high-pitch passing seeds (cool colors), at
+`s = 0.15, 0.25, 0.35, 0.45, 0.55`. Parallel-velocity reversals verify trapped
+motion; passing motion requires one full toroidal transit without reversal.
+Labels report measured classes, unresolved paths and sampled boundary crossings.
+
+The default ARIES-CS scaling is VMEC minor radius **1.70 m** and volume-averaged
+`|B|` **5.86 T**, following [the QH coil study](https://www.cambridge.org/core/services/aop-cambridge-core/content/view/S0022377824000540).
+`--minor-radius` and `--mean-b` override them. Geometry, magnetic components and
+the Jacobian are rescaled consistently in memory before fitting coils; input
+wouts are unchanged. Defaults are **3.52 MeV** fusion alphas and **0.1 ms**, set
+by `--orbit-energy-kev 3520` and `--orbit-time 1e-4`.
+
+```sh
+# Adaptive guiding centers in the scaled wout equilibrium (default).
+python -m examples.coil_optimization.optimize_axis_coils_alm --case qa --pyvista --orbit-model wout-gc
+# Adaptive Lorentz orbits in the optimized coil field.
+python -m examples.coil_optimization.optimize_axis_coils_alm --case qa --pyvista --orbit-model coils-lorentz
+```
+
+Both use existing Dopri8 solvers. Coil Lorentz tracing first rescales the common
+current to the requested volume-averaged field (8 radial Gauss nodes and 32×32
+angles per field period), with its sign aligned to the equilibrium field. It
+uses the existing guiding-center-to-Lorentz position/velocity initialization.
+Lorentz integration resolves gyromotion and can take much longer; the printed
+gyroperiod estimates that cost. `--orbit-points` sets saved points (default 1024),
+independently of adaptive steps; `--orbit-max-steps` sets the step budget.
+`--no-orbits` skips tracing. Initial coils stay hidden. Meshes and orbits stay
+in memory; no VTK files are written. These ten selected paths illustrate orbit
+behavior; they do not estimate a loss fraction.
 Initial and final console reports list length, maximum curvature and arclength-
 weighted mean curvature for each independent base coil (symmetry copies share
 these values), plus the total field's sampled maximum and RMS `B.n/|B|`.
