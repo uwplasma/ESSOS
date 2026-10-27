@@ -333,9 +333,11 @@ def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, 
     compacted = trace_boozer(field, *args, **kwargs, **(
         {"progress": lambda d, t: callbacks[1].append((d, t))} if with_progress else {}))
     assert callbacks[0] == callbacks[1]
-    for name in ("times", "states", "loss_times", "thermalized_times",
-                 "failed_times", "energy_error"):
+    for name in ("times", "states", "loss_times", "thermalized_times", "failed_times"):
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
+    # Batch compaction can change the final diagnostic subtraction by one ulp.
+    np.testing.assert_allclose(compacted.energy_error, whole.energy_error,
+                               rtol=0., atol=2*np.finfo(float).eps)
 
 
 @pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
