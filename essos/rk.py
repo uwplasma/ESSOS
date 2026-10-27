@@ -757,7 +757,7 @@ def _evaluate_inline(graph, constants, *arguments):
 
     for equation in graph.eqns:
         values = [read(var) for var in equation.invars]
-        if equation.primitive.name == "jit":
+        if equation.primitive.name in ("jit", "pjit"):
             nested = equation.params["jaxpr"]
             result = _evaluate_inline(nested.jaxpr, nested.consts, *values)
         else:

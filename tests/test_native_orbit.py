@@ -326,6 +326,15 @@ def test_rhs_preparation_and_gpu_helpers_preserve_values(monkeypatch):
         def get_bind_params(self,p): return ([],p)
         def bind(self,*args,**kwargs): return args[0]+kwargs['offset']
     assert _bind_primitive(Primitive(),[2.],dict(offset=3.))==5.
+    # JAX 0.6 calls this boundary "pjit"; current releases call it "jit".
+    nested=jax.make_jaxpr(lambda x:x*jnp.array([2.,3.]))(jnp.ones(2))
+    for name in ('jit','pjit'):
+        graph=SimpleNamespace(constvars=(),invars=('x',),outvars=('y',),eqns=(
+            SimpleNamespace(primitive=SimpleNamespace(name=name),params={'jaxpr':nested},
+                            invars=('x',),outvars=('y',)),))
+        inline=lambda x:rk._evaluate_inline(graph,(),x)[0].sum()
+        np.testing.assert_allclose(jax.jit(inline)(jnp.ones(2)),5.,atol=0)
+        np.testing.assert_array_equal(jax.grad(inline)(jnp.ones(2)),[2.,3.])
     def value(p):
         rhs=lambda t,y,args:jnp.sin(p)*y+t
         prepared=rk._prepare_rhs(rhs,jnp.asarray(0.),jnp.ones(2),None)
