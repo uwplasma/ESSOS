@@ -14,10 +14,10 @@ import numpy as np
 import essos.augmented_lagrangian as alm
 from essos.coils import Coils, CreateCoilsAroundAxis, apply_symmetries_to_gammas
 from essos.fields import BiotSavart
-from essos.surfaces import SurfaceRZFourier, SquaredFlux
+from essos.surfaces import SurfaceRZFourier, SquaredFlux, BdotN_over_B
 
 
-def plot_pyvista(surface, final, plotter, title):
+def plot_pyvista(surface, final, plotter, title, orbits=()):
     """Build a full-torus surface and closed coil lines in memory."""
     from copy import copy
     import pyvista as pv
@@ -26,14 +26,64 @@ def plot_pyvista(surface, final, plotter, title):
     boundary.nphi, boundary.ntheta = max(64, 2 * surface.nfp * surface.nphi), max(48, surface.ntheta)
     xyz = np.asarray(boundary.gamma)
     plotter.add_mesh(pv.StructuredGrid(xyz[..., 0], xyz[..., 1], xyz[..., 2]),
-                     color='royalblue', opacity=.12, smooth_shading=True)
+                     color='royalblue', opacity=.30, smooth_shading=True)
     for index, line in enumerate(np.asarray(final.gamma)):
         plotter.add_mesh(pv.lines_from_points(line, close=True), color='gold',
                          render_lines_as_tubes=True, line_width=5, label='Optimized' if index == 0 else None)
+    for index, (line, color) in enumerate(zip(orbits, ('tomato', 'cyan')), 1):
+        plotter.add_mesh(pv.lines_from_points(line), color=color, line_width=3,
+                         render_lines_as_tubes=True, label=f'Wout trapped orbit {index}')
     plotter.add_text(title, font_size=14)
     plotter.add_axes()
     plotter.add_legend()
     plotter.view_isometric()
+
+
+def trace_trapped_orbits(wout, duration=2e-3, energy_kev=4.):
+    """Two collisionless alpha guiding centers in the wout field; verify repeated bounces."""
+    import diffrax
+    from essos.constants import ONE_EV
+    from essos.dynamics import Particles, Tracing
+    from essos.fields import Vmec
+    field = Vmec(str(wout), ntheta=3, nphi=3)
+    theta, phi = jnp.meshgrid(jnp.linspace(0., 2*jnp.pi, 16, endpoint=False),
+                             jnp.linspace(0., 2*jnp.pi/field.nfp, 16, endpoint=False))
+    births = []
+    for s in (.25, .55):
+        grid = jnp.stack((jnp.full_like(theta, s), theta, phi), axis=-1).reshape(-1, 3)
+        births.append(grid[jnp.argmin(jax.vmap(field.AbsB)(grid))])
+    particles = Particles(initial_xyz=jnp.stack(births), initial_vparallel_over_v=[.1, .1],
+                          energy=energy_kev * 1e3 * ONE_EV)
+    print(f'Tracing two {energy_kev:g} keV alpha guiding centers in the wout field for {duration:g} s', flush=True)
+    trace = Tracing(field=field, particles=particles, model='GuidingCenterAdaptative', solver=diffrax.Dopri8(),
+                    maxtime=duration, timestep=duration/128, times_to_trace=512,
+                    rtol=1e-8, atol=1e-8, max_steps=16384, progress=False)
+    states, xyz = np.asarray(trace.trajectories), np.asarray(trace.trajectories_xyz)
+    vpar = states[..., 3]
+    bounces = np.sum(np.diff(np.signbit(vpar), axis=1), axis=1)
+    trapped = ((bounces >= 2) & (vpar.min(axis=1) < -1e-4 * float(particles.total_speed))
+               & (vpar.max(axis=1) > 1e-4 * float(particles.total_speed)))
+    if (np.any(np.asarray(trace.status) != 0) or not np.isfinite(states).all() or not np.isfinite(xyz).all() or not trapped.all()
+            or np.any((states[..., 0] < 0) | (states[..., 0] >= 1))):
+        raise RuntimeError(f'Could not verify two confined trapped orbits: status={np.asarray(trace.status).tolist()}, '
+                           f'v_parallel reversals={bounces.tolist()}, s ranges={states[..., 0].min(axis=1).tolist()} '
+                           f'to {states[..., 0].max(axis=1).tolist()}; increase --orbit-time or inspect the wout.')
+    print(f'  Verified trapped orbits: parallel-velocity reversals={bounces.tolist()}', flush=True)
+    return xyz
+
+
+def print_metrics(label, surface, coils):
+    """Report independent-coil geometry and the total field's sampled normal error."""
+    normal = np.asarray(BdotN_over_B(surface, BiotSavart(coils)))
+    count = coils.curves.n_base_curves
+    lengths, curvature = np.asarray(coils.length)[:count], np.asarray(coils.curvature)[:count]
+    speed = np.linalg.norm(np.asarray(coils.gamma_dash)[:count], axis=-1)
+    mean_curvature = np.sum(curvature * speed, axis=1) / np.sum(speed, axis=1)
+    print(f'{label}: max |B.n|/|B|={np.max(np.abs(normal)):.6e}; '
+          f'RMS B.n/|B|={np.sqrt(np.mean(normal**2)):.6e}', flush=True)
+    print('  Base coil   Length [m]   Max curvature [1/m]   Mean curvature [1/m] (arclength weighted)')
+    for index, (length, maximum, mean) in enumerate(zip(lengths, curvature.max(axis=1), mean_curvature), 1):
+        print(f'  {index:9d}   {length:.6f}   {maximum:.6f}   {mean:.6f}', flush=True)
 
 
 def optimize(wout, options):
@@ -73,6 +123,7 @@ def optimize(wout, options):
     history = [float(objective(x))]
     print(f'{wout.name}: nfp={surface.nfp}, {len(initial)} coils, radius={radius:.5g} m; '
           f'initial squared flux={history[0]:.5e}', flush=True)
+    print_metrics('Initial', surface, initial)
     for step in range(options.outer_steps):
         params, state, gradient, info = solver.update(params, state, gradient, info)
         value = float(info[0]); violation = float(jnp.max(jnp.maximum(-margins(params[0]), 0.)))
@@ -84,7 +135,9 @@ def optimize(wout, options):
               f'max scaled violation={violation:.3e}; |grad|={gradient_norm:.3e}', flush=True)
         if violation < 1e-4 and gradient_norm < 1e-6:
             break
-    return surface, coils(params[0]), history
+    final = coils(params[0])
+    print_metrics('Final', surface, final)
+    return surface, final, history
 
 
 def main():
@@ -107,6 +160,9 @@ def main():
     parser.add_argument('--coil-gap', type=float, default=.05, help='minimum sampled coil distance / initial radius')
     parser.add_argument('--plot', action='store_true')
     parser.add_argument('--pyvista', action='store_true', help='interactive ParaView-style surface and coil views')
+    parser.add_argument('--no-orbits', action='store_true', help='hide particles and skip orbit tracing')
+    parser.add_argument('--orbit-time', type=float, default=2e-3, help='wout orbit duration in seconds (when plotting)')
+    parser.add_argument('--orbit-energy-kev', type=float, default=4., help='alpha guiding-center energy for the two orbits')
     options = parser.parse_args()
     cases = ('qa', 'qh', 'qi') if options.case == 'all' else (options.case,)
     for name in cases:
@@ -116,10 +172,10 @@ def main():
     if min(options.coils, options.order, options.outer_steps, options.inner_steps) < 1 or min(options.grid, options.segments) < 3:
         parser.error('counts and iteration limits must be positive; grid and segments must be at least 3')
     if not np.isfinite([options.radius_factor, options.length_factor, options.curvature_factor,
-                        options.surface_gap, options.coil_gap]).all() or min(
+                        options.surface_gap, options.coil_gap, options.orbit_time, options.orbit_energy_kev]).all() or min(
                             options.radius_factor, options.length_factor, options.curvature_factor,
-                            options.surface_gap, options.coil_gap) <= 0:
-        parser.error('geometry factors and separation distances must be finite and positive')
+                            options.surface_gap, options.coil_gap, options.orbit_time, options.orbit_energy_kev) <= 0:
+        parser.error('geometry factors, separation distances, orbit time and energy must be finite and positive')
     if options.pyvista:
         try:
             import pyvista as pv
@@ -131,13 +187,17 @@ def main():
         figure = plt.figure(figsize=(6 * len(cases), 9))
     for index, name in enumerate(cases):
         surface, final, history = optimize(getattr(options, name), options)
+        orbits = (trace_trapped_orbits(getattr(options, name), options.orbit_time, options.orbit_energy_kev)
+                  if (options.plot or options.pyvista) and not options.no_orbits else ())
         if options.pyvista:
             plotter.subplot(0, index)
-            plot_pyvista(surface, final, plotter, name.upper())
+            plot_pyvista(surface, final, plotter, name.upper(), orbits)
         if options.plot:
             ax = figure.add_subplot(2, len(cases), index + 1, projection='3d')
-            surface.plot(ax=ax, show=False, alpha=.12)
+            surface.plot(ax=ax, show=False, alpha=.30)
             final.plot(ax=ax, show=False, color='gold')
+            for orbit, color in zip(orbits, ('tomato', 'cyan')):
+                ax.plot(*orbit.T, color=color, linewidth=2)
             ax.set_title(f'{name.upper()}: optimized coils')
             ax = figure.add_subplot(2, len(cases), len(cases) + index + 1)
             ax.semilogy(history, marker='.')

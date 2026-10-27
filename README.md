@@ -117,8 +117,16 @@ their wouts. `--outer-steps`, `--inner-steps` and `--grid` control the work.
 The example writes no files; `--plot` displays interactive figures.
 For the JAX-branch ParaView-style view, install `pyvista` and use `--pyvista`:
 it displays a full-torus boundary with optimized coils in gold, in one panel
-per case. Both viewers show a transparent boundary (opacity 0.12) and only
-the optimized coils. Meshes stay in memory; no VTK files are written.
+per case. Both viewers show a transparent boundary (opacity 0.30) and only
+the optimized coils, plus two trapped alpha-particle orbits in the **wout
+equilibrium field** (red/cyan). Each orbit must remain confined, complete
+successfully and show at least two parallel-velocity reversals. Defaults are
+4 keV and 2 ms, set by `--orbit-energy-kev` and `--orbit-time`; `--no-orbits`
+hides particles and skips tracing. Initial coils stay hidden. Meshes and
+orbits stay in memory; no VTK files are written.
+Initial and final console reports list length, maximum curvature and arclength-
+weighted mean curvature for each independent base coil (symmetry copies share
+these values), plus the total field's sampled maximum and RMS `B.n/|B|`.
 
 More in [`examples/coil_optimization`](examples/coil_optimization).
 

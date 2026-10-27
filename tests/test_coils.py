@@ -373,15 +373,59 @@ def test_axis_coil_viewer_builds_closed_full_torus_without_changing_target(monke
                             add_legend=lambda: None, view_isometric=lambda: None)
     surface = _small_surface(); surface.range_torus = 'half period'
     final = Coils(CreateCoilsAroundAxis(1, 1, .6, surface=surface, stellsym=True, n_segments=8), [1.])
-    plot_pyvista(surface, final, scene, 'QA')
+    orbits = np.arange(36., dtype=float).reshape(2, 6, 3)
+    plot_pyvista(surface, final, scene, 'QA', orbits)
     assert surface.range_torus == 'half period' and not surface.close
     assert surface.nphi == 8 and surface.ntheta == 10
     boundary = meshes[0][0]
     np.testing.assert_allclose(boundary[0], boundary[-1], atol=1e-14)
     np.testing.assert_allclose(boundary[:, 0], boundary[:, -1], atol=1e-14)
-    assert meshes[0][1]['opacity'] == .12
-    assert len(meshes) == 1 + len(final)
-    for (mesh, style), expected in zip(meshes[1:], final.gamma):
+    assert meshes[0][1]['opacity'] == .30
+    assert len(meshes) == 3 + len(final)
+    for (mesh, style), expected in zip(meshes[1:-2], final.gamma):
         np.testing.assert_array_equal(mesh[:-1], expected)
         np.testing.assert_array_equal(mesh[0], mesh[-1])
         assert style['color'] == 'gold'
+    for (mesh, style), expected in zip(meshes[-2:], orbits):
+        np.testing.assert_array_equal(mesh, expected)  # Particle paths must not be closed like coils.
+        assert 'Wout trapped orbit' in style['label']
+
+
+def test_wout_orbit_overlay_rejects_passing_lost_and_nonfinite_traces(monkeypatch):
+    from types import SimpleNamespace
+    import essos.fields as fields
+    import essos.dynamics as dynamics
+    from examples.coil_optimization.optimize_axis_coils_alm import trace_trapped_orbits
+    monkeypatch.setattr(fields, 'Vmec', lambda *a, **k: SimpleNamespace(
+        nfp=2, AbsB=lambda x: 2. + .1*jnp.cos(x[1])))
+    states = np.zeros((2, 16, 4)); states[..., 0] = .3
+    states[..., 3] = 1e5*np.cos(np.linspace(0., 4*np.pi, 16))
+    xyz = np.arange(96., dtype=float).reshape(2, 16, 3)
+    monkeypatch.setattr(dynamics, 'Tracing', lambda **k: SimpleNamespace(
+        trajectories=states, trajectories_xyz=xyz, status=np.zeros(2)))
+    np.testing.assert_array_equal(trace_trapped_orbits('unused'), xyz)
+    for change in ('passing', 'lost', 'nonfinite', 'failed'):
+        with monkeypatch.context() as patch:
+            bad = states.copy()
+            if change == 'passing': bad[..., 3] = 1e5
+            elif change == 'lost': bad[0, -1, 0] = 1.
+            elif change == 'nonfinite': bad[0, -1, 3] = np.nan
+            patch.setattr(dynamics, 'Tracing', lambda **k: SimpleNamespace(
+                trajectories=bad, trajectories_xyz=xyz, status=np.full(2, 4 if change == 'failed' else 0)))
+            with pytest.raises(RuntimeError, match='Could not verify'):
+                trace_trapped_orbits('unused')
+
+
+def test_axis_coil_metrics_report_absolute_field_error_and_physical_geometry(monkeypatch, capsys):
+    from scipy.special import ellipe
+    from essos.coils import CreateEquallySpacedCurves
+    from examples.coil_optimization import optimize_axis_coils_alm as example
+    circle = CreateEquallySpacedCurves(1, 1, 3., .6, n_segments=128)
+    ellipse = Curves(circle.dofs.at[:, 2, 1].set(-.3), n_segments=128, stellsym=False)
+    monkeypatch.setattr(example, 'BdotN_over_B', lambda *a: jnp.array([[-.4, .1]]))
+    example.print_metrics('Final', _small_surface(), Coils(ellipse, [1.]))
+    output = capsys.readouterr().out
+    assert 'Final: max |B.n|/|B|=4.000000e-01' in output
+    row = np.asarray(output.splitlines()[-1].split(), dtype=float)
+    length = 4 * .6 * ellipe(1 - (.3/.6)**2)
+    np.testing.assert_allclose(row, [1., length, .6/.3**2, 2*np.pi/length], atol=1e-6, rtol=0)
