@@ -604,6 +604,22 @@ class SurfaceRZFourier:
         
         return gamma, gammadash_theta, gammadash_phi
     
+    def centerline(self, phi):
+        """Cartesian poloidal-average curve at toroidal angle(s) ``phi`` in radians.
+
+        Uses all m=0 modes, including asymmetric partners. This geometric
+        centerline of a boundary is not necessarily its magnetic axis.
+        """
+        phi = jnp.asarray(phi)
+        phase = -phi[..., None] * self.xn
+        cosine, sine = jnp.cos(phase) * (self.xm == 0), jnp.sin(phase) * (self.xm == 0)
+        R, Z = cosine @ self.rc, sine @ self.zs
+        if self.rs is not None:
+            R += sine @ self.rs
+        if self.zc is not None:
+            Z += cosine @ self.zc
+        return jnp.stack((R * jnp.cos(phi), R * jnp.sin(phi), Z), axis=-1)
+
     # gamma, gammadash_theta, gammadash_phi properties
     @property
     def gamma(self):

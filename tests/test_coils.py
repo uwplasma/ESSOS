@@ -292,3 +292,96 @@ def test_discretized_coils_copy_and_json_round_trip(tmp_path):
     coils.to_json(str(tmp_path / "c.json"))
     loaded = DiscretizedCoils.from_json(str(tmp_path / "c.json"))
     np.testing.assert_allclose(loaded.gamma, coils.gamma, atol=1e-12)
+
+
+def test_axis_coils_recover_circular_initializer_and_custom_axis():
+    from essos.coils import CreateCoilsAroundAxis, CreateEquallySpacedCurves
+    for nfp, stellsym in ((1, False), (3, True)):
+        surface = surfacerzfourier_from_boundary(jnp.array([[3., .4]]), jnp.array([[0., .5]]), nfp)
+        options = dict(n_segments=16, stellsym=stellsym, scaling_factor=.2, scale_fixed=3.)
+        actual = CreateCoilsAroundAxis(3, 2, .8, surface=surface, **options)
+        expected = CreateEquallySpacedCurves(3, 2, 3., .8, nfp=nfp, **options)
+        np.testing.assert_allclose(actual.dofs, expected.dofs, atol=3e-14)
+        np.testing.assert_allclose(actual.gamma, expected.gamma, atol=3e-14)
+        custom = CreateCoilsAroundAxis(3, 2, .8, axis_function=surface.centerline, nfp=nfp, **options)
+        np.testing.assert_allclose(custom.gamma, actual.gamma, atol=3e-14)
+    for change in (dict(n_coils=0), dict(order=0), dict(n_axis_samples=1), dict(coil_radius=-1.),
+                   dict(axis_function=surface.centerline), dict(surface=None)):
+        with pytest.raises(ValueError):
+            CreateCoilsAroundAxis(**(dict(n_coils=3, order=2, coil_radius=.8, surface=surface) | change))
+
+
+def test_axis_coils_follow_3d_boundary_centerline_and_tangent():
+    from essos.coils import CreateCoilsAroundAxis
+    from essos.surfaces import SurfaceRZFourier
+    surface = SurfaceRZFourier(jnp.array([3., .2, .02, .4, .01]), jnp.array([0., .15, .01, .5, .04]),
+                              2, 1, 1, rs=jnp.array([0., .03, .01, 0., .02]),
+                              zc=jnp.array([.04, .02, 0., 0., .02]))
+    radii = np.linspace(.7, 1., 5)
+    curves = CreateCoilsAroundAxis(5, 3, radii, surface=surface, n_segments=16)
+    centers = np.asarray(curves.curves[:, :, 0]); phi = np.arctan2(centers[:5, 1], centers[:5, 0])
+    R = 3 + .2 * np.cos(2 * phi) - .03 * np.sin(2 * phi)
+    Z = .04 - .15 * np.sin(2 * phi) + .02 * np.cos(2 * phi)
+    np.testing.assert_allclose(centers[:5], np.stack((R*np.cos(phi), R*np.sin(phi), Z), axis=1), atol=2e-14)
+    np.testing.assert_allclose(surface.centerline(phi), centers[:5], atol=2e-14)
+    np.testing.assert_allclose(surface.centerline(phi + np.pi), centers[5:], atol=2e-14)
+    dR = -.4 * np.sin(2 * phi) - .06 * np.cos(2 * phi)
+    dZ = -.3 * np.cos(2 * phi) - .04 * np.sin(2 * phi)
+    tangent = np.stack((dR*np.cos(phi)-R*np.sin(phi), dR*np.sin(phi)+R*np.cos(phi), dZ), axis=1)
+    offsets = np.asarray(curves.gamma[:5]) - centers[:5, None, :]
+    np.testing.assert_allclose(np.sum(offsets * tangent[:, None, :], axis=2), 0., atol=3e-14)
+    np.testing.assert_allclose(np.linalg.norm(offsets, axis=2), np.broadcast_to(radii[:, None], (5, 16)), atol=2e-14)
+    # Independent quadrature checks arclength spacing rather than equal toroidal angles.
+    grid = np.linspace(0., np.pi, 8193)
+    speed = np.sqrt((3+.2*np.cos(2*grid)-.03*np.sin(2*grid))**2
+                    + (-.4*np.sin(2*grid)-.06*np.cos(2*grid))**2
+                    + (-.3*np.cos(2*grid)-.04*np.sin(2*grid))**2)
+    arc = np.r_[0., np.cumsum((speed[1:] + speed[:-1]) * np.diff(grid) / 2)]
+    np.testing.assert_allclose(np.interp(phi, grid, arc) / arc[-1], (np.arange(5)+.5)/5, atol=2e-5)
+
+
+def test_axis_coil_initializer_gradients_match_finite_differences():
+    from essos.coils import CreateCoilsAroundAxis
+    from essos.surfaces import SurfaceRZFourier
+    def objective(parameters):
+        shape, radius = parameters
+        surface = SurfaceRZFourier(jnp.array([3., shape, 0., .4, 0.]),
+                                  jnp.array([0., .15, 0., .5, 0.]), 2, 1, 1)
+        curves = CreateCoilsAroundAxis(3, 2, radius, surface=surface, n_segments=8, n_axis_samples=32)
+        return jnp.sum(curves.dofs * jnp.arange(curves.dofs.size).reshape(curves.dofs.shape))
+    parameters = jnp.array([.2, .8])
+    value, gradient = jax.jit(jax.value_and_grad(objective))(parameters)
+    assert np.isfinite(value) and np.isfinite(gradient).all()
+    evaluate = jax.jit(objective); h = 1e-5
+    finite_difference = [(evaluate(parameters.at[i].add(h)) - evaluate(parameters.at[i].add(-h))) / (2*h)
+                         for i in range(2)]
+    np.testing.assert_allclose(gradient, finite_difference, rtol=2e-7, atol=2e-7)
+
+
+def test_axis_coil_viewer_builds_closed_full_torus_without_changing_target(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from essos.coils import CreateCoilsAroundAxis
+    from examples.coil_optimization.optimize_axis_coils_alm import plot_pyvista
+    meshes = []
+    def lines(points, close=False):
+        return np.concatenate((points, points[:1])) if close else points
+    monkeypatch.setitem(sys.modules, 'pyvista', SimpleNamespace(
+        StructuredGrid=lambda x, y, z: np.stack((x, y, z), axis=-1), lines_from_points=lines))
+    scene = SimpleNamespace(add_mesh=lambda mesh, **kwargs: meshes.append((mesh, kwargs)),
+                            add_text=lambda *a, **k: None, add_axes=lambda: None,
+                            add_legend=lambda: None, view_isometric=lambda: None)
+    surface = _small_surface(); surface.range_torus = 'half period'
+    final = Coils(CreateCoilsAroundAxis(1, 1, .6, surface=surface, stellsym=True, n_segments=8), [1.])
+    plot_pyvista(surface, final, scene, 'QA')
+    assert surface.range_torus == 'half period' and not surface.close
+    assert surface.nphi == 8 and surface.ntheta == 10
+    boundary = meshes[0][0]
+    np.testing.assert_allclose(boundary[0], boundary[-1], atol=1e-14)
+    np.testing.assert_allclose(boundary[:, 0], boundary[:, -1], atol=1e-14)
+    assert meshes[0][1]['opacity'] == .12
+    assert len(meshes) == 1 + len(final)
+    for (mesh, style), expected in zip(meshes[1:], final.gamma):
+        np.testing.assert_array_equal(mesh[:-1], expected)
+        np.testing.assert_array_equal(mesh[0], mesh[-1])
+        assert style['color'] == 'gold'

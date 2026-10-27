@@ -86,6 +86,40 @@ result = least_squares(L, L.starting_dofs, L.grad, max_nfev=400)
 optimized = L.dofs_to_pytree(result.x)["field"].coils
 ```
 
+To initialize circular coils following a boundary's 3D centerline:
+
+```python
+from essos.coils import CreateCoilsAroundAxis
+
+curves = CreateCoilsAroundAxis(3, 3, coil_radius=5.6, surface=surface,
+                              n_segments=45, stellsym=True)
+coils = Coils(curves, currents=[1.0] * 3)
+```
+
+This uses the boundary's poloidally averaged `m=0` curve, including asymmetric
+modes, with circles perpendicular to its local tangent and approximately equal
+arclength spacing. `nfp` comes from the surface; `n_axis_samples` controls spacing
+accuracy. VMEX boundaries can use `surfacerzfourier_from_boundary(inp.rbc, inp.zbs,
+inp.nfp)`. For a solved magnetic axis, supply `axis_function(phi) -> xyz` and
+`nfp` instead of `surface`. Both paths support JAX differentiation.
+
+[`optimize_axis_coils_alm.py`](examples/coil_optimization/optimize_axis_coils_alm.py)
+fits vacuum coil fields to QA, QH and QI boundaries using this initializer and
+ALM constraints on length, curvature and sampled coil/coil and coil/surface
+distances. QA/QH wouts are bundled; supply your QI wout:
+
+```sh
+python -m examples.coil_optimization.optimize_axis_coils_alm --case all --qi /path/to/wout_QI.nc --plot
+```
+
+Use `--case qa` or `--case qh` for one bundled case; `--qa`/`--qh` override
+their wouts. `--outer-steps`, `--inner-steps` and `--grid` control the work.
+The example writes no files; `--plot` displays interactive figures.
+For the JAX-branch ParaView-style view, install `pyvista` and use `--pyvista`:
+it displays a full-torus boundary with optimized coils in gold, in one panel
+per case. Both viewers show a transparent boundary (opacity 0.12) and only
+the optimized coils. Meshes stay in memory; no VTK files are written.
+
 More in [`examples/coil_optimization`](examples/coil_optimization).
 
 ## Field-line tracing

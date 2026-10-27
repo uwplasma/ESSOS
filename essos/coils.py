@@ -1033,6 +1033,44 @@ def CreateEquallySpacedCurves(n_curves:   int,
 
 
 
+def CreateCoilsAroundAxis(n_coils, order, coil_radius, *, surface=None, axis_function=None,
+                          n_segments=100, nfp=None, stellsym=False, n_axis_samples=256,
+                          scaling_type=2, scaling_factor=0., scale_fixed=1.) -> Curves:
+    """Circular coils normal to a regular toroidal centerline, with exact Fourier coefficients.
+
+    Supply either a SurfaceRZFourier boundary or ``axis_function(phi) -> xyz``.
+    A boundary supplies its geometric ``centerline``, not a solved magnetic axis.
+    ``n_coils`` counts base coils per field period (half period if stellsym).
+    Centers use approximate equal arclength from ``n_axis_samples`` samples;
+    normals use the exact tangent and projected cylindrical radial direction.
+    ``coil_radius`` is a positive scalar or one radius per base coil.
+    Geometry, radii and custom-axis parameters remain differentiable in JAX.
+    """
+    if (surface is None) == (axis_function is None):
+        raise ValueError("Supply exactly one of surface or axis_function")
+    nfp = getattr(surface, 'nfp', 1) if nfp is None else nfp
+    if any(not isinstance(value, int) or value < lower for value, lower in
+           ((n_coils, 1), (order, 1), (nfp, 1), (n_axis_samples, 2))):
+        raise ValueError("Counts and order must be positive integers; n_axis_samples >= 2")
+    axis = surface.centerline if surface is not None else axis_function
+    phi = jnp.linspace(0., 2 * jnp.pi / (nfp * (1 + int(stellsym))), n_axis_samples)
+    points = vmap(axis)(phi)
+    arc = jnp.concatenate((jnp.zeros(1), jnp.cumsum(jnp.linalg.norm(jnp.diff(points, axis=0), axis=1))))
+    angles = jnp.interp((jnp.arange(n_coils) + .5) * arc[-1] / n_coils, arc, phi)
+    centers, tangent = vmap(lambda p: jax.jvp(axis, (p,), (jnp.ones_like(p),)))(angles)
+    tangent /= jnp.linalg.norm(tangent, axis=1, keepdims=True)
+    normal = centers.at[:, 2].set(0.)
+    normal -= jnp.sum(normal * tangent, axis=1, keepdims=True) * tangent
+    normal /= jnp.linalg.norm(normal, axis=1, keepdims=True)
+    radius = jnp.broadcast_to(jnp.asarray(coil_radius), (n_coils,))[:, None]
+    if not isinstance(radius, jax.core.Tracer) and (not np.isfinite(radius).all() or np.any(np.asarray(radius) <= 0)):
+        raise ValueError("coil_radius must be finite and positive")
+    dofs = jnp.zeros((n_coils, 3, 1 + 2 * order)).at[:, :, 0].set(centers)
+    dofs = dofs.at[:, :, 1].set(radius * jnp.cross(tangent, normal)).at[:, :, 2].set(radius * normal)
+    return Curves(dofs, n_segments=n_segments, nfp=nfp, stellsym=stellsym,
+                  scaling_type=scaling_type, scaling_factor=scaling_factor, scale_fixed=scale_fixed)
+
+
 @partial(jit, static_argnames=["flip"])
 def RotatedCurve(curve, phi, flip):
     rotmat_T = jnp.array(
