@@ -412,3 +412,51 @@ def test_bdotn_constraint_gradient_is_zero_not_nan_when_satisfied(monkeypatch):
     g = jax.grad(lambda b: of.loss_BdotN_constraint(b, None, target_tol=1e-6))(jnp.array([1e-2, 2e-4]))
     assert jnp.isfinite(g).all() and g[0] > 0
 
+
+
+def _circles(centers, radius, n_segments=64, plane="xy"):
+    """ESSOS curves of circles of ``radius`` about ``centers`` (x, y, z), in the xy or xz plane (no symmetry)."""
+    from essos.coils import Curves
+
+    dofs = np.zeros((len(centers), 3, 3))
+    dofs[:, :, 0] = centers
+    dofs[:, 0, 2] = radius                       # x = x0 + r cos(t)
+    dofs[:, 1 if plane == "xy" else 2, 1] = radius  # y or z = r sin(t)
+    return Curves(jnp.asarray(dofs), n_segments=n_segments, nfp=1, stellsym=False)
+
+
+def test_coil_coil_distances_of_coaxial_circles_are_their_spacing():
+    curves = _circles([(0.0, 0.0, 0.0), (0.0, 0.0, 0.3)], 1.0)
+    distances = objf.coil_coil_distances(curves)
+    assert distances.shape == (2, 64)
+    np.testing.assert_allclose(distances, 0.3, rtol=1e-12)
+    gradient = jax.grad(lambda dofs: jnp.min(objf.coil_coil_distances(curves.with_dofs(dofs))))(curves.dofs)
+    assert np.all(np.isfinite(gradient))
+
+
+def test_coil_self_distances_of_a_polygon_circle_are_one_chord():
+    curves = _circles([(0.0, 0.0, 0.0)], 1.0, n_segments=32)
+    np.testing.assert_allclose(objf.coil_self_distances(curves), 2 * np.sin(np.pi / 32), rtol=1e-12)
+
+
+def test_segment_distances_include_segment_interiors():
+    a = jnp.asarray([[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])  # a closed two-point polygon: the x axis segment, twice
+    b = jnp.asarray([[0.0, -1.0, 0.5], [0.0, 1.0, 0.5]])  # crosses above its midpoint, no vertex nearby
+    np.testing.assert_allclose(objf.segment_distances(a, b), 0.5, rtol=1e-12)
+
+
+def test_coil_surface_distances_of_a_poloidal_coil_are_its_clearance():
+    from essos.surfaces import surfacerzfourier_from_boundary
+
+    rbc, zbs = np.zeros((1, 2)), np.zeros((1, 2))
+    rbc[0], zbs[0, 1] = (3.0, 0.5), 0.5
+    surface = surfacerzfourier_from_boundary(jnp.asarray(rbc), jnp.asarray(zbs), 1, ntheta=64, nphi=64)
+    coil = _circles([(3.0, 0.0, 0.0)], 0.8, plane="xz")  # around the torus' cross-section at phi = 0
+    distances = np.asarray(objf.coil_surface_distances(coil, surface))
+    assert distances.shape == (1, 64)
+    assert np.all(distances >= 0.3 - 1e-12) and np.all(distances < 0.3 + 1e-2)
+
+
+def test_coil_mean_squared_curvature_of_a_circle():
+    np.testing.assert_allclose(objf.coil_mean_squared_curvature(_circles([(0.0, 0.0, 0.0)], 2.0)), 0.25,
+                               rtol=1e-10)

@@ -245,6 +245,91 @@ def loss_coil_curvature(coils, max_coil_curvature=0):
     pointwise_curvature_loss = jnp.square(jnp.maximum(coils.curvature-max_coil_curvature, 0))
     return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
 
+def _n_base_coils(coils):
+    """Number of base coils in ``coils.gamma``, which lists them before their symmetry copies."""
+    copies = coils.nfp * (2 if coils.stellsym else 1)
+    return max(1, coils.gamma.shape[0] // copies)
+
+
+def segment_distances(a, b):
+    """Distances between every segment of the closed polygon ``a`` (n, 3) and of ``b`` (m, 3), shape (n, m).
+
+    Exact segment-segment distances (interiors included, not only the vertices), so a clearance sampled at a
+    modest number of points still bounds the true one; the 1e-30 floor keeps the square root differentiable.
+    """
+    u, v = jnp.roll(a, -1, axis=0) - a, jnp.roll(b, -1, axis=0) - b
+    w = a[:, None] - b[None, :]
+    aa = jnp.maximum(jnp.sum(u * u, axis=-1)[:, None], 1e-30)
+    bb = jnp.maximum(jnp.sum(v * v, axis=-1)[None, :], 1e-30)
+    uv = jnp.einsum("ik,jk->ij", u, v)
+    uw, vw = jnp.sum(u[:, None] * w, axis=-1), jnp.sum(v[None, :] * w, axis=-1)
+    den = aa * bb - uv * uv
+    safe = jnp.where(den > 1e-24, den, 1.0)
+    s, t = (uv * vw - bb * uw) / safe, (aa * vw - uv * uw) / safe
+
+    def squared(s, t):
+        q = w + s[..., None] * u[:, None] - t[..., None] * v[None, :]
+        return jnp.sum(q * q, axis=-1)
+
+    candidates = [squared(jnp.zeros_like(uw), jnp.clip(vw / bb, 0, 1)),
+                  squared(jnp.ones_like(uw), jnp.clip((vw + uv) / bb, 0, 1)),
+                  squared(jnp.clip(-uw / aa, 0, 1), jnp.zeros_like(uw)),
+                  squared(jnp.clip((uv - uw) / aa, 0, 1), jnp.ones_like(uw)),
+                  jnp.where((den > 1e-24) & (s >= 0) & (s <= 1) & (t >= 0) & (t <= 1), squared(s, t), jnp.inf)]
+    return jnp.sqrt(jnp.min(jnp.stack(candidates), axis=0) + 1e-30)
+
+
+@jit
+def coil_coil_distances(coils):
+    """Distance from each base-coil point to the nearest other coil, every symmetry copy included.
+
+    Shape (base coils, points); its minimum is the coil-coil separation, and the per-point values are smooth
+    constraint rows where that minimum switches points.  Coil pairs are mapped one at a time to bound memory.
+    """
+    gamma = coils.gamma
+    indices = jnp.arange(gamma.shape[0])
+
+    def from_base(b):
+        def to(j):
+            return jnp.where(j == b, jnp.inf, jnp.min(segment_distances(gamma[b], gamma[j]), axis=1))
+        return jnp.min(jax.lax.map(to, indices), axis=0)
+
+    return jax.lax.map(from_base, indices[:_n_base_coils(coils)])
+
+
+@jit
+def coil_self_distances(coils):
+    """Distance from each base-coil point to its own coil's non-adjacent segments, shape (base coils, points).
+
+    A positive minimum certifies that no coil intersects itself.
+    """
+    gamma = coils.gamma[:_n_base_coils(coils)]
+    n = gamma.shape[1]
+    offset = jnp.abs(jnp.arange(n)[:, None] - jnp.arange(n)[None, :])
+    nonadjacent = jnp.minimum(offset, n - offset) > 1
+    return jax.lax.map(lambda p: jnp.min(jnp.where(nonadjacent, segment_distances(p, p), jnp.inf), axis=1), gamma)
+
+
+@jit
+def coil_surface_distances(coils, surface):
+    """Distance from each coil point (every symmetry copy) to the nearest point of ``surface.gamma``.
+
+    Shape (coils, points); its minimum is the coil-surface clearance.  Points are mapped one at a time to bound
+    memory, and derivatives flow to both the coils and the surface.
+    """
+    targets = surface.gamma.reshape(-1, 3)
+    points = coils.gamma.reshape(-1, 3)
+    distance = jax.lax.map(lambda p: jnp.sqrt(jnp.min(jnp.sum((p - targets) ** 2, axis=1)) + 1e-30), points)
+    return distance.reshape(coils.gamma.shape[:2])
+
+
+@jit
+def coil_mean_squared_curvature(coils):
+    """Arc-length mean of the squared curvature of every coil, shape (coils,)."""
+    speed = jnp.linalg.norm(coils.gamma_dash, axis=-1)
+    return jnp.sum(coils.curvature ** 2 * speed, axis=1) / jnp.sum(speed, axis=1)
+
+
 def compute_candidates(coils, min_separation):
     centers = coils.curves.curves[:, :, 0]
     a_n = coils.curves.curves[:, :, 2 : 2*coils.order+1 : 2]
