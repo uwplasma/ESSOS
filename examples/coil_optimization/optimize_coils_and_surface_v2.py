@@ -1,4 +1,5 @@
 import os
+from copy import copy
 from time import time
 import jax
 import jax.numpy as jnp
@@ -719,21 +720,20 @@ print("Base-coil currents (optimized):", opt_coils.dofs_currents_raw)
 essos_plots_filepath = os.path.join(output_filepath, "ESSOS_plots")
 os.makedirs(essos_plots_filepath, exist_ok=True)
 
-surface_init.range_torus = "full torus"
-surface_opt.range_torus = "full torus"
-
-surface_init.reset_cache()
-surface_opt.reset_cache()
+surface_plots = [copy(surface_init), copy(surface_opt)]
+for surface_plot in surface_plots:
+    surface_plot.range_torus = "full torus"
+    surface_plot.reset_cache()
 
 fig = plt.figure(figsize=(8, 4))
 
 ax1 = fig.add_subplot(121, projection='3d')
 init_coils.plot(ax=ax1, show=False)
-surface_init.plot(ax=ax1, show=False)
+surface_plots[0].plot(ax=ax1, show=False)
 
 ax2 = fig.add_subplot(122, projection='3d')
 opt_coils.plot(ax=ax2, show=False)
-surface_opt.plot(ax=ax2, show=False)
+surface_plots[1].plot(ax=ax2, show=False)
 
 plt.tight_layout()
 plt.savefig(os.path.join(essos_plots_filepath, "coils_surface_init_opt.png"), dpi=200)
@@ -819,8 +819,8 @@ if EXPORT:
         opt_coils.to_json(os.path.join(output_filepath, "opt_coils_coils_surface.json"))
 
     """ Save results in vtk format to analyze in Paraview """
-    surface_init.to_vtk(os.path.join(output_filepath, "init_surface_coils_surface"), field=field_init)
-    surface_opt.to_vtk(os.path.join(output_filepath, "opt_surface_coils_surface"), field=field_opt)
+    surface_plots[0].to_vtk(os.path.join(output_filepath, "init_surface_coils_surface"), field=field_init)
+    surface_plots[1].to_vtk(os.path.join(output_filepath, "opt_surface_coils_surface"), field=field_opt)
     init_coils.to_vtk(os.path.join(output_filepath, "init_coils_coils_surface"))
     opt_coils.to_vtk(os.path.join(output_filepath, "opt_coils_coils_surface"))
 
