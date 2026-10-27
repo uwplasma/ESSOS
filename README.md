@@ -127,6 +127,7 @@ orbits stay in memory; no VTK files are written.
 Initial and final console reports list length, maximum curvature and arclength-
 weighted mean curvature for each independent base coil (symmetry copies share
 these values), plus the total field's sampled maximum and RMS `B.n/|B|`.
+Reports identify the calculation in progress before evaluating it.
 
 More in [`examples/coil_optimization`](examples/coil_optimization).
 

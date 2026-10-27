@@ -74,7 +74,9 @@ def trace_trapped_orbits(wout, duration=2e-3, energy_kev=4.):
 
 def print_metrics(label, surface, coils):
     """Report independent-coil geometry and the total field's sampled normal error."""
+    print(f'{label}: computing boundary-field diagnostics...', flush=True)
     normal = np.asarray(BdotN_over_B(surface, BiotSavart(coils)))
+    print(f'{label}: computing coil geometry...', flush=True)
     count = coils.curves.n_base_curves
     lengths, curvature = np.asarray(coils.length)[:count], np.asarray(coils.curvature)[:count]
     speed = np.linalg.norm(np.asarray(coils.gamma_dash)[:count], axis=-1)
@@ -124,6 +126,7 @@ def optimize(wout, options):
     print(f'{wout.name}: nfp={surface.nfp}, {len(initial)} coils, radius={radius:.5g} m; '
           f'initial squared flux={history[0]:.5e}', flush=True)
     print_metrics('Initial', surface, initial)
+    print('Starting ALM inner solves (the first call may compile)...', flush=True)
     for step in range(options.outer_steps):
         params, state, gradient, info = solver.update(params, state, gradient, info)
         value = float(info[0]); violation = float(jnp.max(jnp.maximum(-margins(params[0]), 0.)))

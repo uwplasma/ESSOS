@@ -429,3 +429,16 @@ def test_axis_coil_metrics_report_absolute_field_error_and_physical_geometry(mon
     row = np.asarray(output.splitlines()[-1].split(), dtype=float)
     length = 4 * .6 * ellipe(1 - (.3/.6)**2)
     np.testing.assert_allclose(row, [1., length, .6/.3**2, 2*np.pi/length], atol=1e-6, rtol=0)
+
+
+def test_axis_coil_metrics_evaluate_real_field_without_mocks(capsys):
+    from essos.coils import CreateCoilsAroundAxis
+    from examples.coil_optimization.optimize_axis_coils_alm import print_metrics
+    surface = _small_surface()
+    coils = Coils(CreateCoilsAroundAxis(2, 2, .4, surface=surface, n_segments=16), [1., 1.])
+    print_metrics('Initial', surface, coils)
+    output = capsys.readouterr().out
+    assert 'computing boundary-field diagnostics' in output and 'computing coil geometry' in output
+    summary = next(line for line in output.splitlines() if line.startswith('Initial: max'))
+    values = [float(item.split('=')[1]) for item in summary.split(';')]
+    assert np.isfinite(values).all() and 0 <= values[1] <= values[0] <= 1 + 1e-12
