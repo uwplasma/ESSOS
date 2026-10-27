@@ -11,6 +11,17 @@ def coefficient(surface, family, m, n):
     return np.asarray(getattr(surface, family))[mask].item()
 
 
+@pytest.mark.parametrize('close', [False, True])
+@pytest.mark.parametrize('range_torus', ['full torus', 'half period'])
+def test_exported_boundary_volume(tmp_path, close, range_torus):
+    filename = tmp_path / 'input.torus'
+    filename.write_text('&INDATA NFP=2, RBC(0,0)=3, RBC(0,1)=.4, ZBS(0,1)=.5 /')
+    surface = SurfaceRZFourier.from_input_file(filename, close=close, range_torus=range_torus)
+    np.testing.assert_allclose(surface.volume, 2*np.pi**2*3*.4*.5, rtol=1e-12)
+    surface.to_vmec(filename)
+    np.testing.assert_allclose(SurfaceRZFourier.from_input_file(filename).volume, surface.volume, rtol=1e-12)
+
+
 @pytest.mark.parametrize('solver_resolution', ['MPOL=2, NTOR=0,', 'MPOL=20, NTOR=16,', ''])
 def test_input_infers_nonzero_boundary_support(tmp_path, solver_resolution):
     filename = tmp_path / 'input.boundary'
