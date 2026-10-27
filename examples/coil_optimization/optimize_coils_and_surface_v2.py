@@ -59,8 +59,14 @@ SURFACE_MPOL = 1; SURFACE_NTOR = 1   # maximum boundary m and |n|
 VMEC_MPOL = max(SURFACE_MPOL + 2, 5); VMEC_NTOR = max(SURFACE_NTOR + 2, 5)
 # VMEX examples use boundary modes + 2, with at least 5 to resolve low-mode iota.
 # Continuation: set RESTART_FROM, restart_filepath, output_filepath, and surface modes.
-# Increase QA_WEIGHT during continuation; at mode 3 use IOTA_MPOL=IOTA_NTOR=8.
-# FOURIER_ORDER can also be increased on restart to give the coils more freedom.
+# Mode 2: FOURIER_ORDER=6, QA_WEIGHT=1e4, IOTA_FIT_WEIGHT=1e6,
+# LENGTH_WEIGHT=10, CURVATURE_WEIGHT=500; keep the other defaults.
+# Mode 3: FOURIER_ORDER=IOTA_MPOL=IOTA_NTOR=8, VMEC_MPOL=VMEC_NTOR=7,
+# GLOBAL_QA_WEIGHT=1e5, QA_WEIGHT=QS_WEIGHT=1e4, NORMAL_FIELD_WEIGHT=
+# IOTA_APPROX_WEIGHT=IOTA_FIT_WEIGHT=CROSS_SECTIONAL_AREA_WEIGHT=3e6,
+# MAJOR_RADIUS_WEIGHT=3e4, LENGTH_WEIGHT=30, CURVATURE_WEIGHT=1500,
+# CURVATURE_SEGMENTS=512, SCALE_FIELD=.05, SCALE_SURFACE=.02,
+# MAXCOR=128, MAXITER=100. Check VMEX resolution independently after each stage.
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -268,6 +274,7 @@ if GLOBAL_QA_WEIGHT:
                 * (vmec_opt.iota_edge(state, runtime) - IOTA_APPROX_TARGET)**2)
     qa_restart = os.path.join(restart_filepath if RESTART_FROM else output_filepath,
                               "vmex_output", "wout_coils_surface.nc")
+    # Pass physical Fourier coefficients, without VMEX's spectral scaling.
     qa_problem = vmec_opt.VmecProblem.from_loss(qa_input, plasma_loss,
         max_mode=max(SURFACE_MPOL, SURFACE_NTOR), vary_major_radius=True, use_ess=False,
         forward_ftol=1e-12, forward_max_iterations=3500,
