@@ -302,6 +302,139 @@ command if it is missing.
 | [`simple_examples`](examples/simple_examples) | Coils from near-axis or BOOZ_XFORM, perturbed coils, combined fields, MGRID |
 | [`paper`](examples/paper) | Integrator, gradient and Poincare figures |
 
+## Native forward orbit solvers
+
+`Tracing(..., integrator="essos_rk45")` selects Dormand–Prince 5(4);
+`integrator="essos_dopri8"` selects Prince–Dormand 8(7). The existing
+`GuidingCenter`/`FullOrbit` models select fixed steps; their `Adaptative`
+variants select adaptive steps. The default remains Diffrax. Native defaults
+are I control and `rtol=atol=1e-9`; PI is available with
+`native_controller="pi"`, `native_pcoeff=.4`, `native_icoeff=.3`.
+
+All native stepping, GPU execution and private field adapters live in
+[`essos/rk.py`](essos/rk.py).
+
+Native VMEC CUDA tracing automatically uses one warp per particle for spectra
+padded to at most 128 modes, and four for larger spectra. The shared stage loop
+evaluates the initial derivative once and retains it after a rejected trial,
+avoiding a second compiled RHS body. These are the standard native CUDA defaults
+for the existing field adapters and Dopri5/8 methods.
+
+Both native methods share the same stepping driver, FSAL reuse, standard
+dense output, bounded retries and root-found stopping events. Their standard
+interpolants match the corresponding Diffrax methods. Saves do not constrain
+adaptive steps. Solver results include accepted/rejected counts and explicit
+failure statuses; `solve_rk(..., record_steps=True)` retains accepted times for diagnostics.
+
+The physical embedded error is the maximum of the position and velocity
+block errors, divided by their reference length/birth speed and by
+`atol+rtol`. VMEC position errors are measured in Cartesian coordinates;
+Boozer uses flux-radius, toroidal-radian and birth-speed blocks. These are
+local normalized estimates, **not global trajectory-error guarantees**.
+`native_error_control="standard"` selects the usual componentwise RMS budget.
+
+`essos.rk.prepare_solver(..., execution="cuda")` exposes the
+independent GPU loops for fixed-field Biot–Savart GC/Lorentz and VMEC GC;
+it returns a scalar solver for `jax.jit(jax.vmap(solve))`. Cartesian states
+are `(x,y,z,vpar)` or `(x,y,z,vx,vy,vz)`; VMEC uses ESSOS's existing
+five-component axis-regular chart. This low-level path uses zero electric
+field, standard dense output and I control, and stops VMEC orbits at the LCFS.
+`execution="jax"` uses the portable path. `Tracing` uses the portable driver
+and retains its existing electric-field, stopping and exterior-continuation
+interfaces. The generic `essos.rk.solve_rk` also accepts an arbitrary array RHS.
+
+For Boozer, use `trace_boozer(..., integrator="essos_dopri8",
+native_execution="cuda")`. Its CUDA adapter supports fixed cosine Fourier
+fields with K=0; the portable path also supports sine spectra, angle tables
+and PI. GPU arrays are private solver views of the original field data;
+the public field classes are unchanged. This addition is forward-only:
+split collisions and accepted-step reverse AD belong to separate changes.
+
+### Forward comparison
+
+64 particles, RTX 5060 Laptop GPU, JAX 0.11.2, eight saves, three interleaved
+blocked warm samples. VMEC/Boozer rows were rerun on 2026-10-26 with the shared
+VMEC defaults; coil rows retain their 2026-10-24 measurements. Native and Diffrax
+use Dopri8 and the same physical/chart embedded error and I coefficients;
+controller details and rounding can change adaptive counts. Fixed pairs use
+identical timesteps. Native CUDA includes the private field adapters; Diffrax
+uses public field evaluation. Gains describe the complete forward implementation.
+Coils use the unscaled QA coils at 4 keV, 20 us for GC and 2 us for Lorentz;
+VMEC/Boozer use reactor-scale QA at 4 keV and 20 us. Compare backends within rows.
+
+| Field / model | Stepping | Native / Diffrax warm ms | Native / Diffrax buffers MiB | Measured |
+|---|---|---:|---:|---|
+| boozer / gc | adaptive | 1.659 / 3.769 | 0.026 / 0.151 | 2026-10-26 |
+| boozer / gc | fixed | 18.201 / 50.142 | 0.026 / 0.154 | 2026-10-26 |
+| coils / gc | adaptive | 84.426 / 160.362 | 0.026 / 5.980 | 2026-10-24 |
+| coils / gc | fixed | 419.872 / 676.766 | 0.026 / 5.970 | 2026-10-24 |
+| coils / lorentz | adaptive | 29.429 / 70.426 | 0.070 / 0.731 | 2026-10-24 |
+| coils / lorentz | fixed | 782.063 / 1891.586 | 0.070 / 0.721 | 2026-10-24 |
+| vmec / gc | adaptive | 4.836 / 7.171 | 0.066 / 0.965 | 2026-10-26 |
+| vmec / gc | fixed | 88.169 / 161.807 | 0.066 / 0.965 | 2026-10-26 |
+
+Buffers are compiler estimates of arguments + outputs + temporaries minus aliases,
+excluding resident field data/executable constants; they are not peak VRAM.
+Position errors are Cartesian metres for coils/VMEC and flux-chart units for
+Boozer; velocity errors include both absolute and birth-speed-normalized values
+against a tighter Diffrax reference. The measured gains include the private
+field adapters and describe the complete forward implementation.
+
+Generate all eight comparison workloads and their files on a CUDA machine:
+
+```sh
+python -m examples.benchmarks.benchmark_native_orbits --suite \
+  --execution cuda --output output/native_forward
+```
+
+Choose a fresh output folder. The script creates per-workload `comparison.json`
+and `comparison.csv`, plus aggregate `forward.csv` and `forward.md`. Generated
+results are kept under `output/` and are not versioned. Three blocked warm
+samples alternate backend order after startup; setup, compilation and the tighter
+reference are excluded. Compilation may use a persistent cache and is not
+reported as a cold measurement. Reports include inputs, source hashes, step
+counts, failures, error metrics and compiler buffers.
+
+Defaults reproduce the table's 64 particles, 4 keV, seed 42, eight saves,
+rtol=atol=1e-9 and 20 us GC workloads. Fixed VMEC/Boozer use 160 steps, coil GC
+224, and coil Lorentz 1792 over 2 us. For one workload, omit `--suite` and select
+`--field vmec`, `--field boozer` or `--field coils --model gc/lorentz`, with
+`--stepping adaptive/fixed`. A matching Boozer transform can be supplied with
+`--field-cache`; otherwise the optional `essos[booz]` dependency computes it.
+
+### QA Boozer alpha workload
+
+Previously recorded full workload: 8192 alphas, 3.52 MeV, birth s=0.3,
+seed 42, 20 ms, 101 saves, 16 direct Fourier modes. The preceding profiling
+run identified an A100/JAX 0.7.2; the full console logs identify a CUDA device.
+Compilation and warm execution are separated. This is a CATAPULT-sized
+workload, not a new measurement against CATAPULT.
+
+| Method | Control | Compile s | Warm s | Accepted / rejected | Lost / failed |
+|---|---|---:|---:|---:|---:|
+| Native Dopri5 | I, rtol=atol=1e-10 | 4.247 | 21.554 | 895113025 / 63143676 | 110 / 0 |
+| Native Dopri8 | I, rtol=atol=1e-10 | 5.069 | 18.448 | 351025279 / 62226975 | 111 / 0 |
+| Native Dopri8 | I, rtol=atol=1e-8 | 4.985 | 9.223 | 189259503 / 7909253 | 106 / 0 |
+| Existing RK4 | Fixed dt=1.25e-7 s | 2.728 | 20.244 | 1310720000 grid slots / 0 | 108 / 0 |
+
+These full-workload measurements predate the current extraction and have not
+been rerun after the VMEC and initialization updates. RK4 checks loss at endpoints;
+native adaptive methods refine the LCFS crossing. The differing loss counts are
+not an accuracy proof. Regenerate the workload with the script below when ready.
+
+Run on the machine's normal JAX backend (the alpha example selects CUDA
+execution automatically when available):
+
+```sh
+python -m examples.benchmarks.benchmark_native_boozer_alpha \
+  --integrator essos_dopri8 --particles 8192 --horizon .02 \
+  --rtol 1e-10 --atol 1e-10 --output output/native_boozer_alpha
+```
+
+The example saves its Boozer transform, births, trajectories, statistics,
+timings and a diagnostic plot. Reuse its `boozer_inputs.npz` with
+`--field-cache`; select `essos_rk45` or `rk4` for the corresponding baseline.
+
 ## Testing
 
 ```sh
