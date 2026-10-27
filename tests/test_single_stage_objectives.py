@@ -275,4 +275,3 @@ def test_vacuum_qa_coil_and_surface_derivatives():
                             lambda_mpol=2, lambda_ntor=1)
     objective.dependencies = {'field': field, 'surface': torus(ntheta=8, nphi=7)}
     directional_check(objective, objective.starting_dofs, rtol=3e-5, step=1e-6)
-
