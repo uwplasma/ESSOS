@@ -832,13 +832,8 @@ class SurfaceRZFourier:
 
     @property
     def volume(self):
-
-        xyz = self.gamma  # shape: (nphi, ntheta, 3)
-        n = self.normal    # shape: (nphi, ntheta, 3)
-
-        integrand = jnp.sum(xyz * n, axis=2)  # dot(x, n), shape: (nphi, ntheta)
-        volume = jnp.mean(integrand) / 3.0
-        return volume
+        """Enclosed volume from the divergence theorem and periodic quadrature."""
+        return jnp.abs(_surface_mean(self, jnp.sum(self.gamma * self.normal, axis=2))) * (2 * jnp.pi)**2 / 3
 
     @property
     def area(self):
