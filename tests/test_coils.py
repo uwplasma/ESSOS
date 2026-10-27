@@ -442,3 +442,23 @@ def test_axis_coil_metrics_evaluate_real_field_without_mocks(capsys):
     summary = next(line for line in output.splitlines() if line.startswith('Initial: max'))
     values = [float(item.split('=')[1]) for item in summary.split(';')]
     assert np.isfinite(values).all() and 0 <= values[1] <= values[0] <= 1 + 1e-12
+
+
+def test_axis_alm_reports_after_autodiff_keep_cache_metadata_static(monkeypatch, capsys):
+    from pathlib import Path
+    from types import SimpleNamespace
+    from examples.coil_optimization import optimize_axis_coils_alm as example
+    surface = _small_surface(); surface.nphi = surface.ntheta = 4
+    monkeypatch.setattr(example.SurfaceRZFourier, 'from_wout_file', lambda *a, **k: surface)
+    def checked_coils(*args, **kwargs):
+        coils = Coils(*args, **kwargs)
+        assert isinstance(coils._tree_flatten()[1]['currents_scale'], float), 'tracer in static JIT cache metadata'
+        return coils
+    monkeypatch.setattr(example, 'Coils', checked_coils)
+    options = SimpleNamespace(grid=4, coils=1, order=1, segments=8, radius_factor=1.3,
+                              length_factor=1.3, curvature_factor=3., surface_gap=.1, coil_gap=.05,
+                              inner_steps=1, outer_steps=1)
+    _, final, history = example.optimize(Path('analytic_boundary.nc'), options)
+    output = capsys.readouterr().out
+    assert 'Initial: max' in output and 'Final: max' in output
+    assert final.curves.n_base_curves == 1 and len(history) == 2 and np.isfinite(history).all()

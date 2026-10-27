@@ -100,7 +100,8 @@ def optimize(wout, options):
     curves = CreateCoilsAroundAxis(options.coils, options.order, radius, surface=surface,
                                   stellsym=symmetric, n_segments=options.segments, scale_fixed=1 / radius)
     def coils(x):
-        return Coils(curves.with_dofs(x.reshape(curves.dofs.shape)), jnp.ones(options.coils))
+        # Fixed currents also need a concrete normalization in JIT cache metadata.
+        return Coils(curves.with_dofs(x.reshape(curves.dofs.shape)), jnp.ones(options.coils), currents_scale=1.)
     def distance(a, b):
         return jnp.sqrt(jnp.min(jnp.sum((a[:, None] - b[None, :])**2, axis=-1)) + 1e-24)
     initial = coils(curves.dofs.ravel())
