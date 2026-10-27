@@ -94,6 +94,8 @@ CURVATURE_SEGMENTS = 256
 NORMAL_FIELD_WEIGHT = 1e6;
 QS_WEIGHT = 1e2  # helicity-free three-term product
 QA_WEIGHT = 1e3  # VMEX's vacuum two-term residual selects quasi-axisymmetry
+GLOBAL_QA_WEIGHT = 0.  # enable VMEX QA throughout the plasma for final refinement
+QA_SURFACES = (.05, .1, .25, .5, .75, .9, .99)
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e6
@@ -252,6 +254,33 @@ L_iota_fit = custom_loss(loss_straight_field_line_residual, "field", "surface",
                          lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR)
 L_major_radius = custom_loss( loss_major_radius, "surface", target_major_radius=MAJOR_RADIUS_TARGET )
 
+if GLOBAL_QA_WEIGHT:
+    from vmex import optimize as vmec_opt
+    qa_input_file = os.path.join(output_filepath, "input.qa_initial")
+    surface_init.to_vmec(qa_input_file, mpol=VMEC_MPOL, ntor=VMEC_NTOR)
+    # Vacuum QA and iota are flux-independent; unit flux conditions the adjoint.
+    qa_input = replace(vj.VmecInput.from_file(qa_input_file), phiedge=1.)
+    qa_residual = vmec_opt.QuasisymmetryRatioResidual(QA_SURFACES, helicity_m=1, helicity_n=0,
+                                                    ntheta=64, nphi=64)
+    def plasma_loss(state, runtime):
+        rows = qa_residual.residuals_state(state, runtime)
+        return (0.5 * jnp.vdot(rows, rows) + IOTA_APPROX_WEIGHT / GLOBAL_QA_WEIGHT
+                * (vmec_opt.iota_edge(state, runtime) - IOTA_APPROX_TARGET)**2)
+    qa_restart = os.path.join(restart_filepath if RESTART_FROM else output_filepath,
+                              "vmex_output", "wout_coils_surface.nc")
+    qa_problem = vmec_opt.VmecProblem.from_loss(qa_input, plasma_loss,
+        max_mode=max(SURFACE_MPOL, SURFACE_NTOR), vary_major_radius=True, use_ess=False,
+        forward_ftol=1e-12, forward_max_iterations=3500,
+        restart_from=qa_restart if os.path.isfile(qa_restart) else None)
+    mode_index = {(int(n) // surface_init.nfp, int(m)): i
+                  for i, (m, n) in enumerate(zip(surface_init.xm, surface_init.xn))}
+    families = {'RBC': 'rc', 'ZBS': 'zs', 'RBS': 'rs', 'ZBC': 'zc'}
+    qa_dofs = [(families[name[:3]], mode_index.get(tuple(map(int, name[4:-1].split(',')))))
+               for name in qa_problem.names]
+    def loss_global_qa(surface):
+        return qa_problem.jax_fun(jnp.stack([getattr(surface, family)[i] if i is not None else qa_problem.x0[j]
+            for j, (family, i) in enumerate(qa_dofs)]))
+
 # ====================================================================================
 # ====================================================================================
 """ Defining total loss + setting dependencies """
@@ -273,6 +302,9 @@ losses_weighted = [(NORMAL_FIELD_WEIGHT, L_normal_field),
                    (QS_WEIGHT, L_quasi_symmetry),
                    (QA_WEIGHT, L_quasi_axisymmetry),
                    (MAJOR_RADIUS_WEIGHT, L_major_radius) ]
+
+if GLOBAL_QA_WEIGHT:
+    losses_weighted.append((GLOBAL_QA_WEIGHT, custom_loss(loss_global_qa, "surface")))
 
 
 losses_active = [ weight * loss for weight, loss in losses_weighted if weight != 0.0 ]
@@ -888,7 +920,7 @@ RUN_PARAMETERS = {
                              "STELLSYM", "COIL_CURRENT"],
     "Geometry losses":      ["MAJOR_RADIUS_WEIGHT"],
     "Coil losses":          ["LENGTH_WEIGHT", "LENGTH_TARGET", "CURVATURE_WEIGHT", "CURVATURE_TARGET", "CURVATURE_SEGMENTS"],
-    "Field losses":         ["NORMAL_FIELD_WEIGHT", "QS_WEIGHT", "QA_WEIGHT"],
+    "Field losses":         ["NORMAL_FIELD_WEIGHT", "QS_WEIGHT", "QA_WEIGHT", "GLOBAL_QA_WEIGHT", "QA_SURFACES"],
     "Surface losses":       ["CROSS_SECTIONAL_AREA_WEIGHT", "AREA_UNIFORMITY_WEIGHT", "AREA_UNIFORMITY_TOLERANCE",
                              "NORMAL_DISPLACEMENT_WEIGHT", "QQ_WEIGHT", "ALPHA_QQ", "KAPPA_WEIGHT", "ALPHA_KAPPA",
                              "A3D_MIN", "A3D_WEIGHT"],
