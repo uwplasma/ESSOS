@@ -16,7 +16,7 @@ from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean_squared, loss_coil_curvature_from_field,
                                         loss_coil_length_max, loss_cross_sectional_area_mean,
                                         loss_cross_sectional_area_uniformity, loss_surface_normal_displacement, 
-                                        loss_quasi_symmetry, loss_iota_approx, loss_straight_field_line_residual, loss_surface_curvature_section,
+                                        loss_quasi_symmetry, loss_quasi_axisymmetry, loss_iota_approx, loss_straight_field_line_residual, loss_surface_curvature_section,
                                         loss_surface_non_axisymmetric_amplitude, loss_poloidal_slope_min,
                                         loss_surface_poloidal_derivative, quasi_symmetry_residual_on_surface,
                                         loss_major_radius )
@@ -45,7 +45,6 @@ os.makedirs(output_filepath, exist_ok=True) # Make the path
 
 # True -> run a fixed-boundary VMEX equilibrium on the exported surface
 RUN_VMEX = True
-VMEC_MPOL = 9; VMEC_NTOR = 9  # solver resolution; None uses boundary maxima + 2
 
 # True -> skip optimization, load saved dofs from output_filepath
 LOAD_RESULT = False
@@ -56,18 +55,19 @@ LOAD_RESULT = False
 RESTART_FROM = False
 restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it00")
 SURFACE_MPOL = 1; SURFACE_NTOR = 1   # maximum boundary m and |n|
+VMEC_MPOL = max(SURFACE_MPOL + 2, 5); VMEC_NTOR = max(SURFACE_NTOR + 2, 5)
+# VMEX examples use boundary modes + 2, with at least 5 to resolve low-mode iota.
 # Continuation: set RESTART_FROM, restart_filepath, output_filepath, and surface modes.
-# At mode 3 use QS_WEIGHT=1e4 and IOTA_MPOL=IOTA_NTOR=8.
+# Increase QA_WEIGHT during continuation; at mode 3 use IOTA_MPOL=IOTA_NTOR=8.
+# FOURIER_ORDER can also be increased on restart to give the coils more freedom.
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 # vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
-vmec_input = os.path.join(input_filepath, 'input.QA_mode1')
-# Fixed-boundary fitted coils; set None to use equally spaced coils.
-INITIAL_COILS = os.path.join(input_filepath, 'coils_QA_mode1.json')
+vmec_input = os.path.join(input_filepath, 'input.toroidal_surface_02')
 
 # SURFACE PARAMETERS -----------------------------------------------------------------
-ntheta = 32; nphi = 32 ; Npoints = ntheta * nphi
+ntheta = 32; nphi = 33 ; Npoints = ntheta * nphi
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
@@ -82,16 +82,17 @@ COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 # A) Losses weights and targets  → control what results the optimizer considers important
 
 # General Geometry ~~~~~~~~~
-MAJOR_RADIUS_WEIGHT = 0 # The target will be calculated from the initial surface
+MAJOR_RADIUS_WEIGHT = 1e4 # Retain the initial major radius as well as section area.
 
 # Coils ~~~~~~~~~~~~~~~~~~~~
-LENGTH_WEIGHT = 10.; LENGTH_TARGET = 50.;
-CURVATURE_WEIGHT = 500.; CURVATURE_TARGET = 2.
+LENGTH_WEIGHT = 1.; LENGTH_TARGET = 50.;
+CURVATURE_WEIGHT = 100.; CURVATURE_TARGET = 2.
 CURVATURE_SEGMENTS = 256
 
 # Field ~~~~~~~~~~~~~~~~~~~~
 NORMAL_FIELD_WEIGHT = 1e6;
-QS_WEIGHT = 1e3
+QS_WEIGHT = 1e2  # helicity-free three-term product
+QA_WEIGHT = 1e3  # VMEX's vacuum two-term residual selects quasi-axisymmetry
 
 # Surface ~~~~~~~~~~~~~~~~~~~~
 CROSS_SECTIONAL_AREA_WEIGHT = 1e6
@@ -116,7 +117,7 @@ A3D_WEIGHT = 0.
 IOTA_APPROX_WEIGHT = 1e6
 IOTA_APPROX_TARGET = 0.41
 IOTA_MPOL = 6; IOTA_NTOR = 6
-IOTA_FIT_WEIGHT = 1e6  # reject inaccurate or folded straight-angle fits
+IOTA_FIT_WEIGHT = 1e5  # reject inaccurate or folded straight-angle fits
 
 # dtheta/dphi slope penalty
 SLOPE_MIN = 0.05
@@ -182,10 +183,11 @@ elif RESTART_FROM:
     surface_file = os.path.join(restart_filepath, "input.coils_surface")
 else:
     init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
-    init_coils = (Coils.from_json(INITIAL_COILS) if INITIAL_COILS else
-                  Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS))
+    init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
     surface_file = vmec_input
 init_coils.n_segments = N_SEGMENTS
+if not LOAD_RESULT:
+    init_coils.curves.order = FOURIER_ORDER
 surface_init = SurfaceRZFourier.from_input_file(surface_file, ntheta=ntheta, nphi=nphi, close=False,
                                                range_torus='half period', mpol=SURFACE_MPOL, ntor=SURFACE_NTOR)
 if surface_init.nfp != init_coils.nfp:
@@ -199,7 +201,7 @@ if RESTART_FROM:
     print(f"\nRESTART: initial coils and surface from '{os.path.basename(restart_filepath)}', "
           f"surface resolution raised to mpol = {SURFACE_MPOL}, ntor = {SURFACE_NTOR}\n")
 else:
-    print(f"\nNEW RUN: initial surface from '{os.path.basename(vmec_input)}' and coils from {INITIAL_COILS or 'equally spaced initialization'}\n")
+    print(f"\nNEW RUN: initial surface from '{os.path.basename(vmec_input)}' and circular coils\n")
 
 # ------------------------------------------------------------------------------------
 # Initialize reference values for the surface geometry. These will be used to compute the surface normal displacement loss. 
@@ -230,9 +232,10 @@ B_phi_reference = float(jnp.mean(jnp.abs(B_phi_init)))
 # ====================================================================================
 
 L_normal_field = custom_loss( loss_BdotN_mean_squared, "field", "surface" )
-L_length_max = custom_loss( loss_coil_length_max , "field", max_coil_length=LENGTH_TARGET )
+L_length_max = custom_loss( loss_coil_length_max , "field", max_coil_length=LENGTH_TARGET, squared=True )
 L_curvature = custom_loss( loss_coil_curvature_from_field , "field" , max_coil_curvature=CURVATURE_TARGET, n_segments=CURVATURE_SEGMENTS )
 L_quasi_symmetry = custom_loss(loss_quasi_symmetry, "field", "surface")
+L_quasi_axisymmetry = custom_loss(loss_quasi_axisymmetry, "field", "surface", lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR)
 L_cross_sectional_area = custom_loss( loss_cross_sectional_area_mean, "surface", target_area=CROSS_SECTIONAL_AREA_TARGET )
 L_area_uniformity = custom_loss( loss_cross_sectional_area_uniformity, "surface", tolerance=AREA_UNIFORMITY_TOLERANCE )
 L_surface_normal_displacement = custom_loss( loss_surface_normal_displacement , "surface" ,
@@ -267,6 +270,7 @@ losses_weighted = [(NORMAL_FIELD_WEIGHT, L_normal_field),
                    (QQ_WEIGHT, L_surface_poloidal_derivative),
                    (KAPPA_WEIGHT, L_surface_curvature_section),
                    (QS_WEIGHT, L_quasi_symmetry),
+                   (QA_WEIGHT, L_quasi_axisymmetry),
                    (MAJOR_RADIUS_WEIGHT, L_major_radius) ]
 
 
@@ -343,7 +347,9 @@ def loss_callback(intermediate_result):
     step_norm = float(jnp.linalg.norm(dofs_current - dofs_previous))
 
     # The largest absolute gradient component measures first-order optimality.
-    gradient_current = L_total.grad(dofs_current)
+    gradient_current = (scaled_value_and_grad.last_gradient
+                        if np.array_equal(intermediate_result.x, scaled_value_and_grad.last_x)
+                        else L_total.grad(dofs_current))
     optimality = float(jnp.max(jnp.abs(gradient_current)))
 
     # Print one row of the table.
@@ -373,6 +379,8 @@ else:
     value_and_grad = jax.jit(jax.value_and_grad(L_total))
     def scaled_value_and_grad(x):
         value, gradient = value_and_grad(jnp.asarray(x) * x_scale_optimization)
+        scaled_value_and_grad.last_x = np.asarray(x).copy()
+        scaled_value_and_grad.last_gradient = np.asarray(gradient)
         return float(value), np.asarray(gradient * x_scale_optimization)
     res = minimize(scaled_value_and_grad, np.asarray(L_total.starting_dofs / x_scale_optimization),
                    jac=True, method="L-BFGS-B", callback=loss_callback,
@@ -433,6 +441,7 @@ print(f"\nOptimization took {t_end - t_start:.2f} seconds")
 print("Initial loss:", L_total(L_total.starting_dofs))    
 print("Loss after optimization:", L_total(res.x))
 print("Total function evaluations:", res.nfev)
+print("Optimizer status:", getattr(res, 'message', 'loaded result'))
 
 B_dot_n_over_B_init = BdotN_over_B( surface_init , field_init )
 B_dot_n_over_B_opt = BdotN_over_B( surface_opt , field_opt )
@@ -515,8 +524,8 @@ if QQ_WEIGHT != 0.0:
 if LENGTH_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
     print("Coil-length residuals and losses:")
-    print("LENGTH LOSS (INITIAL, WEIGHTED):", LENGTH_WEIGHT * loss_coil_length_max(field_init, max_coil_length=LENGTH_TARGET))
-    print("LENGTH LOSS (OPTIMIZED, WEIGHTED):", LENGTH_WEIGHT * loss_coil_length_max(field_opt, max_coil_length=LENGTH_TARGET))
+    print("LENGTH LOSS (INITIAL, WEIGHTED):", LENGTH_WEIGHT * loss_coil_length_max(field_init, max_coil_length=LENGTH_TARGET, squared=True))
+    print("LENGTH LOSS (OPTIMIZED, WEIGHTED):", LENGTH_WEIGHT * loss_coil_length_max(field_opt, max_coil_length=LENGTH_TARGET, squared=True))
 
 if CURVATURE_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
@@ -569,6 +578,8 @@ print("iota (optimized):", iota_approx_on_surface(surface_opt, field_opt, lambda
 fit = iota_approx_on_surface(surface_opt, field_opt, lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR, return_diagnostics=True)
 print("Straight-angle fit RMS and minimum Jacobian:", fit["rms_residual"], fit["minimum_angle_jacobian"])
 print("RMS B.n/B:", jnp.sqrt(jnp.mean(B_dot_n_over_B_opt**2)))
+print("Vacuum two-term QA mean square:", loss_quasi_axisymmetry(field_opt, surface_opt,
+      lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR))
 
 print("\n---------------------------------------------------------------------------")
 print("3D modes amplitude residuals and losses:")
@@ -668,18 +679,20 @@ print("max excess length (initial):", jnp.max(coil_length_residual_init))
 print("max excess length (optimized):", jnp.max(coil_length_residual_opt))
 
 if LENGTH_WEIGHT != 0.0:
-    print("Length loss (initial):", loss_coil_length_max(field_init, max_coil_length=LENGTH_TARGET))
-    print("Length loss (optimized):", loss_coil_length_max(field_opt, max_coil_length=LENGTH_TARGET))
+    print("Length loss (initial):", loss_coil_length_max(field_init, max_coil_length=LENGTH_TARGET, squared=True))
+    print("Length loss (optimized):", loss_coil_length_max(field_opt, max_coil_length=LENGTH_TARGET, squared=True))
 
 
 print("\n---------------------------------------------------------------------------")
 print("Coil-curvature residuals and losses:")
-coil_curvature_residual_init = jnp.maximum(0, field_init.coils.curvature - CURVATURE_TARGET)
-coil_curvature_residual_opt = jnp.maximum(0, field_opt.coils.curvature - CURVATURE_TARGET)
-print("mean curvature (initial):", jnp.mean(field_init.coils.curvature))
-print("mean curvature (optimized):", jnp.mean(field_opt.coils.curvature))
-print("max curvature (initial):", jnp.max(field_init.coils.curvature))
-print("max curvature (optimized):", jnp.max(field_opt.coils.curvature))
+curves_init, curves_opt = init_coils.curves.copy(), opt_coils.curves.copy()
+curves_init.n_segments = curves_opt.n_segments = CURVATURE_SEGMENTS
+coil_curvature_residual_init = jnp.maximum(0, curves_init.curvature - CURVATURE_TARGET)
+coil_curvature_residual_opt = jnp.maximum(0, curves_opt.curvature - CURVATURE_TARGET)
+print("mean curvature (initial):", jnp.mean(curves_init.curvature))
+print("mean curvature (optimized):", jnp.mean(curves_opt.curvature))
+print("max curvature (initial):", jnp.max(curves_init.curvature))
+print("max curvature (optimized):", jnp.max(curves_opt.curvature))
 print("mean excess curvature (initial):", jnp.mean(coil_curvature_residual_init))
 print("mean excess curvature (optimized):", jnp.mean(coil_curvature_residual_opt))
 print("max excess curvature (initial):", jnp.max(coil_curvature_residual_init))
@@ -872,10 +885,10 @@ RUN_PARAMETERS = {
     "Continuation":         ["RESTART_FROM", "restart_filepath", "SURFACE_MPOL", "SURFACE_NTOR"],
     "Initial surface":      ["ntheta", "nphi"],
     "Coils":                ["N_COILS", "FOURIER_ORDER", "LARGE_R", "SMALL_R", "NFP", "N_SEGMENTS",
-                             "STELLSYM", "COIL_CURRENT", "INITIAL_COILS"],
+                             "STELLSYM", "COIL_CURRENT"],
     "Geometry losses":      ["MAJOR_RADIUS_WEIGHT"],
     "Coil losses":          ["LENGTH_WEIGHT", "LENGTH_TARGET", "CURVATURE_WEIGHT", "CURVATURE_TARGET", "CURVATURE_SEGMENTS"],
-    "Field losses":         ["NORMAL_FIELD_WEIGHT", "QS_WEIGHT"],
+    "Field losses":         ["NORMAL_FIELD_WEIGHT", "QS_WEIGHT", "QA_WEIGHT"],
     "Surface losses":       ["CROSS_SECTIONAL_AREA_WEIGHT", "AREA_UNIFORMITY_WEIGHT", "AREA_UNIFORMITY_TOLERANCE",
                              "NORMAL_DISPLACEMENT_WEIGHT", "QQ_WEIGHT", "ALPHA_QQ", "KAPPA_WEIGHT", "ALPHA_KAPPA",
                              "A3D_MIN", "A3D_WEIGHT"],
