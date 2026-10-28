@@ -115,6 +115,7 @@ class RKSolution(NamedTuple):
     event_mask: object
     stats: RKStats
     step_ts: jax.Array
+    next_dt: object = None
 
 
 # Dormand--Prince stages, with Shampine's embedded error estimator (1986).
@@ -587,7 +588,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     status = jnp.where((state["t"] < t1) & (state["status"] == RKStatus.SUCCESS), RKStatus.MAX_STEPS, state["status"])
     return RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
                       tree_util.tree_unflatten(structure, state["hits"]),
-                      RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"])
+                      RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"], state["h"])
 
 
 def solve_rk45(rhs, y0, args=None, **kwargs):
@@ -816,7 +817,7 @@ def _coil_field_values(refs,point,nc,nq,jacobian):
     return B,J
 
 
-def _coil_rhs_values(refs,y,nc,nq,model,energy,mass,charge):
+def _coil_rhs_values(refs,y,nc,nq,model,energy,mass,charge,moment=None):
     scalar = lambda i:_select_one(y,i,0).reshape(())
     point = tuple(scalar(i) for i in range(3))
     B,J = _coil_field_values(refs,point,nc,nq,model=='gc')
@@ -833,7 +834,7 @@ def _coil_rhs_values(refs,y,nc,nq,model,energy,mass,charge):
     bx = _cross(B,curl_b)
     curvature = tuple(-value/magnitude for value in bx)
     vpar = scalar(3)
-    moment = (energy-mass*vpar**2/2)/magnitude
+    moment = (energy-mass*vpar**2/2)/magnitude if moment is None else moment
     star = tuple(B[i]+vpar*mass/charge*curl_b[i] for i in range(3))
     force = tuple(moment*grad[i]+mass*vpar**2*curvature[i] for i in range(3))
     denominator = _dot(B,star)
@@ -1009,11 +1010,11 @@ def _vmec_quantities(refs, point, tables):
     return covariant, contravariant, magnitude, gradient, curl_b, curvature, sqrtg
 
 
-def _vmec_rhs_values(refs, y, tables, mass, charge, energy):
+def _vmec_rhs_values(refs, y, tables, mass, charge, energy, moment=None):
     point = _vmec_chart(y)
     covariant, contravariant, magnitude, gradient, curl_b, curvature, sqrtg = _vmec_quantities(refs, point, tables)
     vpar = _vmec_scalar(y, 3)
-    moment = (energy-mass*vpar**2/2)/magnitude
+    moment = (energy-mass*vpar**2/2)/magnitude if moment is None else moment
     star = tuple(contravariant[i]+vpar*mass/charge*curl_b[i] for i in range(3))
     force = tuple(moment*gradient[i]+mass*vpar**2*curvature[i] for i in range(3))
     denominator = _dot(covariant, star)
@@ -1249,7 +1250,7 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
         ys, saved, y, t, h, counts, status = pl.pallas_call(kernel, out_shape=shapes, grid=(),
             interpret=interpret, compiler_params=plt.CompilerParams(num_warps=num_warps))(y0, moment, initial_status, *inputs)
         return RKSolution(saved, ys, t, y, status, status == 1,
-            RKStats(counts[0], counts[1], counts[2]), jnp.zeros((0,), y0.dtype))
+            RKStats(counts[0], counts[1], counts[2]), jnp.zeros((0,), y0.dtype), h)
 
     solve.method = method
     return solve
