@@ -849,9 +849,9 @@ class SurfaceRZFourier:
                 ftol_array=(1e-12,), ns_array=(51,), niter_array=(3500,)):
         """Write a vacuum VMEC input, including any asymmetric boundary partners.
 
-        Solver MPOL/NTOR default to the surface mode maxima plus two. They can
-        be overridden independently of the boundary representation; MPOL is a
-        count (VMEC retains m < MPOL), while NTOR is a maximum mode number.
+        Solver MPOL/NTOR default to the boundary maxima plus two. Since MPOL
+        is a count, this retains m through boundary m + 1 and |n| through
+        boundary |n| + 2. Override these independently and check convergence.
         The default zero-current constraint lets VMEC compute vacuum iota.
         """
         families = {'RBC': self.rc, 'ZBS': self.zs, 'RBS': self.rs, 'ZBC': self.zc}
