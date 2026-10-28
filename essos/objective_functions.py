@@ -211,12 +211,9 @@ def quasi_symmetry_residual_on_surface(field, surface):
     It does not select a helicity or prove QS when the supplied surface is not
     a flux surface, so this objective must accompany a normal-field constraint.
 
-    Multiplication by ``L_B**3 / |B|**3``, with
-    ``L_B = sqrt(2)|B| / ||grad B||_F``, makes the residual dimensionless.
-    Evaluate the cancelled expression directly. A relative gradient floor of
-    1e-14 times the RMS field divided by the RMS surface extent keeps constant
-    fields differentiable while preserving field-amplitude and length scaling.
-    A magnetic null or a collapsed surface is outside this diagnostic's domain.
+    Normalize by the major radius and RMS field, rather than an optimized
+    local field gradient. This preserves field-amplitude and length scaling.
+    The RMS field and surface must be nonzero.
     """
     points = surface.gamma.reshape(-1, 3)
     normals = surface.unitnormal.reshape(-1, 3)
@@ -226,12 +223,8 @@ def quasi_symmetry_residual_on_surface(field, surface):
     triple_product = jnp.sum(jnp.cross(normals, grad_magnitude)
                              * grad_parallel_derivative, axis=-1)
 
-    jacobian = jax.vmap(field.dB_by_dX)(points)
-    gradient_squared = jnp.sum(jacobian**2, axis=(-2, -1))
-    field_squared = jnp.mean(jax.vmap(field.AbsB)(points)**2)
-    extent_squared = jnp.mean(jnp.sum((points - jnp.mean(points, axis=0))**2, axis=-1))
-    denominator = (gradient_squared + 1e-28 * field_squared / extent_squared)**1.5
-    residual = 2 * jnp.sqrt(2.0) * triple_product / denominator
+    field_squared = _surface_mean(surface, jnp.sum(B_on_surface(surface, field)**2, axis=-1))
+    residual = surface.rc[0]**3 * triple_product / field_squared**1.5
     return residual.reshape(surface.gamma.shape[:-1])
 
 
@@ -245,31 +238,6 @@ def loss_quasi_symmetry(field, surface):
     return _surface_mean(surface, residual**2)
 
 
-def loss_quasi_axisymmetry(field, surface, *, lambda_mpol=6, lambda_ntor=6):
-    """Vacuum two-term QA residual with VMEC flux-surface quadrature.
-
-    On a flux surface, grad(psi) = B^phi (e_theta x e_phi)/(1+lambda_theta)
-    and the vacuum covariant current functions are I=0, G=<B.e_phi>.
-    This selects QA, unlike the helicity-free triple product. Use together
-    with normal-field and straight-angle validity penalties; the reconstruction
-    requires nonzero B^phi and an invertible fitted angle. The Jacobian floor
-    only keeps invalid trial coordinates finite, not physically acceptable.
-    """
-    fit = iota_approx_on_surface(surface, field, lambda_mpol=lambda_mpol,
-                                 lambda_ntor=lambda_ntor, return_diagnostics=True)
-    B = B_on_surface(surface, field)
-    grad = jax.vmap(field.dAbsB_by_dX)(surface.gamma.reshape(-1, 3)).reshape(B.shape)
-    etheta, ephi = surface.gammadash_theta, surface.gammadash_phi
-    btheta, bphi = jnp.sum(B * etheta, axis=-1), jnp.sum(B * ephi, axis=-1)
-    dtheta, dphi = jnp.sum(grad * etheta, axis=-1), jnp.sum(grad * ephi, axis=-1)
-    Bphi = B_contravariant_theta_phi_on_surface(surface, field)[..., 1]
-    jacobian = jnp.maximum(fit['angle_jacobian'], 0.1)
-    cross_flux = Bphi / jacobian * (btheta * dphi - bphi * dtheta)
-    G = _surface_mean(surface, bphi)
-    residual = (-fit['iota'] * cross_flux - G * jnp.sum(B * grad, axis=-1)) / jnp.linalg.norm(B, axis=-1)**3
-    weight = jacobian / jnp.abs(Bphi)
-    return _surface_mean(surface, weight * residual**2) / _surface_mean(surface, weight)
-
 def loss_iota_approx(field, surface, iota_target, *, lambda_mpol=None, lambda_ntor=None):
     """
     Penalize the distance between the surface rotational transform and a target.
@@ -281,21 +249,6 @@ def loss_iota_approx(field, surface, iota_target, *, lambda_mpol=None, lambda_nt
     # Quadratic penalty: smooth, with gradient -> 0 only at the target.
     return jnp.square(iota - iota_target)
 
-
-def loss_straight_field_line_residual(field, surface, *, lambda_mpol=None,
-                                      lambda_ntor=None, min_jacobian=0.1):
-    r"""Penalize the PDE residual and folds of the fitted straight-field angle.
-
-    A target iota alone permits a large, noninvertible coordinate correction.
-    The squared PDE residual controls fit error, while a squared hinge below
-    ``min_jacobian`` enforces positive ``1 + d(lambda)/d(theta)`` on the sampled
-    grid. Use with normal-field and target-iota objectives, and independently
-    check both diagnostics on a finer grid. This is not a field-line estimate.
-    """
-    diagnostics = iota_approx_on_surface(surface, field, lambda_mpol=lambda_mpol,
-                                         lambda_ntor=lambda_ntor, return_diagnostics=True)
-    deficit = jnp.maximum(min_jacobian - diagnostics["angle_jacobian"], 0.0)
-    return diagnostics["mean_squared_residual"] + _surface_mean(surface, deficit**2)
 
 def loss_poloidal_slope_min(field, surface, slope_min, B_phi_reference, phi_floor_fraction):
     """Penalize insufficient positive poloidal slope and small B^phi."""
