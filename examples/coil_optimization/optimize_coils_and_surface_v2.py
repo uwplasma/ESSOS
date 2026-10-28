@@ -126,7 +126,9 @@ if surface_init.nfp != init_coils.nfp:
 field_init = BiotSavart(init_coils)
 
 # Report where the initial coils and surface come from.
-if RESTART_FROM:
+if LOAD_RESULT:
+    print(f"\nLOADED RESULT: coils and surface from '{os.path.basename(output_filepath)}'\n")
+elif RESTART_FROM:
     print(f"\nRESTART: initial coils and surface from '{os.path.basename(restart_filepath)}', "
           f"surface resolution raised to mpol = {SURFACE_MPOL}, ntor = {SURFACE_NTOR}\n")
 else:
@@ -226,21 +228,11 @@ t_end = time()
 # The optimized field and surface are extracted from the results of the optimization.
 opt_dict = L_total.dofs_to_pytree(res.x)
 
-# The optimized field and surface are extracted from the results of the optimization.
 field_opt = opt_dict["field"]
 surface_opt = opt_dict["surface"]
 
-
-# raise SystemExit("Stopping script after the optimized-field check.")
-
 # Coils geometry is extracted from the optimized field.
 opt_coils = field_opt.coils
-
-
-# Surface displacement between corresponding grid points
-surface_displacement_xyz = surface_opt.gamma - surface_init.gamma
-surface_displacement = jnp.linalg.norm(surface_displacement_xyz, axis=2)# Total displacement magnitude
-surface_normal_displacement = jnp.sum( surface_displacement_xyz * surface_init.unitnormal, axis=2 ) # Displacement perpendicular to the initial surface
 
 
 # ====================================================================================
@@ -258,58 +250,21 @@ print("Loss after optimization:", L_total(res.x))
 print("Total function evaluations:", res.nfev)
 print("Optimizer status:", getattr(res, 'message', 'loaded result'))
 
-B_dot_n_over_B_init = BdotN_over_B( surface_init , field_init )
-B_dot_n_over_B_opt = BdotN_over_B( surface_opt , field_opt )
-
-print("max|B dot n| residual (initial):",jnp.max(jnp.abs(B_dot_n_over_B_init)) )
-print("max|B dot n| residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) )
-
-
-print("\n===========================================================================")
-print("===========================================================================")
-print("WEIGHTED LOSSES:")
-
-if CONSTRAINT_WEIGHT != 0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Normal-field weighted losses:")
-    print("NORMAL-FIELD LOSS (INITIAL, WEIGHTED):", CONSTRAINT_WEIGHT * loss_BdotN_mean_squared(field_init, surface_init) )
-    print("NORMAL-FIELD LOSS (OPTIMIZED, WEIGHTED):",CONSTRAINT_WEIGHT * loss_BdotN_mean_squared(field_opt, surface_opt) )
-
-if QS_WEIGHT != 0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Quasi-symmetry weighted losses:")
-    print("QS LOSS (INITIAL, WEIGHTED):", QS_WEIGHT * loss_quasi_symmetry(field_init, surface_init) )
-    print("QS LOSS (OPTIMIZED, WEIGHTED):",QS_WEIGHT * loss_quasi_symmetry(field_opt, surface_opt) )
-
-if CONSTRAINT_WEIGHT != 0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Rotational transform weighted losses:")
-    print("IOTA LOSS (INITIAL, WEIGHTED):", CONSTRAINT_WEIGHT * loss_iota_approx(field_init, surface_init,iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES) )
-    print("IOTA LOSS (OPTIMIZED, WEIGHTED):", CONSTRAINT_WEIGHT * loss_iota_approx(field_opt, surface_opt,iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES) )
-
-
-if CONSTRAINT_WEIGHT != 0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Mean cross-sectional area weighted losses:")
-    print("AREA LOSS (INITIAL, WEIGHTED):", CONSTRAINT_WEIGHT * loss_cross_sectional_area_mean( surface_init, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
-    print("AREA LOSS (OPTIMIZED, WEIGHTED):", CONSTRAINT_WEIGHT * loss_cross_sectional_area_mean( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
-
-
-if LENGTH_WEIGHT != 0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Coil-length residuals and losses:")
-    print("LENGTH LOSS (INITIAL, WEIGHTED):", LENGTH_WEIGHT * loss_coil_length_max(field_init, max_coil_length=LENGTH_TARGET, squared=True))
-    print("LENGTH LOSS (OPTIMIZED, WEIGHTED):", LENGTH_WEIGHT * loss_coil_length_max(field_opt, max_coil_length=LENGTH_TARGET, squared=True))
-
-if CURVATURE_WEIGHT != 0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Coil-curvature residuals and losses:")
-    print("COIL CURVATURE LOSS (INITIAL, WEIGHTED):", CURVATURE_WEIGHT * loss_coil_curvature_from_field(field_init, max_coil_curvature=CURVATURE_TARGET, n_segments=CURVATURE_SEGMENTS))
-    print("COIL CURVATURE LOSS (OPTIMIZED, WEIGHTED):", CURVATURE_WEIGHT * loss_coil_curvature_from_field(field_opt, max_coil_curvature=CURVATURE_TARGET, n_segments=CURVATURE_SEGMENTS))
-
+print("\nLOSSES (initial, optimized; raw and weighted):")
+for name, weight, loss in (
+    ("Normal field", CONSTRAINT_WEIGHT, L_normal_field),
+    ("Quasisymmetry", QS_WEIGHT, L_quasi_symmetry),
+    ("Iota", CONSTRAINT_WEIGHT, L_iota_approx),
+    ("Section area", CONSTRAINT_WEIGHT, L_cross_sectional_area),
+    ("Coil length", LENGTH_WEIGHT, L_length_max),
+    ("Coil curvature", CURVATURE_WEIGHT, L_curvature),
+):
+    initial = float(loss.call_pytree({"field": field_init, "surface": surface_init}))
+    optimized = float(loss.call_pytree(opt_dict))
+    print(f"{name}: raw {initial:.6e}, {optimized:.6e}; "
+          f"weighted {weight * initial:.6e}, {weight * optimized:.6e}")
 
 print("\n===========================================================================")
-print("===========================================================================")
 print("DIAGNOSTICS:")
 print("\n---------------------------------------------------------------------------")
 print("Normal-field:")
@@ -319,11 +274,6 @@ print("mean abs residual (initial):", jnp.mean(jnp.abs(B_dot_n_over_B_init)) )
 print("mean abs residual (optimized):",jnp.mean(jnp.abs(B_dot_n_over_B_opt)) )
 print("max abs residual (initial):",jnp.max(jnp.abs(B_dot_n_over_B_init)) )
 print("max abs residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) )
-if CONSTRAINT_WEIGHT != 0.0:
-    print("Normal-field loss (initial):",loss_BdotN_mean_squared(field_init, surface_init) )
-    print("Normal-field loss (optimized):",loss_BdotN_mean_squared(field_opt, surface_opt) )
-
-
 print("\n---------------------------------------------------------------------------")
 print("Quasi-symmetry residuals and losses:")
 QS_residual_xyz_init = quasi_symmetry_residual_on_surface(field_init, surface_init)
@@ -332,22 +282,12 @@ print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz_init)))
 print("mean abs residual (optimized):", jnp.mean(jnp.abs(QS_residual_xyz_opt)))
 print("max abs residual (initial):", jnp.max(jnp.abs(QS_residual_xyz_init)))
 print("max abs residual (optimized):", jnp.max(jnp.abs(QS_residual_xyz_opt)))
-if QS_WEIGHT != 0.0:
-    print("QS loss (initial field, initial surface):", loss_quasi_symmetry(field_init, surface_init))
-    print("QS loss (optimized field, optimized surface):", loss_quasi_symmetry(field_opt, surface_opt))
-    # print("QS loss (optimized field, initial surface):", loss_quasi_symmetry(field_opt, surface_init))
-    # print("QS loss (initial field, optimized surface):", loss_quasi_symmetry(field_init, surface_opt))
-    
-    # coils_hybrid = Coils(curves=opt_coils.curves, currents=init_coils.dofs_currents_raw)
-    # field_hybrid = BiotSavart(coils_hybrid)
-    # print("QS loss (optimized coil shapes, initial currents, initial surface):", loss_quasi_symmetry(field_hybrid, surface_init))
-
 print("\n---------------------------------------------------------------------------")
 print("Rotational transform:")
 print("iota (target):", IOTA_APPROX_TARGET)
 print("iota (initial):", iota_approx_on_surface(surface_init, field_init, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES))
-print("iota (optimized):", iota_approx_on_surface(surface_opt, field_opt, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES))
 fit = iota_approx_on_surface(surface_opt, field_opt, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES, return_diagnostics=True)
+print("iota (optimized):", fit["iota"])
 print("Straight-angle fit RMS and minimum Jacobian:", fit["rms_residual"], fit["minimum_angle_jacobian"])
 print("RMS B.n/B:", jnp.sqrt(jnp.mean(B_dot_n_over_B_opt**2)))
 
@@ -362,16 +302,7 @@ cross_sectional_area_initial = surface_init.area_section_by_phi()
 cross_sectional_area_optimized = surface_opt.area_section_by_phi()
 relative_cross_sectional_area_change = ( cross_sectional_area_optimized - cross_sectional_area_initial ) / cross_sectional_area_initial
 
-# print("Initial area:", cross_sectional_area_initial)
-# print("Optimized area:", cross_sectional_area_optimized)
-# print("Absolute area change:", jnp.abs(cross_sectional_area_optimized - cross_sectional_area_initial))
-# print("Relative area change:", relative_cross_sectional_area_change)
 print("Relative area change (%):", 100 * relative_cross_sectional_area_change)
-
-if CONSTRAINT_WEIGHT != 0.0:
-    print("Area loss:", loss_cross_sectional_area_mean( surface_opt , target_area=CROSS_SECTIONAL_AREA_TARGET ) )
-    print("Weighted area loss:", CONSTRAINT_WEIGHT * loss_cross_sectional_area_mean( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
-
 
 print("\n---------------------------------------------------------------------------")
 print("Cross-sectional curvature:")
@@ -426,11 +357,6 @@ print("mean excess length (optimized):", jnp.mean(coil_length_residual_opt))
 print("max excess length (initial):", jnp.max(coil_length_residual_init))
 print("max excess length (optimized):", jnp.max(coil_length_residual_opt))
 
-if LENGTH_WEIGHT != 0.0:
-    print("Length loss (initial):", loss_coil_length_max(field_init, max_coil_length=LENGTH_TARGET, squared=True))
-    print("Length loss (optimized):", loss_coil_length_max(field_opt, max_coil_length=LENGTH_TARGET, squared=True))
-
-
 print("\n---------------------------------------------------------------------------")
 print("Coil-curvature residuals and losses:")
 curves_init, curves_opt = init_coils.curves.copy(), opt_coils.curves.copy()
@@ -445,11 +371,6 @@ print("mean excess curvature (initial):", jnp.mean(coil_curvature_residual_init)
 print("mean excess curvature (optimized):", jnp.mean(coil_curvature_residual_opt))
 print("max excess curvature (initial):", jnp.max(coil_curvature_residual_init))
 print("max excess curvature (optimized):", jnp.max(coil_curvature_residual_opt))
-
-
-if CURVATURE_WEIGHT != 0.0:
-    print("Curvature loss (initial):", loss_coil_curvature_from_field(field_init, max_coil_curvature=CURVATURE_TARGET, n_segments=CURVATURE_SEGMENTS))
-    print("Curvature loss (optimized):", loss_coil_curvature_from_field(field_opt, max_coil_curvature=CURVATURE_TARGET, n_segments=CURVATURE_SEGMENTS))
 
 
 print("\n---------------------------------------------------------------------------")
