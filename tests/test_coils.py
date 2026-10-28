@@ -396,6 +396,9 @@ def test_axis_coil_viewer_builds_closed_full_torus_without_changing_target(monke
     plot_pyvista(surface, final, scene, 'QA', orbits[chosen], [labels[i] for i in chosen])
     assert len(meshes) == 5 + len(final)
     assert [style['color'] for _, style in meshes[-4:]] == ['tomato', 'orangered', 'cyan', 'limegreen']
+    meshes.clear()
+    plot_pyvista(surface, final, scene, 'QA', orbits[chosen], [labels[i] for i in chosen], trapped_fraction=.25)
+    assert [style['color'] for _, style in meshes[-4:]] == ['tomato', 'cyan', 'limegreen', 'dodgerblue']
 
 
 def test_orbit_overlay_classifies_both_models_and_rejects_failed_traces(monkeypatch):
@@ -413,10 +416,11 @@ def test_orbit_overlay_classifies_both_models_and_rejects_failed_traces(monkeypa
     xyz = np.stack((np.cos(states[..., 2]), np.sin(states[..., 2]), states[..., 0]), axis=-1)
     def tracing(**kwargs):
         assert kwargs['solver'].__class__.__name__ == 'Dopri8'
-        p = kwargs['particles']; half = p.nparticles // 2
-        indices = np.r_[np.arange(half), 5+np.arange(half)]
+        p = kwargs['particles']; trapped = int(jnp.sum(jnp.abs(p.initial_vparallel_over_v) < .5))
+        passing = p.nparticles-trapped
+        indices = np.r_[np.arange(trapped) % 5, 5+np.arange(passing) % 5]
         current, positions = states[indices], xyz[indices]
-        np.testing.assert_allclose(p.initial_vparallel_over_v, [.1]*half + [.95*(-1)**i for i in range(half)])
+        np.testing.assert_allclose(p.initial_vparallel_over_v, [.1]*trapped + [.95*(-1)**i for i in range(passing)])
         if kwargs['model'] == 'FullOrbitAdaptative':
             np.testing.assert_allclose(np.linalg.norm(p.initial_vxvyvz, axis=1), p.total_speed, rtol=1e-13)
             np.testing.assert_allclose(p.initial_vxvyvz[:, 2]/p.total_speed, p.initial_vparallel_over_v)
@@ -429,14 +433,20 @@ def test_orbit_overlay_classifies_both_models_and_rejects_failed_traces(monkeypa
         return SimpleNamespace(trajectories=current, trajectories_xyz=positions, status=np.zeros(p.nparticles))
     monkeypatch.setattr(dynamics, 'Tracing', tracing)
     for model in ('wout-gc', 'coils-lorentz'):
-        for count in (4, 10):
-            actual, labels = example.trace_orbits(equilibrium, None, model, nparticles=count)
-            indices = np.r_[np.arange(count//2), 5+np.arange(count//2)]
+        for count, fraction, trapped in ((4, .5, 2), (10, .5, 5), (4, .25, 1), (4, .75, 3),
+                                          (4, 0., 0), (4, 1., 4), (3, .5, 2), (12, .25, 3)):
+            actual, labels = example.trace_orbits(equilibrium, None, model, nparticles=count, trapped_fraction=fraction)
+            indices = np.r_[np.arange(trapped) % 5, 5+np.arange(count-trapped) % 5]
             np.testing.assert_array_equal(actual, xyz[indices])
-            assert sum(': trapped ' in label for label in labels) == sum(': passing ' in label for label in labels) == count//2
-    for invalid in (0, 3, 12):
-        with pytest.raises(ValueError, match='even count'):
+            assert sum(': trapped ' in label for label in labels) == trapped
+            assert sum(': passing ' in label for label in labels) == count-trapped
+            assert len(example.orbit_colors(count, fraction)) == count
+    for invalid in (0, -1, 1.5):
+        with pytest.raises(ValueError, match='positive integer'):
             example.trace_orbits(equilibrium, None, nparticles=invalid)
+    for fraction in (-.1, 1.1, np.nan):
+        with pytest.raises(ValueError, match='trapped fraction'):
+            example.trace_orbits(equilibrium, None, trapped_fraction=fraction)
     for change in ('nonfinite', 'failed'):
         with monkeypatch.context() as patch:
             bad = states.copy()

@@ -22,8 +22,20 @@ ORBIT_COLORS = ('tomato', 'orangered', 'crimson', 'darkorange', 'deeppink',
                 'cyan', 'limegreen', 'dodgerblue', 'mediumslateblue', 'springgreen')
 
 
-def orbit_colors(count):
-    return ORBIT_COLORS[:count//2] + ORBIT_COLORS[5:5+count//2]
+def orbit_counts(count, trapped_fraction=.5):
+    if not isinstance(count, (int, np.integer)) or count < 1:
+        raise ValueError('particle count must be a positive integer')
+    if not np.isfinite(trapped_fraction) or not 0 <= trapped_fraction <= 1:
+        raise ValueError('trapped fraction must be finite and between 0 and 1')
+    trapped = int(np.floor(count * trapped_fraction + .5))
+    return trapped, count-trapped
+
+
+def orbit_colors(count, trapped_fraction=.5):
+    if not count:
+        return ()
+    trapped, passing = orbit_counts(count, trapped_fraction)
+    return tuple(ORBIT_COLORS[i % 5] for i in range(trapped)) + tuple(ORBIT_COLORS[5+i % 5] for i in range(passing))
 
 
 def reactor_equilibrium(wout, minor_radius=1.7, mean_b=5.86):
@@ -80,7 +92,7 @@ def full_torus(surface):
     return boundary
 
 
-def plot_pyvista(surface, final, plotter, title, orbits=(), labels=()):
+def plot_pyvista(surface, final, plotter, title, orbits=(), labels=(), trapped_fraction=.5):
     """Build a full-torus surface and closed coil lines in memory."""
     import pyvista as pv
     xyz = np.asarray(full_torus(surface).gamma)
@@ -89,7 +101,7 @@ def plot_pyvista(surface, final, plotter, title, orbits=(), labels=()):
     for index, line in enumerate(np.asarray(final.gamma)):
         plotter.add_mesh(pv.lines_from_points(line, close=True), color='gold',
                          render_lines_as_tubes=True, line_width=5, label='Optimized' if index == 0 else None)
-    for line, color, label in zip(orbits, orbit_colors(len(orbits)), labels):
+    for line, color, label in zip(orbits, orbit_colors(len(orbits), trapped_fraction), labels):
         plotter.add_mesh(pv.lines_from_points(line), color=color, line_width=3,
                          render_lines_as_tubes=True, label=label)
     plotter.add_text(title, font_size=14)
@@ -99,11 +111,9 @@ def plot_pyvista(surface, final, plotter, title, orbits=(), labels=()):
 
 
 def trace_orbits(equilibrium, coils, model='wout-gc', duration=1e-4, energy_kev=3520.,
-                 save_points=1024, max_steps=2_000_000, nparticles=10):
-    """Seed equal numbers of trapped and passing alphas; report measured orbit classes."""
-    if nparticles not in (2, 4, 6, 8, 10):
-        raise ValueError('nparticles must be an even count from 2 to 10')
-    half = nparticles // 2
+                 save_points=1024, max_steps=2_000_000, nparticles=10, trapped_fraction=.5):
+    """Seed a chosen trapped/passing mixture; report measured orbit classes."""
+    ntrapped, npassing = orbit_counts(nparticles, trapped_fraction)
     import diffrax
     from essos.constants import ONE_EV
     from essos.dynamics import Particles, Tracing
@@ -112,13 +122,14 @@ def trace_orbits(equilibrium, coils, model='wout-gc', duration=1e-4, energy_kev=
     theta, phi = jnp.meshgrid(jnp.linspace(0., 2*jnp.pi, 16, endpoint=False),
                              jnp.linspace(0., 2*jnp.pi/equilibrium.nfp, 16, endpoint=False))
     births = []
-    for s in np.linspace(.15, .55, half):
+    radii, indices = np.unique(np.r_[np.linspace(.15, .55, ntrapped), np.linspace(.15, .55, npassing)], return_inverse=True)
+    for s in radii:
         grid = jnp.stack((jnp.full_like(theta, s), theta, phi), axis=-1).reshape(-1, 3)
         if full_orbit:
             grid = jax.vmap(equilibrium.to_xyz)(grid)
         births.append(grid[jnp.argmin(jax.vmap(field.AbsB)(grid))])
-    particles = Particles(initial_xyz=jnp.tile(jnp.stack(births), (2, 1)),
-                          initial_vparallel_over_v=[.1]*half + [.95*(-1)**i for i in range(half)],
+    particles = Particles(initial_xyz=jnp.stack(births)[indices],
+                          initial_vparallel_over_v=[.1]*ntrapped + [.95*(-1)**i for i in range(npassing)],
                           energy=energy_kev * 1e3 * ONE_EV, field=field if full_orbit else None)
     dt = duration/128
     if full_orbit:
@@ -127,6 +138,7 @@ def trace_orbits(equilibrium, coils, model='wout-gc', duration=1e-4, energy_kev=
         print(f'Lorentz trace resolves gyromotion: shortest birth gyroperiod={gyroperiod:.3g} s; '
               f'about {duration/gyroperiod:.0f} gyroperiods per particle', flush=True)
     print(f'Tracing {nparticles} {energy_kev:g} keV alphas: {model}, {duration:g} s (adaptive Dopri8)', flush=True)
+    print(f'  Seeds: {ntrapped} trapped / {npassing} passing (requested trapped fraction={trapped_fraction:g})', flush=True)
     trace = Tracing(field=field, particles=particles, model='FullOrbitAdaptative' if full_orbit else 'GuidingCenterAdaptative',
                     solver=diffrax.Dopri8(), maxtime=duration, timestep=dt, times_to_trace=save_points,
                     rtol=1e-8, atol=1e-8, max_steps=max_steps, progress=False)
@@ -155,8 +167,8 @@ def trace_orbits(equilibrium, coils, model='wout-gc', duration=1e-4, energy_kev=
         suffix = ' (LCFS exit)' if status[i] == 1 else ' (outside boundary)' if outside[i].any() else ''
         labels.append(f'{model}: {kind} {i+1}{suffix}')
         print(f'  Particle {i+1}: {kind}, parallel reversals={reversals}{suffix}', flush=True)
-    if sum(': trapped ' in label for label in labels) != half or sum(': passing ' in label for label in labels) != half:
-        print(f'  Requested {half} trapped / {half} passing; labels show measured classes. Increase --orbit-time for unresolved paths.', flush=True)
+    if sum(': trapped ' in label for label in labels) != ntrapped or sum(': passing ' in label for label in labels) != npassing:
+        print(f'  Requested {ntrapped} trapped / {npassing} passing; labels show measured classes. Increase --orbit-time for unresolved paths.', flush=True)
     return xyz, labels
 
 
@@ -245,8 +257,8 @@ def main():
     parser.add_argument('--order', type=int, default=4)
     parser.add_argument('--segments', type=int, default=48)
     parser.add_argument('--grid', type=int, default=24, help='surface points in each angle')
-    parser.add_argument('--outer-steps', type=int, default=20)
-    parser.add_argument('--inner-steps', type=int, default=40)
+    parser.add_argument('--outer-steps', type=int, default=20, help='maximum ALM outer iterations')
+    parser.add_argument('--inner-steps', type=int, default=40, help='maximum L-BFGS iterations per ALM outer iteration')
     parser.add_argument('--radius-factor', type=float, default=1.3, help='times maximum boundary-to-centerline radius')
     parser.add_argument('--length-factor', type=float, default=1.3, help='maximum length / initial circular length')
     parser.add_argument('--curvature-factor', type=float, default=3., help='maximum curvature times initial radius')
@@ -258,13 +270,18 @@ def main():
     parser.add_argument('--minor-radius', type=float, default=1.7, help='scaled VMEC minor radius [m]')
     parser.add_argument('--mean-b', type=float, default=5.86, help='target volume-averaged |B| [T]')
     parser.add_argument('--orbit-model', choices=('wout-gc', 'coils-lorentz'), default='wout-gc')
-    parser.add_argument('--orbit-particles', type=int, choices=(2, 4, 6, 8, 10), default=10,
-                        help='total particles, half trapped seeds and half passing seeds')
+    parser.add_argument('--orbit-particles', type=int, default=10, help='positive total particle count')
+    parser.add_argument('--orbit-trapped-fraction', type=float, default=.5,
+                        help='fraction of trapped seeds, from 0 to 1; nearest integer count, ties rounded up')
     parser.add_argument('--orbit-time', type=float, default=1e-4, help='orbit duration [s] (when plotting)')
     parser.add_argument('--orbit-energy-kev', type=float, default=3520., help='alpha kinetic energy [keV]')
     parser.add_argument('--orbit-points', type=int, default=1024, help='saved points per orbit')
     parser.add_argument('--orbit-max-steps', type=int, default=2_000_000, help='adaptive step budget per particle')
     options = parser.parse_args()
+    try:
+        orbit_counts(options.orbit_particles, options.orbit_trapped_fraction)
+    except ValueError as error:
+        parser.error(str(error))
     names = ('qa', 'qh', 'qi') if options.case == 'all' else (options.case,)
     cases = ([(options.wout.stem, options.wout)] if options.wout is not None else
              [(name.upper(), getattr(options, name)) for name in names])
@@ -298,15 +315,15 @@ def main():
                 final = reactor_coils(equilibrium, final, options.mean_b)
             orbits, labels = trace_orbits(equilibrium, final, options.orbit_model, options.orbit_time,
                                          options.orbit_energy_kev, options.orbit_points, options.orbit_max_steps,
-                                         nparticles=options.orbit_particles)
+                                         nparticles=options.orbit_particles, trapped_fraction=options.orbit_trapped_fraction)
         if options.pyvista:
             plotter.subplot(0, index)
-            plot_pyvista(surface, final, plotter, name, orbits, labels)
+            plot_pyvista(surface, final, plotter, name, orbits, labels, options.orbit_trapped_fraction)
         if options.plot:
             ax = figure.add_subplot(2, len(cases), index + 1, projection='3d')
             full_torus(surface).plot(ax=ax, show=False, alpha=.30)
             final.plot(ax=ax, show=False, color='gold')
-            for orbit, color, label in zip(orbits, orbit_colors(len(orbits)), labels):
+            for orbit, color, label in zip(orbits, orbit_colors(len(orbits), options.orbit_trapped_fraction), labels):
                 ax.plot(*orbit.T, color=color, linewidth=2, label=label)
             if len(orbits):
                 ax.legend(fontsize=6)

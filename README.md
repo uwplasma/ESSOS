@@ -120,16 +120,23 @@ without a preset; `--wout` and `--case` are mutually exclusive:
 python -m examples.coil_optimization.optimize_axis_coils_alm --wout /path/to/wout.nc --pyvista --orbit-model coils-lorentz --orbit-particles 4
 ```
 
-`--outer-steps`, `--inner-steps` and `--grid` control the work.
+`--outer-steps` sets the maximum ALM iterations (default 20), and `--inner-steps`
+the maximum L-BFGS iterations per ALM step (default 40); convergence can stop
+earlier. `--grid` controls the surface resolution.
 The example writes no files; `--plot` displays interactive figures.
 For the JAX-branch ParaView-style view, install `pyvista` and use `--pyvista`:
 it displays a full-torus boundary with optimized coils in gold, in one panel
 per case. Both viewers show the entire closed torus (opacity 0.30) and only
 the optimized coils, plus ten alpha-particle paths: five low-pitch trapped
 seeds (warm colors) and five high-pitch passing seeds (cool colors), at
-`s = 0.15, 0.25, 0.35, 0.45, 0.55`. Set `--orbit-particles 4` for two trapped
-and two passing seeds at `s = 0.15, 0.55`; even totals from 2 to 10 are supported.
-Parallel-velocity reversals verify trapped
+`s = 0.15, 0.25, 0.35, 0.45, 0.55`. `--orbit-particles` accepts any positive
+integer; `--orbit-trapped-fraction` sets the trapped-seed fraction (default 0.5).
+The trapped count is rounded to the nearest integer, with ties rounded up;
+the remainder are passing seeds. The console prints both counts. For example,
+`--orbit-particles 4 --orbit-trapped-fraction 0.25` gives one trapped and three
+passing seeds; `0` and `1` select all passing or all trapped. Each group's birth
+radii span `s = 0.15` to `0.55` (a single seed uses `0.15`). Colors cycle within
+each group for larger totals. Parallel-velocity reversals verify trapped
 motion; passing motion requires one full toroidal transit without reversal.
 Labels report measured classes, unresolved paths and sampled boundary crossings.
 
