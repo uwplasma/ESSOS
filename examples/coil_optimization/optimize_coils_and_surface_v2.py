@@ -11,21 +11,15 @@ import numpy as np
 # ESSOS imports
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
-from essos.surfaces import ( SurfaceRZFourier, BdotN_over_B, B_on_surface, B_contravariant_theta_phi_on_surface,
-                             iota_approx_on_surface, SquaredFlux, toroidal_flux )
+from essos.surfaces import ( SurfaceRZFourier, BdotN_over_B,
+                             iota_approx_on_surface, toroidal_flux )
 from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean_squared, loss_coil_curvature_from_field,
                                         loss_coil_length_max, loss_cross_sectional_area_mean,
-                                        loss_cross_sectional_area_uniformity, loss_surface_normal_displacement, 
-                                        loss_quasi_symmetry, loss_quasi_axisymmetry, loss_iota_approx, loss_straight_field_line_residual, loss_surface_curvature_section,
-                                        loss_surface_non_axisymmetric_amplitude, loss_poloidal_slope_min,
-                                        loss_surface_poloidal_derivative, quasi_symmetry_residual_on_surface,
-                                        loss_major_radius )
+                                        loss_quasi_symmetry, loss_iota_approx,
+                                        quasi_symmetry_residual_on_surface )
 
-
-#  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
-#  `scipy.optimize.minimize` or `jaxopt`, can be used as well and may even be preferable.
-from scipy.optimize import least_squares, minimize
+from scipy.optimize import minimize
 
 # Imports to run VMEX after the optimization is obtained.
 from dataclasses import replace
@@ -57,16 +51,12 @@ RESTART_FROM = False
 restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it00")
 SURFACE_MPOL = 1; SURFACE_NTOR = 1   # maximum boundary m and |n|
 VMEC_MPOL = max(SURFACE_MPOL + 2, 5); VMEC_NTOR = max(SURFACE_NTOR + 2, 5)
-# VMEX examples use boundary modes + 2, with at least 5 to resolve low-mode iota.
+# Boundary modes + 2 (minimum 5) is a starting resolution; refine VMEX to check QA/iota.
 # Continuation: set RESTART_FROM, restart_filepath, output_filepath, and surface modes.
-# Mode 2: FOURIER_ORDER=6, QA_WEIGHT=1e4, IOTA_FIT_WEIGHT=1e6,
-# LENGTH_WEIGHT=10, CURVATURE_WEIGHT=500; keep the other defaults.
-# Mode 3: FOURIER_ORDER=IOTA_MPOL=IOTA_NTOR=8, VMEC_MPOL=VMEC_NTOR=7,
-# GLOBAL_QA_WEIGHT=1e5, QA_WEIGHT=QS_WEIGHT=1e4, NORMAL_FIELD_WEIGHT=
-# IOTA_APPROX_WEIGHT=IOTA_FIT_WEIGHT=CROSS_SECTIONAL_AREA_WEIGHT=3e6,
-# MAJOR_RADIUS_WEIGHT=3e4, LENGTH_WEIGHT=30, CURVATURE_WEIGHT=1500,
-# CURVATURE_SEGMENTS=512, SCALE_FIELD=.05, SCALE_SURFACE=.02,
-# MAXCOR=128, MAXITER=100. Check VMEX resolution independently after each stage.
+# Short continuation: mode 2 uses IOTA_MODES=8; mode 3 uses 12 and a 64 x 65 grid.
+# For mode 3, start with CONSTRAINT_WEIGHT=3e7, QS_WEIGHT=1e5 and scales 0.05/0.02.
+# IOTA_MODES can be raised independently when checking the fitted angle.
+# Coil order follows the surface limits; check final VMEX resolution independently.
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -74,11 +64,11 @@ input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_input = os.path.join(input_filepath, 'input.toroidal_surface_02')
 
 # SURFACE PARAMETERS -----------------------------------------------------------------
-ntheta = 32; nphi = 33 ; Npoints = ntheta * nphi
+ntheta = 32; nphi = 33
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
-N_COILS = 4; FOURIER_ORDER = 4;
+N_COILS = 4; FOURIER_ORDER = 2 * max(SURFACE_MPOL, SURFACE_NTOR) + 2
 LARGE_R = 10; SMALL_R = 5.6; NFP = 2;
 N_SEGMENTS = 64; STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
@@ -88,92 +78,22 @@ COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 # A) Losses weights and targets  → control what results the optimizer considers important
 
-# General Geometry ~~~~~~~~~
-MAJOR_RADIUS_WEIGHT = 1e4 # Retain the initial major radius as well as section area.
-
-# Coils ~~~~~~~~~~~~~~~~~~~~
-LENGTH_WEIGHT = 1.; LENGTH_TARGET = 50.;
-CURVATURE_WEIGHT = 100.; CURVATURE_TARGET = 2.
-CURVATURE_SEGMENTS = 256
-
-# Field ~~~~~~~~~~~~~~~~~~~~
-NORMAL_FIELD_WEIGHT = 1e6;
-QS_WEIGHT = 1e2  # helicity-free three-term product
-QA_WEIGHT = 1e3  # VMEX's vacuum two-term residual selects quasi-axisymmetry
-GLOBAL_QA_WEIGHT = 0.  # enable VMEX QA throughout the plasma for final refinement
-QA_SURFACES = (.05, .1, .25, .5, .75, .9, .99)
-
-# Surface ~~~~~~~~~~~~~~~~~~~~
-CROSS_SECTIONAL_AREA_WEIGHT = 1e6
-AREA_UNIFORMITY_WEIGHT = 0. # 1e3
-AREA_UNIFORMITY_TOLERANCE = 0.05     # |A(phi)/<A> - 1| allowed without penalty (~ Amax/Amin <= 1.1)
-
-NORMAL_DISPLACEMENT_WEIGHT = 0. # 1e4  
-
-# Surface-parametrization control: prevent qq = ||dc_phi/dtheta|| from approaching zero.
-QQ_WEIGHT = 0. # 1e5;
-ALPHA_QQ = 1.
-
-# Cross-sectional curvature control: limit kappa relative to the initial maximum.
-KAPPA_WEIGHT = 0. # 1e2 # 1e5;
-ALPHA_KAPPA = 3.
-
-# Non-axisymmetry control: Forces the initial torus to became a stellarator faster
-A3D_MIN = 0.2
-A3D_WEIGHT = 0.
-
-# Rotational transform ~~~~~~~~~~~~~~~~~~~~
-IOTA_APPROX_WEIGHT = 1e6
+# Six physical objectives: normal field, QS, iota, section area, length, curvature.
+CONSTRAINT_WEIGHT = 3e6  # Common weight for B.n/B, target iota, and section area.
+QS_WEIGHT = 1e4          # Globally normalized helicity-free three-term product.
+LENGTH_WEIGHT = 30.; LENGTH_TARGET = 50.
+CURVATURE_WEIGHT = 1500.; CURVATURE_TARGET = 2.
+CURVATURE_SEGMENTS = 256  # Resolve curvature independently of field quadrature.
 IOTA_APPROX_TARGET = 0.41
-IOTA_MPOL = 6; IOTA_NTOR = 6
-IOTA_FIT_WEIGHT = 1e5  # reject inaccurate or folded straight-angle fits
-
-# dtheta/dphi slope penalty
-SLOPE_MIN = 0.05
-PHI_FLOOR_FRACTION = 0.1
-POLOIDAL_SLOPE_WEIGHT = 0.
+IOTA_MODES = 6           # Resolve the straight-field-angle correction.
 
 # B) x_scale  → controls how easily variables move
 SCALE_FIELD = 2.18
 SCALE_SURFACE = 1.
 
 # Numerical method parameters --------------------------------------------------------
-MAXITER=1500
-MAXCOR=50
+MAXITER=80
 
-
-# ====================================================================================
-# ====================================================================================
-""" DIAGNOSTIC FUNCTIONS """
-# ====================================================================================
-# ====================================================================================
-
-def diagnostic_gradient(loss_total, dofs, field, surface, scale_field, scale_surface, label):
-    NN_field_dofs = field.dofs.size
-    NN_surface_dofs = surface.dofs.size
-
-    gradient = loss_total.grad(dofs)
-    gradient_field = gradient[:NN_field_dofs]
-    gradient_surface = gradient[NN_field_dofs:NN_field_dofs + NN_surface_dofs]
-
-    gradient_rms_field = jnp.sqrt(jnp.mean(jnp.square(gradient_field)))
-    gradient_rms_surface = jnp.sqrt(jnp.mean(jnp.square(gradient_surface)))
-
-    gradient_rms_field_scaled = scale_field * gradient_rms_field
-    gradient_rms_surface_scaled = scale_surface * gradient_rms_surface
-
-    print("\n---------------------------------------------------------------------------")
-    print(f"\n{label} gradient diagnostics:")
-    print("Number of field dofs:", NN_field_dofs)
-    print("Number of surface dofs:", NN_surface_dofs)
-    print("Field-gradient L2 norm:", jnp.linalg.norm(gradient_field))
-    print("Surface-gradient L2 norm:", jnp.linalg.norm(gradient_surface))
-    print("Field-gradient RMS:", gradient_rms_field)
-    print("Surface-gradient RMS:", gradient_rms_surface)
-    print("Surface/field RMS ratio:", gradient_rms_surface / gradient_rms_field)
-    print("Scaled field-gradient RMS:", gradient_rms_field_scaled)
-    print("Scaled surface-gradient RMS:", gradient_rms_surface_scaled)
-    print("Scaled surface/field RMS ratio:", gradient_rms_surface_scaled / gradient_rms_field_scaled)
 
 # ====================================================================================
 # ====================================================================================
@@ -212,27 +132,11 @@ if RESTART_FROM:
 else:
     print(f"\nNEW RUN: initial surface from '{os.path.basename(vmec_input)}' and circular coils\n")
 
-# ------------------------------------------------------------------------------------
-# Initialize reference values for the surface geometry. These will be used to compute the surface normal displacement loss. 
-# Compute and cache the initial surface coordinates and unit normals before JAX traces the optimization.
-# Wait for both calculations to finish and store them as fixed reference arrays for the displacement loss.
-surface_gamma_reference = surface_init.gamma.block_until_ready()
-unitnormal_reference = surface_init.unitnormal.block_until_ready()
-qq_reference = float( jnp.min(jnp.linalg.norm(surface_init.gammadash_theta, axis=2)) ) # Initial minimum = qq = ||∂c_phi/∂theta||
-kappa_reference = float(jnp.max(surface_init.curvature_section_by_phi()))
-
-
-# Retain the original geometry targets when increasing boundary resolution.
+# Retain the original section-area target when increasing boundary resolution.
 surface_reference = SurfaceRZFourier.from_input_file(vmec_input, ntheta=ntheta, nphi=nphi,
                                                     close=False, range_torus='half period')
-MAJOR_RADIUS_TARGET = float(surface_reference.rc[0])
 CROSS_SECTIONAL_AREA_TARGET = float(jnp.mean(surface_reference.area_section_by_phi()))
-LENGTH_SCALE_SURFACE = float(jnp.sqrt(CROSS_SECTIONAL_AREA_TARGET / jnp.pi))
-kappa_max = ALPHA_KAPPA * kappa_reference
 
-# Fixed numerical scale from the initial field; this is not a physics target.
-B_phi_init = B_contravariant_theta_phi_on_surface(surface_init, field_init)[..., 1]
-B_phi_reference = float(jnp.mean(jnp.abs(B_phi_init)))
 
 # ====================================================================================
 # ====================================================================================
@@ -244,49 +148,9 @@ L_normal_field = custom_loss( loss_BdotN_mean_squared, "field", "surface" )
 L_length_max = custom_loss( loss_coil_length_max , "field", max_coil_length=LENGTH_TARGET, squared=True )
 L_curvature = custom_loss( loss_coil_curvature_from_field , "field" , max_coil_curvature=CURVATURE_TARGET, n_segments=CURVATURE_SEGMENTS )
 L_quasi_symmetry = custom_loss(loss_quasi_symmetry, "field", "surface")
-L_quasi_axisymmetry = custom_loss(loss_quasi_axisymmetry, "field", "surface", lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR)
 L_cross_sectional_area = custom_loss( loss_cross_sectional_area_mean, "surface", target_area=CROSS_SECTIONAL_AREA_TARGET )
-L_area_uniformity = custom_loss( loss_cross_sectional_area_uniformity, "surface", tolerance=AREA_UNIFORMITY_TOLERANCE )
-L_surface_normal_displacement = custom_loss( loss_surface_normal_displacement , "surface" ,
-                                            surface_gamma_reference=surface_gamma_reference , unitnormal_reference=unitnormal_reference,
-                                            length_scale=LENGTH_SCALE_SURFACE )
-L_surface_poloidal_derivative = custom_loss( loss_surface_poloidal_derivative, "surface", qq_reference=qq_reference, alpha_qq=ALPHA_QQ )
-L_surface_curvature_section = custom_loss( loss_surface_curvature_section , "surface" , kappa_max=kappa_max )
-L_surface_non_axisymmetric_amplitude = custom_loss( loss_surface_non_axisymmetric_amplitude, "surface", A3D_min=A3D_MIN )
-L_poloidal_slope_min = custom_loss( loss_poloidal_slope_min, "field", "surface",
-                                   slope_min=SLOPE_MIN, B_phi_reference=B_phi_reference, phi_floor_fraction=PHI_FLOOR_FRACTION )
-L_iota_approx = custom_loss( loss_iota_approx, "field", "surface", iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR )
-L_iota_fit = custom_loss(loss_straight_field_line_residual, "field", "surface",
-                         lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR)
-L_major_radius = custom_loss( loss_major_radius, "surface", target_major_radius=MAJOR_RADIUS_TARGET )
+L_iota_approx = custom_loss( loss_iota_approx, "field", "surface", iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES )
 
-if GLOBAL_QA_WEIGHT:
-    from vmex import optimize as vmec_opt
-    qa_input_file = os.path.join(output_filepath, "input.qa_initial")
-    surface_init.to_vmec(qa_input_file, mpol=VMEC_MPOL, ntor=VMEC_NTOR)
-    # Vacuum QA and iota are flux-independent; unit flux conditions the adjoint.
-    qa_input = replace(vj.VmecInput.from_file(qa_input_file), phiedge=1.)
-    qa_residual = vmec_opt.QuasisymmetryRatioResidual(QA_SURFACES, helicity_m=1, helicity_n=0,
-                                                    ntheta=64, nphi=64)
-    def plasma_loss(state, runtime):
-        rows = qa_residual.residuals_state(state, runtime)
-        return (0.5 * jnp.vdot(rows, rows) + IOTA_APPROX_WEIGHT / GLOBAL_QA_WEIGHT
-                * (vmec_opt.iota_edge(state, runtime) - IOTA_APPROX_TARGET)**2)
-    qa_restart = os.path.join(restart_filepath if RESTART_FROM else output_filepath,
-                              "vmex_output", "wout_coils_surface.nc")
-    # Pass physical Fourier coefficients, without VMEX's spectral scaling.
-    qa_problem = vmec_opt.VmecProblem.from_loss(qa_input, plasma_loss,
-        max_mode=max(SURFACE_MPOL, SURFACE_NTOR), vary_major_radius=True, use_ess=False,
-        forward_ftol=1e-12, forward_max_iterations=3500,
-        restart_from=qa_restart if os.path.isfile(qa_restart) else None)
-    mode_index = {(int(n) // surface_init.nfp, int(m)): i
-                  for i, (m, n) in enumerate(zip(surface_init.xm, surface_init.xn))}
-    families = {'RBC': 'rc', 'ZBS': 'zs', 'RBS': 'rs', 'ZBC': 'zc'}
-    qa_dofs = [(families[name[:3]], mode_index.get(tuple(map(int, name[4:-1].split(',')))))
-               for name in qa_problem.names]
-    def loss_global_qa(surface):
-        return qa_problem.jax_fun(jnp.stack([getattr(surface, family)[i] if i is not None else qa_problem.x0[j]
-            for j, (family, i) in enumerate(qa_dofs)]))
 
 # ====================================================================================
 # ====================================================================================
@@ -294,36 +158,12 @@ if GLOBAL_QA_WEIGHT:
 # ====================================================================================
 # ====================================================================================
 
-losses_weighted = [(NORMAL_FIELD_WEIGHT, L_normal_field),
-                   (LENGTH_WEIGHT, L_length_max),
-                   (CURVATURE_WEIGHT, L_curvature),
-                   (CROSS_SECTIONAL_AREA_WEIGHT, L_cross_sectional_area),
-                   (AREA_UNIFORMITY_WEIGHT, L_area_uniformity),
-                   (NORMAL_DISPLACEMENT_WEIGHT, L_surface_normal_displacement),
-                   (IOTA_APPROX_WEIGHT, L_iota_approx),
-                   (IOTA_FIT_WEIGHT, L_iota_fit),
-                   (A3D_WEIGHT, L_surface_non_axisymmetric_amplitude),
-                   (POLOIDAL_SLOPE_WEIGHT, L_poloidal_slope_min),
-                   (QQ_WEIGHT, L_surface_poloidal_derivative),
-                   (KAPPA_WEIGHT, L_surface_curvature_section),
-                   (QS_WEIGHT, L_quasi_symmetry),
-                   (QA_WEIGHT, L_quasi_axisymmetry),
-                   (MAJOR_RADIUS_WEIGHT, L_major_radius) ]
-
-if GLOBAL_QA_WEIGHT:
-    losses_weighted.append((GLOBAL_QA_WEIGHT, custom_loss(loss_global_qa, "surface")))
-
-
-losses_active = [ weight * loss for weight, loss in losses_weighted if weight != 0.0 ]
-
-if not losses_active:
-    raise ValueError("At least one loss weight must be nonzero.")
-
-L_total = losses_active[0]
-
-for loss_active in losses_active[1:]:
-    L_total = L_total + loss_active
-
+L_total = (CONSTRAINT_WEIGHT * L_normal_field
+           + LENGTH_WEIGHT * L_length_max
+           + CURVATURE_WEIGHT * L_curvature
+           + CONSTRAINT_WEIGHT * L_cross_sectional_area
+           + CONSTRAINT_WEIGHT * L_iota_approx
+           + QS_WEIGHT * L_quasi_symmetry)
 
 # The dependencies of the total loss are set to the field and surface. Both will be modified during the optimization.
 L_total.dependencies = { "field": field_init, "surface": surface_init }
@@ -340,69 +180,13 @@ x_scale_optimization = jnp.concatenate([
     SCALE_SURFACE * jnp.ones(NN_surface_dofs),
 ])
 
-# Diagnostic of the initial gradient of the total loss with respect to the field and surface dofs.
-diagnostic_gradient(L_total, L_total.starting_dofs, field_init, surface_init, SCALE_FIELD, SCALE_SURFACE, "Initial")
-
-
-# def grad(x, scale_grad=1e-1):
-#     gradient = L_total.grad(x)
-#     NN_surface_dofs = L_total.dependencies["surface"].dofs.size
-#     NN_field_dofs = L_total.dependencies["field"].dofs.size
-#     total_grad = jnp.concatenate([gradient[:NN_field_dofs], scale_grad*gradient[NN_field_dofs:]])
-#     return total_grad
-
 # ====================================================================================
 # ====================================================================================
 """ Optimizing the total loss """
 # ====================================================================================
 # ====================================================================================
 
-# Values remembered between calls to the callback.
-iteration_callback = 0
-dofs_previous = None
-cost_previous = None
-
-def loss_callback(intermediate_result):
-    # Allow this function to update the values defined above.
-    global iteration_callback, dofs_previous, cost_previous
-
-    # SciPy first calls the callback after iteration 1.
-    if iteration_callback == 0:
-        # We calculate and print the initial state (iteration 0) ourselves.
-        dofs_previous = L_total.starting_dofs
-        cost_previous = float(L_total(dofs_previous))
-
-        gradient_init = L_total.grad(dofs_previous)
-        optimality_init = float(jnp.max(jnp.abs(gradient_init)))
-
-        print(f"{'Iteration':>10}{'Cost':>15}{'Cost reduction':>18}{'Step norm':>15}{'Optimality':>15}")
-        print(f"{0:>6}{cost_previous:>19.4e}{'':>18}{'':>15}{optimality_init:>15.2e}")
-
-    # SciPy provides the parameters and objective value after this iteration.
-    dofs_current = jnp.asarray(intermediate_result.x) * x_scale_optimization
-    cost_current = float(intermediate_result.fun)
-
-    # Compare this accepted point with the previous accepted point.
-    cost_reduction = cost_previous - cost_current
-    step_norm = float(jnp.linalg.norm(dofs_current - dofs_previous))
-
-    # The largest absolute gradient component measures first-order optimality.
-    gradient_current = (scaled_value_and_grad.last_gradient
-                        if np.array_equal(intermediate_result.x, scaled_value_and_grad.last_x)
-                        else L_total.grad(dofs_current))
-    optimality = float(jnp.max(jnp.abs(gradient_current)))
-
-    # Print one row of the table.
-    iteration_callback += 1
-    print(f"{iteration_callback:>6}{cost_current:>19.4e}{cost_reduction:>18.2e}{step_norm:>15.2e}{optimality:>15.2e}")
-
-    # Keep this point so the next callback can compare against it.
-    dofs_previous = dofs_current
-    cost_previous = cost_current
-
 t_start = time()
-
-
 
 
 if LOAD_RESULT:
@@ -419,28 +203,19 @@ else:
     value_and_grad = jax.jit(jax.value_and_grad(L_total))
     def scaled_value_and_grad(x):
         value, gradient = value_and_grad(jnp.asarray(x) * x_scale_optimization)
-        scaled_value_and_grad.last_x = np.asarray(x).copy()
-        scaled_value_and_grad.last_gradient = np.asarray(gradient)
         return float(value), np.asarray(gradient * x_scale_optimization)
-    res = minimize(scaled_value_and_grad, np.asarray(L_total.starting_dofs / x_scale_optimization),
-                   jac=True, method="L-BFGS-B", callback=loss_callback,
-                   options={'maxiter': MAXITER, 'maxcor': MAXCOR, 'maxls': 40, 'ftol': 1e-12, 'gtol': 1e-8})
+    x_initial = np.asarray(L_total.starting_dofs / x_scale_optimization)
+    bounds = [(None, None)] * x_initial.size
+    # R00 is the first surface coefficient; keep the major radius fixed.
+    bounds[NN_field_dofs] = (x_initial[NN_field_dofs], x_initial[NN_field_dofs])
+    res = minimize(scaled_value_and_grad, x_initial,
+                   jac=True, method="L-BFGS-B", bounds=bounds,
+                   callback=lambda intermediate_result: print(f"Cost: {intermediate_result.fun:.6e}"),
+                   options={'maxiter': MAXITER, 'maxcor': 128, 'maxls': 40, 'ftol': 1e-12, 'gtol': 1e-8})
     res.x = np.asarray(res.x * x_scale_optimization)
     jnp.save(os.path.join(output_filepath, "res_x.npy"), res.x)
 
-# res = minimize(L_total, L_total.starting_dofs, jac = L_total.grad, method = "L-BFGS-B", callback=loss_callback ,
-#                  options={'maxiter': MAXITER} )
-
-
-# res = least_squares(L_total, L_total.starting_dofs, L_total.grad, x_scale=x_scale_optimization,
-#                      verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=300)
-# res = least_squares(L_total, L_total.starting_dofs, lambda x: grad(x, scale_grad=1e-1), verbose=2, ftol=1e-7, gtol=1e-7, xtol=1e-14, max_nfev=200)
-# res = least_squares(L_total, res.x, lambda x: grad(x, scale_grad=3e-1), verbose=2, ftol=1e-7, gtol=1e-7, xtol=1e-14, max_nfev=300)
-# res = least_squares(L_total, res.x, lambda x: grad(x, scale_grad=6e-1), verbose=2, ftol=1e-7, gtol=1e-7, xtol=1e-14, max_nfev=300)
-# res = least_squares(L_total, res.x, lambda x: grad(x, scale_grad=1), verbose=2, ftol=1e-7, gtol=1e-7, xtol=1e-14, max_nfev=300)
 t_end = time()
-
-diagnostic_gradient(L_total, res.x, field_init, surface_init, SCALE_FIELD, SCALE_SURFACE, "Optimized")
 
 
 # ====================================================================================
@@ -494,11 +269,11 @@ print("\n=======================================================================
 print("===========================================================================")
 print("WEIGHTED LOSSES:")
 
-if NORMAL_FIELD_WEIGHT != 0.0:
+if CONSTRAINT_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
     print("Normal-field weighted losses:")
-    print("NORMAL-FIELD LOSS (INITIAL, WEIGHTED):", NORMAL_FIELD_WEIGHT * loss_BdotN_mean_squared(field_init, surface_init) )
-    print("NORMAL-FIELD LOSS (OPTIMIZED, WEIGHTED):",NORMAL_FIELD_WEIGHT * loss_BdotN_mean_squared(field_opt, surface_opt) )
+    print("NORMAL-FIELD LOSS (INITIAL, WEIGHTED):", CONSTRAINT_WEIGHT * loss_BdotN_mean_squared(field_init, surface_init) )
+    print("NORMAL-FIELD LOSS (OPTIMIZED, WEIGHTED):",CONSTRAINT_WEIGHT * loss_BdotN_mean_squared(field_opt, surface_opt) )
 
 if QS_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
@@ -506,60 +281,19 @@ if QS_WEIGHT != 0.0:
     print("QS LOSS (INITIAL, WEIGHTED):", QS_WEIGHT * loss_quasi_symmetry(field_init, surface_init) )
     print("QS LOSS (OPTIMIZED, WEIGHTED):",QS_WEIGHT * loss_quasi_symmetry(field_opt, surface_opt) )
 
-if IOTA_APPROX_WEIGHT != 0.0:
+if CONSTRAINT_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
     print("Rotational transform weighted losses:")
-    print("IOTA LOSS (INITIAL, WEIGHTED):", IOTA_APPROX_WEIGHT * loss_iota_approx(field_init, surface_init,iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR) )
-    print("IOTA LOSS (OPTIMIZED, WEIGHTED):", IOTA_APPROX_WEIGHT * loss_iota_approx(field_opt, surface_opt,iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR) )
+    print("IOTA LOSS (INITIAL, WEIGHTED):", CONSTRAINT_WEIGHT * loss_iota_approx(field_init, surface_init,iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES) )
+    print("IOTA LOSS (OPTIMIZED, WEIGHTED):", CONSTRAINT_WEIGHT * loss_iota_approx(field_opt, surface_opt,iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES) )
 
-if A3D_WEIGHT !=0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("3D modes amplitude weighted losses:")
-    print("3D AMPLITUDE LOSS (INITIAL):", A3D_WEIGHT * loss_surface_non_axisymmetric_amplitude(surface_init, A3D_min=A3D_MIN))
-    print("3D AMPLITUDE (OPTIMIZED):", A3D_WEIGHT * loss_surface_non_axisymmetric_amplitude(surface_opt, A3D_min=A3D_MIN))
 
-if MAJOR_RADIUS_WEIGHT !=0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Major Radius losses:")
-    print("MAJOR RADIUS LOSS (INITIAL):", MAJOR_RADIUS_WEIGHT * loss_major_radius(surface_init, MAJOR_RADIUS_TARGET))
-    print("MAJOR RADIUS LOSS (OPTIMIZED):", MAJOR_RADIUS_WEIGHT * loss_major_radius(surface_opt, MAJOR_RADIUS_TARGET))
-
-if POLOIDAL_SLOPE_WEIGHT != 0.0:
-    # Evaluate once, then show the raw loss and its contribution to L_total.
-    loss_slope_init = loss_poloidal_slope_min(
-        field_init, surface_init, SLOPE_MIN, B_phi_reference, PHI_FLOOR_FRACTION
-    )
-    print("\n---------------------------------------------------------------------------")
-    print("Poloidal-slope loss (initial, unweighted):", loss_slope_init)
-    print("Poloidal-slope loss (initial, weighted):", POLOIDAL_SLOPE_WEIGHT * loss_slope_init)
-
-if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
+if CONSTRAINT_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
     print("Mean cross-sectional area weighted losses:")
-    print("AREA LOSS (INITIAL, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_cross_sectional_area_mean( surface_init, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
-    print("AREA LOSS (OPTIMIZED, WEIGHTED):", CROSS_SECTIONAL_AREA_WEIGHT * loss_cross_sectional_area_mean( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
+    print("AREA LOSS (INITIAL, WEIGHTED):", CONSTRAINT_WEIGHT * loss_cross_sectional_area_mean( surface_init, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
+    print("AREA LOSS (OPTIMIZED, WEIGHTED):", CONSTRAINT_WEIGHT * loss_cross_sectional_area_mean( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
 
-if NORMAL_DISPLACEMENT_WEIGHT != 0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Surface normal-displacement weighted losses:")
-    print("NORMAL-DISPLACEMENT LOSS (INITIAL, WEIGHTED):", NORMAL_DISPLACEMENT_WEIGHT * loss_surface_normal_displacement( surface_init, surface_gamma_reference=surface_gamma_reference, unitnormal_reference=unitnormal_reference, length_scale=LENGTH_SCALE_SURFACE ) )
-    print("NORMAL-DISPLACEMENT LOSS (OPTIMIZED, WEIGHTED):", NORMAL_DISPLACEMENT_WEIGHT * loss_surface_normal_displacement( surface_opt, surface_gamma_reference=surface_gamma_reference, unitnormal_reference=unitnormal_reference, length_scale=LENGTH_SCALE_SURFACE ) )
-
-if KAPPA_WEIGHT != 0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Cross-sectional surface curvature:")
-    loss_kappa_init = loss_surface_curvature_section(surface_init, kappa_max=kappa_max)
-    loss_kappa_opt = loss_surface_curvature_section(surface_opt, kappa_max=kappa_max)
-    print("CROSS-SECTIONAL SURFACE CURVATURE LOSS (INITIAL, WEIGHTED):", KAPPA_WEIGHT * loss_kappa_init)
-    print("CROSS-SECTIONAL SURFACE CURVATURE LOSS (OPTIMIZED, WEIGHTED):", KAPPA_WEIGHT * loss_kappa_opt)
-
-if QQ_WEIGHT != 0.0:
-    print("\n---------------------------------------------------------------------------")
-    print("Norm of the poloidal-parametrization derivative:")
-    loss_qq_init = loss_surface_poloidal_derivative(surface_init, qq_reference=qq_reference, alpha_qq=ALPHA_QQ)
-    loss_qq_opt = loss_surface_poloidal_derivative(surface_opt, qq_reference=qq_reference, alpha_qq=ALPHA_QQ)
-    print("POLOIDAL-DERIVATIVE LOSS (INITIAL, WEIGHTED):", QQ_WEIGHT * loss_qq_init)
-    print("POLOIDAL-DERIVATIVE LOSS (OPTIMIZED, WEIGHTED):", QQ_WEIGHT * loss_qq_opt)
 
 if LENGTH_WEIGHT != 0.0:
     print("\n---------------------------------------------------------------------------")
@@ -574,8 +308,6 @@ if CURVATURE_WEIGHT != 0.0:
     print("COIL CURVATURE LOSS (OPTIMIZED, WEIGHTED):", CURVATURE_WEIGHT * loss_coil_curvature_from_field(field_opt, max_coil_curvature=CURVATURE_TARGET, n_segments=CURVATURE_SEGMENTS))
 
 
-
-
 print("\n===========================================================================")
 print("===========================================================================")
 print("DIAGNOSTICS:")
@@ -587,7 +319,7 @@ print("mean abs residual (initial):", jnp.mean(jnp.abs(B_dot_n_over_B_init)) )
 print("mean abs residual (optimized):",jnp.mean(jnp.abs(B_dot_n_over_B_opt)) )
 print("max abs residual (initial):",jnp.max(jnp.abs(B_dot_n_over_B_init)) )
 print("max abs residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) )
-if NORMAL_FIELD_WEIGHT != 0.0:
+if CONSTRAINT_WEIGHT != 0.0:
     print("Normal-field loss (initial):",loss_BdotN_mean_squared(field_init, surface_init) )
     print("Normal-field loss (optimized):",loss_BdotN_mean_squared(field_opt, surface_opt) )
 
@@ -613,21 +345,16 @@ if QS_WEIGHT != 0.0:
 print("\n---------------------------------------------------------------------------")
 print("Rotational transform:")
 print("iota (target):", IOTA_APPROX_TARGET)
-print("iota (initial):", iota_approx_on_surface(surface_init, field_init, lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR))
-print("iota (optimized):", iota_approx_on_surface(surface_opt, field_opt, lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR))
-fit = iota_approx_on_surface(surface_opt, field_opt, lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR, return_diagnostics=True)
+print("iota (initial):", iota_approx_on_surface(surface_init, field_init, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES))
+print("iota (optimized):", iota_approx_on_surface(surface_opt, field_opt, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES))
+fit = iota_approx_on_surface(surface_opt, field_opt, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES, return_diagnostics=True)
 print("Straight-angle fit RMS and minimum Jacobian:", fit["rms_residual"], fit["minimum_angle_jacobian"])
 print("RMS B.n/B:", jnp.sqrt(jnp.mean(B_dot_n_over_B_opt**2)))
-print("Vacuum two-term QA mean square:", loss_quasi_axisymmetry(field_opt, surface_opt,
-      lambda_mpol=IOTA_MPOL, lambda_ntor=IOTA_NTOR))
 
 print("\n---------------------------------------------------------------------------")
-print("3D modes amplitude residuals and losses:")
+print("Nonaxisymmetric coefficient amplitude:")
 print("3D coefficient amplitude (initial):", surface_init.non_axisymmetric_amplitude())
 print("3D coefficient amplitude (optimized):", surface_opt.non_axisymmetric_amplitude())
-if A3D_WEIGHT !=0.0:
-    print("3D amplitude loss (initial):", loss_surface_non_axisymmetric_amplitude(surface_init, A3D_min=A3D_MIN))
-    print("3D amplitude loss (optimized):", loss_surface_non_axisymmetric_amplitude(surface_opt, A3D_min=A3D_MIN))
 
 print("\n---------------------------------------------------------------------------")
 print("Mean cross-sectional area:")
@@ -641,9 +368,9 @@ relative_cross_sectional_area_change = ( cross_sectional_area_optimized - cross_
 # print("Relative area change:", relative_cross_sectional_area_change)
 print("Relative area change (%):", 100 * relative_cross_sectional_area_change)
 
-if CROSS_SECTIONAL_AREA_WEIGHT != 0.0:
+if CONSTRAINT_WEIGHT != 0.0:
     print("Area loss:", loss_cross_sectional_area_mean( surface_opt , target_area=CROSS_SECTIONAL_AREA_TARGET ) )
-    print("Weighted area loss:", CROSS_SECTIONAL_AREA_WEIGHT * loss_cross_sectional_area_mean( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
+    print("Weighted area loss:", CONSTRAINT_WEIGHT * loss_cross_sectional_area_mean( surface_opt, target_area=CROSS_SECTIONAL_AREA_TARGET ) )
 
 
 print("\n---------------------------------------------------------------------------")
@@ -670,35 +397,16 @@ print("Index of optimized maximum (phi, theta):", index_phi_max_opt, index_theta
 print("Phi at optimized maximum:", surface_opt.phi2d[index_phi_max_opt, index_theta_max_opt])
 print("Theta at optimized maximum:", surface_opt.theta2d[index_phi_max_opt, index_theta_max_opt])
 
-if KAPPA_WEIGHT != 0.0:
-    loss_kappa_init = loss_surface_curvature_section(surface_init, kappa_max=kappa_max)
-    loss_kappa_opt = loss_surface_curvature_section(surface_opt, kappa_max=kappa_max)
-    print("Reference maximum curvature:", kappa_reference)
-    print("Allowed maximum curvature:", kappa_max)
-    print("Cross-sectional curvature loss (initial):", loss_kappa_init)
-    print("Cross-sectional curvature loss (optimized):", loss_kappa_opt)
-    print("Weighted cross-sectional curvature loss (optimized):", KAPPA_WEIGHT * loss_kappa_opt)
-
 
 print("\n---------------------------------------------------------------------------")
 print("Norm of the poloidal-parametrization derivative:")
 
 qq_init = jnp.linalg.norm(surface_init.gammadash_theta, axis=2)
 qq_opt = jnp.linalg.norm(surface_opt.gammadash_theta, axis=2)
-qq_minimum_allowed = ALPHA_QQ * qq_reference
 
 print("Minimum ||dc_phi/dtheta|| (initial):", jnp.min(qq_init))
 print("Minimum ||dc_phi/dtheta|| (optimized):", jnp.min(qq_opt))
 print("||dc_phi/dtheta|| at maximum optimized curvature:", qq_opt[index_phi_max_opt, index_theta_max_opt])
-
-if QQ_WEIGHT != 0.0:
-    loss_qq_init = loss_surface_poloidal_derivative(surface_init, qq_reference=qq_reference, alpha_qq=ALPHA_QQ)
-    loss_qq_opt = loss_surface_poloidal_derivative(surface_opt, qq_reference=qq_reference, alpha_qq=ALPHA_QQ)
-    print("Reference minimum ||dc_phi/dtheta||:", qq_reference)
-    print("Allowed minimum ||dc_phi/dtheta||:", qq_minimum_allowed)
-    print("Poloidal-derivative loss (initial):", loss_qq_init)
-    print("Poloidal-derivative loss (optimized):", loss_qq_opt)
-    print("Weighted poloidal-derivative loss (optimized):", QQ_WEIGHT * loss_qq_opt)
 
 
 print("\n---------------------------------------------------------------------------")
@@ -752,6 +460,30 @@ print("Base-coil currents (optimized):", opt_coils.dofs_currents_raw)
 
 # ====================================================================================
 # ====================================================================================
+""" Record of the run parameters """
+# The input parameters are grouped as in the INPUT DATA section and written as "NAME = value" lines,
+# so the file can later be read back to set up a run.
+RUN_PARAMETERS = {
+    "Run control":          ["EXPORT", "RUN_VMEX", "VMEC_MPOL", "VMEC_NTOR", "LOAD_RESULT", "MAXITER"],
+    "Continuation":         ["RESTART_FROM", "restart_filepath", "SURFACE_MPOL", "SURFACE_NTOR"],
+    "Initial surface":      ["ntheta", "nphi"],
+    "Coils":                ["N_COILS", "FOURIER_ORDER", "LARGE_R", "SMALL_R", "NFP", "N_SEGMENTS",
+                             "STELLSYM", "COIL_CURRENT"],
+    "Loss weights":         ["CONSTRAINT_WEIGHT", "QS_WEIGHT", "LENGTH_WEIGHT", "CURVATURE_WEIGHT"],
+    "Coil limits":          ["LENGTH_TARGET", "CURVATURE_TARGET", "CURVATURE_SEGMENTS"],
+    "Rotational transform": ["IOTA_APPROX_TARGET", "IOTA_MODES"],
+    "x_scale":              ["SCALE_FIELD", "SCALE_SURFACE"],
+}
+
+if not LOAD_RESULT:
+    with open(os.path.join(output_filepath, "essos_surf_coils.in"), "w") as f:
+        f.write(f"# ESSOS single-stage run parameters ({datetime.datetime.now():%Y-%m-%d %H:%M})\n")
+        f.write(f"VMEC_INPUT = {os.path.basename(vmec_input)!r}\n")
+        for section, names in RUN_PARAMETERS.items():
+            f.write(f"\n# {section}\n")
+            for name in names:
+                f.write(f"{name} = {globals()[name]!r}\n")
+
 """ Plotting the initial and optimized coils """
 # ====================================================================================
 # ====================================================================================
@@ -778,74 +510,6 @@ plt.tight_layout()
 plt.savefig(os.path.join(essos_plots_filepath, "coils_surface_init_opt.png"), dpi=200)
 plt.show()
 
-
-# ====================================================================================
-""" Poincaré sections at the narrowest and widest cross-sections """
-# ====================================================================================
-import jax
-from essos.dynamics import Tracing
-
-N_FIELDLINES = 6
-N_TURNS = 100
-
-# --- 1. Cross-section of a SurfaceRZFourier at a fixed phi ---------------------------
-def surface_section(surface, phi, ntheta=256):
-    theta = jnp.linspace(0, 2 * jnp.pi, ntheta, endpoint=False)
-    angles = surface.xm[:, None] * theta[None, :] - surface.xn[:, None] * phi
-    R = jnp.sum(surface.rc[:, None] * jnp.cos(angles), axis=0)
-    Z = jnp.sum(surface.zs[:, None] * jnp.sin(angles), axis=0)
-    return R, Z
-
-# --- 2. Section area (shoelace) along one field period -> narrowest / widest phi ----
-def section_area(surface, phi):
-    R, Z = surface_section(surface, phi)
-    return 0.5 * jnp.abs(jnp.sum(R * jnp.roll(Z, -1) - jnp.roll(R, -1) * Z))
-
-phis = jnp.linspace(0, 2 * jnp.pi / surface_opt.nfp, 64, endpoint=False)
-areas = jax.vmap(lambda p: section_area(surface_opt, p))(phis)
-PHI_NARROW, PHI_WIDE = float(phis[jnp.argmin(areas)]), float(phis[jnp.argmax(areas)])
-
-# # --- 3. Rescale currents so |B| ~ 1 (field-line ODE is dx/dt = B) --------------------
-# B_mean = jnp.mean(jnp.linalg.norm(B_on_surface(surface_opt, field_opt), axis=-1))
-# field_trace = BiotSavart(Coils(curves=opt_coils.curves, currents=opt_coils.dofs_currents_raw / B_mean))
-
-# # --- 4. Starting points on phi = 0, Z = 0, from section centre to edge --------------
-# R_phi0, _ = surface_section(surface_opt, 0.0)
-# R_center = 0.5 * (jnp.max(R_phi0) + jnp.min(R_phi0))
-# R_start = jnp.linspace(R_center, R_center + 0.95 * (jnp.max(R_phi0) - R_center), N_FIELDLINES)
-# initial_xyz = jnp.stack([R_start, jnp.zeros_like(R_start), jnp.zeros_like(R_start)], axis=1)
-
-# # --- 5. Trace field lines (time ~ arc length ~ 2*pi*R0 per turn) ---------------------
-# R0 = float(surface_opt.rc[0])
-# tracing = Tracing(field=field_trace, model='FieldLineAdaptative', initial_conditions=initial_xyz,
-#                   maxtime=N_TURNS * 2 * jnp.pi * R0, times_to_trace=N_TURNS * 200,
-#                   atol=1e-8, rtol=1e-8)
-
-# # --- 6. Poincaré points at any phi0, using field-period symmetry ---------------------
-# def poincare_points(traj, phi0, nfp):
-#     period = 2 * jnp.pi / nfp
-#     X, Y, Z = traj[:, 0], traj[:, 1], traj[:, 2]
-#     R = jnp.sqrt(X**2 + Y**2)
-#     phi = jnp.unwrap(jnp.arctan2(Y, X))
-#     k = jnp.floor((phi - phi0) / period)
-#     i = jnp.where(jnp.diff(k) != 0)[0]
-#     w = (phi0 + jnp.maximum(k[i], k[i + 1]) * period - phi[i]) / (phi[i + 1] - phi[i])
-#     return R[i] + w * (R[i + 1] - R[i]), Z[i] + w * (Z[i + 1] - Z[i])
-
-# # --- 7. Plot ------------------------------------------------------------------------
-# fig, axes = plt.subplots(1, 2, figsize=(11, 5))
-# for ax, phi0, title in zip(axes, [PHI_NARROW, PHI_WIDE], ["Narrowest section", "Widest section"]):
-#     for traj in tracing.trajectories:
-#         ax.scatter(*poincare_points(traj, phi0, surface_opt.nfp), s=1)
-#     R_b, Z_b = surface_section(surface_opt, phi0)
-#     ax.plot(jnp.append(R_b, R_b[0]), jnp.append(Z_b, Z_b[0]), 'r-', lw=1, label='optimized surface')
-#     ax.set_title(f"{title}, phi = {phi0:.3f}")
-#     ax.set_xlabel('R'); ax.set_ylabel('Z'); ax.set_aspect('equal')
-# axes[0].legend()
-
-# plt.tight_layout()
-# plt.savefig(os.path.join(essos_plots_filepath, "poincare_narrow_wide.png"), dpi=200)
-# plt.show()
 
 """ Exporting results """
 
@@ -909,38 +573,9 @@ if EXPORT:
         # The breaking is measured as the norm of those modes relative to the average field B00, on three surfaces.
         with netCDF4.Dataset(boozmn_file) as booz:
             bmnc = np.asarray(booz["bmnc_b"][:]); xm_b = np.asarray(booz["ixm_b"][:]); xn_b = np.asarray(booz["ixn_b"][:])
+            s_b = (np.asarray(booz["jlist"][:]) - 1.5) / (int(wout.ns) - 1)
         B00 = bmnc[:, (xm_b == 0) & (xn_b == 0)][:, 0]
-        symmetry_breaking = np.sqrt(np.sum(bmnc[:, xn_b != 0]**2, axis=1)) / B00
+        symmetry_breaking = np.sqrt(np.sum(bmnc[:, xn_b != 0]**2, axis=1)) / np.abs(B00)
         print("  QA symmetry breaking (n != 0 modes / B00):")
         for s_index in [bmnc.shape[0] // 4, bmnc.shape[0] // 2, bmnc.shape[0] - 1]:
-            print(f"    s = {(s_index + 0.5) / bmnc.shape[0]:.2f}: {100 * symmetry_breaking[s_index]:.2f} %")
-
-
-""" Record of the run parameters """
-# The input parameters are grouped as in the INPUT DATA section and written as "NAME = value" lines,
-# so the file can later be read back to set up a run.
-RUN_PARAMETERS = {
-    "Run control":          ["EXPORT", "RUN_VMEX", "VMEC_MPOL", "VMEC_NTOR", "LOAD_RESULT", "MAXITER", "MAXCOR"],
-    "Continuation":         ["RESTART_FROM", "restart_filepath", "SURFACE_MPOL", "SURFACE_NTOR"],
-    "Initial surface":      ["ntheta", "nphi"],
-    "Coils":                ["N_COILS", "FOURIER_ORDER", "LARGE_R", "SMALL_R", "NFP", "N_SEGMENTS",
-                             "STELLSYM", "COIL_CURRENT"],
-    "Geometry losses":      ["MAJOR_RADIUS_WEIGHT"],
-    "Coil losses":          ["LENGTH_WEIGHT", "LENGTH_TARGET", "CURVATURE_WEIGHT", "CURVATURE_TARGET", "CURVATURE_SEGMENTS"],
-    "Field losses":         ["NORMAL_FIELD_WEIGHT", "QS_WEIGHT", "QA_WEIGHT", "GLOBAL_QA_WEIGHT", "QA_SURFACES"],
-    "Surface losses":       ["CROSS_SECTIONAL_AREA_WEIGHT", "AREA_UNIFORMITY_WEIGHT", "AREA_UNIFORMITY_TOLERANCE",
-                             "NORMAL_DISPLACEMENT_WEIGHT", "QQ_WEIGHT", "ALPHA_QQ", "KAPPA_WEIGHT", "ALPHA_KAPPA",
-                             "A3D_MIN", "A3D_WEIGHT"],
-    "Rotational transform": ["IOTA_APPROX_WEIGHT", "IOTA_APPROX_TARGET", "IOTA_MPOL", "IOTA_NTOR", "IOTA_FIT_WEIGHT",
-                             "SLOPE_MIN", "PHI_FLOOR_FRACTION", "POLOIDAL_SLOPE_WEIGHT"],
-    "x_scale":              ["SCALE_FIELD", "SCALE_SURFACE"],
-}
-
-if not LOAD_RESULT:
-    with open(os.path.join(output_filepath, "essos_surf_coils.in"), "w") as f:
-        f.write(f"# ESSOS single-stage run parameters ({datetime.datetime.now():%Y-%m-%d %H:%M})\n")
-        f.write(f"VMEC_INPUT = {os.path.basename(vmec_input)!r}\n")
-        for section, names in RUN_PARAMETERS.items():
-            f.write(f"\n# {section}\n")
-            for name in names:
-                f.write(f"{name} = {globals()[name]!r}\n")
+            print(f"    s = {s_b[s_index]:.2f}: {100 * symmetry_breaking[s_index]:.2f} %")

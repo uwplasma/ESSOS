@@ -92,7 +92,7 @@ def B_contravariant_theta_phi_on_surface(surface, field):
     # The final index selects theta (0) or phi (1).
     return jnp.stack((B_contra_theta, B_contra_phi), axis=-1)
 
-def iota_approx_on_surface(surface, field, regularization=1e-10, *,
+def iota_approx_on_surface(surface, field, regularization=None, *,
                            lambda_mpol=None, lambda_ntor=None, return_diagnostics=False):
     r"""Fit ``theta* = theta + lambda`` and a constant rotational transform.
 
@@ -103,6 +103,9 @@ def iota_approx_on_surface(surface, field, regularization=1e-10, *,
     The fit does not enforce invertibility of theta*. Optional diagnostics give
     the RMS PDE residual and minimum ``1 + d(lambda)/d(theta)``; a small residual
     alone does not establish a valid straight-field-line coordinate system.
+    By default, the normal-field error sets the ridge strength: resolving a
+    coordinate correction below that surface error is unreliable. An explicit
+    ``regularization`` overrides this choice. Check the result independently.
     """
     if (lambda_mpol is None) != (lambda_ntor is None):
         raise ValueError("Specify both lambda_mpol and lambda_ntor, or neither")
@@ -141,6 +144,8 @@ def iota_approx_on_surface(surface, field, regularization=1e-10, *,
             weights = weights.at[jnp.array([0, -1]), :].multiply(0.5)
     weights = weights.ravel() / jnp.sum(weights)
     sqrt_weights = jnp.sqrt(weights)
+    if regularization is None:
+        regularization = jnp.maximum(1e-10, _surface_mean(surface, BdotN_over_B(surface, field)**2))
     # Ridge only the coordinate correction, leaving a constant iota unbiased.
     # QR avoids squaring the condition number as the normal equations did.
     ridge = jnp.sqrt(regularization) * jnp.eye(A.shape[1]).at[0, 0].set(0.0)
@@ -152,9 +157,7 @@ def iota_approx_on_surface(surface, field, regularization=1e-10, *,
         mean_squared_residual = jnp.sum(weights * (A @ solution - slope)**2)
         angle_jacobian = 1 + theta_derivative_columns @ solution[1:]
         return {"iota": solution[0],
-                "mean_squared_residual": mean_squared_residual,
                 "rms_residual": jnp.sqrt(mean_squared_residual),
-                "angle_jacobian": angle_jacobian.reshape(surface.nphi, surface.ntheta),
                 "minimum_angle_jacobian": jnp.min(angle_jacobian)}
     return solution[0]
 
@@ -965,9 +968,9 @@ class SurfaceRZFourier:
                 ftol_array=(1e-12,), ns_array=(51,), niter_array=(3500,)):
         """Write a vacuum VMEC input, including any asymmetric boundary partners.
 
-        Solver MPOL/NTOR default to the surface mode maxima plus two. They can
-        be overridden independently of the boundary representation; MPOL is a
-        count (VMEC retains m < MPOL), while NTOR is a maximum mode number.
+        Solver MPOL/NTOR default to the boundary maxima plus two. Since MPOL
+        is a count, this retains m through boundary m + 1 and |n| through
+        boundary |n| + 2. Override these independently and check convergence.
         The default zero-current constraint lets VMEC compute vacuum iota.
         """
         families = {'RBC': self.rc, 'ZBS': self.zs, 'RBS': self.rs, 'ZBC': self.zc}
