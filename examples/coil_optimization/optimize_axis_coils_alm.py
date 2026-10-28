@@ -22,6 +22,10 @@ ORBIT_COLORS = ('tomato', 'orangered', 'crimson', 'darkorange', 'deeppink',
                 'cyan', 'limegreen', 'dodgerblue', 'mediumslateblue', 'springgreen')
 
 
+def orbit_colors(count):
+    return ORBIT_COLORS[:count//2] + ORBIT_COLORS[5:5+count//2]
+
+
 def reactor_equilibrium(wout, minor_radius=1.7, mean_b=5.86):
     """Rescale all dimensional wout tables consistently, without writing a new wout."""
     field = Vmec(str(wout), ntheta=3, nphi=3)
@@ -85,7 +89,7 @@ def plot_pyvista(surface, final, plotter, title, orbits=(), labels=()):
     for index, line in enumerate(np.asarray(final.gamma)):
         plotter.add_mesh(pv.lines_from_points(line, close=True), color='gold',
                          render_lines_as_tubes=True, line_width=5, label='Optimized' if index == 0 else None)
-    for line, color, label in zip(orbits, ORBIT_COLORS, labels):
+    for line, color, label in zip(orbits, orbit_colors(len(orbits)), labels):
         plotter.add_mesh(pv.lines_from_points(line), color=color, line_width=3,
                          render_lines_as_tubes=True, label=label)
     plotter.add_text(title, font_size=14)
@@ -95,8 +99,11 @@ def plot_pyvista(surface, final, plotter, title, orbits=(), labels=()):
 
 
 def trace_orbits(equilibrium, coils, model='wout-gc', duration=1e-4, energy_kev=3520.,
-                 save_points=1024, max_steps=2_000_000):
-    """Seed five trapped and five passing alphas; report their measured orbit classes."""
+                 save_points=1024, max_steps=2_000_000, nparticles=10):
+    """Seed equal numbers of trapped and passing alphas; report measured orbit classes."""
+    if nparticles not in (2, 4, 6, 8, 10):
+        raise ValueError('nparticles must be an even count from 2 to 10')
+    half = nparticles // 2
     import diffrax
     from essos.constants import ONE_EV
     from essos.dynamics import Particles, Tracing
@@ -105,13 +112,13 @@ def trace_orbits(equilibrium, coils, model='wout-gc', duration=1e-4, energy_kev=
     theta, phi = jnp.meshgrid(jnp.linspace(0., 2*jnp.pi, 16, endpoint=False),
                              jnp.linspace(0., 2*jnp.pi/equilibrium.nfp, 16, endpoint=False))
     births = []
-    for s in np.linspace(.15, .55, 5):
+    for s in np.linspace(.15, .55, half):
         grid = jnp.stack((jnp.full_like(theta, s), theta, phi), axis=-1).reshape(-1, 3)
         if full_orbit:
             grid = jax.vmap(equilibrium.to_xyz)(grid)
         births.append(grid[jnp.argmin(jax.vmap(field.AbsB)(grid))])
     particles = Particles(initial_xyz=jnp.tile(jnp.stack(births), (2, 1)),
-                          initial_vparallel_over_v=[.1]*5 + [.95, -.95, .95, -.95, .95],
+                          initial_vparallel_over_v=[.1]*half + [.95*(-1)**i for i in range(half)],
                           energy=energy_kev * 1e3 * ONE_EV, field=field if full_orbit else None)
     dt = duration/128
     if full_orbit:
@@ -119,12 +126,12 @@ def trace_orbits(equilibrium, coils, model='wout-gc', duration=1e-4, energy_kev=
         dt = min(dt, gyroperiod/16)
         print(f'Lorentz trace resolves gyromotion: shortest birth gyroperiod={gyroperiod:.3g} s; '
               f'about {duration/gyroperiod:.0f} gyroperiods per particle', flush=True)
-    print(f'Tracing ten {energy_kev:g} keV alphas: {model}, {duration:g} s (adaptive Dopri8)', flush=True)
+    print(f'Tracing {nparticles} {energy_kev:g} keV alphas: {model}, {duration:g} s (adaptive Dopri8)', flush=True)
     trace = Tracing(field=field, particles=particles, model='FullOrbitAdaptative' if full_orbit else 'GuidingCenterAdaptative',
                     solver=diffrax.Dopri8(), maxtime=duration, timestep=dt, times_to_trace=save_points,
                     rtol=1e-8, atol=1e-8, max_steps=max_steps, progress=False)
     states, xyz = np.array(trace.trajectories), np.array(trace.trajectories_xyz)
-    status = np.asarray(getattr(trace, 'status', np.zeros(10)))
+    status = np.asarray(getattr(trace, 'status', np.zeros(nparticles)))
     # VMEC fills saves after an LCFS exit with inf/nan. End these paths at the actual exit.
     for i in np.flatnonzero(status == 1):
         states[i, ~np.isfinite(states[i]).all(axis=1)] = np.asarray(trace.lcfs_states)[i]
@@ -148,8 +155,8 @@ def trace_orbits(equilibrium, coils, model='wout-gc', duration=1e-4, energy_kev=
         suffix = ' (LCFS exit)' if status[i] == 1 else ' (outside boundary)' if outside[i].any() else ''
         labels.append(f'{model}: {kind} {i+1}{suffix}')
         print(f'  Particle {i+1}: {kind}, parallel reversals={reversals}{suffix}', flush=True)
-    if sum(': trapped ' in label for label in labels) != 5 or sum(': passing ' in label for label in labels) != 5:
-        print('  Requested 5 trapped / 5 passing; labels show measured classes. Increase --orbit-time for unresolved paths.', flush=True)
+    if sum(': trapped ' in label for label in labels) != half or sum(': passing ' in label for label in labels) != half:
+        print(f'  Requested {half} trapped / {half} passing; labels show measured classes. Increase --orbit-time for unresolved paths.', flush=True)
     return xyz, labels
 
 
@@ -228,7 +235,9 @@ def optimize(equilibrium, options):
 def main():
     inputs = Path(__file__).resolve().parents[1] / 'input_files'
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--case', choices=('qa', 'qh', 'qi', 'all'), default='all')
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('--case', choices=('qa', 'qh', 'qi', 'all'), default='all')
+    selection.add_argument('--wout', type=Path, help='run one arbitrary wout instead of a preset case')
     parser.add_argument('--qa', type=Path, default=inputs / 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
     parser.add_argument('--qh', type=Path, default=inputs / 'wout_QH_simple_scaled.nc')
     parser.add_argument('--qi', type=Path, help='QI wout path (not bundled)')
@@ -249,16 +258,19 @@ def main():
     parser.add_argument('--minor-radius', type=float, default=1.7, help='scaled VMEC minor radius [m]')
     parser.add_argument('--mean-b', type=float, default=5.86, help='target volume-averaged |B| [T]')
     parser.add_argument('--orbit-model', choices=('wout-gc', 'coils-lorentz'), default='wout-gc')
+    parser.add_argument('--orbit-particles', type=int, choices=(2, 4, 6, 8, 10), default=10,
+                        help='total particles, half trapped seeds and half passing seeds')
     parser.add_argument('--orbit-time', type=float, default=1e-4, help='orbit duration [s] (when plotting)')
     parser.add_argument('--orbit-energy-kev', type=float, default=3520., help='alpha kinetic energy [keV]')
     parser.add_argument('--orbit-points', type=int, default=1024, help='saved points per orbit')
     parser.add_argument('--orbit-max-steps', type=int, default=2_000_000, help='adaptive step budget per particle')
     options = parser.parse_args()
-    cases = ('qa', 'qh', 'qi') if options.case == 'all' else (options.case,)
-    for name in cases:
-        path = getattr(options, name)
+    names = ('qa', 'qh', 'qi') if options.case == 'all' else (options.case,)
+    cases = ([(options.wout.stem, options.wout)] if options.wout is not None else
+             [(name.upper(), getattr(options, name)) for name in names])
+    for name, path in cases:
         if path is None or not path.is_file():
-            parser.error(f'provide --{name} with an existing {name.upper()} wout file')
+            parser.error(f'{name}: missing or invalid wout file: {path}; supply --wout or the preset --qa/--qh/--qi path')
     if min(options.coils, options.order, options.outer_steps, options.inner_steps, options.orbit_max_steps) < 1 or min(options.grid, options.segments, options.orbit_points) < 3:
         parser.error('counts and iteration limits must be positive; grid and segments must be at least 3')
     if not np.isfinite([options.radius_factor, options.length_factor, options.curvature_factor,
@@ -277,27 +289,28 @@ def main():
     if options.plot:
         import matplotlib.pyplot as plt
         figure = plt.figure(figsize=(6 * len(cases), 9))
-    for index, name in enumerate(cases):
-        equilibrium = reactor_equilibrium(getattr(options, name), options.minor_radius, options.mean_b)
+    for index, (name, path) in enumerate(cases):
+        equilibrium = reactor_equilibrium(path, options.minor_radius, options.mean_b)
         surface, final, history = optimize(equilibrium, options)
         orbits, labels = (), ()
         if (options.plot or options.pyvista) and not options.no_orbits:
             if options.orbit_model == 'coils-lorentz':
                 final = reactor_coils(equilibrium, final, options.mean_b)
             orbits, labels = trace_orbits(equilibrium, final, options.orbit_model, options.orbit_time,
-                                         options.orbit_energy_kev, options.orbit_points, options.orbit_max_steps)
+                                         options.orbit_energy_kev, options.orbit_points, options.orbit_max_steps,
+                                         nparticles=options.orbit_particles)
         if options.pyvista:
             plotter.subplot(0, index)
-            plot_pyvista(surface, final, plotter, name.upper(), orbits, labels)
+            plot_pyvista(surface, final, plotter, name, orbits, labels)
         if options.plot:
             ax = figure.add_subplot(2, len(cases), index + 1, projection='3d')
             full_torus(surface).plot(ax=ax, show=False, alpha=.30)
             final.plot(ax=ax, show=False, color='gold')
-            for orbit, color, label in zip(orbits, ORBIT_COLORS, labels):
+            for orbit, color, label in zip(orbits, orbit_colors(len(orbits)), labels):
                 ax.plot(*orbit.T, color=color, linewidth=2, label=label)
             if len(orbits):
                 ax.legend(fontsize=6)
-            ax.set_title(f'{name.upper()}: optimized coils')
+            ax.set_title(f'{name}: optimized coils')
             ax = figure.add_subplot(2, len(cases), len(cases) + index + 1)
             ax.semilogy(history, marker='.')
             ax.set(xlabel='ALM iteration', ylabel='Local squared flux')

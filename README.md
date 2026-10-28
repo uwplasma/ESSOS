@@ -113,14 +113,23 @@ python -m examples.coil_optimization.optimize_axis_coils_alm --case all --qi /pa
 ```
 
 Use `--case qa` or `--case qh` for one bundled case; `--qa`/`--qh` override
-their wouts. `--outer-steps`, `--inner-steps` and `--grid` control the work.
+their wouts. Alternatively, `--wout /path/to/wout.nc` runs any single equilibrium
+without a preset; `--wout` and `--case` are mutually exclusive:
+
+```sh
+python -m examples.coil_optimization.optimize_axis_coils_alm --wout /path/to/wout.nc --pyvista --orbit-model coils-lorentz --orbit-particles 4
+```
+
+`--outer-steps`, `--inner-steps` and `--grid` control the work.
 The example writes no files; `--plot` displays interactive figures.
 For the JAX-branch ParaView-style view, install `pyvista` and use `--pyvista`:
 it displays a full-torus boundary with optimized coils in gold, in one panel
 per case. Both viewers show the entire closed torus (opacity 0.30) and only
 the optimized coils, plus ten alpha-particle paths: five low-pitch trapped
 seeds (warm colors) and five high-pitch passing seeds (cool colors), at
-`s = 0.15, 0.25, 0.35, 0.45, 0.55`. Parallel-velocity reversals verify trapped
+`s = 0.15, 0.25, 0.35, 0.45, 0.55`. Set `--orbit-particles 4` for two trapped
+and two passing seeds at `s = 0.15, 0.55`; even totals from 2 to 10 are supported.
+Parallel-velocity reversals verify trapped
 motion; passing motion requires one full toroidal transit without reversal.
 Labels report measured classes, unresolved paths and sampled boundary crossings.
 
@@ -146,7 +155,7 @@ Lorentz integration resolves gyromotion and can take much longer; the printed
 gyroperiod estimates that cost. `--orbit-points` sets saved points (default 1024),
 independently of adaptive steps; `--orbit-max-steps` sets the step budget.
 `--no-orbits` skips tracing. Initial coils stay hidden. Meshes and orbits stay
-in memory; no VTK files are written. These ten selected paths illustrate orbit
+in memory; no VTK files are written. These selected paths illustrate orbit
 behavior; they do not estimate a loss fraction.
 Initial and final console reports list length, maximum curvature and arclength-
 weighted mean curvature for each independent base coil (symmetry copies share
