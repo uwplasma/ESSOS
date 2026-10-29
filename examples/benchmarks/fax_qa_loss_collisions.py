@@ -58,7 +58,7 @@ def volume_births(field, count, seed, s_min=0., s_max=1.):
     return data,weights
 
 
-def prepare(args):
+def prepare(args, previous=None):
     import jax
     import jax.numpy as jnp
     from essos.fax_adapter import FaxMode
@@ -94,7 +94,6 @@ def prepare(args):
              complex(*snapshot.get("native_global_phase",[1.,0.]))*np.exp(1j*np.deg2rad(snapshot.get("wave_phase_deg",0.))))
     packet = replace(packet, structure=packet.structure*phase)
     wave = packet.as_physical_potential(potential_volts=recorded["potential_volts"], frequency_sign=1)
-    packet.save(args.output/"mode.npz")
     B = np.asarray(jax.jit(jax.vmap(lambda p: field.modB(*p)))(jnp.asarray(data[:, :3])))
     speed, pitch = birth_parameters(data, B)
     if (not np.all(np.isfinite(B) & (B > 0)) or not np.all(data[:, 4] >= 0)
@@ -102,7 +101,6 @@ def prepare(args):
         raise ValueError("Invalid reconstructed particle births")
     births = dict(initial_conditions=data, speed=speed, pitch=pitch, birth_B=B,
                   marker_indices=np.arange(args.particles),weights=weights)
-    np.savez_compressed(args.output/"births.npz", **births)
     summary = dict(status="prepared", cases={}, particles=args.particles, duration_s=args.tmax,
         method=args.method, requested_timestep_s=args.timestep,
         collision_dtmax_s=args.collision_dtmax,tolerance=args.tolerance,execution=args.execution,
@@ -122,6 +120,7 @@ def prepare(args):
         weights="physical Boozer volume Jacobian" if args.birth_source == "volume" else "equal markers",
         mass_kg=MASS, charge_C=CHARGE, field_representation=args.representation,
         equilibrium_mode_tolerance=args.mode_tolerance,equilibrium_harmonics=len(field.xm),
+        spatial_geometry_mode_tolerance=args.geometry_mode_tolerance,
         field_angular_points=None if args.representation == "fourier" else args.angular_points,
         field_model="Existing K=0 Boozer equilibrium; natural-cubic physical potential; existing GC RHS",
         collision_operator="Native adaptive Dopri8 and split Coulomb kicks; spatial diffusion selected per case",
@@ -131,6 +130,23 @@ def prepare(args):
         comparison_scope="Native FAX six-case experiment; no published collisional loss reference or fitted paper endpoints",
         platform=jax.default_backend(), devices=[str(d) for d in jax.devices()[:1]],
         device_kind=jax.devices()[0].device_kind, jax_version=jax.__version__)
+    if previous is not None:
+        keys=("particles","duration_s","method","requested_timestep_s","collision_dtmax_s","tolerance",
+            "execution","collision_tolerance","moment_tolerance","n_save","collision_seed","frequency_hz",
+            "potential_volts","native_global_phase","equilibrium_sha256","births_sha256","birth_source",
+            "field_representation","equilibrium_mode_tolerance","background")
+        changed=[key for key in keys if summary[key]!=previous.get(key)]
+        if any(CASES[c][2] for c in previous["cases"]) and previous.get("spatial_geometry_mode_tolerance",0.)!=args.geometry_mode_tolerance:
+            changed.append("spatial_geometry_mode_tolerance")
+        old=FaxMode.load(args.output/"mode.npz",equilibrium=args.boozmn)
+        if any(not np.array_equal(getattr(old,k),getattr(packet,k)) for k in ("s","harmonics","structure")):
+            changed.append("mode coefficients")
+        if changed:raise ValueError("Resume settings differ: "+", ".join(changed))
+        if any(not (args.output/f"{c}.npz").is_file() for c in previous["cases"]):
+            raise ValueError("A completed resume case is missing its NPZ")
+        summary["cases"]=previous["cases"]
+    packet.save(args.output/"mode.npz")
+    np.savez_compressed(args.output/"births.npz", **births)
     write_summary(args.output, summary)
     return field, wave, births, summary
 
@@ -166,9 +182,14 @@ def run_cases(args, field, wave, births, summary):
 
     species = BackgroundSpecies(2, jnp.array([ELECTRON_MASS/PROTON_MASS, 2.]),
         jnp.array([-1., 1.]), jnp.full(2, args.density), jnp.full(2, args.temperature))
-    geometry=spatial_geometry(args.boozmn) if any(CASES[c][2] for c in summary["requested_cases"]) else None
+    geometry=spatial_geometry(args.boozmn,args.geometry_mode_tolerance) if any(CASES[c][2] for c in summary["requested_cases"]) else None
     summary["spatial_geometry_harmonics"]=None if geometry is None else len(geometry.xm)
+    if geometry is not None:
+        print(f"Spatial geometry: {len(geometry.xm)} harmonics, cutoff={args.geometry_mode_tolerance:g}",flush=True)
     for case in summary["requested_cases"]:
+        if case in summary["cases"]:
+            print(f"Reusing completed case: {case}",flush=True)
+            continue
         with_wave, with_collisions, with_spatial, label = CASES[case]
         summary.update(status="running", active_case=case, completed_save_intervals=0)
         write_summary(args.output, summary)
@@ -271,6 +292,7 @@ def main():
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--run", action="store_true")
     action.add_argument("--report-only", action="store_true")
+    parser.add_argument("--resume", action="store_true", help="Validate existing inputs and skip completed cases")
     parser.add_argument("--mode", type=Path, default=REFERENCE_MODE/"mode.npz")
     parser.add_argument("--wave-summary", type=Path, default=REFERENCE_MODE/"wave_summary.json")
     parser.add_argument("--boozmn", type=Path, default=default_equilibrium())
@@ -288,6 +310,8 @@ def main():
     parser.add_argument("--execution", choices=("shared", "independent"), help="Default: independent on CUDA, shared on CPU")
     parser.add_argument("--representation", choices=("fourier","table"), default="fourier")
     parser.add_argument("--mode-tolerance", type=float, default=1e-4)
+    parser.add_argument("--geometry-mode-tolerance", type=float, default=1e-6,
+        help="Relative cutoff per R/Z/toroidal-shift spectrum; 0 retains all nonzero geometry modes")
     parser.add_argument("--timing-repeats", type=int, default=0, help="Warm repeats for the unperturbed collisionless orbit kernel")
     parser.add_argument("--tolerance", type=float, default=1e-9)
     parser.add_argument("--collision-dtmax", type=float, default=1e-6)
@@ -319,9 +343,12 @@ def main():
                        (args.timestep,args.tolerance,args.collision_dtmax,args.collision_tolerance,args.moment_tolerance,
                         args.density,args.temperature,args.wall_seconds))
             or not np.isfinite(args.mode_tolerance) or not 0 < args.mode_tolerance < 1
+            or not np.isfinite(args.geometry_mode_tolerance) or not 0 <= args.geometry_mode_tolerance < 1
             or args.timing_repeats < 0):
         parser.error("Invalid particle count, duration, step, background, resolution, seed or wall cap")
-    if args.output.exists() and any(args.output.iterdir()):
+    if args.resume and (not args.run or not (args.output/"summary.json").is_file()):
+        parser.error("--resume requires --run and an existing output summary")
+    if args.output.exists() and any(args.output.iterdir()) and not args.resume:
         parser.error("Choose a fresh --output to preserve results")
     os.environ.update(JAX_PLATFORMS=args.platform, ESSOS_CPU_DEVICES="1", OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -340,7 +367,8 @@ def main():
     try:
         import jax
         jax.config.update("jax_enable_x64", True)
-        field, wave, births, summary = prepare(args)
+        previous=json.loads((args.output/"summary.json").read_text()) if args.resume else None
+        field, wave, births, summary = prepare(args,previous)
         holder["summary"] = summary
         if args.run:
             run_cases(args, field, wave, births, summary)

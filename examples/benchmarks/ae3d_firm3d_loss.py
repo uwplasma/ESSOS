@@ -82,7 +82,7 @@ def equilibrium(path, *, angular_points=48, mode_tolerance=1e-7):
             angle_grid=None if angular_points is None else (angular_points, angular_points))
 
 
-def spatial_geometry(path):
+def spatial_geometry(path, mode_tolerance=0.):
     """Read the archived embedding; phi=zeta+p, whereas ESSOS uses zeta-nu."""
     from types import SimpleNamespace
     from netCDF4 import Dataset
@@ -98,7 +98,11 @@ def spatial_geometry(path):
             for name,source,sign in (("rmnc_b","rmnc_b",1),("rmns_b","rmns_b",1),
                 ("zmnc_b","zmnc_b",1),("zmns_b","zmns_b",1),
                 ("numnc_b","pmnc_b",-1),("numns_b","pmns_b",-1))}
-    keep=np.any(np.stack(list(values.values()))!=0,axis=(0,2))
+    if not np.isfinite(mode_tolerance) or not 0<=mode_tolerance<1:
+        raise ValueError("Geometry mode tolerance must lie in [0,1)")
+    amplitude=[np.hypot(values[c],values[a]).max(axis=1) for c,a in
+        (("rmnc_b","rmns_b"),("zmnc_b","zmns_b"),("numnc_b","numns_b"))]
+    keep=np.any([a>mode_tolerance*a.max() for a in amplitude],axis=0)
     return BoozerGeometry.from_booz_xform(SimpleNamespace(s_b=s,xm_b=m[keep],xn_b=n[keep],
         **{name:value[keep] for name,value in values.items()}))
 
@@ -209,21 +213,28 @@ def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
                 orbit_steps=counts[:,1],orbit_rejected=counts[:,2]),
             timings=dict(driver='dedicated Boozer orbit kernel',compile_seconds=compile_seconds,
                          first_execution_seconds=first_seconds,warm_seconds=warm))
-    particles = Particles(initial_xyz=points, initial_vparallel_over_v=pitch,
-        mass=MASS, charge=CHARGE, energy=.5*MASS*speed**2)
     key = jax.random.key(seed)
-    particles.random_keys = (jax.vmap(lambda i:jax.random.fold_in(key,i))(jnp.arange(len(data),dtype=jnp.uint32))
-                             if stable_keys else jax.random.split(key,len(data)))
+    keys=(jax.vmap(lambda i:jax.random.fold_in(key,i))(jnp.arange(len(data),dtype=jnp.uint32))
+          if stable_keys else jax.random.split(key,len(data)))
     collisional = species is not None
     if species is None:
         collision_dtmax = tmax
         species = BackgroundSpecies(1,jnp.array([2.]),jnp.array([1.]),jnp.array([0.]),jnp.array([17800.]))
-    solution = trace_split(field,particles,species,tmax=tmax,timestep=timestep,n_save=n_save,
-        integrator="essos_dopri8",perturbation=wave,rtol=tolerance,atol=tolerance,
-        orbit_dt0=timestep,collision_dtmax=collision_dtmax,execution=execution,
-        spatial_diffusion=spatial_diffusion,spatial_geometry=spatial_geometry,adaptive=True,orbit_adaptive=True,
-        collision_controller="moments" if collisional else "conservative",
-        collision_tolerance=collision_tolerance,moment_tolerance=moment_tolerance)
+    def solve(points,pitch,energy,keys):
+        particles=Particles(initial_xyz=points,initial_vparallel_over_v=pitch,mass=MASS,charge=CHARGE,energy=energy)
+        particles.random_keys=keys
+        return trace_split(field,particles,species,tmax=tmax,timestep=timestep,n_save=n_save,
+            integrator="essos_dopri8",perturbation=wave,rtol=tolerance,atol=tolerance,
+            orbit_dt0=timestep,collision_dtmax=collision_dtmax,execution=execution,
+            spatial_diffusion=spatial_diffusion,spatial_geometry=spatial_geometry,adaptive=True,orbit_adaptive=True,
+            collision_controller="moments" if collisional else "conservative",
+            collision_tolerance=collision_tolerance,moment_tolerance=moment_tolerance)
+    import time
+    arguments=(points,pitch,.5*MASS*speed**2,keys)
+    started=time.perf_counter();compiled=jax.jit(solve).lower(*arguments).compile()
+    compile_seconds=time.perf_counter()-started
+    started=time.perf_counter();solution=jax.block_until_ready(compiled(*arguments))
+    execution_seconds=time.perf_counter()-started
     y, status, stop = np.asarray(solution.ys), np.asarray(solution.status), np.asarray(solution.t)
     B = np.asarray(jax.jit(jax.vmap(jax.vmap(lambda p:field.modB(*p))))(solution.ys[:,:,:3]))
     current_speed = np.sqrt(np.maximum(y[:,:,3]**2+2*y[:,:,4]*B/MASS,0.))
@@ -233,7 +244,9 @@ def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
     return SimpleNamespace(times=np.asarray(solution.ts),states=np.concatenate((y[:,:,:4],current_speed[:,:,None]),axis=2),
         lost=lost,failed=failed,axis_stopped=axis,loss_times=np.where(lost,stop,-1.),
         failed_times=np.where(failed,stop,-1.),axis_stop_times=np.where(axis,stop,-1.),
-        thermalized_times=np.full(len(data),-1.),step_stats=solution.stats)
+        thermalized_times=np.full(len(data),-1.),step_stats=solution.stats,
+        timings=dict(driver='native independent split kernel' if execution=='independent' else 'native shared split solver',
+            compile_seconds=compile_seconds,first_execution_seconds=execution_seconds,warm_seconds=[]))
 
 
 def run_cases(field, mode, data, arrays, summary, args):

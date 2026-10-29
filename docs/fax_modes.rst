@@ -132,10 +132,18 @@ execution, and CPU defaults to shared execution. Individual ``--case`` values
 allow separate jobs; the two added cases end in ``_collisions_spatial``.
 The wave voltage and initial phase come from the saved magnetic comparison.
 The bath defaults to electrons/deuterium, each at ``4.21e20 m^-3`` and
-``17.8 keV``. Spatial cases read the same archive's full Cartesian surface
+``17.8 keV``. Spatial cases read the same archive's Cartesian surface
 embedding. Its toroidal shift is converted from ``phi=zeta+p`` to ESSOS's
-``phi=zeta-nu`` convention. Only exactly zero geometry harmonics are dropped;
-the magnetic cutoff is not applied to geometry. Spatial kicks use the existing
+``phi=zeta-nu`` convention. ``--geometry-mode-tolerance`` applies a relative
+cutoff independently to R, Z and toroidal-shift amplitudes. The default ``1e-6``
+retains 345 geometry harmonics for this QA case; ``0`` retains all 4489 nonzero
+modes. This is separate from the ``1e-4`` magnetic cutoff (25 harmonics) and
+the 35-harmonic wave. A 1280-point audit against the full geometry found a
+maximum 56 micrometre position error and 0.069% local inverse-map Jacobian error
+at the default geometry cutoff; this is not a loss-convergence measurement.
+Native geometry callbacks share exact value/Jacobian evaluations. Spatial
+Fourier sums use blocks of at most 128 harmonics, bounding compiler intermediates
+even with the full spectrum. Spatial kicks use the existing
 Cartesian displacement and nonlinear coordinate inversion in ``trace_split``.
 
 The generated proposal points are uniform in flux coordinates, with physical
@@ -152,7 +160,7 @@ The moment budget, collision-kick tolerance and orbit tolerance are separate.
 sets the initial guess. Native independent execution uses direct Fourier
 equilibrium fields; the optional angular table representation requires shared
 execution. ``--mode-tolerance`` controls equilibrium harmonic truncation
-(default ``1e-7``); it leaves the saved FAX wave unchanged. The summary records
+(default ``1e-4``); it leaves the saved FAX wave unchanged. The summary records
 the cutoff and retained equilibrium count. Check field and orbit convergence
 before relaxing this cutoff for production. Collisionless cases skip the
 collision moment predictor while retaining adaptive orbit control. The
@@ -163,6 +171,8 @@ normalization is at least as strict as the per-marker orbit budget.
 blocked warm execution times separately. Wave tables use indexed vector
 kernel reads, preserving the existing spline and potential formulas. Radial
 rows and individual harmonics are not expanded into scalar selection chains.
+Every case records solver compilation and first blocked execution separately;
+``wall_seconds`` additionally includes preparation, post-processing and saving.
 The native moment predictor scalarizes speed and pitch before differentiation,
 avoiding higher spatial field derivatives multiplied by zero velocity tangents.
 It retains the same first derivatives, diagonal Hessian and moment budget.
@@ -173,12 +183,17 @@ completed case saves marker indices, weights, states and termination times in
 its own NPZ before the next case starts. Regenerate figures and CSV, including
 from partial runs, with ``--report-only --output PATH``. Missing cases are not
 treated as completed.
+After interruption, rerun the same command and output directory with
+``--resume``. Births, wave coefficients and physical settings are validated
+before completed cases are reused. A geometry cutoff can change while only
+non-spatial cases have completed; completed spatial cases require its original
+value. Axis-stopped or failed markers retain their unresolved classification.
 Shared execution is still the native adaptive solver on the selected GPU;
 independent execution uses the vectorized table adapter and shared exact
-value/Jacobian evaluations. Earlier 158-harmonic GPU attempts predate these
-changes and did not save a perturbed result. The latest adapter passes CPU
-parity tests; full-wave GPU compilation and production loss runs still need
-to be validated within an explicitly approved run budget.
+value/Jacobian evaluations. The blocked full-spectrum geometry callback passes
+GPU value/Jacobian parity, but the complete spatial-diffusion CUDA solver still
+exceeds the bounded compilation checks. Production spatial loss runs remain
+unvalidated; the isolated callback result does not establish solver performance.
 
 ``examples.benchmarks.ae3d_firm3d_loss --run --particles 5000
 --case both --platform cuda --execution independent`` separately traces the

@@ -131,20 +131,42 @@ def test_archived_embedding_and_spatial_wave_collision_trace(tmp_path):
         nc.createVariable('ns_b','i4',())[...]=4
         for name,values,dimension in (('jlist',[2,3,4],'surface'),('ixm_b',[0,1,2],'mode'),('ixn_b',[0,0,2],'mode')):
             nc.createVariable(name,'i4',(dimension,))[:]=values
-        for name,values in (('rmnc_b',np.column_stack((s*0+2,.2*np.sqrt(s),s*0))),
+        for name,values in (('rmnc_b',np.column_stack((s*0+2,.2*np.sqrt(s),s*0+1e-7))),
             ('zmns_b',np.column_stack((s*0,.2*np.sqrt(s),s*0))),
             ('pmns_b',np.column_stack((s*0,.03*np.sqrt(s),s*0)))):
             nc.createVariable(name,'f8',('surface','mode'))[:]=values
-    geometry=spatial_geometry(path)
-    assert len(geometry.xm)==2  # Only exactly zero geometry harmonics are removed.
+    assert len(spatial_geometry(path).xm)==3
+    geometry=spatial_geometry(path,mode_tolerance=1e-6)
+    assert len(geometry.xm)==2
     q=jnp.array([.5,.4,.2]);R=2+.2*np.sqrt(q[0])*np.cos(q[1]);phi=q[2]+.03*np.sqrt(q[0])*np.sin(q[1])
     np.testing.assert_allclose(geometry(q),[R*np.cos(phi),R*np.sin(phi),.2*np.sqrt(q[0])*np.sin(q[1])],atol=2e-14)
+    # The native value/Jacobian callback must invert the same Cartesian kick.
+    geometry=geometry._replace(coefficients=jnp.pad(geometry.coefficients,((0,0),(0,128),(0,0),(0,0))),
+        xm=jnp.pad(geometry.xm,(0,128)),xn=jnp.pad(geometry.xn,(0,128)))
+    from jax.experimental import pallas as pl
+    from essos.split import prepare_physics,_split_field_data,move_in_cartesian,CollisionStep
+    initial=jnp.array([.4,.3,.2,6e6,1e-14]);displacement=jnp.array([1e-5,-2e-5,3e-5,0.,0.,0.,0.,0.])
+    public=lambda y:jnp.array([y[0]**2+y[1]**2,jnp.arctan2(y[1],y[0]),y[2]])
+    def build(view):
+        kick=lambda t,y,h,dw,a:CollisionStep(move_in_cartesian(y,dw[:3],lambda y:view.to_xyz(public(y))),0.,0.)
+        return lambda t,y,a:jnp.zeros(5),kick,lambda a,b,e:0.,lambda t,y,a:1.,lambda t,y,a:jnp.inf
+    field=equilibrium()
+    arrays,factory=prepare_physics(field,_split_field_data(field),build,initial,5,spatial_geometry=geometry)
+    def kernel(yref,dref,*refs):
+        *data,outref=refs
+        outref[...]=factory(data,yref[...])[1](yref[...],jnp.asarray(1.),dref[...])[0]
+    native=pl.pallas_call(kernel,out_shape=jax.ShapeDtypeStruct((8,),initial.dtype),grid=(),interpret=True)
+    moved=jax.jit(native)(jnp.pad(initial,(0,3)),displacement,*arrays)[:5]
+    np.testing.assert_allclose(geometry.regular_xyz(moved[:3]),
+        geometry.regular_xyz(initial[:3])+displacement[:3],rtol=0,atol=2e-13)
+    np.testing.assert_array_equal(moved[3:],initial[3:])
     bath=BackgroundSpecies(1,jnp.array([2.]),jnp.array([1.]),jnp.array([4.21e20]),jnp.array([17800.]))
     wave=PhysicalPotentialMode([0.,.5,1.],[[2,1]],np.array([[0.],[500j],[1000j]]),9e5)
     data=np.array([[.5,.4,.2,6e6,1e12]])
     traced=native_trace(equilibrium(),data,wave,tmax=1e-10,timestep=1e-10,tolerance=1e-7,
         species=bath,n_save=2,collision_dtmax=1e-10,spatial_diffusion=True,spatial_geometry=geometry)
     assert not traced.failed.any() and np.isfinite(traced.states).all()
+    assert traced.timings['compile_seconds']>0 and traced.timings['first_execution_seconds']>0
     np.testing.assert_allclose(traced.states[0,0,:4],data[0,:4],rtol=1e-13)
 
 
@@ -155,11 +177,11 @@ def test_six_case_outputs_preserve_births_and_weighted_loss_curves(tmp_path,monk
     args=SimpleNamespace(boozmn=tmp_path/'unused.nc',particles=2,tmax=.01,method='essos_dopri8',
         timestep=1e-8,n_save=2,tolerance=1e-9,seed=42,execution='independent',collision_dtmax=1e-6,
         birth_source='volume',collision_tolerance=.001,moment_tolerance=.01,timing_repeats=0,
-        density=4.21e20,temperature=17800.,output=tmp_path)
+        density=4.21e20,temperature=17800.,geometry_mode_tolerance=1e-6,output=tmp_path)
     summary=dict(requested_cases=list(benchmark.CASES),cases={},device_kind='mock',mass_kg=benchmark.MASS,
         particles=2,duration_s=.01,frequency_hz=27800.,birth_source='volume')
     embedding=SimpleNamespace(xm=np.array([0,1]));wave=object();calls=[]
-    monkeypatch.setattr(benchmark,'spatial_geometry',lambda path:embedding)
+    monkeypatch.setattr(benchmark,'spatial_geometry',lambda path,tolerance:embedding)
     def trace(field,received,perturbation,**settings):
         assert received is data and settings['seed']==42
         assert settings['spatial_geometry'] is (embedding if settings['spatial_diffusion'] else None)
@@ -172,6 +194,8 @@ def test_six_case_outputs_preserve_births_and_weighted_loss_curves(tmp_path,monk
     benchmark.run_cases(args,SimpleNamespace(xm=np.arange(25)),wave,births,summary)
     assert set(calls)=={(False,False,False),(True,False,False),(False,True,False),
                         (True,True,False),(False,True,True),(True,True,True)}
+    benchmark.run_cases(args,SimpleNamespace(xm=np.arange(25)),wave,births,summary)
+    assert len(calls)==6  # Resuming keeps completed trajectories unchanged.
     benchmark.plot_saved(tmp_path)
     curves=np.genfromtxt(tmp_path/'loss_fraction.csv',delimiter=',',names=True)
     assert len(curves.dtype.names)==7
