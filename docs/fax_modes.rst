@@ -53,7 +53,7 @@ download is needed to read an existing ESSOS mode packet.
      tests/test_fax_adapter.py tests/test_mode_reconstruction.py
    python -m examples.benchmarks.fax_shear_alfven_benchmark
 
-The thirteen bridge tests include a small full physical-potential FAX matrix solve
+The bridge tests include a small full physical-potential FAX matrix solve
 against independent uniform-plasma dispersion, interchange and native tracing
 of two markers with different energies. They also check phase preservation,
 AE3D angular-frequency units, spline values, Maxwell identities, a smooth axis,
@@ -107,9 +107,10 @@ validation questions; reconstruction agreement alone does not resolve them.
 Native particle and collision comparisons
 ----------------------------------------
 
-Place the new 35-harmonic packet in
-``../artifacts/fax_integration/qa_saved_mode_35/`` as ``mode.npz`` and
-``wave_summary.json``. Keep the packet and its hash-checked summary together.
+The frozen 35-harmonic mode and its hash-checked normalization metadata are
+versioned in ``examples/benchmarks/references/fax_qa_35/`` and loaded by default.
+A fresh checkout needs no mode ZIP, file transfer or FAX installation for tracing.
+The archive command below retrieves the required equilibrium separately.
 The default study uses 8192 generated births, a ``1e-4`` equilibrium cutoff
 (25 retained magnetic harmonics for this QA equilibrium), and all six cases:
 

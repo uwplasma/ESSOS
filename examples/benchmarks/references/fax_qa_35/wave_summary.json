@@ -1,0 +1,17 @@
+{
+  "equilibrium_sha256": "6a32726c66b57dc5d68e31bbf53f6f5833f1e7fb124404dadfe76873beb2b6d5",
+  "mode_sha256": "3ab1fff2fcf0692c78e0d295fe07369b34759f436eadd364fbae4c19659e629f",
+  "frequency_hz": 27799.82738550482,
+  "potential_volts": 1514.1357584886323,
+  "harmonics": 35,
+  "angular_basis": "cosine",
+  "radial_points": 51,
+  "angular_points": 64,
+  "mass_density_kg_m3": 1.88e-6,
+  "eigenpair_residual": 2.289428806301964e-14,
+  "magnetic_energy_amplitude": 0.001,
+  "normalization": "sqrt(int |delta B|^2 dV / int |B0|^2 dV), full volume at common t=0 snapshot",
+  "saved_packet_phase_applied": true,
+  "frozen_time_s": 0.0,
+  "field_model": "ESSOS K=0 Boozer; curl(alpha B0); natural-cubic physical Phi"
+}

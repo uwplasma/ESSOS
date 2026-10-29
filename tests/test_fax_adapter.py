@@ -180,3 +180,14 @@ def test_six_case_outputs_preserve_births_and_weighted_loss_curves(tmp_path,monk
         with np.load(tmp_path/f'{case}.npz') as saved:
             np.testing.assert_array_equal(saved['marker_indices'],births['marker_indices'])
             np.testing.assert_array_equal(saved['weights'],births['weights'])
+
+
+def test_default_qa_mode_packet_is_available_without_local_artifacts():
+    import json
+    from examples.benchmarks.fax_qa_loss_collisions import REFERENCE_MODE
+    summary=json.loads((REFERENCE_MODE/'wave_summary.json').read_text())
+    assert hashlib.sha256((REFERENCE_MODE/'mode.npz').read_bytes()).hexdigest()==summary['mode_sha256']
+    with np.load(REFERENCE_MODE/'mode.npz',allow_pickle=False) as packet:
+        assert packet['harmonics'].shape==(35,2)
+        assert float(packet['frequency_hz'])==summary['frequency_hz']
+        assert json.loads(str(packet['metadata_json']))['equilibrium_sha256']==summary['equilibrium_sha256']

@@ -22,6 +22,7 @@ from examples.benchmarks.sampling import estimate_interval
 from examples.fieldline_tracing.fax_qa_poincare import ROOT, ARTIFACTS, default_equilibrium
 
 
+REFERENCE_MODE=Path(__file__).with_name("references")/"fax_qa_35"
 CASES = {
     "unperturbed": (False, False, False, "Unperturbed, collisionless"),
     "unperturbed_collisions": (False, True, False, "Unperturbed + collisions"),
@@ -270,8 +271,8 @@ def main():
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--run", action="store_true")
     action.add_argument("--report-only", action="store_true")
-    parser.add_argument("--mode", type=Path, default=ARTIFACTS/"qa_saved_mode_35/mode.npz")
-    parser.add_argument("--wave-summary", type=Path, default=ARTIFACTS/"qa_saved_mode_35/wave_summary.json")
+    parser.add_argument("--mode", type=Path, default=REFERENCE_MODE/"mode.npz")
+    parser.add_argument("--wave-summary", type=Path, default=REFERENCE_MODE/"wave_summary.json")
     parser.add_argument("--boozmn", type=Path, default=default_equilibrium())
     parser.add_argument("--births", type=Path)
     parser.add_argument("--output", type=Path, default=ARTIFACTS/"qa_8192_six_cases_gpu")
@@ -308,7 +309,7 @@ def main():
         return
     for path in (args.mode,args.wave_summary,args.boozmn):
         if not path.is_file():
-            parser.error(f"Missing input: {path}; transfer the saved mode packet or pass explicit input paths")
+            parser.error(f"Missing input: {path}; download the archived equilibrium or pass explicit input paths")
     if (args.particles < 1 or (args.birth_source == "archive" and args.particles > 5000)
             or (args.birth_source == "volume" and args.births is not None)
             or not 0 <= args.birth_s_min < args.birth_s_max <= 1
