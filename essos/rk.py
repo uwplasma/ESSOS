@@ -805,12 +805,38 @@ def _pack(values):
     return result
 
 
+def _fourier_geometry(curves,second=False):
+    """Evaluate the existing Fourier DOFs with exact basis contractions.
+
+    Avoids GPU miscompilation of fused gather/padding pullbacks, including
+    coil-length gradients. No curve reparameterization or derivative estimate.
+    """
+    q=curves.quadpoints;basis=[jnp.ones_like(q)];derivative=[jnp.zeros_like(q)]
+    twice=[jnp.zeros_like(q)]
+    for mode in range(1,curves.order+1):
+        w=2*jnp.pi*mode;phase=w*q;s,c=jnp.sin(phase),jnp.cos(phase)
+        basis.extend((s,c));derivative.extend((w*c,-w*s))
+        if second:twice.extend((-w*w*s,-w*w*c))
+    return tuple(jnp.einsum('ncm,mq->nqc',curves.curves,jnp.stack(a))
+        for a in ((basis,derivative,twice) if second else (basis,derivative)))
+
+
 def _coil_geometry(field):
-    gamma,tangent,current = field.coils.gamma,field.coils.gamma_dash,field.coils.currents
+    from .coils import Curves
+    curves=getattr(field.coils,'curves',None)
+    if isinstance(curves,Curves):
+        gamma,tangent=_fourier_geometry(curves)
+    else:
+        gamma,tangent=field.coils.gamma,field.coils.gamma_dash
+    current=field.coils.currents
     nc,nq,_ = gamma.shape
     pc,pq = (1<<(size-1).bit_length() for size in (nc,nq))
     weight = current*1e-7
-    arrays = tuple(jnp.pad(value[:,:,i].T,((0,pq-nq),(0,pc-nc))).reshape(-1)
+    index=jnp.arange(pc*pq);row,column=index%pc,index//pc
+    valid=(row<nc)&(column<nq)
+    row,column=jnp.minimum(row,nc-1),jnp.minimum(column,nq-1)
+    # Explicit indexing avoids a GPU miscompile of dynamic transpose/pad views.
+    arrays = tuple(jnp.where(valid,value[row,column,i],0.)
         for value in (gamma,tangent*weight[:,None,None]) for i in range(3))
     return arrays,nc,nq
 

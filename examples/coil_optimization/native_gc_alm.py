@@ -7,6 +7,7 @@ Imports never start tracing. All particles and random paths remain fixed.
 import argparse
 import csv
 import json
+from functools import partial
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
@@ -22,7 +23,10 @@ from essos.dynamics import Particles, Tracing
 from essos.fields import BiotSavart
 from essos.particle_losses import (classifier_loss_fraction, classifier_line_loss,
     classifier_energy_cost)
-from essos.surfaces import SurfaceRZFourier, SurfaceClassifier, BdotN_over_B
+from essos.surfaces import SurfaceRZFourier, SurfaceClassifier
+from essos.split import ClassifierStop
+from essos.native_ad import gpu_jit_options
+from essos.rk import _fourier_geometry,_coil_geometry,_coil_field_values
 from .native_particle_optimization import save_optimization_plots
 
 INPUT = Path(__file__).resolve().parents[1]/"input_files"
@@ -38,9 +42,9 @@ DEFAULTS = dict(
     surface_points=60, classifier_h=.1, safety_margin=.2, birth_axis_samples=1000,
     maxiter=100, inner_maxiter=50, max_change=.05, penalty=1., beta=1.01,
     eta_tol=1e-5, omega_tol=1e-7, model_mu="Mu_Adaptative_2",
-    collisions=False, execution="shared", collision_step=1e-8, collision_dtmax=1e-6,
+    collisions=True, execution="auto", collision_step=1e-8, collision_dtmax=1e-6,
     collision_capacity=4096, max_orbit_steps=4096,
-    collision_tolerance=.001, moment_tolerance=.005, collision_seed=42,
+    collision_tolerance=.001, moment_tolerance=.01, collision_seed=42,
     background_density=4.21e20, background_temperature_ev=17.8e3,
     save_plots=True, output=Path("output/native_gc_alm"))
 
@@ -71,6 +75,33 @@ def make_constraints(geometry, particle, options):
         constraints.append(alm.ineq(lambda x: geometry(x)["bdotn"],
             weight=options.bdotn_weight, **p))
     return alm.combine(*constraints)
+
+
+def compile_optimizer(optimizer,*,independent=True):
+    """Apply the split GPU capture policy to ALM's outer compiled functions."""
+    options=gpu_jit_options() if independent else {}
+    if not options:return optimizer
+    update=optimizer.update
+    return optimizer._replace(
+        init=jax.jit(optimizer.init.__wrapped__,**options),
+        update=partial(jax.jit(update.func.__wrapped__,static_argnums=(4,5,6,7,8,9,10),**options),
+                       *update.args,**update.keywords))
+
+
+def field_normal_ratio(surface,field):
+    """Use the native direct-coil evaluator for the unchanged B.n/|B| constraint."""
+    arrays,nc,nq=_coil_geometry(field)
+    magnetic=jax.vmap(lambda x:jnp.asarray(_coil_field_values(arrays,tuple(x),nc,nq,False)[0]))(
+        surface.gamma.reshape(-1,3)).reshape(surface.gamma.shape)
+    return jnp.sum(magnetic*surface.unitnormal,axis=-1)/jnp.linalg.norm(magnetic,axis=-1)
+
+
+def save_coil_iteration(output,iteration,coil_dofs,parameters):
+    """Store public coil DOFs and optimizer coordinates without particle tracing."""
+    directory=Path(output)/"iterations"
+    directory.mkdir(exist_ok=True)
+    np.savez_compressed(directory/f"{iteration:06d}.npz",iteration=iteration,
+        coil_dofs=np.asarray(coil_dofs),parameters=np.asarray(parameters))
 
 
 def build_problem(options, objective):
@@ -111,24 +142,29 @@ def build_problem(options, objective):
 
     def geometry(x):
         field = field_at(x)
+        _,tangent,second=_fourier_geometry(field.coils.curves,second=True)
+        speed=jnp.linalg.norm(tangent,axis=-1)
+        length=jnp.mean(speed,axis=-1)
+        curvature=jnp.linalg.norm(jnp.cross(tangent,second),axis=-1)/speed**3
         result = dict(axis=jnp.mean(jax.vmap(field.AbsB)(axis_points))-options.axis_field_target,
-            length=options.length_target-field.coils.length[:ncoils],
-            curvature=options.curvature_target-field.coils.curvature[:ncoils])
+            length=options.length_target-length[:ncoils],
+            curvature=options.curvature_target-curvature[:ncoils])
         if options.bdotn_weight:
-            values = jnp.abs(BdotN_over_B(surface, field))-options.bdotn_target
+            values = jnp.abs(field_normal_ratio(surface, field))-options.bdotn_target
             sharpness = 20/options.bdotn_target
             result["bdotn"] = -(jax.scipy.special.logsumexp(sharpness*values)
                 -jnp.log(values.size))/sharpness
         return result
 
-    def safety(t, y, args, **kwargs):
-        return jnp.maximum(0., boundary.evaluate_xyz(y[:3])+options.safety_margin)
+    safety = ClassifierStop(boundary, options.safety_margin)
 
     if options.collisions:
         from essos.background_species import BackgroundSpecies
         background = BackgroundSpecies(2, jnp.array([ELECTRON_MASS/PROTON_MASS, 2.]),
             jnp.array([-1., 1.]), jnp.full(2, options.background_density),
             jnp.full(2, options.background_temperature_ev))
+    execution = ("independent" if jax.default_backend()=="gpu" else "shared") if options.execution=="auto" else options.execution
+    if options.collisions:print(f"Native split execution: forward={execution}; reverse={execution}",flush=True)
 
     def trace(x):
         field = field_at(x)
@@ -137,6 +173,7 @@ def build_problem(options, objective):
             result = trace_split(field, particles, background, model="GuidingCenter",
                 integrator="essos_dopri8", tmax=options.horizon, n_save=options.saves,
                 timestep=options.collision_step, collision_dtmax=options.collision_dtmax,
+                adaptive=True, orbit_adaptive=True,
                 collision_tolerance=options.collision_tolerance, collision_controller="moments",
                 moment_tolerance=options.moment_tolerance, orbit_dt0=options.initial_step,
                 rtol=options.rtol, atol=options.atol, event=safety,
@@ -145,7 +182,7 @@ def build_problem(options, objective):
                 adjoint_orbit_checkpoint_steps=options.checkpoint_steps,
                 adjoint_max_accepted_steps=options.collision_capacity,
                 adjoint_max_orbit_steps=options.accepted_capacity,
-                execution=options.execution)
+                execution=execution, reverse_execution="independent" if execution=="independent" else "shared")
             states = eqx.error_if(result.ys, jnp.any(result.status>SplitStatus.EVENT),
                 "native split solve failed; inspect work/tape capacities")
         else:
@@ -161,22 +198,22 @@ def build_problem(options, objective):
 
     def metrics(x, states):
         field = field_at(x)
-        return dict(loss_fraction=classifier_loss_fraction(states, boundary, options.softness),
-            distance=classifier_line_loss(states, point, direction, boundary,
+        return dict(loss_fraction=classifier_loss_fraction(states, safety, options.softness),
+            distance=classifier_line_loss(states, point, direction, safety,
                 options.softness, options.location_softness),
             heat_flux=classifier_energy_cost(states, field, particles.mass, particles.energy,
-                "GuidingCenterAdaptative", boundary, softness=options.softness))
+                "GuidingCenterAdaptative", safety, softness=options.softness))
 
     def particle(x):
         states = trace(x)
         # Trace only once and evaluate only the selected particle constraint.
         if objective == "loss_fraction":
-            return classifier_loss_fraction(states, boundary, options.softness)
+            return classifier_loss_fraction(states, safety, options.softness)
         if objective == "distance":
-            return classifier_line_loss(states, point, direction, boundary,
+            return classifier_line_loss(states, point, direction, safety,
                 options.softness, options.location_softness)
         return classifier_energy_cost(states, field_at(x), particles.mass, particles.energy,
-            "GuidingCenterAdaptative", boundary, softness=options.softness)
+            "GuidingCenterAdaptative", safety, softness=options.softness)
 
     constraints = make_constraints(geometry, particle, options)
     return SimpleNamespace(base=base, theta0=theta0, particles=particles, field=field_at,
@@ -204,14 +241,17 @@ def run(objective, defaults=None, argv=None):
     if not (0<=o.birth_fraction<1 and 0<o.initial_step<=o.horizon and o.max_change>0
             and o.classifier_h>0 and o.safety_margin>0 and o.penalty>0 and o.bdotn_target>0):
         parser.error("invalid birth fraction, time, scale, classifier, penalty or Bn target")
-    if o.execution not in ("shared", "independent"):
-        parser.error("execution must be shared or independent")
+    if o.execution not in ("auto", "shared", "independent"):
+        parser.error("execution must be auto, shared or independent")
+    if o.execution=="independent" and not o.collisions:
+        parser.error("independent split execution requires --collisions")
     o.output.mkdir(parents=True, exist_ok=True)
-    if (o.output/"summary.json").exists():
+    if (o.output/"summary.json").exists() or (o.output/"iterations").exists():
         parser.error("choose a fresh output directory")
     print(f"JAX backend: {jax.default_backend()}; devices: {jax.devices()}", flush=True)
     print(f"QI GC ALM: {objective}; native Dopri8 accepted-map AD; collisions={o.collisions}", flush=True)
     problem = build_problem(o, objective)
+    problem.base.to_json(str(o.output/"initial_coils.json"))
     print("Initializing ALM multipliers and native value/gradient", flush=True)
     constraints = problem.constraints
     # Multiplier setup needs output shapes only; JIT prunes particle tracing.
@@ -219,6 +259,7 @@ def run(objective, defaults=None, argv=None):
     optimizer = alm.ALM_model_lbfgs(constraints, beta=o.beta, model_mu=o.model_mu,
         eta_tol=o.eta_tol, omega_tol=o.omega_tol, inner_maxiter=o.inner_maxiter,
         bounds=(-jnp.ones_like(params[0]), jnp.ones_like(params[0])))
+    optimizer=compile_optimizer(optimizer,independent=o.collisions and o.execution!='shared')
     start = perf_counter()
     state, gradient, info = jax.block_until_ready(optimizer.init(params))
     initialization_s = perf_counter()-start
@@ -230,6 +271,8 @@ def run(objective, defaults=None, argv=None):
             gradient_norm=float(jnp.linalg.norm(gradient[0])), seconds=seconds)
         if not np.isfinite(list(values.values())).all():
             raise RuntimeError("nonfinite ALM value or gradient")
+        save_coil_iteration(o.output,iteration,
+            np.asarray(problem.theta0)+o.max_change*np.asarray(params[0]),params[0])
         records.append(values)
         print(f"ALM {iteration}: particle={values['particle_metric']:.8g}; L={values['lagrangian']:.8g}; constraints={values['constraint_norm']:.4g}; "
             f"|grad|={values['gradient_norm']:.4g}; {seconds:.2f} s", flush=True)

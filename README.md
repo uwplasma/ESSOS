@@ -731,15 +731,37 @@ Defaults retain 20 fixed-seed 3.52 MeV alphas born at 70% of the local
 axis-to-boundary distance, 5.7 T mean field on the original magnetic axis,
 1e-4 s horizon, ten saves, 45 m length and 1/m curvature upper limits.
 The loaded file contains five independent coils; limits apply to all five.
-The loss-fraction case is collisionless. Distance/heat retain collisional
-GC tracing by default, using the new native split method with a uniform
-electron/deuterium bath; `--no-collisions` selects collisionless native GC.
+All three cases default to collisional GC tracing with a uniform
+electron/deuterium bath. Both orbit and collision steps are adaptive, using
+native Dopri8 with collision tolerance `0.001`, moment-predictor tolerance
+`0.01` (`--moment-tolerance`) and orbit `rtol=atol=1e-7`.
+`--no-collisions` selects collisionless native GC.
 No example selects a JAX backend or chunks particles.
 Current DOFs are normalized after the 5.7 T rescaling; `--max-change` bounds
 dimensionless changes in the public coil DOFs, including the currents.
-The two-species collisional examples default to native shared JAX execution,
-including on GPU. The specialized `--execution independent` GPU path is opt-in:
-its local QI value/gradient compilation was killed before returning a result.
+With `--execution auto` (default), collisional examples select the specialized
+native forward/reverse kernels on GPU and shared JAX on CPU. Use
+`--execution shared` to select the portable implementation explicitly.
+Uniform multispecies rates are summed before stepping. The ALM outer GPU JIT
+disables CUDA command-buffer capture for the guarded persistent reverse;
+computation remains on the selected GPU.
+
+Native preparation evaluates the same coil Fourier series and its derivatives
+with basis contractions, retaining the public DOFs, scaling and symmetries.
+The length/curvature constraints use these derivatives; B.n/|B| uses the native
+direct-coil field evaluator at the original surface points. Values and gradients
+are checked against the existing formulas. Public field/coil classes are unchanged.
+The one-particle, two-step GPU smoke with twenty physical coils, two background
+species and the real classifier passes both recorded forward/reverse and the
+heat-flux ALM initialization. Its solver directional derivative is
+`8.350803831323357e-7`, versus frozen accepted-step JVP `8.350803831323323e-7`.
+
+The fixed classifier uses direct cell indexing on regular grids and the same
+eight-corner trilinear interpolation for stopping and all three particle losses.
+Nonuniform grids retain a bounded cell search. This native adapter preserves
+the original table, periodic angle, outside fill and position derivatives;
+it does not change the surface or the sigmoid loss. Its value and gradient
+are checked against the original interpolator, including the periodic seam.
 
 The particle metric is an ALM equality constraint targeting zero, alongside
 the axis-field equality and coil upper bounds. Distance reproduces the classic
@@ -763,6 +785,20 @@ performs the initial ALM value/gradient without optimizer updates. Each fresh
 output directory receives `history.csv`, `summary.json`, optimized coil input,
 trajectory/DOF arrays and a PNG comparing up to ten initial/final trajectories
 and coils with their R-Z projections. These outputs are ignored by Git.
+Iteration zero and every completed outer ALM iteration also write
+`iterations/000000.npz`, `000001.npz`, etc., containing public `coil_dofs`,
+optimizer `parameters` and the iteration number matching `history.csv`.
+`initial_coils.json` preserves the coil definition and scaling for reconstruction:
+
+```python
+import numpy as np
+from essos.coils import Coils
+with np.load("output/native_gc_alm_heat_flux/iterations/000005.npz") as data:
+    coils = Coils.from_json("output/native_gc_alm_heat_flux/initial_coils.json").with_dofs(data["coil_dofs"])
+```
+
+These per-iteration checkpoints save coil DOFs only, with no extra particle
+solves. Particle trajectories remain saved for the initial and final configurations.
 
 ## Testing
 

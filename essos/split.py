@@ -1122,7 +1122,8 @@ selected device. Explicit ``"independent"`` rejects unsupported reverse cases.
         if vmec or boozer:
             events.append(lambda t, y, args: 1 - y[0] ** 2 - y[1] ** 2)
         if event is not None:
-            events.extend([lambda t, y, args, f=f: f(t, public(y), args) for f in tree_util.tree_leaves(event)])
+            events.extend([f if not (vmec or boozer) else
+                lambda t, y, args, f=f: f(t, public(y), args) for f in tree_util.tree_leaves(event)])
         if _replay_tapes is not None:
             from .native_ad import replay_accepted_split
             saved,final=replay_accepted_split(rhs,kick,initial,None,tape,times,
@@ -1785,7 +1786,9 @@ def _validate_independent(field, particles, species, *, model, integrator, adapt
 
 
 def _coefficient_graph(species, full_orbit, mass=M, charge=Q):
-    """Remove the singleton species axis without changing the physical rates."""
+    """Sum the physical rates and hoist species-only work out of speed updates."""
+    from jax._src.interpreters.partial_eval import partial_eval_jaxpr_nounits
+    from jax.extend.core import ClosedJaxpr
     def coefficients(speed):
         def values(v):
             point = jnp.zeros(4)
@@ -1796,7 +1799,12 @@ def _coefficient_graph(species, full_orbit, mass=M, charge=Q):
         dp, dt, ddp, q = val
         dk = slope[3]+slope[2]+2*(slope[0]-slope[1])/speed-2*(dp-dt)/speed**2 if full_orbit else jnp.zeros_like(speed)
         return dp, dt, ddp, q, slope[3], dk
-    return _flatten(coefficients, jnp.asarray(4e5))
+    graph = _flatten(coefficients, jnp.asarray(4e5))
+    setup, stage, _, _ = partial_eval_jaxpr_nounits(graph, [True], instantiate=True)
+    fixed = tuple(jax.core.eval_jaxpr(setup.jaxpr, setup.consts))
+    body = stage.jaxpr
+    return ClosedJaxpr(body.replace(constvars=list(body.constvars)+list(body.invars[:len(fixed)]),
+        invars=body.invars[len(fixed):]), tuple(stage.consts)+fixed)
 
 
 def _split_field_data(field):
@@ -1819,6 +1827,71 @@ def _split_field_data(field):
     return arrays, (nc, nq) if coil else data.tables if vmec else None
 
 
+class ClassifierStop:
+    """Fixed Cartesian SurfaceClassifier level, with direct GPU table reads.
+
+    Positive inside the classifier's outward offset. Both execution paths use
+    the same linear interpolant and fill value; event decisions remain frozen
+    under accepted-map AD. The classifier and its storage are unchanged.
+    """
+    def __init__(self, boundary, margin=0.):
+        self.boundary, self.margin = boundary, margin
+        self._data, self._level = self._kernel_view()
+
+    def __call__(self, t, y, args=None, **kwargs):
+        return jnp.maximum(0.,self.evaluate_xyz(y[:3])+self.margin)
+
+    def evaluate_xyz(self, xyz):
+        """Unshifted signed distance for the differentiable particle objectives."""
+        return self._level(self._data,xyz,False)
+
+    def _kernel_view(self):
+        if hasattr(self,'_data'):return self._data,self._level
+        table = self.boundary.dist
+        axes = tuple(table.grid)
+        shape = tuple(len(axis) for axis in axes)
+        if (len(shape)!=3 or min(shape)<2 or table.method!='linear'
+                or table.values.size!=int(np.prod(shape)) or table.fill_value is None):
+            raise ValueError('ClassifierStop requires a scalar 3D linear classifier with a fill value')
+        uniform = tuple(np.allclose(axis,np.linspace(axis[0],axis[-1],len(axis)),
+            rtol=0.,atol=32*np.finfo(axis.dtype).eps*max(1.,float(np.max(np.abs(axis)))))
+            for axis in map(np.asarray,axes))
+        arrays = (*axes, table.values.reshape(-1), jnp.asarray(table.fill_value), jnp.asarray(self.margin))
+        def level(refs, y, stopping=True):
+            x, yy, z = (scalar(y,i) if stopping else y[i] for i in range(3))
+            coordinates = jnp.sqrt(x*x+yy*yy), jnp.mod(jnp.arctan2(yy,x),2*jnp.pi), z
+            indices, fractions = [], []
+            outside = jnp.asarray(False)
+            for axis, n, value, regular in zip(refs[:3], shape, coordinates, uniform):
+                if regular:
+                    index=jnp.clip(jnp.floor((value-axis[0])*(n-1)/(axis[n-1]-axis[0])).astype(jnp.int32),0,n-2)
+                    # Match searchsorted(side='left'), including rounded grid knots.
+                    index=jnp.where((index>0)&(value<=axis[index]),index-1,index)
+                    index=jnp.where((index<n-2)&(value>axis[index+1]),index+1,index)
+                else:
+                    def search(_, bounds):
+                        low, high = bounds
+                        middle = (low+high)//2
+                        below = axis[jnp.minimum(middle,n-1)] < value
+                        return jnp.where(below,middle+1,low),jnp.where(below,high,middle)
+                    insertion, _ = lax.fori_loop(0,n.bit_length(),search,(jnp.int32(0),jnp.int32(n)))
+                    index = jnp.clip(insertion-1,0,n-2)
+                indices.append(index)
+                fractions.append((value-axis[index])/(axis[index+1]-axis[index]))
+                outside |= (value<axis[0]) | (value>axis[n-1])
+            result = jnp.asarray(0., y.dtype)
+            for corner in range(8):
+                index, weight = jnp.int32(0), jnp.asarray(1., y.dtype)
+                for axis, (start, fraction, n) in enumerate(zip(indices,fractions,shape)):
+                    high = (corner>>(2-axis))&1
+                    index = index*n+start+high
+                    weight *= fraction if high else 1-fraction
+                result += weight*refs[3][jnp.clip(index,0,int(np.prod(shape))-1)]
+            distance=jnp.where(outside,refs[4][()],result)
+            return jnp.maximum(0.,distance+refs[5][()]) if stopping else distance
+        return arrays, level
+
+
 def _prepare_split_field(field, species, *, gc, collision_tolerance, speed_floor,
                          event=None, state_size=5, field_view=None,mass=M,charge=Q,spatial_diffusion=False):
     """Reuse the orbit PR's private field views, carrying physical mu per kick."""
@@ -1832,13 +1905,16 @@ def _prepare_split_field(field, species, *, gc, collision_tolerance, speed_floor
         nc, nq = metadata
     nfield = len(arrays)
     cg = _coefficient_graph(species, not gc,mass,charge)
-    def gc_map(v, xi, h, dw, *c):
+    # Keep the per-particle floor as explicit data, not a captured map constant.
+    def gc_map(v, xi, h, dw, floor, *c):
         out = guiding_center_collision_step(v, xi, h, dw, CollisionCoefficients(*c),
-            tolerance=collision_tolerance, speed_floor=speed_floor)
+            tolerance=collision_tolerance, speed_floor=floor)
         return out.y, out.drift_error, out.diffusion_error
     gg = _flatten(gc_map, jnp.asarray(4e5), jnp.asarray(.5), jnp.asarray(1e-7),
-                   jnp.zeros(2), *(jnp.asarray(1.),)*6) if gc else None
+                   jnp.zeros(2),jnp.asarray(0.), *(jnp.asarray(1.),)*6) if gc else None
     functions = tree_util.tree_leaves(event)
+    tables = [function._kernel_view() for function in functions if isinstance(function,ClassifierStop)]
+    functions = [function for function in functions if not isinstance(function,ClassifierStop)]
     eg = _flatten(lambda y: jnp.min(jnp.asarray([f(0., y, None) for f in functions])),
                   jnp.zeros(state_size)) if functions else None
     event_arrays = []
@@ -1848,14 +1924,16 @@ def _prepare_split_field(field, species, *, gc, collision_tolerance, speed_floor
                 raise ValueError("independent stopping surfaces require scalar/vector constants")
             event_arrays.append(value if value.ndim == 0 else
                 jnp.pad(value, (0, (1 << (value.size-1).bit_length())-value.size)))
-    all_arrays = tuple(arrays)+tuple(cg.consts)+(tuple(gg.consts) if gc else ())+tuple(event_arrays)
+    all_arrays = (tuple(arrays)+tuple(cg.consts)+(tuple(gg.consts)+(jnp.asarray(speed_floor),) if gc else ())+tuple(event_arrays)
+        +tuple(value for values,_ in tables for value in values))
 
     def factory(refs, y0):
         frefs = refs[:nfield]
         ci = nfield+len(cg.consts)
         cc = [ref[...] for ref in refs[nfield:ci]]
-        mc = [ref[...] for ref in refs[ci:ci+len(gg.consts)]] if gc else ()
-        erefs = refs[ci+(len(gg.consts) if gc else 0):]
+        mc = [ref[...] for ref in refs[ci:ci+len(gg.consts)+1]] if gc else ()
+        event_start = ci+(len(gg.consts)+1 if gc else 0)
+        erefs = refs[event_start:event_start+len(event_arrays)]
         ec = ([ref[...] if value.ndim == 0 else tuple(scalar(ref[...], i) for i in range(value.size))
                for ref, value in zip(erefs, eg.consts)] if eg is not None else ())
         zero = scalar(y0, 7)
@@ -1894,7 +1972,16 @@ def _prepare_split_field(field, species, *, gc, collision_tolerance, speed_floor
             def norm(y, e, speed, budget):
                 return jnp.maximum(jnp.sqrt(scalar(e, 0)**2+scalar(e, 1)**2),
                     jnp.maximum(jnp.abs(scalar(e, 2)), jnp.abs(scalar(e, 3))/speed))/budget
-        level = (lambda y: zero+1.) if eg is None else lambda y: _evaluate_surface(eg.jaxpr, ec, y)
+        table_levels = []
+        start = event_start+len(event_arrays)
+        for values, evaluate in tables:
+            table_levels.append(lambda y, evaluate=evaluate, data=refs[start:start+len(values)]:evaluate(data,y))
+            start += len(values)
+        def level(y):
+            result = _evaluate_surface(eg.jaxpr,ec,y) if eg is not None else zero+jnp.inf
+            for function in table_levels:
+                result = jnp.minimum(result,function(y))
+            return result if eg is not None or table_levels else zero+1.
         def kick(y, h, dw):
             if gc and spatial_diffusion:
                 vector,_=_coil_field_values(frefs,tuple(scalar(y,i) for i in range(3)),nc,nq,False)
@@ -1906,7 +1993,7 @@ def _prepare_split_field(field, species, *, gc, collision_tolerance, speed_floor
             if gc:
                 xi=scalar(y,3)/speed
                 velocity_noise=pack(tuple(scalar(dw,i) for i in (3,4))) if spatial_diffusion else dw
-                changed, ed, es = _evaluate_kernel(gg.jaxpr, mc, speed, xi, h, velocity_noise, *c, scalarize=True)
+                changed, ed, es = _evaluate_kernel(gg.jaxpr, mc[:-1], speed, xi, h, velocity_noise,mc[-1], *c, scalarize=True)
                 v, xi = scalar(changed, 0), scalar(changed, 1)
                 if spatial_diffusion:
                     unit=tuple(b/B for b in vector);noise=tuple(scalar(dw,i) for i in range(3))
@@ -1956,7 +2043,7 @@ def _solve_independent(rhs, collision, initial, args=None, *, field, species, gc
             raise ValueError(name+" must be a positive integer")
     nstate = initial.size
     screening=getattr(species,'screening_species',None)
-    fast=field_view is not None and species.number_species==1 and species.radial_grid is None and (screening is None or screening.radial_grid is None)
+    fast=field_view is not None and species.radial_grid is None and (screening is None or screening.radial_grid is None)
     if spatial_diffusion and field_view is not None and not isinstance(field,BiotSavart):fast=False
     if physics is None or fast:
         arrays, factory = _prepare_split_field(field, species, gc=gc,
