@@ -739,7 +739,16 @@ Current DOFs are normalized after the 5.7 T rescaling; `--max-change` bounds
 dimensionless changes in the public coil DOFs, including the currents.
 The two-species collisional examples default to native shared JAX execution,
 including on GPU. The specialized `--execution independent` GPU path is opt-in:
-its local QI value/gradient compilation was killed before returning a result.
+its QI forward recording now passes, but the full QI GPU gradient run still
+fails locally. Small-coil multispecies reverse checks pass; the QI reverse
+path remains under investigation.
+
+The fixed classifier uses direct cell indexing on regular grids and the same
+eight-corner trilinear interpolation for stopping and all three particle losses.
+Nonuniform grids retain a bounded cell search. This native adapter preserves
+the original table, periodic angle, outside fill and position derivatives;
+it does not change the surface or the sigmoid loss. Its value and gradient
+are checked against the original interpolator, including the periodic seam.
 
 The particle metric is an ALM equality constraint targeting zero, alongside
 the axis-field equality and coil upper bounds. Distance reproduces the classic
@@ -763,6 +772,58 @@ performs the initial ALM value/gradient without optimizer updates. Each fresh
 output directory receives `history.csv`, `summary.json`, optimized coil input,
 trajectory/DOF arrays and a PNG comparing up to ten initial/final trajectories
 and coils with their R-Z projections. These outputs are ignored by Git.
+
+## Prescribed Alfvén perturbations
+
+`essos.perturbations` supplies analytical Boozer modes and spectra;
+`essos.gc_perturbations` supplies native VMEC modes and a Boozer-to-VMEC adapter.
+The existing GC RHS receives magnetic flutter, electric and inductive
+corrections. It retains the background field magnitude and conserves physical
+magnetic moment between collisions; kinetic energy can change through wave work.
+
+Use `perturbation=wave` with `trace_boozer`, native `Tracing`, or `trace_split`.
+The split path uses the existing adaptive orbit/collision solvers and supports
+`adjoint="accepted"` for wave parameters. An inner cutoff protects singular
+paper harmonics; smooth analytical modes need no cutoff. See
+[the model, API and benchmark commands](docs/analytical_perturbations.rst).
+
+```sh
+JAX_PLATFORMS=cpu python -B -m pytest -q -p no:cacheprovider tests/test_perturbations.py
+python -m examples.particle_tracing.vmec_alfven_cpu_smoke
+python -m examples.benchmarks.paul_boozer_vmec_benchmark --dry-run --particles 100 --platform cpu
+```
+
+Benchmark outputs default to `../artifacts/analytical_alfven/`. The retained
+Paul comparison distinguishes the QS-filtered Boozer and full VMEC backgrounds;
+it does not establish an exact reproduction of the paper's equilibrium.
+
+## FAX mode integration
+
+`FaxMode` imports computed complex eigenprofiles with explicit frequency units
+and an equilibrium hash. `PhysicalPotentialMode` reconstructs physical Fourier
+potentials with natural cubic splines; `SpectralAlfvenMode` provides a smooth
+regular-axis envelope with an explicit taper for annular data. Both use the
+existing perturbation corrections and support JAX derivatives.
+The native field adapter's table selector preserves its gather derivatives
+when differentiating reconstructed potentials.
+
+The examples retain the full FAX physical-potential QA calculation, frozen-field
+Poincaré plots, the independent uniform-plasma check, the archived AE3D/FIRM3D
+loss comparison, and four paired native adaptive tracing cases with/without
+waves and collisions. Amplitude is an imposed normalization; FAX supplies mode
+frequency and relative structure. See [the workflow and commands](docs/fax_modes.rst).
+
+```sh
+JAX_PLATFORMS=cpu python -B -m pytest -q -p no:cacheprovider tests/test_fax_adapter.py tests/test_mode_reconstruction.py
+python -m examples.benchmarks.fax_shear_alfven_benchmark --help
+python -m examples.benchmarks.fax_qa_loss_collisions --help
+```
+
+FAX is optional for importing an already saved mode. Live calculations require
+its `fax.vorticity` API. Ten bridge tests cover units, phases, field identities,
+an actual small FAX solve, native tracing, and accepted-map collision gradients.
+Added outputs default to `../artifacts/fax_integration/`; generated results
+are kept outside this checkout.
 
 ## Testing
 

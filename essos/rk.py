@@ -643,15 +643,30 @@ def _padded_spline(knots, coefficients):
     return jnp.asarray(grid), jnp.asarray(values)
 
 
-def _select_one(value, index, axis):
+@partial(jax.custom_jvp, nondiff_argnums=(2, 3))
+def _select_one(value, index, axis, keepdims=True):
     """Bit-preserving scalar/slice selection on a kernel-local array."""
     shape = [1]*value.ndim
     shape[axis] = value.shape[axis]
     mask = jnp.arange(value.shape[axis]).reshape(shape) == index
     dtype = {8: jnp.uint64, 4: jnp.uint32, 2: jnp.uint16, 1: jnp.uint8}[value.dtype.itemsize]
     bits = jax.lax.bitcast_convert_type(value, dtype)
-    selected = jnp.max(jnp.where(mask, bits, jnp.zeros_like(bits)), axis=axis, keepdims=True)
+    selected = jnp.max(jnp.where(mask, bits, jnp.zeros_like(bits)), axis=axis, keepdims=keepdims)
     return jax.lax.bitcast_convert_type(selected, value.dtype)
+
+
+@_select_one.defjvp
+def _select_one_jvp(axis, keepdims, primals, tangents):
+    value, index = primals
+    tangent, _ = tangents
+    result = _select_one(value, index, axis, keepdims)
+    if tangent.dtype == jax.dtypes.float0:
+        return result, jnp.zeros_like(result, dtype=jax.dtypes.float0)
+    shape = [1]*value.ndim
+    shape[axis] = value.shape[axis]
+    mask = jnp.arange(value.shape[axis]).reshape(shape) == index
+    # The bit-preserving primal selection must still differentiate as a gather.
+    return result, jnp.sum(jnp.where(mask, tangent, jnp.zeros_like(tangent)), axis=axis, keepdims=keepdims)
 
 
 def _kernel_is_finite(value):
@@ -691,23 +706,31 @@ class _KernelField:
         return tuple(value[i] for i in range(3)), tuple(slope[i] for i in range(3))
 
 
-def _kernel_rhs(model, y0, moment, mass, charge):
+def _kernel_rhs(model, y0, moment, mass, charge, perturbation=None):
     """Lower the original checked RHS; adapt unsupported local-array indexing."""
     from .boozer import guiding_center_rhs, _chart
 
-    def physical(y):
-        value = guiding_center_rhs(model, y, moment, mass, charge)
+    def physical(*arguments):
+        t, y = (0., arguments[0]) if perturbation is None else arguments
+        value = (guiding_center_rhs(model, y, moment, mass, charge) if perturbation is None else
+                 guiding_center_rhs(model, y, moment, mass, charge, t=t, perturbation=perturbation))
         _, r, theta, *_ = _chart(y)
         B = model.modB_derivatives(r, theta, y[2])[0]
         return jnp.where(jnp.isfinite(B) & (B > 0), value, jnp.nan)
 
-    original = jax.make_jaxpr(physical)(y0)
-    flat = jax.make_jaxpr(lambda y: _evaluate_inline(original.jaxpr, original.consts, y)[0])(y0)
+    arguments = (y0,) if perturbation is None else (jnp.asarray(0., y0.dtype), y0)
+    return _lower_kernel_rhs(physical, *arguments)
 
-    def evaluate(y):
+
+def _lower_kernel_rhs(physical, *arguments):
+    """Adapt the existing RHS graph for power-of-two CUDA local arrays."""
+    original = jax.make_jaxpr(physical)(*arguments)
+    flat = jax.make_jaxpr(lambda *args: _evaluate_inline(original.jaxpr, original.consts, *args)[0])(*arguments)
+
+    def evaluate(*arguments):
         graph = flat.jaxpr
         env = dict(zip(graph.constvars, flat.consts))
-        env.update(zip(graph.invars, (y,)))
+        env.update(zip(graph.invars, arguments))
         def read(v):
             return v.val if isinstance(v, Literal) else env[v]
         for equation in graph.eqns:
@@ -731,11 +754,27 @@ def _kernel_rhs(model, y0, moment, mass, charge):
                             raise ValueError("Unsupported kernel-local dynamic RHS slice")
                         value = _select_one(value, jnp.clip(index, 0, size-1), axis)
                 result = [value]
-            elif name == "concatenate" and len(values) > 2:
+            elif name == "concatenate" and (len(values) > 2 or all(v.shape == (1,) for v in values)):
                 value = jnp.zeros((len(values),), values[0].dtype)
                 for i, v in enumerate(values):
                     value = jnp.where(jnp.arange(len(values)) == i, jnp.reshape(v, ()), value)
                 result = [value]
+            elif name == "stack":
+                # Triton stack excludes scalar inputs and >2 operands.
+                axis = equation.params["axis"]
+                shape = [1]*(values[0].ndim+1)
+                shape[axis] = len(values)
+                index = jnp.arange(len(values)).reshape(shape)
+                value = jnp.zeros(equation.outvars[0].aval.shape, values[0].dtype)
+                for i, v in enumerate(values):
+                    value = jnp.where(index == i, jnp.expand_dims(v, axis), value)
+                result = [value]
+            elif name == "unstack":
+                axis = equation.params["axis"]
+                result = [_select_one(values[0], i, axis, keepdims=False)
+                          for i in range(len(equation.outvars))]
+            elif name == "dot_general" and all(v.ndim == 1 for v in values):
+                result = [jnp.sum(values[0]*values[1])]
             elif name == "le_to":
                 # Positive finite knots followed by +inf; NaN queries sort last.
                 result = [jnp.less_equal(values[0], values[1]) | jnp.isnan(values[1])]
@@ -810,7 +849,11 @@ def _coil_geometry(field):
     nc,nq,_ = gamma.shape
     pc,pq = (1<<(size-1).bit_length() for size in (nc,nq))
     weight = current*1e-7
-    arrays = tuple(jnp.pad(value[:,:,i].T,((0,pq-nq),(0,pc-nc))).reshape(-1)
+    index=jnp.arange(pc*pq);row,column=index%pc,index//pc
+    valid=(row<nc)&(column<nq)
+    row,column=jnp.minimum(row,nc-1),jnp.minimum(column,nq-1)
+    # Explicit indexing avoids a GPU miscompile of dynamic transpose/pad views.
+    arrays = tuple(jnp.where(valid,value[row,column,i],0.)
         for value in (gamma,tangent*weight[:,None,None]) for i in range(3))
     return arrays,nc,nq
 
@@ -1050,6 +1093,68 @@ def _vmec_rhs_values(refs, y, tables, mass, charge, energy, moment=None):
                  c*velocity[1], zero, zero, zero))
 
 
+class _KernelVmecField:
+    """The same VMEC field quantities with a zero fourth vector component."""
+    def __init__(self, refs, tables):
+        self.refs, self.tables = refs, tables
+
+    def gc_quantities(self, point):
+        values = _vmec_quantities(self.refs, point, self.tables)
+        zero = jnp.zeros_like(values[2])
+        return tuple(_pack((*value, zero)) if isinstance(value, tuple) else value for value in values)
+
+    def _value_gradient(self, point, name):
+        return _vmec_series(self.refs, point, self.tables[name])
+
+    def _value(self, point, name):
+        # Perturbation AD uses the existing exact Fourier Jacobian, including
+        # radial interpolation, instead of differentiating its implementation.
+        @jax.custom_jvp
+        def value(query):
+            return self._value_gradient(query, name)[0]
+
+        @value.defjvp
+        def value_jvp(primals, tangents):
+            result, gradient = self._value_gradient(primals[0], name)
+            return result, sum(g*d for g, d in zip(gradient, tangents[0]))
+
+        return value(point)
+
+    def AbsB(self, point):
+        return self._value(point, 'bmnc')
+
+    def B_contravariant(self, point):
+        b = tuple(self._value(point, name) for name in ('bsupumnc', 'bsupvmnc'))
+        zero = jnp.zeros_like(b[0])
+        return _pack((zero, *b, zero))
+
+    def B_covariant(self, point):
+        b = tuple(self._value(point, name) for name in ('bsubsmns', 'bsubumnc', 'bsubvmnc'))
+        return _pack((*b, jnp.zeros_like(b[0])))
+    def dAbsB_by_dX(self, point): return self.gc_quantities(point)[3]
+    def curl_b(self, point): return self.gc_quantities(point)[4]
+    def kappa(self, point): return self.gc_quantities(point)[5]
+    def sqrtg(self, point): return self._value(point, 'gmnc')
+
+
+class _KernelZeroElectric:
+    def E_covariant(self, point): return jnp.zeros(4, dtype=point[0].dtype)
+
+
+def _vmec_mu_rhs(model, y, moment, mass, charge, t, perturbation):
+    """Call the production GC RHS; only the axis chart/output layout differs."""
+    from .dynamics import _guiding_center_velocity, _AXIS_REGION
+    point = _vmec_chart(y)
+    velocity, acceleration = _guiding_center_velocity(model, _KernelZeroElectric(), charge, mass,
+        point, _vmec_scalar(y, 3), mu=moment, t=t, perturbation=perturbation)
+    u, w, s = _vmec_scalar(y, 0), _vmec_scalar(y, 1), point[0]
+    half = jnp.where(s > 0, .5/jnp.where(s > 0, s, 1.), 0.)
+    c, zero = s/(s+_AXIS_REGION), jnp.zeros_like(u)
+    return _pack((u*half*velocity[0]-(1-c)*w*velocity[1],
+                  w*half*velocity[0]+(1-c)*u*velocity[1], velocity[2], acceleration,
+                  c*velocity[1], zero, zero, zero))
+
+
 def _vmec_xyz_values(refs, y, tables):
     point = _vmec_chart(y)
     R = _vmec_series(refs, point, tables['rmnc'])[0]
@@ -1057,27 +1162,53 @@ def _vmec_xyz_values(refs, y, tables):
     return R*jnp.cos(point[2]), R*jnp.sin(point[2]), Z
 
 def _prepare_vmec_gpu(field,mass,charge,energy,speed,times,dt0,rtol,atol,max_steps,*,
-                         method="dopri8",adaptive=True,length_scale=1.,interpret=False):
+                         method="dopri8",adaptive=True,length_scale=1.,interpret=False,
+                         constant_mu=False,perturbation=None):
+    if perturbation is not None and not constant_mu:
+        raise ValueError("VMEC perturbations require constant_mu=True")
     prepared=_prepare_vmec_data(field)
+    parameters, structure = jax.tree.flatten(perturbation)
+    if any(jnp.ndim(p) != 0 for p in parameters):
+        raise ValueError("CUDA prescribed modes currently require scalar parameters")
+    arrays = prepared.arrays+tuple(jnp.asarray(p, jnp.float64) for p in parameters)
     def factory(refs,point,invariant):
+        wave = None
         evaluate=lambda y:_vmec_rhs_values(refs,y,prepared.tables,mass,charge,energy)
+        if constant_mu:
+            count = len(prepared.arrays)
+            model = _KernelVmecField(refs[:count], prepared.tables)
+            wave = jax.tree.unflatten(structure, [r[...] for r in refs[count:]])
+            def physical(*args):
+                t, y = (0., args[0]) if wave is None else args
+                return _vmec_mu_rhs(model,y,invariant,mass,charge,t,wave)
+            args = (point,) if wave is None else (jnp.zeros((), point.dtype), point)
+            evaluate = _lower_kernel_rhs(physical, *args)
         def estimate(endpoint,error,speed):
             high,low=_vmec_xyz_values(refs,endpoint,prepared.tables),_vmec_xyz_values(refs,endpoint-error,prepared.tables)
             position=jnp.sqrt(sum((a-b)**2 for a,b in zip(high,low)))/length_scale
             return jnp.maximum(position,jnp.abs(_vmec_scalar(error,3))/speed)
-        return evaluate,estimate,lambda y:1.-_vmec_scalar(y,0)**2-_vmec_scalar(y,1)**2
+        cutoff = None if wave is None else wave.axis_stop_threshold()
+        level = lambda y:1.-_vmec_scalar(y,0)**2-_vmec_scalar(y,1)**2
+        if cutoff is not None:
+            boundary = level
+            level = lambda y:jnp.minimum(boundary(y), jnp.where(cutoff > 0,
+                jnp.maximum(_vmec_scalar(y,0)**2+_vmec_scalar(y,1)**2-cutoff, 0.), 1.))
+        return evaluate,estimate,level
     # Avoid cross-warp reductions for short spectra; keep parallelism for large ones.
     warps = 1 if max(prepared.arrays[2].size, prepared.arrays[4].size) <= 128 else 4
-    return _prepare_gpu_solver(prepared.arrays,factory,speed,times,dt0,rtol,atol,max_steps,
-        state_size=8,method=method,adaptive=adaptive,num_warps=warps,interpret=interpret)
+    return _prepare_gpu_solver(arrays,factory,speed,times,dt0,rtol,atol,max_steps,
+        state_size=8,method=method,adaptive=adaptive,num_warps=warps,interpret=interpret,
+        time_dependent=perturbation is not None)
 
 # Independent GPU particle loops
 
 def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_steps, *,
-                       state_size=4, method="dopri8", adaptive=True, num_warps=1, interpret=False):
+                       state_size=4, method="dopri8", adaptive=True, num_warps=1, interpret=False,
+                       time_dependent=False):
     """Prepare a CUDA solver outside jit; return solve(y0, invariant).
 
     Fixed and adaptive Dopri5/8 share FSAL stages and standard dense output.
+    ``time_dependent=True`` calls evaluate(t,y) at the tableau's stage times.
     Adaptive acceptance uses the adapter's error blocks and I control. Save
     times do not constrain steps. Each particle stops independently; there is
     no particle chunking or compaction. Numerical equivalence is subject to
@@ -1117,8 +1248,9 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
     tmax = float(times[-1])
     # Load float64 scalars explicitly. Nested Pallas loops must not infer
     # their device scalar precision from weak Python constant initializers.
+    nodes = (0., *(_C if method == "dopri5" else _C8)) if time_dependent else ()
     scalars = jnp.asarray([0., dt0, tmax, 8*np.finfo(np.float64).eps*tmax,
-                           speed, rtol+atol], jnp.float64)
+                           speed, rtol+atol, *nodes], jnp.float64)
     inputs = tuple(arrays)+(coefficients, error_weights, dense_coefficients, jnp.asarray(times), scalars)
     nsave = len(times)
 
@@ -1137,6 +1269,8 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
             point = yref[...]
             zero, initial_h, final_t, roundoff, particle_speed, budget = (paramsref[i] for i in range(6))
             evaluate, estimate, level = factory(field_refs, point, mref[...])
+            def rhs(t, y):
+                return evaluate(t, y) if time_dependent else evaluate(y)
 
             def finite(value):
                 return jnp.min(_kernel_is_finite(value).astype(jnp.int32)) > 0
@@ -1200,7 +1334,7 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
                 def stage(i, stage_carry):
                     bank, _, first = stage_carry
                     yi = y+jnp.sum(aref[i, :][:, None]*bank, axis=0)
-                    fi = evaluate(yi)
+                    fi = rhs(t+paramsref[6+i]*h if time_dependent else t, yi)
                     return jnp.where(indexbank == i, h*fi[None, :], bank), fi, jnp.where(i == 0, fi, first)
 
                 bank, f1, f0 = jax.lax.fori_loop((trials != 0).astype(jnp.int32), np.int32(stages), stage, (bank, f0, f0))
@@ -1277,7 +1411,7 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
 # Boozer GPU preparation
 
 def _prepare_boozer_gpu(field, mass, charge, speed, times, dt0, rtol, atol, max_steps, *,
-                         method="dopri8", adaptive=True, interpret=False):
+                         method="dopri8", adaptive=True, interpret=False, perturbation=None):
     if field.table is not None or field.sine_coef is not None:
         raise ValueError("The CUDA adapter requires a fixed cosine Fourier Boozer field")
     radial, b = _padded_spline(field.r_knots, field.b_coef)
@@ -1285,16 +1419,28 @@ def _prepare_boozer_gpu(field, mass, charge, speed, times, dt0, rtol, atol, max_
     modes = b.shape[1]
     arrays = (radial, b, flux, profiles, jnp.pad(field.xm, (0,modes-len(field.xm))),
               jnp.pad(field.xn, (0,modes-len(field.xn))))
+    parameters, structure = jax.tree.flatten(perturbation)
+    if any(jnp.ndim(p) != 0 for p in parameters):
+        raise ValueError("CUDA prescribed modes currently require scalar parameters")
+    arrays += tuple(jnp.asarray(p, jnp.float64) for p in parameters)
     scalar = lambda y,i: _select_one(y,i,0).reshape(())
     def factory(refs, point, moment):
-        model = _KernelField(refs, float(field.psi0))
-        evaluate = _kernel_rhs(model, point, moment, mass, charge)
+        model = _KernelField(refs[:6], float(field.psi0))
+        wave = jax.tree.unflatten(structure, [r[...] for r in refs[6:]])
+        evaluate = _kernel_rhs(model, point, moment, mass, charge, wave)
         def estimate(endpoint, error, speed):
             a,b,c,d = (scalar(error,i) for i in range(4))
             return jnp.maximum(jnp.sqrt(a*a+b*b),jnp.maximum(jnp.abs(c),jnp.abs(d)/speed))
-        return evaluate, estimate, lambda y: 1.-scalar(y,0)**2-scalar(y,1)**2
+        level = lambda y: 1.-scalar(y,0)**2-scalar(y,1)**2
+        cutoff = None if wave is None else wave.axis_stop_threshold()
+        if cutoff is not None:
+            boundary = level
+            level = lambda y: jnp.minimum(boundary(y), jnp.where(cutoff > 0,
+                jnp.maximum(scalar(y,0)**2+scalar(y,1)**2-cutoff, 0.), 1.))
+        return evaluate, estimate, level
     return _prepare_gpu_solver(arrays,factory,speed,times,dt0,rtol,atol,max_steps,
-                              method=method,adaptive=adaptive,interpret=interpret)
+                              method=method,adaptive=adaptive,interpret=interpret,
+                              time_dependent=perturbation is not None)
 
 # Existing Tracing integration
 
@@ -1307,7 +1453,8 @@ class _ParticleParameters(NamedTuple):
 
 def prepare_solver(field, *, mass, charge, energy, times, dt0, model="gc", method="dopri8",
                    adaptive=True, rtol=1e-9, atol=1e-9, controller="i", pcoeff=.4, icoeff=.3,
-                   max_steps=1_000_000, length_scale=1., execution="jax", interpret=False):
+                   max_steps=1_000_000, length_scale=1., execution="jax", interpret=False,
+                   perturbation=None):
     """Prepare ``solve(state) -> RKSolution`` for fixed-field forward tracing.
 
     Cartesian GC states are (x,y,z,vpar), Lorentz states (x,y,z,vx,vy,vz).
@@ -1315,46 +1462,65 @@ def prepare_solver(field, *, mass, charge, energy, times, dt0, model="gc", metho
     at s=1. The CUDA path uses independent particle programs and I control;
     the portable path supports I/PI. Use jit(vmap(solve)) for a batch.
     This function prepares fixed fields outside jit. It defines no AD rule.
+    ``model="gc_mu"`` conserves physical mu and accepts perturbations; VMEC
+    states are (u,w,phi,vpar,mu,Theta). CUDA gc_mu currently supports VMEC.
     """
     import numpy as np
     from .fields import BiotSavart, Vmec
-    from .dynamics import GuidingCenter, Lorentz, _axis_regular, _from_axis_regular
+    from .dynamics import GuidingCenter, GuidingCenterMu, Lorentz, _axis_regular, _from_axis_regular
     from .electric_field import Electric_field_zero
-    if execution not in ("jax", "cuda") or model not in ("gc", "lorentz"):
-        raise ValueError("Require execution jax/cuda and model gc/lorentz")
+    if execution not in ("jax", "cuda") or model not in ("gc", "gc_mu", "lorentz"):
+        raise ValueError("Require execution jax/cuda and model gc/gc_mu/lorentz")
+    if perturbation is not None:
+        from .gc_perturbations import GuidingCenterPerturbation
+        if model != 'gc_mu' or not isinstance(perturbation, GuidingCenterPerturbation):
+            raise ValueError("Perturbations require gc_mu and a GuidingCenterPerturbation")
     if not all(np.isfinite(v) for v in (mass,charge,energy,length_scale)) or min(mass,energy,length_scale)<=0 or charge==0:
         raise ValueError("Require positive finite mass, energy, length_scale and nonzero charge")
     speed=float(np.sqrt(2*energy/mass))
     vmec=isinstance(field,Vmec)
-    if vmec and model!='gc':
+    if vmec and model=='lorentz':
         raise ValueError("VMEC native integration supports guiding centers")
-    size=5 if vmec else 4 if model=='gc' else 6
+    size=(6 if vmec else 5) if model=='gc_mu' else 5 if vmec else 4 if model=='gc' else 6
     if execution=='cuda':
         if controller!='i':
             raise ValueError("CUDA execution supports the I controller")
+        if model=='gc_mu' and not vmec:
+            raise ValueError("CUDA gc_mu currently requires VMEC")
         if vmec:
             prepare_orbit_solver = _prepare_vmec_gpu
         elif isinstance(field,BiotSavart):
             prepare_orbit_solver = _prepare_coils_gpu
         else:
             raise ValueError("CUDA Cartesian fields must be BiotSavart")
-        options={} if vmec else dict(model=model)
+        options=dict(constant_mu=model=='gc_mu',perturbation=perturbation) if vmec else dict(model=model)
         kernel=prepare_orbit_solver(field,mass,charge,energy,speed,times,dt0,rtol,atol,max_steps,
             method=method,adaptive=adaptive,length_scale=length_scale,interpret=interpret,**options)
         padded=8 if size in (5,6) else 4
         def solve(y):
+            if vmec and model=='gc_mu':
+                internal = jnp.concatenate([y[:4], y[-1:], jnp.zeros(3, y.dtype)])
+                result = kernel(internal, y[4])
+                def unpack(value):
+                    moment = jnp.where(jnp.isfinite(value[...,0]), y[4], jnp.inf)
+                    return jnp.concatenate([value[...,:4], moment[...,None], value[...,4:5]], axis=-1)
+                return result._replace(ys=unpack(result.ys),y=unpack(result.y))
             result=kernel(jnp.pad(y,(0,padded-size)),jnp.zeros((),y.dtype))
             return result._replace(ys=result.ys[:,:size],y=result.y[:size])
         return solve
     particle=_ParticleParameters(mass,charge,energy,speed)
-    if model=='gc':
-        rhs=lambda t,y,args:GuidingCenter(t,y,(field,particle,Electric_field_zero()))
+    if model!='lorentz':
+        dynamics = GuidingCenter if model=='gc' else partial(GuidingCenterMu,perturbation=perturbation)
+        rhs=lambda t,y,args:dynamics(t,y,(field,particle,Electric_field_zero()))
         rhs=_axis_regular(rhs) if vmec else rhs
     else:
         rhs=lambda t,y,args:Lorentz(t,y,(field,particle))
     position=(lambda y:field.to_xyz(_from_axis_regular(y)[:3])) if vmec else None
-    norm=OrbitErrorNorm(rtol,atol,speed,length_scale,1 if model=='gc' else 3,position)
+    norm=OrbitErrorNorm(rtol,atol,speed,length_scale,3 if model=='lorentz' else 1,position)
     event=(lambda t,y,args:1.-y[0]**2-y[1]**2) if vmec else None
+    cutoff=None if perturbation is None else perturbation.axis_stop_threshold()
+    if vmec and cutoff is not None:
+        event=(event,lambda t,y,args:jnp.where(cutoff>0,jnp.maximum(y[0]**2+y[1]**2-cutoff,0.),1.))
     return lambda y:solve_rk(rhs,y,t1=times[-1],dt0=dt0,ts=times,method=method,adaptive=adaptive,
         rtol=rtol,atol=atol,error_norm=norm,controller=controller,pcoeff=pcoeff,icoeff=icoeff,
         event=event,max_steps=max_steps)
@@ -1434,7 +1600,7 @@ def _boozer_error_norm(error, speed, rtol, atol):
 
 
 def trace_boozer_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
-                  method, adaptive, controller, pcoeff, icoeff, max_steps, *, execution="jax"):
+                  method, adaptive, controller, pcoeff, icoeff, max_steps, *, execution="jax", perturbation=None):
     """Select portable JAX or fixed-field CUDA execution without changing physics.
 
     CUDA supports fixed steps and adaptive I control for cosine Fourier fields. The portable
@@ -1449,14 +1615,15 @@ def trace_boozer_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, a
             raise ValueError("CUDA native orbits require I control")
         prepare_orbit_solver = _prepare_boozer_gpu
         solver = prepare_orbit_solver(field, mass, charge, float(speed), times,
-                                      dt0, rtol, atol, max_steps, method=method, adaptive=adaptive)
+                                      dt0, rtol, atol, max_steps, method=method, adaptive=adaptive,
+                                      perturbation=perturbation)
     return _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
-                          method, adaptive, controller, pcoeff, icoeff, max_steps, solver)
+                          method, adaptive, controller, pcoeff, icoeff, max_steps, solver, perturbation)
 
 
 @partial(jax.jit, static_argnames=("method", "adaptive", "controller", "max_steps", "orbit_solver"))
 def _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
-                   method, adaptive, controller, pcoeff, icoeff, max_steps, orbit_solver=None):
+                   method, adaptive, controller, pcoeff, icoeff, max_steps, orbit_solver=None, perturbation=None):
     """One shared native RK solve per orbit, independent of the save grid."""
     from .boozer import _chart, guiding_center_rhs
 
@@ -1465,9 +1632,12 @@ def _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
             _, r, theta, *_ = _chart(y)
             return field.modB_derivatives(r, theta, y[2])[0]
 
+        cutoff = None if perturbation is None else perturbation.axis_stop_threshold()
+        inside = False if cutoff is None else (cutoff > 0) & (jnp.sum(y0[:2]**2) <= cutoff)
+
         def rhs(t, y, args):
-            del t, args
-            value = guiding_center_rhs(field, y, mu, mass, charge)
+            value = jax.lax.cond(inside, lambda: jnp.zeros_like(y),
+                lambda: guiding_center_rhs(field, y, mu, mass, charge, t=t, perturbation=perturbation))
             B = magnetic_field(y)
             return jnp.where(jnp.isfinite(B) & (B > 0), value, jnp.nan)
 
@@ -1480,10 +1650,14 @@ def _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
             return _boozer_error_norm(error, speed, rtol, atol)
 
         if orbit_solver is None:
+            event = lambda t, y, args: 1. - y[0]**2 - y[1]**2
+            if cutoff is not None:
+                event = (event, lambda t, y, args: jnp.where(cutoff > 0,
+                    jnp.where(inside, 0., y[0]**2+y[1]**2-cutoff), 1.))
             solution = solve_rk(rhs, y0, t1=times[-1], dt0=dt0, ts=times,
                 method=method, adaptive=adaptive, rtol=rtol, atol=atol,
                 error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
-                max_steps=max_steps, event=lambda t, y, args: 1. - y[0]**2 - y[1]**2)
+                max_steps=max_steps, event=event)
         else:
             solution = orbit_solver(y0, mu)
 
@@ -1503,7 +1677,9 @@ def _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
         birth, birth_energy, _ = output(y0)
         output_failed = ~jnp.all(valid) | ~end_valid
         failed = (solution.status > RKStatus.EVENT) | output_failed
-        lost = (solution.status == RKStatus.EVENT) & ~failed
+        axis_hit = (jnp.asarray(False) if cutoff is None else solution.event_mask[1]
+            if orbit_solver is None else solution.event_mask & (jnp.sum(solution.y[:2]**2) < (1+cutoff)/2))
+        lost = (solution.status == RKStatus.EVENT) & ~failed & ~axis_hit
         first_bad = jnp.min(jnp.where(valid, jnp.inf, times))
         failed_time = jnp.minimum(solution.t, first_bad)
 
@@ -1517,8 +1693,9 @@ def _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
         _, values = jax.lax.scan(hold, (birth, jnp.asarray(True)), (values, valid))
         energy_error = jnp.maximum(jnp.max(jnp.abs(energies/birth_energy - 1)),
                                     jnp.abs(end_energy/birth_energy - 1))
-        return (values, jnp.where(lost, solution.t, -1.), jnp.where(failed, failed_time, -1.),
+        result = (values, jnp.where(lost, solution.t, -1.), jnp.where(failed, failed_time, -1.),
                 jnp.where(failed, jnp.inf, energy_error), jnp.stack(solution.stats),
                 jnp.where(output_failed, RKStatus.NONFINITE, solution.status))
+        return result if perturbation is None else result+(jnp.where(axis_hit & ~failed, solution.t, -1.),)
 
     return jax.vmap(one)(y0, mu0)

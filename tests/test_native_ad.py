@@ -265,7 +265,8 @@ def test_persistent_reverse_kernel_matches_complete_frozen_map_on_cpu(gc):
     # Rate derivatives are checked above. Constant coefficients keep this
     # complete RK/kick transpose fixture small enough for CPU-only CI.
     diffusion=jnp.array(1e10)
-    coefficients=jax.make_jaxpr(lambda v:(diffusion,2*diffusion,jnp.array(0.),
+    flag=jnp.array(True)
+    coefficients=jax.make_jaxpr(lambda v:(jnp.where(flag,diffusion,0.),2*diffusion,jnp.array(0.),
         jnp.array(-1e8),jnp.array(0.),jnp.array(0.)))(jnp.array(4e5))
     graphs=physical_graphs(geometry,background,floor,nc,nq,gc,
         active_coefficients=False,active_floor=False,spatial_diffusion=gc,
@@ -297,6 +298,8 @@ def test_persistent_reverse_kernel_matches_complete_frozen_map_on_cpu(gc):
         saved_bar,terminal_bar,times,graphs[:3],gc=gc,segment_steps=1,spatial_diffusion=gc,interpret=True))()
     for left,right in zip(jax.tree.leaves(actual[:2]),jax.tree.leaves(expected)):
         np.testing.assert_allclose(left,right,rtol=2e-9,atol=2e-11)
+    for value,bar in zip(coefficients.consts,actual[2]):
+        if value.dtype==jnp.bool_:assert bar.dtype==jax.dtypes.float0
 
 
 def test_qi_alm_line_heat_and_upper_bound_constraints():
@@ -325,3 +328,78 @@ def test_qi_alm_line_heat_and_upper_bound_constraints():
     feasible=jnp.zeros(2);bad=jnp.array([0.,3.]);lp=constraint.init(feasible)
     assert float(constraint.loss(lp,feasible)[0])==0
     assert float(constraint.loss(lp,bad)[0])>0
+
+
+def test_specialized_multispecies_rates_and_classifier_grid():
+    from types import SimpleNamespace
+    from jax.scipy.interpolate import RegularGridInterpolator
+    from jax.experimental import pallas as pl
+    from essos.background_species import BackgroundSpecies
+    from essos.constants import (ELECTRON_MASS,PROTON_MASS,
+        ALPHA_PARTICLE_MASS as mass,ALPHA_PARTICLE_CHARGE as charge)
+    from essos.split import ClassifierStop,_coefficient_graph,collision_coefficients
+    from essos.rk import _coil_geometry
+    def buffers(p,direct):
+        gamma=jnp.arange(45,dtype=float).reshape(3,5,3)*p[0]
+        tangent=jnp.sin(gamma)*p[1];currents=jnp.array([1.,2.,3.])*p[2]
+        if direct:return jnp.stack(_coil_geometry(SimpleNamespace(coils=SimpleNamespace(
+            gamma=gamma,gamma_dash=tangent,currents=currents)))[0])
+        return jnp.stack([jnp.pad(a[:,:,i].T,((0,3),(0,1))).reshape(-1)
+            for a in (gamma,tangent*(currents*1e-7)[:,None,None]) for i in range(3)])
+    for transform in (jax.jit,lambda f:jax.jit(jax.jacfwd(f))):
+        np.testing.assert_allclose(transform(lambda p:buffers(p,True))(jnp.array([.1,.3,1e7])),
+            transform(lambda p:buffers(p,False))(jnp.array([.1,.3,1e7])),rtol=1e-14,atol=1e-14)
+    for n in (2,3):
+        def rates(p,prepared):
+            bath=BackgroundSpecies(n,jnp.array([ELECTRON_MASS/PROTON_MASS,2.,3.][:n]),
+                jnp.array([-1.,1.,1.][:n]),jnp.full(n,4e20)*jnp.exp(p[0]),jnp.full(n,17800.))
+            v=1.3e7*jnp.exp(p[1])
+            if not prepared:return jnp.array(collision_coefficients(bath,mass,charge,v,jnp.zeros(3),full_orbit=True))
+            graph=_coefficient_graph(bath,True)
+            assert all(c.shape==() for c in graph.consts)
+            return jnp.array(jax.core.eval_jaxpr(graph.jaxpr,graph.consts,v))
+        p=jnp.array([.1,.02])
+        for transform in (lambda f:jax.jit(f),lambda f:jax.jit(jax.jacfwd(f))):
+            np.testing.assert_allclose(transform(lambda p:rates(p,True))(p),
+                transform(lambda p:rates(p,False))(p),rtol=3e-11,atol=1e-5)
+    for radii in (jnp.linspace(.8,2.,7),jnp.array([.8,.9,1.2,1.5,1.6,1.9,2.])):
+        grid=(radii,jnp.linspace(0.,2*jnp.pi,9),jnp.linspace(-.8,.8,6))
+        r,phi,z=jnp.meshgrid(*grid,indexing='ij')
+        interpolation=RegularGridInterpolator(grid,(r+2*jnp.cos(phi)+.3*z*z)[...,None],fill_value=-1.)
+        def evaluate(x):return interpolation(jnp.array([jnp.hypot(x[0],x[1]),
+            jnp.mod(jnp.arctan2(x[1],x[0]),2*jnp.pi),x[2]]))[0,0]
+        stop=ClassifierStop(SimpleNamespace(dist=interpolation,evaluate_xyz=evaluate),.2)
+        data,level=stop._kernel_view()
+        def sample(point):
+            def kernel(y,*refs):refs[-1][()]=level(refs[:-1],y[...])
+            return pl.pallas_call(kernel,out_shape=jax.ShapeDtypeStruct((),jnp.float64),interpret=True)(point,*data)
+        points=jnp.array([[1.2,0.,.1],[0.,1.4,-.3],[-1.2,-.2,.5],[.2,0.,0.],
+                         [1.2,-1e-12,0.],[1.2,1e-12,0.]])
+        padded=jnp.pad(points,((0,0),(0,5)))
+        np.testing.assert_allclose(jax.jit(jax.vmap(sample))(padded),
+            jax.vmap(lambda y:jnp.maximum(0.,evaluate(y[:3])+.2))(padded),rtol=1e-14,atol=2e-14)
+        np.testing.assert_allclose(jax.vmap(stop.evaluate_xyz)(points),
+            jax.vmap(evaluate)(points),rtol=1e-14,atol=2e-14)
+        np.testing.assert_allclose(jax.jit(jax.vmap(jax.grad(stop.evaluate_xyz)))(points),
+            jax.jit(jax.vmap(jax.grad(evaluate)))(points),rtol=2e-12,atol=2e-12)
+    from tests.test_native_orbit import coil_field
+    from essos.split import _prepare_split_field,guiding_center_collision_step
+    field=coil_field();y=jnp.array([1.,.03,.01,-2e5,1e-16,0.,0.,0.])
+    bath=BackgroundSpecies(2,jnp.array([ELECTRON_MASS/PROTON_MASS,2.]),
+        jnp.array([-1.,1.]),jnp.full(2,4e20),jnp.full(2,17800.))
+    def apply(floor):
+        data,factory=_prepare_split_field(field,bath,gc=True,collision_tolerance=.001,
+            speed_floor=floor,event=stop,state_size=5)
+        def kernel(yr,*refs):
+            _,kick,_,level=factory(refs[:-2],yr[...])
+            refs[-2][...]=kick(yr[...],jnp.asarray(1e-9),jnp.zeros(8))[0]
+            refs[-1][()]=level(yr[...])
+        return pl.pallas_call(kernel,out_shape=(jax.ShapeDtypeStruct((8,),y.dtype),
+            jax.ShapeDtypeStruct((),y.dtype)),interpret=True)(y,*data)
+    B=field.AbsB(y[:3]);v=jnp.sqrt(y[3]**2+2*y[4]*B/mass)
+    c=collision_coefficients(bath,mass,charge,v,y[:3])
+    changed,level=jax.jit(apply)(jnp.asarray(1e4))
+    speed,pitch=guiding_center_collision_step(v,y[3]/v,1e-9,jnp.zeros(2),c,speed_floor=1e4).y
+    expected=y.at[3].set(speed*pitch).at[4].set(mass*speed**2*(1-pitch**2)/(2*B))
+    np.testing.assert_allclose(changed,expected,rtol=3e-12,atol=1e-20)
+    np.testing.assert_allclose(level,stop(0.,y),rtol=1e-14)

@@ -530,16 +530,45 @@ def _gc_quantities(field, points):
             field.sqrtg(points))
 
 
-def _guiding_center_velocity(field, electric_field, q, m, points, vpar, mu=None, energy=None):
+def _gc_cross(a, b):
+    """Physical cross product; private CUDA views may carry one zero pad."""
+    if a.shape[0] == 3:
+        return jnp.cross(a, b)
+    return jnp.stack([a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2],
+                      a[0]*b[1]-a[1]*b[0], jnp.zeros_like(a[0])])
+
+
+def _guiding_center_velocity(field, electric_field, q, m, points, vpar, mu=None, energy=None,
+                             *, t=0., perturbation=None):
     """Guiding-center dx/dt and dv_par/dt, at magnetic moment ``mu`` or, if None, at ``energy``."""
     # One evaluation of every field quantity (fused for Biot-Savart fields).
     B_cov, B_contra, AbsB, dAbsB, curl_b, kappa, sqrtg = _gc_quantities(field, points)
+    if perturbation is not None and mu is None:
+        raise ValueError("Perturbed GC motion requires a conserved magnetic moment")
     mu = (energy - m*vpar**2/2)/AbsB if mu is None else mu
     Bstar=B_contra+vpar*m/q*curl_b#+m/q*flow.curl_U0(points)
     Ustar=vpar*B_contra/AbsB#+flow.U0(points)
     F_gc=mu*dAbsB+m*vpar**2*kappa-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)
-    dxdt =  Ustar + jnp.cross(B_cov, F_gc)/jnp.dot(B_cov,Bstar)/q/sqrtg
+    if perturbation is not None:
+        (alpha, _), derivative = perturbation.derivatives(field, points, t)
+        # All curls/cross products are contravariant; gradients and E are
+        # covariant. B_cov retains the full radial component in VMEC.
+        spatial = lambda row: (jnp.where(jnp.arange(4)<3, row, jnp.zeros_like(row))
+                               if B_cov.shape[0] == 4 else row[:3])
+        curl_B = AbsB*curl_b-_gc_cross(B_cov, dAbsB)/(AbsB*sqrtg)
+        delta_B = _gc_cross(spatial(derivative[0]), B_cov)/sqrtg+alpha*curl_B
+        delta_E = -spatial(derivative[1])-derivative[0, 3]*B_cov
+        Bstar += delta_B
+        # Retain the existing curvature-drift form, adding the perpendicular
+        # flutter streaming correction with the updated GC denominator.
+        Ustar += vpar*(AbsB*delta_B-B_contra*jnp.dot(B_cov, delta_B)/AbsB)/jnp.dot(B_cov, Bstar)
+        F_gc -= q*delta_E
+    dxdt =  Ustar + _gc_cross(B_cov, F_gc)/jnp.dot(B_cov,Bstar)/q/sqrtg
     dvdt = -jnp.dot(Bstar,F_gc)/jnp.dot(B_cov,Bstar)*AbsB/m
+    if perturbation is not None:
+        # Curvature already enters Bstar: its contraction with delta_B must
+        # not become an extra parallel force in this drift representation.
+        dvdt += AbsB*vpar**2*jnp.dot(delta_B, kappa)/jnp.dot(B_cov, Bstar)
     return dxdt, dvdt
 
 
@@ -555,11 +584,15 @@ def GuidingCenter(t,
 
 
 @partial(jit, static_argnums=(2))
-def GuidingCenterMu(t, initial_condition, args) -> jnp.ndarray:
-    """Collisionless guiding center with state (x, y, z, v_par, mu); mu is constant."""
+def GuidingCenterMu(t, initial_condition, args, *, perturbation=None) -> jnp.ndarray:
+    """Collisionless GC state (x1,x2,x3,v_par,mu), with constant physical mu [J/T].
+
+    Optional alpha/Phi potentials use the background's native coordinates.
+    """
     field, particles, electric_field = args
     dxdt, dvdt = _guiding_center_velocity(field, electric_field, particles.charge, particles.mass,
-                                          initial_condition[:3], initial_condition[3], mu=initial_condition[4])
+                                          initial_condition[:3], initial_condition[3], mu=initial_condition[4],
+                                          t=t, perturbation=perturbation)
     return jnp.concatenate([dxdt, jnp.array([dvdt, 0.0])])
     # def zero_derivatives(_):
     #     return jnp.zeros(4, dtype=float)
@@ -783,6 +816,7 @@ VMEC_STATUS = {
     3: "struck the wall",
     4: "failed: non-finite state or solver failure",
     5: "stopped after max_returns re-entries",
+    6: "stopped at the prescribed perturbation inner cutoff",
 }
 
 # Event times are refined to |dt| < 1e-8 t + 1e-11 s. Every event function
@@ -901,12 +935,21 @@ class Tracing():
                  orbit_length_scale=1., orbit_speed_scale=None,
                  native_controller="i", native_pcoeff=.4, native_icoeff=.3,
                  native_adjoint="none", native_adjoint_checkpoint_steps=16,
-                 native_adjoint_max_accepted_steps=None, native_adjoint_parameter_accumulation="segment"):
+                 native_adjoint_max_accepted_steps=None, native_adjoint_parameter_accumulation="segment", perturbation=None):
 
         self.native_adjoint, self.native_adjoint_checkpoint_steps = native_adjoint, native_adjoint_checkpoint_steps
         self.native_adjoint_max_accepted_steps = native_adjoint_max_accepted_steps
         self.native_adjoint_parameter_accumulation = native_adjoint_parameter_accumulation
 
+        self.perturbation = perturbation
+        if perturbation is not None:
+            from essos.gc_perturbations import GuidingCenterPerturbation
+            if not isinstance(perturbation, GuidingCenterPerturbation):
+                raise TypeError("Tracing perturbations must use native-coordinate GuidingCenterPerturbation potentials")
+            if model not in ('GuidingCenter', 'GuidingCenterAdaptative'):
+                raise ValueError("Native-coordinate perturbations currently support collisionless guiding centers")
+            if exterior_field is not None or wall is not None:
+                raise ValueError("Perturbed GC exterior continuation needs an exterior wave model")
         from essos.rk import _configure_tracing as configure
         configure(self, integrator, model, solver, native_error_control, orbit_length_scale,
                   orbit_speed_scale, native_controller, native_pcoeff, native_icoeff)
@@ -1028,6 +1071,13 @@ class Tracing():
             self.ODE_term = ODETerm(self._vector_field(GuidingCenter))
             self.args = (self.field, self.particles,self.electric_field)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
+            if perturbation is not None:
+                # Reuse the existing fixed-mu GC function and the same solver.
+                # Inferring mu from the fixed birth energy would suppress wave work.
+                self.ODE_term = ODETerm(self._vector_field(partial(GuidingCenterMu, perturbation=perturbation)))
+                B0 = vmap(self.field.AbsB)(self.particles.initial_xyz)
+                mu0 = self.particles.mass*self.particles.initial_vperpendicular**2/(2*B0)
+                self.initial_conditions = jnp.column_stack([self.initial_conditions, mu0])
         elif model == 'GuidingCenterCollisions':
             # Brownian motion
             #t0=0.0
@@ -1277,8 +1327,13 @@ class Tracing():
         Solves of inactive orbits start at maxtime and take no steps.
         """
         T, times, ext = self.maxtime, self.times, self.exterior_field
+        axis_stop = None if self.perturbation is None else self.perturbation.axis_stop_threshold()
+        boundaries = (lambda t, y, args, **kwargs: 1.0 - y[0]**2 - y[1]**2,)
+        if axis_stop is not None:
+            boundaries += (lambda t, y, args, **kwargs: jnp.where(axis_stop > 0,
+                y[0]**2 + y[1]**2 - axis_stop, 1.),)
         inside = (*self._terms(key, flag=True), self.args,
-                  Event((lambda t, y, args, **kwargs: 1.0 - y[0]**2 - y[1]**2, _failed_event),
+                  Event((*boundaries, _failed_event),
                         root_finder=_EVENT_ROOT_FINDER))
         if ext is not None:
             wall = self.wall if self.wall is not None else (lambda x: jnp.ones(()))
@@ -1311,14 +1366,20 @@ class Tracing():
             # Inside; an orbit that starts outside the LCFS crosses at once.
             run = o["active"] & o["inside"]
             out = o["y"][0] >= 1.0
-            o, t_end, end, (crossed,), failed = segment(o, run & ~out, inside, _to_axis_regular(o["y"]), 0,
+            inner = jnp.array(False) if axis_stop is None else run & (axis_stop > 0) & (o["y"][0] <= axis_stop)
+            initially_inner = inner
+            o, t_end, end, hits, failed = segment(o, run & ~out & ~inner, inside, _to_axis_regular(o["y"]), 0,
                                                        _from_axis_regular)
-            crossed, end = crossed | (run & out), jnp.where(out, o["y"], end)
+            crossed = hits[0] | (run & out)
+            inner |= hits[1] if axis_stop is not None else False
+            end = jnp.where(out | initially_inner, o["y"], end)
             x, E = self._vmec_to_exterior(end)
             first = crossed & jnp.isinf(o["lcfs_time"])
             o.update(t=t_end, lcfs_time=jnp.where(first, t_end, o["lcfs_time"]),
+                     axis_stop_time=jnp.where(inner, t_end, o["axis_stop_time"]),
+                     axis_stop_state=jnp.where(inner, end, o["axis_stop_state"]),
                      lcfs_state=jnp.where(first, end, o["lcfs_state"]), lcfs_energy=jnp.where(first, E, o["lcfs_energy"]),
-                     status=jnp.select([failed, run & ~crossed, crossed & (ext is None)], [4, 0, 1], o["status"]),
+                     status=jnp.select([failed, inner, run & ~crossed, crossed & (ext is None)], [4, 6, 0, 1], o["status"]),
                      active=o["active"] & ~(failed | (run & ~crossed) | (crossed & (ext is None))),
                      inside=o["inside"] & ~crossed, x=jnp.where(crossed, x, o["x"]))
             if ext is None:
@@ -1336,6 +1397,7 @@ class Tracing():
         nt, d = len(times), y0.shape[0]
         o = dict(t=jnp.zeros(()), y=y0, x=jnp.zeros(5), inside=jnp.array(True), active=jnp.array(True),
                  status=jnp.zeros((), jnp.int8), returns=jnp.zeros((), int), lcfs_time=jnp.full((), jnp.inf),
+                 axis_stop_time=jnp.full((), jnp.inf), axis_stop_state=jnp.full(d, jnp.nan),
                  lcfs_state=jnp.full(d, jnp.nan), lcfs_energy=jnp.full((), jnp.nan), traj=jnp.full((nt, d), jnp.inf),
                  xyz=jnp.full((nt, 3), jnp.nan), region=jnp.full(nt, -1, dtype=jnp.int8))
         o = lax.while_loop(lambda o: o["active"], step, o)
@@ -1347,7 +1409,10 @@ class Tracing():
         """Model state on the LCFS -> (x, y, z, v_par, mu) and energy, keeping E and mu."""
         point, m, c = y[:3], self.particles.mass, SPEED_OF_LIGHT
         B = self.field.AbsB(point)
-        if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
+        if self.perturbation is not None:
+            vpar, mu = y[3], y[4]
+            E = 0.5*m*vpar**2+mu*B
+        elif self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
             vpar, E = y[3], self.particles.energy
             mu = (E - 0.5 * m * vpar**2) / B
         elif self.model == 'GuidingCenterCollisions':
@@ -1380,6 +1445,8 @@ class Tracing():
         self.status, self.returns, self.region = o["status"], o["returns"], o["region"]
         self.failed, self.wall_hits = self.status == 4, self.status == 3
         self.failure_times = np.where(self.failed, o["t"], np.inf)
+        self.axis_stop_times, self.axis_stop_states = o["axis_stop_time"], o["axis_stop_state"]
+        self.axis_stopped = self.status == 6
         self.lcfs_times, self.lcfs_states, self.lcfs_energies = o["lcfs_time"], o["lcfs_state"], o["lcfs_energy"]
         self.lcfs_positions = np.asarray(vmap(self.field.to_xyz)(jnp.asarray(o["lcfs_state"][:, :3])))
         self.wall_times = np.where(self.wall_hits, o["t"], np.inf)

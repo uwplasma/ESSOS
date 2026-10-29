@@ -23,6 +23,7 @@ from essos.fields import BiotSavart
 from essos.particle_losses import (classifier_loss_fraction, classifier_line_loss,
     classifier_energy_cost)
 from essos.surfaces import SurfaceRZFourier, SurfaceClassifier, BdotN_over_B
+from essos.split import ClassifierStop
 from .native_particle_optimization import save_optimization_plots
 
 INPUT = Path(__file__).resolve().parents[1]/"input_files"
@@ -121,14 +122,14 @@ def build_problem(options, objective):
                 -jnp.log(values.size))/sharpness
         return result
 
-    def safety(t, y, args, **kwargs):
-        return jnp.maximum(0., boundary.evaluate_xyz(y[:3])+options.safety_margin)
+    safety = ClassifierStop(boundary, options.safety_margin)
 
     if options.collisions:
         from essos.background_species import BackgroundSpecies
         background = BackgroundSpecies(2, jnp.array([ELECTRON_MASS/PROTON_MASS, 2.]),
             jnp.array([-1., 1.]), jnp.full(2, options.background_density),
             jnp.full(2, options.background_temperature_ev))
+    execution = ("independent" if jax.default_backend()=="gpu" else "shared") if options.execution=="auto" else options.execution
 
     def trace(x):
         field = field_at(x)
@@ -145,7 +146,7 @@ def build_problem(options, objective):
                 adjoint_orbit_checkpoint_steps=options.checkpoint_steps,
                 adjoint_max_accepted_steps=options.collision_capacity,
                 adjoint_max_orbit_steps=options.accepted_capacity,
-                execution=options.execution)
+                execution=execution, reverse_execution="independent" if execution=="independent" else "shared")
             states = eqx.error_if(result.ys, jnp.any(result.status>SplitStatus.EVENT),
                 "native split solve failed; inspect work/tape capacities")
         else:
@@ -161,22 +162,22 @@ def build_problem(options, objective):
 
     def metrics(x, states):
         field = field_at(x)
-        return dict(loss_fraction=classifier_loss_fraction(states, boundary, options.softness),
-            distance=classifier_line_loss(states, point, direction, boundary,
+        return dict(loss_fraction=classifier_loss_fraction(states, safety, options.softness),
+            distance=classifier_line_loss(states, point, direction, safety,
                 options.softness, options.location_softness),
             heat_flux=classifier_energy_cost(states, field, particles.mass, particles.energy,
-                "GuidingCenterAdaptative", boundary, softness=options.softness))
+                "GuidingCenterAdaptative", safety, softness=options.softness))
 
     def particle(x):
         states = trace(x)
         # Trace only once and evaluate only the selected particle constraint.
         if objective == "loss_fraction":
-            return classifier_loss_fraction(states, boundary, options.softness)
+            return classifier_loss_fraction(states, safety, options.softness)
         if objective == "distance":
-            return classifier_line_loss(states, point, direction, boundary,
+            return classifier_line_loss(states, point, direction, safety,
                 options.softness, options.location_softness)
         return classifier_energy_cost(states, field_at(x), particles.mass, particles.energy,
-            "GuidingCenterAdaptative", boundary, softness=options.softness)
+            "GuidingCenterAdaptative", safety, softness=options.softness)
 
     constraints = make_constraints(geometry, particle, options)
     return SimpleNamespace(base=base, theta0=theta0, particles=particles, field=field_at,
@@ -204,8 +205,10 @@ def run(objective, defaults=None, argv=None):
     if not (0<=o.birth_fraction<1 and 0<o.initial_step<=o.horizon and o.max_change>0
             and o.classifier_h>0 and o.safety_margin>0 and o.penalty>0 and o.bdotn_target>0):
         parser.error("invalid birth fraction, time, scale, classifier, penalty or Bn target")
-    if o.execution not in ("shared", "independent"):
-        parser.error("execution must be shared or independent")
+    if o.execution not in ("auto", "shared", "independent"):
+        parser.error("execution must be auto, shared or independent")
+    if o.execution=="independent" and not o.collisions:
+        parser.error("independent split execution requires --collisions")
     o.output.mkdir(parents=True, exist_ok=True)
     if (o.output/"summary.json").exists():
         parser.error("choose a fresh output directory")

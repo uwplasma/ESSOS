@@ -1430,7 +1430,11 @@ def physical_graphs(geometry, species, floor, nc, nq, gc, *, active_coefficients
     def kick_transpose(y, values, c, f, h, dw, bar):
         by, bg, bc, bf = jax.vjp(lambda y, values, c, f: kick(y, values, c, f, h, dw),
                                 y, values, c, f)[1](bar)
-        return by, bg, bc if active_coefficients else tree_util.tree_map(jnp.zeros_like,c), bf if active_floor else jnp.zeros_like(f)
+        # Hoisted physical branch flags have exact zero (float0) cotangents;
+        # use numeric scratch slots, restoring float0 at the custom-VJP boundary.
+        bc = tuple(jnp.zeros(value.shape,jnp.float64) if b.dtype==jax.dtypes.float0 else b
+                   for value,b in zip(c,bc))
+        return by, bg, bc if active_coefficients else tree_util.tree_map(jnp.zeros_like,bc), bf if active_floor else jnp.zeros_like(f)
     kick_pullback = trace(kick_transpose, y, geometry, constants, floor,
                             jnp.asarray(1e-8), noise, seed)
     return rhs_graph, rhs_pullback, kick_pullback, constants
@@ -1522,7 +1526,8 @@ def reverse_kernel(terminal_state, parameters, tape, saved_bar, terminal_bar, ti
                 by = pack(result[:8])
                 gp = tuple(a+b for a, b in zip(gp, result[8:8+nfield]))
                 first_constant=8+nfield
-                cp += pack(tuple(jnp.asarray(v).reshape(()) for v in result[first_constant:first_constant+ncoeff]))
+                cp += pack(tuple(jnp.asarray(v).reshape(()) for v in result[first_constant:first_constant+ncoeff])
+                           +(zero,)*(cp.shape[0]-ncoeff))
                 fp += result[first_constant+ncoeff].reshape(())
                 return by, gp, cp, fp
             by, gp, cp, fp = jax.lax.cond(kicks[index], kick_reverse, lambda values: values, (by, gp, cp, fp))
@@ -1607,7 +1612,8 @@ def reverse_kernel(terminal_state, parameters, tape, saved_bar, terminal_bar, ti
     result = pl.pallas_call(kernel, out_shape=out_shapes, grid=(),
         compiler_params=plt.CompilerParams(num_warps=warps),interpret=interpret)(*inputs)
     return result[0][:nstate], tuple(result[1][i] for i in range(6)), tuple(
-        result[2][i].reshape(value.shape) for i, value in enumerate(coefficients)), result[3]
+        result[2][i].reshape(value.shape).astype(value.dtype) if jnp.issubdtype(value.dtype,jnp.inexact)
+        else jnp.zeros(value.shape,jax.dtypes.float0) for i, value in enumerate(coefficients)), result[3]
 
 
 def solve_gpu_accepted(forward, initial, field, species, *, gc, speed_floor, options, arrays, spatial_diffusion):

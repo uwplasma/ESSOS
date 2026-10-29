@@ -20,3 +20,5 @@ stellarator coils to improve plasma confinement.
    :caption: Contents:
 
    getting_started
+   fax_modes
+   ae3d_firm3d_benchmark

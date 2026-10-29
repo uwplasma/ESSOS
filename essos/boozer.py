@@ -232,23 +232,41 @@ def _chart(y):
     return s, r, jnp.arctan2(w, u), cos_t, sin_t, safe
 
 
-def guiding_center_rhs(field, y, mu, mass, charge):
-    """Time derivative of ``(u, w, zeta, v_par)``; ``mu = v_perp^2 / (2 |B|)``."""
+def guiding_center_rhs(field, y, mu, mass, charge, *, t=0., perturbation=None):
+    """GC derivative at fixed mu=v_perp**2/(2 B0); optional q alpha B0 and q Phi."""
     s, r, theta, cos_t, sin_t, safe = _chart(y)
     zeta, vpar = y[2], y[3]
     B, dB_dr, dB_dtheta_r, dB_dzeta = field.modB_derivatives(r, theta, zeta)
-    (iota, G, I), (_, dG_ds, dI_ds) = field.profiles(s)
+    profiles = field.profiles(s)
+    (iota, G, I), (_, dG_ds, dI_ds) = profiles
     psi0 = field.psi0
     I_r = jnp.where(r > 0, I / safe, 0.0)
     fak1 = mass * (vpar * vpar / B + mu)
     C = -charge * iota + mass * vpar * dG_ds / (psi0 * B)
     F = charge + mass * vpar * dI_ds / (psi0 * B)
+    if perturbation is not None:
+        (alpha, _), (da, dp) = perturbation._scalar_derivatives(field, (y[0], y[1], y[2]), t, profiles)
+        C += charge*alpha*dG_ds/psi0
+        F += charge*alpha*dI_ds/psi0
     D_iota = F * G - C * I
     # ds/dt / (2 r), r dtheta/dt and dzeta/dt, all regular on the axis.
     sdot_2r = (I_r * dB_dzeta - G * dB_dtheta_r) * fak1 / (2 * D_iota * psi0)
     r_thetadot = (G * dB_dr / (2 * psi0) * fak1 - r * C * vpar * B) / D_iota
     zetadot = (F * vpar * B - dB_dr * I_r / (2 * psi0) * fak1) / D_iota
     vpardot = (C * r * dB_dtheta_r - F * dB_dzeta) * mu * B / D_iota
+    if perturbation is not None:
+        # Spatial components (d/dr, d/dtheta/r, d/dzeta), without CUDA vector reductions.
+        grad_alpha = (cos_t*da[0]+sin_t*da[1], -sin_t*da[0]+cos_t*da[1], da[2])
+        grad_phi = (cos_t*dp[0]+sin_t*dp[1], -sin_t*dp[0]+cos_t*dp[1], dp[2])
+        force = tuple(charge*(p-vpar*B*a) for p, a in zip(grad_phi, grad_alpha))
+        sdot_2r += (I_r*force[2]-G*force[1])/(2*D_iota*psi0)
+        r_thetadot += G*force[0]/(2*D_iota*psi0)
+        zetadot -= I_r*force[0]/(2*D_iota*psi0)
+        dk = tuple(-mass*vpar/B**2*b+charge*a for b, a in zip((dB_dr,dB_dtheta_r,dB_dzeta), grad_alpha))
+        dh = tuple(mass*mu*b+charge*p for b, p in zip((dB_dr,dB_dtheta_r,dB_dzeta), grad_phi))
+        cross = .5*(dk[0]*(G*dh[1]-I_r*dh[2])-(G*dk[1]-I_r*dk[2])*dh[0])
+        # Induction and the spatial alpha/Phi cross term in the same GC RHS.
+        vpardot += B/(mass*D_iota)*(charge*(C*r*grad_phi[1]-F*grad_phi[2]-D_iota*da[3])+cross/psi0)
     return jnp.array([cos_t * sdot_2r - sin_t * r_thetadot,
                       sin_t * sdot_2r + cos_t * r_thetadot, zetadot, vpardot])
 
@@ -304,12 +322,14 @@ class BoozerTrace:
     states: np.ndarray
     loss_times: np.ndarray
     thermalized_times: np.ndarray
-    energy_error: np.ndarray  # max |E/E0 - 1| per particle (collisionless drift only)
+    energy_error: np.ndarray | None  # unperturbed drift only; wave work is physical
     failed_times: np.ndarray | None = None
     terminal_states: np.ndarray | None = None
     terminal_energy_error: np.ndarray | None = None
     step_stats: np.ndarray | None = None  # native only: (particles, 3), trials/accepted/rejected
     solver_status: np.ndarray | None = None  # native RKStatus per particle
+    kinetic_energy_change: np.ndarray | None = None
+    axis_stop_times: np.ndarray | None = None  # singular-wave cutoff, separate from LCFS exits
 
     @property
     def lost(self):
@@ -320,12 +340,19 @@ class BoozerTrace:
         return (np.zeros_like(self.loss_times, dtype=bool) if self.failed_times is None
                 else self.failed_times >= 0)
 
-    def loss_fractions(self):
+    @property
+    def axis_stopped(self):
+        return np.zeros_like(self.lost) if self.axis_stop_times is None else self.axis_stop_times >= 0
+
+    def loss_fractions(self, *, include_axis=False):
         """Cumulative losses; failed or nonfinite trajectories are undefined."""
-        if (self.failed.any() or not np.isfinite(self.energy_error).all()
+        if (self.failed.any() or (self.energy_error is not None and not np.isfinite(self.energy_error).all())
+                or (self.kinetic_energy_change is not None and not np.isfinite(self.kinetic_energy_change).all())
                 or not np.isfinite(self.states).all()):
             raise RuntimeError("Loss fraction is undefined when particle trajectories fail; inspect failed_times")
         lt = self.loss_times[self.lost]
+        if include_axis and self.axis_stop_times is not None:
+            lt = np.concatenate([lt, self.axis_stop_times[self.axis_stopped & ~self.lost]])
         return np.searchsorted(np.sort(lt), self.times, side="right") / self.loss_times.size
 
 
@@ -480,7 +507,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
                  progress=True, compact=True, method=None, tolerance=1e-8,
                  integrator=None, adaptive=True, rtol=1e-9, atol=1e-9,
                  native_controller="i", native_pcoeff=.4, native_icoeff=.3,
-                 native_execution="jax", max_steps=MAX_ATTEMPTS):
+                 native_execution="jax", max_steps=MAX_ATTEMPTS, perturbation=None):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The default ``timestep`` is ``R0 / (2 nfp speed)``, with ``R0 = |G| / |B|`` on the
@@ -520,7 +547,16 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     ``step_stats`` and ``solver_status`` are returned on ``BoozerTrace``;
     energy error is measured at saved and terminal states. LCFS events are
     root-found and subsequent saves hold that state; failures are reported.
+    Prescribed ``perturbation`` potentials use the shared native driver only
+    (default ``essos_dopri8``), preserving physical stage times and constant mu.
+    Physical wave work is ``kinetic_energy_change``; ``energy_error`` is None.
+    Singular waves report ``axis_stop_times`` separately from LCFS exits.
     """
+    if perturbation is not None:
+        from essos.perturbations import BoozerPerturbation
+        if not isinstance(perturbation, BoozerPerturbation):
+            raise TypeError("perturbation must implement BoozerPerturbation")
+        integrator = "essos_dopri8" if integrator is None else integrator
     if integrator not in (None, "essos_rk45", "essos_dopri8"):
         raise ValueError("integrator must be None, 'essos_rk45' or 'essos_dopri8'")
     if integrator is not None:
@@ -588,12 +624,15 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         from essos.rk import trace_boozer_orbits as native_orbits
         result = native_orbits(field, y0, mu0, mass, charge, speed[0], jnp.asarray(times),
             float(timestep), rtol, atol, "dopri5" if integrator == "essos_rk45" else "dopri8",
-            bool(adaptive), native_controller, native_pcoeff, native_icoeff, max_steps, execution=native_execution)
-        states, t_loss, t_fail, err, stats, status = (np.asarray(a)[:n] for a in result)
+            bool(adaptive), native_controller, native_pcoeff, native_icoeff, max_steps,
+            execution=native_execution, perturbation=perturbation)
+        states, t_loss, t_fail, err, stats, status = (np.asarray(a)[:n] for a in result[:6])
         if progress is not None:
             progress(n_int, n_int)
-        return BoozerTrace(times, states, t_loss, np.full(n, -1.), err, t_fail,
-                           step_stats=stats, solver_status=status)
+        return BoozerTrace(times, states, t_loss, np.full(n, -1.),
+            err if perturbation is None else None, t_fail, step_stats=stats, solver_status=status,
+            kinetic_energy_change=err if perturbation is not None else None,
+            axis_stop_times=np.asarray(result[6])[:n] if perturbation is not None else None)
     carry, first = _start(field, y0, mu0)
     chunk = n_int if progress is None and not compact else -(-n_int // 10)
     states = np.empty((n, n_int + 1, 5), dtype=np.asarray(first).dtype)
