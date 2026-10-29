@@ -59,11 +59,13 @@ def reference(field,times,grid):
     return answer
 
 def references(options):
-    report=dict(times=np.linspace(0.,.025,6).tolist(),variables=VARIABLES,
+    report=dict(times=np.asarray(getattr(options,'times',np.linspace(0.,.025,6))).tolist(),variables=VARIABLES,
         scope='Independent backward Fokker-Planck generator for coupled z/speed/pitch motion, plus parallel velocity. Helix uses exact polynomial-in-z transport. No native tracer or stochastic trajectories.',fields={})
     for field in options.fields:
         grids=([(65,32,33,4),(97,48,49,8),(145,64,65,16),(97,48,49,16)] if field=='mirror' else
                [(128,12,16),(256,16,32),(384,24,64),(256,16,64)])
+        grids=[(*grid[:-1],max(1,int(np.ceil(grid[-1]*5/(len(report['times'])-1))))) for grid in grids]
+        grids[-1]=(*grids[-1][:-1],max(grids[-1][-1],2*grids[1][-1]))
         rows=[]
         for grid in grids:
             print('Coupled physical reference',field,grid,flush=True)

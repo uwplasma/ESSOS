@@ -2,8 +2,8 @@
 
 An independently controlled native RK orbit solve precedes each Milstein
 collision map. Brownian rejection memory preserves every sampled interval.
-Private GPU adapters leave public field classes unchanged. No custom reverse
-rule or checkpoint tape is installed in this forward-only module.
+Private GPU adapters leave public field classes unchanged. Optional accepted-map
+recording connects to the checkpointed reverse rules in ``essos.native_ad``.
 """
 from enum import IntEnum
 from functools import lru_cache
@@ -476,7 +476,10 @@ class SplitSolution(NamedTuple):
     stats: SplitStats
     step_ts: jax.Array
 
-def solve_split(rhs, collision, y0, args=None, *, t0=0.0, t1, dt0, ts, key, noise_dim, adaptive=True, dtmin=0.0, dtmax=jnp.inf, method='dopri8', orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution='loop', reuse_orbit_step=True, collision_controller='conservative', collision_wiener_norm=None, rtol=1e-09, atol=1e-09, error_norm=None, controller='i', pcoeff=0.4, icoeff=0.3, event=None, max_steps=100000, max_orbit_steps=10000, max_pending=64, record_steps=False, step_limit=None, align_orbit=False, event_dtmax=None, combined_error_norm=None, shared_clock=False, reuse_combined_orbit=True, combined_controller='rms', _orbit_rhs_prepared=False):
+def solve_split(rhs, collision, y0, args=None, *, t0=0.0, t1, dt0, ts, key, noise_dim, adaptive=True, dtmin=0.0, dtmax=jnp.inf, method='dopri8', orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution='loop', reuse_orbit_step=True, collision_controller='conservative', collision_wiener_norm=None, rtol=1e-09, atol=1e-09, error_norm=None, controller='i', pcoeff=0.4, icoeff=0.3, event=None, max_steps=100000, max_orbit_steps=10000, max_pending=64, record_steps=False, step_limit=None, align_orbit=False, event_dtmax=None, combined_error_norm=None, shared_clock=False, reuse_combined_orbit=True, combined_controller='rms', _orbit_rhs_prepared=False,
+                adjoint='none', adjoint_checkpoint_steps=16, adjoint_orbit_checkpoint_steps=16,
+                adjoint_max_accepted_steps=None, adjoint_max_orbit_steps=None,
+                _record_ad=False, _collision_state_indices=None, _recorder=None):
     """Orbit advancement followed by an endpoint collision kick.
 
 ``collision(t, y, h, dW, args)`` returns ``CollisionStep`` with normalized
@@ -545,6 +548,18 @@ retaining their original grid anchors. They must not depend on fresh noise.
 Stopped/failed outputs hold the last finite state; always inspect status.
 Work and Brownian memory are bounded. No inaccurate step is forced through
 dtmin or a memory limit."""
+    if adjoint not in ('none','accepted'):
+        raise ValueError("adjoint must be 'none' or 'accepted'")
+    if adjoint == 'accepted' or _record_ad:
+        options=locals().copy()
+        from .native_ad import solve_accepted_split, _SplitRecorder
+        for name in ('rhs','collision','y0','args','adjoint','_record_ad','_recorder'):
+            options.pop(name)
+        if adjoint == 'accepted':
+            return solve_accepted_split(rhs,collision,y0,args,**options)
+        _recorder=_SplitRecorder.from_options(jnp.asarray(y0),options)
+    if _recorder is not None and combined_error_norm is not None:
+        raise ValueError('accepted AD records the production moment controller; experimental step doubling is unsupported')
     combined = combined_error_norm is not None
     if combined_controller not in ('i','rms'):
         raise ValueError("combined_controller must be 'i' or 'rms'")
@@ -635,9 +650,15 @@ dtmin or a memory limit."""
         return lax.while_loop(lambda s: (s['index'] < len(ts)) & (ts[jnp.minimum(s['index'], len(ts) - 1)] <= s['t']), one, s)
     s = save(s)
     initial_saves = s['index']
+    if _recorder is not None:
+        s = _recorder.initialize(s)
 
     def integrate(t, y, end, guess):
-        return solve_rk(orbit_rhs, y, args, t0=t, t1=end, dt0=jnp.minimum(guess, end-t), ts=jnp.empty((0,), y0.dtype), method=method, adaptive=orbit_adaptive, rtol=rtol, atol=atol, stage_execution=orbit_stage_execution, error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff, event=event, root_find=True, max_steps=1 if shared_clock else max_orbit_steps)
+        if _recorder is not None:
+            from .native_ad import _OrbitRecorder
+        result = solve_rk(orbit_rhs, y, args, t0=t, t1=end, dt0=jnp.minimum(guess, end-t), ts=jnp.empty((0,), y0.dtype), method=method, adaptive=orbit_adaptive, rtol=rtol, atol=atol, stage_execution=orbit_stage_execution, error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff, event=event, root_find=True, max_steps=1 if shared_clock else max_orbit_steps,
+            _recorder=None if _recorder is None else _OrbitRecorder(max_orbit_steps,adjoint_orbit_checkpoint_steps,schedule=True))
+        return result
 
     def kick(t, y, h, dw):
         result = collision(t, y, h, dw, args)
@@ -696,7 +717,8 @@ dtmin or a memory limit."""
                     lambda _:shared_first._replace(stats=type(shared_first.stats)(*(jnp.zeros_like(v) for v in shared_first.stats))),None)
                 orbit=tail._replace(stats=type(tail.stats)(*(a+b for a,b in zip(shared_first.stats,tail.stats))))
             else:
-                orbit = integrate(s['t'], s['y'], end, guess)
+                result = integrate(s['t'], s['y'], end, guess)
+                orbit, schedule = result if _recorder is not None else (result, None)
             trial = lax.cond(orbit.status == RKStatus.SUCCESS, lambda _: kick(end, orbit.y, h, dw), lambda _: CollisionStep(orbit.y, jnp.zeros((), y0.dtype), jnp.zeros((), y0.dtype), empty_model), None)
             memory, combined_error = m, jnp.zeros((), y0.dtype)
             if combined:
@@ -787,6 +809,8 @@ dtmin or a memory limit."""
                 else:
                     state['history'] = lax.cond(accepted, lambda history: history.at[state['accepted']].set(end), lambda history: history, state['history'])
             state = save(state)
+            if _recorder is not None:
+                state = _recorder.record(s,state,accepted,orbit_event,orbit,schedule,dw)
             if lookahead:
 
                 def choose(state):
@@ -811,10 +835,12 @@ dtmin or a memory limit."""
     status = jnp.where((s['status'] == SplitStatus.SUCCESS) & (s['t'] < t1), SplitStatus.MAX_STEPS, s['status'])
     ys = jnp.where((jnp.arange(len(ts)) >= s['index'])[:, None], s['y'], s['ys'])
     solution = SplitSolution(ts, ys, s['t'], s['y'], status, SplitStats(s['steps'], s['accepted'], s['rejected'], s['orbit_steps'], s['orbit_rejected'], s['memory'].peak, s['max_error'],s.get('combined_rejected',0),s.get('combined_error',0.),(2 if combined else 1)*s['accepted'],s.get('accepted_orbit_steps'),s.get('max_orbit_steps_per_collision')), s['history'])
-    return solution
+    return solution if _recorder is None else _recorder.finish(s,solution,initial_saves)
 
-def trace_split(field, particles, species, *, model='GuidingCenter', tmax, timestep, times=None, n_save=100, integrator='essos_dopri8', collision_tolerance=0.001, adaptive=True, collision_dtmax=None, orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution=None, reuse_orbit_step=True, collision_controller='moments', moment_tolerance=.005, moment_reference_time=.005, rtol=1e-09, atol=1e-09, controller='i', pcoeff=0.4, icoeff=0.3, speed_floor=None, spatial_diffusion=None, spatial_geometry=None, orbit=True, electric_field=None, event=None, max_steps=100000, max_orbit_steps=10000, max_pending=64, record_steps=False, execution='shared', combined_tolerance=None, combined_length_scale=1., shared_clock=False, reuse_combined_orbit=True, combined_controller='rms', step_limit=None):
-    """Batched forward split tracing using ESSOS field and particle objects.
+def trace_split(field, particles, species, *, model='GuidingCenter', tmax, timestep, times=None, n_save=100, integrator='essos_dopri8', collision_tolerance=0.001, adaptive=True, collision_dtmax=None, orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution=None, reuse_orbit_step=True, collision_controller='moments', moment_tolerance=.005, moment_reference_time=.005, rtol=1e-09, atol=1e-09, controller='i', pcoeff=0.4, icoeff=0.3, speed_floor=None, spatial_diffusion=None, spatial_geometry=None, orbit=True, electric_field=None, event=None, max_steps=100000, max_orbit_steps=10000, max_pending=64, record_steps=False, execution='shared', combined_tolerance=None, combined_length_scale=1., shared_clock=False, reuse_combined_orbit=True, combined_controller='rms', step_limit=None,
+                adjoint='none', adjoint_checkpoint_steps=16, adjoint_orbit_checkpoint_steps=16,
+                adjoint_max_accepted_steps=None, adjoint_max_orbit_steps=None, _record_ad=False, _replay_tapes=None, reverse_execution='auto'):
+    """Batched split tracing with optional accepted-map reverse differentiation.
 
 Returns a ``SplitSolution`` with shared ts and particle-leading arrays. GC states are
 ``(position[3], v_parallel, mu)`` with **physical** mu=m*v_perp^2/(2 B)
@@ -837,6 +863,16 @@ refine/check that parameter when studying the thermal population.
 
 Independent per-particle keys come from ``particles.random_keys``. The
 field classes and existing Tracing/trace_boozer entry points are unchanged.
+
+``adjoint="accepted"`` records accepted outer/inner schedules and retained
+Wiener increments. Reverse differentiates all accepted orbit/collision maps,
+including spatial kicks, while freezing controller/rejection/event decisions.
+``adjoint_orbit_checkpoint_steps`` bounds the live replay segment; the two
+``adjoint_max_*`` options bound tape storage and raise on reverse overflow.
+Independent forward execution keeps the same production GPU kernel. With
+``reverse_execution="auto"``, uniform alpha/direct-coil cases use persistent
+GPU reverse; other supported fields use checkpointed JAX reverse on the
+selected device. Explicit ``"independent"`` rejects unsupported reverse cases.
 
     ``execution="independent"`` uses one persistent GPU program per particle.
     It uses the same physical collision maps and moment predictor, including
@@ -873,6 +909,19 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
     from .electric_field import Electric_field_zero
     from .constants import ELEMENTARY_CHARGE
 
+    if adjoint not in ('none','accepted'):
+        raise ValueError("adjoint must be 'none' or 'accepted'")
+    if reverse_execution not in ('auto','shared','independent'):
+        raise ValueError("reverse_execution must be 'auto', 'shared' or 'independent'")
+    if (_record_ad and _replay_tapes is not None) or (adjoint!='none' and (_record_ad or _replay_tapes is not None)):
+        raise ValueError('record/replay and accepted AD are separate operations')
+    if adjoint=='accepted' and reverse_execution=='independent' and execution!='independent':
+        raise ValueError('independent reverse requires independent forward execution')
+    if adjoint=='accepted' or _record_ad:
+        from .native_ad import _validate_ad_sizes
+        _validate_ad_sizes(adjoint_checkpoint_steps=adjoint_checkpoint_steps,
+            adjoint_orbit_checkpoint_steps=adjoint_orbit_checkpoint_steps,
+            adjoint_max_accepted_steps=adjoint_max_accepted_steps,adjoint_max_orbit_steps=adjoint_max_orbit_steps)
     if integrator not in ('essos_rk45', 'essos_dopri8'):
         raise ValueError("split integrator must be 'essos_rk45' or 'essos_dopri8'")
     if model not in ('GuidingCenter', 'FullOrbit'):
@@ -993,7 +1042,7 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
         y0 = jnp.concatenate([jnp.asarray(particles.initial_xyz_fullorbit), jnp.asarray(particles.initial_vxvyvz)], axis=1)
     if execution == "shared" and y0.shape[0]:
         rhs = _prepare_rhs(rhs, jnp.zeros((), y0.dtype), y0[0], None)
-    def one(initial, key):
+    def one(initial, key, tape=None):
         birth = public(initial)
         birth_speed = jnp.sqrt(birth[3] ** 2 + 2 * birth[4] * magnitude(birth[:3]) / mass) if gc else jnp.linalg.norm(birth[3:])
         if speed_floor is None:
@@ -1016,7 +1065,8 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
                     displacement=guiding_center_spatial_increment(state[3]/speed,dw[:3],c,
                         spatial_direction(y,B,source),charge*B/mass)
                     if vmec or boozer:
-                        y=move_in_cartesian(y,displacement,lambda q:spatial_position(q,source))
+                        y=move_in_cartesian(y,displacement,lambda q:spatial_position(q,source),
+                            implicit=adjoint=='accepted' and source is field)
                         point=public(y)[:3]
                     else:
                         point=point+displacement;y=y.at[:3].set(point)
@@ -1073,6 +1123,11 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
             events.append(lambda t, y, args: 1 - y[0] ** 2 - y[1] ** 2)
         if event is not None:
             events.extend([lambda t, y, args, f=f: f(t, public(y), args) for f in tree_util.tree_leaves(event)])
+        if _replay_tapes is not None:
+            from .native_ad import replay_accepted_split
+            saved,final=replay_accepted_split(rhs,kick,initial,None,tape,times,
+                method='dopri5' if integrator=='essos_rk45' else 'dopri8',stage_execution=orbit_stage_execution)
+            return jax.vmap(public)(saved),public(final)
         solve = solve_split
         if execution == 'independent':
             from functools import partial
@@ -1087,11 +1142,23 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
                     tolerance=moment_tolerance,reference_time=moment_reference_time,orbit=orbit,reference_magnitude=magnitude) if moment_control else lambda t,y,a:jnp.asarray(jnp.inf)
                 level=lambda t,y,a:jnp.min(jnp.asarray([f(t,y,a) for f in events])) if events else jnp.asarray(1.,y.dtype)
                 return drift,collision,measure,level,limit
-            solve = partial(_solve_independent, field=field, species=species, gc=gc, birth_speed=birth_speed, speed_floor=floor, collision_tolerance=collision_tolerance, field_view=field_view,physics=physics,mass=mass,charge=charge,spatial_diffusion=spatial_diffusion,spatial_geometry=spatial_geometry)
-        solution = solve(rhs, kick, initial, t1=tmax, dt0=timestep, ts=times, key=key, noise_dim=(5 if spatial_diffusion else 2) if gc else 3, dtmax=timestep if collision_dtmax is None else collision_dtmax, adaptive=adaptive, orbit_dt0=orbit_dt0, orbit_adaptive=orbit_adaptive, orbit_stage_execution=orbit_stage_execution, reuse_orbit_step=reuse_orbit_step, collision_controller=collision_controller, collision_wiener_norm=collision_wiener_norm, method='dopri5' if integrator == 'essos_rk45' else 'dopri8', rtol=rtol, atol=atol, controller=controller, pcoeff=pcoeff, icoeff=icoeff, error_norm=norm, combined_error_norm=combined_norm, shared_clock=shared_clock, reuse_combined_orbit=reuse_combined_orbit, combined_controller=combined_controller, step_limit=active_limit, align_orbit=moment_control and orbit_adaptive and reuse_orbit_step, event=tuple(events), max_steps=max_steps, max_orbit_steps=max_orbit_steps, max_pending=max_pending, record_steps=record_steps, _orbit_rhs_prepared=execution == "shared")
+            solve = partial(_solve_independent, field=field, species=species, gc=gc, birth_speed=birth_speed, speed_floor=floor, collision_tolerance=collision_tolerance, field_view=field_view,physics=physics,mass=mass,charge=charge,spatial_diffusion=spatial_diffusion,spatial_geometry=spatial_geometry,_reverse_execution=reverse_execution)
+        solution = solve(rhs, kick, initial, t1=tmax, dt0=timestep, ts=times, key=key, noise_dim=(5 if spatial_diffusion else 2) if gc else 3, dtmax=timestep if collision_dtmax is None else collision_dtmax, adaptive=adaptive, orbit_dt0=orbit_dt0, orbit_adaptive=orbit_adaptive, orbit_stage_execution=orbit_stage_execution, reuse_orbit_step=reuse_orbit_step, collision_controller=collision_controller, collision_wiener_norm=collision_wiener_norm, method='dopri5' if integrator == 'essos_rk45' else 'dopri8', rtol=rtol, atol=atol, controller=controller, pcoeff=pcoeff, icoeff=icoeff, error_norm=norm, combined_error_norm=combined_norm, shared_clock=shared_clock, reuse_combined_orbit=reuse_combined_orbit, combined_controller=combined_controller, step_limit=active_limit, align_orbit=moment_control and orbit_adaptive and reuse_orbit_step, event=tuple(events), max_steps=max_steps, max_orbit_steps=max_orbit_steps, max_pending=max_pending, record_steps=record_steps, _orbit_rhs_prepared=execution == "shared",
+            adjoint=adjoint,adjoint_checkpoint_steps=adjoint_checkpoint_steps,
+            adjoint_orbit_checkpoint_steps=adjoint_orbit_checkpoint_steps,
+            adjoint_max_accepted_steps=adjoint_max_accepted_steps,adjoint_max_orbit_steps=adjoint_max_orbit_steps,
+            _record_ad=_record_ad,_collision_state_indices=tuple(range(3,initial.size)) if not gc else None)
+        if _record_ad:
+            solution,tape=solution
+            return solution._replace(ys=jax.vmap(public)(solution.ys),y=public(solution.y)),tape
         return solution._replace(ys=jax.vmap(public)(solution.ys), y=public(solution.y))
     if speed_floor is not None:
         _concrete_check(speed_floor, lambda x: np.ndim(x) == 0 and np.isfinite(x) and (x > 0), 'speed_floor must be positive and finite')
+    if _replay_tapes is not None:
+        return jax.jit(jax.vmap(one))(y0,particles.random_keys,_replay_tapes)
+    if _record_ad:
+        solution,tapes=jax.jit(jax.vmap(one))(y0,particles.random_keys)
+        return solution._replace(ts=times),tapes
     return jax.jit(jax.vmap(one))(y0, particles.random_keys)._replace(ts=times)
 
 
@@ -1383,7 +1450,9 @@ def _draw_normal(key, dim):
     uniform = jnp.maximum(lower, unit * (1.0 - lower) + lower)
     return (next_key, jnp.sqrt(jnp.asarray(2.0, jnp.float64)) * jax.lax.erf_inv(uniform))
 
-def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed, tolerance=1e-09, noise_dim=2, max_steps=100000, max_orbit_steps=10000, max_pending=64, warps=1, state_size=8, bank_components=8, orbit_dt0=None, final_time=None, align_orbit=False, interpret=False):
+def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed, tolerance=1e-09, noise_dim=2, max_steps=100000, max_orbit_steps=10000, max_pending=64, warps=1, state_size=8, bank_components=8, orbit_dt0=None, final_time=None, align_orbit=False, interpret=False,
+        record=False, adjoint_checkpoint_steps=16, adjoint_orbit_checkpoint_steps=16,
+        adjoint_max_accepted_steps=None, adjoint_max_orbit_steps=None, collision_indices=None):
     """Persistent particle loop; factory also supplies the optional predictor."""
     from jax.experimental import pallas as pl
     from jax.experimental.pallas import triton as plt
@@ -1398,9 +1467,52 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
     capacity = max_pending if adaptive else 1
     noise_size = 1 << (noise_dim - 1).bit_length()
 
+    if record:
+        from .native_ad import _SplitCheckpointTape, _TapeView
+        outer_capacity = min(max_steps,adjoint_max_accepted_steps or max_steps)
+        inner_capacity = adjoint_max_orbit_steps or max_steps
+        inner_segment = adjoint_orbit_checkpoint_steps
+        outer_segment = adjoint_checkpoint_steps
+        if collision_indices is None:
+            node_capacity = (inner_capacity+inner_segment-1)//inner_segment+outer_capacity-1
+            derivative_capacity = node_capacity
+        else:
+            nonempty_maps = min(outer_capacity,inner_capacity)
+            node_capacity = nonempty_maps+(inner_capacity-nonempty_maps)//inner_segment
+            derivative_capacity = (inner_capacity-1)//inner_segment
+        endpoint_size = 8 if collision_indices is None else len(collision_indices)
+        shape = lambda dims,dtype=jnp.float64:jax.ShapeDtypeStruct(dims,dtype)
+        tape_shapes = _SplitCheckpointTape(
+            shape((outer_capacity,2)),shape((outer_capacity,noise_dim)),shape((outer_capacity,),jnp.bool_),
+            shape((outer_capacity+1,),jnp.int32),shape((inner_capacity,2)),shape((outer_capacity,)),
+            shape(((outer_capacity+outer_segment-1)//outer_segment,8)),
+            shape((),jnp.int32),shape((),jnp.int32),shape((),jnp.int32),shape((),jnp.int32),shape((),jnp.int32),
+            shape((outer_capacity+1,),jnp.int32),shape((node_capacity,8)),
+            shape((derivative_capacity,8)),shape((outer_capacity,endpoint_size)),shape((),jnp.int32))
+        padded_tape_shapes = tuple(shape(tuple(1<<max(size-1,0).bit_length() for size in value.shape),value.dtype)
+                                   for value in tape_shapes)
+        tape_layout=[]
+        bank_sizes=[0,0]
+        for spec in padded_tape_shapes:
+            bank=0 if jnp.issubdtype(spec.dtype,jnp.floating) else 1
+            tape_layout.append((bank,bank_sizes[bank],spec.shape))
+            bank_sizes[bank]+=int(np.prod(spec.shape))
+        bank_sizes=[((size+127)//128)*128 for size in bank_sizes]
+        tape_bank_shapes=(shape((bank_sizes[0],)),shape((bank_sizes[1],),jnp.int32))
+
     def solve(initial, key):
 
         def kernel(yref, kref, *refs):
+            if record:
+                banks=refs[-2:]
+                refs=refs[:-2]
+                tape_refs={name:_TapeView(banks[bank],offset,shape_) for name,(bank,offset,shape_) in
+                           zip(_SplitCheckpointTape._fields,tape_layout)}
+                for ref,size in zip(banks,bank_sizes):
+                    def clear(i,_):
+                        ref[i*128+jnp.arange(128)]=jnp.zeros((128,),ref.dtype)
+                    jax.lax.fori_loop(0,size//128,clear,None)
+                tape_refs['fractions'][...]=jnp.ones(tape_refs['fractions'].shape,jnp.float64)
             *data, aref, dref, eref, tsref, pref, ysout, yout, tout, statsout, statusout, ends, increments = refs
             y0 = yref[...]
             zero, first_h, ceiling, final_t, birth_speed, budget, first_orbit_h = (pref[i] for i in range(7))
@@ -1425,12 +1537,13 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
                 result = y + expand(jnp.sum((weights * fraction)[:, None] * bank, axis=0))
                 return jnp.where(fraction == 0, y, jnp.where(fraction == 1, endpoint, result))
 
-            def orbit(y, t, end, guess):
+            def orbit(y, t, end, guess, outer_index, inner_index, node_index):
                 old = level(y)
-                start = (t, y, dynamic_rhs(y), jnp.minimum(guess, end - t), old, integer(0), integer(0), integer(0))
+                start = (t, y, dynamic_rhs(y), jnp.minimum(guess, end - t), old, integer(0), integer(0), integer(0)) + ((zero+1,) if record else ())
 
                 def step(c):
-                    t, y, f0, guess, old, status, trials, rejected = c
+                    t, y, f0, guess, old, status, trials, rejected = c[:8]
+                    last_fraction = c[8] if record else zero+1
                     remaining = end - t
                     h = jnp.minimum(guess, remaining)
                     close = remaining - h <= 8 * jnp.finfo(y.dtype).eps * jnp.maximum(jnp.abs(t), jnp.abs(end))
@@ -1472,11 +1585,30 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
                     status = jnp.where(crossing & ok, 1, jnp.where(stuck, jnp.where(valid, 3, 4), 0)).astype(jnp.int32)
                     if not adaptive:
                         status = jnp.where(~valid, 4, status)
-                    return (jnp.where(accept, jnp.where(crossing, t + root * h, stop), t), jnp.where(accept, stop_y, y), jnp.where(accept, f1, f0), proposal, jnp.where(accept, new, old), status, trials + 1, rejected + (~accept).astype(jnp.int32))
+                    if record:
+                        local_index = trials-rejected
+                        slot = inner_index+local_index
+                        node = node_index+local_index//inner_segment
+                        def save_step(_):
+                            tape_refs['orbit_times'][slot,0] = t
+                            tape_refs['orbit_times'][slot,1] = h
+                            def checkpoint(_):
+                                tape_refs['orbit_states'][node,:] = y
+                                if collision_indices is None:
+                                    tape_refs['orbit_derivatives'][node,:] = expand(f0)
+                                elif derivative_capacity:
+                                    def derivative(_):
+                                        tape_refs['orbit_derivatives'][node-outer_index-1,:] = expand(f0)
+                                    jax.lax.cond(local_index>0,derivative,lambda _:None,None)
+                            jax.lax.cond(local_index%inner_segment==0,checkpoint,lambda _:None,None)
+                        jax.lax.cond(accept&(outer_index<outer_capacity)&(slot<inner_capacity)&(node<node_capacity),
+                                     save_step,lambda _:None,None)
+                    return (jnp.where(accept, jnp.where(crossing, t + root * h, stop), t), jnp.where(accept, stop_y, y), jnp.where(accept, f1, f0), proposal, jnp.where(accept, new, old), status, trials + 1, rejected + (~accept).astype(jnp.int32)) + ((jnp.where(accept,jnp.where(crossing,root,zero+1),last_fraction),) if record else ())
                 out = jax.lax.while_loop(lambda c: (c[0] < end) & (c[5] == 0) & (c[6] < max_orbit_steps), step, start)
-                t, y, _, guess, _, status, trials, rejected = out
+                t, y, _, guess, _, status, trials, rejected = out[:8]
+                fraction = out[8] if record else zero+1
                 status = jnp.where((t < end) & (status == 0), 2, status).astype(jnp.int32)
-                return (t, y, guess, status, trials, rejected)
+                return (t, y, guess, status, trials, rejected, fraction)
 
             def save(y, t, index):
 
@@ -1492,10 +1624,13 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
                 previous = stamp
             initial_status = jnp.where(valid_inputs, jnp.where(finite(y0) & finite(level(y0)), jnp.where(level(y0) <= 0, 1, 0), 4), 5).astype(jnp.int32)
             index = save(y0, zero, integer(0))
-            start = (zero, y0, jnp.minimum(first_h, ceiling), first_orbit_h, kref[...], integer(0), integer(0), index, integer(0), initial_status, integer(0), integer(0), integer(0), integer(0), integer(0), zero,integer(0),integer(0))
+            if record:
+                tape_refs['initial_saves'][...] = index
+            start = (zero, y0, jnp.minimum(first_h, ceiling), first_orbit_h, kref[...], integer(0), integer(0), index, integer(0), initial_status, integer(0), integer(0), integer(0), integer(0), integer(0), zero,integer(0),integer(0)) + ((integer(0),)*3 if record else ())
 
             def advance(c):
-                t, y, h, oh, key, size, peak, index, grid, status, trials, accepted, rejected, ot, orr, maxerr,path_steps,path_max = c
+                t, y, h, oh, key, size, peak, index, grid, status, trials, accepted, rejected, ot, orr, maxerr,path_steps,path_max = c[:18]
+                ad_count,ad_inner,ad_nodes = c[18:] if record else (integer(0),)*3
                 barrier = jnp.where(index < nsave, tsref[jnp.minimum(index, nsave - 1)], final_t)
                 limit=step_limit(t,y) if adaptive and step_limit is not None else zero+jnp.inf
                 valid_limit=(limit>0)&~jnp.isnan(limit)
@@ -1537,7 +1672,7 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
                 usable = valid_limit & ~overflow & (h > 0) & (end > t)
 
                 def attempt(_):
-                    stop, endpoint, next_oh, os, orbit_trials, orbit_rejected = orbit(y, t, end, jnp.minimum(oh, h) if adaptive else jnp.minimum(first_orbit_h, h))
+                    stop, endpoint, next_oh, os, orbit_trials, orbit_rejected, fraction = orbit(y, t, end, jnp.minimum(oh, h) if adaptive else jnp.minimum(first_orbit_h, h), ad_count, ad_inner, ad_nodes)
 
                     def collide(_):
                         return kick(endpoint, h, increments[size - 1, :])
@@ -1558,11 +1693,35 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
                     nt = jnp.where(event, stop, jnp.where(accept, end, t))
                     ny = jnp.where(event, endpoint, jnp.where(accept, trial, y))
                     ni = save(ny, nt, index)
+                    committed = accept|event
+                    inner_count = orbit_trials-orbit_rejected
+                    if record:
+                        nodes = (inner_count+inner_segment-1)//inner_segment
+                        def commit(_):
+                            tape_refs['times'][ad_count,0],tape_refs['times'][ad_count,1] = t,nt
+                            for component in range(noise_dim):
+                                tape_refs['increments'][ad_count,component] = increments[size-1,component]
+                            tape_refs['kicks'][ad_count] = accept
+                            tape_refs['offsets'][ad_count+1] = ad_inner+inner_count
+                            tape_refs['checkpoint_offsets'][ad_count+1] = ad_nodes+nodes
+                            tape_refs['fractions'][ad_count] = fraction
+                            endpoint_components = range(8) if collision_indices is None else collision_indices
+                            for component,index_ in enumerate(endpoint_components):
+                                tape_refs['orbit_endpoints'][ad_count,component] = scalar(endpoint,index_)
+                            def outer_checkpoint(_):
+                                tape_refs['states'][ad_count//outer_segment,:] = y
+                            jax.lax.cond(ad_count%outer_segment==0,outer_checkpoint,lambda _:None,None)
+                        jax.lax.cond(committed&(ad_count<outer_capacity)&(ad_inner+inner_count<=inner_capacity),
+                                     commit,lambda _:None,None)
+                        next_nodes = ad_nodes+jnp.where(committed,nodes,0)
+                    else:
+                        next_nodes = ad_nodes
                     kept=jnp.where(accept|event,orbit_trials-orbit_rejected,0)
-                    return (nt, ny, nh, next_oh, key, size - accept.astype(jnp.int32), peak, ni, grid + (accept & (end == grid_end)).astype(jnp.int32), ns, trials + 1, accepted + accept.astype(jnp.int32), rejected + reject.astype(jnp.int32), ot + orbit_trials, orr + orbit_rejected, jnp.maximum(maxerr, jnp.where(accept, error, zero)),path_steps+kept,jnp.maximum(path_max,kept))
+                    return (nt, ny, nh, next_oh, key, size - accept.astype(jnp.int32), peak, ni, grid + (accept & (end == grid_end)).astype(jnp.int32), ns, trials + 1, accepted + accept.astype(jnp.int32), rejected + reject.astype(jnp.int32), ot + orbit_trials, orr + orbit_rejected, jnp.maximum(maxerr, jnp.where(accept, error, zero)),path_steps+kept,jnp.maximum(path_max,kept)) + ((ad_count+committed.astype(jnp.int32),ad_inner+jnp.where(committed,inner_count,0),next_nodes) if record else ())
                 return jax.lax.cond(usable, attempt, lambda _: c[:4] + (key, size, peak, index, grid, jnp.where(~valid_limit,5,jnp.where(overflow,6,3)).astype(jnp.int32)) + c[10:], None)
             out = jax.lax.while_loop(lambda c: (c[0] < final_t) & (c[9] == 0) & (c[10] < max_steps), advance, start)
-            t, y, _, _, _, _, peak, index, _, status, trials, accepted, rejected, ot, orr, maxerr,path_steps,path_max = out
+            t, y, _, _, _, _, peak, index, _, status, trials, accepted, rejected, ot, orr, maxerr,path_steps,path_max = out[:18]
+            ad_count,ad_inner,ad_nodes = out[18:] if record else (integer(0),)*3
             status = jnp.where((t < final_t) & (status == 0), 2, status)
 
             def tail(i, _):
@@ -1571,9 +1730,21 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
             jax.lax.fori_loop(index, nsave, tail, ())
             yout[...], tout[...], statusout[...] = (y, t, status)
             statsout[...] = pack(tuple((v.astype(y.dtype) for v in (trials, accepted, rejected, ot, orr, peak))) + (maxerr,path_steps.astype(y.dtype),path_max.astype(y.dtype))+(zero,)*7)
+            if record:
+                tape_refs['count'][...],tape_refs['orbit_count'][...] = ad_count,ad_inner
+                tape_refs['checkpoint_count'][...] = ad_nodes
+                tape_refs['saved_count'][...],tape_refs['status'][...] = index,status.astype(jnp.int32)
+
         shapes = (jax.ShapeDtypeStruct((nsave, 8), jnp.float64), jax.ShapeDtypeStruct((8,), jnp.float64), jax.ShapeDtypeStruct((), jnp.float64), jax.ShapeDtypeStruct((16,), jnp.float64), jax.ShapeDtypeStruct((), jnp.int32), jax.ShapeDtypeStruct((capacity,), jnp.float64), jax.ShapeDtypeStruct((capacity, noise_size), jnp.float64))
-        outputs = pl.pallas_call(kernel, out_shape=shapes + (), grid=(), compiler_params=plt.CompilerParams(num_warps=warps), interpret=interpret)(initial, key, *inputs)
+        outputs = pl.pallas_call(kernel, out_shape=shapes + (tape_bank_shapes if record else ()), grid=(), compiler_params=plt.CompilerParams(num_warps=warps), interpret=interpret)(initial, key, *inputs)
         ys, y, t, stats, status = outputs[:5]
+        if record:
+            banks=outputs[len(shapes):]
+            values=(banks[bank][offset:offset+int(np.prod(shape_))].reshape(shape_).astype(spec.dtype)
+                    for (bank,offset,shape_),spec in zip(tape_layout,tape_shapes))
+            tape = _SplitCheckpointTape(*(value[tuple(slice(size) for size in spec.shape)]
+                for value,spec in zip(values,tape_shapes)))
+            return (ys,y,t,stats,status),tape
         return (ys, y, t, stats, status)
     return solve
 
@@ -1802,24 +1973,50 @@ def _solve_independent(rhs, collision, initial, args=None, *, field, species, gc
                 return (*physical,prediction)
     else:
         arrays,factory=prepare_physics(field,field_view,physics,initial,options['noise_dim'],spatial_geometry=spatial_geometry)
-    solve = _prepare_split_kernel(arrays, factory, options['ts'], adaptive=options['adaptive'],
-        dt0=options['dt0'], dtmax=options['dtmax'], speed=birth_speed,
-        tolerance=(options['rtol']+options['atol'])/2, noise_dim=options['noise_dim'],
-        max_steps=options['max_steps'], max_orbit_steps=options['max_orbit_steps'],
-        max_pending=options['max_pending'], state_size=nstate,
-        bank_components=4 if gc and nstate == 5 else 8,
-        orbit_dt0=options['orbit_dt0'], final_time=options['t1'],align_orbit=options.get('align_orbit',False),
-        warps=4 if isinstance(field,Vmec) and not spatial_diffusion else 1)
-    ys, y, t, stats, status = solve(jnp.pad(initial, (0, 8-nstate)), jax.random.key_data(options['key']))
-    return SplitSolution(options['ts'], ys[:, :nstate], t, y[:nstate], status,
-        SplitStats(*(stats[i].astype(jnp.int32) for i in range(6)), stats[6],collision_updates=stats[1].astype(jnp.int32),
-            accepted_orbit_steps=stats[7].astype(jnp.int32),max_orbit_steps_per_collision=stats[8].astype(jnp.int32)),
-        jnp.empty((0,), initial.dtype))
+    def forward(initial, parameters=None, *, record=False):
+        solve = _prepare_split_kernel(arrays, factory, options['ts'], adaptive=options['adaptive'],
+            dt0=options['dt0'], dtmax=options['dtmax'], speed=birth_speed,
+            tolerance=(options['rtol']+options['atol'])/2, noise_dim=options['noise_dim'],
+            max_steps=options['max_steps'], max_orbit_steps=options['max_orbit_steps'],
+            max_pending=options['max_pending'], state_size=nstate,
+            bank_components=4 if gc and nstate == 5 else 8,
+            orbit_dt0=options['orbit_dt0'], final_time=options['t1'],align_orbit=options.get('align_orbit',False),
+            warps=4 if isinstance(field,Vmec) and not spatial_diffusion else 1,
+            record=record,adjoint_checkpoint_steps=options.get('adjoint_checkpoint_steps',16),
+            adjoint_orbit_checkpoint_steps=options.get('adjoint_orbit_checkpoint_steps',16),
+            adjoint_max_accepted_steps=options.get('adjoint_max_accepted_steps'),
+            adjoint_max_orbit_steps=options.get('adjoint_max_orbit_steps'),
+            collision_indices=options.get('_collision_state_indices'))
+        result = solve(jnp.pad(initial, (0, 8-nstate)), jax.random.key_data(options['key']))
+        if record:
+            result,tape=result
+            tape=tape._replace(states=tape.states[:,:nstate],orbit_states=tape.orbit_states[:,:nstate],
+                orbit_derivatives=tape.orbit_derivatives[:,:nstate],
+                orbit_endpoints=tape.orbit_endpoints[:,:nstate] if options.get('_collision_state_indices') is None else tape.orbit_endpoints)
+        ys,y,t,stats,status=result
+        solution = SplitSolution(options['ts'], ys[:, :nstate], t, y[:nstate], status,
+            SplitStats(*(stats[i].astype(jnp.int32) for i in range(6)), stats[6],collision_updates=stats[1].astype(jnp.int32),
+                accepted_orbit_steps=stats[7].astype(jnp.int32),max_orbit_steps_per_collision=stats[8].astype(jnp.int32)),
+            jnp.empty((0,), initial.dtype))
+        return (solution,tape) if record else solution
+    if options.get('adjoint','none') == 'accepted':
+        from .native_ad import solve_accepted_split, solve_gpu_accepted
+        direct=(isinstance(field,BiotSavart) and fast and mass==M and charge==Q)
+        if options.get('_reverse_execution','auto') not in ('auto','shared','independent'):
+            raise ValueError("reverse_execution must be 'auto', 'shared' or 'independent'")
+        if options.get('_reverse_execution','auto')=='independent' and not direct:
+            raise ValueError('independent reverse currently requires direct alpha coils and uniform background')
+        if direct and options.get('_reverse_execution','auto')!='shared':
+            return solve_gpu_accepted(forward,initial,field,species,gc=gc,speed_floor=speed_floor,
+                options=options,arrays=arrays,spatial_diffusion=spatial_diffusion)
+        ad_options={k:v for k,v in options.items() if k not in ('adjoint','_record_ad','_reverse_execution')}
+        return solve_accepted_split(rhs,collision,initial,args,_forward_override=forward,**ad_options)
+    return forward(initial,record=options.get('_record_ad',False))
 
 
 # Spatial geometry
 
-def move_in_cartesian(state, displacement, position):
+def move_in_cartesian(state, displacement, position, *, implicit=False):
     """Invert the Cartesian Euler kick in the existing regular position chart.
 
     Solving the nonlinear map retains its Ito coordinate drift automatically;
@@ -1840,8 +2037,23 @@ def move_in_cartesian(state, displacement, position):
         scale=jnp.maximum(1.,jnp.maximum(jnp.linalg.norm(target),
             jnp.linalg.norm(matrix)*jnp.maximum(1.,jnp.linalg.norm(point))))
         return point,jnp.linalg.norm(mapping(point)-target)/scale,iteration+1
-    point,error,_=jax.lax.while_loop(lambda c:((c[2]==0)|(c[1]>threshold))&(c[2]<8),advance,
-        (state[:3],jnp.linalg.norm(displacement),jnp.asarray(0)))
+    if not implicit:
+        point,error,_=jax.lax.while_loop(lambda c:((c[2]==0)|(c[1]>threshold))&(c[2]<8),advance,
+            (state[:3],jnp.linalg.norm(displacement),jnp.asarray(0)))
+        return state.at[:3].set(jnp.where(error<=threshold,point,jnp.full_like(point,jnp.nan)))
+    def solve_root(function, guess):
+        del function
+        return jax.lax.while_loop(lambda c:((c[2]==0)|(c[1]>threshold))&(c[2]<8),advance,
+            (guess,jnp.linalg.norm(displacement),jnp.asarray(0)))[0]
+    def tangent_solve(linear, value):
+        a,b,c=jax.vmap(linear)(jnp.eye(3,dtype=state.dtype))
+        rows=jnp.stack((jnp.cross(b,c),jnp.cross(c,a),jnp.cross(a,b)))
+        return (rows@value)/jnp.dot(a,rows[0])
+    point=jax.lax.custom_root(lambda q:mapping(q)-target,state[:3],solve_root,tangent_solve)
+    matrix=jax.jacfwd(mapping)(point)
+    scale=jnp.maximum(1.,jnp.maximum(jnp.linalg.norm(target),
+        jnp.linalg.norm(matrix)*jnp.maximum(1.,jnp.linalg.norm(point))))
+    error=jnp.linalg.norm(mapping(point)-target)/scale
     return state.at[:3].set(jnp.where(error<=threshold,point,jnp.full_like(point,jnp.nan)))
 
 class BoozerGeometry(NamedTuple):

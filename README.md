@@ -512,10 +512,17 @@ python -m examples.benchmarks.validate_production_tolerance \
   --particles 2000 --batch-size 2000 --output output/first_passage.json
 ```
 
-![Thermalization](docs/readme_split_thermalization.png)
+![GC thermalization: means and standard deviations](docs/readme_split_thermalization.png)
+![Lorentz thermalization: means and standard deviations](docs/readme_split_thermalization_lorentz.png)
 ![Speed and pitch distributions](docs/readme_split_distributions.png)
-![First-passage moments](docs/readme_split_first_stopping_moments.png)
 ![First-passage distribution](docs/readme_split_first_stopping_distribution.png)
+
+Presentation figures use bold labels, 320-dpi PNGs and vector PDF exports.
+Evolution panels show means above standard deviations, with 95% sampling bands.
+Histograms show counts with the independent black theory drawn on top; dashed
+blue lines mark the birth speed and pitch. First stopping shows only the
+histogram and black reference for the tight adaptive run. Figure files can be
+regenerated from saved reports with the scripts' --plot-only option.
 
 Uniform-field spatial and velocity statistics use moment budget .01, collision
 tolerance .001 and orbit `rtol=atol=1e-10`. GC uses explicit spatial kicks;
@@ -524,19 +531,27 @@ express the same prescribed field, not distinct MHD equilibria.
 
 ```sh
 python -m examples.benchmarks.benchmark_split_coordinate_physics \
-  --study diffusion --particles 2000 --tolerance .01 --output output/uniform
+  --study diffusion --models gc lorentz --charts cartesian --particles 2000 \
+  --tolerance .01 --save-points 201 --output output/uniform
 python -m examples.benchmarks.benchmark_split_coordinate_physics \
   --study diffusion --models gc lorentz --charts cartesian --particles 2000 \
   --tolerance .01 --seed 8706 --output output/uniform_seed8706
 ```
 
-Original seed 7706: spatial spreading agrees within sampling intervals, but
+The earlier six-save run with seed 7706 found spatial spreading within sampling intervals, but
 speed-variance gaps `+9.19 +/- 7.23%` (GC) and `-11.32 +/- 5.46%` (Lorentz)
 remain recorded. The independent seed 8706 gives `-1.00 +/- 6.30%` and
 `-2.50 +/- 6.14%`; it does not make the original population pass.
 
-![Uniform field, original seed 7706](docs/readme_split_coordinate_diffusion.png)
-![Uniform field, independent seed 8706](docs/readme_split_coordinate_diffusion_seed8706.png)
+![Uniform field, GC](docs/readme_split_coordinate_diffusion.png)
+![Uniform field, Lorentz](docs/readme_split_coordinate_diffusion_lorentz.png)
+
+The refreshed primary uniform/helix figures retain 2,000 particles and budget
+.01, with 201 actual saved times instead of six; no particle-curve smoothing
+is used. A changed save grid can change the realized Brownian paths.
+The earlier [independent-seed uniform comparison](docs/readme_split_coordinate_diffusion_seed8706.png)
+remains a separate sampling diagnostic. Velocities use the thermal scale
+sigma_T = sqrt(T/m) and time uses t*nu0.
 
 Mirror and helix cases test coupled orbit/collision moments at budget .01.
 VMEC/Boozer labels below denote manufactured coordinate charts of prescribed
@@ -548,7 +563,8 @@ bands show separate reference and production sampling intervals.
 
 ```sh
 python -m examples.benchmarks.benchmark_split_coordinate_physics \
-  --study coupled --models gc lorentz --particles 2000 --tolerance .01 \
+  --study coupled --fields helix --models gc lorentz --charts cartesian \
+  --particles 2000 --tolerance .01 --save-points 201 \
   --output output/coupled_moments
 ```
 
@@ -581,6 +597,172 @@ python -m examples.benchmarks.benchmark_split_path_convergence \
 ![GC spatial diffusion convergence](docs/readme_split_multirate_gc.png)
 ![Lorentz spatial diffusion convergence](docs/readme_split_multirate.png)
 ![Paired numerical convergence](docs/readme_split_moment_numerical_convergence.png)
+
+## Accepted-map native reverse AD
+
+This branch builds on `feat/native_split_collisions`. Reverse AD is opt-in:
+`solve_rk(..., adjoint="accepted")` handles Dopri5/Dopri8 orbits, and
+`trace_split(..., adjoint="accepted")` handles the full orbit/collision map.
+The implementation is consolidated in [essos/native_ad.py](essos/native_ad.py).
+
+The forward solver selects accepted intervals and retains its Wiener increments.
+Reverse freezes those intervals, random increments, rejection decisions and
+event fractions. It differentiates RK stages, dense saves, collision
+coefficients, pitch deflection, speed diffusion and GC spatial kicks.
+Coordinate kicks use the derivative of the converged Cartesian inverse;
+Newton iteration decisions are excluded. This does not differentiate the
+motion of a first-hit time or the adaptive mesh.
+
+| Field / model | Independent GPU forward with AD recording | Reverse execution |
+|---|---|---|
+| Direct Biot–Savart / GC | Includes the moment predictor and spatial kicks | Persistent GPU for uniform alpha cases; otherwise checkpointed JAX |
+| Direct Biot–Savart / Lorentz | Includes the moment predictor and velocity collisions | Persistent GPU for uniform alpha cases; otherwise checkpointed JAX |
+| VMEC / GC | Includes coordinate spatial kicks | Checkpointed JAX on the selected device |
+| Boozer / GC | Requires `spatial_geometry=BoozerGeometry.from_booz_xform(transform)` | Checkpointed JAX on the selected device |
+
+Set `execution="independent"` for the GPU forward loop and
+`reverse_execution="auto"` to select the available reverse implementation.
+`"shared"` explicitly selects JAX reverse; `"independent"` requires the
+specialized direct-coil reverse. Field classes and their storage are unchanged.
+The coordinate benchmark differentiates birth controls with a fixed equilibrium;
+it does not regenerate VMEC/Boozer equilibria from boundary coefficients.
+
+One-particle GPU kernel audits (float64, RTX 5060 Laptop, JAX 0.11.2) give the
+following directional derivatives. Both columns use the same accepted times
+and Wiener increments. Coil audits perturb pitch, energy and one coil DOF;
+coordinate audits perturb pitch, energy and birth radius.
+
+| Case | Reverse | Frozen-path JVP |
+|---|---:|---:|
+| Direct coils / GC, fixed | 0.0395485633371120 | 0.0395485633371120 |
+| Direct coils / Lorentz, fixed | -0.205256475887027 | -0.205256475887028 |
+| QA VMEC / GC, adaptive | 0.458124210711454 | 0.458124210711437 |
+| Manufactured Boozer spectrum/geometry / GC, adaptive | 0.459437117932997 | 0.459437117932998 |
+
+These are two-interval derivative fixtures, not physical ensemble studies or
+long-horizon performance measurements. Reproduce them with the benchmark's
+`--kernel-audit` option, for example:
+
+```sh
+python -m examples.benchmarks.benchmark_native_ad --kernel-audit \
+  --field coils --model gc --stepping fixed --output output/native_ad/audit_gc.json
+```
+
+Use `--model lorentz` for the second row, or `--field vmec`/`--field boozer`
+with `--model gc --stepping adaptive` for the coordinate rows. Coordinate cold
+compilation is substantially heavier than these tiny execution workloads;
+these GPU audits are outside the fast CI suite.
+
+Checkpoint segments default to 16 accepted orbit steps. Set
+`adjoint_orbit_checkpoint_steps` to trade live replay workspace for stored
+checkpoints. `adjoint_max_accepted_steps` and `adjoint_max_orbit_steps` bound
+outer intervals and total accepted inner steps separately. Insufficient
+capacity raises an error during reverse; it never returns a truncated gradient.
+There is no particle chunking.
+
+The benchmark below checks reverse directional derivatives against JVPs through
+an independent replay of the same accepted schedule and Wiener increments.
+Its diagnostic scalar exercises position and velocity sensitivities; it is
+not an optimization objective. Ordinary finite differences that rerun adaptation
+measure a different map.
+
+```sh
+python -m examples.benchmarks.benchmark_native_ad \
+  --field coils --model gc --stepping adaptive --particles 64 \
+  --output output/native_ad/coils_gc_adaptive.json
+```
+
+Repeat with `--model lorentz`, `--field vmec`, or `--field boozer` (GC), and
+`--stepping fixed` for fixed orbit/collision intervals. The default honors the
+selected JAX backend; it chooses the independent forward loop on GPU and shared
+execution on CPU. Boozer setup requires the optional `booz_xform_jax` package.
+Coil runs differentiate coil Fourier/current parameters and three birth
+controls; coordinate runs differentiate the three birth controls.
+
+Each case records compilation, first execution, blocked warm medians, compiled
+buffer sizes, allocator counters, accepted steps and gradient agreement. Run
+each case in a fresh process for allocator peaks. AD is measured first; the
+later forward counters are cumulative. Repeat with `--forward-only` in another
+process for an isolated forward peak. `--cold-compile` disables the persistent
+compilation cache. Complete value-and-gradient
+time includes forward recording and reverse replay; it is distinct from a
+reverse-only time. Compilation/setup are excluded from warm timings. Reports
+are generated under ignored `output/`; generated JSON/CSV/SVG/profile files
+are not retained in this branch. The physics figures above remain reproducible
+with their existing scripts.
+
+Fast AD regressions run with `pytest tests/test_native_ad.py`. Large physical
+ensembles and timing benchmarks are separate from CI.
+
+The recovered coil-optimization examples retain final-radius/classifier
+objectives, length/curvature/B·n penalties, axis-field targets, fixed births,
+toroidal targets, safety stops and PNG trajectory plots. GC and full-orbit
+reference parameters remain editable inside their entry scripts:
+
+```sh
+python -m examples.coil_optimization.optimize_coils_particle_confinement_guidingcenter_native --help
+python -m examples.coil_optimization.optimize_coils_particle_confinement_fullorbit_native --help
+```
+
+Use `--collisions` for the full accepted split adjoint. Collisionless examples
+use `Tracing(..., native_adjoint="accepted")`. Array loss-fraction, loss-location
+and heat objectives are retained in `essos/particle_losses.py`; their jax_9/10
+provenance and units are documented there. Runtime optimization reports and
+plots are written under ignored `output/`.
+
+### QI coil ALM examples recovered from the JAX branches
+
+Three GC examples recover the classic `en/jax_13` setups (commit `638916d`),
+also compared with `jax_9`, `jax_10` and `jax_12`. The original QI coils
+and matching surface are retained in `examples/input_files/`: the coil JSON
+is required physical input, rather than a generated benchmark report.
+VMEC supplies the fixed classifier and birth geometry; particles follow
+the direct Biot--Savart coil field. Only coil Fourier/current DOFs vary.
+
+```sh
+python -m examples.coil_optimization.optimize_coils_native_gc_alm_loss_fraction
+python -m examples.coil_optimization.optimize_coils_native_gc_alm_distance
+python -m examples.coil_optimization.optimize_coils_native_gc_alm_heat_flux
+```
+
+Each entry has an editable `PARAMETERS` dictionary; shared defaults are in
+`examples/coil_optimization/native_gc_alm.py`, and CLI flags override them.
+Defaults retain 20 fixed-seed 3.52 MeV alphas born at 70% of the local
+axis-to-boundary distance, 5.7 T mean field on the original magnetic axis,
+1e-4 s horizon, ten saves, 45 m length and 1/m curvature upper limits.
+The loaded file contains five independent coils; limits apply to all five.
+The loss-fraction case is collisionless. Distance/heat retain collisional
+GC tracing by default, using the new native split method with a uniform
+electron/deuterium bath; `--no-collisions` selects collisionless native GC.
+No example selects a JAX backend or chunks particles.
+Current DOFs are normalized after the 5.7 T rescaling; `--max-change` bounds
+dimensionless changes in the public coil DOFs, including the currents.
+The two-species collisional examples default to native shared JAX execution,
+including on GPU. The specialized `--execution independent` GPU path is opt-in:
+its local QI value/gradient compilation was killed before returning a result.
+
+The particle metric is an ALM equality constraint targeting zero, alongside
+the axis-field equality and coil upper bounds. Distance reproduces the classic
+per-save escape-centroid distance to the infinite boundary tangent line at
+theta=3*pi/2, phi=pi; it is not a first-hit distance to a curved boundary line.
+Heat reproduces the first-loss-weighted, birth-normalized `E_total*v_perp`
+proxy, not a surface power density. The heat case also enables the historical
+smooth B.n/|B| constraint; `--bdotn-weight 0` disables it.
+
+The current ESSOS ALM uses bounded Optimistix L-BFGS internally, replacing the
+older JAXopt wrapper and perturbation weighting. Native Dopri8 uses adaptive
+I control and checkpointed accepted-map reverse for every particle constraint.
+The axis constraint now uses the same fixed QI axis as the initial current
+normalization, rather than the old circle inferred from coil centre radii.
+The experimental historical custom VJPs that held trajectories fixed are not
+used. A separate safety surface 0.2 m outside the soft classifier stops escapes;
+`--safety-margin` adjusts it without moving the soft confinement target.
+
+For a short run, append `--maxiter 10 --inner-maxiter 10`. `--evaluate-only`
+performs the initial ALM value/gradient without optimizer updates. Each fresh
+output directory receives `history.csv`, `summary.json`, optimized coil input,
+trajectory/DOF arrays and a PNG comparing up to ten initial/final trajectories
+and coils with their R-Z projections. These outputs are ignored by Git.
 
 ## Testing
 

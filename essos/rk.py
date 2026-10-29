@@ -3,7 +3,7 @@
 Fixed/adaptive integration, physical error budgets, standard dense output and
 events share one implementation. Independent GPU particle loops retain the
 same formulas. Diffrax is used only by the existing-Tracing result adapter;
-native numerical integration defines no custom reverse rule or collisions.
+native numerical integration supports an optional accepted-step reverse rule.
 """
 from dataclasses import dataclass
 from enum import IntEnum
@@ -345,7 +345,9 @@ def _first_hit(hits):
 def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                rtol=1e-9, atol=1e-9, event=None, root_find=True,
                max_steps=1_000_000, dtmin=0., dtmax=np.inf, record_steps=False, method="dopri5",
-               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, stage_execution="unrolled"):
+               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, stage_execution="unrolled",
+               adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None,
+               adjoint_parameter_accumulation="segment", _recorder=None):
     """Integrate an array state forward in time with bounded adaptive retries.
 
     ``ts`` is an ordered save grid, independent of the integration steps.
@@ -374,7 +376,10 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     By default memory holds only the save grid and current step. Opt into an
     infinity-padded accepted-time history with ``record_steps=True``; its first
     ``stats.accepted + 1`` entries are valid. This is diagnostic data for future
-    accepted-step replay, not an implemented AD rule.
+    accepted-step inspection. ``adjoint="accepted"`` separately enables the
+    checkpointed reverse rule in ``essos.native_ad``. Its accepted times, event
+    fractions and controller decisions are frozen; stages and dense output
+    retain their physical derivatives.
 
     Concrete invalid inputs raise ValueError. Invalid dynamic values under JIT
     return INVALID_INPUT. Non-finite states, derivatives or event values are
@@ -383,6 +388,14 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     ``method`` selects ``"dopri5"`` or ``"dopri8"``. The convenience entry points
     ``solve_rk45`` and ``solve_dopri8`` fix this choice.
     """
+    if adjoint not in ('none','accepted'):
+        raise ValueError("adjoint must be 'none' or 'accepted'")
+    if adjoint == 'accepted':
+        options=locals().copy()
+        from .native_ad import solve_accepted
+        for name in ('rhs','y0','args','adjoint','_recorder'):
+            options.pop(name)
+        return solve_accepted(rhs,y0,args,**options)
     if stage_execution not in ("loop", "unrolled"):
         raise ValueError("stage_execution must be 'loop' or 'unrolled'")
     trial_step = _trial_step if stage_execution == "loop" else _trial_unrolled
@@ -481,6 +494,9 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                               (ts[jnp.minimum(s["index"], len(ts) - 1)] == t0), body, s)
 
     state = save_initial(state)
+    initial_saves = state["index"]
+    if _recorder is not None:
+        state = _recorder.initialize(state)
 
     def advance(s):
         t, y = s["t"], s["y"]
@@ -581,14 +597,17 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                 return dict(s, ys=s["ys"].at[i].set(value), saved_ts=s["saved_ts"].at[i].set(ts[i]), index=i + 1)
             updated = lax.while_loop(lambda s: accept & (s["index"] < len(ts)) &
                                      (ts[jnp.minimum(s["index"], len(ts) - 1)] <= stop_t), save, updated)
+        if _recorder is not None:
+            updated = _recorder.record(s, updated, t, y, h, fraction, accept)
         return updated
 
     state = lax.while_loop(lambda s: (s["t"] < t1) & (s["status"] == RKStatus.SUCCESS) &
                            (s["steps"] < max_steps), advance, state)
     status = jnp.where((state["t"] < t1) & (state["status"] == RKStatus.SUCCESS), RKStatus.MAX_STEPS, state["status"])
-    return RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
+    solution = RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
                       tree_util.tree_unflatten(structure, state["hits"]),
                       RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"], state["h"])
+    return solution if _recorder is None else _recorder.finish(state, solution, initial_saves)
 
 
 def solve_rk45(rhs, y0, args=None, **kwargs):
@@ -1392,7 +1411,10 @@ def _solve_tracing(trace, terms, controller, t0, y0, args, event, throw, exterio
         root_find=event.root_finder is not None, max_steps=trace.max_steps,
         method="dopri8" if trace.integrator == "essos_dopri8" else "dopri5",
         error_norm=_trace_error_norm(trace, exterior=exterior, flag=flag),
-        controller=trace.native_controller, pcoeff=trace.native_pcoeff, icoeff=trace.native_icoeff)
+        controller=trace.native_controller, pcoeff=trace.native_pcoeff, icoeff=trace.native_icoeff,
+        adjoint=trace.native_adjoint, adjoint_checkpoint_steps=trace.native_adjoint_checkpoint_steps,
+        adjoint_max_accepted_steps=trace.native_adjoint_max_accepted_steps,
+        adjoint_parameter_accumulation=trace.native_adjoint_parameter_accumulation)
     ys = solution.ys
     if throw:
         import equinox as eqx

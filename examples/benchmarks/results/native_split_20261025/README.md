@@ -16,6 +16,38 @@ classes are unchanged; geometry conversion stays in the split solver modules.
 Only scripts, Markdown and selected README PNGs belong in this addition.
 Generated TMP/SVG/PPTX/CSV/JSON files stay under ignored `output/`.
 
+### Presentation refresh
+
+The primary uniform/helix views use 2,000 particles, budget .01 and
+--save-points 201 for actual time resolution. Production and independent
+references are evaluated at matching times. --charts cartesian selects one
+curve per physical model. Black curves retain the distinct GC and full-Lorentz
+references; grey/blue bands retain their separate sampling uncertainties.
+Panels show means and standard deviations; variance confidence intervals are
+transformed by the square root with their lower endpoint clipped at zero.
+The six-save diagnostics and their numerical tables below remain historical
+results, rather than statistics of the new save grid.
+
+Thermalization and first-stopping reports can be rendered again with
+--plot-only, without tracing. PNG export is 320 dpi, with a PDF companion.
+Thermalization histograms retain the independent finite-time speed and pitch
+theory, with blue birth-value markers. First stopping
+plots only the tight adaptive histogram and black reference. Data are not
+pooled across methods or models.
+Smooth reference PDFs are scaled by particle count times bin width for the
+count histograms. The Lorentz moments are instantaneous samples, not gyro-
+averages: the 201-point output grid does not resolve every fast gyroperiod
+in the helix, even though the adaptive orbit integration resolves gyromotion.
+
+After generating the reports, regenerate only the figures with:
+
+~~~sh
+python -m examples.benchmarks.benchmark_split_coordinate_physics --plot-only --study diffusion --charts cartesian --output output/uniform
+python -m examples.benchmarks.benchmark_split_coordinate_physics --plot-only --study coupled --charts cartesian --output output/coupled_moments
+python -m examples.benchmarks.validate_beam_relaxation --plot-only --output output/thermalization.json
+python -m examples.benchmarks.validate_production_tolerance --plot-only --output output/first_passage.json
+~~~
+
 ## Physics studies
 
 Run from the repository root. These commands launch population studies; they

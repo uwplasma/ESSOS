@@ -82,9 +82,9 @@ def birth(field):
     return jnp.asarray(np.r_[-np.cross(v,b)/omega,v])
 
 
-def solve(field,particles,seed,*,steps=400,phase=.1):
+def solve(field,particles,seed,*,steps=400,phase=.1,save_points=6):
     """Three coupled controls: base, finer orbit, finer orbit+collision time."""
-    h=.005/steps;state=jnp.concatenate((birth(field),jnp.eye(3).ravel()))
+    h=.025/((save_points-1)*steps);state=jnp.concatenate((birth(field),jnp.eye(3).ravel()))
     initial=jnp.broadcast_to(state,(particles,15));key=jax.random.PRNGKey(seed)
     # The same fine Cartesian Brownian increments drive all reference levels.
     def run():
@@ -100,7 +100,7 @@ def solve(field,particles,seed,*,steps=400,phase=.1):
             states=jax.lax.fori_loop(0,steps,advance,states)
             return states,states
         start=jnp.broadcast_to(initial,(3,particles,15))
-        _,saved=jax.lax.scan(segment,start,jnp.arange(5))
+        _,saved=jax.lax.scan(segment,start,jnp.arange(save_points-1))
         return jnp.concatenate((start[None],saved),axis=0)
     states=np.asarray(jax.jit(run)())
     if not np.isfinite(states).all():raise RuntimeError('nonfinite independent Lorentz reference')
@@ -135,12 +135,13 @@ def statistics(values,other=None):
     return rows
 
 
-def generate(fields,particles,*,steps=400,phase=.1,seed=20261028,output=None):
-    report=dict(particles=particles,times=np.linspace(0.,.025,6).tolist(),seed=seed,steps_per_save=steps,phase=phase,
+def generate(fields,particles,*,steps=400,phase=.1,seed=20261028,output=None,save_points=6):
+    steps=max(1,int(np.ceil(steps*5/(save_points-1))))
+    report=dict(particles=particles,times=np.linspace(0.,.025,save_points).tolist(),seed=seed,steps_per_save=steps,phase=phase,
         scope='Independent full-Lorentz numerical Monte Carlo reference; Cartesian Ito EM in a transported orthogonal noise frame and centred exact-angle magnetic rotation, with orbit/collision refinements. Not an analytic solution.',fields={})
     for field in fields:
         print('Independent Lorentz reference',field,'N=',particles,'steps/save=',steps,flush=True)
-        start=perf_counter();states=solve(field,particles,seed+(field=='helix'),steps=steps,phase=phase)
+        start=perf_counter();states=solve(field,particles,seed+(field=='helix'),steps=steps,phase=phase,save_points=save_points)
         values=moments(states,field);levels=[]
         for i in range(3):levels.append(dict(collision_interval=.005/steps/(2 if i==2 else 1),
             phase=phase/(2 if i else 1),evolution=statistics(values[:,i])))
@@ -156,10 +157,11 @@ def main():
     parser.add_argument('--fields',nargs='+',choices=('mirror','helix'),default=['mirror','helix'])
     parser.add_argument('--particles',type=int,default=2000);parser.add_argument('--steps',type=int,default=400)
     parser.add_argument('--phase',type=float,default=.1);parser.add_argument('--seed',type=int,default=20261028)
+    parser.add_argument('--save-points',type=int,default=6)
     parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
-    if args.particles<2 or args.steps<1 or args.phase<=0:parser.error('positive resolution and at least two particles required')
+    if args.particles<2 or args.steps<1 or args.phase<=0 or args.save_points<2:parser.error('positive resolution and at least two particles required')
     args.output.parent.mkdir(parents=True,exist_ok=True)
-    generate(args.fields,args.particles,steps=args.steps,phase=args.phase,seed=args.seed,output=args.output)
+    generate(args.fields,args.particles,steps=args.steps,phase=args.phase,seed=args.seed,output=args.output,save_points=args.save_points)
 
 
 if __name__=='__main__':main()

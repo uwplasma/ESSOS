@@ -899,7 +899,13 @@ class Tracing():
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None, integrator="diffrax", native_error_control="physics",
                  orbit_length_scale=1., orbit_speed_scale=None,
-                 native_controller="i", native_pcoeff=.4, native_icoeff=.3):
+                 native_controller="i", native_pcoeff=.4, native_icoeff=.3,
+                 native_adjoint="none", native_adjoint_checkpoint_steps=16,
+                 native_adjoint_max_accepted_steps=None, native_adjoint_parameter_accumulation="segment"):
+
+        self.native_adjoint, self.native_adjoint_checkpoint_steps = native_adjoint, native_adjoint_checkpoint_steps
+        self.native_adjoint_max_accepted_steps = native_adjoint_max_accepted_steps
+        self.native_adjoint_parameter_accumulation = native_adjoint_parameter_accumulation
 
         from essos.rk import _configure_tracing as configure
         configure(self, integrator, model, solver, native_error_control, orbit_length_scale,

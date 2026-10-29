@@ -25,6 +25,7 @@ from .benchmark_split_helix import HelicalField
 from .benchmark_split_multirate import UniformMagneticField
 from .nonrelativistic_collision_reference import ProtonBackground
 from .validate_beam_relaxation import estimate
+from .collision_plotting import presentation, series, save
 
 
 def chart_maps(chart,scale):
@@ -108,7 +109,7 @@ def solver(fieldname,chart,options,*,spatial=True,model='gc'):
             B=field.AbsB(to_cartesian(y)[:3])
         v,xi=step.y
         return step._replace(y=y.at[3].set(v*xi).at[4].set(M*v*v*(1-xi*xi)/(2*B)))
-    times=np.linspace(0.,options.horizon,6);si_times=times/nu;si_times[-1]=options.horizon/nu
+    times=np.linspace(0.,options.horizon,getattr(options,'save_points',6));si_times=times/nu;si_times[-1]=options.horizon/nu
     def one(key):
         out=solve_split(rhs,kick,initial,t1=options.horizon/nu,dt0=cap/nu,dtmax=cap/nu,
             ts=jnp.asarray(si_times),key=key,noise_dim=5 if gc and spatial else 2 if gc else 3,
@@ -138,6 +139,8 @@ def apply_lorentz_reference(report,reference):
     """Correct spatial/pitch references; keep independent radial speed theory."""
     from scipy.stats import t as student_t
     critical=student_t.ppf(.975,min(report['particles'],reference['particles'])-1)
+    if 'times' in report and (len(report['times'])!=len(reference['times']) or not np.allclose(report['times'],reference['times'],rtol=0,atol=1e-14)):
+        raise ValueError('Lorentz reference and production save times do not match')
     for row in report['rows']:
         if row.get('model','gc')!='lorentz':continue
         target=reference['fields'][row['field']]['levels'][-1]['evolution']
@@ -157,18 +160,21 @@ def run(options):
     from .benchmark_combined_validation import references,add_speed_reference,physical_moments
     output=options.output;output.mkdir(parents=True,exist_ok=True)
     reference_path=options.reference or output/'reference.json'
+    times=np.linspace(0.,options.horizon,options.save_points)
     if reference_path.exists():reference=json.loads(reference_path.read_text())
     else:
-        reference=references(SimpleNamespace(fields=options.fields,output=output))
+        reference=references(SimpleNamespace(fields=options.fields,output=output,times=times))
         add_speed_reference(SimpleNamespace(output=output),reference)
+    if len(reference['times'])!=len(times) or not np.allclose(reference['times'],times,rtol=0,atol=1e-14):
+        raise ValueError('Reference save times differ; use a fresh output folder or matching reference')
     report=dict(moment_tolerance=options.tolerance,collision_tolerance=.001,orbit_tolerance=1e-10,seed=options.seed,cap=options.cap,
-        particles=options.particles,backend=jax.default_backend(),device=jax.devices()[0].device_kind,
+        particles=options.particles,times=times.tolist(),backend=jax.default_backend(),device=jax.devices()[0].device_kind,
         scope='Same prescribed Cartesian physics transformed into regular flux charts; these are not VMEC equilibria or Boozer K=0 spectra.',rows=[])
     numerical=None
     if 'lorentz' in options.models:
         from .lorentz_collision_reference import generate
         path=options.lorentz_reference or output/'lorentz_reference.json'
-        numerical=json.loads(path.read_text()) if path.exists() else generate(options.fields,options.particles,output=path)
+        numerical=json.loads(path.read_text()) if path.exists() else generate(options.fields,options.particles,output=path,save_points=options.save_points)
     for name in options.fields:
         expected_mean,expected_cov,error=physical_moments(reference,name)
         configurations=[(model,chart) for model in options.models for chart in (options.charts if model=='gc' else ['cartesian'])]
@@ -188,7 +194,7 @@ def run(options):
                 mu[:,1]=np.asarray(radial['moments']['speed_mean'])*p.sigma
                 cov[:,1,1]=np.asarray(radial['moments']['speed_variance'])*p.sigma**2
             checks=[]
-            for i in range(6):
+            for i in range(len(times)):
                 row={}
                 for k,variable in enumerate(('position','speed','pitch','parallel')):
                     row[variable+'_mean']=estimate(values[:,i,k],mu[i,k])
@@ -206,36 +212,35 @@ def run(options):
             np.savez_compressed(output/f'{name}_{chart}{suffix}.npz',moments=values,states=out.ys)
             (output/'comparison.json').write_text(json.dumps(report,indent=2)+'\n')
             print(name,chart,'completed',elapsed,'s; orbit/collision',record['accepted_orbit_steps']/record['collision_updates'],flush=True)
-    plot(report,output,times)
+    plot(report,output,times,charts=options.charts)
 
 
-def plot(report,output,times):
+@presentation
+def plot(report,output,times,charts=None):
     import matplotlib.pyplot as plt
-    panels=[('position_mean','Mean z [m]'),('speed_mean','Mean speed [m/s]'),('pitch_mean','Mean pitch'),
-        ('position_variance','Var z [m²]'),('speed_variance','Var speed [m²/s²]'),('pitch_variance','Var pitch'),
-        ('parallel_mean','Mean parallel speed [m/s]'),('parallel_variance','Var parallel speed [m²/s²]'),
-        ('position_parallel_covariance','Cov(z,vparallel) [m²/s]')]
+    p=ProtonBackground(coulomb_log_model='impact')
+    panels=(('position',r'z\nu_0/\sigma_T',p.sigma/p.nu),('speed',r'v/\sigma_T',p.sigma),
+            ('pitch',r'\xi',1.),('parallel',r'v_\parallel/\sigma_T',p.sigma))
     for field,model in dict.fromkeys((row['field'],row.get('model','gc')) for row in report['rows']):
-        rows=[row for row in report['rows'] if row['field']==field and row.get('model','gc')==model]
-        fig,axes=plt.subplots(3,3,figsize=(15,11),layout='constrained')
-        for ax,(name,label) in zip(axes.flat,panels):
-            expected=[e[name]['reference'] for e in rows[0]['evolution']]
-            exact_speed=name.startswith('speed_')
-            ax.plot(times,expected,color='k',lw=2,
-                label='Independent speed theory' if exact_speed else 'Independent axial GC reference' if model=='gc' else 'Independent full-Lorentz numerical reference')
-            half=np.array([e[name].get('reference_half95',0.) for e in rows[0]['evolution']])
-            if np.any(half):ax.fill_between(times,np.asarray(expected)-half,np.asarray(expected)+half,color='k',alpha=.12,label='Reference 95% sampling')
-            for row in rows:
-                values=np.array([e[name]['value'] for e in row['evolution']]);half=np.array([e[name]['half95'] for e in row['evolution']])
-                curve_label=model.upper()+' / '+{'cartesian':'Cartesian','vmec':'VMEC regular chart','boozer':'Boozer regular chart'}[row['chart']]
-                line,=ax.plot(times,values,label=curve_label);ax.fill_between(times,values-half,values+half,color=line.get_color(),alpha=.12)
-            ax.set(xlabel=r'$t\nu_0$',ylabel=label);ax.grid(alpha=.2);ax.ticklabel_format(axis='y',style='sci',scilimits=(-3,4),useOffset=False)
-        axes[0,0].legend(fontsize=8)
-        fig.suptitle(f"{model.upper()} {field}: N={report['particles']}; moment budget {report['moment_tolerance']:g}\n"+
-            ('Shading: pointwise 95% sampling intervals. Axial GC reference omits perpendicular kicks.' if model=='gc' else
-             'Black: independent full-Lorentz numerical reference (speed: radial theory). Grey/blue: separate 95% sampling intervals.'))
+        rows=[r for r in report['rows'] if r['field']==field and r.get('model','gc')==model and (charts is None or r['chart'] in charts)]
+        if not rows:continue
+        fig,axes=plt.subplots(2,4,figsize=(19,7),layout='constrained')
+        for j,(variable,symbol,scale) in enumerate(panels):
+            for i,stat in enumerate(('mean','variance')):
+                ax=axes[i,j];name=variable+'_'+stat
+                for k,row in enumerate(rows):
+                    data=row['evolution']
+                    series(ax,times,[e[name]['value'] for e in data],[e[name]['half95'] for e in data],
+                           std=i==1,scale=scale,label=model.upper()+' / '+row['chart'],color=f'C{k}')
+                data=rows[0]['evolution']
+                series(ax,times,[e[name]['reference'] for e in data],[e[name].get('reference_half95',0.) for e in data],
+                       std=i==1,scale=scale,reference=True,label='Independent speed theory' if variable=='speed' else 'Independent GC reference' if model=='gc' else 'Full-Lorentz reference')
+                ax.set(title=r'$\langle '+symbol+r'\rangle$' if i==0 else r'$\sigma('+symbol+r')$',
+                       xlabel=r'$t\nu_0$')
+        axes[0,0].legend()
+        fig.suptitle(f"{model.upper()} · {field.capitalize()} · N={report['particles']:,} · budget {report['moment_tolerance']:g}")
         suffix='' if model=='gc' else '_lorentz'
-        fig.savefig(output/f'{field}{suffix}_moments.png',dpi=160);plt.close(fig)
+        save(fig,output/f'{field}{suffix}_moments.png')
 
 
 def diffusion(options):
@@ -243,7 +248,7 @@ def diffusion(options):
     from .benchmark_split_multirate import velocity_reference,observables
     from .lorentz_spatial_reference import guiding_center_msd
     output=options.output;output.mkdir(parents=True,exist_ok=True)
-    times=np.linspace(0.,options.horizon,6);rows=[];omega=2048.
+    times=np.linspace(0.,options.horizon,options.save_points);rows=[];omega=2048.
     for model in options.models:
         coarse,fine,reference,_,_=velocity_reference(model,times,'impact',need_pitch=False)
         target=reference['moments']
@@ -257,10 +262,10 @@ def diffusion(options):
             if np.any(out.status):raise RuntimeError((model,chart,np.unique(out.status,return_counts=True)))
             scale=np.array([p.sigma/p.nu]*3+([p.sigma,M*p.sigma**2/field.magnitude] if model=='gc' else [p.sigma]*3))
             speed,pitch,_,msd=observables(out.ys/scale,omega,model)
-            values=(msd,speed,pitch,speed,pitch,speed*pitch)
-            names=('spatial','speed_mean','pitch_mean','speed_variance','pitch_variance','parallel_variance')
+            values=(msd,speed,pitch,speed,pitch,speed*pitch,speed*pitch)
+            names=('spatial','speed_mean','pitch_mean','speed_variance','pitch_variance','parallel_variance','parallel_mean')
             evolution=[]
-            for i in range(6):
+            for i in range(len(times)):
                 evolution.append({name:estimate(value[:,i],expected[i] if name=='spatial' else target[name][i],
                     variance='variance' in name) for name,value in zip(names,values)})
             label=model+' / '+chart
@@ -272,32 +277,37 @@ def diffusion(options):
             report=dict(particles=options.particles,moment_tolerance=options.tolerance,times=times.tolist(),seed=seed,cap=options.cap,
                 omega=omega,scope='Uniform physical field; manufactured flux charts; normalized speed and rho_sigma displacement.',rows=rows)
             (output/'comparison.json').write_text(json.dumps(report,indent=2)+'\n')
-    plot_diffusion(report,output)
+    plot_diffusion(report,output,charts=options.charts)
 
 
-def plot_diffusion(report,output):
+@presentation
+def plot_diffusion(report,output,charts=None):
     import matplotlib.pyplot as plt
     times=np.asarray(report.get('times',np.linspace(0.,.1,6)))
-    panels=(('spatial',r'$E[|\Delta G_\perp|^2]/\rho_\sigma^2$','Spatial diffusion'),
-        ('speed_mean',r'$E[v]/\sigma$','Mean speed'),('pitch_mean',r'$E[\xi]$','Mean pitch'),
-        ('speed_variance',r'$\mathrm{Var}(v)/\sigma^2$','Speed variance'),
-        ('pitch_variance',r'$\mathrm{Var}(\xi)$','Pitch variance'),
-        ('parallel_variance',r'$\mathrm{Var}(v_\parallel)/\sigma^2$','Parallel-speed variance'))
-    fig,axes=plt.subplots(2,3,figsize=(15,8),layout='constrained');seen=set()
-    for row in report['rows']:
-        for ax,(name,label,title) in zip(axes.flat,panels):
-            if row['model'] not in seen:
-                ax.plot(times,[e[name]['reference'] for e in row['evolution']],color='k',
-                    ls='-' if row['model']=='gc' else '--',lw=2,label='Independent '+row['model']+' reference')
-            values=np.array([e[name]['value'] for e in row['evolution']]);half=np.array([e[name]['half95'] for e in row['evolution']])
-            line,=ax.plot(times,values,label=row['model']+' / '+row['chart'])
-            ax.fill_between(times,values-half,values+half,color=line.get_color(),alpha=.1)
-            ax.set(title=title,xlabel=r'$t\nu_0$',ylabel=label);ax.grid(alpha=.2)
-        seen.add(row['model'])
-    axes[0,0].legend(fontsize=6)
-    fig.suptitle(f"Uniform-field coupled spatial/velocity statistics; N={report['particles']}; moment budget {report['moment_tolerance']:g}\n"
-        'Black = independent transient generator; shading = pointwise 95% sampling intervals; GC spatial kicks enabled')
-    fig.savefig(output/'diffusion_moments.png',dpi=160);plt.close(fig)
+    for model in dict.fromkeys(r['model'] for r in report['rows']):
+        rows=[r for r in report['rows'] if r['model']==model and (charts is None or r['chart'] in charts)]
+        if not rows:continue
+        panels=[('speed',r'v/\sigma_T'),('pitch',r'\xi')]
+        if 'parallel_mean' in rows[0]['evolution'][0]:panels.append(('parallel',r'v_\parallel/\sigma_T'))
+        fig,axes=plt.subplots(2,len(panels),figsize=(5*len(panels),7),layout='constrained')
+        for j,(variable,symbol) in enumerate(panels):
+            for i,stat in enumerate(('mean','variance')):
+                ax=axes[i,j];name=variable+'_'+stat
+                for k,row in enumerate(rows):
+                    series(ax,times,[e[name]['value'] for e in row['evolution']],[e[name]['half95'] for e in row['evolution']],
+                           std=i==1,label=model.upper()+' / '+row['chart'],color=f'C{k}')
+                series(ax,times,[e[name]['reference'] for e in rows[0]['evolution']],std=i==1,reference=True,label='Independent theory')
+                ax.set(title=r'$\langle '+symbol+r'\rangle$' if i==0 else r'$\sigma('+symbol+r')$',xlabel=r'$t\nu_0$')
+        axes[0,0].legend()
+        fig.suptitle(f"{model.upper()} · Uniform field · N={report['particles']:,} · budget {report['moment_tolerance']:g}")
+        save(fig,output/f'diffusion_{model}_moments.png')
+        fig,ax=plt.subplots(figsize=(7,4.5),layout='constrained')
+        for k,row in enumerate(rows):
+            series(ax,times,[e['spatial']['value'] for e in row['evolution']],[e['spatial']['half95'] for e in row['evolution']],
+                   label=model.upper()+' / '+row['chart'],color=f'C{k}')
+        series(ax,times,[e['spatial']['reference'] for e in rows[0]['evolution']],reference=True,label='Independent theory')
+        ax.set(xlabel=r'$t\nu_0$',ylabel=r'$\langle|\Delta G_\bot|^2\rangle/\rho_\sigma^2$',title=model.upper()+': spatial diffusion')
+        ax.legend();save(fig,output/f'diffusion_{model}_spatial.png')
 
 
 def adapters(options):
@@ -361,6 +371,7 @@ def main():
     parser.add_argument('--cap',type=float,default=.0025)
     parser.add_argument('--tolerance',type=float,default=.01)
     parser.add_argument('--horizon',type=float)
+    parser.add_argument('--save-points',type=int,default=201,help='actual saved times; no interpolation of particle samples')
     parser.add_argument('--study',choices=('coupled','diffusion','adapters'),default='coupled')
     parser.add_argument('--models',nargs='+',choices=('gc','lorentz'),help='Coupled defaults to GC; select Lorentz explicitly for full-gyromotion runs')
     parser.add_argument('--fields',nargs='+',choices=('mirror','helix'),default=['mirror','helix'])
@@ -377,7 +388,7 @@ def main():
     options=parser.parse_args()
     if options.models is None:options.models=['gc'] if options.study=='coupled' else ['gc','lorentz']
     if options.horizon is None:options.horizon=.025 if options.study=='coupled' else .1
-    if options.particles<2 or options.tolerance<=0 or options.cap<=0 or (options.study=='coupled' and options.horizon!=.025):
+    if options.particles<2 or options.save_points<2 or options.tolerance<=0 or options.cap<=0 or (options.study=='coupled' and options.horizon!=.025):
         parser.error('use >=2 particles, positive budget and the coupled reference horizon .025')
     if options.plot_only:
         report=json.loads((options.output/'comparison.json').read_text())
@@ -386,8 +397,8 @@ def main():
             (options.output/'comparison.json').write_text(json.dumps(report,indent=2)+'\n')
         elif any(row.get('model')=='lorentz' for row in report['rows']) and options.study=='coupled' and 'lorentz_reference' not in report:
             parser.error('old Lorentz reports require --lorentz-reference; GC curves are not Lorentz references')
-        if options.study=='diffusion':plot_diffusion(report,options.output)
-        elif options.study=='coupled':plot(report,options.output,np.linspace(0.,options.horizon,6))
+        if options.study=='diffusion':plot_diffusion(report,options.output,charts=options.charts)
+        elif options.study=='coupled':plot(report,options.output,np.asarray(report.get('times',np.linspace(0.,options.horizon,6))),charts=options.charts)
         else:parser.error('adapter checks have no figure')
     else:{'coupled':run,'diffusion':diffusion,'adapters':adapters}[options.study](options)
 

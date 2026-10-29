@@ -15,61 +15,26 @@ from .nonrelativistic_collision_reference import ProtonBackground, proton_first_
 from .validate_collisional_slowing_down import native_solver
 from .validate_collision_physics import run_batches, work
 from .validate_beam_relaxation import estimate
+from .collision_plotting import presentation, histogram, save
 
 
+@presentation
 def plot(report, reference, output):
     import matplotlib.pyplot as plt
-    meta = report["metadata"]
-    grid = np.asarray(report["plot_reference"]["times"])
-    cdf = reference.cdf(grid)
-    edges = np.asarray(report["plot_reference"]["histogram_edges"])
-    right = edges[-1]
-    density = np.diff(reference.cdf(edges))/np.diff(edges)
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
-    moments, moment_axes = plt.subplots(2, 2, figsize=(11, 7.5), constrained_layout=True)
-    labels = ("Fixed", f"Adaptive\ntol {meta['base_tolerance']:g}",
-        f"Adaptive\ntol {meta['tight_tolerance']:g}")
-    for i, model in enumerate(("gc", "lorentz")):
-        rows = [row for row in report["rows"] if row["model"] == model]
-        for j, row in enumerate(rows):
-            color, style = f"C{j}", ("-", "--", "-.")[j]
-            axes[i, 0].step(grid, row["empirical_cdf"], where="post", color=color,
-                ls=style, label=labels[j].replace("\n", ", "))
-            axes[i, 1].stairs(row["plot"]["histogram_density"], edges, color=color,
-                ls=style, label=labels[j].replace("\n", ", "))
-            for k, name in enumerate(("mean", "variance")):
-                moment_axes[i, k].errorbar(j, row[name]["value"],
-                    yerr=row[name]["half95"], fmt="o", color=color, capsize=5)
-        if len(rows) != len(labels):
-            raise ValueError("fixed, base-adaptive and tight-adaptive rows required")
-        axes[i, 0].plot(grid, cdf, "k", lw=2, label="Independent first-passage theory")
-        axes[i, 1].stairs(density, edges, color="k", lw=2, label="Theory, same bin averages")
-        for k, title in enumerate(("stopping-time CDF", "stopping-time density")):
-            axes[i, k].set(title=model.upper()+": "+title, xlabel=r"First-stopping time $\tau\nu_0$",
-                ylabel="Cumulative probability" if k == 0 else "Probability density", xlim=(0., right))
-            axes[i, k].grid(alpha=.2)
-        for k, name in enumerate(("mean", "variance")):
-            ax = moment_axes[i, k]
-            ax.axhline(report["reference"]["restricted_"+name], color="k", lw=2,
-                label="Independent first-passage theory")
-            ax.set(title=model.upper()+": first-stopping "+name,
-                xticks=range(3), xticklabels=labels, xlim=(-.4, 2.4),
-                ylabel=r"$\tau\nu_0$" if k == 0 else r"$(\tau\nu_0)^2$")
-            ax.grid(alpha=.2)
-    subtitle = (f"Production Brownian sampler; {meta.get('backend', 'unspecified')}; N={meta['particles']:,} per configuration; "
-        f"ceiling {meta['cap']:g} unchanged")
-    fig.suptitle("First slowing down: E=5T to first E<=2T; no source\n"+subtitle)
-    moments.suptitle("First-stopping mean and variance; empirical 95% sampling intervals\n"+subtitle)
-    axes[0, 0].legend(fontsize=8)
-    axes[0, 1].legend(fontsize=8)
-    moment_axes[0, 0].legend(fontsize=8)
-    for suffix, figure in (("distribution", fig), ("moments", moments)):
-        for extension in ("png", "svg"):
-            figure.savefig(output.with_name(output.stem+"_"+suffix).with_suffix("."+extension), dpi=170)
-        plt.close(figure)
-    report["plot_reference"] = dict(times=grid.tolist(), cdf=cdf.tolist(),
-        histogram_edges=edges.tolist(), histogram_density=density.tolist(),
-        survival_beyond_display=float(1-reference.cdf(right)))
+    meta=report["metadata"]
+    edges=np.asarray(report["plot_reference"]["histogram_edges"])
+    density=np.diff(reference.cdf(edges))/np.diff(edges)
+    fig,axes=plt.subplots(1,2,figsize=(13,4.8),layout="constrained")
+    for ax,model in zip(axes,("gc","lorentz")):
+        row=min((r for r in report["rows"] if r["model"]==model),
+                key=lambda r:(r["method"]=="fixed",r["tolerance"] if r["tolerance"] is not None else np.inf))
+        counts=np.asarray(row["plot"]["histogram_density"])*meta["particles"]*np.diff(edges)
+        grid=np.linspace(0.,edges[-1],1001)
+        histogram(ax,edges,counts,density,particles=meta["particles"],curve=(grid,np.gradient(reference.cdf(grid),grid)))
+        ax.set(title=model.upper()+": first-stopping distribution",xlabel=r"$\tau\nu_0$",xlim=(0.,edges[-1]))
+        ax.legend()
+    fig.suptitle(f"First crossing from 5T to 2T · N={meta['particles']:,}")
+    save(fig,output.with_name(output.stem+"_distribution"))
 
 
 def main():

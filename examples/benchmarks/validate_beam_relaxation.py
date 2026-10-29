@@ -25,6 +25,7 @@ from scipy.stats import kstest, norm, t as student_t
 from .thermal_relaxation_reference import RelaxationReference, PhysicalRelaxationReference, impact_coefficients
 from .validate_collision_physics import thermal_solver, run_batches, work
 from .analyze_collisional_convergence import conditional_spatial_statistics
+from .collision_plotting import presentation, series, histogram, save
 
 
 def estimate(values, expected, *, variance=False):
@@ -101,97 +102,74 @@ def prepare_references(times, coefficient_model="constant_log"):
     return references, checks
 
 
+@presentation
 def plot(report, output):
     import matplotlib.pyplot as plt
-    times = np.asarray(report["metadata"]["times"])
-    quantities = ("speed_mean", "speed_variance", "pitch_mean", "pitch_variance")
-    fig, axes = plt.subplots(2, 4, figsize=(16, 7), constrained_layout=True)
-    for i, model in enumerate(("gc", "lorentz")):
-        ref = report["references"][model]
-        for j, name in enumerate(quantities):
-            ax = axes[i, j]
-            ax.plot(times, ref["transient"][name], "k", lw=2, label="Independent transient theory")
-            ax.axhline(ref["equilibrium"][name], color="k", ls="--", lw=1, label="Stationary model limit")
-            if report["metadata"].get("coefficient_model") == "physical":
-                ax.axhline(ref["maxwell_equilibrium"][name], color=".5", ls=":", lw=1, label="Ideal Maxwell / isotropic limit")
-            for row in report["rows"]:
-                if row["model"] != model:
-                    continue
-                color = "C0" if row["method"] == "fixed" else "C1"
-                fine = row["setting"] == "fine"
-                values = [s[name]["value"] for s in row["evolution"]]
-                half = np.array([s[name]["half95"] for s in row["evolution"]])
-                ax.plot(times, values, color=color, ls="-" if fine else ":", lw=1.2,
-                    label=f"{row['method']}: {row['setting']}")
-                if fine:
-                    ax.fill_between(times, values-half, values+half, color=color, alpha=.1)
-            ax.set(title=f"{model.upper()}: {name.replace('_', ' ')}", xlabel=r"Time $t\nu_0$")
-            ax.grid(alpha=.2)
-    axes[0, 0].legend(fontsize=6)
-    family = report["metadata"].get("coefficient_model", "constant_log")
-    fig.suptitle(f"Non-Maxwellian 5T beam relaxing in a fixed T bath; N={report['metadata']['particles']:,}; coefficients: {family}\n"
-        "Black solid = transient reference, dashed = stationary limit; fine-run shading = marginal 95% MC intervals")
-    fig.savefig(output.with_suffix(".png"), dpi=170)
-    fig.savefig(output.with_suffix(".svg"))
-    plt.close(fig)
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), constrained_layout=True)
-    ref = np.asarray(report["references"]["gc"]["transient"]["spatial_integral"])
+    times=np.asarray(report["metadata"]["times"]);meta=report["metadata"]
+    panels=(("speed",r"v/\sigma_T"),("pitch",r"\xi"),("parallel",r"v_\parallel/\sigma_T"))
+    for model in ("gc","lorentz"):
+        ref=report["references"][model]
+        rows=[r for r in report["rows"] if r["model"]==model]
+        selected=[r for r in rows if r["setting"]=="fine"] or rows
+        fig,axes=plt.subplots(2,3,figsize=(15,7),layout="constrained")
+        for j,(variable,symbol) in enumerate(panels):
+            for i,stat in enumerate(("mean","variance")):
+                ax=axes[i,j];name=variable+"_"+stat
+                for k,row in enumerate(selected):
+                    series(ax,times,[s[name]["value"] for s in row["evolution"]],[s[name]["half95"] for s in row["evolution"]],
+                           std=i==1,label=model.upper(),color=f"C{k}")
+                series(ax,times,ref["transient"][name],std=i==1,reference=True,label="Independent theory")
+                ax.set(title=r"$\langle "+symbol+r"\rangle$" if i==0 else r"$\sigma("+symbol+r")$",xlabel=r"$t\nu_0$")
+        axes[0,0].legend()
+        fig.suptitle(f"{model.upper()} · Thermalization · N={meta['particles']:,}")
+        save(fig,output.with_name(output.stem+"_"+model))
+    # Keep the unabsorbed spatial-diffusion diagnostic.
+    fig,axes=plt.subplots(1,3,figsize=(16,4.5),layout="constrained")
+    ref=np.asarray(report["references"]["gc"]["transient"]["spatial_integral"])
     for row in report["rows"]:
-        if row["model"] != "gc":
-            continue
-        label = f"{row['method']}: {row['setting']}"
-        color = "C0" if row["method"] == "fixed" else "C1"
-        fine = row["setting"] == "fine"
-        for ax, name in zip(axes[:2], ("spatial_integral", "displacement2")):
-            y = np.array([s[name]["value"] for s in row["spatial"]])
-            half = np.array([s[name]["half95"] for s in row["spatial"]])
-            ax.plot(times, y, color=color, ls="-" if fine else ":", label=label)
-            if fine:
-                ax.fill_between(times, y-half, y+half, color=color, alpha=.1)
-        if fine:
-            ratio = [s["noise"]["mean"] if "noise" in s else 1. for s in row["spatial"]]
-            axes[2].plot(times, ratio, color=color, label=label)
-    for ax, title in zip(axes[:2], ("Accumulated diffusion: E[Q]", "Actual spatial spreading: E[R_perp^2]")):
-        ax.plot(times, ref, "k", lw=2, label="Independent transient theory")
-        ax.set(title=title, xlabel=r"Time $t\nu_0$", ylabel=r"Displacement$^2$ / $\rho_\sigma^2$")
-    axes[2].axhline(1., color="k", ls="--", label="Exact conditional-noise mean")
-    half = 1.96/np.sqrt(report["metadata"]["particles"])
-    axes[2].axhspan(1-half, 1+half, color=".8", alpha=.3, label="Marginal 95% null range")
-    axes[2].set(title="Spatial noise: E[R_perp^2/Q]", xlabel=r"Time $t\nu_0$")
-    for ax in axes:
-        ax.grid(alpha=.2)
-    axes[0].legend(fontsize=7)
-    fig.suptitle("Spatial diffusion of the same initially fast GC population at fixed times; no thermal stopping or source")
-    fig.savefig(output.with_name(output.stem+"_spatial").with_suffix(".png"), dpi=170)
-    fig.savefig(output.with_name(output.stem+"_spatial").with_suffix(".svg"))
-    plt.close(fig)
-    if not all("distribution" in report["references"][model] for model in ("gc", "lorentz")):
-        return
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
-    for i, model in enumerate(("gc", "lorentz")):
-        ref = report["references"][model]["distribution"]
-        rows = [r for r in report["rows"] if r["model"] == model]
-        for j, name in enumerate(("speed", "pitch")):
-            edges = np.asarray(ref[name+"_edges"])
-            for method in sorted({r["method"] for r in rows}):
-                row = min((r for r in rows if r["method"] == method), key=lambda r: r["cap"])
-                if "histograms" in row:
-                    counts = np.asarray(row["histograms"][name]["counts"])
-                    count = row["histograms"][name]["particles"]
-                else:
-                    values = row["final_"+name]
-                    counts, count = np.histogram(values, edges)[0], len(values)
-                axes[i, j].stairs(counts/(count*np.diff(edges)), edges, label=method)
-            axes[i, j].stairs(ref[name+"_density"], edges, color="k", lw=2, label="Independent final-time theory")
-            axes[i, j].set(title=f"{model.upper()}: final {name} distribution", ylabel="Probability density",
-                xlabel=r"$v/\sqrt{T/m}$" if name == "speed" else r"$\xi$")
-            axes[i, j].grid(alpha=.2)
-            axes[i, j].legend(fontsize=7)
-    fig.suptitle(f"Relaxation from the same initially fast, anisotropic beam; coefficients: {family}\n"
-        f"Final physical time t*nu0={times[-1]:g}; N={report['metadata']['particles']:,}; finest saved cap per method")
-    fig.savefig(output.with_name(output.stem+"_distribution").with_suffix(".png"), dpi=170)
-    fig.savefig(output.with_name(output.stem+"_distribution").with_suffix(".svg"))
-    plt.close(fig)
+        if row["model"]!="gc":continue
+        for ax,name in zip(axes[:2],("spatial_integral","displacement2")):
+            series(ax,times,[s[name]["value"] for s in row["spatial"]],[s[name]["half95"] for s in row["spatial"]],
+                   label=row["method"]+" / "+row["setting"])
+        if row["setting"]=="fine":
+            axes[2].plot(times,[s.get("noise",{}).get("mean",1.) for s in row["spatial"]],label=row["method"])
+    for ax,title in zip(axes[:2],("Accumulated diffusion","Spatial spreading")):
+        series(ax,times,ref,reference=True,label="Independent theory")
+        ax.set(title=title,xlabel=r"$t\nu_0$",ylabel=r"$\langle R_\bot^2\rangle/\rho_\sigma^2$")
+    half=1.96/np.sqrt(meta["particles"])
+    axes[2].axhspan(1-half,1+half,color=".8",alpha=.3)
+    axes[2].axhline(1.,color="k",ls="--");axes[2].set(title="Conditional-noise mean",xlabel=r"$t\nu_0$")
+    axes[0].legend();save(fig,output.with_name(output.stem+"_spatial"))
+    if not all("distribution" in report["references"][model] for model in ("gc","lorentz")):return
+    fig,axes=plt.subplots(2,2,figsize=(13,9),layout="constrained")
+    for i,model in enumerate(("gc","lorentz")):
+        ref=report["references"][model]["distribution"]
+        row=min((r for r in report["rows"] if r["model"]==model),key=lambda r:(r["method"]=="fixed",r["cap"]))
+        # Raw samples allow finer bins, evaluated against the same independent generator.
+        family=meta.get("coefficient_model","constant_log")
+        cls=PhysicalRelaxationReference if family=="physical" else RelaxationReference
+        reference=cls(lower=.05*np.sqrt(2.) if model=="gc" else 0.,nodes=1024,
+                      **(dict(law=impact_coefficients) if family=="impact" else {}))
+        for j,name in enumerate(("speed","pitch")):
+            ax=axes[i,j];edges=np.asarray(ref[name+"_edges"])
+            if "histograms" in row:
+                counts=np.asarray(row["histograms"][name]["counts"]);count=row["histograms"][name]["particles"]
+                density=np.asarray(ref[name+"_density"])
+            else:
+                samples=row["final_"+name];edges=np.linspace(0.,6.,61) if name=="speed" else np.linspace(-1.,1.,51)
+                counts=np.histogram(samples,edges)[0];count=len(samples)
+                cdf=reference.speed_cdf(times[-1]) if name=="speed" else reference.pitch_cdf(times[-1],harmonics=12)
+                density=np.diff(cdf(edges))/np.diff(edges)
+            grid=np.linspace(edges[0],edges[-1],501)
+            cdf=reference.speed_cdf(times[-1]) if name=="speed" else reference.pitch_cdf(times[-1],harmonics=12)
+            histogram(ax,edges,counts,density,particles=count,initial=meta.get("initial_"+name,np.sqrt(10.) if name=="speed" else .6),
+                      curve=(grid,np.gradient(cdf(grid),grid)))
+            ax.set(title=model.upper()+": "+("Speed distribution" if name=="speed" else "Pitch distribution"),
+                   xlabel=r"$v/\sigma_T$" if name=="speed" else r"$\xi$")
+            ax.legend(fontsize=10)
+            if name=="pitch":ax.set_ylim(top=max(counts)*1.4)
+    fig.suptitle(f"Thermalized distributions · N={meta['particles']:,} · "+r"$t\nu_0=$"+f"{times[-1]:g}")
+    save(fig,output.with_name(output.stem+"_distribution"))
 
 
 def main():
