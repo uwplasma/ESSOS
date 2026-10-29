@@ -1,4 +1,4 @@
-"""Four paired QA alpha-loss cases using the saved native FAX mode.
+"""Six paired QA alpha-loss cases using the saved native FAX mode.
 
 Preparation is the default. --run explicitly enables particle tracing;
 --platform cuda selects a GPU. No FAX solve or collision implementation is
@@ -17,16 +17,18 @@ import time
 import numpy as np
 
 from examples.benchmarks.ae3d_firm3d_archive import MANIFEST
-from examples.benchmarks.ae3d_firm3d_loss import MASS, CHARGE, ENERGY, birth_parameters, equilibrium, native_trace
+from examples.benchmarks.ae3d_firm3d_loss import MASS, CHARGE, ENERGY, birth_parameters, equilibrium, native_trace, spatial_geometry
 from examples.benchmarks.sampling import estimate_interval
 from examples.fieldline_tracing.fax_qa_poincare import ROOT, ARTIFACTS, default_equilibrium
 
 
 CASES = {
-    "unperturbed": (False, False, "Unperturbed, collisionless"),
-    "unperturbed_collisions": (False, True, "Unperturbed + collisions"),
-    "perturbed": (True, False, "Native FAX, collisionless"),
-    "perturbed_collisions": (True, True, "Native FAX + collisions"),
+    "unperturbed": (False, False, False, "Unperturbed, collisionless"),
+    "unperturbed_collisions": (False, True, False, "Unperturbed + collisions"),
+    "perturbed": (True, False, False, "Native FAX, collisionless"),
+    "perturbed_collisions": (True, True, False, "Native FAX + collisions"),
+    "unperturbed_collisions_spatial": (False, True, True, "Unperturbed + collisions + spatial diffusion"),
+    "perturbed_collisions_spatial": (True, True, True, "Native FAX + collisions + spatial diffusion"),
 }
 
 
@@ -121,11 +123,11 @@ def prepare(args):
         equilibrium_mode_tolerance=args.mode_tolerance,equilibrium_harmonics=len(field.xm),
         field_angular_points=None if args.representation == "fourier" else args.angular_points,
         field_model="Existing K=0 Boozer equilibrium; natural-cubic physical potential; existing GC RHS",
-        collision_operator="Native adaptive Dopri8 and split Coulomb speed/pitch kicks; no spatial diffusion",
+        collision_operator="Native adaptive Dopri8 and split Coulomb kicks; spatial diffusion selected per case",
         background=dict(species=["electron", "deuterium"], density_each_m3=args.density,
                         temperature_each_eV=args.temperature,
                         source="examples/particle_tracing_collisions/trace_particles_vmec_collisionsMu.py defaults"),
-        comparison_scope="Native FAX four-case experiment; no published collisional loss reference or fitted paper endpoints",
+        comparison_scope="Native FAX six-case experiment; no published collisional loss reference or fitted paper endpoints",
         platform=jax.default_backend(), devices=[str(d) for d in jax.devices()[:1]],
         device_kind=jax.devices()[0].device_kind, jax_version=jax.__version__)
     write_summary(args.output, summary)
@@ -163,8 +165,10 @@ def run_cases(args, field, wave, births, summary):
 
     species = BackgroundSpecies(2, jnp.array([ELECTRON_MASS/PROTON_MASS, 2.]),
         jnp.array([-1., 1.]), jnp.full(2, args.density), jnp.full(2, args.temperature))
+    geometry=spatial_geometry(args.boozmn) if any(CASES[c][2] for c in summary["requested_cases"]) else None
+    summary["spatial_geometry_harmonics"]=None if geometry is None else len(geometry.xm)
     for case in summary["requested_cases"]:
-        with_wave, with_collisions, label = CASES[case]
+        with_wave, with_collisions, with_spatial, label = CASES[case]
         summary.update(status="running", active_case=case, completed_save_intervals=0)
         write_summary(args.output, summary)
         print(f"Tracing {label}: {args.particles} markers, {args.tmax*1e3:g} ms, "
@@ -177,11 +181,15 @@ def run_cases(args, field, wave, births, summary):
             species=species if with_collisions else None,seed=args.seed,execution=args.execution,
             collision_dtmax=args.collision_dtmax,stable_keys=args.birth_source == "volume",
             collision_tolerance=args.collision_tolerance,moment_tolerance=args.moment_tolerance,
-            timing_repeats=args.timing_repeats)
+            timing_repeats=args.timing_repeats,spatial_diffusion=with_spatial,
+            spatial_geometry=geometry if with_spatial else None)
         np.savez_compressed(args.output/f"{case}.npz", times=trace.times, states=trace.states,
             loss_times=trace.loss_times, thermalized_times=trace.thermalized_times,
-            failed_times=trace.failed_times, axis_stop_times=trace.axis_stop_times,weights=births["weights"])
-        summary["cases"][case] = dict(**summarize_trace(trace,births["weights"]),wall_seconds=time.perf_counter()-case_started)
+            failed_times=trace.failed_times, axis_stop_times=trace.axis_stop_times,weights=births["weights"],
+            marker_indices=births["marker_indices"])
+        summary["cases"][case] = dict(**summarize_trace(trace,births["weights"]),
+            perturbed=with_wave,collisions=with_collisions,spatial_diffusion=with_spatial,
+            wall_seconds=time.perf_counter()-case_started)
         write_summary(args.output, summary)
         print(f"Completed {case}: {json.dumps(summary['cases'][case])}", flush=True)
     summary.pop("active_case", None)
@@ -205,7 +213,7 @@ def plot_saved(output):
         return
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.7), constrained_layout=True)
     curves = []
-    for case, (wave, collisions, label) in CASES.items():
+    for case, (wave, collisions, spatial, label) in CASES.items():
         if case not in summary["cases"]:
             continue
         result = summary["cases"][case]
@@ -216,11 +224,11 @@ def plot_saved(output):
         weights = weights/weights.sum()
         exits = np.where(data["loss_times"] >= 0,data["loss_times"],np.inf)
         curve = 100*(weights@(exits[:,None] <= times[None,:]))
-        color, style = ("C1" if wave else "C0"), ("-" if collisions else "--")
+        color, style = ("C1" if wave else "C0"), (":" if spatial else "-" if collisions else "--")
         suffix = "" if result["valid_loss_estimate"] else " (unresolved markers)"
         curve_label = f"{label}: {curve[-1]:.2f}%"+suffix
         axes[0].step(times*1e3,curve,where="post",color=color,ls=style,label=curve_label)
-        curves.append((times,curve,color,style,curve_label))
+        curves.append((case,times,curve,color,style,curve_label))
         active = np.ones(data["states"].shape[:2], bool)
         for name in ("loss_times", "thermalized_times", "failed_times", "axis_stop_times"):
             stop = data[name][:, None]
@@ -231,7 +239,7 @@ def plot_saved(output):
                            out=np.full(len(times),np.nan),where=denominator>0)
         axes[1].plot(times*1e3, energy, color=color, ls=style, label=label)
     ylabel = "Volume-weighted loss fraction [%]" if summary.get("birth_source") == "volume" else "Loss fraction [%]"
-    axes[0].set(xlabel="Time [ms]",ylabel=ylabel,title="Four paired alpha-loss cases")
+    axes[0].set(xlabel="Time [ms]",ylabel=ylabel,title=f"{len(curves)} paired alpha-loss cases")
     axes[1].set(xlabel="Time [ms]", ylabel="Mean kinetic energy [MeV]", title="Active markers only (changing population)")
     for ax in axes:
         ax.grid(alpha=.2)
@@ -242,7 +250,9 @@ def plot_saved(output):
         fig.savefig(output/f"fax_qa_loss_collisions.{suffix}",dpi=300)
     plt.close(fig)
     fig,ax = plt.subplots(figsize=(8.5,5.5),constrained_layout=True)
-    for times,curve,color,style,label in curves:
+    np.savetxt(output/"loss_fraction.csv",np.column_stack((curves[0][1],*[c[2]/100 for c in curves])),
+        delimiter=",",header="time_s,"+",".join(c[0] for c in curves),comments="")
+    for case,times,curve,color,style,label in curves:
         ax.step(times*1e3,curve,where="post",color=color,ls=style,label=label)
     ax.set(xlabel="Time [ms]",ylabel=ylabel,xlim=(0,summary["duration_s"]*1e3),ylim=(0,None),
         title=f"QA alpha losses: {summary['particles']} particles per case\n"
@@ -260,13 +270,13 @@ def main():
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--run", action="store_true")
     action.add_argument("--report-only", action="store_true")
-    parser.add_argument("--mode", type=Path, default=ARTIFACTS/"fax_qa_poincare/mode.npz")
-    parser.add_argument("--wave-summary", type=Path, default=ARTIFACTS/"fax_qa_poincare/summary.json")
+    parser.add_argument("--mode", type=Path, default=ARTIFACTS/"qa_saved_mode_35/mode.npz")
+    parser.add_argument("--wave-summary", type=Path, default=ARTIFACTS/"qa_saved_mode_35/wave_summary.json")
     parser.add_argument("--boozmn", type=Path, default=default_equilibrium())
     parser.add_argument("--births", type=Path)
-    parser.add_argument("--output", type=Path, default=ARTIFACTS/"fax_qa_loss_collisions_512")
-    parser.add_argument("--particles", type=int, default=512)
-    parser.add_argument("--birth-source", choices=("archive","volume"), default="archive")
+    parser.add_argument("--output", type=Path, default=ARTIFACTS/"qa_8192_six_cases_gpu")
+    parser.add_argument("--particles", type=int, default=8192)
+    parser.add_argument("--birth-source", choices=("archive","volume"), default="volume")
     parser.add_argument("--birth-s-min", type=float, default=0.)
     parser.add_argument("--birth-s-max", type=float, default=1.)
     parser.add_argument("--case", choices=("all", *CASES), default="all")
@@ -274,14 +284,14 @@ def main():
     parser.add_argument("--timestep", type=float, default=1e-8)
     parser.add_argument("--n-save", type=int, default=101)
     parser.add_argument("--method", choices=("essos_dopri8",), default="essos_dopri8")
-    parser.add_argument("--execution", choices=("shared", "independent"), default="shared")
+    parser.add_argument("--execution", choices=("shared", "independent"), help="Default: independent on CUDA, shared on CPU")
     parser.add_argument("--representation", choices=("fourier","table"), default="fourier")
-    parser.add_argument("--mode-tolerance", type=float, default=1e-7)
+    parser.add_argument("--mode-tolerance", type=float, default=1e-4)
     parser.add_argument("--timing-repeats", type=int, default=0, help="Warm repeats for the unperturbed collisionless orbit kernel")
     parser.add_argument("--tolerance", type=float, default=1e-9)
     parser.add_argument("--collision-dtmax", type=float, default=1e-6)
     parser.add_argument("--collision-tolerance", type=float, default=1e-3)
-    parser.add_argument("--moment-tolerance", type=float, default=.005)
+    parser.add_argument("--moment-tolerance", type=float, default=.01)
     parser.add_argument("--density", type=float, default=4.21e20)
     parser.add_argument("--temperature", type=float, default=17.8e3)
     parser.add_argument("--seed", type=int, default=42)
@@ -289,11 +299,16 @@ def main():
     parser.add_argument("--platform", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--wall-seconds", type=float, default=21600.)
     args = parser.parse_args()
+    if args.execution is None:
+        args.execution="independent" if args.platform=="cuda" else "shared"
     if args.execution == "independent" and args.representation != "fourier":
         parser.error("Native independent execution requires --representation fourier")
     if args.report_only:
         plot_saved(args.output)
         return
+    for path in (args.mode,args.wave_summary,args.boozmn):
+        if not path.is_file():
+            parser.error(f"Missing input: {path}; transfer the saved mode packet or pass explicit input paths")
     if (args.particles < 1 or (args.birth_source == "archive" and args.particles > 5000)
             or (args.birth_source == "volume" and args.births is not None)
             or not 0 <= args.birth_s_min < args.birth_s_max <= 1

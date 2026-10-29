@@ -57,6 +57,39 @@ def test_complex_spectrum_recovers_two_analytical_modes_and_derivatives():
     np.testing.assert_allclose(values[:,:5],portable.ys,rtol=2e-12,atol=1e-9)
 
 
+def test_native_wave_moment_predictor_matches_public_derivatives():
+    from jax.experimental import pallas as pl
+    from essos.background_species import BackgroundSpecies
+    from essos.boozer import guiding_center_rhs
+    from essos.mode_reconstruction import PhysicalPotentialMode
+    from essos.split import _split_field_data, native_step_limit, prepare_physics
+    from examples.benchmarks.alfven_gc_verification import MASS, CHARGE, SPEED
+    field=equilibrium()
+    s=np.linspace(0,1,9)
+    wave=PhysicalPotentialMode(s,[[2,1],[3,2]],s[:,None]**np.array([1,1.5])*np.array([2e4j,1e4]),9e5)
+    bath=BackgroundSpecies(1,jnp.array([2.]),jnp.array([1.]),jnp.array([4.21e20]),jnp.array([17800.]))
+    initial=jnp.array([.4,.3,.7,.7*SPEED,1e-14])
+    public=lambda y:y.at[0].set(y[0]**2+y[1]**2).at[1].set(jnp.arctan2(y[1],y[0]))
+    def build(source):
+        rhs=lambda t,y,a:jnp.append(guiding_center_rhs(source,y[:4],y[4]/MASS,MASS,CHARGE,t=t,perturbation=wave),0.)
+        limit=native_step_limit(source,bath,MASS,CHARGE,initial,rhs,public,lambda y:y[:3],lambda p:source.modB(*p),
+            gc=True,coordinate=True,boozer=True,electric_field=None,time_dependent=True,tmax=.01,dtmax=1e-4,
+            reference_magnitude=lambda p:field.modB(*p))
+        return rhs,None,None,None,limit
+    def native(y,t):
+        arrays,factory=prepare_physics(field,_split_field_data(field),build,initial,2,predictor_only=True,time_dependent=True)
+        def kernel(yref,tref,*refs):
+            *data,outref=refs
+            outref[...]=factory(data,yref[...])[-1](tref[()],yref[...])
+        return pl.pallas_call(kernel,out_shape=jax.ShapeDtypeStruct((),y.dtype),grid=(),interpret=True)(jnp.pad(y,(0,3)),t,*arrays)
+    states=jnp.stack((initial,initial.at[3].multiply(-.7).at[4].multiply(1.3),initial.at[0].multiply(1.1).at[3].multiply(.2)))
+    times=jnp.array([0.,1.3e-6,.0002])
+    expected=jax.jit(jax.vmap(lambda y,t:build(field)[-1](t,y,None)))(states,times)
+    actual=jax.jit(jax.vmap(native))(states,times)
+    assert bool(jnp.all((actual>0)&(actual<1e-4)))
+    np.testing.assert_allclose(actual,expected,rtol=3e-10,atol=1e-16)
+
+
 def test_negative_m_and_full_torus_n_satisfy_ideal_relation_and_periodicity():
     field = equilibrium()
     wave = SpectralAlfvenMode(np.linspace(0, 1, 5), [[-3, 7]], np.ones((5, 1))*1e4j, -7e5)

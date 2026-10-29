@@ -115,3 +115,68 @@ def test_live_fax_eigensolver_can_export_a_small_mode(tmp_path):
     baseline=native_trace(field,data,None,tmax=2e-8,timestep=1e-8,tolerance=1e-8,n_save=3,timing_repeats=1)
     assert not baseline.failed.any() and len(baseline.timings['warm_seconds'])==1
     np.testing.assert_allclose(baseline.states[:,0],trace.states[:,0],rtol=1e-13)
+
+
+def test_archived_embedding_and_spatial_wave_collision_trace(tmp_path):
+    import jax
+    import jax.numpy as jnp
+    from netCDF4 import Dataset
+    from examples.benchmarks.ae3d_firm3d_loss import spatial_geometry,native_trace
+    from examples.benchmarks.alfven_gc_verification import equilibrium
+    from essos.background_species import BackgroundSpecies
+    from essos.mode_reconstruction import PhysicalPotentialMode
+    path=tmp_path/'boozmn.nc';s=np.array([1/6,.5,5/6])
+    with Dataset(path,'w') as nc:
+        nc.createDimension('surface',3);nc.createDimension('mode',3)
+        nc.createVariable('ns_b','i4',())[...]=4
+        for name,values,dimension in (('jlist',[2,3,4],'surface'),('ixm_b',[0,1,2],'mode'),('ixn_b',[0,0,2],'mode')):
+            nc.createVariable(name,'i4',(dimension,))[:]=values
+        for name,values in (('rmnc_b',np.column_stack((s*0+2,.2*np.sqrt(s),s*0))),
+            ('zmns_b',np.column_stack((s*0,.2*np.sqrt(s),s*0))),
+            ('pmns_b',np.column_stack((s*0,.03*np.sqrt(s),s*0)))):
+            nc.createVariable(name,'f8',('surface','mode'))[:]=values
+    geometry=spatial_geometry(path)
+    assert len(geometry.xm)==2  # Only exactly zero geometry harmonics are removed.
+    q=jnp.array([.5,.4,.2]);R=2+.2*np.sqrt(q[0])*np.cos(q[1]);phi=q[2]+.03*np.sqrt(q[0])*np.sin(q[1])
+    np.testing.assert_allclose(geometry(q),[R*np.cos(phi),R*np.sin(phi),.2*np.sqrt(q[0])*np.sin(q[1])],atol=2e-14)
+    bath=BackgroundSpecies(1,jnp.array([2.]),jnp.array([1.]),jnp.array([4.21e20]),jnp.array([17800.]))
+    wave=PhysicalPotentialMode([0.,.5,1.],[[2,1]],np.array([[0.],[500j],[1000j]]),9e5)
+    data=np.array([[.5,.4,.2,6e6,1e12]])
+    traced=native_trace(equilibrium(),data,wave,tmax=1e-10,timestep=1e-10,tolerance=1e-7,
+        species=bath,n_save=2,collision_dtmax=1e-10,spatial_diffusion=True,spatial_geometry=geometry)
+    assert not traced.failed.any() and np.isfinite(traced.states).all()
+    np.testing.assert_allclose(traced.states[0,0,:4],data[0,:4],rtol=1e-13)
+
+
+def test_six_case_outputs_preserve_births_and_weighted_loss_curves(tmp_path,monkeypatch):
+    from examples.benchmarks import fax_qa_loss_collisions as benchmark
+    data=np.array([[.2,.1,.3,6e6,1e12],[.4,.2,.5,-5e6,2e12]])
+    births=dict(initial_conditions=data,weights=np.array([1.,3.]),marker_indices=np.arange(2))
+    args=SimpleNamespace(boozmn=tmp_path/'unused.nc',particles=2,tmax=.01,method='essos_dopri8',
+        timestep=1e-8,n_save=2,tolerance=1e-9,seed=42,execution='independent',collision_dtmax=1e-6,
+        birth_source='volume',collision_tolerance=.001,moment_tolerance=.01,timing_repeats=0,
+        density=4.21e20,temperature=17800.,output=tmp_path)
+    summary=dict(requested_cases=list(benchmark.CASES),cases={},device_kind='mock',mass_kg=benchmark.MASS,
+        particles=2,duration_s=.01,frequency_hz=27800.,birth_source='volume')
+    embedding=SimpleNamespace(xm=np.array([0,1]));wave=object();calls=[]
+    monkeypatch.setattr(benchmark,'spatial_geometry',lambda path:embedding)
+    def trace(field,received,perturbation,**settings):
+        assert received is data and settings['seed']==42
+        assert settings['spatial_geometry'] is (embedding if settings['spatial_diffusion'] else None)
+        calls.append((perturbation is wave,settings['species'] is not None,settings['spatial_diffusion']))
+        return SimpleNamespace(times=np.array([0.,.01]),states=np.ones((2,2,5))*1e6,
+            lost=np.array([False,True]),failed=np.zeros(2,bool),axis_stopped=np.zeros(2,bool),
+            loss_times=np.array([-1.,.005]),thermalized_times=np.full(2,-1.),
+            failed_times=np.full(2,-1.),axis_stop_times=np.full(2,-1.))
+    monkeypatch.setattr(benchmark,'native_trace',trace)
+    benchmark.run_cases(args,SimpleNamespace(xm=np.arange(25)),wave,births,summary)
+    assert set(calls)=={(False,False,False),(True,False,False),(False,True,False),
+                        (True,True,False),(False,True,True),(True,True,True)}
+    benchmark.plot_saved(tmp_path)
+    curves=np.genfromtxt(tmp_path/'loss_fraction.csv',delimiter=',',names=True)
+    assert len(curves.dtype.names)==7
+    for case in benchmark.CASES:
+        np.testing.assert_allclose(curves[case],[0.,.75])
+        with np.load(tmp_path/f'{case}.npz') as saved:
+            np.testing.assert_array_equal(saved['marker_indices'],births['marker_indices'])
+            np.testing.assert_array_equal(saved['weights'],births['weights'])

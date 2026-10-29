@@ -34,14 +34,14 @@ def energy_amplitudes(geometry, background, waves, *, radial_points=32, angular_
     """
     import jax
     import jax.numpy as jnp
-    from fax.vorticity import _sample_boozer_quadrature
+    from fax.vorticity import _sample_boozer_geometry
 
     nodes, weights = np.polynomial.legendre.leggauss(radial_points)
     nodes, weights = (nodes+1)/2, weights/2
     angle = np.arange(angular_points)*2*np.pi/angular_points
     theta, zeta = np.meshgrid(angle, angle, indexing="ij")
     def sample(geo):
-        values = _sample_boozer_quadrature(geo, jnp.asarray(nodes), jnp.asarray(theta), jnp.asarray(zeta),
+        values = _sample_boozer_geometry(geo, jnp.asarray(nodes), jnp.asarray(theta), jnp.asarray(zeta),
                                          jnp.ones_like(geo.s), 1)
         return values[0], values[3]
 

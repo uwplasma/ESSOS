@@ -53,7 +53,7 @@ download is needed to read an existing ESSOS mode packet.
      tests/test_fax_adapter.py tests/test_mode_reconstruction.py
    python -m examples.benchmarks.fax_shear_alfven_benchmark
 
-The ten bridge tests include a small full physical-potential FAX matrix solve
+The thirteen bridge tests include a small full physical-potential FAX matrix solve
 against independent uniform-plasma dispersion, interchange and native tracing
 of two markers with different energies. They also check phase preservation,
 AE3D angular-frequency units, spline values, Maxwell identities, a smooth axis,
@@ -107,44 +107,44 @@ validation questions; reconstruction agreement alone does not resolve them.
 Native particle and collision comparisons
 ----------------------------------------
 
-After generating ``fax_qa_poincare/mode.npz`` and its summary:
+Place the new 35-harmonic packet in
+``../artifacts/fax_integration/qa_saved_mode_35/`` as ``mode.npz`` and
+``wave_summary.json``. Keep the packet and its hash-checked summary together.
+The default study uses 8192 generated births, a ``1e-4`` equilibrium cutoff
+(25 retained magnetic harmonics for this QA equilibrium), and all six cases:
 
 .. code-block:: bash
 
-   python -m examples.benchmarks.fax_qa_loss_collisions --run \
-     --particles 512 --case all --tmax 0.01 --platform cuda \
-     --execution independent --wall-seconds 21600
+   python -m examples.benchmarks.ae3d_firm3d_archive --download
+   XLA_PYTHON_CLIENT_PREALLOCATE=false python -u -m examples.benchmarks.fax_qa_loss_collisions --run \
+     --particles 8192 --birth-source volume --seed 42 --case all --tmax 0.01 \
+     --platform cuda --execution independent --representation fourier \
+     --mode-tolerance 1e-4 --moment-tolerance 0.01 --collision-tolerance 1e-3 \
+     --tolerance 1e-9 --collision-dtmax 1e-6 --wall-seconds 21600 \
+     --output ../artifacts/fax_integration/qa_8192_six_cases_gpu
 
-This compares the same archived births with/without the native FAX wave and
-with/without collisions, using native adaptive Dopri8 and the base split
-collision controller. The initial timestep is not fixed. Every marker retains
-its archived parallel velocity and mu/m, so its birth energy may differ
-slightly from the nominal monoenergetic value after field reconstruction.
+The cases are unperturbed/perturbed collisionless, unperturbed/perturbed with
+speed/pitch collisions, and unperturbed/perturbed with those collisions plus
+spatial diffusion. All use native adaptive Dopri8 and the base split collision
+controller; the initial timestep is not fixed. CUDA defaults to independent
+execution, and CPU defaults to shared execution. Individual ``--case`` values
+allow separate jobs; the two added cases end in ``_collisions_spatial``.
 The wave voltage and initial phase come from the saved magnetic comparison.
 The bath defaults to electrons/deuterium, each at ``4.21e20 m^-3`` and
-``17.8 keV``. This comparison explicitly disables spatial collision diffusion;
-it isolates speed/pitch scattering. Use the base ``trace_split`` API with a
-Cartesian geometry embedding for spatial diffusion studies.
-
-For a generated cohort on a larger Linux GPU machine:
-
-.. code-block:: bash
-
-   XLA_PYTHON_CLIENT_PREALLOCATE=false python -u -m examples.benchmarks.fax_qa_loss_collisions --run \
-     --particles 2000 --birth-source volume --seed 42 --case all --tmax 0.01 \
-     --platform cuda --execution independent --representation fourier \
-     --moment-tolerance 0.01 --collision-tolerance 1e-3 --tolerance 1e-9 \
-     --mode ../artifacts/fax_integration/qa_saved_mode/mode.npz \
-     --wave-summary ../artifacts/fax_integration/qa_saved_mode/wave_summary.json \
-     --wall-seconds 21600 --output ../artifacts/fax_integration/qa_2000_four_cases_gpu
+``17.8 keV``. Spatial cases read the same archive's full Cartesian surface
+embedding. Its toroidal shift is converted from ``phi=zeta+p`` to ESSOS's
+``phi=zeta-nu`` convention. Only exactly zero geometry harmonics are dropped;
+the magnetic cutoff is not applied to geometry. Spatial kicks use the existing
+Cartesian displacement and nonlinear coordinate inversion in ``trace_split``.
 
 The generated proposal points are uniform in flux coordinates, with physical
 Boozer-volume weights and isotropic pitch at 3.52 MeV. They are a new source,
 not the archive's centrally concentrated fusion-birth population. Particle
-proposals and collision keys have stable prefixes as count increases. All four
+proposals and collision keys have stable prefixes as count increases. All six
 cases share the same births and weights. ``--birth-s-min``/``--birth-s-max``
 restrict the source region. The archive option retains its 5000-marker limit;
-generated cohorts may use 8000 or more when requested.
+generated cohorts support 8192 markers. To reuse archived births, select
+``--birth-source archive --particles 5000`` or a smaller archive prefix.
 
 The moment budget, collision-kick tolerance and orbit tolerance are separate.
 ``--collision-dtmax`` bounds adaptive collision intervals, while ``--timestep``
@@ -162,9 +162,16 @@ normalization is at least as strict as the per-marker orbit budget.
 blocked warm execution times separately. Wave tables use indexed vector
 kernel reads, preserving the existing spline and potential formulas. Radial
 rows and individual harmonics are not expanded into scalar selection chains.
+The native moment predictor scalarizes speed and pitch before differentiation,
+avoiding higher spatial field derivatives multiplied by zero velocity tangents.
+It retains the same first derivatives, diagonal Hessian and moment budget.
 Plotting writes a bold-font ``fax_qa_loss_fraction.png`` at 300 dpi,
-plus SVG/PDF and an accompanying loss/energy figure. Report-only plotting
-works on saved partial cases without treating missing cases as completed.
+plus SVG/PDF, an accompanying loss/energy figure, and ``loss_fraction.csv``
+(time in seconds and volume-weighted fractions from zero to one). Each
+completed case saves marker indices, weights, states and termination times in
+its own NPZ before the next case starts. Regenerate figures and CSV, including
+from partial runs, with ``--report-only --output PATH``. Missing cases are not
+treated as completed.
 Shared execution is still the native adaptive solver on the selected GPU;
 independent execution uses the vectorized table adapter and shared exact
 value/Jacobian evaluations. Earlier 158-harmonic GPU attempts predate these

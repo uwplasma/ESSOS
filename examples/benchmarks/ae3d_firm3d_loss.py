@@ -82,6 +82,27 @@ def equilibrium(path, *, angular_points=48, mode_tolerance=1e-7):
             angle_grid=None if angular_points is None else (angular_points, angular_points))
 
 
+def spatial_geometry(path):
+    """Read the archived embedding; phi=zeta+p, whereas ESSOS uses zeta-nu."""
+    from types import SimpleNamespace
+    from netCDF4 import Dataset
+    from essos.split import BoozerGeometry
+
+    with Dataset(path) as nc:
+        for name in ("rmnc_b","zmns_b","pmns_b"):
+            if name not in nc.variables:
+                raise ValueError("Spatial diffusion requires archived geometry: "+name)
+        s=(np.asarray(nc["jlist"][:])-1.5)/(int(nc["ns_b"][:])-1)
+        m,n=np.asarray(nc["ixm_b"][:]),np.asarray(nc["ixn_b"][:])
+        values={name:sign*(np.asarray(nc[source][:]).T if source in nc.variables else np.zeros((len(m),len(s))))
+            for name,source,sign in (("rmnc_b","rmnc_b",1),("rmns_b","rmns_b",1),
+                ("zmnc_b","zmnc_b",1),("zmns_b","zmns_b",1),
+                ("numnc_b","pmnc_b",-1),("numns_b","pmns_b",-1))}
+    keep=np.any(np.stack(list(values.values()))!=0,axis=(0,2))
+    return BoozerGeometry.from_booz_xform(SimpleNamespace(s_b=s,xm_b=m[keep],xn_b=n[keep],
+        **{name:value[keep] for name,value in values.items()}))
+
+
 def birth_parameters(data, B):
     """Preserve archived v_parallel AND mu/m, rather than recomputing either."""
     velocity, mu = data[:, 3], data[:, 4]
@@ -143,7 +164,8 @@ def prepare(packet, output, angular_points, mode_tolerance):
 
 def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
                  n_save=101, seed=42, execution="shared", collision_dtmax=1e-6, stable_keys=False,
-                 collision_tolerance=1e-3, moment_tolerance=.005, timing_repeats=0):
+                 collision_tolerance=1e-3, moment_tolerance=.005, timing_repeats=0,
+                 spatial_diffusion=False, spatial_geometry=None):
     """Preserve archived v_parallel and mu/m, using orbit-only tracing in vacuum."""
     from types import SimpleNamespace
     import jax
@@ -152,6 +174,8 @@ def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
     from essos.dynamics import Particles
     from essos.split import SplitStatus, trace_split
 
+    if spatial_diffusion and (species is None or spatial_geometry is None):
+        raise ValueError("Spatial diffusion requires collisions and a Cartesian Boozer embedding")
     points = jnp.asarray(data[:, :3])
     b0 = jax.vmap(lambda p: field.modB(*p))(points)
     speed, pitch = birth_parameters(jnp.asarray(data), b0)
@@ -197,7 +221,7 @@ def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
     solution = trace_split(field,particles,species,tmax=tmax,timestep=timestep,n_save=n_save,
         integrator="essos_dopri8",perturbation=wave,rtol=tolerance,atol=tolerance,
         orbit_dt0=timestep,collision_dtmax=collision_dtmax,execution=execution,
-        spatial_diffusion=False,adaptive=True,orbit_adaptive=True,
+        spatial_diffusion=spatial_diffusion,spatial_geometry=spatial_geometry,adaptive=True,orbit_adaptive=True,
         collision_controller="moments" if collisional else "conservative",
         collision_tolerance=collision_tolerance,moment_tolerance=moment_tolerance)
     y, status, stop = np.asarray(solution.ys), np.asarray(solution.status), np.asarray(solution.t)

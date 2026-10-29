@@ -2676,9 +2676,13 @@ def native_step_limit(field,bath,mass,charge,initial,rhs,public,position,magnitu
         def limit(t,y,args):
             vel=phase(y)[-2:]
             f=lambda v:velocity(v,y,t)
-            f0=f(vel);F=jax.jacfwd(f)(vel);H=jax.jacfwd(jax.jacfwd(f))(vel)
+            if hasattr(field,'_velocity_jet'):
+                velocity_jet=field._velocity_jet(f,vel)
+            else:
+                f0=f(vel);F=jax.jacfwd(f)(vel);H=jax.jacfwd(jax.jacfwd(f))(vel)
+                velocity_jet=(f0,F,jnp.stack((H[:,0,0],H[:,1,1]),axis=1))
             jet=collision_jet(radial,*vel,y,rhs(t,y,args)/nu)
-            linear,quadratic=expanded_moment_budget((f0,F,jnp.stack((H[:,0,0],H[:,1,1]),axis=1)),jet,vel,jnp.maximum(reference_time,t*nu))
+            linear,quadratic=expanded_moment_budget(velocity_jet,jet,vel,jnp.maximum(reference_time,t*nu))
             return interval_from_budget(linear,quadratic,tolerance,cap=cap)/nu
         return limit
     def radial(r,point):
@@ -3123,6 +3127,17 @@ def prepare_physics(field, field_view, build, initial, noise_dim,*,predictor_onl
         magnetic_vector=calls.add(vector,fast_vector,3)
 
     class View:
+        def _velocity_jet(self,function,vel):
+            # Scalarize before AD so fixed-position tangents stay symbolic zero.
+            graph=_flatten(lambda r,xi:tuple(function(jnp.stack((r,xi)))),*vel)
+            def evaluate(r,xi):
+                return scalar_graph(graph.jaxpr,graph.consts,r,xi,calls=calls,defer=True)
+            first=[];second=[]
+            for i in range(2):
+                def column(v):return evaluate(v,vel[1]) if i==0 else evaluate(vel[0],v)
+                first.append(jnp.asarray(jax.jacfwd(column)(vel[i])))
+                second.append(jnp.asarray(jax.jacfwd(jax.jacfwd(column))(vel[i])))
+            return jnp.asarray(evaluate(*vel)),jnp.stack(first,axis=1),jnp.stack(second,axis=1)
         def gc_quantities(self,point):
             v=geometry(*point)
             return jnp.asarray(v[:3]),jnp.asarray(v[3:6]),v[6],jnp.asarray(v[7:10]),jnp.asarray(v[10:13]),jnp.asarray(v[13:16]),v[16]

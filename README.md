@@ -809,8 +809,10 @@ when differentiating reconstructed potentials.
 
 The examples retain the full FAX physical-potential QA calculation, frozen-field
 Poincaré plots, the independent uniform-plasma check, the archived AE3D/FIRM3D
-loss comparison, and four paired native adaptive tracing cases with/without
-waves and collisions. Amplitude is an imposed normalization; FAX supplies mode
+loss comparison, and six paired native adaptive tracing cases with/without
+waves, collisions and spatial diffusion. The large-run preset uses 8192 shared
+births, a 35-harmonic wave and a `1e-4` equilibrium cutoff, and saves per-marker
+loss data plus CSV curves. Amplitude is an imposed normalization; FAX supplies mode
 frequency and relative structure. See [the workflow and commands](docs/fax_modes.rst).
 
 ```sh
@@ -820,8 +822,8 @@ python -m examples.benchmarks.fax_qa_loss_collisions --help
 ```
 
 FAX is optional for importing an already saved mode. Live calculations require
-its `fax.vorticity` API. Ten bridge tests cover units, phases, field identities,
-an actual small FAX solve, native tracing, and accepted-map collision gradients.
+its `fax.vorticity` API. Thirteen bridge tests cover units, phases, field identities,
+an actual small FAX solve, native tracing, spatial diffusion and accepted-map collision gradients.
 Added outputs default to `../artifacts/fax_integration/`; generated results
 are kept outside this checkout.
 
