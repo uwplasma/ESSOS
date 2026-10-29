@@ -915,7 +915,7 @@ def test_gpu_sampler_uses_the_production_threefry_normal_stream():
         jax.config.update('jax_threefry_partitionable',original)
 
 
-def test_scalar_lowering_preserves_constants_slices_and_surface_values():
+def test_scalar_lowering_preserves_constants_slices_and_surface_values(monkeypatch):
     x = jnp.array([.2,-.3,.4,.5,0.,0.,0.,0.])
     functions = (lambda x:x[1:2],lambda x:jax.lax.dynamic_slice(x,(x[0].astype(int),),(1,)),
         lambda x:jnp.sin(x)+jnp.cos(x),lambda x:jax.lax.erf(x),
@@ -984,6 +984,27 @@ def test_scalar_lowering_preserves_constants_slices_and_surface_values():
     graph=s._flatten(lambda p:(*fast(*p),*jax.jacfwd(value)(p).reshape(-1)),point)
     prepared=_scalar_predictor(graph,calls)
     assert sum(eq.primitive in calls.handlers for eq in prepared.jaxpr.eqns)==1
+    # Older JAX keeps actual DropVars after inlining partially used calls.
+    # Coalescing must promote all required outputs into the shared definition.
+    from jax._src import core
+    calls=KernelCalls();formula=lambda x:(x*x,jnp.sin(x),x+3.)
+    call=calls.add(formula,lambda refs,x:formula(x),3)
+    def partial(x):
+        a,_,_=call(x);_,b,_=call(x);_,_,c=call(x)
+        return a+b+c
+    point=jnp.array(.2);legacy=jax.make_jaxpr(partial)(point)
+    used=set(legacy.jaxpr.outvars)
+    used.update(v for eq in legacy.jaxpr.eqns for v in eq.invars if not isinstance(v,core.Literal))
+    legacy=type(legacy)(legacy.jaxpr.replace(eqns=[eq.replace(outvars=[
+        v if v in used else core.DropVar(v.aval) for v in eq.outvars]) for eq in legacy.jaxpr.eqns]),legacy.consts)
+    core.check_jaxpr(legacy.jaxpr)
+    with monkeypatch.context() as patch:
+        patch.setattr(jax,'make_jaxpr',lambda *a,**k:lambda *v:legacy)
+        graph=s._flatten(partial,point)
+    core.check_jaxpr(graph.jaxpr)
+    assert sum(eq.primitive in calls.handlers for eq in graph.jaxpr.eqns)==1
+    actual=jax.jit(jax.value_and_grad(lambda x:scalar_graph(graph.jaxpr,graph.consts,x,calls=calls)[0]))(point)
+    np.testing.assert_allclose(actual,(sum(formula(point)),2*point+jnp.cos(point)+1),rtol=3e-13)
     powers=jnp.array([-.7, .7, 1.])
     for exponent in (-4,-2,-1,0,1,2,3,6):
         actual=jax.jit(lambda v:s._kernel_integer_power(v,exponent))(powers)
