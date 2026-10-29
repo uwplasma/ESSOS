@@ -66,7 +66,8 @@ def prepare(args):
         recorded = snapshot
     if hashlib.sha256(args.boozmn.read_bytes()).hexdigest() != snapshot["equilibrium_sha256"]:
         raise ValueError("The equilibrium differs from the magnetic-section comparison")
-    field = equilibrium(args.boozmn,angular_points=None if args.representation == "fourier" else args.angular_points)
+    field = equilibrium(args.boozmn,angular_points=None if args.representation == "fourier" else args.angular_points,
+                        mode_tolerance=args.mode_tolerance)
     if args.birth_source == "volume":
         data,weights = volume_births(field,args.particles,args.seed,args.birth_s_min,args.birth_s_max)
         birth_digest = hashlib.sha256(data.tobytes()).hexdigest()
@@ -117,6 +118,7 @@ def prepare(args):
         birth_s_range=[args.birth_s_min,args.birth_s_max] if args.birth_source == "volume" else None,
         weights="physical Boozer volume Jacobian" if args.birth_source == "volume" else "equal markers",
         mass_kg=MASS, charge_C=CHARGE, field_representation=args.representation,
+        equilibrium_mode_tolerance=args.mode_tolerance,equilibrium_harmonics=len(field.xm),
         field_angular_points=None if args.representation == "fourier" else args.angular_points,
         field_model="Existing K=0 Boozer equilibrium; natural-cubic physical potential; existing GC RHS",
         collision_operator="Native adaptive Dopri8 and split Coulomb speed/pitch kicks; no spatial diffusion",
@@ -149,6 +151,7 @@ def summarize_trace(trace, weights=None):
         result["solver_steps"] = {name:dict(total=int(np.sum(values)),max=int(np.max(values)))
             for name in ("accepted","rejected","orbit_steps","orbit_rejected")
             for values in (np.asarray(getattr(trace.step_stats,name)),)}
+    if hasattr(trace,"timings"):result["timings"]=trace.timings
     return result
 
 
@@ -165,14 +168,16 @@ def run_cases(args, field, wave, births, summary):
         summary.update(status="running", active_case=case, completed_save_intervals=0)
         write_summary(args.output, summary)
         print(f"Tracing {label}: {args.particles} markers, {args.tmax*1e3:g} ms, "
-              f"{args.method}, initial dt={args.timestep:g} s, {summary['device_kind']}", flush=True)
+              f"{args.method}, {len(field.xm)} equilibrium harmonics, initial dt={args.timestep:g} s, "
+              f"{summary['device_kind']}", flush=True)
         case_started = time.perf_counter()
 
         trace = native_trace(field,births["initial_conditions"],wave if with_wave else None,
             tmax=args.tmax,timestep=args.timestep,n_save=args.n_save,tolerance=args.tolerance,
             species=species if with_collisions else None,seed=args.seed,execution=args.execution,
             collision_dtmax=args.collision_dtmax,stable_keys=args.birth_source == "volume",
-            collision_tolerance=args.collision_tolerance,moment_tolerance=args.moment_tolerance)
+            collision_tolerance=args.collision_tolerance,moment_tolerance=args.moment_tolerance,
+            timing_repeats=args.timing_repeats)
         np.savez_compressed(args.output/f"{case}.npz", times=trace.times, states=trace.states,
             loss_times=trace.loss_times, thermalized_times=trace.thermalized_times,
             failed_times=trace.failed_times, axis_stop_times=trace.axis_stop_times,weights=births["weights"])
@@ -271,6 +276,8 @@ def main():
     parser.add_argument("--method", choices=("essos_dopri8",), default="essos_dopri8")
     parser.add_argument("--execution", choices=("shared", "independent"), default="shared")
     parser.add_argument("--representation", choices=("fourier","table"), default="fourier")
+    parser.add_argument("--mode-tolerance", type=float, default=1e-7)
+    parser.add_argument("--timing-repeats", type=int, default=0, help="Warm repeats for the unperturbed collisionless orbit kernel")
     parser.add_argument("--tolerance", type=float, default=1e-9)
     parser.add_argument("--collision-dtmax", type=float, default=1e-6)
     parser.add_argument("--collision-tolerance", type=float, default=1e-3)
@@ -294,7 +301,9 @@ def main():
             or not 0 <= args.seed < 2**32 or not 0 < args.tmax <= .01
             or not all(np.isfinite(v) and v > 0 for v in
                        (args.timestep,args.tolerance,args.collision_dtmax,args.collision_tolerance,args.moment_tolerance,
-                        args.density,args.temperature,args.wall_seconds))):
+                        args.density,args.temperature,args.wall_seconds))
+            or not np.isfinite(args.mode_tolerance) or not 0 < args.mode_tolerance < 1
+            or args.timing_repeats < 0):
         parser.error("Invalid particle count, duration, step, background, resolution, seed or wall cap")
     if args.output.exists() and any(args.output.iterdir()):
         parser.error("Choose a fresh --output to preserve results")

@@ -1005,6 +1005,39 @@ def test_scalar_lowering_preserves_constants_slices_and_surface_values(monkeypat
     assert sum(eq.primitive in calls.handlers for eq in graph.jaxpr.eqns)==1
     actual=jax.jit(jax.value_and_grad(lambda x:scalar_graph(graph.jaxpr,graph.consts,x,calls=calls)[0]))(point)
     np.testing.assert_allclose(actual,(sum(formula(point)),2*point+jnp.cos(point)+1),rtol=3e-13)
+    # Dynamic reads must grow with the selected row, not the whole table.
+    sizes=[]
+    for rows in (8,64):
+        table=jnp.arange(rows*16.,dtype=jnp.float64).reshape(rows,16)
+        formula=lambda x:jnp.sum(jnp.sin(table[x[0].astype(jnp.int32)]*x[1]))
+        point=jnp.array([3.,.02]);graph=s._flatten(formula,point)
+        def lowered(x):
+            constants=[s._KernelTable(v.reshape(-1),v.shape) if v.ndim else v for v in graph.consts]
+            return scalar_graph(graph.jaxpr,constants,x)[0]
+        sizes.append(len(jax.make_jaxpr(lowered)(point).jaxpr.eqns))
+        for fn in (lambda f:f,jax.jacfwd,lambda f:jax.jacfwd(jax.jacfwd(f))):
+            np.testing.assert_allclose(jax.jit(fn(lowered))(point),fn(formula)(point),rtol=3e-13,atol=1e-12)
+    assert sizes[1]<=sizes[0]+16
+    from jax.experimental import pallas as pl
+    def ref_kernel(source,target):
+        index=jnp.asarray(0,jnp.int32)
+        graph=s._flatten(lambda i:source[i]+source[i]**2,index)
+        assert sum(eq.primitive.name=='get' for eq in graph.jaxpr.eqns)==1
+        target[0]=s._evaluate_kernel(graph.jaxpr,graph.consts,index)[0]
+        def mutate(i):
+            previous=target[i];target[i]=previous+1
+            return previous+target[i]
+        graph=s._flatten(mutate,index)
+        assert sum(eq.primitive.name=='get' for eq in graph.jaxpr.eqns)==2
+        target[0]=s._evaluate_kernel(graph.jaxpr,graph.consts,index)[0]
+    ref_call=pl.pallas_call(ref_kernel,out_shape=jax.ShapeDtypeStruct((1,),jnp.float64),interpret=True)
+    np.testing.assert_array_equal(jax.jit(ref_call)(jnp.array([2.])),[13.])
+    from jax._src.lax.lax import lt_to_p
+    from essos.rk import _bind_primitive
+    for dtype in (jnp.float32,jnp.float64):
+        ordered=jnp.array([-jnp.nan,-jnp.inf,-1.,-0.,0.,1.,jnp.inf,jnp.nan],dtype)
+        args=(ordered[:,None],ordered[None,:])
+        np.testing.assert_array_equal(jax.jit(lambda a,b:_bind_primitive(lt_to_p,(a,b),{}))(*args),lt_to_p.bind(*args))
     powers=jnp.array([-.7, .7, 1.])
     for exponent in (-4,-2,-1,0,1,2,3,6):
         actual=jax.jit(lambda v:s._kernel_integer_power(v,exponent))(powers)

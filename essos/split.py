@@ -1228,6 +1228,7 @@ def _flatten(function, *examples):
     from jax._src.interpreters import partial_eval
     graph = jax.make_jaxpr(function)(*examples)
     graph = jax.make_jaxpr(lambda *x: _evaluate_inline(graph.jaxpr, graph.consts, *x))(*examples)
+    readonly=all(type(effect).__name__=='ReadEffect' for effect in graph.jaxpr.effects)
     aliases,expressions,kept={},{},[]
     def freeze(value):
         if isinstance(value,dict):return tuple((k,freeze(v)) for k,v in sorted(value.items()))
@@ -1242,7 +1243,7 @@ def _flatten(function, *examples):
     for eq in graph.jaxpr.eqns:
         inputs=[v if isinstance(v,Literal) else aliases.get(v,v) for v in eq.invars]
         key=None
-        if not eq.effects:
+        if not eq.effects or (readonly and eq.primitive.name in ('get','masked_load')):
             try:key=eq.primitive,tuple(operand(v) for v in inputs),freeze(eq.params)
             except TypeError:pass
         if key is not None and key in expressions:
@@ -1382,7 +1383,13 @@ def _evaluate_kernel(graph, constants, *arguments, scalarize=False):
             result = [_kernel_integer_power(vals[0], p['y'])]
         elif name == 'le_to':
             result = [jnp.less_equal(vals[0], vals[1]) | jnp.isnan(vals[1])]
-        elif name in ('concatenate', 'stack') and (len(vals) > 2 or (scalarize and all((v.size == 1 for v in vals)))):
+        elif name=='stack':
+            axis=p['axis'];shape=[1]*(vals[0].ndim+1);shape[axis]=len(vals)
+            index=jnp.arange(len(vals)).reshape(shape)
+            value=jnp.zeros(eq.outvars[0].aval.shape,vals[0].dtype)
+            for i,v in enumerate(vals):value=jnp.where(index==i,jnp.expand_dims(v,axis),value)
+            result=[value]
+        elif name=='concatenate' and (len(vals)>2 or all(v.size==1 for v in vals)):
             outshape = eq.outvars[0].aval.shape
             if any((v.size != 1 for v in vals)):
                 raise ValueError(('concatenate', p))
@@ -2701,18 +2708,19 @@ class KernelCalls:
     """Keep native field reductions intact while scalarizing moment algebra."""
     def __init__(self):self.handlers={}
 
-    def first_jet(self,function,kernel_function):
-        """Share one exact 3D value/Jacobian evaluation across JVP directions."""
+    def first_jet(self,function,kernel_function,*,outputs=3,dimensions=3):
+        """Share one exact value/Jacobian evaluation across JVP directions."""
         def ordinary(*point):
             jacobian=jax.jacfwd(lambda x:jnp.asarray(function(*x)))(jnp.asarray(point))
             return (*function(*point),*jacobian.reshape(-1))
-        packed=self.add(ordinary,kernel_function,12)
+        packed=self.add(ordinary,kernel_function,outputs*(dimensions+1))
         @jax.custom_jvp
-        def value(*point):return packed(*point)[:3]
+        def value(*point):return packed(*point)[:outputs]
         @value.defjvp
         def directional(primals,tangents):
             data=packed(*primals)
-            return data[:3],tuple(sum(data[3+3*i+j]*tangents[j] for j in range(3)) for i in range(3))
+            return data[:outputs],tuple(sum(data[outputs+dimensions*i+j]*tangents[j]
+                for j in range(dimensions)) for i in range(outputs))
         return value
 
     def add(self, function, kernel_function, count,*,kernel_jvp=None):
@@ -2763,6 +2771,36 @@ def _vmec_position_tangent(refs,point,direction,tables):
     c,s=jnp.cos(point[2]),jnp.sin(point[2])
     return radial*c-R*s*direction[2],radial*s+R*c*direction[2],vertical
 
+class _KernelTable:
+    """Lazy constant-table views: load the requested cell, not every row."""
+    def __init__(self, ref, shape, indices=None):
+        self.ref=ref
+        self.indices=np.arange(np.prod(shape),dtype=np.int64).reshape(shape) if indices is None else indices
+        self.shape,self.ndim=self.indices.shape,self.indices.ndim
+        self.offset=int(self.indices.flat[0])
+        self.strides=tuple(int(np.take(self.indices,1,axis=i).flat[0])-self.offset if n>1 else 0
+                           for i,n in enumerate(self.shape))
+    def __array__(self,dtype=None,copy=None):
+        values=np.empty(self.shape,object)
+        for i in np.ndindex(self.shape):values[i]=self.ref[int(self.indices[i])]
+        return values if dtype is None else values.astype(dtype)
+    def _view(self,indices):
+        view=type(self)(self.ref,indices.shape,indices)
+        expected=np.full(indices.shape,view.offset,np.int64)
+        for i,(n,stride) in enumerate(zip(indices.shape,view.strides)):
+            shape=[1]*indices.ndim;shape[i]=n
+            expected+=np.arange(n).reshape(shape)*stride
+        return view if np.array_equal(indices,expected) else np.asarray(view)
+    def __getitem__(self,index):
+        index=index if isinstance(index,tuple) else (index,)
+        if len(index)==self.ndim and all(isinstance(i,(int,np.integer,jax.core.Tracer,jax.Array)) for i in index):
+            return self.ref[self.offset+sum(i*s for i,s in zip(index,self.strides))]
+        return self._view(self.indices[index])
+    def reshape(self,*args,**kwargs):return self._view(self.indices.reshape(*args,**kwargs))
+    def transpose(self,*args):return self._view(self.indices.transpose(*args))
+    def squeeze(self,axis=None):return self._view(self.indices.squeeze(axis))
+
+
 def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,defer=False):
     memo={} if memo is None else memo
     def word_key(value):
@@ -2772,6 +2810,9 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
         value=np.asarray(value)
         return ('literal',value.dtype.str,value.shape,value.tobytes())
     def logical(value, shape):
+        if isinstance(value,_KernelTable):
+            if shape:return value.reshape(shape)
+            value=value.reshape(shape)[()]
         if isinstance(value, tuple):
             out=np.empty((len(value),),object)
             for i,v in enumerate(value):out[i]=v
@@ -2808,7 +2849,7 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
             'neg':np.negative,'abs':np.abs,'sqrt':np.sqrt,'eq':np.equal,'ne':np.not_equal,
             'lt':np.less,'le':np.less_equal,'gt':np.greater,'ge':np.greater_equal,
             'max':np.maximum,'min':np.minimum,'and':np.bitwise_and,'or':np.bitwise_or}
-        static=all(np.asarray(v).dtype!=object for v in values)
+        static=all(not isinstance(v,_KernelTable) and np.asarray(v).dtype!=object for v in values)
         if calls is not None and equation.primitive in calls.handlers:
             words=tuple(scalar(v) for v in values)
             key=('field',equation.primitive,tuple(word_key(v) for v in words))
@@ -2855,6 +2896,9 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
             operand=values[0];out=np.empty(p['slice_sizes'],object)
             starts=[jnp.clip(scalar(v),0,n-k) for v,n,k in zip(values[1:],operand.shape,p['slice_sizes'])]
             for index in np.ndindex(out.shape):
+                if isinstance(operand,_KernelTable):
+                    out[index]=operand[tuple(start+i for start,i in zip(starts,index))]
+                    continue
                 value=operand.flat[0]
                 for source in np.ndindex(operand.shape):
                     match=jnp.asarray(True)
@@ -2929,7 +2973,7 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
             result=[out]
         elif name.startswith('scatter'):
             operand,indices,updates=values;dims=p['dimension_numbers']
-            if indices.dtype==object:
+            if indices.dtype==object or isinstance(operand,_KernelTable):
                 raise ValueError('predictor lowering requires static scalar scatter indices')
             out=np.array(operand,object,copy=True)
             window_axes=[i for i in range(out.ndim) if i not in dims.inserted_window_dims]
@@ -2953,6 +2997,9 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
                     batch=tuple(index[i] for i in batch_axes);selected=[0]*operand.ndim
                     for axis,item in zip(dims.start_index_map,indices[batch]):selected[axis]=jnp.clip(item,0,operand.shape[axis]-p['slice_sizes'][axis])
                     for axis,i in zip(window_axes,dims.offset_dims):selected[axis]+=index[i]
+                    if isinstance(operand,_KernelTable):
+                        out[index]=operand[tuple(selected)]
+                        continue
                     choices=[range(n) if isinstance(i,jax.core.Tracer) else (int(i),) for i,n in zip(selected,operand.shape)]
                     value=operand[tuple(next(iter(c)) for c in choices)]
                     for source in product(*choices):
@@ -3007,6 +3054,8 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
 
 def _scalar_predictor(graph,calls):
     """Simplify scalar moment algebra before expanding native field reductions."""
+    # Large spline tables stay as indexed kernel inputs, not scalar arguments.
+    if any(v.size>1024 for v in graph.consts):return None
     variables=(*graph.jaxpr.constvars,*graph.jaxpr.invars)
     def evaluate(*words):
         values=[];offset=0
@@ -3090,6 +3139,26 @@ def prepare_physics(field, field_view, build, initial, noise_dim,*,predictor_onl
         position=calls.add(xyz,fast_xyz,3,kernel_jvp=lambda refs,p,d:_vmec_position_tangent(refs,p,d,metadata))
         view.to_xyz=lambda point:jnp.asarray(position(*point))
     if boozer:
+        table_calls={}
+        def tabulated(mode,point,t):
+            key=id(mode)
+            if key not in table_calls:
+                data,evaluate=mode._kernel_view();start=len(arrays)+len(extra);extra.extend(data)
+                def fast(refs,*q):
+                    model=_KernelField(refs[:nsource],float(field.psi0))
+                    def jet(*x):
+                        value=lambda point:evaluate(refs[start:start+len(data)],model,
+                            (point[0],point[1],point[2]),point[3])
+                        point=jnp.asarray(x)
+                        directions=jnp.eye(4,dtype=point.dtype)
+                        jacobian=[jax.jvp(value,(point,),(directions[i],))[1] for i in range(4)]
+                        return (*value(point),*(jacobian[j][i] for i in range(2) for j in range(4)))
+                    graph=_flatten(jet,*q)
+                    return _evaluate_kernel(graph.jaxpr,graph.consts,*q)
+                table_calls[key]=calls.first_jet(lambda *q:tuple(mode.potentials(field,q[:3],q[3])),
+                                                fast,outputs=2,dimensions=4)
+            return jnp.asarray(table_calls[key](*point,t))
+        view._tabulated_potentials=tabulated
         def modb(r,theta,z):return tuple(field.modB_derivatives(r,theta,z))
         def profiles(s):return flatten_values(field.profiles(s))
         def boozer_fast(fn):
@@ -3112,8 +3181,6 @@ def prepare_physics(field, field_view, build, initial, noise_dim,*,predictor_onl
             else:fast_xyz=ordinary(xyz)
             position=calls.add(xyz,fast_xyz,3)
             view.to_xyz=lambda point:jnp.asarray(position(*point))
-    nfield=len(arrays)+len(extra)
-    arrays=tuple(arrays)+tuple(extra)
     rhs,kick,norm,level,limit=build(view)
     nstate=initial.size
     def kicked(y,h,dw):
@@ -3132,18 +3199,21 @@ def prepare_physics(field, field_view, build, initial, noise_dim,*,predictor_onl
         magnetic_vector=calls.first_jet(vector,vector_jet)
     graphs.append(_flatten(lambda t,y:limit(t,y,None),jnp.asarray(0.),initial))
     prediction=_scalar_predictor(graphs[-1],calls)
-    all_arrays=tuple(arrays)+tuple(v for graph in graphs for v in graph.consts)
+    nfield=len(arrays)+len(extra)
+    arrays=tuple(arrays)+tuple(extra)
+    all_arrays=tuple(arrays)+tuple(v.reshape(-1) if v.ndim else v for graph in graphs for v in graph.consts)
     def factory(refs,y0):
         offset=nfield;constants=[]
         for graph in graphs:
             values=[]
             for v,ref in zip(graph.consts,refs[offset:offset+len(graph.consts)]):
-                values.append(tuple(ref[index] for index in np.ndindex(v.shape)) if v.ndim else ref[()])
+                values.append(_KernelTable(ref,v.shape) if v.ndim else ref[()])
             constants.append(values);offset+=len(graph.consts)
         def evaluate(i,*args):
-            if i==len(graphs)-1:
+            if i==len(graphs)-1 and prediction is not None:
                 words=tuple(word for value in (*constants[i],*args)
-                    for word in (value if isinstance(value,tuple) else (value,)))
+                    for word in (tuple(np.asarray(value).flat) if isinstance(value,_KernelTable) else value
+                                 if isinstance(value,tuple) else (value,)))
                 return scalar_graph(prediction.jaxpr,prediction.consts,*words,calls=calls,refs=refs[:nfield])
             return scalar_graph(graphs[i].jaxpr,constants[i],*args,calls=calls,refs=refs[:nfield])
         state=lambda y:tuple(scalar(y,i) for i in range(nstate))

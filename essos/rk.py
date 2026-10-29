@@ -798,6 +798,14 @@ def _bind_primitive(primitive, values, parameters):
     primitives rather than discarding them while adapting ordinary equations.
     This Python dispatch runs during graph preparation, not each RK stage.
     """
+    if primitive.name == 'lt_to':
+        if not jnp.issubdtype(values[0].dtype,jnp.floating):return jnp.less(*values)
+        # IEEE total order, including signed zero and NaN sign/payload.
+        dtype={2:jnp.int16,4:jnp.int32,8:jnp.int64}[values[0].dtype.itemsize]
+        sign=jnp.asarray(-(1 << (8*values[0].dtype.itemsize-1)),dtype)
+        bits=[jax.lax.bitcast_convert_type(v,dtype) for v in values]
+        keys=[jnp.where(b<0,~b ^ sign,b) for b in bits]
+        return jnp.less(*keys)
     binding = primitive.get_bind_params(parameters)
     if isinstance(binding, tuple):
         subfunctions, binding = binding

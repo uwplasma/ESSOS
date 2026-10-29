@@ -19,7 +19,7 @@ def test_complex_spectrum_recovers_two_analytical_modes_and_derivatives():
     assert jax.grad(selected)(.7) == pytest.approx(1.4)
     assert jax.grad(jax.grad(selected))(.7) == pytest.approx(2.)
     field = equilibrium()
-    s = np.linspace(0, 1, 8)
+    s = np.linspace(0, 1, 9)
     phases, amplitudes = [.3, -.7], [2e4, -1e4]
     modes = [[3, 2], [4, 3]]
     coefficients = np.tile(-1j*np.array(amplitudes)*np.exp(1j*np.array(phases)), (len(s), 1))
@@ -35,7 +35,9 @@ def test_complex_spectrum_recovers_two_analytical_modes_and_derivatives():
     from essos.mode_reconstruction import PhysicalPotentialMode
     from essos.split import CollisionStep, _prepare_split_kernel, _split_field_data, prepare_physics, solve_split
     from examples.benchmarks.alfven_gc_verification import MASS, CHARGE, SPEED
-    physical = PhysicalPotentialMode(s,modes,coefficients*s[:,None]**(np.array(modes)[:,0]/2),9e5)
+    physical_modes=modes+[[2,1]]
+    physical_coefficients=np.column_stack((coefficients*s[:,None]**(np.array(modes)[:,0]/2),3e3j*s))
+    physical = PhysicalPotentialMode(s,physical_modes,physical_coefficients,9e5)
     initial = jnp.array([.4,.3,.7,.7*SPEED,1e-14])
     times = jnp.array([0.,1e-8,2e-8])
     def build(background):

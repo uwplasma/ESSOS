@@ -143,8 +143,8 @@ def prepare(packet, output, angular_points, mode_tolerance):
 
 def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
                  n_save=101, seed=42, execution="shared", collision_dtmax=1e-6, stable_keys=False,
-                 collision_tolerance=1e-3, moment_tolerance=.005):
-    """Preserve each archived v_parallel and mu/m in the native split state."""
+                 collision_tolerance=1e-3, moment_tolerance=.005, timing_repeats=0):
+    """Preserve archived v_parallel and mu/m, using orbit-only tracing in vacuum."""
     from types import SimpleNamespace
     import jax
     import jax.numpy as jnp
@@ -155,18 +155,50 @@ def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
     points = jnp.asarray(data[:, :3])
     b0 = jax.vmap(lambda p: field.modB(*p))(points)
     speed, pitch = birth_parameters(jnp.asarray(data), b0)
+    if species is None and wave is None:
+        import time
+        from essos.rk import _boozer_batch, _prepare_boozer_gpu
+        times=np.linspace(0.,tmax,n_save)
+        y0=jnp.column_stack((jnp.sqrt(points[:,0])*jnp.cos(points[:,1]),
+            jnp.sqrt(points[:,0])*jnp.sin(points[:,1]),points[:,2],jnp.asarray(data[:,3])))
+        mu=jnp.asarray(data[:,4])
+        # A common minimum birth speed makes the existing orbit error budget
+        # at least as strict as each marker's original normalized budget.
+        scale=float(jnp.min(speed))
+        solver=(_prepare_boozer_gpu(field,MASS,CHARGE,scale,times,timestep,tolerance,tolerance,100000)
+                if execution=='independent' else None)
+        function=jax.jit(lambda y,m:_boozer_batch(field,y,m,MASS,CHARGE,scale,jnp.asarray(times),
+            timestep,tolerance,tolerance,'dopri8',True,'i',.4,.3,100000,solver))
+        started=time.perf_counter();compiled=function.lower(y0,mu).compile()
+        compile_seconds=time.perf_counter()-started
+        started=time.perf_counter();result=jax.block_until_ready(compiled(y0,mu))
+        first_seconds=time.perf_counter()-started
+        warm=[]
+        for _ in range(timing_repeats):
+            started=time.perf_counter();result=jax.block_until_ready(compiled(y0,mu))
+            warm.append(time.perf_counter()-started)
+        states,loss,failed,_,counts,status=map(np.asarray,result)
+        return SimpleNamespace(times=times,states=states,lost=loss>=0,failed=failed>=0,
+            axis_stopped=np.zeros(len(data),bool),loss_times=loss,failed_times=failed,
+            axis_stop_times=np.full(len(data),-1.),thermalized_times=np.full(len(data),-1.),
+            step_stats=SimpleNamespace(accepted=counts[:,1],rejected=counts[:,2],
+                orbit_steps=counts[:,1],orbit_rejected=counts[:,2]),
+            timings=dict(driver='dedicated Boozer orbit kernel',compile_seconds=compile_seconds,
+                         first_execution_seconds=first_seconds,warm_seconds=warm))
     particles = Particles(initial_xyz=points, initial_vparallel_over_v=pitch,
         mass=MASS, charge=CHARGE, energy=.5*MASS*speed**2)
     key = jax.random.key(seed)
     particles.random_keys = (jax.vmap(lambda i:jax.random.fold_in(key,i))(jnp.arange(len(data),dtype=jnp.uint32))
                              if stable_keys else jax.random.split(key,len(data)))
+    collisional = species is not None
     if species is None:
         collision_dtmax = tmax
         species = BackgroundSpecies(1,jnp.array([2.]),jnp.array([1.]),jnp.array([0.]),jnp.array([17800.]))
     solution = trace_split(field,particles,species,tmax=tmax,timestep=timestep,n_save=n_save,
         integrator="essos_dopri8",perturbation=wave,rtol=tolerance,atol=tolerance,
         orbit_dt0=timestep,collision_dtmax=collision_dtmax,execution=execution,
-        spatial_diffusion=False,adaptive=True,orbit_adaptive=True,collision_controller="moments",
+        spatial_diffusion=False,adaptive=True,orbit_adaptive=True,
+        collision_controller="moments" if collisional else "conservative",
         collision_tolerance=collision_tolerance,moment_tolerance=moment_tolerance)
     y, status, stop = np.asarray(solution.ys), np.asarray(solution.status), np.asarray(solution.t)
     B = np.asarray(jax.jit(jax.vmap(jax.vmap(lambda p:field.modB(*p))))(solution.ys[:,:,:3]))

@@ -132,7 +132,7 @@ For a generated cohort on a larger Linux GPU machine:
 
    XLA_PYTHON_CLIENT_PREALLOCATE=false python -u -m examples.benchmarks.fax_qa_loss_collisions --run \
      --particles 2000 --birth-source volume --seed 42 --case all --tmax 0.01 \
-     --platform cuda --execution shared --representation fourier \
+     --platform cuda --execution independent --representation fourier \
      --moment-tolerance 0.01 --collision-tolerance 1e-3 --tolerance 1e-9 \
      --mode ../artifacts/fax_integration/qa_saved_mode/mode.npz \
      --wave-summary ../artifacts/fax_integration/qa_saved_mode/wave_summary.json \
@@ -150,13 +150,27 @@ The moment budget, collision-kick tolerance and orbit tolerance are separate.
 ``--collision-dtmax`` bounds adaptive collision intervals, while ``--timestep``
 sets the initial guess. Native independent execution uses direct Fourier
 equilibrium fields; the optional angular table representation requires shared
-execution. Plotting writes a bold-font ``fax_qa_loss_fraction.png`` at 300 dpi,
+execution. ``--mode-tolerance`` controls equilibrium harmonic truncation
+(default ``1e-7``); it leaves the saved FAX wave unchanged. The summary records
+the cutoff and retained equilibrium count. Check field and orbit convergence
+before relaxing this cutoff for production. Collisionless cases skip the
+collision moment predictor while retaining adaptive orbit control. The
+unperturbed collisionless case uses the dedicated Boozer orbit kernel,
+without constructing split collision maps. Its common minimum birth-speed
+normalization is at least as strict as the per-marker orbit budget.
+``--timing-repeats 3`` records its compilation, first execution, and three
+blocked warm execution times separately. Wave tables use indexed vector
+kernel reads, preserving the existing spline and potential formulas. Radial
+rows and individual harmonics are not expanded into scalar selection chains.
+Plotting writes a bold-font ``fax_qa_loss_fraction.png`` at 300 dpi,
 plus SVG/PDF and an accompanying loss/energy figure. Report-only plotting
 works on saved partial cases without treating missing cases as completed.
 Shared execution is still the native adaptive solver on the selected GPU;
-it avoids scalarizing a large tabulated mode into a persistent kernel. The
-local 158-harmonic independent-kernel job was killed before a perturbed result
-was saved, so its large-mode resource requirements remain unverified.
+independent execution uses the vectorized table adapter and shared exact
+value/Jacobian evaluations. Earlier 158-harmonic GPU attempts predate these
+changes and did not save a perturbed result. The latest adapter passes CPU
+parity tests; full-wave GPU compilation and production loss runs still need
+to be validated within an explicitly approved run budget.
 
 ``examples.benchmarks.ae3d_firm3d_loss --run --particles 5000
 --case both --platform cuda --execution independent`` separately traces the

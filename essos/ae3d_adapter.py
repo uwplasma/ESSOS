@@ -137,13 +137,16 @@ class TabulatedAlfvenMode(BoozerPerturbation):
             self.radial_coefficients = jnp.asarray(CubicSpline(grid, values, axis=0, bc_type="natural").c)
 
     def potentials(self, field, point, t):
+        if hasattr(field,'_tabulated_potentials'):
+            return field._tabulated_potentials(self,point,t)
         u, w, zeta = point
         s = u*u+w*w
         # Phi_nonzero_m=O(s) has a unique C1 extension at u=w=0.
         # Avoid differentiating atan2(0,0); this branch changes only that point.
         theta = jnp.arctan2(w, jnp.where(s > 0, u, 1.))
         sample = jnp.clip(s, self.s[0], self.s[-1])
-        index = jnp.clip(jnp.searchsorted(self.s, sample, side="right")-1, 0, len(self.s)-2)
+        grid = getattr(self,'_kernel_knots',self.s)
+        index = jnp.clip(jnp.searchsorted(grid, sample, side="right", method="compare_all")-1, 0, len(self.s)-2)
         if self.interpolation == "linear":
             weight = (sample-self.s[index])/(self.s[index+1]-self.s[index])
             phi = self.phi[index]+weight*(self.phi[index+1]-self.phi[index])
@@ -154,3 +157,30 @@ class TabulatedAlfvenMode(BoozerPerturbation):
         (iota, G, I), _ = field.profiles(s)
         alpha = (self.n-self.m*iota)*harmonic/(self.omega*(G+iota*I))
         return jnp.stack([jnp.sum(alpha), jnp.sum(harmonic)])
+
+    def _kernel_view(self):
+        """Masked read-only tables; evaluate the same potentials in GPU lanes."""
+        from types import SimpleNamespace
+        count,modes=len(self.s),len(self.m)
+        nr,nm=1 << (count-1).bit_length(),1 << (modes-1).bit_length()
+        arrays=(self.s,self.phi,self.m,self.n,self.omega)
+        if self.radial_coefficients is not None:
+            arrays+=(self.radial_coefficients,)
+        def evaluate(refs,field,point,t):
+            columns=jnp.arange(nm)
+            index=jnp.minimum(columns,modes-1)
+            class Grid:
+                def __len__(self):return count
+                def __getitem__(self,i):return refs[0][i+count if isinstance(i,int) and i<0 else i]
+            class Rows:
+                def __getitem__(self,i):return jnp.where(columns<modes,refs[1][i,index],0.)
+            class Cubics:
+                def __getitem__(self,i):
+                    return jnp.where(columns[None,:]<modes,refs[5][jnp.arange(4)[:,None],i[1],index[None,:]],0.)
+            knots=jnp.arange(nr)
+            view=SimpleNamespace(s=Grid(),_kernel_knots=jnp.where(knots<count,refs[0][jnp.minimum(knots,count-1)],jnp.inf),phi=Rows(),
+                m=jnp.where(columns<modes,refs[2][index],0),
+                n=jnp.where(columns<modes,refs[3][index],0),omega=refs[4][...],interpolation=self.interpolation,
+                radial_coefficients=Cubics() if self.radial_coefficients is not None else None)
+            return TabulatedAlfvenMode.potentials(view,field,point,t)
+        return arrays,evaluate

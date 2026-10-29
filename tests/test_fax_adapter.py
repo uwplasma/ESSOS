@@ -112,3 +112,6 @@ def test_live_fax_eigensolver_can_export_a_small_mode(tmp_path):
     np.testing.assert_allclose(trace.states[:,0,3],data[:,3],rtol=1e-14)
     B = np.array([field.modB(*p) for p in data[:,:3]])
     np.testing.assert_allclose((trace.states[:,0,4]**2-data[:,3]**2)/(2*B),data[:,4],rtol=1e-13)
+    baseline=native_trace(field,data,None,tmax=2e-8,timestep=1e-8,tolerance=1e-8,n_save=3,timing_repeats=1)
+    assert not baseline.failed.any() and len(baseline.timings['warm_seconds'])==1
+    np.testing.assert_allclose(baseline.states[:,0],trace.states[:,0],rtol=1e-13)
