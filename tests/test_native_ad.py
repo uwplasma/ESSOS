@@ -366,10 +366,27 @@ def test_qi_alm_line_heat_and_upper_bound_constraints(monkeypatch,tmp_path):
     actual=jax.block_until_ready(compiled.init(params))
     for a,b in zip(jax.tree_util.tree_leaves(actual),jax.tree_util.tree_leaves(expected)):
         np.testing.assert_allclose(a,b,rtol=1e-13,atol=1e-13)
+
     expected=jax.block_until_ready(optimizer.update(params,*expected))
     actual=jax.block_until_ready(compiled.update(params,*actual))
     for a,b in zip(jax.tree_util.tree_leaves(actual),jax.tree_util.tree_leaves(expected)):
         np.testing.assert_allclose(a,b,rtol=1e-13,atol=1e-13)
+
+    from examples.coil_optimization.native_gc_alm import scipy_optimizer, DEFAULTS
+    monkeypatch.setattr(jax,'default_backend',lambda:'cpu')
+    constraint=alm.combine(alm.eq(lambda x:x-jnp.array([2.,.25])))
+    options=SimpleNamespace(**dict(DEFAULTS,collisions=False,inner_maxiter=10))
+    params=(jnp.zeros(2),constraint.init(jnp.zeros(2)))
+    scipy=scipy_optimizer(constraint,options)
+    state,gradient,info=scipy.init(params)
+    reference=alm.ALM_model_lbfgs(constraint).init(params)
+    for a,b in zip(jax.tree_util.tree_leaves((gradient,info)),jax.tree_util.tree_leaves(reference[1:])):
+        np.testing.assert_allclose(a,b,rtol=1e-13,atol=1e-13)
+    compile_seconds=state['compile_s']
+    for _ in range(2):
+        params,state,gradient,info=scipy.update(params,state,gradient,info)
+        np.testing.assert_allclose(params[0],[1.,.25],atol=1e-7)
+    assert state['compile_s']==compile_seconds and len(state['inner_solves'])==2
 
 
 def test_specialized_multispecies_rates_and_classifier_grid():

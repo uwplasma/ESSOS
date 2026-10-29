@@ -13,6 +13,7 @@ from time import perf_counter
 from types import SimpleNamespace
 import equinox as eqx
 import jax
+import jaxlib
 import jax.numpy as jnp
 import numpy as np
 from essos import augmented_lagrangian as alm
@@ -46,6 +47,7 @@ DEFAULTS = dict(
     collision_capacity=4096, max_orbit_steps=4096,
     collision_tolerance=.001, moment_tolerance=.01, collision_seed=42,
     background_density=4.21e20, background_temperature_ev=17.8e3,
+    optimizer="optimistix", scipy_ftol=1e-12,
     save_plots=True, output=Path("output/native_gc_alm"))
 
 
@@ -86,6 +88,85 @@ def compile_optimizer(optimizer,*,independent=True):
         init=jax.jit(optimizer.init.__wrapped__,**options),
         update=partial(jax.jit(update.func.__wrapped__,static_argnums=(4,5,6,7,8,9,10),**options),
                        *update.args,**update.keywords))
+
+
+def scipy_optimizer(constraints, options):
+    """Host L-BFGS-B, retaining ESSOS ALM constraints and multiplier updates.
+
+    Only one native value/gradient executable is compiled. SciPy enforces the
+    same [-1, 1] scaled-DOF box directly, rather than through tanh coordinates.
+    Its inner gradient tolerance is omega_tol; ftol is independently selectable.
+    """
+    import optax
+    from scipy.optimize import minimize
+    policy = gpu_jit_options() if options.collisions and options.execution != "shared" else {}
+    def lagrangian(x, lp):
+        value, violations = constraints.loss(lp, x)
+        return value, (jnp.zeros_like(value), value, violations)
+    value_grad = jax.jit(jax.value_and_grad(lagrangian, argnums=(0, 1), has_aux=True), **policy)
+    executable = None
+    statistics = dict(evaluations=0, compile_s=0., first_evaluation_s=0., inner_solves=[])
+
+    def evaluate(x, lp):
+        (value, info), gradient = jax.block_until_ready(executable(jnp.asarray(x), lp))
+        if not np.isfinite(value) or not np.isfinite(gradient[0]).all():
+            raise RuntimeError("nonfinite SciPy native value/gradient")
+        statistics["evaluations"] += 1
+        return float(value), gradient, info
+
+    def init(params):
+        nonlocal executable
+        start = perf_counter()
+        executable = value_grad.lower(*params).compile()
+        statistics["compile_s"] = perf_counter()-start
+        print(f"Native objective/gradient lowering+compilation: {statistics['compile_s']:.2f} s; starting first evaluation", flush=True)
+        start = perf_counter()
+        _, gradient, info = evaluate(*params)
+        statistics["first_evaluation_s"] = perf_counter()-start
+        print(f"First native value/gradient execution: {statistics['first_evaluation_s']:.2f} s", flush=True)
+        return statistics, gradient, info
+
+    @jax.jit
+    def update_multipliers(lp, gradient, info, old_info):
+        kwargs = dict(model_lagrangian="Standard", beta=options.beta,
+                      eta_tol=options.eta_tol, omega_tol=options.omega_tol)
+        if options.model_mu == "Mu_Tolerance":
+            updates = alm.apply_mu_tolerance_all_constraints(lp,
+                grad_dicts_map=gradient, constraint_infos_map=info, **kwargs)
+        else:
+            updates = jax.tree_util.tree_map(lambda p, g, new, old:
+                alm.apply_mu_tolerance_per_constraint(p, g, new, constraint_info_prev=old,
+                    model_mu=options.model_mu, decrease_tol=.75, **kwargs),
+                lp, gradient, info, old_info, is_leaf=lambda x:isinstance(x, dict))
+        return optax.apply_updates(lp, updates)
+
+    def update(params, state, gradient, info):
+        x, lp = params
+        old_info, latest, steps = info[2], {}, []
+        start = perf_counter()
+        def fun(candidate):
+            value, grad, aux = evaluate(candidate, lp)
+            latest.update(x=candidate.copy(), gradient=grad, info=aux)
+            return value, np.asarray(grad[0], dtype=np.float64)
+        def callback(candidate):
+            steps.append(None)
+            print(f"  SciPy L-BFGS-B inner {len(steps)}: "
+                  f"{statistics['evaluations']} total value/gradient calls; {perf_counter()-start:.2f} s", flush=True)
+        result = minimize(fun, np.asarray(x, dtype=np.float64), method="L-BFGS-B", jac=True,
+            bounds=[(-1., 1.)]*x.size, callback=callback,
+            options=dict(maxiter=options.inner_maxiter, gtol=options.omega_tol, ftol=options.scipy_ftol))
+        x = jnp.asarray(result.x)
+        if np.array_equal(result.x, latest.get("x")):
+            gradient, info = latest["gradient"], latest["info"]
+        else:
+            _, gradient, info = evaluate(x, lp)
+        lp = update_multipliers(lp, gradient[1], info[2], old_info)
+        _, gradient, info = evaluate(x, lp)
+        statistics["inner_solves"].append(dict(iterations=int(result.nit), evaluations=int(result.nfev),
+            status=int(result.status), message=str(result.message), seconds=perf_counter()-start))
+        print(f"  SciPy inner solve: {result.message}; {result.nit} iterations, {result.nfev} evaluations", flush=True)
+        return (x, lp), statistics, gradient, info
+    return alm.ALM(init, update)
 
 
 def field_normal_ratio(surface,field):
@@ -243,6 +324,8 @@ def run(objective, defaults=None, argv=None):
         parser.error("invalid birth fraction, time, scale, classifier, penalty or Bn target")
     if o.execution not in ("auto", "shared", "independent"):
         parser.error("execution must be auto, shared or independent")
+    if o.optimizer not in ("optimistix", "scipy") or not 0 < o.scipy_ftol < 1:
+        parser.error("optimizer must be optimistix or scipy; scipy-ftol must lie between 0 and 1")
     if o.execution=="independent" and not o.collisions:
         parser.error("independent split execution requires --collisions")
     o.output.mkdir(parents=True, exist_ok=True)
@@ -256,10 +339,13 @@ def run(objective, defaults=None, argv=None):
     constraints = problem.constraints
     # Multiplier setup needs output shapes only; JIT prunes particle tracing.
     params = problem.initial, jax.jit(constraints.init)(problem.initial)
-    optimizer = alm.ALM_model_lbfgs(constraints, beta=o.beta, model_mu=o.model_mu,
-        eta_tol=o.eta_tol, omega_tol=o.omega_tol, inner_maxiter=o.inner_maxiter,
-        bounds=(-jnp.ones_like(params[0]), jnp.ones_like(params[0])))
-    optimizer=compile_optimizer(optimizer,independent=o.collisions and o.execution!='shared')
+    if o.optimizer == "scipy":
+        optimizer = scipy_optimizer(constraints, o)
+    else:
+        optimizer = alm.ALM_model_lbfgs(constraints, beta=o.beta, model_mu=o.model_mu,
+            eta_tol=o.eta_tol, omega_tol=o.omega_tol, inner_maxiter=o.inner_maxiter,
+            bounds=(-jnp.ones_like(params[0]), jnp.ones_like(params[0])))
+        optimizer=compile_optimizer(optimizer,independent=o.collisions and o.execution!='shared')
     start = perf_counter()
     state, gradient, info = jax.block_until_ready(optimizer.init(params))
     initialization_s = perf_counter()-start
@@ -283,12 +369,18 @@ def run(objective, defaults=None, argv=None):
     for iteration in range(1, 1+(0 if o.evaluate_only else o.maxiter)):
         if records[-1]["constraint_norm"]<=o.eta_tol and records[-1]["gradient_norm"]<=o.omega_tol:
             break
+        phase="; first call also traces/compiles the update" if iteration==1 and o.optimizer=="optimistix" else ""
+        print(f"ALM {iteration}: starting inner L-BFGS (max {o.inner_maxiter} steps){phase}",flush=True)
         start = perf_counter()
         params, state, gradient, info = jax.block_until_ready(optimizer.update(params, state, gradient, info))
         record(iteration, perf_counter()-start)
-    initial, final = jax.block_until_ready((problem.trace(problem.initial), problem.trace(params[0])))
+    print("Tracing initial/final coils for saved diagnostics", flush=True)
+    trace = jax.jit(problem.trace, **(gpu_jit_options() if o.collisions and o.execution!='shared' else {}))
+    initial, final = jax.block_until_ready((trace(problem.initial), trace(params[0])))
     initial_metrics = problem.metrics(problem.initial, initial)
     final_metrics = problem.metrics(params[0], final)
+    print(f"Particle cost consistency: logged {records[0]['particle_metric']:.9g} -> {records[-1]['particle_metric']:.9g}; "
+          f"retraced {float(initial_metrics[objective]):.9g} -> {float(final_metrics[objective]):.9g}", flush=True)
     optimized = problem.field(params[0]).coils
     optimized.to_json(str(o.output/"optimized_coils.json"))
     np.savez_compressed(o.output/"optimization.npz", parameters=params[0],
@@ -307,6 +399,18 @@ def run(objective, defaults=None, argv=None):
         solver="essos_dopri8", adjoint="accepted", backend=jax.default_backend(),
         distance_definition="Per-save escape-centroid distance to an infinite boundary tangent line, as in classic jax_13",
         heat_definition="First-loss-weighted E_total*v_perp normalized by birth E*v; dimensionless proxy",
-        optimizer="Current ESSOS ALM with bounded Optimistix LBFGS; no historical frozen-trajectory custom VJP")
+        optimizer=("ESSOS ALM with host SciPy L-BFGS-B and a reused native value/gradient executable"
+                   if o.optimizer=="scipy" else "Current ESSOS ALM with bounded Optimistix LBFGS; no historical frozen-trajectory custom VJP"))
+    report["cost_retrace"] = dict(logged_initial=records[0]["particle_metric"],
+        retraced_initial=float(initial_metrics[objective]), logged_final=records[-1]["particle_metric"],
+        retraced_final=float(final_metrics[objective]))
+    report["runtime"] = dict(jax=jax.__version__, jaxlib=jaxlib.__version__,
+        devices=[str(device) for device in jax.devices()], prng=str(jax.config.jax_default_prng_impl),
+        threefry_partitionable=bool(jax.config.jax_threefry_partitionable))
+    if o.optimizer == "scipy":
+        report["optimizer_statistics"] = state
     (o.output/"summary.json").write_text(json.dumps(report, indent=2)+"\n")
+    if o.save_plots:
+        from .plot_native_gc_alm import plot_run
+        plot_run(o.output, problem.surface, ClassifierStop(problem.boundary), vars(o))
     print(f"Saved {o.output.resolve()}", flush=True)

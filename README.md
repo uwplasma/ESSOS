@@ -781,10 +781,16 @@ used. A separate safety surface 0.2 m outside the soft classifier stops escapes;
 `--safety-margin` adjusts it without moving the soft confinement target.
 
 For a short run, append `--maxiter 10 --inner-maxiter 10`. `--evaluate-only`
-performs the initial ALM value/gradient without optimizer updates. Each fresh
+performs the initial ALM value/gradient without optimizer updates. Initialization
+and the full inner L-BFGS update are separate JIT programs: the first update has
+its own cold compilation. The script announces each inner solve before starting;
+the next cost/checkpoint appears after that complete outer update. Each fresh
 output directory receives `history.csv`, `summary.json`, optimized coil input,
 trajectory/DOF arrays and a PNG comparing up to ten initial/final trajectories
 and coils with their R-Z projections. These outputs are ignored by Git.
+With plots enabled, all three examples also save coil overlays, saved-time loss
+fractions, heat-proxy histograms and matched initial/final loss-location maps in
+`comparison_plots/`, using the already saved trajectories.
 Iteration zero and every completed outer ALM iteration also write
 `iterations/000000.npz`, `000001.npz`, etc., containing public `coil_dofs`,
 optimizer `parameters` and the iteration number matching `history.csv`.
@@ -799,6 +805,42 @@ with np.load("output/native_gc_alm_heat_flux/iterations/000005.npz") as data:
 
 These per-iteration checkpoints save coil DOFs only, with no extra particle
 solves. Particle trajectories remain saved for the initial and final configurations.
+
+Reproduce coil overlays, saved-time loss fractions, and lost-particle heat-proxy
+maps from a completed or downloaded run without tracing again:
+
+```sh
+python -m examples.coil_optimization.plot_native_gc_alm /path/to/run1 /path/to/run2
+```
+
+The PNGs are written under each run's `comparison_plots/`. The original QI
+equilibrium is resolved from the saved settings or bundled inputs; `--wout`
+selects its local copy. Losses use the first saved point outside the unshifted
+classifier, so their positions and times are limited by the save spacing.
+Colours show `E_total*v_perp` in W m, a heat proxy rather than heat flux per unit
+area. These counts are distinct from the differentiable classifier loss score.
+
+All three ALM scripts accept `--optimizer scipy`. This retains the existing
+constraint definitions, multiplier updates, scaled coil DOFs and native split
+AD, while running inner L-BFGS-B and its line search on the host. One compiled
+native value/gradient executable is reused across evaluations and outer updates;
+the full inner optimizer is not traced into XLA. Compilation and first execution
+are timed separately, with inner progress and solver termination messages.
+The native value/gradient itself can still have substantial compilation cost.
+SciPy enforces the same scaled `[-1, 1]` box directly (Optimistix uses a tanh
+parameterization); its inner `gtol` is `--omega-tol`, and `--scipy-ftol` defaults
+to `1e-12`. These are different inner optimizers, so iteration paths can differ.
+The 500-particle A100 compilation reduction has not yet been measured.
+Diagnostic retracing now also uses dynamic JIT coil inputs. Logged and retraced
+particle costs are printed together and stored under `cost_retrace` in the run
+summary; they must be checked before interpreting small optimization gains.
+
+```sh
+python -m examples.coil_optimization.optimize_coils_native_gc_alm_loss_fraction \
+  --optimizer scipy --particles 20 --horizon 1e-4 \
+  --collision-tolerance 0.001 --moment-tolerance 0.01 \
+  --maxiter 10 --inner-maxiter 10 --output output/qi_loss_scipy
+```
 
 ## Testing
 
