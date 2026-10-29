@@ -1247,7 +1247,7 @@ from .constants import ALPHA_PARTICLE_MASS as M, ALPHA_PARTICLE_CHARGE as Q
 from .rk import _DENSE8, _cross as cross, _dot as dot, _coil_field_values as field_values, _pack as pack
 from .split import (_evaluate_kernel, scalar,
     _coefficient_graph as coefficient_graph, CollisionCoefficients,
-    guiding_center_collision_step, _diffusion_root)
+    guiding_center_collision_step, _diffusion_root,_register_kernel_placement)
 from .split import guiding_center_spatial_diffusion
 
 
@@ -1451,6 +1451,7 @@ def physical_graphs(geometry, species, floor, nc, nq, gc, *, active_coefficients
 def reverse_kernel(terminal_state, parameters, tape, saved_bar, terminal_bar, times,
                    graphs, *, gc, segment_steps=16, warps=None, spatial_diffusion=False, interpret=False):
     """Replay and transpose one particle entirely inside a persistent kernel."""
+    if not interpret:_register_kernel_placement()
     rhs_graph, rhs_pb, kick_pb = graphs
     warps = (2 if gc else 4) if warps is None else warps
     geometry, coefficients, floor = parameters

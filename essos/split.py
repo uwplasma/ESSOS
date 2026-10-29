@@ -1457,12 +1457,28 @@ def _draw_normal(key, dim):
     uniform = jnp.maximum(lower, unit * (1.0 - lower) + lower)
     return (next_key, jnp.sqrt(jnp.asarray(2.0, jnp.float64)) * jax.lax.erf_inv(uniform))
 
+@lru_cache(None)
+def _register_kernel_placement():
+    """Lower unspecified JAX placement as identity on already resident values."""
+    from jax._src.dispatch import device_put_p
+    from jax._src.pallas.triton import lowering
+    if device_put_p in lowering.triton_lowering_rules:
+        return lowering.triton_lowering_rules[device_put_p]
+    @lowering.register_lowering(device_put_p)
+    def placement(ctx,*values,**parameters):
+        if any(v is not None for name in ('devices','srcs') for v in parameters.get(name,())):
+            raise NotImplementedError('explicit device transfers are unsupported inside native GPU kernels')
+        return values
+    return placement
+
+
 def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed, tolerance=1e-09, noise_dim=2, max_steps=100000, max_orbit_steps=10000, max_pending=64, warps=1, state_size=8, bank_components=8, orbit_dt0=None, final_time=None, align_orbit=False, interpret=False,
         record=False, adjoint_checkpoint_steps=16, adjoint_orbit_checkpoint_steps=16,
         adjoint_max_accepted_steps=None, adjoint_max_orbit_steps=None, collision_indices=None):
     """Persistent particle loop; factory also supplies the optional predictor."""
     from jax.experimental import pallas as pl
     from jax.experimental.pallas import triton as plt
+    if not interpret:_register_kernel_placement()
     times = jnp.asarray(times, jnp.float64)
     nsave, stages, bank_size = (len(times), len(_ERROR8), 16)
     matrix = np.zeros((bank_size, bank_size))

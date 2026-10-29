@@ -117,7 +117,11 @@ def test_closure_parameters_initial_state_and_custom_jvp_are_preserved():
 
 
 def test_gpu_recorder_interpretation_keeps_primal_noise_and_sparse_nodes():
-    from essos.split import _prepare_split_kernel, scalar
+    from essos.split import _prepare_split_kernel, scalar,_register_kernel_placement
+    placement=_register_kernel_placement();value=jnp.array([1.,2.])
+    assert placement(None,value,devices=(None,),srcs=(None,))[0] is value
+    with pytest.raises(NotImplementedError,match='explicit device transfers'):
+        placement(None,value,devices=(object(),),srcs=(None,))
     def factory(refs,y0):
         zero=scalar(y0,7)
         def rhs(y):return jnp.where(jnp.arange(8)==0,zero+1,zero)
@@ -266,7 +270,7 @@ def test_persistent_reverse_kernel_matches_complete_frozen_map_on_cpu(gc):
     # complete RK/kick transpose fixture small enough for CPU-only CI.
     diffusion=jnp.array(1e10)
     flag=jnp.array(True)
-    coefficients=jax.make_jaxpr(lambda v:(jnp.where(flag,diffusion,0.),2*diffusion,jnp.array(0.),
+    coefficients=jax.make_jaxpr(lambda v:(jax.device_put(jnp.where(flag,diffusion,0.)),2*diffusion,jnp.array(0.),
         jnp.array(-1e8),jnp.array(0.),jnp.array(0.)))(jnp.array(4e5))
     graphs=physical_graphs(geometry,background,floor,nc,nq,gc,
         active_coefficients=False,active_floor=False,spatial_diffusion=gc,
