@@ -1202,6 +1202,7 @@ def _split_select(value, index, axis):
     return _select_one(value, index, axis)
 
 def _flatten(function, *examples):
+    from jax._src.core import DropVar
     from jax._src.interpreters import partial_eval
     graph = jax.make_jaxpr(function)(*examples)
     graph = jax.make_jaxpr(lambda *x: _evaluate_inline(graph.jaxpr, graph.consts, *x))(*examples)
@@ -1223,10 +1224,15 @@ def _flatten(function, *examples):
             try:key=eq.primitive,tuple(operand(v) for v in inputs),freeze(eq.params)
             except TypeError:pass
         if key is not None and key in expressions:
-            aliases.update(zip(eq.outvars,expressions[key]))
+            index=expressions[key];previous=kept[index]
+            # Retain newly used outputs when an earlier identical call dropped
+            # them. A DropVar must never become an input alias.
+            outputs=[new if isinstance(old,DropVar) else old for old,new in zip(previous.outvars,eq.outvars)]
+            kept[index]=previous.replace(outvars=outputs)
+            aliases.update((new,old) for new,old in zip(eq.outvars,outputs) if not isinstance(new,DropVar))
         else:
             kept.append(eq.replace(invars=inputs))
-            if key is not None:expressions[key]=eq.outvars
+            if key is not None:expressions[key]=len(kept)-1
     graph=type(graph)(graph.jaxpr.replace(eqns=kept,outvars=[v if isinstance(v,Literal) else aliases.get(v,v) for v in graph.jaxpr.outvars]),graph.consts)
     live,_=partial_eval.dce_jaxpr(graph.jaxpr,[True]*len(graph.jaxpr.outvars),instantiate=True)
     return type(graph)(live,graph.consts)
