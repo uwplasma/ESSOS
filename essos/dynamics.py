@@ -1,4 +1,3 @@
-from pyexpat import model
 import os
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -17,15 +16,15 @@ from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
 from functools import partial
 from time import perf_counter
-from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
-from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
+from diffrax import diffeqsolve, ODETerm, SaveAt, PIDController, Event, TqdmProgressMeter, NoProgressMeter
+from diffrax import ControlTerm,MultiTerm,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
 import optimistix as optx
 from essos.coils import Coils
 from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
-from essos.electric_field import Electric_field_flux, Electric_field_zero
-from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
+from essos.electric_field import Electric_field_zero
+from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,SPEED_OF_LIGHT
 from essos.plot import fix_matplotlib_3d
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu_D_ab
 
@@ -115,185 +114,9 @@ class Particles():
         return Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=initial_vparallel_over_v, charge=charge, mass=mass, energy=energy, field=field)
 
 
-    
-    @classmethod
-    def InitializeParticlesAroundSurfaceAxis(cls, surface, n_particles, 
-                                            distance_from_axis=0.0,
-                                            charge=ALPHA_PARTICLE_CHARGE,
-                                            mass=ALPHA_PARTICLE_MASS, 
-                                            energy=FUSION_ALPHA_PARTICLE_ENERGY,
-                                            min_vparallel_over_v=-1,
-                                            max_vparallel_over_v=1,
-                                            field=None,
-                                            random_seed=42,
-                                            n_arc_samples=1000,
-                                            boundary_surface=None,
-                                            distance_mode='absolute',
-                                            boundary_bisection_steps=32):
-        """Initialize particles randomly distributed around/along a magnetic axis extracted from a surface.
-        
-        Args:
-            surface: SurfaceRZFourier object to extract axis from
-            n_particles: Number of particles to initialize
-            distance_from_axis: Perpendicular distance (in Frenet frame) from the axis 
-                               (0.0 for particles on axis, >0 for particles around axis).
-                               If distance_mode='fraction_to_boundary', this is interpreted
-                               as a fraction in [0, 1] of the local axis-to-boundary distance.
-            charge: Particle charge (default: alpha particle charge)
-            mass: Particle mass (default: alpha particle mass)
-            energy: Particle kinetic energy
-            min_vparallel_over_v: Minimum parallel velocity fraction
-            max_vparallel_over_v: Maximum parallel velocity fraction
-            field: Magnetic field object (for converting to full orbit if needed)
-            random_seed: Seed for random number generation
-            n_arc_samples: Number of samples for arc-length parametrization
-            boundary_surface: Optional surface used as geometric boundary when
-                             distance_mode='fraction_to_boundary'.
-            distance_mode: 'absolute' or 'fraction_to_boundary'.
-            boundary_bisection_steps: Number of bisection iterations used to
-                                     find axis-to-boundary distance along each
-                                     particle direction.
-            
-        Returns:
-            Particles object with initial positions distributed around the axis
-        """
-        if distance_mode not in ('absolute', 'fraction_to_boundary'):
-            raise ValueError("distance_mode must be 'absolute' or 'fraction_to_boundary'.")
-
-        if distance_mode == 'fraction_to_boundary':
-            if boundary_surface is None:
-                raise ValueError("boundary_surface is required when distance_mode='fraction_to_boundary'.")
-            if distance_from_axis < 0.0 or distance_from_axis > 1.0:
-                raise ValueError("distance_from_axis must be in [0, 1] when distance_mode='fraction_to_boundary'.")
-
-            from essos.surfaces import signed_distance_from_surface_jax
-
-            # Global bound used to cap the ray search for boundary intersection.
-            boundary_points = boundary_surface.gamma.reshape((-1, 3))
-            boundary_extent = float(jnp.max(jnp.linalg.norm(boundary_points, axis=1)))
-            boundary_search_cap = max(1.0, 4.0 * boundary_extent)
-
-            def signed_distance_boundary(xyz):
-                return float(jnp.squeeze(signed_distance_from_surface_jax(xyz, boundary_surface)))
-
-            def axis_to_boundary_distance(axis_pos, direction):
-                # Find t such that axis_pos + t * direction lies on boundary (signed distance ~ 0).
-                # Assumes axis point is inside boundary and direction points outward in the local plane.
-                t_low = 0.0
-                t_high = 0.2
-                s_high = signed_distance_boundary(axis_pos + t_high * direction)
-                while s_high > 0.0 and t_high < boundary_search_cap:
-                    t_low = t_high
-                    t_high *= 2.0
-                    s_high = signed_distance_boundary(axis_pos + t_high * direction)
-
-                # If no crossing was found, return the current bound as a safe fallback.
-                if s_high > 0.0:
-                    return t_high
-
-                for _ in range(boundary_bisection_steps):
-                    t_mid = 0.5 * (t_low + t_high)
-                    s_mid = signed_distance_boundary(axis_pos + t_mid * direction)
-                    if s_mid > 0.0:
-                        t_low = t_mid
-                    else:
-                        t_high = t_mid
-                return t_high
-
-        # Extract m=0 modes (magnetic axis) from surface
-        m0_mask = surface.xm == 0
-        rc_axis = surface.rc[m0_mask]
-        zs_axis = surface.zs[m0_mask]
-        xn_axis = surface.xn[m0_mask]
-        
-        # Helper function: compute axis curve at given phi
-        def compute_axis_point(phi):
-            """Compute axis position at toroidal angle phi"""
-            angles = xn_axis * phi
-            R_val = jnp.sum(rc_axis * jnp.cos(angles))
-            Z = -jnp.sum(zs_axis * jnp.sin(angles))
-            x = R_val * jnp.cos(phi)
-            y = R_val * jnp.sin(phi)
-            return jnp.array([x, y, Z])
-        
-        # Compute arc-length parametrization along the axis
-        phi_arc = jnp.linspace(0, 2 * jnp.pi, n_arc_samples, endpoint=True)
-        axis_arc_pts = jnp.array([compute_axis_point(p) for p in phi_arc])
-        
-        # Compute arc-length
-        deltas = jnp.linalg.norm(jnp.diff(axis_arc_pts, axis=0), axis=1)
-        cumulative_arc = jnp.concatenate([jnp.array([0.0]), jnp.cumsum(deltas)])
-        total_arc = cumulative_arc[-1]
-        
-        # Generate random arc-length positions
-        key = jax.random.key(random_seed)
-        key_arcs, key_thetas, key_vparallel = jax.random.split(key, 3)
-        
-        random_arcs = jax.random.uniform(key_arcs, (n_particles,)) * total_arc
-        random_thetas = jax.random.uniform(key_thetas, (n_particles,)) * 2 * jnp.pi  # Poloidal angle
-        
-        # Map arc-length positions back to phi coordinates
-        particle_phis = jnp.interp(random_arcs, cumulative_arc, phi_arc)
-        
-        # Compute axis positions and Frenet frames at particle locations
-        def compute_particle_position(phi, theta, distance):
-            """Compute particle position on/around axis using Frenet frame"""
-            # Axis point at this phi
-            axis_pos = compute_axis_point(phi)
-            
-            # Compute Frenet frame (tangent, normal, binormal)
-            # Tangent: derivative along phi (using finite differences)
-            eps = 1e-8
-            axis_plus = compute_axis_point(phi + eps)
-            axis_minus = compute_axis_point(phi - eps)
-            tangent = (axis_plus - axis_minus) / (2 * eps)
-            tangent = tangent / jnp.maximum(jnp.linalg.norm(tangent), 1e-12)
-
-            # Build a robust orthonormal frame perpendicular to tangent.
-            # This avoids degeneracy when axis-only Fourier data has zero poloidal derivative.
-            ref = jnp.array([0.0, 0.0, 1.0])
-            use_x = jnp.abs(jnp.dot(ref, tangent)) > 0.9
-            ref = jnp.where(use_x, jnp.array([1.0, 0.0, 0.0]), ref)
-
-            dot_rt = jnp.dot(ref, tangent)
-            normal = ref - dot_rt * tangent
-            normal = normal / jnp.maximum(jnp.linalg.norm(normal), 1e-12)
-            
-            # Binormal: tangent × normal
-            binormal = jnp.cross(tangent, normal)
-            binormal = binormal / jnp.maximum(jnp.linalg.norm(binormal), 1e-12)
-
-            direction = jnp.cos(theta) * normal + jnp.sin(theta) * binormal
-            direction = direction / jnp.maximum(jnp.linalg.norm(direction), 1e-12)
-
-            if distance_mode == 'fraction_to_boundary':
-                max_distance = axis_to_boundary_distance(axis_pos, direction)
-                actual_distance = distance * max_distance
-            else:
-                actual_distance = distance
-            
-            # Position: axis + distance * direction in local normal-binormal plane
-            position = axis_pos + actual_distance * direction
-            
-            return position
-        
-        # Compute all particle positions
-        initial_xyz = jnp.array([compute_particle_position(phi, theta, distance_from_axis) 
-                                 for phi, theta in zip(particle_phis, random_thetas)])
-        
-        # Generate random parallel velocity fractions
-        initial_vparallel_over_v = jax.random.uniform(key_vparallel, (n_particles,), 
-                                                       minval=min_vparallel_over_v, 
-                                                       maxval=max_vparallel_over_v)
-        
-        # Create and return Particles object
-        return cls(initial_xyz=initial_xyz, 
-                  initial_vparallel_over_v=initial_vparallel_over_v,
-                  charge=charge, 
-                  mass=mass, 
-                  energy=energy,
-                  field=field)
-
+def _species_sum(rate, m, q, v, points, species):
+    """Sum of the pair collision rate ``rate`` (nu_s_ab, nu_D_ab, ...) over all background species."""
+    return jnp.sum(jax.vmap(rate, in_axes=(None, None, 0, None, None, None))(m, q, species.species_indeces, v, points, species), axis=0)
 
 
 def _mu_collision_noise(vpar, mu, points, field, particles, species):
@@ -304,9 +127,8 @@ def _mu_collision_noise(vpar, mu, points, field, particles, species):
     m, q, B = particles.mass, particles.charge, field.AbsB(points)
     v = jnp.sqrt(vpar**2 + 2.*mu*B/m)
     xi = vpar/v
-    indeces_species = species.species_indeces
-    nu_D = jnp.sum(jax.vmap(nu_D_ab, in_axes=(None, None, 0, None, None, None))(m, q, indeces_species, v, points, species), axis=0)
-    nu_par = jnp.sum(jax.vmap(nu_par_ab, in_axes=(None, None, 0, None, None, None))(m, q, indeces_species, v, points, species), axis=0)
+    nu_D = _species_sum(nu_D_ab, m, q, v, points, species)
+    nu_par = _species_sum(nu_par_ab, m, q, v, points, species)
     # Velocity-space diffusion of (vpar/v, mu/(m v^2/2B)), divided by v^2
     Yvv = (nu_par*xi**2+nu_D*(1.-xi**2))/2.
     Yvmu = xi*(1.-xi**2)*(nu_par-nu_D)
@@ -329,8 +151,6 @@ def GuidingCenterCollisionsDiffusionMu(t,
     field, particles,_,species,_ = args
     vpar=SPEED_OF_LIGHT*vpar
     mu=SPEED_OF_LIGHT**2*particles.mass*mu    
-    q = particles.charge
-    m = particles.mass
     points = jnp.array([x, y, z])
     #I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(B_contravariant,B_contravariant))/AbsB**2
     I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(field.B_contravariant(points),jnp.reshape(field.B_contravariant(points),(3,1))))/field.AbsB(points)**2
@@ -366,19 +186,15 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
     Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
-    indeces_species=species.species_indeces
-    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_par_dv=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_D_dv=jnp.sum(jax.vmap(d_nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)      
+    nu_s = _species_sum(nu_s_ab, m, q, v, points, species)
+    nu_D = _species_sum(nu_D_ab, m, q, v, points, species)
+    nu_par = _species_sum(nu_par_ab, m, q, v, points, species)
+    dnu_par_dv = _species_sum(d_nu_par_ab, m, q, v, points, species)
+    dnu_D_dv = _species_sum(d_nu_D_ab, m, q, v, points, species)
     Diffusion_par=p**2*nu_par/2.
     Diffusion_perp=p**2*nu_D/2.
     d_Diffusion_par_dp=p*nu_par+p**2*dnu_par_dv/(2.*m)
     d_Diffusion_perp_dp=p*nu_D+p**2*dnu_D_dv/(2.*m)    
-    Yvv=(Diffusion_par*xi**2+Diffusion_perp*(1.-xi**2))/p**2
-    Yvmu=2.*xi*(1.-xi**2)*(Diffusion_par-Diffusion_perp)/p**2
-    Ymumu=4.*(1.-xi**2)*(Diffusion_par*(1.-xi**2)+Diffusion_perp*xi**2)/p**2 
     #Dmuv=2.*mu*vpar/p**2*(Diffusion_par-Diffusion_perp)
     #Dmumu=2.*mu/(m*field.AbsB(points))*((1-xi**2)(Diffusion_par-Diffusion_perp)+Diffusion_perp)
     #Dvv=Diffusion_perp/m**2*(1.-xi**2)+Diffusion_par/m**2*xi**2
@@ -426,12 +242,11 @@ def GuidingCenterCollisionsDriftMuIto(t,
     Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
-    indeces_species=species.species_indeces
-    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_par_dv=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_D_dv=jnp.sum(jax.vmap(d_nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)      
+    nu_s = _species_sum(nu_s_ab, m, q, v, points, species)
+    nu_D = _species_sum(nu_D_ab, m, q, v, points, species)
+    nu_par = _species_sum(nu_par_ab, m, q, v, points, species)
+    dnu_par_dv = _species_sum(d_nu_par_ab, m, q, v, points, species)
+    dnu_D_dv = _species_sum(d_nu_D_ab, m, q, v, points, species)
     Diffusion_par=p**2*nu_par/2.
     Diffusion_perp=p**2*nu_D/2.
     d_Diffusion_par_dp=p*nu_par+p**2*dnu_par_dv/(2.*m)
@@ -465,9 +280,8 @@ def GuidingCenterCollisionsDiffusion(t,
     points = jnp.array([x, y, z])
     I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(field.B_contravariant(points),jnp.reshape(field.B_contravariant(points),(3,1))))/field.AbsB(points)**2
     p=m*v
-    indeces_species=species.species_indeces
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_D = _species_sum(nu_D_ab, m, q, v, points, species)
+    nu_par = _species_sum(nu_par_ab, m, q, v, points, species)
     Diffusion_par=p**2/2.*nu_par
     Diffusion_perp=p**2/2.*nu_D 
     Diffusion_x=0.0#((Diffusion_par-Diffusion_perp)*(1.-xi**2)/2.+Diffusion_perp)/(m*omega_mod)**2
@@ -497,11 +311,10 @@ def GuidingCenterCollisionsDrift(t,
     Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)    
-    indeces_species=species.species_indeces
-    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_par=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_s = _species_sum(nu_s_ab, m, q, v, points, species)
+    nu_D = _species_sum(nu_D_ab, m, q, v, points, species)
+    nu_par = _species_sum(nu_par_ab, m, q, v, points, species)
+    dnu_par = _species_sum(d_nu_par_ab, m, q, v, points, species)
     Diffusion_par=p**2/2.*nu_par
     Diffusion_perp=p**2/2.*nu_D 
     d_Diffusion_par_dp=p*nu_par+p**2/2.*dnu_par/m
@@ -582,9 +395,8 @@ def LorentzCollisionsDiffusion(t,
     v=jnp.sqrt(vx**2+vy**2+vz**2)
     p=m*v
     P_v=jnp.outer(v_vector,v_vector)/v**2  # projector on the velocity direction
-    indeces_species=species.species_indeces
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_D = _species_sum(nu_D_ab, m, q, v, points, species)
+    nu_par = _species_sum(nu_par_ab, m, q, v, points, species)
     Diffusion_par=p**2/2.*nu_par
     Diffusion_perp=p**2/2.*nu_D 
     Dpar=jnp.sqrt(2.*Diffusion_par)#*0.0000
@@ -609,8 +421,7 @@ def LorentzCollisionsDrift(t,
     # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(points)
-    indeces_species=species.species_indeces
-    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    nu_s = _species_sum(nu_s_ab, m, q, v, points, species)
     dxdt = jnp.array([vx, vy, vz])
     # Noise-induced drift. The Fokker-Planck operator d_i(nu_s v_i f + D_ij d_j f),
     # D = sigma sigma^T / 2, has Ito drift -nu_s v + d_j D_ij; the Stratonovich

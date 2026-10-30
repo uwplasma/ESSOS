@@ -392,9 +392,9 @@ class Curves:
         Save the curves to a file
         """
         with open(filename, "a") as file:
-            file.write(f"nfp stellsym order\n")
+            file.write("nfp stellsym order\n")
             file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
-            file.write(f"Degrees of freedom\n")
+            file.write("Degrees of freedom\n")
             file.write(f"{repr(self.dofs.tolist())}\n")
             
     def to_simsopt(self):
@@ -830,19 +830,19 @@ class Coils:
         Save the coils to a file
         """
         with open(filename, "a") as file:
-            file.write(f"nfp stellsym order\n")
+            file.write("nfp stellsym order\n")
             file.write(f"{self.nfp} {self.stellsym} {self.order}\n")
-            file.write(f"Degrees of freedom\n")
+            file.write("Degrees of freedom\n")
             file.write(f"{repr(self.dofs.tolist())}\n")
-            file.write(f"Curves scaling type\n")
+            file.write("Curves scaling type\n")
             file.write(f"{self.curves.scaling_type}\n")
-            file.write(f"Curves scaling factor\n")
+            file.write("Curves scaling factor\n")
             file.write(f"{self.curves.scaling_factor}\n")
-            file.write(f"Curves fixed scaling\n")
+            file.write("Curves fixed scaling\n")
             file.write(f"{self.curves.scale_fixed}\n")
-            file.write(f"Currents degrees of freedom\n")
+            file.write("Currents degrees of freedom\n")
             file.write(f"{repr(self._dofs_currents.tolist())}\n")
-            file.write(f"Currents scaling factor\n")
+            file.write("Currents scaling factor\n")
             file.write(f"{self.currents_scale}\n")
             file.write(f"{text}\n")
     
@@ -1544,13 +1544,13 @@ class DiscretizedCoils:
         with open(filename, "a") as file:
             file.write(f"n_segments: {self.n_segments}\n")
             file.write(f"nfp: {self.nfp}, stellsym: {self.stellsym}\n")
-            file.write(f"Base gamma dofs\n")
+            file.write("Base gamma dofs\n")
             file.write(f"{repr(self.dofs_gamma.tolist())}\n")
-            file.write(f"Gamma fixed scaling\n")
+            file.write("Gamma fixed scaling\n")
             file.write(f"{self.scale_fixed}\n")
-            file.write(f"Currents degrees of freedom\n")
+            file.write("Currents degrees of freedom\n")
             file.write(f"{repr(self.dofs_currents.tolist())}\n")
-            file.write(f"Currents scaling factor\n")
+            file.write("Currents scaling factor\n")
             file.write(f"{self.currents_scale}\n")
             file.write(f"{text}\n")
     
@@ -1718,19 +1718,6 @@ class DiscretizedCoils:
         base_gamma = Curves(coils.curves._dofs, coils.n_segments, nfp=1, stellsym=False).gamma
         currents = coils.dofs_currents_raw
         return cls(base_gamma, currents, nfp=coils.nfp, stellsym=coils.stellsym)
-    
-    def to_Coils(self, order: int = None) -> Coils:
-        """Convert to standard Coils object
-        
-        Args:
-            order: Fourier order for fitted curves (default: n_segments // 2 - 1)
-        """
-        if order is None:
-            order = (self.n_segments // 2) - 1
-        
-        dofs, _ = fit_dofs_from_coils(self._gamma, order, self.n_segments)
-        curves = Curves(dofs, self.n_segments, nfp=self.nfp, stellsym=self.stellsym)
-        return Coils(curves, self.dofs_currents_raw)
     
     def _tree_flatten(self):
         children = (self.dofs_gamma, self.dofs_currents)

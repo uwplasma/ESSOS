@@ -8,9 +8,8 @@ from functools import partial
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart,BiotSavart_from_gamma
 from essos.surfaces import BdotN_over_B
-from essos.coils import Curves, Coils
 from essos.constants import mu_0
-from essos.coil_perturbation import perturb_curves, perturb_curves_systematic, perturb_curves_statistic
+from essos.coil_perturbation import perturb_curves_systematic, perturb_curves_statistic
 
 
 
@@ -325,7 +324,6 @@ def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
         Scalar loss (sum over all relevant coil-surface pairs)
     """
     n_coils = coils.gamma.shape[0]
-    n_points_coil = coils.gamma.shape[1]
     surface_points = surface.gamma.reshape(-1, 3)
     n_points_surface = surface_points.shape[0]
 
@@ -341,7 +339,6 @@ def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
         gamma_i = coils.gamma[idx]
         gamma_dash_i = coils.gamma_dash[idx]
         gamma_dash_norm = jnp.linalg.norm(gamma_dash_i, axis=1)
-        n_points = gamma_i.shape[0]
 
         # If block_size is None, use full vmap (no chunking)
         use_block_size = min(n_points_surface, n_points_surface if block_size is None else block_size)
