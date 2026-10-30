@@ -87,4 +87,4 @@ jobs:
         key: xla-${{ runner.os }}-py3.10-jax0.6.2-${{ github.sha }}
         restore-keys: xla-${{ runner.os }}-py3.10-jax0.6.2-
     - name: Run tests
-      run: pytest -n auto
+      run: pytest -n auto -x -vv --tb=short
