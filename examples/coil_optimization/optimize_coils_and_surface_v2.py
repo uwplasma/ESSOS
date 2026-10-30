@@ -54,7 +54,7 @@ LOAD_RESULT = False
 # True -> start from an already optimized surface and coils, at a higher surface resolution (select the folder).
 RESTART_FROM = False
 restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it00")
-# SURFACE_MPOL = 2; SURFACE_NTOR = 3   # maximum m and n of the surface (ESSOS convention)
+SURFACE_MPOL = 2; SURFACE_NTOR = 3   # maximum m and n of the surface (ESSOS convention)
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")

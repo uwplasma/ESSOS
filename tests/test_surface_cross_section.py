@@ -18,6 +18,7 @@ def test_mean_cross_sectional_area_elliptic_torus(range_torus, close):
     surface = SurfaceRZFourier(jnp.array([R0, a]), jnp.array([0.0, b]), nfp=1, mpol=1, ntor=0,
                                ntheta=40, nphi=30, close=close, range_torus=range_torus)
     np.testing.assert_allclose(surface.mean_cross_sectional_area(), np.pi * a * b, rtol=1e-12)
+    np.testing.assert_allclose(surface.area_section_by_phi(), np.pi * a * b, rtol=1e-12)
 
 
 @pytest.mark.parametrize("close", [False, True])
