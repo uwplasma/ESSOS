@@ -2,7 +2,6 @@
 """ALM (Augmented Lagrangian Method) using JAX and optimizers from OPTAX/OPTIMISTIX inspired by mdmm_jax github repository"""
 
 from typing import Any, Callable, NamedTuple
-import os
 import jax
 from jax import jit
 import jax.numpy as jnp
@@ -221,102 +220,6 @@ class SelectiveConstraint:
             return self.constraint.loss(params, *args, **kwargs, **self.kwargs)
         args = self._get_filtered_args()
         return self.constraint.loss(params, *args, **self.kwargs)
-
-
-class ScaledConstraint:
-    """Wraps a constraint with automatic or user-specified scaling.
-    
-    Useful when combining constraints with vastly different magnitudes.
-    Automatically normalizes constraint output by its initial norm or element-wise absolute values.
-    
-    Attributes:
-        constraint: The underlying Constraint (init_fn, loss_fn) tuple
-        scale_factor: Scalar to multiply constraint output (auto-computed or user-specified)
-        auto_scale: Whether to auto-compute scale_factor from initial constraint norm
-        elementwise_scale: If True, scale by 1/abs(constraint) element-wise; if False, scale by 1/norm
-    
-    Example:
-        # Auto-scale based on initial constraint norm (default)
-        constraint = alm.eq(lambda x: jnp.sum(x**2))
-        scaled = ScaledConstraint(constraint, auto_scale=True, elementwise_scale=False)
-        
-        # Auto-scale element-wise
-        scaled = ScaledConstraint(constraint, auto_scale=True, elementwise_scale=True)
-        
-        # Or use fixed scaling
-        scaled = ScaledConstraint(constraint, scale_factor=1.0, auto_scale=False)
-    """
-    def __init__(self, constraint: BaseConstraint, scale_factor=1.0, auto_scale=True, elementwise_scale=False):
-        """Initialize a ScaledConstraint.
-        
-        Args:
-            constraint: A Constraint (init_fn, loss_fn) tuple
-            scale_factor: Fixed scaling factor (ignored if auto_scale=True)
-            auto_scale: If True, automatically compute scale_factor from initial constraint
-            elementwise_scale: If True, scale element-wise by 1/abs(constraint); if False, scale by 1/norm
-        """
-        if not (hasattr(constraint, 'init') and hasattr(constraint, 'loss')):
-            raise TypeError(f"constraint must provide `init` and `loss` callables, got {type(constraint)}")
-        
-        if not auto_scale and scale_factor <= 0:
-            raise ValueError(f"scale_factor must be positive, got {scale_factor}")
-        
-        self.constraint = constraint
-        self.scale_factor = scale_factor
-        self.auto_scale = auto_scale
-        self.elementwise_scale = elementwise_scale
-        self._initial_scale = None
-        self._initial_scale_scalar = None  # For loss_value scaling
-    
-    def init(self, *args, **kwargs):
-        """Initialize constraint parameters and compute scale factor if needed."""
-        params = self.constraint.init(*args, **kwargs)
-        
-        # If auto_scale, compute initial constraint scaling
-        if self.auto_scale:
-            _, constraint_info = self.constraint.loss(params, *args, **kwargs)
-            constraint_flat, unflatten_fn = jax.flatten_util.ravel_pytree(constraint_info)
-            
-            if self.elementwise_scale:
-                # Element-wise scaling: scale = 1 / abs(constraint_flat)
-                scale_flat = 1.0 / jnp.maximum(jnp.abs(constraint_flat), 1.)
-                # Unflatten to match constraint_info structure
-                self._initial_scale = unflatten_fn(scale_flat)
-                # For loss_value, use mean of element-wise scales
-                self._initial_scale_scalar = jnp.linalg.norm(scale_flat)
-            else:
-                # Norm-based scaling: scale = 1 / norm(constraint_flat)
-                scale_scalar = 1.0 / jnp.maximum(jnp.linalg.norm(constraint_flat), 1.)
-                self._initial_scale = scale_scalar
-                self._initial_scale_scalar = scale_scalar
-        
-        return params
-    
-    def loss(self, params, *args, **kwargs):
-        """Compute scaled constraint loss.
-        
-        Args:
-            params: Constraint parameters from init()
-            *args: Arguments to constraint
-            **kwargs: Keyword arguments
-            
-        Returns:
-            (scaled_loss_value, constraint_info) tuple
-        """
-        loss_value, constraint_info = self.constraint.loss(params, *args, **kwargs)
-        
-        # Apply scaling
-        if self.auto_scale and self._initial_scale is not None:
-            # Scale loss_value with scalar
-            loss_scale = self._initial_scale_scalar
-            # Scale constraint_info with potentially element-wise scale
-            info_scale = self._initial_scale
-        else:
-            loss_scale = self.scale_factor
-            info_scale = self.scale_factor
-        
-        return loss_value * loss_scale, jax.tree_util.tree_map(lambda x: x * info_scale, constraint_info)
-
 
 
 def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,omega=1.0,eta=1.0,sq_grad=0., weight=1., reduction=jnp.sum):
@@ -554,9 +457,6 @@ def combine(*args):
 ####These are auxilair functions to do operations on the lagrange multiplier parameters and on auxiliar loss information
 def total_infeasibility(tree):
     return jax.tree_util.tree_reduce(lambda x, y: x + jnp.sum(jnp.abs(y)), tree, jnp.array(0.))
-
-#def norm_constraints(tree):
-#    return jnp.sqrt(jax.tree_util.tree_reduce(lambda x, y: x + jnp.sum(y**2), tree, jnp.array(0.)))
 
 def norm_constraints(tree):
     flat=jax.flatten_util.ravel_pytree(tree)[0]
@@ -851,8 +751,6 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
 
     return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
 
-
-ALM_model_jaxopt_lbfgsb = ALM_model_lbfgs  # former name
 
 
 

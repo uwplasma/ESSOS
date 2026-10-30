@@ -1,10 +1,9 @@
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-from jax import jit, grad
 from functools import partial
 from essos.coils import Curves, Coils
-from scipy.optimize import least_squares, minimize
+from scipy.optimize import least_squares
 from essos.surfaces import SurfaceRZFourier
 
 def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
