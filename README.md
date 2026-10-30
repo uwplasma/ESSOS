@@ -304,6 +304,24 @@ command if it is missing.
 
 ## Native forward orbit solvers
 
+### Which integrators can be used
+
+| Where | Option | Methods |
+|---|---|---|
+| `Tracing(model=...)` | `GuidingCenter`, `FullOrbit`, `FieldLine` | fixed step `timestep` (Diffrax Dopri8) |
+| | `GuidingCenterAdaptative`, `FullOrbitAdaptative`, `FieldLineAdaptative` | adaptive, `rtol`/`atol` (Diffrax Dopri8, PID) |
+| | `FullOrbit_Boris` | Boris pusher, fixed step |
+| | `*Collisions*` models | Diffrax SDE solvers (Milstein, SPaRK) |
+| `Tracing(solver=...)` | any Diffrax ODE solver | e.g. `Dopri5()`, `Tsit5()`, `Dopri8()` |
+| `Tracing(integrator=...)` | `"diffrax"` (default), `"essos_rk45"`, `"essos_dopri8"` | native Dormand–Prince 5(4) / 8(7) |
+| `trace_boozer(method=...)` | `"rk4"`, `"dopri5"`, `"dopri8"` (default), `"adaptive"`, `"adaptive8"` | fixed or adaptive |
+| `trace_boozer(integrator=...)` | `"essos_dopri8"`, with `native_execution="cuda"` | native, CPU or GPU |
+
+All are explicit; the guiding-centre and Lorentz equations are not stiff, so
+implicit solvers only add cost. Dopri8 is the most efficient choice at the
+default tolerance. [`trace_particles_compare_integrators.py`](examples/particle_tracing/trace_particles_compare_integrators.py)
+traces the same particles with each integrator and prints the cost and energy error.
+
 `Tracing(..., integrator="essos_rk45")` selects Dormand–Prince 5(4);
 `integrator="essos_dopri8"` selects Prince–Dormand 8(7). The existing
 `GuidingCenter`/`FullOrbit` models select fixed steps; their `Adaptative`
