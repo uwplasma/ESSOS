@@ -118,7 +118,7 @@ The default study uses 8192 generated births, a ``1e-4`` equilibrium cutoff
 
    python -m examples.benchmarks.ae3d_firm3d_archive --download
    XLA_PYTHON_CLIENT_PREALLOCATE=false python -u -m examples.benchmarks.fax_qa_loss_collisions --run \
-     --particles 8192 --birth-source volume --seed 42 --case all --tmax 0.01 \
+     --particles 8192 --birth-source volume --seed 42 --case all --tmax 0.01 --batch-size 512 \
      --platform cuda --execution independent --representation fourier \
      --mode-tolerance 1e-4 --moment-tolerance 0.01 --collision-tolerance 1e-3 \
      --tolerance 1e-9 --collision-dtmax 1e-6 --wall-seconds 21600 \
@@ -141,10 +141,13 @@ modes. This is separate from the ``1e-4`` magnetic cutoff (25 harmonics) and
 the 35-harmonic wave. A 1280-point audit against the full geometry found a
 maximum 56 micrometre position error and 0.069% local inverse-map Jacobian error
 at the default geometry cutoff; this is not a loss-convergence measurement.
-Native geometry callbacks share exact value/Jacobian evaluations. Spatial
+Native geometry callbacks compute position and its exact first derivatives in
+one spline/Fourier pass, without three extra differentiated traversals. Spatial
 Fourier sums use blocks of at most 128 harmonics, bounding compiler intermediates
 even with the full spectrum. Spatial kicks use the existing
 Cartesian displacement and nonlinear coordinate inversion in ``trace_split``.
+Unperturbed Boozer spatial cases retain the specialized orbit adapter and use
+the general adapter only for the coordinate collision kick and moment predictor.
 
 The generated proposal points are uniform in flux coordinates, with physical
 Boozer-volume weights and isotropic pitch at 3.52 MeV. They are a new source,
@@ -173,6 +176,18 @@ kernel reads, preserving the existing spline and potential formulas. Radial
 rows and individual harmonics are not expanded into scalar selection chains.
 Every case records solver compilation and first blocked execution separately;
 ``wall_seconds`` additionally includes preparation, post-processing and saving.
+Compilation prints a heartbeat every 30 seconds, with simulated time still
+zero. Execution also prints a 30-second wall-time heartbeat while a batch is
+running. ``--batch-size`` defaults to 512 particles: after each completed batch the
+log and summary report the number finished, its actual simulated end-time range,
+execution time and case wall time. CUDA particles have independent clocks;
+this is completed-particle progress, not a synchronized time for the whole cohort.
+Births and random keys are assigned before batching, and each particle is solved
+without temporal restarts. Tail padding is discarded. ``--batch-size 0`` uses
+one full-cohort call; timing reports record the batch size and count. Resume
+continues completed cases; unfinished batches are recomputed after interruption.
+Reported execution seconds sum the blocked execution times of all batches;
+progress logging, transfers to host and saving also contribute to wall time.
 The native moment predictor scalarizes speed and pitch before differentiation,
 avoiding higher spatial field derivatives multiplied by zero velocity tangents.
 It retains the same first derivatives, diagonal Hessian and moment budget.
@@ -190,10 +205,11 @@ non-spatial cases have completed; completed spatial cases require its original
 value. Axis-stopped or failed markers retain their unresolved classification.
 Shared execution is still the native adaptive solver on the selected GPU;
 independent execution uses the vectorized table adapter and shared exact
-value/Jacobian evaluations. The blocked full-spectrum geometry callback passes
-GPU value/Jacobian parity, but the complete spatial-diffusion CUDA solver still
-exceeds the bounded compilation checks. Production spatial loss runs remain
-unvalidated; the isolated callback result does not establish solver performance.
+value/Jacobian evaluations. Single-pass derivatives pass CPU value, Jacobian
+and second-derivative checks. A two-step unperturbed spatial CUDA trace also
+matches the CPU reference; FAX plus spatial diffusion still exceeds the bounded
+compilation check. Full-ensemble spatial execution timings and loss convergence
+remain unvalidated; tiny checks do not establish production performance.
 
 ``examples.benchmarks.ae3d_firm3d_loss --run --particles 5000
 --case both --platform cuda --execution independent`` separately traces the

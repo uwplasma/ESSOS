@@ -106,7 +106,7 @@ def prepare(args, previous=None):
         collision_dtmax_s=args.collision_dtmax,tolerance=args.tolerance,execution=args.execution,
         adaptive_orbit=True,adaptive_collisions=True,collision_controller="moments",
         collision_tolerance=args.collision_tolerance,moment_tolerance=args.moment_tolerance,
-        n_save=args.n_save, collision_seed=args.seed,
+        n_save=args.n_save, collision_seed=args.seed,particle_batch_size=min(args.batch_size or args.particles,args.particles),
         requested_cases=list(CASES) if args.case == "all" else [args.case],
         frequency_hz=packet.frequency_hz, omega_rad_s=float(wave.omega), harmonics=len(packet.harmonics),
         potential_volts=recorded["potential_volts"], native_global_phase=[phase.real,phase.imag],
@@ -191,20 +191,27 @@ def run_cases(args, field, wave, births, summary):
             print(f"Reusing completed case: {case}",flush=True)
             continue
         with_wave, with_collisions, with_spatial, label = CASES[case]
-        summary.update(status="running", active_case=case, completed_save_intervals=0)
+        summary.update(status="running", active_case=case, completed_particles=0)
         write_summary(args.output, summary)
         print(f"Tracing {label}: {args.particles} markers, {args.tmax*1e3:g} ms, "
               f"{args.method}, {len(field.xm)} equilibrium harmonics, initial dt={args.timestep:g} s, "
-              f"{summary['device_kind']}", flush=True)
+              f"batch size={min(args.batch_size or args.particles,args.particles)}, {summary['device_kind']}", flush=True)
         case_started = time.perf_counter()
-
+        def progress(done,total,tmin,tmax,execution_seconds):
+            wall=time.perf_counter()-case_started
+            summary.update(completed_particles=done,last_batch_simulated_time_s=[tmin,tmax],
+                active_case_wall_seconds=wall,active_case_execution_seconds=execution_seconds)
+            write_summary(args.output,summary)
+            print(f'  {case}: {done}/{total} particles complete; batch final simulated t='
+                  f'{tmin*1e3:.4g}–{tmax*1e3:.4g} ms (target {args.tmax*1e3:g} ms; early stops included); '
+                  f'execution={execution_seconds:.1f} s; case wall={wall:.1f} s',flush=True)
         trace = native_trace(field,births["initial_conditions"],wave if with_wave else None,
             tmax=args.tmax,timestep=args.timestep,n_save=args.n_save,tolerance=args.tolerance,
             species=species if with_collisions else None,seed=args.seed,execution=args.execution,
             collision_dtmax=args.collision_dtmax,stable_keys=args.birth_source == "volume",
             collision_tolerance=args.collision_tolerance,moment_tolerance=args.moment_tolerance,
             timing_repeats=args.timing_repeats,spatial_diffusion=with_spatial,
-            spatial_geometry=geometry if with_spatial else None)
+            spatial_geometry=geometry if with_spatial else None,batch_size=args.batch_size,progress=progress)
         np.savez_compressed(args.output/f"{case}.npz", times=trace.times, states=trace.states,
             loss_times=trace.loss_times, thermalized_times=trace.thermalized_times,
             failed_times=trace.failed_times, axis_stop_times=trace.axis_stop_times,weights=births["weights"],
@@ -215,7 +222,9 @@ def run_cases(args, field, wave, births, summary):
         write_summary(args.output, summary)
         print(f"Completed {case}: {json.dumps(summary['cases'][case])}", flush=True)
     summary.pop("active_case", None)
-    summary.pop("completed_save_intervals", None)
+    for key in ('completed_save_intervals','completed_particles','last_batch_simulated_time_s',
+                'active_case_wall_seconds','active_case_execution_seconds'):
+        summary.pop(key,None)
     summary["status"] = ("completed" if all(r["valid_loss_estimate"] for r in summary["cases"].values())
                          else "completed_with_unresolved_markers")
     write_summary(args.output, summary)
@@ -299,6 +308,8 @@ def main():
     parser.add_argument("--births", type=Path)
     parser.add_argument("--output", type=Path, default=ARTIFACTS/"qa_8192_six_cases_gpu")
     parser.add_argument("--particles", type=int, default=8192)
+    parser.add_argument("--batch-size",type=int,default=512,
+        help="Particles per progress update; 0 runs the full cohort in one call")
     parser.add_argument("--birth-source", choices=("archive","volume"), default="volume")
     parser.add_argument("--birth-s-min", type=float, default=0.)
     parser.add_argument("--birth-s-max", type=float, default=1.)
@@ -334,7 +345,7 @@ def main():
     for path in (args.mode,args.wave_summary,args.boozmn):
         if not path.is_file():
             parser.error(f"Missing input: {path}; download the archived equilibrium or pass explicit input paths")
-    if (args.particles < 1 or (args.birth_source == "archive" and args.particles > 5000)
+    if (args.particles < 1 or args.batch_size<0 or (args.birth_source == "archive" and args.particles > 5000)
             or (args.birth_source == "volume" and args.births is not None)
             or not 0 <= args.birth_s_min < args.birth_s_max <= 1
             or args.n_save < 2 or args.angular_points < 16

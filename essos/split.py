@@ -2073,6 +2073,7 @@ def _solve_independent(rhs, collision, initial, args=None, *, field, species, gc
                        birth_speed, speed_floor, collision_tolerance, field_view=None, physics=None,
                        mass=M,charge=Q,spatial_diffusion=False,spatial_geometry=None,time_dependent=False,**options):
     from .fields import BiotSavart,Vmec
+    from .boozer import BoozerField
     for name in ('max_steps', 'max_orbit_steps', 'max_pending'):
         value = options[name]
         if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value < 1:
@@ -2080,20 +2081,24 @@ def _solve_independent(rhs, collision, initial, args=None, *, field, species, gc
     nstate = initial.size
     screening=getattr(species,'screening_species',None)
     fast=not time_dependent and field_view is not None and species.radial_grid is None and (screening is None or screening.radial_grid is None)
-    if spatial_diffusion and field_view is not None and not isinstance(field,BiotSavart):fast=False
+    coordinate_spatial=spatial_diffusion and field_view is not None and not isinstance(field,BiotSavart)
+    if coordinate_spatial and physics is None:raise ValueError('coordinate spatial diffusion requires a physics adapter')
+    if coordinate_spatial and not isinstance(field,BoozerField):fast=False
     if physics is None or fast:
         arrays, factory = _prepare_split_field(field, species, gc=gc,
             collision_tolerance=collision_tolerance, speed_floor=speed_floor,
             event=options['event'], state_size=nstate, field_view=field_view,
-            mass=mass,charge=charge,spatial_diffusion=spatial_diffusion)
+            mass=mass,charge=charge,spatial_diffusion=spatial_diffusion and not coordinate_spatial)
         if physics is not None:
-            predictor_arrays,predictor_factory=prepare_physics(field,field_view,physics,initial,options['noise_dim'],predictor_only=True)
+            predictor_arrays,predictor_factory=prepare_physics(field,field_view,physics,initial,options['noise_dim'],
+                predictor_only=not coordinate_spatial,spatial_geometry=spatial_geometry)
             nfield=len(field_view[0]);nphysics=len(arrays);original_factory=factory
             arrays=tuple(arrays)+tuple(predictor_arrays[nfield:])
             def factory(refs,y0):
                 physical=original_factory(refs[:nphysics],y0)
-                prediction=predictor_factory(refs[:nfield]+refs[nphysics:],y0)[4]
-                return (*physical,prediction)
+                general=predictor_factory(refs[:nfield]+refs[nphysics:],y0)
+                return ((physical[0],general[1],physical[2],physical[3],general[4]) if coordinate_spatial
+                        else (*physical,general[4]))
     else:
         arrays,factory=prepare_physics(field,field_view,physics,initial,options['noise_dim'],spatial_geometry=spatial_geometry,time_dependent=time_dependent)
     def forward(initial, parameters=None, *, record=False):
@@ -2104,7 +2109,7 @@ def _solve_independent(rhs, collision, initial, args=None, *, field, species, gc
             max_pending=options['max_pending'], state_size=nstate,
             bank_components=4 if gc and nstate == 5 else 8,
             orbit_dt0=options['orbit_dt0'], final_time=options['t1'],align_orbit=options.get('align_orbit',False),
-            warps=4 if isinstance(field,Vmec) and not spatial_diffusion else 1,
+            warps=4 if (isinstance(field,Vmec) and not spatial_diffusion) or (spatial_diffusion and spatial_geometry is not None) else 1,
             record=record,adjoint_checkpoint_steps=options.get('adjoint_checkpoint_steps',16),
             adjoint_orbit_checkpoint_steps=options.get('adjoint_orbit_checkpoint_steps',16),
             adjoint_max_accepted_steps=options.get('adjoint_max_accepted_steps'),
@@ -2248,18 +2253,39 @@ class BoozerGeometry(NamedTuple):
         coefficients[:c.shape[0],:c.shape[1],:6]=c
         arrays=tuple(map(jnp.asarray,(knots,coefficients,np.pad(np.asarray(self.xm),(0,nm-len(self.xm))),
             np.pad(np.asarray(self.xn),(0,nm-len(self.xn))))))
-        def evaluate(refs,s,theta,zeta):
+        def evaluate(refs,s,theta,zeta,*,jet=False):
             grid,table,m,n=refs
             i=jnp.clip(jnp.sum((s>=grid[...]).astype(jnp.int32))-1,0,len(self.knots)-2)
-            d=s-grid[i]
-            amplitude=((table[i,:,:,0]*d+table[i,:,:,1])*d+table[i,:,:,2])*d+table[i,:,:,3]
-            power=jnp.minimum(m[...],2+m[...]%2);root=jnp.sqrt(s)
-            factor=jnp.where(power==0,1.,jnp.where(power==1,root,jnp.where(power==2,s,s*root)))
-            phase=m[...]*theta-n[...]*zeta;cosine,sine=factor*jnp.cos(phase),factor*jnp.sin(phase)
-            column=lambda i:_select_one(amplitude,i,1).reshape((nm,))
-            values=tuple(jnp.sum(column(i)*cosine+column(i+1)*sine) for i in (0,2,4))
-            R,Z,shift=values
-            return R*jnp.cos(zeta-shift),R*jnp.sin(zeta-shift),Z
+            d=s-grid[i];root=jnp.sqrt(s);width=min(nm,128)
+            def block(index,values):
+                columns=index*width+jnp.arange(width)
+                a=table[i,columns,:,0];b=table[i,columns,:,1]
+                c=table[i,columns,:,2];e=table[i,columns,:,3]
+                amplitude=((a*d+b)*d+c)*d+e
+                modes=m[columns];power=jnp.minimum(modes,2+modes%2)
+                factor=jnp.where(power==0,1.,jnp.where(power==1,root,jnp.where(power==2,s,s*root)))
+                phase=modes*theta-n[columns]*zeta;cp,sp=jnp.cos(phase),jnp.sin(phase)
+                cosine,sine=factor*cp,factor*sp
+                def combine(amplitude,cosine,sine):
+                    column=lambda i:_select_one(amplitude,i,1).reshape((width,))
+                    return tuple(jnp.sum(column(k)*cosine+column(k+1)*sine) for k in (0,2,4))
+                result=combine(amplitude,cosine,sine)
+                if jet:
+                    slope=(3*a*d+2*b)*d+c
+                    df=jnp.where(power==0,0.,power*factor/(2*s))
+                    result=(*result,*combine(slope*factor[:,None]+amplitude*df[:,None],cp,sp),
+                        *combine(amplitude,-modes*sine,modes*cosine),
+                        *combine(amplitude,n[columns]*sine,-n[columns]*cosine))
+                return tuple(v+r for v,r in zip(values,result))
+            values=jax.lax.fori_loop(0,nm//width,block,(jnp.zeros_like(s),)*(12 if jet else 3))
+            R,Z,shift=values[:3];cp,sp=jnp.cos(zeta-shift),jnp.sin(zeta-shift)
+            position=(R*cp,R*sp,Z)
+            if not jet:return position
+            columns=[]
+            for j in range(3):
+                dR,dZ,dshift=values[3+3*j:6+3*j];dphi=(1 if j==2 else 0)-dshift
+                columns.append((dR*cp-R*sp*dphi,dR*sp+R*cp*dphi,dZ))
+            return (*position,*(columns[j][i] for i in range(3) for j in range(3)))
         return arrays,evaluate
 
 
@@ -3192,9 +3218,18 @@ def prepare_physics(field, field_view, build, initial, noise_dim,*,predictor_onl
             xyz=lambda *q:tuple(spatial_geometry(jnp.asarray(q)))
             if hasattr(spatial_geometry,'_kernel_view'):
                 data,evaluate=spatial_geometry._kernel_view();start=nsource+len(extra);extra.extend(data)
-                fast_xyz=lambda refs,*q:evaluate(refs[start:start+len(data)],*q)
-            else:fast_xyz=ordinary(xyz)
-            position=calls.add(xyz,fast_xyz,3)
+                def fast_xyz(refs,*q):
+                    def jet(*point):
+                        if isinstance(spatial_geometry,BoozerGeometry):
+                            return evaluate(refs[start:start+len(data)],*point,jet=True)
+                        value=lambda *p:evaluate(refs[start:start+len(data)],*p)
+                        columns=[jax.jvp(value,point,tuple(jnp.ones_like(p) if i==j else jnp.zeros_like(p)
+                            for j,p in enumerate(point)))[1] for i in range(3)]
+                        return (*value(*point),*(columns[j][i] for i in range(3) for j in range(3)))
+                    graph=_flatten(jet,*q)
+                    return _evaluate_kernel(graph.jaxpr,graph.consts,*q)
+                position=calls.first_jet(xyz,fast_xyz)
+            else:position=calls.add(xyz,ordinary(xyz),3)
             view.to_xyz=lambda point:jnp.asarray(position(*point))
     rhs,kick,norm,level,limit=build(view)
     nstate=initial.size

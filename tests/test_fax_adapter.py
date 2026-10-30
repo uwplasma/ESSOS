@@ -117,7 +117,7 @@ def test_live_fax_eigensolver_can_export_a_small_mode(tmp_path):
     np.testing.assert_allclose(baseline.states[:,0],trace.states[:,0],rtol=1e-13)
 
 
-def test_archived_embedding_and_spatial_wave_collision_trace(tmp_path):
+def test_archived_embedding_and_spatial_wave_collision_trace(tmp_path,monkeypatch):
     import jax
     import jax.numpy as jnp
     from netCDF4 import Dataset
@@ -127,15 +127,24 @@ def test_archived_embedding_and_spatial_wave_collision_trace(tmp_path):
     from essos.mode_reconstruction import PhysicalPotentialMode
     path=tmp_path/'boozmn.nc';s=np.array([1/6,.5,5/6])
     with Dataset(path,'w') as nc:
-        nc.createDimension('surface',3);nc.createDimension('mode',3)
+        nc.createDimension('surface',3);nc.createDimension('mode',4)
         nc.createVariable('ns_b','i4',())[...]=4
-        for name,values,dimension in (('jlist',[2,3,4],'surface'),('ixm_b',[0,1,2],'mode'),('ixn_b',[0,0,2],'mode')):
+        for name,values,dimension in (('jlist',[2,3,4],'surface'),('ixm_b',[0,1,2,3],'mode'),('ixn_b',[0,0,2,-1],'mode')):
             nc.createVariable(name,'i4',(dimension,))[:]=values
-        for name,values in (('rmnc_b',np.column_stack((s*0+2,.2*np.sqrt(s),s*0+1e-7))),
-            ('zmns_b',np.column_stack((s*0,.2*np.sqrt(s),s*0))),
-            ('pmns_b',np.column_stack((s*0,.03*np.sqrt(s),s*0)))):
+        for name,values in (('rmnc_b',np.column_stack((s*0+2,.2*np.sqrt(s),s*0+1e-7,2e-8*s**1.5))),
+            ('zmns_b',np.column_stack((s*0,.2*np.sqrt(s),s*0,3e-8*s**1.5))),
+            ('pmns_b',np.column_stack((s*0,.03*np.sqrt(s),s*0,-2e-8*s**1.5))),
+            ('rmns_b',np.column_stack((s*0,s*0,1e-8*s,-2e-8*s**1.5)))):
             nc.createVariable(name,'f8',('surface','mode'))[:]=values
-    assert len(spatial_geometry(path).xm)==3
+    full=spatial_geometry(path)
+    assert len(full.xm)==4
+    refs,evaluate=full._kernel_view()
+    def expected(point):
+        return jnp.r_[full(point),jax.jacfwd(full)(point).reshape(-1)]
+    jet=lambda point:jnp.asarray(evaluate(refs,*point,jet=True))
+    points=jnp.array([[.001,.4,.2],[.5,1.3,-.7],[.95,-.2,2.]])
+    np.testing.assert_allclose(jax.jit(jax.vmap(jet))(points),jax.jit(jax.vmap(expected))(points),rtol=2e-12,atol=2e-12)
+    np.testing.assert_allclose(jax.jit(jax.jacfwd(jet))(points[1]),jax.jit(jax.jacfwd(expected))(points[1]),rtol=2e-11,atol=2e-11)
     geometry=spatial_geometry(path,mode_tolerance=1e-6)
     assert len(geometry.xm)==2
     q=jnp.array([.5,.4,.2]);R=2+.2*np.sqrt(q[0])*np.cos(q[1]);phi=q[2]+.03*np.sqrt(q[0])*np.sin(q[1])
@@ -168,6 +177,16 @@ def test_archived_embedding_and_spatial_wave_collision_trace(tmp_path):
     assert not traced.failed.any() and np.isfinite(traced.states).all()
     assert traced.timings['compile_seconds']>0 and traced.timings['first_execution_seconds']>0
     np.testing.assert_allclose(traced.states[0,0,:4],data[0,:4],rtol=1e-13)
+    baseline=native_trace(field,data,None,tmax=1e-10,timestep=1e-10,tolerance=1e-7,
+        species=bath,n_save=2,collision_dtmax=1e-10,spatial_diffusion=True,spatial_geometry=geometry)
+    import essos.split as split
+    original=split._prepare_split_kernel
+    monkeypatch.setattr(split,'_prepare_split_kernel',lambda *a,**k:original(*a,**(k|dict(interpret=True))))
+    monkeypatch.setattr(split,'_validate_independent',lambda *a,**k:None)
+    native=native_trace(field,data,None,tmax=1e-10,timestep=1e-10,tolerance=1e-7,
+        species=bath,n_save=2,collision_dtmax=1e-10,spatial_diffusion=True,spatial_geometry=geometry,execution='independent')
+    assert not native.failed.any()
+    np.testing.assert_allclose(native.states,baseline.states,rtol=3e-11,atol=3e-11)
 
 
 def test_six_case_outputs_preserve_births_and_weighted_loss_curves(tmp_path,monkeypatch):
@@ -177,14 +196,19 @@ def test_six_case_outputs_preserve_births_and_weighted_loss_curves(tmp_path,monk
     args=SimpleNamespace(boozmn=tmp_path/'unused.nc',particles=2,tmax=.01,method='essos_dopri8',
         timestep=1e-8,n_save=2,tolerance=1e-9,seed=42,execution='independent',collision_dtmax=1e-6,
         birth_source='volume',collision_tolerance=.001,moment_tolerance=.01,timing_repeats=0,
-        density=4.21e20,temperature=17800.,geometry_mode_tolerance=1e-6,output=tmp_path)
+        density=4.21e20,temperature=17800.,geometry_mode_tolerance=1e-6,batch_size=2,output=tmp_path)
     summary=dict(requested_cases=list(benchmark.CASES),cases={},device_kind='mock',mass_kg=benchmark.MASS,
         particles=2,duration_s=.01,frequency_hz=27800.,birth_source='volume')
     embedding=SimpleNamespace(xm=np.array([0,1]));wave=object();calls=[]
     monkeypatch.setattr(benchmark,'spatial_geometry',lambda path,tolerance:embedding)
     def trace(field,received,perturbation,**settings):
         assert received is data and settings['seed']==42
+        assert settings['batch_size']==2
         assert settings['spatial_geometry'] is (embedding if settings['spatial_diffusion'] else None)
+        settings['progress'](2,2,.005,.01,.2)
+        import json
+        checkpoint=json.loads((tmp_path/'summary.json').read_text())
+        assert checkpoint['completed_particles']==2 and checkpoint['last_batch_simulated_time_s']==[.005,.01]
         calls.append((perturbation is wave,settings['species'] is not None,settings['spatial_diffusion']))
         return SimpleNamespace(times=np.array([0.,.01]),states=np.ones((2,2,5))*1e6,
             lost=np.array([False,True]),failed=np.zeros(2,bool),axis_stopped=np.zeros(2,bool),
@@ -204,6 +228,33 @@ def test_six_case_outputs_preserve_births_and_weighted_loss_curves(tmp_path,monk
         with np.load(tmp_path/f'{case}.npz') as saved:
             np.testing.assert_array_equal(saved['marker_indices'],births['marker_indices'])
             np.testing.assert_array_equal(saved['weights'],births['weights'])
+
+
+def test_progress_batches_preserve_keys_order_and_tail():
+    import jax
+    import jax.numpy as jnp
+    from examples.benchmarks.ae3d_firm3d_loss import _trace_batches
+    points=jnp.arange(15.).reshape(5,3)
+    keys=jax.random.split(jax.random.key(42),5)
+    def solve(points,keys):
+        return points+jax.vmap(jax.random.normal)(keys)[:,None],points[:,0]/1000
+    progress=[]
+    result,timing=_trace_batches(solve,(points,keys),batch_size=2,
+        end_times=lambda out:out[1],progress=lambda *row:progress.append(row),repeats=1)
+    expected=jax.jit(solve)(points,keys)
+    for actual,reference in zip(result,expected):np.testing.assert_array_equal(actual,reference)
+    assert [r[0] for r in progress]==[2,4,5]
+    assert all(r[1]==5 for r in progress)
+    np.testing.assert_allclose([(r[2],r[3]) for r in progress],[(0.,.003),(.006,.009),(.012,.012)],rtol=1e-15,atol=0.)
+    assert timing['batch_size']==2 and timing['batches']==3 and len(timing['warm_seconds'])==1
+    from examples.benchmarks.alfven_gc_verification import equilibrium
+    from examples.benchmarks.ae3d_firm3d_loss import native_trace
+    data=np.array([[.3,.2,.3,6e6,1e12],[.4,.1,.2,-5e6,2e12]])
+    options=dict(tmax=2e-8,timestep=1e-8,tolerance=1e-8,n_save=3)
+    full=native_trace(equilibrium(),data,None,**options)
+    batched=native_trace(equilibrium(),data,None,batch_size=1,**options)
+    np.testing.assert_allclose(batched.states,full.states,rtol=2e-14,atol=2e-14)
+    np.testing.assert_array_equal(batched.step_stats.accepted,full.step_stats.accepted)
 
 
 def test_default_qa_mode_packet_is_available_without_local_artifacts():

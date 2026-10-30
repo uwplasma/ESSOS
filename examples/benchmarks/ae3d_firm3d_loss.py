@@ -166,10 +166,64 @@ def prepare(packet, output, angular_points, mode_tolerance):
     return field, mode, data, arrays, summary
 
 
+def _trace_batches(function, arguments, *, batch_size, end_times, progress=None, repeats=0):
+    """Report completed marker batches without restarting any particle solve."""
+    import threading
+    import jax
+    import jax.numpy as jnp
+
+    arguments=tuple(jnp.asarray(value) for value in arguments)
+    count=len(arguments[0])
+    if not count:raise ValueError('at least one particle is required')
+    if batch_size is not None and (not isinstance(batch_size,int) or batch_size<0):
+        raise ValueError('batch_size must be a nonnegative integer or None')
+    size=min(batch_size or count,count)
+    def inputs(start):
+        indices=jnp.minimum(start+jnp.arange(size),count-1)
+        return tuple(value[indices] for value in arguments)
+    stopped=threading.Event();started=time.perf_counter();trace_started=started
+    def heartbeat():
+        while not stopped.wait(30):
+            print(f'  Still compiling: simulated t=0 ms; compile wall={time.perf_counter()-started:.1f} s',flush=True)
+    thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
+    print('  Preparing and compiling native solver (simulated t=0 ms)...',flush=True)
+    try:
+        compiled=jax.jit(function).lower(*inputs(0)).compile()
+    finally:
+        stopped.set();thread.join()
+    compile_seconds=time.perf_counter()-started
+    print(f'  Compiled in {compile_seconds:.2f} s; executing batches of {size} particles...',flush=True)
+    outputs=[];execution_seconds=0.;warm=[0.]*repeats
+    for start in range(0,count,size):
+        values=inputs(start);rows=min(size,count-start)
+        finished=threading.Event();started=time.perf_counter()
+        def executing():
+            while not finished.wait(30):
+                print(f'  Tracing: {start}/{count} particles finished; current batch wall='
+                      f'{time.perf_counter()-started:.1f} s; total trace wall={time.perf_counter()-trace_started:.1f} s; '
+                      'simulated end times pending',flush=True)
+        monitor=threading.Thread(target=executing,daemon=True);monitor.start()
+        try:
+            result=jax.block_until_ready(compiled(*values))
+        finally:
+            finished.set();monitor.join()
+        execution_seconds+=time.perf_counter()-started
+        host=jax.tree.map(lambda x:np.asarray(x)[:rows],result);outputs.append(host)
+        if progress is not None:
+            times=np.asarray(end_times(host))
+            progress(start+rows,count,float(times.min()),float(times.max()),execution_seconds)
+        for i in range(repeats):
+            started=time.perf_counter();jax.block_until_ready(compiled(*values))
+            warm[i]+=time.perf_counter()-started
+    return jax.tree.map(lambda *parts:np.concatenate(parts,axis=0),*outputs),dict(
+        compile_seconds=compile_seconds,first_execution_seconds=execution_seconds,
+        warm_seconds=warm,batch_size=size,batches=len(outputs))
+
+
 def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
                  n_save=101, seed=42, execution="shared", collision_dtmax=1e-6, stable_keys=False,
                  collision_tolerance=1e-3, moment_tolerance=.005, timing_repeats=0,
-                 spatial_diffusion=False, spatial_geometry=None):
+                 spatial_diffusion=False, spatial_geometry=None,batch_size=None,progress=None):
     """Preserve archived v_parallel and mu/m, using orbit-only tracing in vacuum."""
     from types import SimpleNamespace
     import jax
@@ -184,7 +238,6 @@ def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
     b0 = jax.vmap(lambda p: field.modB(*p))(points)
     speed, pitch = birth_parameters(jnp.asarray(data), b0)
     if species is None and wave is None:
-        import time
         from essos.rk import _boozer_batch, _prepare_boozer_gpu
         times=np.linspace(0.,tmax,n_save)
         y0=jnp.column_stack((jnp.sqrt(points[:,0])*jnp.cos(points[:,1]),
@@ -197,22 +250,15 @@ def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
                 if execution=='independent' else None)
         function=jax.jit(lambda y,m:_boozer_batch(field,y,m,MASS,CHARGE,scale,jnp.asarray(times),
             timestep,tolerance,tolerance,'dopri8',True,'i',.4,.3,100000,solver))
-        started=time.perf_counter();compiled=function.lower(y0,mu).compile()
-        compile_seconds=time.perf_counter()-started
-        started=time.perf_counter();result=jax.block_until_ready(compiled(y0,mu))
-        first_seconds=time.perf_counter()-started
-        warm=[]
-        for _ in range(timing_repeats):
-            started=time.perf_counter();result=jax.block_until_ready(compiled(y0,mu))
-            warm.append(time.perf_counter()-started)
+        result,timings=_trace_batches(function,(y0,mu),batch_size=batch_size,progress=progress,repeats=timing_repeats,
+            end_times=lambda out:np.where(out[1]>=0,out[1],np.where(out[2]>=0,out[2],tmax)))
         states,loss,failed,_,counts,status=map(np.asarray,result)
         return SimpleNamespace(times=times,states=states,lost=loss>=0,failed=failed>=0,
             axis_stopped=np.zeros(len(data),bool),loss_times=loss,failed_times=failed,
             axis_stop_times=np.full(len(data),-1.),thermalized_times=np.full(len(data),-1.),
             step_stats=SimpleNamespace(accepted=counts[:,1],rejected=counts[:,2],
                 orbit_steps=counts[:,1],orbit_rejected=counts[:,2]),
-            timings=dict(driver='dedicated Boozer orbit kernel',compile_seconds=compile_seconds,
-                         first_execution_seconds=first_seconds,warm_seconds=warm))
+            timings=dict(driver='dedicated Boozer orbit kernel',**timings))
     key = jax.random.key(seed)
     keys=(jax.vmap(lambda i:jax.random.fold_in(key,i))(jnp.arange(len(data),dtype=jnp.uint32))
           if stable_keys else jax.random.split(key,len(data)))
@@ -223,30 +269,26 @@ def native_trace(field, data, wave, *, tmax, timestep, tolerance, species=None,
     def solve(points,pitch,energy,keys):
         particles=Particles(initial_xyz=points,initial_vparallel_over_v=pitch,mass=MASS,charge=CHARGE,energy=energy)
         particles.random_keys=keys
-        return trace_split(field,particles,species,tmax=tmax,timestep=timestep,n_save=n_save,
+        solution=trace_split(field,particles,species,tmax=tmax,timestep=timestep,n_save=n_save,
             integrator="essos_dopri8",perturbation=wave,rtol=tolerance,atol=tolerance,
             orbit_dt0=timestep,collision_dtmax=collision_dtmax,execution=execution,
             spatial_diffusion=spatial_diffusion,spatial_geometry=spatial_geometry,adaptive=True,orbit_adaptive=True,
             collision_controller="moments" if collisional else "conservative",
             collision_tolerance=collision_tolerance,moment_tolerance=moment_tolerance)
-    import time
+        return solution.ys,solution.status,solution.t,solution.stats
     arguments=(points,pitch,.5*MASS*speed**2,keys)
-    started=time.perf_counter();compiled=jax.jit(solve).lower(*arguments).compile()
-    compile_seconds=time.perf_counter()-started
-    started=time.perf_counter();solution=jax.block_until_ready(compiled(*arguments))
-    execution_seconds=time.perf_counter()-started
-    y, status, stop = np.asarray(solution.ys), np.asarray(solution.status), np.asarray(solution.t)
-    B = np.asarray(jax.jit(jax.vmap(jax.vmap(lambda p:field.modB(*p))))(solution.ys[:,:,:3]))
+    (y,status,stop,stats),timings=_trace_batches(solve,arguments,batch_size=batch_size,progress=progress,end_times=lambda out:out[2])
+    B = np.asarray(jax.jit(jax.vmap(jax.vmap(lambda p:field.modB(*p))))(jnp.asarray(y[:,:,:3])))
     current_speed = np.sqrt(np.maximum(y[:,:,3]**2+2*y[:,:,4]*B/MASS,0.))
     event, failed = status == SplitStatus.EVENT, status > SplitStatus.EVENT
     lost = event & (y[:,-1,0] >= 1.-1e-8)
     axis = event & ~lost
-    return SimpleNamespace(times=np.asarray(solution.ts),states=np.concatenate((y[:,:,:4],current_speed[:,:,None]),axis=2),
+    return SimpleNamespace(times=np.asarray(jnp.linspace(0.,tmax,n_save)),states=np.concatenate((y[:,:,:4],current_speed[:,:,None]),axis=2),
         lost=lost,failed=failed,axis_stopped=axis,loss_times=np.where(lost,stop,-1.),
         failed_times=np.where(failed,stop,-1.),axis_stop_times=np.where(axis,stop,-1.),
-        thermalized_times=np.full(len(data),-1.),step_stats=solution.stats,
+        thermalized_times=np.full(len(data),-1.),step_stats=stats,
         timings=dict(driver='native independent split kernel' if execution=='independent' else 'native shared split solver',
-            compile_seconds=compile_seconds,first_execution_seconds=execution_seconds,warm_seconds=[]))
+            **timings))
 
 
 def run_cases(field, mode, data, arrays, summary, args):
