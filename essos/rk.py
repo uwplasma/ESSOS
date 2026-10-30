@@ -1121,6 +1121,14 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
             def finite(value):
                 return jnp.min(_kernel_is_finite(value).astype(jnp.int32)) > 0
 
+            def save_loop(condition, write, index):
+                # JAX 0.6 cannot discharge Pallas ref reads in while conditions.
+                def advance(carry):
+                    index = write(carry[0])
+                    return index, condition(index)
+                return jax.lax.while_loop(lambda c: c[1], advance,
+                    (index, condition(index)))[0]
+
             def dense(y, endpoint, bank, fraction):
                 if method == "dopri5":
                     # Same quartic extension as rk._rk45_dense; the padded
@@ -1155,7 +1163,7 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
                 tsout[i] = zero
                 return i+1
 
-            index = jax.lax.while_loop(lambda i: (status == 0) & (i < nsave) &
+            index = save_loop(lambda i: (status == 0) & (i < nsave) &
                 (tsref[jnp.minimum(i, nsave-1)] == 0), initial_save, jnp.asarray(0, jnp.int32))
             indexbank = jnp.arange(bank_size)[:, None]
             # Time, state, FSAL derivative, proposal, event value, status,
@@ -1227,7 +1235,7 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
                     tsout[i] = tsref[i]
                     return i+1
 
-                index = jax.lax.while_loop(lambda i: accept & (i < nsave) &
+                index = save_loop(lambda i: accept & (i < nsave) &
                     (tsref[jnp.minimum(i, nsave-1)] <= stop_t), save, index)
                 return (jnp.where(accept, stop_t, t), jnp.where(accept, stop_y, y),
                     jnp.where(accept, f1, f0), proposed, jnp.where(accept, new_value, old_value),

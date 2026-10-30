@@ -225,7 +225,8 @@ def test_boozer_public_native_outputs_and_failures(monkeypatch):
         original(SimpleNamespace(table=1.,sine_coef=None),1.,1.,1.,[0.,.1],.1,1e-9,1e-9,8,interpret=True)
 
 
-def test_vmec_private_values_match_current_main():
+def test_vmec_private_values_match_current_main(monkeypatch):
+    from functools import partial
     from essos.fields import Vmec
     from essos.rk import _prepare_vmec_data as prepare, _vmec_quantities as quantities, _vmec_rhs_values as rhs_values, _vmec_xyz_values as xyz_values
     from essos.dynamics import GuidingCenter,Particles,_axis_regular,_to_axis_regular
@@ -245,7 +246,10 @@ def test_vmec_private_values_match_current_main():
     np.testing.assert_allclose(xyz_values(prepared.arrays,y,prepared.tables),field.to_xyz(x),atol=3e-12)
     from essos.rk import prepare_solver
     args=dict(mass=1.,charge=1.,energy=.5,times=np.array([0.,.001]),dt0=.001,max_steps=8)
-    reference=jax.jit(prepare_solver(field,**args))(y[:5])
+    # Bound the real-equilibrium CPU reference graph on older XLA releases.
+    with monkeypatch.context() as patch:
+        patch.setattr(rk,'solve_rk',partial(rk.solve_rk,stage_execution='loop'))
+        reference=jax.jit(prepare_solver(field,**args))(y[:5])
     gpu=jax.jit(prepare_solver(field,execution='cuda',interpret=True,**args))(y[:5])
     np.testing.assert_allclose(gpu.y,reference.y,atol=3e-12)
     for change in (dict(model='lorentz'),dict(execution='x'),dict(energy=-1),dict(execution='cuda',controller='pi')):
@@ -274,7 +278,8 @@ def test_independent_gpu_loop_on_cpu(method):
     def factory(refs,point,invariant):
         scalar=lambda y:_select_one(y,0,0).reshape(())
         return (lambda y:jnp.ones_like(y),lambda y,e,v:jnp.max(jnp.abs(e)),lambda y:.3-scalar(y))
-    times=np.array([0.,.1,.2,.5])
+    # Exercise repeated initial/interior saves in both Pallas save loops.
+    times=np.array([0.,0.,.1,.2,.2,.5])
     for adaptive in (False,True):
         solve=prepare_gpu_solver((),factory,1.,times,.2,1e-9,1e-9,16,method=method,
                                  adaptive=adaptive,interpret=True)
@@ -282,7 +287,7 @@ def test_independent_gpu_loop_on_cpu(method):
         out=run(jnp.zeros(4),jnp.asarray(0.))
         assert out.status==rk.RKStatus.EVENT
         np.testing.assert_allclose(out.t,.3,atol=2e-14)
-        np.testing.assert_allclose(out.ys[:3],np.broadcast_to(times[:3,None],(3,4)),atol=2e-14)
+        np.testing.assert_allclose(out.ys[:-1],np.broadcast_to(times[:-1,None],(len(times)-1,4)),atol=2e-14)
         assert np.isinf(out.ys[-1]).all()
         invalid=run(jnp.full(4,jnp.nan),jnp.asarray(0.))
         assert invalid.status==rk.RKStatus.NONFINITE and invalid.stats.steps==0
