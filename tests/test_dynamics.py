@@ -1,3 +1,4 @@
+import sys
 import pytest
 from pathlib import Path
 import jax
@@ -417,6 +418,7 @@ def _near_axis_particles():
     return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([0.9, 0.9, 0.9, -0.9, 0.9]))
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
 def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature():
     """Without the noise-induced drift sigma_ik d_j sigma_jk / 2 a thermal
     ensemble heated to <E> ~ 1.35 (3T/2) within two slowing-down times."""
@@ -606,6 +608,7 @@ class _UniformField:
         return xyz
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
 @pytest.mark.parametrize("stop", [False, True])
 def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypatch, stop):
     """FullOrbitCollisions passed a four-element args tuple to drift and
@@ -637,6 +640,27 @@ def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypat
         assert bool(trace.boundary_hits[0])
         assert float(jnp.max(trace.trajectories[0, :, 2])) < ceiling
         np.testing.assert_array_equal(trace.trajectories[0, -1], trace.trajectories[0, -2])
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
+def test_tracing_pytree_round_trip_and_jit():
+    """Unflatten re-ran __init__ with times as times_to_trace, passed both
+    condition and stopping_criteria, and dropped species and boundary."""
+    field = _UniformField((0., 0., 1.), magnitude=1e-3)
+    particles = Particles([[1., 0., 0.]], [.5], field=field)
+    species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
+
+    def below_ceiling(t, y, args, **kwargs):
+        return 1.0 - y[2]
+    trace = Tracing(field=field, particles=particles, species=species, model="FullOrbitCollisions",
+                    maxtime=1e-6, timestep=1e-7, times_to_trace=3, stopping_criteria=below_ceiling)
+    leaves, treedef = jax.tree_util.tree_flatten(trace)
+    rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+    assert rebuilt.species is species and rebuilt.times_to_trace == 3
+    assert rebuilt.stopping_criteria == trace.stopping_criteria and rebuilt.condition is trace.condition
+    np.testing.assert_array_equal(rebuilt.times, trace.times)
+    np.testing.assert_array_equal(rebuilt.trajectories, trace.trajectories)
+    np.testing.assert_allclose(jax.jit(lambda tr: tr.energy())(trace), trace.energy(), rtol=1e-12)
 
 
 class _MuField:

@@ -138,19 +138,39 @@ def BdotN(surface, field):
 def BdotN_over_B(surface, field, **kwargs):
     return BdotN(surface, field) / jnp.linalg.norm(B_on_surface(surface, field), axis=2)
 
+def _surface_mean(surface, values):
+    """Average of ``values`` (on the ``(nphi, ntheta)`` grid) over the whole torus.
+
+    Theta is periodic, so a duplicated ``close=True`` end column is dropped.
+    Over a full torus phi is treated the same way; over a half period with
+    ``close=True`` both ends are sampled and the trapezoid rule is used.
+    A half period with ``close=False`` is a midpoint grid. Surfaces without
+    ``close``/``range_torus`` (e.g. VMEX's) are taken as open full-torus grids.
+    Integrals over the torus are this mean times ``(2 pi)**2``, because the
+    normal is taken with respect to theta and phi in radians and a
+    half-period integrand repeats over the ``2 nfp`` half periods.
+    """
+    close = getattr(surface, "close", False)
+    if close:
+        values = values[:, :-1]
+    if getattr(surface, "range_torus", "full torus") == "full torus" or not close:
+        return jnp.mean(values[:-1] if close else values)
+    weights = jnp.ones(values.shape[0]).at[jnp.array([0, -1])].set(0.5)
+    return jnp.sum(weights @ values) / (jnp.sum(weights) * values.shape[1])
+
 @jit
 def _squared_flux_local(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
-                          * surface.area_element)
+    return 0.5 * _surface_mean(surface, BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
+                                       * surface.area_element)
 
 @jit
 def _squared_flux_global(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element)
+    return 0.5 * _surface_mean(surface, BdotN(surface, field)**2 * surface.area_element)
 
 @jit
 def _squared_flux_normalized(surface, field):
-    return 0.5 * jnp.mean(BdotN(surface, field)**2 * surface.area_element) / \
-                 jnp.mean(jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
+    return 0.5 * _surface_mean(surface, BdotN(surface, field)**2 * surface.area_element) / \
+                 _surface_mean(surface, jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
 
 def SquaredFlux(surface, field, definition='local'):
     if definition == 'local':
@@ -534,6 +554,9 @@ class SurfaceRZFourier:
             div, end_val = self.nfp, 0.5
         quadpoints_theta = jnp.linspace(0, 2 * jnp.pi, num=self.ntheta, endpoint=self.close)
         quadpoints_phi   = jnp.linspace(0, 2 * jnp.pi * end_val / div, num=self.nphi, endpoint=self.close)
+        if self.range_torus == "half period" and not self.close:
+            # Midpoint grid (as in simsopt): spectrally accurate for stellarator-symmetric integrands.
+            quadpoints_phi = quadpoints_phi + jnp.pi * end_val / div / self.nphi
         theta2d, phi2d = jnp.meshgrid(quadpoints_theta, quadpoints_phi)
         return quadpoints_theta, quadpoints_phi, theta2d, phi2d
 
@@ -743,28 +766,14 @@ class SurfaceRZFourier:
 
     @property
     def volume(self):
-
-        xyz = self.gamma  # shape: (nphi, ntheta, 3)
-        n = self.normal    # shape: (nphi, ntheta, 3)
-
-        integrand = jnp.sum(xyz * n, axis=2)  # dot(x, n), shape: (nphi, ntheta)
-        volume = jnp.mean(integrand) / 3.0
-        return volume
+        """Enclosed volume, ``(1/3) |integral of x . n dtheta dphi|``."""
+        integrand = jnp.sum(self.gamma * self.normal, axis=2)
+        return jnp.abs(_surface_mean(self, integrand)) * (2 * jnp.pi)**2 / 3.0
 
     @property
     def area(self):
-        #n = self.normal  # (nphi, ntheta, 3)
-        #norm_n = jnp.linalg.norm(n, axis=2)  # shape: (nphi, ntheta)
-        #avg_area = jnp.mean(norm_n)
-        #return avg_area
-        n = self.normal  # shape: (nphi, ntheta, 3)
-        norm_n = jnp.linalg.norm(n, axis=2)  
-
-        dphi = 2 * jnp.pi / self.nphi
-        dtheta = 2 * jnp.pi / self.ntheta
-
-        area = jnp.sum(norm_n) * dphi * dtheta
-        return area
+        """Surface area, ``integral of |n| dtheta dphi``."""
+        return _surface_mean(self, jnp.linalg.norm(self.normal, axis=2)) * (2 * jnp.pi)**2
 
     # def change_resolution(self, mpol: int, ntor: int, ntheta=None, nphi=None,close=True):
     #     """
@@ -902,33 +911,22 @@ class SurfaceRZFourier:
         with open(filename, 'w') as f:
             f.write('\n'.join(lines) + '\n/\n')
 
+    def _section_area_integrand(self):
+        """``R dZ/dtheta`` at fixed cylindrical phi, ``dZ/dtheta = Z_theta - Z_u phi_theta / phi_u``
+        (u the surface toroidal angle), times the Jacobian ``phi_u`` of the change of toroidal angle."""
+        x, y = self.gamma[..., 0], self.gamma[..., 1]
+        d_phi, d_theta = self.gammadash_phi, self.gammadash_theta
+        r2 = x**2 + y**2
+        phi_u = (x * d_phi[..., 1] - y * d_phi[..., 0]) / r2
+        phi_theta = (x * d_theta[..., 1] - y * d_theta[..., 0]) / r2
+        return jnp.sqrt(r2) * (d_theta[..., 2] * phi_u - d_phi[..., 2] * phi_theta)
+
     def area_section_by_phi(self):
-        """
-        Calculate the area enclosed by every poloidal cross section. For each fixed toroidal angle phi:
-        A(phi) = abs(integral R * dZ/dtheta dtheta)
-        Returns an array with shape (nphi,).
-        """
-        # Extract the surface coordinates (x, y, z) from the gamma property. The shape of xyz is (nphi, ntheta, 3).
-        xyz = self.gamma
-
-        # Cylindrical radius R = sqrt(x^2 + y^2).
-        R = jnp.sqrt(xyz[:, :, 0] ** 2 + xyz[:, :, 1] ** 2)
-
-        # Derivative of Z with respect to the poloidal angle theta.
-        dZ_dtheta = self.gammadash_theta[:, :, 2]
-
-        # Green's-theorem integrand for each poloidal cross section.
-        area_integrand = R * dZ_dtheta
-
+        """Area ``|int R dZ/dtheta dtheta|`` of every constant-phi cross section, shape ``(nphi,)``."""
+        integrand = self._section_area_integrand()
         if self.close:
-            # The endpoints are present, so trapezoidal integration avoids
-            # counting the duplicated endpoints twice.
-            theta = self.theta2d[0, :]
-            return jnp.abs( jnp.trapezoid(area_integrand, x=theta, axis=1) )
-
-        # Without the endpoint, the uniform periodic trapezoidal rule is equivalent to the grid spacing multiplied by the sum.
-        dtheta = 2 * jnp.pi / self.ntheta
-        return jnp.abs( dtheta * jnp.sum(area_integrand, axis=1) )
+            integrand = integrand[:, :-1]
+        return 2 * jnp.pi * jnp.abs(jnp.mean(integrand, axis=1))
 
     def curvature_section_by_phi(self):
         """
@@ -964,6 +962,10 @@ class SurfaceRZFourier:
 
         # The square root gives the measure the same length units as rc and zs.
         return jnp.sqrt(amplitude_squared)
+
+    def mean_cross_sectional_area(self):
+        """Mean over phi of the constant-phi cross-section area; the phi average uses ``_surface_mean``."""
+        return 2 * jnp.pi * jnp.abs(_surface_mean(self, self._section_area_integrand()))
 
     def _tree_flatten(self):
         tables = (self._rc, self._zs, self._rs, self._zc)

@@ -1048,6 +1048,9 @@ class Tracing():
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
         elif model == 'FullOrbitCollisions':
+            if tuple(map(int, diffrax.__version__.split('.')[:3])) < (0, 7, 1):
+                # diffrax 0.7.0, the last release for Python 3.10, returns inf for this SDE (checked on JAX 0.6.2).
+                raise ImportError("FullOrbitCollisions needs diffrax>=0.7.1, which needs Python>=3.11")
             self.args = (self.field, self.particles, self.species)
             if self.particles.initial_xyz_fullorbit is None:
                 raise ValueError("Initial full orbit positions require field input to Particles")
@@ -1705,18 +1708,21 @@ class Tracing():
         return plotting_data
     
     def _tree_flatten(self):
-        children = (self.trajectories, self.initial_conditions, self.times)  # arrays / dynamic values
-        aux_data = {'field': self.field, 'electric_field': self.electric_field, 'model': self.model, 'maxtime': self.maxtime, 'timestep': self.timestep,
-                    'rtol': self.rtol, 'atol': self.atol, 'particles': self.particles, 'condition': self.condition, 'tag_gc': self.tag_gc,
-                    'solver': self.solver, 'stopping_criteria': self.stopping_criteria,
-                    'progress': self.progress, 'devices': self.devices, 'exterior_field': self.exterior_field,
-                    'wall': self.wall, 'max_returns': self.max_returns, 'reentry_depth': self.reentry_depth,
-                    'particle_batch_size': self.particle_batch_size}  # static values
-        return (children, aux_data)
+        # Rebuilding through __init__ would trace again and mapped times onto
+        # times_to_trace; every attribute holding arrays is a child instead.
+        def has_arrays(value):
+            return any(isinstance(leaf, (jax.Array, np.ndarray)) for leaf in tree_util.tree_leaves(value))
+        names = tuple(name for name, value in vars(self).items() if has_arrays(value))
+        static = tuple((name, value) for name, value in vars(self).items() if name not in names)
+        return tuple(getattr(self, name) for name in names), (names, static)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        return cls(*children, **aux_data)
+        names, static = aux_data
+        tracing = object.__new__(cls)
+        tracing.__dict__.update(static)
+        tracing.__dict__.update(zip(names, children))
+        return tracing
 
 
 tree_util.register_pytree_node(Tracing,
