@@ -1,8 +1,8 @@
 import copy
+import numpy as np
 import jax
 from jax import vmap, grad, device_get
 import jax.numpy as jnp
-from jaxopt import LBFGS
 from essos.surfaces import SurfaceRZFourier
 from scipy.optimize import minimize
 
@@ -120,44 +120,25 @@ class QfmSurface:
                         printlog=True, **kwargs):
         x0 = self.surface_optimize.x if x0 is None else x0
 
-        # ---------- Define objective function, return scalar + aux dict (all use jnp.array) ----------
-        def fn(x):
-            value = self.penalty_objective(x, constraint_weight)
-            aux = {
-                "objective": self.objective(x),
-                "constraint": self.constraint(x),
-                "penalty": value
-            }
-            return value, aux
+        penalty = jax.jit(jax.value_and_grad(lambda x: self.penalty_objective(x, constraint_weight)))
+        iterations = []
 
-        solver = LBFGS(fun=fn, maxiter=maxiter, tol=tol, has_aux=True)
-        state = solver.init_state(x0)
+        def callback(x):
+            iterations.append(1)
+            value, gradient = penalty(x)
+            self._callback({"iter": len(iterations), "objective": float(self.objective(x)),
+                            "constraint": float(self.constraint(x)),
+                            "penalty": float(value), "grad_norm": float(jnp.linalg.norm(gradient))}, printlog)
 
-        trace = []
-        x = x0
-        for k in range(maxiter):
-            x, state = solver.update(x, state)
-
-            info = {key: device_get(v) if isinstance(v, jnp.ndarray) else v for key, v in state.aux.items()}
-            info["iter"] = k + 1
-            info["grad_norm"] = float(jnp.linalg.norm(grad(lambda z: self.penalty_objective(z, constraint_weight))(x)))
-            info["error"] = float(state.error)
-
-            # Ensure we call _callback for logging every step if printlog is True
-            self._callback(info, printlog)
-
-            if state.error <= tol:
-                break
-
-        x_safe = device_get(x)  # Move back to host
-        self.surface_optimize = self._build_surface_with_x(self.surface_optimize, x_safe)
-
+        res = minimize(lambda x: tuple(map(np.asarray, penalty(x))), np.asarray(x0), jac=True,
+                       method="L-BFGS-B", tol=tol, options={"maxiter": maxiter}, callback=callback)
+        self.surface_optimize = self._build_surface_with_x(self.surface_optimize, res.x)
         return {
-            "fun": float(self.penalty_objective(x, constraint_weight)),
-            "gradient": jnp.array(grad(lambda z: self.penalty_objective(z, constraint_weight))(x)),
-            "iter": k + 1,
-            "info": state,
-            "success": state.error <= tol,
+            "fun": float(res.fun),
+            "gradient": jnp.array(res.jac),
+            "iter": res.nit,
+            "info": res,
+            "success": res.success,
             "s": self.surface_optimize,
         }
 
@@ -168,8 +149,10 @@ class QfmSurface:
         res = minimize(
             fun=lambda x: float(self.objective(x)),
             x0=x0,
+            jac=lambda x: np.asarray(grad(self.objective)(x)),
             method="SLSQP",
-            constraints={"type": "eq", "fun": lambda x: float(self.constraint(x))},
+            constraints={"type": "eq", "fun": lambda x: float(self.constraint(x)),
+                         "jac": lambda x: np.asarray(grad(self.constraint)(x))},
             tol=tol,
             options={"maxiter": maxiter, "disp": False},
             callback=lambda x: self._callback(x, printlog)  # Use internal callback directly
