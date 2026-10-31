@@ -700,6 +700,32 @@ def _enable_x64():
         from jax.experimental import enable_x64
     return enable_x64
 
+
+@pytest.mark.parametrize("xi", [0., .3, 1., -1.])
+def test_zero_density_mu_collisions_have_zero_noise_and_collisionless_drift(xi):
+    from essos.dynamics import (GuidingCenterCollisionsDiffusionMu,
+                                GuidingCenterCollisionsDriftMuIto,
+                                GuidingCenterCollisionsDriftMuStratonovich)
+    with _enable_x64()():
+        state, scale, args = _mu_collision_setup(1e5, xi)
+        absent = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]),
+                                   jnp.array([0.]), jnp.array([1e3]))
+        args = (*args[:3], absent, args[4])
+        noise = lambda y: GuidingCenterCollisionsDiffusionMu(0., y, args)
+        sigma, tangent = jax.jvp(noise, (state,), (jnp.ones(5),))
+        np.testing.assert_array_equal(sigma, np.zeros((5, 5)))
+        np.testing.assert_array_equal(tangent, np.zeros((5, 5)))
+        batch = jnp.stack([state, state])
+        sigma, tangent = jax.jvp(jax.vmap(noise), (batch,), (jnp.ones_like(batch),))
+        np.testing.assert_array_equal(sigma, np.zeros((2, 5, 5)))
+        np.testing.assert_array_equal(tangent, np.zeros((2, 5, 5)))
+        expected = np.array([0., 0., state[3]*scale[0], 0., 0.])
+        for drift in (GuidingCenterCollisionsDriftMuIto, GuidingCenterCollisionsDriftMuStratonovich):
+            np.testing.assert_allclose(drift(0., state, args), expected, rtol=1e-14, atol=1e-14)
+            np.testing.assert_allclose(jax.vmap(lambda y: drift(0., y, args))(batch),
+                                       np.stack([expected, expected]), rtol=1e-14, atol=1e-14)
+
+
 @pytest.mark.parametrize("v,xi", [(1e5, 0.0), (1e6, 0.0), (1e5, 0.3), (1e5, 1.0), (1e6, -1.0)])
 def test_mu_collision_noise_is_finite_and_matches_the_diffusion_tensor(v, xi):
     """The eigenvectors were 0/0 at xi = 0, and jnp.select returned zero noise
