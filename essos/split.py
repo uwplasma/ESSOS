@@ -17,50 +17,11 @@ from .rk import RKStatus, solve_rk, _concrete_check, _prepare_rhs, OrbitErrorNor
 
 
 
-# Collision error
-
-
-class CollisionErrorModel(NamedTuple):
-    abs_drift: jax.Array
-    parallel: jax.Array
-    drift: jax.Array                 # .5 |Q Q'| (GC), or .5 |K K'| (particle)
-    diffusion: jax.Array             # (D_parallel')**2
-    pitch_drift: jax.Array           # .5 |xi| nu**2; zero for particle control
-    pitch_diffusion: jax.Array       # .5 sqrt((1-xi**2) nu) nu; zero for particle
-    tolerance: jax.Array
-    speed_noise_index: jax.Array     # -2 for GC (including spatial noise), 2 for particle
-
 def _ratio(numerator, denominator):
+    """numerator/denominator with 0/0 -> 0 and x/0 -> inf (vacuum has no error)."""
     safe = jnp.where(denominator > 0, denominator, 1.)
     return jnp.where(denominator > 0, numerator/safe,
                      jnp.where(numerator == 0, 0., jnp.inf))
-
-def collision_error_estimates(model, h, dw):
-    """Evaluate both normalized estimates without another coefficient/RHS call."""
-    eps_v = model.tolerance*(model.abs_drift*h+jnp.sqrt(jnp.maximum(2*model.parallel*h, 0.)))
-    drift = jnp.maximum(_ratio(model.drift*h*h, eps_v),
-                        model.pitch_drift*h*h/model.tolerance)
-    diffusion = jnp.maximum(
-        _ratio(model.diffusion*jnp.abs(dw[model.speed_noise_index])**3,
-               6*eps_v*jnp.sqrt(jnp.maximum(model.parallel, 0.))),
-        model.pitch_diffusion*h*(jnp.abs(dw[-1])+jnp.sqrt(h/3))/model.tolerance)
-    return drift, diffusion
-
-def collision_error_passes(model, h, dw, *, target=1.):
-    """Check the same four bounds without forming normalized error ratios.
-
-    Coefficients and tolerance are finite/nonnegative, with positive tolerance,
-    as supplied by the physical collision maps. Zero numerators and zero speed
-    diffusion retain the estimator's 0/0 -> 0 convention. The actual trial still
-    computes its normalized errors and independently checks finiteness.
-    """
-    tolerance = target*model.tolerance
-    speed_scale = tolerance*(model.abs_drift*h+jnp.sqrt(jnp.maximum(2*model.parallel*h, 0.)))
-    return ((model.drift*h*h <= speed_scale)
-            & (model.diffusion*jnp.abs(dw[model.speed_noise_index])**3
-               <= 6*speed_scale*jnp.sqrt(jnp.maximum(model.parallel, 0.)))
-            & (model.pitch_drift*h*h <= tolerance)
-            & (model.pitch_diffusion*h*(jnp.abs(dw[-1])+jnp.sqrt(h/3)) <= tolerance))
 
 
 # Collisions
@@ -78,7 +39,6 @@ class CollisionStep(NamedTuple):
     y: jax.Array
     drift_error: jax.Array           # dimensionless, acceptable if <= 1
     diffusion_error: jax.Array
-    error_model: CollisionErrorModel | None = None
 
 def _diffusion_root(value):
     """sqrt(max(value, 0)) with a zero AD tangent at zero diffusion.
@@ -143,8 +103,7 @@ def _speed_diffusion_error(c, dw, tolerance):
     return _ratio(c.parallel_derivative**2 * jnp.abs(dw)**3,
                   6*tolerance*jnp.sqrt(jnp.maximum(c.parallel, 0.)))
 
-def guiding_center_collision_step(speed, pitch, h, dw, c, *, tolerance=1e-3, speed_floor=0.,
-                                  return_error_model=False):
+def guiding_center_collision_step(speed, pitch, h, dw, c, *, tolerance=1e-3, speed_floor=0.):
     """Paper Eqs. (70)--(75), with speed [m/s] replacing normalized momentum.
 
     ``dw`` contains two independent Wiener increments of variance h, not unit
@@ -167,10 +126,7 @@ def guiding_center_collision_step(speed, pitch, h, dw, c, *, tolerance=1e-3, spe
     # retain the sign-symmetric estimate rather than cancelling negative dW.
     es = jnp.maximum(_speed_diffusion_error(c, dw[0], eps_v),
                      .5*angular_noise*nu*h*(jnp.abs(dw[1])+jnp.sqrt(h/3))/tolerance)
-    model = (CollisionErrorModel(jnp.abs(drift), dp, .5*jnp.abs(q*dq), ddp**2,
-        .5*jnp.abs(pitch)*nu**2, .5*angular_noise*nu, tolerance, jnp.array(-2))
-        if return_error_model else None)
-    return CollisionStep(jnp.array([v, reflect_pitch(xi)]), ed, es, model)
+    return CollisionStep(jnp.array([v, reflect_pitch(xi)]), ed, es)
 
 def velocity_basis(velocity):
     """Orthonormal columns (perp1, perp2, parallel), evaluated at this step."""
@@ -182,7 +138,7 @@ def velocity_basis(velocity):
     first = first/jnp.linalg.norm(first)
     return jnp.stack([first, jnp.cross(direction, first), direction], axis=1)
 
-def particle_collision_step(velocity, h, dw, c, *, tolerance=1e-3, return_error_model=False):
+def particle_collision_step(velocity, h, dw, c, *, tolerance=1e-3):
     """Paper Eqs. (57)--(62), in the local velocity-aligned basis.
 
     The parallel component is a Milstein increment; perpendicular components
@@ -195,11 +151,8 @@ def particle_collision_step(velocity, h, dw, c, *, tolerance=1e-3, return_error_
         jnp.reshape(drift*h + _diffusion_root(2*dp)*dw[2]
                     + .5*ddp*(dw[2]**2-h), (1,))])
     eps_v = tolerance*(jnp.abs(drift)*h + jnp.sqrt(jnp.maximum(2*dp*h, 0.)))
-    model = (CollisionErrorModel(jnp.abs(drift), dp, .5*jnp.abs(drift*dk), ddp**2,
-        jnp.zeros_like(speed), jnp.zeros_like(speed), tolerance, jnp.array(2))
-        if return_error_model else None)
     return CollisionStep(velocity + velocity_basis(velocity) @ delta,
-        _ratio(.5*jnp.abs(drift*dk)*h*h, eps_v), _speed_diffusion_error(c, dw[2], eps_v), model)
+        _ratio(.5*jnp.abs(drift*dk)*h*h, eps_v), _speed_diffusion_error(c, dw[2], eps_v))
 
 class BrownianMemory(NamedTuple):
     """Stack of unconsumed intervals: the next interval is at size-1."""
@@ -260,190 +213,6 @@ def brownian_propose(memory, h, *, t_end=None):
 def brownian_accept(memory):
     return memory._replace(size=memory.size-1, t=memory.ends[memory.size-1])
 
-def brownian_sample(memory, end, *, normal=None):
-    """Sample W(end)-W(memory.t), retaining every sampled future point.
-
-    Unlike ``brownian_propose``, this can span several stored intervals. New
-    points inside a stored interval use the conditional law in Eqs. 83--84;
-    points beyond the last sample extend it by an independent increment.
-    The descending endpoint/interval representation is shared with the stack
-    driver. Overflow leaves the memory and random key unchanged.
-    An explicit standard ``normal`` can be supplied by a caller that owns the
-    random-key advancement; otherwise a new key is split only for insertion.
-    """
-    if normal is not None:
-        normal = jnp.asarray(normal, dtype=memory.increments.dtype)
-        if normal.shape != memory.increments.shape[1:]:
-            raise ValueError("normal must match the Wiener increment shape")
-    m = memory
-    indices = jnp.arange(len(m.ends))
-    active = indices < m.size
-    matches = active & (m.ends == end)
-    known = jnp.any(matches) | (end == m.t)
-    overflow = ~known & (m.size == len(m.ends))
-
-    def insert(m):
-        # k=-1 extends the furthest endpoint; otherwise split interval k.
-        k = jnp.sum(active & (m.ends > end))-1
-        extending = k < 0
-        start = jnp.where(extending,
-            jnp.where(m.size > 0, m.ends[0], m.t),
-            jnp.where(k+1 < m.size, m.ends[jnp.minimum(k+1, len(m.ends)-1)], m.t))
-        stop = m.ends[jnp.maximum(k, 0)]
-        duration = jnp.where(extending, end-start, stop-start)
-        fraction = jnp.where(extending, 1., (end-start)/jnp.where(duration > 0, duration, 1.))
-        if normal is None:
-            key, draw = jax.random.split(m.key)
-            z = jax.random.normal(draw, m.increments.shape[1:], dtype=m.increments.dtype)
-        else:
-            key, z = m.key, normal
-        parent = m.increments[jnp.maximum(k, 0)]
-        left = jnp.where(extending, jnp.sqrt(jnp.maximum(end-start, 0.))*z,
-            fraction*parent+jnp.sqrt(jnp.maximum((end-start)*(1-fraction), 0.))*z)
-        at = k+1
-        old_indices = jnp.clip(indices-(indices > at), 0, len(m.ends)-1)
-        ends, increments = m.ends[old_indices], m.increments[old_indices]
-        ends = ends.at[at].set(end)
-        increments = increments.at[at].set(left)
-        increments = lax.cond(extending, lambda a: a,
-            lambda a: a.at[k].set(parent-left), increments)
-        return BrownianMemory(ends, increments, m.size+1, key,
-                              jnp.maximum(m.peak, m.size+1), m.t)
-
-    m = lax.cond(~known & ~overflow, insert, lambda m: m, m)
-    value = jnp.sum(jnp.where(((indices < m.size) & (m.ends <= end))[:, None], m.increments, 0.), axis=0)
-    return m, value, overflow
-
-def brownian_consume(memory, end):
-    """Consume through an endpoint previously inserted by brownian_sample."""
-    keep = (jnp.arange(len(memory.ends)) < memory.size) & (memory.ends > end)
-    return memory._replace(size=jnp.sum(keep), t=end)
-
-def paper_collision_step_size(memory, h, dw, drift_error, diffusion_error,
-                              accepted, *, dtmin, dtmax, barrier, wiener_norm=None):
-    """Paper section 5.3, Eqs. 78--82, with retained Wiener look-ahead.
-
-    Probe cumulative Wiener values at successive thirds, stopping at the
-    first threshold crossing. ``wiener_norm`` projects onto the noise components
-    present in the error estimate; its default is the Euclidean vector norm.
-    For the particle estimate (Eq. 62), only the parallel increment is relevant.
-    All probes, including the first failing one, remain in Brownian memory.
-    The first third is retried if no candidate passes; actual error estimates
-    still decide acceptance. dtmax and the next output/final time cap probes.
-    """
-    drift_dominated = drift_error >= diffusion_error
-    base = jnp.where(drift_dominated,
-        jnp.minimum(1.5, .9*jnp.maximum(drift_error, 1e-30)**(-.5))*h, h)
-    limit = jnp.minimum(dtmax, barrier-memory.t)
-    unit = jnp.minimum(jnp.maximum(base/3, dtmin), limit)
-    norm = jnp.linalg.norm if wiener_norm is None else wiener_norm
-    amplitude = norm(dw)
-    optimum = .9*jnp.maximum(diffusion_error, 1e-30)**(-1/3)*amplitude
-    lmax = jnp.where(drift_dominated, 3,
-        jnp.where(~accepted, 2, jnp.where(amplitude < 2*jnp.sqrt(h), 4, 6)))
-
-    def probe(carry):
-        m, n, chosen, running, overflow = carry
-        length = jnp.minimum(n*unit, limit)
-        end = jnp.minimum(m.t+length, barrier)
-        m, candidate, full = brownian_sample(m, end)
-        passes = norm(candidate) < optimum
-        chosen = jnp.where((n == 1) | passes, end-m.t, chosen)
-        return m, n+1, chosen, passes & ~full & (length < limit), overflow | full
-
-    def stochastic(_):
-        m, _, chosen, _, overflow = lax.while_loop(
-            lambda c: (c[1] <= lmax) & c[3], probe,
-            (memory, jnp.array(1), unit, jnp.array(True), jnp.array(False)))
-        return m, chosen, overflow
-
-    # A zero realized diffusion estimate leaves Eq. (80)'s threshold undefined
-    # when the controlled increment is also zero. Use the drift proposal as a
-    # fallback; zero realized error does not imply zero diffusion coefficients.
-    # The next actual trial must still satisfy both error limits.
-    return lax.cond(diffusion_error > 0, stochastic,
-        lambda _: (memory, jnp.minimum(jnp.maximum(base, dtmin), limit), jnp.array(False)), None)
-
-
-# Collision controller
-
-
-def _fit_error_step(model, bound, minimum, normal_magnitude, target):
-    """Largest bracketed step for frozen coefficients and fixed |dW|/sqrt(h).
-
-    Eight bisections avoid assuming a common error power for speed and pitch.
-    This is a cheap prediction: the next actual Brownian sample is checked
-    separately. A sub-grid positive fallback still goes through real acceptance.
-    """
-    # At fixed |dW|/sqrt(h), cancel the common sqrt(h) in the speed
-    # numerators/denominator and compare cross-products. These are exactly the
-    # same four error inequalities, including 0/0 -> 0 in vacuum, without
-    # repeated divisions, noise indexing, or coefficient square roots.
-    parallel = jnp.sqrt(jnp.maximum(model.parallel, 0.))
-    thermal_noise = jnp.sqrt(jnp.maximum(2*model.parallel, 0.))
-    speed_noise = model.diffusion*jnp.abs(normal_magnitude[model.speed_noise_index])**3
-    pitch_noise = model.pitch_diffusion*(jnp.abs(normal_magnitude[-1])+1/jnp.sqrt(3.))
-    tolerance = target*model.tolerance
-
-    def passes(h):
-        root_h = jnp.sqrt(h)
-        scale = tolerance*(model.abs_drift*root_h+thermal_noise)
-        return ((model.drift*h*root_h <= scale)
-                & (speed_noise*h <= 6*parallel*scale)
-                & (model.pitch_drift*h*h <= tolerance)
-                & (pitch_noise*h*root_h <= tolerance))
-
-    def bisect(_):
-        def one(_, bracket):
-            lo, hi = bracket
-            middle = (lo+hi)/2
-            passed = passes(middle)
-            return jnp.where(passed, middle, lo), jnp.where(passed, hi, middle)
-        lo, hi = lax.fori_loop(0, 8, one, (minimum, bound))
-        return jnp.where(lo > 0, lo, hi/2)
-    return lax.cond(passes(bound), lambda _: bound, bisect, None)
-
-def candidate_collision_step_size(memory, h, error_model, accepted, *,
-                                  dtmin, dtmax, barrier, target=.9):
-    """Predict, probe and backtrack using both frozen normalized error estimates.
-
-    Accepted trials can grow by at most two; rejected trials shrink by at least
-    20%, subject to dtmin and save/final boundaries. The initial predictor uses
-    unit Gaussian magnitudes. A failed probe refits using its realized Gaussian
-    magnitudes and a smaller upper bound. At most four Wiener points are probed.
-    If the budget is exhausted, the last sampled step is returned for the real
-    acceptance test; no inaccurate step is forced through.
-    """
-    limit = jnp.minimum(dtmax, barrier-memory.t)
-    bound = jnp.minimum(jnp.maximum(jnp.where(accepted, 2., .8)*h, dtmin), limit)
-    minimum = jnp.minimum(dtmin, bound)
-    unit_noise = jnp.ones(memory.increments.shape[1:], dtype=memory.increments.dtype)
-    proposal = _fit_error_step(error_model, bound, minimum, unit_noise, target)
-
-    def stochastic(_):
-        def probe(carry):
-            m, wanted, last, count, running, overflow = carry
-            end = jnp.minimum(m.t+wanted, barrier)
-            length = end-m.t
-            m, dw, full = brownian_sample(m, end)
-            passed = collision_error_passes(error_model, length, dw, target=target)
-            retry = ~passed & ~full & (length > minimum) & (count < 3)
-
-            def refit(_):
-                smaller = jnp.maximum(.8*length, minimum)
-                normal = jnp.abs(dw)/jnp.sqrt(length)
-                return _fit_error_step(error_model, smaller, minimum, normal, target)
-            next_h = lax.cond(retry, refit, lambda _: length, None)
-            return m, next_h, length, count+1, retry, overflow | full
-        m, _, last, _, _, overflow = lax.while_loop(
-            lambda c: c[4], probe,
-            (memory, proposal, proposal, jnp.array(0), jnp.array(True), jnp.array(False)))
-        return m, last, overflow
-
-    has_noise_error = (error_model.diffusion > 0) | (error_model.pitch_diffusion > 0)
-    return lax.cond(has_noise_error, stochastic,
-        lambda _: (memory, proposal, jnp.array(False)), None)
-
 class SplitStatus(IntEnum):
     SUCCESS = 0
     EVENT = 1
@@ -461,11 +230,8 @@ class SplitStats(NamedTuple):
     orbit_rejected: jax.Array
     peak_pending: jax.Array
     max_accepted_error: jax.Array
-    combined_rejected: jax.Array = 0
-    max_accepted_combined_error: jax.Array = 0.
-    collision_updates: jax.Array = 0
-    accepted_orbit_steps: jax.Array | None = None
-    max_orbit_steps_per_collision: jax.Array | None = None
+    accepted_orbit_steps: jax.Array
+    max_orbit_steps_per_collision: jax.Array
 
 class SplitSolution(NamedTuple):
     ts: jax.Array
@@ -476,96 +242,37 @@ class SplitSolution(NamedTuple):
     stats: SplitStats
     step_ts: jax.Array
 
-def solve_split(rhs, collision, y0, args=None, *, t0=0.0, t1, dt0, ts, key, noise_dim, adaptive=True, dtmin=0.0, dtmax=jnp.inf, method='dopri8', orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution='loop', reuse_orbit_step=True, collision_controller='conservative', collision_wiener_norm=None, rtol=1e-09, atol=1e-09, error_norm=None, controller='i', pcoeff=0.4, icoeff=0.3, event=None, max_steps=100000, max_orbit_steps=10000, max_pending=64, record_steps=False, step_limit=None, align_orbit=False, event_dtmax=None, combined_error_norm=None, shared_clock=False, reuse_combined_orbit=True, combined_controller='rms', _orbit_rhs_prepared=False):
-    """Orbit advancement followed by an endpoint collision kick.
+def solve_split(rhs, collision, y0, args=None, *, t0=0.0, t1, dt0, ts, key, noise_dim, adaptive=True, dtmin=0.0, dtmax=jnp.inf, method='dopri8', orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution='loop', reuse_orbit_step=True, rtol=1e-09, atol=1e-09, error_norm=None, controller='i', pcoeff=0.4, icoeff=0.3, event=None, max_steps=100000, max_orbit_steps=10000, max_pending=64, record_steps=False, step_limit=None, align_orbit=False, event_dtmax=None, _orbit_rhs_prepared=False):
+    """Orbit advancement followed by an endpoint collision kick (Lie splitting).
 
-``collision(t, y, h, dW, args)`` returns ``CollisionStep`` with normalized
-drift/diffusion estimates. Rejected trials repeat from the last accepted
-state and retain all Brownian samples. The conservative controller uses
-factors 0.9*min(E_drift**(-1/2), E_diff**(-2/3)), capped at 1.5.
-``collision_controller="paper"`` selects section 5.3's Wiener look-ahead
-(Eqs. 78--82), retaining every sampled candidate including failed probes.
-``collision_controller="candidate"`` predicts both errors using frozen
-local coefficients, then probes/backtracks on retained Wiener candidates.
-It requires ``CollisionStep.error_model`` and still checks actual errors
-for acceptance. The native collision kernels supply this metadata without
-extra runtime coefficient evaluations.
-``collision_wiener_norm`` selects the Wiener components that enter the
-collision error estimate; by default it is the Euclidean norm of all noise.
+    ``collision(t, y, h, dW, args)`` returns a ``CollisionStep`` with normalized
+    drift/diffusion error estimates, acceptable when <= 1. Rejected trials repeat
+    from the last accepted state and retain every Brownian sample (bridge
+    conditioning, paper Eqs. 83-84), so refining a step never redraws the path.
+    The next interval is 0.9*min(E_drift**(-1/2), E_diff**(-2/3)), capped at 1.5.
 
-``dt0``/``dtmax`` control collision/splitting intervals; ``orbit_dt0`` and
-rtol/atol control the independent RK solve within each interval. Collision
-estimates do not bound operator-splitting error: refine dtmax to check it.
-Saves are exact split boundaries, so changing ts can change the trajectory.
-No ODE dense interpolation is applied to a stochastic trajectory.
-``reuse_orbit_step`` carries the next adaptive RK step-size guess across
-kicks and retries. Every solve recomputes its initial derivative; no FSAL
-derivative or PI error history is carried across a collision.
-``orbit_stage_execution`` selects the RK loop or unrolled execution layout;
-it does not change the orbit formula or the collision sampling.
+    ``dt0``/``dtmax`` control collision/splitting intervals; ``orbit_dt0``,
+    rtol/atol and ``method`` control the independent RK solve within each
+    interval. Collision estimates do not bound splitting error: refine dtmax to
+    check it. Saves are exact split boundaries, so changing ts changes the
+    trajectory. ``reuse_orbit_step`` carries the RK step-size guess across kicks;
+    ``align_orbit`` snaps a collision endpoint to a nearby orbit step.
 
-``combined_error_norm(coarse, fine)`` optionally compares one full split step
-with two Brownian-coupled half steps and accepts the fine result only when
-this scalar estimate and all three collision estimates are <=1. Midpoints
-remain in Brownian memory on rejection; growth cannot skip stored endpoints.
-This experimental mode requires conservative adaptive collisions and no
-events/step limits. Its H**(3/2) step-size predictor is a heuristic, not an
-ensemble-error bound. ``accepted`` counts outer intervals; ``collision_updates``
-counts the two accepted half kicks. Recorded step_ts includes both half ends.
-Work counters include the full comparison trajectory and rejected trials.
-``reuse_combined_orbit`` shares the initial half-orbit between the coarse and
-fine paths. The coarse orbit then continues without the midpoint kick; the
-fine path continues after it. The coarse collision still spans the full
-interval. RK tolerances and retained Brownian samples are unchanged. False
-retains the original independent full-orbit comparison for verification.
-``combined_controller="rms"`` predicts the next interval from an exponential
-average of squared defects divided by (h/dt0)**3, including rejected trials.
-The averaging weight is 1/4 and the normalized RMS target is .55. Save times
-and retained endpoints can truncate h without shrinking the intended proposal.
-Every actual trial still requires the same realized defect and collision
-estimates <=1; this predictor is not a certified conditional RMS error bound.
-``combined_controller="i"`` retains the original single-defect I proposal.
-
-``shared_clock=True`` is an experimental policy comparison: one accepted RK
-step per collision update, with both error estimates constraining the common
-interval. Rejected orbit trials retain their Wiener endpoints. It requires
-adaptive conservative collisions/orbits, reused RK proposals and no events,
-step limits or combined control. This uses native formulas, not ASCOT's solver.
-
-Events are scalar booleans or positive-inside level sets (or their PyTrees).
-Orbit crossings are root-found before a kick. A kick crossing stops at its
-endpoint; Brownian crossings are not root-found by ODE interpolation.
-Optional ``step_limit(t, y, args)`` supplies a positive interval ceiling
-from the current accepted state. Optional ``event_dtmax`` retries a detected
-kick crossing until its interval is this small, retaining Brownian samples.
-The two controls support boundary-resolution diagnostics; they do not detect
-every crossing followed by a return, or certify an exact first-passage time.
-Neither is enabled by default. Step limits also subdivide fixed grids while
-retaining their original grid anchors. They must not depend on fresh noise.
-Stopped/failed outputs hold the last finite state; always inspect status.
-Work and Brownian memory are bounded. No inaccurate step is forced through
-dtmin or a memory limit."""
-    combined = combined_error_norm is not None
-    if combined_controller not in ('i','rms'):
-        raise ValueError("combined_controller must be 'i' or 'rms'")
-    rms = combined and combined_controller == 'rms'
-    if align_orbit and (not adaptive or not orbit_adaptive or not reuse_orbit_step or shared_clock or combined):
-        raise ValueError('orbit endpoint alignment requires separate adaptive clocks and orbit-step reuse')
-    if shared_clock and (combined or not adaptive or not orbit_adaptive or not reuse_orbit_step or collision_controller != 'conservative' or tree_util.tree_leaves(event) or step_limit is not None or event_dtmax is not None):
-        raise ValueError('shared_clock requires adaptive conservative collisions/orbits with reused steps, without combined control, events or step limits')
-    if combined and (not adaptive or collision_controller != 'conservative' or tree_util.tree_leaves(event) or step_limit is not None or event_dtmax is not None):
-        raise ValueError('combined control requires adaptive conservative collisions without events or step limits')
-    if combined and not callable(combined_error_norm):
-        raise ValueError('combined_error_norm must be callable')
+    Events are scalar booleans or positive-inside level sets (or PyTrees of them).
+    Orbit crossings are root-found before a kick; a kick crossing stops at its
+    endpoint. Optional ``step_limit(t, y, args)`` supplies a positive interval
+    ceiling from the current accepted state (it must not depend on fresh noise);
+    ``event_dtmax`` retries a detected kick crossing until its interval is this
+    small. Stopped or failed outputs hold the last finite state; inspect
+    ``status``. Work and Brownian memory are bounded and no inaccurate step is
+    forced through ``dtmin`` or a memory limit."""
+    if align_orbit and (not adaptive or not orbit_adaptive or not reuse_orbit_step):
+        raise ValueError('orbit endpoint alignment requires adaptive orbit and collision clocks and orbit-step reuse')
     for name, value in (('max_steps', max_steps), ('max_orbit_steps', max_orbit_steps)):
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f'{name} must be a positive integer')
     if orbit_stage_execution not in ('loop', 'unrolled'):
         raise ValueError("orbit_stage_execution must be 'loop' or 'unrolled'")
-    if collision_controller not in ('conservative', 'paper', 'candidate'):
-        raise ValueError("collision_controller must be 'conservative', 'paper' or 'candidate'")
-    candidate = adaptive and collision_controller == 'candidate'
-    lookahead = adaptive and collision_controller in ('paper', 'candidate')
     y0 = jnp.asarray(y0, dtype=jnp.result_type(y0, float))
     ts = jnp.asarray(ts, dtype=y0.dtype)
     if y0.ndim != 1 or y0.size == 0 or (not jnp.issubdtype(y0.dtype, jnp.floating)):
@@ -586,15 +293,6 @@ dtmin or a memory limit."""
     if event_dtmax is not None:
         valid &= jnp.isfinite(event_dtmax) & (event_dtmax > 0) & (event_dtmax >= dtmin)
     _concrete_check(valid, np.all, 'invalid split times or step limits')
-    empty_model = None
-    if candidate:
-        schema = jax.eval_shape(collision, t0, y0, dt0, jnp.zeros((noise_dim,), y0.dtype), args)
-        if not isinstance(schema.error_model, CollisionErrorModel):
-            raise ValueError('candidate controller requires CollisionStep.error_model')
-        if any((x.shape != () for x in tree_util.tree_leaves(schema.error_model))):
-            raise ValueError('collision error model coefficients must be scalars')
-        empty_model = tree_util.tree_map(lambda x: jnp.zeros(x.shape, x.dtype), schema.error_model)
-        empty_model = empty_model._replace(tolerance=jnp.ones_like(empty_model.tolerance))
     functions = tree_util.tree_leaves(event)
 
     def values(t, y):
@@ -611,20 +309,16 @@ dtmin or a memory limit."""
     v0 = values(t0, y0)
     initial_status = jnp.where(~valid, SplitStatus.INVALID_INPUT, jnp.where(~jnp.isfinite(y0).all() | ~finite_values(v0), SplitStatus.NONFINITE, jnp.where(stopped(v0), SplitStatus.EVENT, SplitStatus.SUCCESS)))
     memory = brownian_memory(key, noise_dim, capacity=max_pending, dtype=y0.dtype, t0=t0)
-    s = dict(t=t0, y=y0, h=jnp.minimum(dt0, dtmax), orbit_h=orbit_dt0, status=initial_status, memory=memory, index=jnp.array(0), ys=jnp.broadcast_to(y0, (len(ts), y0.size)), steps=jnp.array(0), accepted=jnp.array(0), rejected=jnp.array(0), orbit_steps=jnp.array(0), orbit_rejected=jnp.array(0), max_error=jnp.zeros((), y0.dtype), history=jnp.full(((2 if combined else 1)*max_steps + 1 if record_steps else 0,), jnp.inf, dtype=y0.dtype))
-    if combined:
-        s.update(combined_rejected=jnp.array(0), combined_error=jnp.zeros((), y0.dtype),
-            accepted_orbit_steps=jnp.array(0), max_orbit_steps_per_collision=jnp.array(0))
-    else:
-        s.update(accepted_orbit_steps=jnp.array(0), max_orbit_steps_per_collision=jnp.array(0))
-    if rms:
-        s.update(combined_rate=jnp.zeros((),y0.dtype),combined_rate_ready=jnp.array(False))
+    s = dict(t=t0, y=y0, h=jnp.minimum(dt0, dtmax), orbit_h=orbit_dt0, status=initial_status, memory=memory, index=jnp.array(0), ys=jnp.broadcast_to(y0, (len(ts), y0.size)), steps=jnp.array(0), accepted=jnp.array(0), rejected=jnp.array(0), orbit_steps=jnp.array(0), orbit_rejected=jnp.array(0), max_error=jnp.zeros((), y0.dtype), history=jnp.full((max_steps + 1 if record_steps else 0,), jnp.inf, dtype=y0.dtype), accepted_orbit_steps=jnp.array(0), max_orbit_steps_per_collision=jnp.array(0))
     if record_steps:
         s['history'] = s['history'].at[0].set(t0)
     if not adaptive:
         s['grid_index'] = jnp.array(0)
     if event_dtmax is not None:
         s['event_h'] = jnp.asarray(jnp.inf, dtype=y0.dtype)
+
+    def next_save(s):
+        return jnp.where(s['index'] < len(ts), ts[jnp.minimum(s['index'], len(ts) - 1)], t1) if len(ts) else t1
 
     def save(s):
         if not len(ts):
@@ -634,10 +328,9 @@ dtmin or a memory limit."""
             return dict(s, ys=s['ys'].at[s['index']].set(s['y']), index=s['index'] + 1)
         return lax.while_loop(lambda s: (s['index'] < len(ts)) & (ts[jnp.minimum(s['index'], len(ts) - 1)] <= s['t']), one, s)
     s = save(s)
-    initial_saves = s['index']
 
     def integrate(t, y, end, guess):
-        return solve_rk(orbit_rhs, y, args, t0=t, t1=end, dt0=jnp.minimum(guess, end-t), ts=jnp.empty((0,), y0.dtype), method=method, adaptive=orbit_adaptive, rtol=rtol, atol=atol, stage_execution=orbit_stage_execution, error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff, event=event, root_find=True, max_steps=1 if shared_clock else max_orbit_steps)
+        return solve_rk(orbit_rhs, y, args, t0=t, t1=end, dt0=jnp.minimum(guess, end-t), ts=jnp.empty((0,), y0.dtype), method=method, adaptive=orbit_adaptive, rtol=rtol, atol=atol, stage_execution=orbit_stage_execution, error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff, event=event, root_find=True, max_steps=max_orbit_steps)
 
     def kick(t, y, h, dw):
         result = collision(t, y, h, dw, args)
@@ -645,135 +338,59 @@ dtmin or a memory limit."""
             raise ValueError('collision must preserve the state shape')
         if jnp.ndim(result.drift_error) or jnp.ndim(result.diffusion_error):
             raise ValueError('collision errors must be scalars')
-        return result if candidate else result._replace(error_model=None)
+        return result
 
     def valid_trial(trial):
-        errors=jnp.asarray([trial.drift_error,trial.diffusion_error])
-        return jnp.isfinite(trial.y).all() & jnp.isfinite(errors).all() & jnp.all(errors>=0)
+        errors = jnp.asarray([trial.drift_error, trial.diffusion_error])
+        return jnp.isfinite(trial.y).all() & jnp.isfinite(errors).all() & jnp.all(errors >= 0)
 
     def advance_with_limit(s, limit):
-        physical_barrier = t1 if not len(ts) else jnp.where(s['index'] < len(ts), ts[jnp.minimum(s['index'], len(ts) - 1)], t1)
+        physical_barrier = next_save(s)
         barrier = physical_barrier
         if step_limit is not None:
             barrier = jnp.minimum(barrier, s['t'] + limit)
         if event_dtmax is not None:
             barrier = jnp.minimum(barrier, s['t'] + s['event_h'])
         if adaptive:
-            proposal = jnp.minimum(s['h'], jnp.maximum(s['orbit_h'], dtmin)) if shared_clock else s['h']
-            wanted_end = jnp.minimum(s['t'] + proposal, barrier)
+            wanted_end = jnp.minimum(s['t'] + s['h'], barrier)
         else:
             grid_end = t0 + (s['grid_index'] + 1) * jnp.minimum(dt0, dtmax)
             close = jnp.abs(grid_end - barrier) <= 8 * jnp.finfo(y0.dtype).eps * jnp.maximum(jnp.abs(grid_end), jnp.abs(barrier))
             grid_end = jnp.where(close, barrier, grid_end)
             wanted_end = jnp.minimum(grid_end, barrier)
         if align_orbit:
-            length=wanted_end-s['t'];guess=s['orbit_h']
-            near=(jnp.isfinite(guess)&(guess>0)&(wanted_end<physical_barrier)
-                &(guess>=.9*length)&(guess<length*(1-1e-12)))
-            wanted_end=jnp.where(near,s['t']+guess,wanted_end)
-        if combined or shared_clock:
-            # Do not create a roundoff-sized remainder before a known endpoint.
-            # Snapping occurs before sampling; no Wiener point is discarded.
-            rounding = 8*jnp.finfo(y0.dtype).eps*jnp.maximum(jnp.abs(barrier),jnp.abs(s['t']))
-            wanted_end = jnp.where((wanted_end>s['t']) & (barrier-wanted_end<=rounding),barrier,wanted_end)
-            parent = s['memory'].ends[jnp.maximum(s['memory'].size-1,0)]
-            wanted_end = jnp.where((s['memory'].size>0)&(parent>=wanted_end)&(parent<=barrier)&(parent-wanted_end<=rounding),parent,wanted_end)
-        if lookahead:
-            m, dw, overflow = brownian_sample(s['memory'], wanted_end)
-            end, h = (wanted_end, wanted_end - s['t'])
-        else:
-            m, h, dw, overflow = brownian_propose(s['memory'], wanted_end - s['t'], t_end=wanted_end)
-            end = m.ends[m.size - 1]
+            length = wanted_end - s['t']
+            guess = s['orbit_h']
+            near = (jnp.isfinite(guess) & (guess > 0) & (wanted_end < physical_barrier)
+                    & (guess >= .9*length) & (guess < length*(1-1e-12)))
+            wanted_end = jnp.where(near, s['t'] + guess, wanted_end)
+        m, h, dw, overflow = brownian_propose(s['memory'], wanted_end - s['t'], t_end=wanted_end)
+        end = m.ends[m.size - 1]
         usable = ~overflow & (h > 0) & (end > s['t'])
 
         def attempt(_):
-            guess = h if shared_clock else s['orbit_h'] if reuse_orbit_step and orbit_adaptive else orbit_dt0
-            if combined and reuse_combined_orbit:
-                half_end=s['t']+h/2
-                shared_first=integrate(s['t'],s['y'],half_end,guess)
-                tail=lax.cond(shared_first.status==RKStatus.SUCCESS,
-                    lambda _:integrate(half_end,shared_first.y,end,shared_first.next_dt if reuse_orbit_step and orbit_adaptive else orbit_dt0),
-                    lambda _:shared_first._replace(stats=type(shared_first.stats)(*(jnp.zeros_like(v) for v in shared_first.stats))),None)
-                orbit=tail._replace(stats=type(tail.stats)(*(a+b for a,b in zip(shared_first.stats,tail.stats))))
-            else:
-                orbit = integrate(s['t'], s['y'], end, guess)
-            trial = lax.cond(orbit.status == RKStatus.SUCCESS, lambda _: kick(end, orbit.y, h, dw), lambda _: CollisionStep(orbit.y, jnp.zeros((), y0.dtype), jnp.zeros((), y0.dtype), empty_model), None)
-            memory, combined_error = m, jnp.zeros((), y0.dtype)
-            if combined:
-                middle = s['t']+h/2
-                splittable = (middle > s['t']) & (middle < end)
-                memory, _, left, full = lax.cond(splittable,
-                    lambda m: brownian_propose(m, middle-s['t'], t_end=middle),
-                    lambda m: (m, jnp.zeros_like(h), jnp.zeros_like(dw), jnp.array(False)), m)
-                def refine(_):
-                    first = shared_first if reuse_combined_orbit else integrate(s['t'], s['y'], middle, guess)
-                    a = kick(middle, first.y, middle-s['t'], left)
-                    second = integrate(middle, a.y, end, first.next_dt if reuse_orbit_step and orbit_adaptive else orbit_dt0)
-                    b = kick(end, second.y, end-middle, dw-left)
-                    estimate = jnp.asarray(combined_error_norm(trial.y, b.y), dtype=y0.dtype)
-                    if estimate.ndim != 0:
-                        raise ValueError('combined error norm must return a scalar')
-                    status = jnp.where(first.status != RKStatus.SUCCESS, first.status,
-                        jnp.where(~jnp.isfinite(a.y).all(), RKStatus.NONFINITE, second.status))
-                    stats = type(orbit.stats)(*(x+z if reuse_combined_orbit else x+y+z for x,y,z in zip(orbit.stats,first.stats,second.stats)))
-                    refined = b._replace(y=jnp.where(valid_trial(a)&valid_trial(b),b.y,jnp.full_like(b.y,jnp.nan)),
-                        drift_error=jnp.maximum(trial.drift_error,jnp.maximum(a.drift_error,b.drift_error)),
-                        diffusion_error=jnp.maximum(trial.diffusion_error,jnp.maximum(a.diffusion_error,b.diffusion_error)))
-                    return (second._replace(status=status,stats=stats),refined,estimate,
-                        (first.stats.accepted+second.stats.accepted).astype(s['accepted'].dtype),
-                        jnp.maximum(first.stats.accepted,second.stats.accepted).astype(s['accepted'].dtype))
-                orbit,trial,combined_error,path_steps,path_max = lax.cond(splittable & ~full & (orbit.status == RKStatus.SUCCESS) & valid_trial(trial),
-                    refine, lambda _: (orbit,trial,combined_error,jnp.zeros_like(s['accepted']),jnp.zeros_like(s['accepted'])), None)
+            guess = s['orbit_h'] if reuse_orbit_step and orbit_adaptive else orbit_dt0
+            orbit = integrate(s['t'], s['y'], end, guess)
+            trial = lax.cond(orbit.status == RKStatus.SUCCESS, lambda _: kick(end, orbit.y, h, dw), lambda _: CollisionStep(orbit.y, jnp.zeros((), y0.dtype), jnp.zeros((), y0.dtype)), None)
             v = values(end, trial.y)
             finite = valid_trial(trial) & finite_values(v)
-            finite &= jnp.isfinite(combined_error) & (combined_error >= 0)
             error = jnp.maximum(trial.drift_error, trial.diffusion_error)
-            accepted = (orbit.status == RKStatus.SUCCESS) & finite & ((jnp.maximum(error,combined_error) <= 1) | (not adaptive))
-            if combined:
-                accepted &= splittable & ~full
+            accepted = (orbit.status == RKStatus.SUCCESS) & finite & ((error <= 1) | (not adaptive))
             refine_event = jnp.array(False)
             if event_dtmax is not None:
                 refine_event = accepted & stopped(v) & (h > event_dtmax * (1 + 8 * jnp.finfo(y0.dtype).eps))
                 accepted &= ~refine_event
-            orbit_retry = (orbit.status == RKStatus.MAX_STEPS) & (orbit.stats.accepted == 0) & (orbit.stats.rejected == 1) if shared_clock else jnp.array(False)
-            orbit_status = jnp.where(orbit_retry, RKStatus.SUCCESS, orbit.status)
-            rejected = (orbit_status == RKStatus.SUCCESS) & finite & ~accepted
+            rejected = (orbit.status == RKStatus.SUCCESS) & finite & ~accepted
             orbit_event = orbit.status == RKStatus.EVENT
-            status = jnp.where(orbit_status != RKStatus.SUCCESS, orbit_status, jnp.where(~finite, SplitStatus.NONFINITE, jnp.where(accepted & stopped(v), SplitStatus.EVENT, jnp.where(rejected & (h <= dtmin), SplitStatus.MIN_STEP, SplitStatus.SUCCESS))))
-            if combined:
-                status = jnp.where(full, SplitStatus.BROWNIAN_CAPACITY, jnp.where(~splittable, SplitStatus.MIN_STEP, status))
-            if rms:
-                observe=(h>dt0*1e-6)&(combined_error>1e-8)&jnp.isfinite(combined_error)
-                observation=combined_error**2/jnp.maximum((h/dt0)**3,1e-30)
-                rate=jnp.where(observe,jnp.where(s['combined_rate_ready'],.75*s['combined_rate']+.25*observation,observation),s['combined_rate'])
-                ready=s['combined_rate_ready']|observe
-                proposal=dt0*(.55**2/jnp.maximum(rate,1e-30))**(1/3)
-                collision=.9*h*jnp.minimum(jnp.maximum(trial.drift_error,1e-30)**(-.5),jnp.maximum(trial.diffusion_error,1e-30)**(-2/3))
-                proposal=jnp.minimum(proposal,collision)
-                ceiling=jnp.where(accepted & (h<s['h']),1.5*s['h'],jnp.where(accepted,1.5,.9)*h)
-                next_h=jnp.clip(proposal,jnp.maximum(dtmin,.1*h),jnp.minimum(dtmax,ceiling))
-            elif adaptive and (not lookahead):
+            status = jnp.where(orbit.status != RKStatus.SUCCESS, orbit.status, jnp.where(~finite, SplitStatus.NONFINITE, jnp.where(accepted & stopped(v), SplitStatus.EVENT, jnp.where(rejected & (h <= dtmin), SplitStatus.MIN_STEP, SplitStatus.SUCCESS))))
+            if adaptive:
                 factor = 0.9 * jnp.minimum(jnp.maximum(trial.drift_error, 1e-30) ** (-0.5), jnp.maximum(trial.diffusion_error, 1e-30) ** (-2 / 3))
-                if combined:
-                    factor = jnp.minimum(factor, .9*jnp.maximum(combined_error,1e-30)**(-2/3))
                 factor = jnp.clip(factor, 0.1, jnp.where(accepted, 1.5, 0.9))
                 next_h = jnp.clip(h * factor, dtmin, dtmax)
             else:
                 next_h = jnp.minimum(dt0, dtmax)
-            if shared_clock:
-                next_h = jnp.clip(jnp.minimum(next_h, orbit.next_dt), dtmin, dtmax)
-            state = dict(s, t=jnp.where(orbit_event, orbit.t, jnp.where(accepted, end, s['t'])), y=jnp.where(orbit_event, orbit.y, jnp.where(accepted, trial.y, s['y'])), h=next_h, status=status, steps=s['steps'] + 1, accepted=s['accepted'] + accepted.astype(s['accepted'].dtype), rejected=s['rejected'] + rejected.astype(s['rejected'].dtype), orbit_steps=s['orbit_steps'] + orbit.stats.steps, orbit_rejected=s['orbit_rejected'] + orbit.stats.rejected, memory=lax.cond(accepted, (lambda m: brownian_consume(m, end)) if lookahead or combined else brownian_accept, lambda m: m, memory), max_error=jnp.maximum(s['max_error'], jnp.where(accepted, error, 0.0)))
-            if rms:
-                state.update(combined_rate=rate,combined_rate_ready=ready)
-            if combined:
-                state.update(combined_rejected=s['combined_rejected']+(rejected & (combined_error>1)).astype(s['rejected'].dtype),
-                    combined_error=jnp.maximum(s['combined_error'],jnp.where(accepted,combined_error,0.)),
-                    accepted_orbit_steps=s['accepted_orbit_steps']+jnp.where(accepted,path_steps,0),
-                    max_orbit_steps_per_collision=jnp.maximum(s['max_orbit_steps_per_collision'],jnp.where(accepted,path_max,0)))
-            else:
-                path_steps = jnp.where(accepted,orbit.stats.accepted,0).astype(s['accepted'].dtype)
-                state.update(accepted_orbit_steps=s['accepted_orbit_steps']+path_steps,
-                    max_orbit_steps_per_collision=jnp.maximum(s['max_orbit_steps_per_collision'],path_steps))
+            path_steps = jnp.where(accepted, orbit.stats.accepted, 0).astype(s['accepted'].dtype)
+            state = dict(s, t=jnp.where(orbit_event, orbit.t, jnp.where(accepted, end, s['t'])), y=jnp.where(orbit_event, orbit.y, jnp.where(accepted, trial.y, s['y'])), h=next_h, status=status, steps=s['steps'] + 1, accepted=s['accepted'] + accepted.astype(s['accepted'].dtype), rejected=s['rejected'] + rejected.astype(s['rejected'].dtype), orbit_steps=s['orbit_steps'] + orbit.stats.steps, orbit_rejected=s['orbit_rejected'] + orbit.stats.rejected, memory=lax.cond(accepted, brownian_accept, lambda m: m, m), max_error=jnp.maximum(s['max_error'], jnp.where(accepted, error, 0.0)), accepted_orbit_steps=s['accepted_orbit_steps'] + path_steps, max_orbit_steps_per_collision=jnp.maximum(s['max_orbit_steps_per_collision'], path_steps))
             if event_dtmax is not None:
                 state['event_h'] = jnp.where(refine_event, jnp.maximum(dtmin, 0.5 * h), jnp.inf)
                 state['h'] = jnp.where(refine_event, state['event_h'], state['h'])
@@ -782,22 +399,8 @@ dtmin or a memory limit."""
             if not adaptive:
                 state['grid_index'] = s['grid_index'] + (accepted & (end == grid_end)).astype(s['grid_index'].dtype)
             if record_steps:
-                if combined:
-                    state['history'] = lax.cond(accepted,lambda a:a.at[2*state['accepted']-1].set(middle).at[2*state['accepted']].set(end),lambda a:a,state['history'])
-                else:
-                    state['history'] = lax.cond(accepted, lambda history: history.at[state['accepted']].set(end), lambda history: history, state['history'])
-            state = save(state)
-            if lookahead:
-
-                def choose(state):
-                    barrier = t1 if not len(ts) else jnp.where(state['index'] < len(ts), ts[jnp.minimum(state['index'], len(ts) - 1)], t1)
-                    if candidate:
-                        memory, next_h, overflow = candidate_collision_step_size(state['memory'], h, trial.error_model, accepted, dtmin=dtmin, dtmax=dtmax, barrier=barrier)
-                    else:
-                        memory, next_h, overflow = paper_collision_step_size(state['memory'], h, dw, trial.drift_error, trial.diffusion_error, accepted, dtmin=dtmin, dtmax=dtmax, barrier=barrier, wiener_norm=collision_wiener_norm)
-                    return dict(state, memory=memory, h=next_h, status=jnp.where(overflow, SplitStatus.BROWNIAN_CAPACITY, state['status']))
-                state = lax.cond((state['status'] == SplitStatus.SUCCESS) & (state['t'] < t1) & ~refine_event, choose, lambda state: state, state)
-            return state
+                state['history'] = lax.cond(accepted, lambda history: history.at[state['accepted']].set(end), lambda history: history, state['history'])
+            return save(state)
         return lax.cond(usable, attempt, lambda _: dict(s, memory=m, status=jnp.where(overflow, SplitStatus.BROWNIAN_CAPACITY, SplitStatus.MIN_STEP)), None)
 
     def advance(s):
@@ -810,61 +413,37 @@ dtmin or a memory limit."""
     s = lax.while_loop(lambda s: (s['status'] == SplitStatus.SUCCESS) & (s['t'] < t1) & (s['steps'] < max_steps), advance, s)
     status = jnp.where((s['status'] == SplitStatus.SUCCESS) & (s['t'] < t1), SplitStatus.MAX_STEPS, s['status'])
     ys = jnp.where((jnp.arange(len(ts)) >= s['index'])[:, None], s['y'], s['ys'])
-    solution = SplitSolution(ts, ys, s['t'], s['y'], status, SplitStats(s['steps'], s['accepted'], s['rejected'], s['orbit_steps'], s['orbit_rejected'], s['memory'].peak, s['max_error'],s.get('combined_rejected',0),s.get('combined_error',0.),(2 if combined else 1)*s['accepted'],s.get('accepted_orbit_steps'),s.get('max_orbit_steps_per_collision')), s['history'])
-    return solution
+    stats = SplitStats(s['steps'], s['accepted'], s['rejected'], s['orbit_steps'], s['orbit_rejected'], s['memory'].peak, s['max_error'], s['accepted_orbit_steps'], s['max_orbit_steps_per_collision'])
+    return SplitSolution(ts, ys, s['t'], s['y'], status, stats, s['history'])
 
-def trace_split(field, particles, species, *, model='GuidingCenter', tmax, timestep, times=None, n_save=100, integrator='essos_dopri8', collision_tolerance=0.001, adaptive=True, collision_dtmax=None, orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution=None, reuse_orbit_step=True, collision_controller='moments', moment_tolerance=.005, moment_reference_time=.005, rtol=1e-09, atol=1e-09, controller='i', pcoeff=0.4, icoeff=0.3, speed_floor=None, spatial_diffusion=None, spatial_geometry=None, orbit=True, electric_field=None, event=None, max_steps=100000, max_orbit_steps=10000, max_pending=64, record_steps=False, execution='shared', combined_tolerance=None, combined_length_scale=1., shared_clock=False, reuse_combined_orbit=True, combined_controller='rms', step_limit=None):
+def trace_split(field, particles, species, *, model='GuidingCenter', tmax, timestep, times=None, n_save=100, integrator='essos_dopri8', collision_tolerance=0.001, adaptive=True, collision_dtmax=None, orbit_dt0=None, orbit_adaptive=True, orbit_stage_execution=None, reuse_orbit_step=True, collision_controller='moments', moment_tolerance=.005, moment_reference_time=.005, rtol=1e-09, atol=1e-09, controller='i', pcoeff=0.4, icoeff=0.3, speed_floor=None, spatial_diffusion=None, spatial_geometry=None, orbit=True, electric_field=None, event=None, max_steps=100000, max_orbit_steps=10000, max_pending=64, record_steps=False, execution='shared', interpret=False, step_limit=None):
     """Batched forward split tracing using ESSOS field and particle objects.
 
-Returns a ``SplitSolution`` with shared ts and particle-leading arrays. GC states are
-``(position[3], v_parallel, mu)`` with **physical** mu=m*v_perp^2/(2 B)
-[J/T], unlike the legacy normalized collisional state. FullOrbit states
-are ``(xyz, vx, vy, vz)``. VMEC/Boozer positions are (s, theta, zeta).
-VMEC uses its regular axis chart; Boozer uses (sqrt(s)cos(theta),
-sqrt(s)sin(theta)) internally. Both stop at the LCFS. Exterior continuation
-is not part of this entry point. ``event`` receives public physical states.
+    Returns a ``SplitSolution`` with shared ts and particle-leading arrays. GC states
+    are ``(position[3], v_parallel, mu)`` with **physical** mu=m*v_perp^2/(2 B)
+    [J/T], unlike the legacy normalized collisional state. FullOrbit states are
+    ``(xyz, vx, vy, vz)``. VMEC/Boozer positions are (s, theta, zeta); both stop at
+    the LCFS and ``event`` receives public physical states.
 
-The default includes the existing paper Eq. (69) position diffusion for GC.
-FullOrbit retains its particle collision map. Explicit ``spatial_diffusion=False``
-is retained for isolated operator diagnostics. VMEC uses its existing spatial
-geometry; Boozer requires ``spatial_geometry=BoozerGeometry.from_booz_xform(b)``
-or an equivalent public-flux-coordinate to Cartesian map. Spatial kicks are
-inverted nonlinearly in the regular chart, preserving the Cartesian update.
-``orbit=False`` runs collision-only statistics.
-``speed_floor`` defaults to 5% of the smallest active background thermal
-speed for the test mass. The GC reflection wall affects near-zero speeds;
-refine/check that parameter when studying the thermal population.
+    GC includes the paper Eq. (69) perpendicular spatial diffusion by default
+    (``spatial_diffusion=False`` isolates the velocity operator); FullOrbit uses its
+    particle collision map. VMEC uses its own spatial geometry; Boozer requires
+    ``spatial_geometry=BoozerGeometry.from_booz_xform(b)``. Spatial kicks are inverted
+    nonlinearly in the regular chart, preserving the Cartesian update. ``orbit=False``
+    runs collision-only statistics. ``speed_floor`` defaults to 5% of the smallest
+    active background thermal speed. Per-particle keys come from ``particles.random_keys``.
 
-Independent per-particle keys come from ``particles.random_keys``. The
-field classes and existing Tracing/trace_boozer entry points are unchanged.
+    ``collision_controller="moments"`` (default, adaptive only) adds a coupled
+    mean/covariance interval ceiling with local budget ``moment_tolerance``, on top of
+    the collision checks at ``collision_tolerance`` and orbit checks at ``rtol/atol``;
+    none of these is a global error bound. ``"conservative"`` keeps only the collision
+    checks. An explicit ``step_limit(t, y, args)`` [s] replaces the moment predictor.
 
-    ``execution="independent"`` uses one persistent GPU program per particle.
-    It uses the same physical collision maps and moment predictor, including
-    background profiles, Coulomb-log selection and Cartesian GC spatial kicks.
-    It requires GPU float64, Threefry keys, zero electric field, Dopri8/I,
-    matching orbit/collision adaptation, and no step recording. Unsupported
-    GPU options raise; ``execution="shared"`` retains ordinary JAX execution.
-
-    ``collision_controller="moments"`` is the adaptive default. It adds a
-    coupled mean/covariance interval ceiling while retaining native collision
-    checks at ``collision_tolerance`` and orbit checks at ``rtol/atol``.
-    ``moment_tolerance`` is a local predictor budget, not a global error bound.
-
-    ``combined_tolerance`` enables experimental full-step/two-half-step control
-    on the shared Cartesian path. Position differences are scaled by
-    ``combined_length_scale`` [m]; velocity differences by birth speed, with
-    an additional pitch block for GC. This is a separate local budget from
-    collision_tolerance and RK rtol/atol. None retains the original method.
-    ``reuse_combined_orbit`` defaults to True; False retains independent
-    coarse/fine orbit integrations for comparison. It affects combined mode only.
-    ``combined_controller="rms"`` smooths squared defects for the next-step
-    proposal while retaining the existing per-trial checks. "i" is the old policy.
-    ``step_limit(t, y, args)`` optionally supplies a positive interval ceiling
-    in seconds using the current Cartesian physical state. It must not draw
-    fresh noise. This exposes solve_split's existing hook on the shared path;
-    an explicit callback replaces the default moment predictor.
-    ``shared_clock=True`` selects a native one-orbit-step/one-collision policy
-    for comparison, also limited to the shared Cartesian path without events.
+    ``execution="independent"`` runs one persistent GPU kernel per particle with the same
+    collision maps and predictor. It needs GPU float64, Threefry keys, zero electric
+    field, Dopri8/I and matching orbit/collision adaptation; unsupported options raise.
+    ``"shared"`` is ordinary JAX execution. ``interpret=True`` runs the independent
+    kernel under the Pallas interpreter on any backend (slow; for testing).
     """
     from .boozer import BoozerField, guiding_center_rhs
     from .coils import Coils
@@ -877,11 +456,9 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
         raise ValueError("split integrator must be 'essos_rk45' or 'essos_dopri8'")
     if model not in ('GuidingCenter', 'FullOrbit'):
         raise ValueError("split model must be 'GuidingCenter' or 'FullOrbit'")
-    if combined_controller not in ('i','rms'):
-        raise ValueError("combined_controller must be 'i' or 'rms'")
-    moment_control=collision_controller=='moments' and adaptive and step_limit is None and combined_tolerance is None and not shared_clock
-    if collision_controller=='moments':
-        collision_controller='conservative'
+    if collision_controller not in ('moments', 'conservative'):
+        raise ValueError("collision_controller must be 'moments' or 'conservative'")
+    moment_control = collision_controller == 'moments' and adaptive and step_limit is None
     for name,value in (('moment_tolerance',moment_tolerance),('moment_reference_time',moment_reference_time)):
         _concrete_check(value,lambda x:np.ndim(x)==0 and np.isfinite(x) and x>0,name+' must be positive and finite')
     _concrete_check(collision_tolerance, lambda x: np.ndim(x) == 0 and np.isfinite(x) and (x > 0), 'collision_tolerance must be positive and finite')
@@ -896,13 +473,6 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
     boozer, vmec = (isinstance(field, BoozerField), isinstance(field, Vmec))
     if step_limit is not None and (execution != 'shared' or boozer or vmec):
         raise ValueError('step_limit currently requires shared Cartesian tracing')
-    if shared_clock and (execution != 'shared' or boozer or vmec):
-        raise ValueError('shared_clock currently requires shared Cartesian tracing')
-    if combined_tolerance is not None:
-        if execution != 'shared' or boozer or vmec:
-            raise ValueError('combined control currently requires shared Cartesian tracing')
-        for name,value in (('combined_tolerance',combined_tolerance),('combined_length_scale',combined_length_scale)):
-            _concrete_check(value, lambda x: np.ndim(x)==0 and np.isfinite(x) and x>0, name+' must be positive and finite')
     if orbit_stage_execution is None:
         orbit_stage_execution = 'unrolled' if integrator == 'essos_dopri8' and model == 'GuidingCenter' and isinstance(field, BiotSavart) and (not adaptive) and (not orbit_adaptive) and (jax.default_backend() == 'gpu') else 'loop'
     gc = model == 'GuidingCenter'
@@ -924,7 +494,7 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
     if times.ndim != 1:
         raise ValueError('times must be one-dimensional')
     if execution == 'independent':
-        _validate_independent(field, particles, species, model=model, integrator=integrator, adaptive=adaptive, orbit_adaptive=orbit_adaptive, controller=controller, collision_controller=collision_controller, electric_field=electric_field, spatial_diffusion=spatial_diffusion, orbit=orbit, record_steps=record_steps, reuse_orbit_step=reuse_orbit_step, event=event, times=times, tmax=tmax)
+        _validate_independent(field, particles, species, model=model, integrator=integrator, adaptive=adaptive, orbit_adaptive=orbit_adaptive, controller=controller, electric_field=electric_field, spatial_diffusion=spatial_diffusion, orbit=orbit, record_steps=record_steps, reuse_orbit_step=reuse_orbit_step, event=event, times=times, interpret=interpret)
     field_view = _split_field_data(field) if execution == 'independent' and isinstance(field,(BiotSavart,Vmec,BoozerField)) else None
     moment_vmec_data=None
     if vmec and moment_control and execution=='shared':
@@ -1010,7 +580,7 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
             speed = jnp.sqrt(state[3] ** 2 + 2 * state[4] * B / mass) if gc else jnp.linalg.norm(state[3:])
             c = collision_coefficients(species, mass, charge, speed, point, full_orbit=not gc)
             if gc:
-                step = guiding_center_collision_step(speed, state[3] / speed, h, dw[-2:], c, tolerance=collision_tolerance, speed_floor=floor, return_error_model=adaptive and collision_controller == 'candidate')
+                step = guiding_center_collision_step(speed, state[3] / speed, h, dw[-2:], c, tolerance=collision_tolerance, speed_floor=floor)
                 v, pitch = step.y
                 if spatial_diffusion:
                     displacement=guiding_center_spatial_increment(state[3]/speed,dw[:3],c,
@@ -1023,7 +593,7 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
                     B = magnitude(point,source)
                 result = y.at[3].set(v * pitch).at[4].set(mass * v * v * (1 - pitch * pitch) / (2 * B))
             else:
-                step = particle_collision_step(state[3:], h, dw, c, tolerance=collision_tolerance, return_error_model=adaptive and collision_controller == 'candidate')
+                step = particle_collision_step(state[3:], h, dw, c, tolerance=collision_tolerance)
                 result = y.at[3:].set(step.y)
             valid_c = jnp.isfinite(jnp.asarray(c)).all() & (c.parallel >= 0) & (c.perpendicular >= 0)
             result = jnp.where(jnp.isfinite(B) & (B > 0) & (speed > 0) & valid_c, result, jnp.full_like(result, jnp.nan))
@@ -1047,27 +617,12 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
                 electric_field=electric_field,tmax=tmax,dtmax=timestep if collision_dtmax is None else collision_dtmax,
                 tolerance=moment_tolerance,reference_time=moment_reference_time,orbit=orbit)
 
-        def collision_wiener_norm(dw):
-            return jnp.linalg.norm(dw[-2:]) if gc else jnp.abs(dw[2])
-        norm = OrbitErrorNorm(rtol=rtol, atol=atol, speed_scale=birth_speed, velocity_components=1 if gc else 3, position_map=position if vmec else None)
-        combined_norm = None
-        if combined_tolerance is not None:
-            def combined_norm(coarse,fine):
-                delta_x=jnp.linalg.norm(fine[:3]-coarse[:3])/combined_length_scale
-                if gc:
-                    def velocity(y):
-                        speed=jnp.sqrt(y[3]**2+2*y[4]*magnitude(y[:3])/mass)
-                        return speed,y[3]/speed
-                    va,xa=velocity(coarse);vb,xb=velocity(fine)
-                    delta_v=jnp.maximum(jnp.abs(va-vb)/birth_speed,jnp.abs(xa-xb))
-                else:
-                    delta_v=jnp.linalg.norm(fine[3:]-coarse[3:])/birth_speed
-                value=jnp.maximum(delta_x,delta_v)/combined_tolerance
-                return jnp.where((combined_tolerance>0)&(combined_length_scale>0)&jnp.isfinite(combined_tolerance)&jnp.isfinite(combined_length_scale),value,jnp.nan)
         if boozer:
 
             def norm(a, b, error):
                 return jnp.maximum(jnp.linalg.norm(error[:2]), jnp.maximum(jnp.abs(error[2]), jnp.abs(error[3]) / birth_speed)) / (rtol + atol)
+        else:
+            norm = OrbitErrorNorm(rtol=rtol, atol=atol, speed_scale=birth_speed, velocity_components=1 if gc else 3, position_map=position if vmec else None)
         events = []
         if vmec or boozer:
             events.append(lambda t, y, args: 1 - y[0] ** 2 - y[1] ** 2)
@@ -1087,8 +642,8 @@ field classes and existing Tracing/trace_boozer entry points are unchanged.
                     tolerance=moment_tolerance,reference_time=moment_reference_time,orbit=orbit,reference_magnitude=magnitude) if moment_control else lambda t,y,a:jnp.asarray(jnp.inf)
                 level=lambda t,y,a:jnp.min(jnp.asarray([f(t,y,a) for f in events])) if events else jnp.asarray(1.,y.dtype)
                 return drift,collision,measure,level,limit
-            solve = partial(_solve_independent, field=field, species=species, gc=gc, birth_speed=birth_speed, speed_floor=floor, collision_tolerance=collision_tolerance, field_view=field_view,physics=physics,mass=mass,charge=charge,spatial_diffusion=spatial_diffusion,spatial_geometry=spatial_geometry)
-        solution = solve(rhs, kick, initial, t1=tmax, dt0=timestep, ts=times, key=key, noise_dim=(5 if spatial_diffusion else 2) if gc else 3, dtmax=timestep if collision_dtmax is None else collision_dtmax, adaptive=adaptive, orbit_dt0=orbit_dt0, orbit_adaptive=orbit_adaptive, orbit_stage_execution=orbit_stage_execution, reuse_orbit_step=reuse_orbit_step, collision_controller=collision_controller, collision_wiener_norm=collision_wiener_norm, method='dopri5' if integrator == 'essos_rk45' else 'dopri8', rtol=rtol, atol=atol, controller=controller, pcoeff=pcoeff, icoeff=icoeff, error_norm=norm, combined_error_norm=combined_norm, shared_clock=shared_clock, reuse_combined_orbit=reuse_combined_orbit, combined_controller=combined_controller, step_limit=active_limit, align_orbit=moment_control and orbit_adaptive and reuse_orbit_step, event=tuple(events), max_steps=max_steps, max_orbit_steps=max_orbit_steps, max_pending=max_pending, record_steps=record_steps, _orbit_rhs_prepared=execution == "shared")
+            solve = partial(_solve_independent, field=field, species=species, gc=gc, birth_speed=birth_speed, speed_floor=floor, collision_tolerance=collision_tolerance, field_view=field_view,physics=physics,mass=mass,charge=charge,spatial_diffusion=spatial_diffusion,spatial_geometry=spatial_geometry,interpret=interpret)
+        solution = solve(rhs, kick, initial, t1=tmax, dt0=timestep, ts=times, key=key, noise_dim=(5 if spatial_diffusion else 2) if gc else 3, dtmax=timestep if collision_dtmax is None else collision_dtmax, adaptive=adaptive, orbit_dt0=orbit_dt0, orbit_adaptive=orbit_adaptive, orbit_stage_execution=orbit_stage_execution, reuse_orbit_step=reuse_orbit_step, method='dopri5' if integrator == 'essos_rk45' else 'dopri8', rtol=rtol, atol=atol, controller=controller, pcoeff=pcoeff, icoeff=icoeff, error_norm=norm, step_limit=active_limit, align_orbit=moment_control and orbit_adaptive and reuse_orbit_step, event=tuple(events), max_steps=max_steps, max_orbit_steps=max_orbit_steps, max_pending=max_pending, record_steps=record_steps, _orbit_rhs_prepared=execution == "shared")
         return solution._replace(ys=jax.vmap(public)(solution.ys), y=public(solution.y))
     if speed_floor is not None:
         _concrete_check(speed_floor, lambda x: np.ndim(x) == 0 and np.isfinite(x) and (x > 0), 'speed_floor must be positive and finite')
@@ -1158,7 +713,8 @@ def _flatten(function, *examples):
             aliases.update(zip(eq.outvars,expressions[key]))
         else:
             kept.append(eq.replace(invars=inputs))
-            if key is not None:expressions[key]=eq.outvars
+            # A dropped (unused) result cannot be read by a later duplicate.
+            if key is not None and not any(type(v).__name__=='DropVar' for v in eq.outvars):expressions[key]=eq.outvars
     graph=type(graph)(graph.jaxpr.replace(eqns=kept,outvars=[v if isinstance(v,Literal) else aliases.get(v,v) for v in graph.jaxpr.outvars]),graph.consts)
     live,_=partial_eval.dce_jaxpr(graph.jaxpr,[True]*len(graph.jaxpr.outvars),instantiate=True)
     return type(graph)(live,graph.consts)
@@ -1581,20 +1137,18 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
 
 
 def _validate_independent(field, particles, species, *, model, integrator, adaptive,
-        orbit_adaptive, controller, collision_controller, electric_field,
-        spatial_diffusion, orbit, record_steps, reuse_orbit_step, event, times, tmax):
-    from .fields import BiotSavart, Vmec
-    from .boozer import BoozerField
+        orbit_adaptive, controller, electric_field,
+        spatial_diffusion, orbit, record_steps, reuse_orbit_step, event, times, interpret=False):
     from .electric_field import Electric_field_zero
-    if integrator != "essos_dopri8" or controller != "i" or collision_controller != "conservative":
-        raise ValueError("independent execution requires Dopri8/I and conservative collision control")
+    if integrator != "essos_dopri8" or controller != "i":
+        raise ValueError("independent execution requires Dopri8/I")
     if adaptive != orbit_adaptive or not reuse_orbit_step:
         raise ValueError("independent execution requires matching adaptation and orbit-step reuse")
     if not isinstance(electric_field, Electric_field_zero):
         raise ValueError("independent execution requires zero electric field")
     if record_steps:
         raise ValueError("independent execution does not provide step histories")
-    if jax.default_backend() != "gpu" or not jax.config.jax_enable_x64:
+    if (jax.default_backend() != "gpu" and not interpret) or not jax.config.jax_enable_x64:
         raise ValueError("independent execution requires GPU float64")
     if jax.random.key_data(particles.random_keys).shape[-1] != 2:
         raise ValueError("independent execution requires Threefry particle keys")
@@ -1779,7 +1333,7 @@ def _prepare_split_field(field, species, *, gc, collision_tolerance, speed_floor
 
 def _solve_independent(rhs, collision, initial, args=None, *, field, species, gc,
                        birth_speed, speed_floor, collision_tolerance, field_view=None, physics=None,
-                       mass=M,charge=Q,spatial_diffusion=False,spatial_geometry=None,**options):
+                       mass=M,charge=Q,spatial_diffusion=False,spatial_geometry=None,interpret=False,**options):
     from .fields import BiotSavart,Vmec
     for name in ('max_steps', 'max_orbit_steps', 'max_pending'):
         value = options[name]
@@ -1811,12 +1365,11 @@ def _solve_independent(rhs, collision, initial, args=None, *, field, species, gc
         max_pending=options['max_pending'], state_size=nstate,
         bank_components=4 if gc and nstate == 5 else 8,
         orbit_dt0=options['orbit_dt0'], final_time=options['t1'],align_orbit=options.get('align_orbit',False),
-        warps=4 if isinstance(field,Vmec) and not spatial_diffusion else 1)
+        warps=4 if isinstance(field,Vmec) and not spatial_diffusion else 1,interpret=interpret)
     ys, y, t, stats, status = solve(jnp.pad(initial, (0, 8-nstate)), jax.random.key_data(options['key']))
+    counts = stats.astype(jnp.int32)
     return SplitSolution(options['ts'], ys[:, :nstate], t, y[:nstate], status,
-        SplitStats(*(stats[i].astype(jnp.int32) for i in range(6)), stats[6],collision_updates=stats[1].astype(jnp.int32),
-            accepted_orbit_steps=stats[7].astype(jnp.int32),max_orbit_steps_per_collision=stats[8].astype(jnp.int32)),
-        jnp.empty((0,), initial.dtype))
+        SplitStats(*counts[:6], stats[6], counts[7], counts[8]), jnp.empty((0,), initial.dtype))
 
 
 # Spatial geometry
@@ -1942,13 +1495,6 @@ class CollisionJet(NamedTuple):
     spatial_drift: object
     spatial_variance: object
 
-class MomentDefect(NamedTuple):
-    mean: object
-    covariance: object
-    cubic_covariance: object
-    noise: object
-    orbit_jacobian: object
-
 def collision_jet(radial,r,xi,point,direction):
     """Analytic pitch derivatives of drift/variance; two radial derivatives.
 
@@ -1969,67 +1515,6 @@ def collision_jet(radial,r,xi,point,direction):
     return CollisionJet(drift,noise,aj,ah,qj,qh,
         jnp.array([spatial[0],-2*xi*d*spatial[2]]),
         jnp.array([2*b*spatial[1],2*(1-xi*xi)*d*spatial[2]]))
-
-def moment_defect(f,vel,jet,*,collision_remainder=True,orbit_jet=None):
-    """E[split-exact] = mean*h^2/2, delta Cov = covariance*h^2/2.
-
-    Splitting terms are [L_orbit,L_collision] on linear/quadratic tests.
-    The optional collision remainder matches the implemented diagonal
-    Milstein map, not an exact collision semigroup. The cubic spatial block
-    is the missing integrated velocity noise, exact for free Brownian flight.
-    Higher-order terms for a general nonlinear field are not included.
-    """
-    a,g,aj,ah,qj,qh,xa,xq=jet;q=g*g
-    if orbit_jet is None:
-        f0=f(vel);fj=jax.jacfwd(f)(vel)
-        trace=jnp.einsum('ijj,j->i',jax.jacfwd(jax.jacfwd(f))(vel),q)
-    else:
-        f0,fj,diagonal=orbit_jet;trace=diagonal@q
-    n=f0.size
-    J=jnp.zeros((n,n)).at[:,-2:].set(fj)
-    G=jnp.zeros((n,2)).at[-2:,:].set(jnp.diag(g));Q=G@G.T
-    mean=-fj@a-.5*trace
-    mean=mean.at[-2:].add(aj@f0[-2:]+xa)
-    cov=jnp.zeros((n,n)).at[-2:,-2:].set(jnp.diag(qj@f0[-2:]+xq))
-    cov=cov-J@Q-Q@J.T
-    if collision_remainder:
-        la=aj@a+.5*jnp.einsum('ijj,j->i',ah,q)
-        lq=qj@a+.5*jnp.einsum('ijj,j->i',qh,q)
-        mean=mean.at[-2:].add(-la)
-        correction=jnp.diag(.25*jnp.diag(qj)**2-lq)-aj@jnp.diag(q)-jnp.diag(q)@aj.T
-        cov=cov.at[-2:,-2:].add(correction)
-    B=(J@G).at[-2:,:].set(0.)
-    return MomentDefect(mean,cov,-B@B.T/3,G,J)
-
-def budget_components(defect,vel,tau):
-    """Mean/covariance error rates over tau using linear orbit transport.
-
-    Averaging I+sJ over 0<=s<=tau propagates local mixed defects into
-    later position variance. This captures the leading global Brownian-
-    flight variance bias which a diagonal local RMS error omits.
-    """
-    b,C,D,G,J=defect
-    b=b+.5*tau*(J@b)
-    def transport(A):return A+.5*tau*(J@A+A@J.T)+(tau*tau/3)*(J@A@J.T)
-    C,D=transport(C),transport(D)
-    B=J@G
-    # PSD Gramian diagonal: integral_0^tau |G+s JG|^2 ds.
-    # Add physical parallel velocity p=r*xi as an observable, retaining its
-    # Ito mean correction from the mixed covariance defect.
-    n=b.size;P=jnp.concatenate((jnp.eye(n),jnp.zeros((1,n)).at[0,-2:].set(vel[::-1])),axis=0)
-    bp=P@b;bp=bp.at[-1].add(C[-2,-1])
-    Cp,Dp=P@C@P.T,P@D@P.T
-    Gp,Bp=P@G,P@B
-    spreadp=tau*jnp.sum((Gp+.5*tau*Bp)**2,axis=1)+tau**3/12*jnp.sum(Bp*Bp,axis=1)
-    scale=jnp.sqrt(jnp.maximum(spreadp,1e-28))
-    return (.5*tau*jnp.abs(bp)/scale,
-        .5*tau*jnp.abs(Cp)/(scale[:,None]*scale[None,:]),
-        tau*jnp.abs(Dp)/(scale[:,None]*scale[None,:]))
-
-def transported_budget(defect,vel,tau):
-    """Reduce the individual mean/covariance limits without extra evaluations."""
-    means,covariance,quadratic=budget_components(defect,vel,tau)
-    return jnp.maximum(jnp.max(means),jnp.max(covariance)),jnp.max(quadratic)
 
 def interval_from_budget(linear,quadratic,tolerance,cap=.0025):
     """Largest h satisfying linear*h+quadratic*h*h <= .8*tolerance."""
@@ -2112,15 +1597,12 @@ def expanded_moment_budget(velocity,jet,vel,tau):
     quadratic=jnp.max(tau*diagonal*(inverse[:3]*inverse[:3]))
     return linear,quadratic
 
-def make_step_limit(field,bath,physical,tolerance=.005,*,reference_time=.005,cap=.0025,expanded=True,projection=None):
+def make_step_limit(field,bath,physical,tolerance=.005,*,reference_time=.005,cap=.0025,projection=None):
     """Predict intervals from a fractional moment-defect budget.
 
     reference_time is in t*nu0 units, NOT a timestep cap. It sets the earliest
     observation timescale; elapsed time subsequently grows the spread proxy.
-    Tolerance differs from the old local-trajectory RMS tolerance. Independent
-    physical/paired tests, rather than this proxy, determine achieved error.
-    expanded=False retains the dense algebra reference; both use the same
-    native coefficient and field derivatives.
+    Independent physical/paired tests, rather than this proxy, determine achieved error.
     """
     to_phase,_,_,radial=_cartesian_model(field,bath,physical)
     def limit(t,y,args):
@@ -2131,11 +1613,7 @@ def make_step_limit(field,bath,physical,tolerance=.005,*,reference_time=.005,cap
             jacobian=jax.jacfwd(projection)(point)
             velocity=tuple(jnp.concatenate((jacobian@value[:3],value[3:]),axis=0) for value in velocity)
         tau=jnp.maximum(reference_time,t*physical.nu)
-        if expanded:
-            linear,quadratic=expanded_moment_budget(velocity,jet,vel,tau)
-        else:
-            defect=moment_defect(None,vel,jet,orbit_jet=velocity)
-            linear,quadratic=transported_budget(defect,vel,tau)
+        linear,quadratic=expanded_moment_budget(velocity,jet,vel,tau)
         return interval_from_budget(linear,quadratic,tolerance,cap=cap)/physical.nu
     return limit
 
@@ -2254,7 +1732,7 @@ def _particle_velocity_jacobians(v,b,gradient,rotation,electric,rates,first,*,or
     return A1,F
 
 def _particle_budget(velocity,unit_b,unit_gradient,rotation,electric,rates,
-                     rate_first,rate_second,profile_rate,tau,*,details=False,orbit=True):
+                     rate_first,rate_second,profile_rate,tau,*,orbit=True):
     """Same weak-moment budget for Lorentz motion, including speed and pitch.
 
     Field/profile derivatives are current exact derivatives. The local radial
@@ -2291,7 +1769,7 @@ def _particle_budget(velocity,unit_b,unit_gradient,rotation,electric,rates,
     linear=jnp.maximum(jnp.max(.5*tau*jnp.abs(mean)/scale),jnp.max(pairs))
     spatial_response=F[:3]@noise
     quadratic=jnp.max(tau*jnp.sum(spatial_response*spatial_response,axis=1)/(3*scale[:3]*scale[:3]))
-    return (linear,quadratic,mean,covariance) if details else (linear,quadratic)
+    return linear,quadratic
 
 def native_step_limit(field,bath,mass,charge,initial,rhs,public,position,magnitude,
                       *,gc,coordinate=False,boozer=False,
