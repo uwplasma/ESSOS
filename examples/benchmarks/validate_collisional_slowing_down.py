@@ -1,4 +1,8 @@
-"""Production first-passage diagnostic used by validate_production_tolerance."""
+"""Production first-passage diagnostic used by validate_production_tolerance.
+
+Boundary-aware stepping limits monitoring intervals near the absorbing speed; it
+is not an exact Brownian crossing sampler, and the split driver separately refines
+detected crossing intervals."""
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -6,10 +10,25 @@ from essos.background_species import BackgroundSpecies
 from essos.constants import PROTON_MASS as M,ELEMENTARY_CHARGE as Q
 from essos.split import (solve_split,collision_coefficients,guiding_center_collision_step,particle_collision_step,
     guiding_center_spatial_diffusion,guiding_center_spatial_increment)
-from .collision_event_diagnostic import boundary_step_limit
 
 
-def native_solver(model, controller, adaptive, physical, horizon, threshold, *,
+def boundary_step_limit(speed, boundary, diffusion, drift, resolution, *, safety=.2):
+    """Return a time interval using consistently scaled speed, D and drift.
+
+    ``diffusion`` is D in dv=A dt+sqrt(2D)dW. ``resolution`` is the smallest
+    boundary-policy interval and the detected-crossing ceiling, not a bound on
+    the unknown continuous hit time. Missed returns require convergence checks.
+    """
+    distance = jnp.maximum(speed-boundary, 0.)
+    diffusive = safety*distance**2/jnp.where(diffusion > 0, 2*diffusion, 1.)
+    diffusive = jnp.where(diffusion > 0, diffusive, jnp.inf)
+    inward = jnp.maximum(-drift, 0.)
+    advective = safety*distance/jnp.where(inward > 0, inward, 1.)
+    advective = jnp.where(inward > 0, advective, jnp.inf)
+    return jnp.maximum(resolution, jnp.minimum(diffusive, advective))
+
+
+def native_solver(model, adaptive, physical, horizon, threshold, *,
                   spatial=False, times=None, magnetic_field=1., boundary_shift=False,
                   event_interval=None, event_safety=.2, record_steps=False):
     """Native benchmark, optionally testing a discrete-exit boundary correction.
@@ -65,9 +84,9 @@ def native_solver(model, controller, adaptive, physical, horizon, threshold, *,
                 speed = y[3] if spatial else (y[0] if gc else jnp.linalg.norm(y))
                 pitch = y[4] if spatial else y[1]
                 c = collision_coefficients(species, M, Q, speed, jnp.zeros(3), full_orbit=not gc)
-                kwargs = dict(tolerance=tolerance, return_error_model=adaptive and controller == "candidate")
-                # Keep driver, Wiener increments and candidate-error metadata
-                # in SI units. Only reporting converts to collision time.
+                kwargs = dict(tolerance=tolerance)
+                # Keep driver and Wiener increments in SI units;
+                # only reporting converts to collision time.
                 result = (guiding_center_collision_step(speed, pitch, h, dw[-2:], c,
                             speed_floor=.05*np.sqrt(2)*physical.sigma, **kwargs) if gc else
                         particle_collision_step(y, h, dw, c, **kwargs))
@@ -87,8 +106,6 @@ def native_solver(model, controller, adaptive, physical, horizon, threshold, *,
             return solve_split(lambda t, y, args: jnp.zeros_like(y), kick, y0,
                 t1=horizon/nu, dt0=initial/nu, dtmax=cap/nu, ts=save_times,
                 key=key, noise_dim=(5 if spatial else 2) if gc else 3, method="dopri5", adaptive=adaptive,
-                collision_controller=controller,
-                collision_wiener_norm=(lambda w: jnp.linalg.norm(w[-2:])) if gc else (lambda w: jnp.abs(w[2])),
                 event=lambda t, y, args: y[-1] if boundary_shift else
                     (y[3] if spatial else (y[0] if gc else jnp.linalg.norm(y)))/physical.sigma-threshold,
                 max_steps=100_000, record_steps=record_steps,
