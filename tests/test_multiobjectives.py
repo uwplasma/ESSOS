@@ -70,6 +70,14 @@ def test_custom_loss_named_unraveler():
     assert jnp.array_equal(gradient_tuple["unused"], gradient["unused"])
 
 
+def test_custom_loss_scalar_multiplication_keeps_dependencies():
+    loss = custom_loss(lambda a: jnp.sum(a**2), "a")
+    loss.dependencies = {"a": jnp.array([1.0, 2.0])}
+    scaled = 3 * loss
+    assert scaled.dependencies is loss.dependencies
+    assert scaled(scaled.starting_dofs) == 15.0
+
+
 @pytest.mark.xfail(reason='test_build_available_inputs uses the old optimizer loss API (x, dofs_curves=, currents_scale=); BdotN_over_B now lives in essos.surfaces with signature (surface, field). Needs rewrite to new API.', strict=False)
 def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn):
     optimizer = MultiObjectiveOptimizer(
