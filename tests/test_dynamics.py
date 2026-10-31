@@ -1,4 +1,5 @@
 import os
+import sys
 import pytest
 from pathlib import Path
 import jax
@@ -422,6 +423,7 @@ def _near_axis_particles():
     return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([0.9, 0.9, 0.9, -0.9, 0.9]))
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
 def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature():
     """Without the noise-induced drift sigma_ik d_j sigma_jk / 2 a thermal
     ensemble heated to <E> ~ 1.35 (3T/2) within two slowing-down times."""
@@ -690,6 +692,7 @@ class _UniformField:
         return xyz
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
 @pytest.mark.parametrize("stop", [False, True])
 def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypatch, stop):
     """FullOrbitCollisions passed a four-element args tuple to drift and
@@ -723,6 +726,7 @@ def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypat
         np.testing.assert_array_equal(trace.trajectories[0, -1], trace.trajectories[0, -2])
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
 def test_tracing_pytree_round_trip_and_jit():
     """Unflatten re-ran __init__ with times as times_to_trace, passed both
     condition and stopping_criteria, and dropped species and boundary."""
