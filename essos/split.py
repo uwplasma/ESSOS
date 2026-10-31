@@ -1633,12 +1633,14 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
                 status = jnp.where((t < end) & (status == 0), 2, status).astype(jnp.int32)
                 return (t, y, guess, status, trials, rejected, fraction)
 
+            save_times = tsref[...]
+
             def save(y, t, index):
 
                 def store(i):
                     ysout[i, :] = y
                     return i + 1
-                return jax.lax.while_loop(lambda i: (i < nsave) & (tsref[jnp.minimum(i, nsave - 1)] <= t), store, index)
+                return jax.lax.while_loop(lambda i: (i < nsave) & (save_times[jnp.minimum(i, nsave - 1)] <= t), store, index)
             valid_inputs = (first_h > 0) & finite(first_h) & (ceiling > 0) & ~jnp.isnan(ceiling) & (first_orbit_h > 0) & finite(first_orbit_h) & (birth_speed > 0) & finite(birth_speed) & (budget > 0) & finite(budget) & (final_t >= 0) & finite(final_t)
             previous = zero
             for i in range(nsave):
@@ -2830,7 +2832,7 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
         elif name=='cond':
             branch=p['branches'][int(scalar(values[0]))]
             result=list(scalar_graph(branch.jaxpr,branch.consts,*values[1:],calls=calls,refs=refs,memo=memo,defer=defer))
-        elif name in ('custom_jvp_call','custom_vjp_call','closed_call','jit'):
+        elif name in ('custom_jvp_call','custom_vjp_call','closed_call','jit','pjit'):
             nested=p.get('call_jaxpr',p.get('fun_jaxpr',p.get('jaxpr')))
             body=getattr(nested,'jaxpr',nested)
             result=list(scalar_graph(body,getattr(nested,'consts',()),*values,calls=calls,refs=refs,memo=memo,defer=defer))

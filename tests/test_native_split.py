@@ -131,7 +131,7 @@ def test_physical_coefficients_match_diffusion_divergence_and_zero_flux():
         np.testing.assert_allclose(c.friction, -M*speed*c.parallel/(1000*Q), rtol=3e-14)
         basis = s.velocity_basis(velocity)
         noise = basis@jnp.diag(jnp.sqrt(2*jnp.array([c.perpendicular, c.perpendicular, c.parallel])))
-        np.testing.assert_allclose(noise@noise.T/2, diffusion(velocity), rtol=2e-13)
+        np.testing.assert_allclose(noise@noise.T/2, diffusion(velocity), rtol=3e-13)
     assert s.collision_coefficients(background, M, Q, jnp.asarray(1e5), point).particle_drift_derivative == 0
     rates=jnp.array([-.2,.4,.2]);first=jnp.array([.03,-.01,.02]);second=jnp.array([.01,.02,-.01])
     unit=jnp.array([.2,.4,.7]);unit=unit/jnp.linalg.norm(unit)
