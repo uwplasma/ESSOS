@@ -437,150 +437,29 @@ timings and a diagnostic plot. Reuse its `boozer_inputs.npz` with
 
 ## Native split orbit and collisions
 
-`essos.split.trace_split` advances a native Dopri8 orbit, then applies the
-nonrelativistic collision map. Defaults are the moment predictor
-(`moment_tolerance=0.005`), native collision tolerance `0.001`, and separate
-orbit `rtol`/`atol`. These local controls do not bound global statistical error.
-`execution="independent"` selects the specialized GPU loop with the same
-predictor and retained Brownian rejection memory; `"shared"` uses shared JAX.
-
-GC includes perpendicular spatial diffusion with three Wiener components
-independent of speed/pitch noise. VMEC uses its existing Cartesian geometry;
-Boozer additionally requires geometric Fourier tables from the same transform:
+`essos.split.trace_split` advances a native Dopri orbit, then applies a Milstein
+Coulomb-collision map per interval (nonrelativistic, guiding-center or full orbit),
+with Brownian bridge memory so rejected steps never redraw the path:
 
 ```python
-from essos.split import trace_split, BoozerGeometry
-result = trace_split(field, particles, species, tmax=tmax, timestep=dt,
-                     spatial_geometry=BoozerGeometry.from_booz_xform(booz))
+from essos.split import trace_split
+result = trace_split(field, particles, species, tmax=tmax, timestep=dt)  # SplitSolution
 ```
 
-The solver applies Cartesian spatial kicks and inverts the regular coordinate
-map, retaining its nonlinear drift. Missing geometry or failed inversion raises
-or reports failure. Lorentz uses its three-component velocity collision map.
-Public field classes are unchanged.
+Defaults: moment-predictor interval ceiling (`moment_tolerance=0.005`), collision
+tolerance `0.001`, orbit `rtol=atol=1e-9`. These are local controls, not global error
+bounds; refine `timestep`/`collision_dtmax` to check splitting error. GC includes
+perpendicular spatial diffusion (paper Eq. 69). VMEC fields use their own geometry;
+Boozer fields need `spatial_geometry=BoozerGeometry.from_booz_xform(booz)`. Always
+check `result.status`. `execution="independent"` runs one persistent GPU kernel per
+particle (float64 GPU, Dopri8, zero electric field); `"shared"` is ordinary JAX, and
+`interpret=True` runs the GPU kernel on CPU for testing.
 
-### Timings and compilation
-
-```sh
-python -m examples.benchmarks.benchmark_split_orbits \
-  --field coils --model gc --case native_independent --stepping adaptive \
-  --particles 64 --repeats 3 --output output/native_split_gc_gpu
-```
-
-Select `--model lorentz`, `--stepping fixed` or `--case native_shared` for the
-other native cases. Reports separate compilation, synchronized warm execution,
-orbit/collision counts, compiler buffers and allocator peaks. The legacy Diffrax
-GC baseline omits spatial diffusion; use the explicitly labelled diagnostic
-`--no-spatial-diffusion` for that comparison.
-
-Observed lowering plus compilation for the corrected adaptive 64-particle
-adapter checks (local GPU, 2026-10-28):
-
-| Field / model | Shared JAX, s | Independent GPU, s |
-|---|---:|---:|
-| Biot–Savart / GC | 12.93 | 63.51 |
-| Biot–Savart / Lorentz | 8.49 | 81.50 |
-| VMEC / GC | 9.49 | 369.99 |
-| Boozer / GC | 12.23 | 209.41 |
-
-Both paths use the GPU: 5 keV protons, moment budget .01, collision tolerance
-.001, orbit `rtol=atol=1e-9`, .4 ns horizon, GC spatial diffusion enabled.
-All four shared/GPU adapter pairs passed agreement and repeatability checks.
-Caching was allowed; these are single startup observations, not cold averages
-or independent QA physics validation. The [compilation report](examples/benchmarks/results/native_split_20261025/compilation_20261027.md)
-retains the separate cold measurements and `--cold-compile` reproduction.
-
-### Physical benchmarks
-
-The following figures use 2,000 particles, hot non-Maxwellian births and a
-1 keV proton bath without a source. Black curves are independent references;
-shading shows sampling uncertainty, not particle variance or timestep error.
-The [benchmark guide](examples/benchmarks/results/native_split_20261025/README.md)
-documents the physical models, reference refinements, controller comparisons
-and unresolved discrepancies. Generated reports stay in ignored `output/`;
-only these PNGs are retained with their reproduction scripts.
-
-Thermalization checks speed/pitch moments and distributions. First passage
-checks the first crossing from `5 T` to `<=2 T`, with boundary resolution
-controlled separately from collision accuracy:
-
-```sh
-python -m examples.benchmarks.validate_beam_relaxation \
-  --particles 2000 --batch-size 2000 --coefficient-model impact \
-  --methods conservative --settings fine --output output/thermalization.json
-python -m examples.benchmarks.validate_production_tolerance \
-  --particles 2000 --batch-size 2000 --output output/first_passage.json
-```
+Validation against independent Fokker-Planck references, including unresolved
+discrepancies, and compile/startup timings are in
+[`examples/benchmarks/results/native_split.md`](examples/benchmarks/results/native_split.md).
 
 ![Thermalization](docs/readme_split_thermalization.png)
-![Speed and pitch distributions](docs/readme_split_distributions.png)
-![First-passage moments](docs/readme_split_first_stopping_moments.png)
-![First-passage distribution](docs/readme_split_first_stopping_distribution.png)
-
-Uniform-field spatial and velocity statistics use moment budget .01, collision
-tolerance .001 and orbit `rtol=atol=1e-10`. GC uses explicit spatial kicks;
-Lorentz includes finite gyromotion. The GC chart curves overlap because they
-express the same prescribed field, not distinct MHD equilibria.
-
-```sh
-python -m examples.benchmarks.benchmark_split_coordinate_physics \
-  --study diffusion --particles 2000 --tolerance .01 --output output/uniform
-python -m examples.benchmarks.benchmark_split_coordinate_physics \
-  --study diffusion --models gc lorentz --charts cartesian --particles 2000 \
-  --tolerance .01 --seed 8706 --output output/uniform_seed8706
-```
-
-Original seed 7706: spatial spreading agrees within sampling intervals, but
-speed-variance gaps `+9.19 +/- 7.23%` (GC) and `-11.32 +/- 5.46%` (Lorentz)
-remain recorded. The independent seed 8706 gives `-1.00 +/- 6.30%` and
-`-2.50 +/- 6.14%`; it does not make the original population pass.
-
-![Uniform field, original seed 7706](docs/readme_split_coordinate_diffusion.png)
-![Uniform field, independent seed 8706](docs/readme_split_coordinate_diffusion_seed8706.png)
-
-Mirror and helix cases test coupled orbit/collision moments at budget .01.
-VMEC/Boozer labels below denote manufactured coordinate charts of prescribed
-fields; real equilibrium adapter checks are separate. GC axial references omit
-perpendicular spatial kicks and represent the strong-magnetization limit.
-Lorentz uses independent full-Lorentz numerical references with orbit/collision
-refinement checks; speed retains independent radial theory. Grey and blue
-bands show separate reference and production sampling intervals.
-
-```sh
-python -m examples.benchmarks.benchmark_split_coordinate_physics \
-  --study coupled --models gc lorentz --particles 2000 --tolerance .01 \
-  --output output/coupled_moments
-```
-
-This generates both references. To reuse a full-Lorentz reference, generate it
-with `python -m examples.benchmarks.lorentz_collision_reference --particles 2000
---steps 400 --phase .1 --output output/lorentz_reference.json` and pass
-`--lorentz-reference output/lorentz_reference.json` to the coupled command.
-Mean position/pitch agree within combined sampling intervals in the corrected
-Lorentz comparison, but some early helix variance/covariance gaps still exceed
-pointwise intervals. These figures do not establish 1% accuracy for all moments.
-
-![GC mirror moments](docs/readme_split_coordinate_mirror_moments.png)
-![GC helix moments](docs/readme_split_coordinate_helix_moments.png)
-![Lorentz mirror moments](docs/readme_split_coordinate_mirror_lorentz_moments.png)
-![Lorentz helix moments](docs/readme_split_coordinate_helix_lorentz_moments.png)
-
-Fixed/adaptive multirate convergence and paired Brownian refinement remain
-available separately. The latter compares budgets .01/.005 on 64 common paths
-for the axial GC model without perpendicular kicks:
-
-```sh
-python -m examples.benchmarks.benchmark_split_multirate \
-  --particles 2000 --models gc lorentz --output output/multirate
-python -m examples.benchmarks.benchmark_split_path_convergence \
-  --control moments --particles 64 --tolerances .01 .005 \
-  --refinements 8 16 32 --max-steps 2000 --max-roots 4096 \
-  --output output/paired_convergence
-```
-
-![GC spatial diffusion convergence](docs/readme_split_multirate_gc.png)
-![Lorentz spatial diffusion convergence](docs/readme_split_multirate.png)
-![Paired numerical convergence](docs/readme_split_moment_numerical_convergence.png)
 
 ## Testing
 

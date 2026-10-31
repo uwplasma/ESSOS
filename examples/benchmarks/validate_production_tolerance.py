@@ -125,7 +125,7 @@ def main():
     keys = jax.vmap(lambda i: jax.random.fold_in(jax.random.key(args.seed), i))(jnp.arange(n)).reshape((-1, batch))
     for model in ("gc", "lorentz"):
         for adaptive in (False, True):
-            function = native_solver(model, "conservative", adaptive, p, args.horizon, 2.,
+            function = native_solver(model, adaptive, p, args.horizon, 2.,
                 spatial=model=="gc", times=times, event_interval=args.event_interval)
             parameters = tuple(map(jnp.asarray, (args.base_tolerance, args.cap, args.cap)))
             executable = function.lower(keys[0], *parameters).compile()
