@@ -154,6 +154,13 @@ def scipy_optimizer(constraints, options):
     return alm.ALM(init, update)
 
 
+def length_and_curvature(coils):
+    """Mean length element and pointwise curvature of every coil from the native Fourier geometry."""
+    _, tangent, second = _fourier_geometry(coils.curves, second=True)
+    speed = jnp.linalg.norm(tangent, axis=-1)
+    return jnp.mean(speed, axis=-1), jnp.linalg.norm(jnp.cross(tangent, second), axis=-1)/speed**3
+
+
 def field_normal_ratio(surface, field):
     """B.n/|B| on a surface through the native direct-coil evaluator."""
     arrays, nc, nq = _coil_geometry(field)
@@ -192,11 +199,9 @@ def build_problem(o, objective):
 
     def geometry(x):
         field = field_at(x)
-        _, tangent, second = _fourier_geometry(field.coils.curves, second=True)
-        speed = jnp.linalg.norm(tangent, axis=-1)
-        curvature = jnp.linalg.norm(jnp.cross(tangent, second), axis=-1)/speed**3
+        length, curvature = length_and_curvature(field.coils)
         result = dict(axis=jnp.mean(jax.vmap(field.AbsB)(axis_points))-o.axis_field_target,
-            length=o.length_target-jnp.mean(speed, axis=-1)[:ncoils], curvature=o.curvature_target-curvature[:ncoils])
+            length=o.length_target-length[:ncoils], curvature=o.curvature_target-curvature[:ncoils])
         if o.bdotn_weight:
             values = jnp.abs(field_normal_ratio(surface, field))-o.bdotn_target
             sharpness = 20/o.bdotn_target

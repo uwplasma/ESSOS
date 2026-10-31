@@ -292,7 +292,7 @@ def test_native_tracing_api_and_array_objectives_receive_physical_gradients():
 
 def test_qi_alm_helpers_match_their_definitions():
     from examples.coil_optimization.native_gc_alm import (make_constraints, boundary_line, field_normal_ratio,
-        scipy_optimizer, DEFAULTS)
+        length_and_curvature, scipy_optimizer, DEFAULTS)
     from essos import augmented_lagrangian as alm
     from essos.fields import BiotSavart
     from essos.surfaces import SurfaceRZFourier, BdotN_over_B
@@ -309,6 +309,20 @@ def test_qi_alm_helpers_match_their_definitions():
     actual = jax.jit(jax.value_and_grad(lambda x: flux(x, True)))(jnp.zeros_like(coils.dofs))
     for a, b in zip(actual, expected):
         np.testing.assert_allclose(a, b, rtol=3e-12, atol=3e-12)
+    # Native Fourier length/curvature equal the public formulas in value and in the coil-DOF gradient.
+    def limits(x, native):
+        c = coils.with_dofs(coils.dofs*(1+x))
+        if native:
+            length, curvature = length_and_curvature(c)
+        else:
+            speed = jnp.linalg.norm(c.gamma_dash, axis=-1)
+            length, curvature = jnp.mean(speed, axis=-1), jnp.linalg.norm(
+                jnp.cross(c.gamma_dash, c.gamma_dashdash), axis=-1)/speed**3
+        return jnp.sum(length)+jnp.sum(curvature**2)
+    expected = jax.jit(jax.value_and_grad(lambda x: limits(x, False)))(jnp.zeros(()))
+    actual = jax.jit(jax.value_and_grad(lambda x: limits(x, True)))(jnp.zeros(()))
+    for a, b in zip(actual, expected):
+        np.testing.assert_allclose(a, b, rtol=3e-11)
     # Upper limits enter as "target minus value" (feasible when >= 0); the equality is the particle metric.
     geometry = lambda x: dict(axis=x[0], length=jnp.array([2.])-x[1], curvature=jnp.array([1.])-x[1])
     constraint = make_constraints(geometry, lambda x: x[0]**2, SimpleNamespace(penalty=1., bdotn_weight=0.))
