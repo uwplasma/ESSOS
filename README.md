@@ -205,38 +205,22 @@ and its derivatives, together with the flux functions `G`, `I` and `iota`.
 
 ### Prescribed analytical Alfvén perturbations
 
-Analytical modes supply `delta A = alpha B0` and an electric potential to the
-existing guiding-centre equations, in Boozer coordinates or full VMEC geometry.
-The corrections include magnetic flutter, induction and the parallel-force
-correction, with constant magnetic moment and physical wave energy exchange.
+Analytical modes supply `delta A = alpha B0` and a potential to the guiding-centre
+equations, in Boozer coordinates (`trace_boozer(..., perturbation=...)`) or in full
+VMEC geometry, with flutter, induction and constant magnetic moment:
 
 ```python
 from essos.gc_perturbations import AnalyticalVmecAlfvenMode
 
-wave = AnalyticalVmecAlfvenMode(3, 2, 9e5, 2e4,
-                              radial_center=.4, radial_width=.5)
-tracing = Tracing(field=field, particles=particles,
-                  model="GuidingCenterAdaptative", perturbation=wave,
-                  maxtime=2e-7, times_to_trace=9, progress=False)
+wave = AnalyticalVmecAlfvenMode(3, 2, 9e5, 2e4, radial_center=.4, radial_width=.5)
+tracing = Tracing(field=field, particles=particles, model="GuidingCenterAdaptative",
+                  perturbation=wave, maxtime=2e-7, times_to_trace=9, progress=False)
 ```
 
-The [small CPU example](examples/particle_tracing/vmec_alfven_cpu_smoke.py)
-traces two particles with and without a wave under a 120-second cap.
-[Equations, conservation checks and reproduction commands](docs/analytical_perturbations.rst)
-describe the model and its limits.
+See [the equations, tests and the comparison with Paul et al. (2023)](docs/analytical_perturbations.rst);
+[`alfven_perturbation.py`](examples/particle_tracing/alfven_perturbation.py) is a short example.
 
-![Paul alpha-loss comparison: 100 particles per curve](docs/_static/analytical_perturbations/paul_loss_100.png)
-
-The Paul comparison uses the same 100 initial particles for Boozer / Perfect QS
-and VMEC / full equilibrium, without and with the m=15 wave. Weighted losses
-are 12.25% / 21.53% for Boozer and 12.25% / 20.56% for VMEC. Published endpoints
-are shown as crosses. This small comparison does not establish quantitative
-paper reproduction. Compact saved data regenerate all documentation figures
-without particle tracing:
-
-```bash
-python -m examples.benchmarks.plot_alfven_results
-```
+![Paul alpha-loss comparison](docs/_static/analytical_perturbations/paul_loss_100.png)
 
 ## Comparison with other codes
 

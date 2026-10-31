@@ -15,29 +15,35 @@ import jax.numpy as jnp
 import numpy as np
 
 
-class BoozerPerturbation(eqx.Module):
-    """Interface for a future computed-mode adapter, including FAX.
+class Perturbation(eqx.Module):
+    """Prescribed ``potentials(field, point, t) -> (alpha [m], Phi [V])``.
 
-    ``potentials(field, xyz, t)`` returns ``(alpha [m], Phi [V])``;
-    xyz is the regular chart ``(sqrt(s) cos(theta), sqrt(s) sin(theta), zeta)``.
-    The equilibrium covariant field is ``I dtheta + G dzeta`` (K=0).
+    ``axis_stop_threshold`` is an optional inner boundary in normalized toroidal
+    flux (None disables it); ``derivatives`` returns the potentials and their
+    Jacobian in (point, time), shape (2, 4).
     """
 
-    def potentials(self, field, xyz, t):
+    def potentials(self, field, point, t):
         raise NotImplementedError
 
     def axis_stop_threshold(self):
-        """Optional inner boundary in normalized toroidal flux; None disables it."""
         return None
 
-    def derivatives(self, field, xyz, t):
-        """Potentials and their Jacobian in (u, w, zeta, time), shape (2, 4)."""
+    def derivatives(self, field, point, t):
         def evaluate(z):
             value = self.potentials(field, z[:3], z[3])
             return value, value
 
-        derivative, value = jax.jacfwd(evaluate, has_aux=True)(jnp.append(xyz, t))
+        derivative, value = jax.jacfwd(evaluate, has_aux=True)(jnp.append(point, t))
         return value, derivative
+
+
+class BoozerPerturbation(Perturbation):
+    """Perturbation of ``trace_boozer``; ``point`` is the regular chart
+    ``(sqrt(s) cos(theta), sqrt(s) sin(theta), zeta)``. The equilibrium
+    covariant field is ``I dtheta + G dzeta`` (K=0). A computed-mode adapter,
+    including FAX, only needs to implement ``potentials``.
+    """
 
 
 class AnalyticalAlfvenMode(BoozerPerturbation):
@@ -68,35 +74,25 @@ class AnalyticalAlfvenMode(BoozerPerturbation):
 
     def __init__(self, m, n, omega, amplitude, *, phase=0., regularize_axis=True,
                  radial_center=0.5, radial_width=None, axis_stop_s=1e-8):
-        for name, value in (("m", m), ("n", n)):
-            if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
-                raise ValueError(f"{name} must be an integer")
-        if m < 0:
-            raise ValueError("m must be nonnegative")
-        for name, value in (("omega", omega), ("amplitude", amplitude),
-                            ("phase", phase), ("radial_center", radial_center)):
-            if isinstance(value, jax.core.Tracer):
-                if value.ndim:
-                    raise ValueError(f"{name} must be a scalar")
-                continue
-            if np.ndim(value) or not np.isfinite(value):
-                raise ValueError(f"{name} must be a finite scalar")
+        if any(isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer)) for v in (m, n)) or m < 0:
+            raise ValueError("m must be a nonnegative integer and n an integer")
         if not isinstance(omega, jax.core.Tracer) and omega == 0:
             raise ValueError("omega must be nonzero for the ideal Alfven relation")
-        if radial_width is not None and (np.ndim(radial_width) or not np.isfinite(radial_width)
-                                         or radial_width <= 0):
-            raise ValueError("radial_width must be positive and finite")
-        if not isinstance(regularize_axis, (bool, np.bool_)):
-            raise ValueError("regularize_axis must be boolean")
-        if axis_stop_s is not None and (np.ndim(axis_stop_s) or not np.isfinite(axis_stop_s)
-                                       or not 0 < axis_stop_s < 1):
-            raise ValueError("axis_stop_s must be None or a finite scalar strictly between 0 and 1")
+        if radial_width is not None and not radial_width > 0:
+            raise ValueError("radial_width must be positive")
+        if axis_stop_s is not None and not 0 < axis_stop_s < 1:
+            raise ValueError("axis_stop_s must be None or strictly between 0 and 1")
         self.m, self.n = int(m), int(n)
         self.omega, self.amplitude, self.phase = map(jnp.asarray, (omega, amplitude, phase))
         self.regularize_axis = bool(regularize_axis)
         self.radial_center = jnp.asarray(radial_center)
         self.radial_width = None if radial_width is None else float(radial_width)
         self.axis_stop_s = None if axis_stop_s is None else float(axis_stop_s)
+
+    def envelope(self, s):
+        if self.radial_width is None:
+            return 1.
+        return jnp.exp(-((s-self.radial_center)/self.radial_width)**2)
 
     def axis_stop_threshold(self):
         if self.regularize_axis or self.m == 0 or self.axis_stop_s is None:
@@ -112,8 +108,7 @@ class AnalyticalAlfvenMode(BoozerPerturbation):
         if not self.regularize_axis and self.m:
             harmonic = jnp.where(s > 0, harmonic / jnp.where(s > 0, s, 1.)**(self.m/2),
                                   jnp.where(self.amplitude == 0, 0., jnp.nan))
-        envelope = 1. if self.radial_width is None else jnp.exp(-((s-self.radial_center)/self.radial_width)**2)
-        phi = self.amplitude * envelope * harmonic
+        phi = self.amplitude * self.envelope(s) * harmonic
         (iota, G, I), _ = field.profiles(s)
         alpha = (self.n - self.m*iota) * phi / (self.omega*(G+iota*I))
         return jnp.stack([alpha, phi])

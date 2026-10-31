@@ -20,6 +20,7 @@ import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 from essos.background_species import nu_D_ab, nu_par_ab, d_nu_par_ab, nu_s_ab, JOULE_PER_EV
+from essos.perturbations import BoozerPerturbation
 
 jax.config.update("jax_enable_x64", True)
 
@@ -587,22 +588,16 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.
 
-    ``perturbation`` accepts a ``BoozerPerturbation`` from essos.perturbations.
-    ``speed`` may be a positive scalar or one positive birth speed per marker
-    (needed to initialize sections at a common wave-frame invariant).
-    Every RK stage uses its own physical time. With modes, ``energy_error``
-    is None: physical wave work is reported as ``kinetic_energy_change``.
-    Check a wave-frame invariant in exact-QS single-mode benchmarks instead.
-    Modes plus collisions use a fixed RK orbit step followed by the existing
-    Boozer Euler-Maruyama speed/pitch kick. This is velocity-space collision
-    splitting, without GC spatial diffusion, using the main-branch collision
-    coefficients and operator.
-    A singular analytical mode can supply an inner boundary. Axis encounters
-    stop there and populate ``axis_stop_times``; ``lost`` retains LCFS exits.
-    ``loss_fractions(include_axis=True)`` additionally counts axis stops.
+    ``perturbation`` is a ``BoozerPerturbation`` (essos.perturbations); every RK stage uses its
+    own physical time. ``speed`` may be a scalar or one birth speed per marker. With a wave,
+    ``energy_error`` is None and the physical wave work is ``kinetic_energy_change``; check a
+    wave-frame invariant in exact-QS single-mode cases instead. Waves plus collisions need a
+    fixed RK method and use the existing Euler-Maruyama speed/pitch kick (no GC spatial
+    diffusion). A singular mode supplies an inner boundary: axis encounters stop there and
+    fill ``axis_stop_times``, while ``lost`` keeps LCFS exits;
+    ``loss_fractions(include_axis=True)`` counts both.
     """
     if perturbation is not None:
-        from essos.perturbations import BoozerPerturbation
         if not isinstance(perturbation, BoozerPerturbation):
             raise TypeError("perturbation must implement BoozerPerturbation")
         if species is not None and method.startswith("adaptive"):
