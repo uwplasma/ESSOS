@@ -2500,6 +2500,12 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
             backend='cuda' if jax.default_backend()=='gpu' else jax.default_backend()
             default=next((i for i,group in enumerate(p['platforms']) if group is None),0)
             result=[np.asarray(next((i for i,group in enumerate(p['platforms']) if group is not None and backend in group),default),np.int32)]
+        elif (name=='call_hi_primitive' and type(p['_prim']).__name__=='SearchSorted'
+              and np.ndim(values[0])==1 and not np.ndim(values[1])):
+            # JAX >= 0.12 keeps searchsorted (e.g. inside jnp.interp) as one primitive.
+            right,query,count='side=right' in repr(p['_prim']),scalar(values[1]),np.empty((),object)
+            count[()]=sum(jnp.asarray(x<=query if right else x<query,jnp.int32) for x in values[0])
+            result=[count]
         elif name=='cond':
             branch=p['branches'][int(scalar(values[0]))]
             result=list(scalar_graph(branch.jaxpr,branch.consts,*values[1:],calls=calls,refs=refs,memo=memo,defer=defer))
