@@ -302,6 +302,286 @@ command if it is missing.
 | [`simple_examples`](examples/simple_examples) | Coils from near-axis or BOOZ_XFORM, perturbed coils, combined fields, MGRID |
 | [`paper`](examples/paper) | Integrator, gradient and Poincare figures |
 
+## Native forward orbit solvers
+
+`Tracing(..., integrator="essos_rk45")` selects Dormand–Prince 5(4);
+`integrator="essos_dopri8"` selects Prince–Dormand 8(7). The existing
+`GuidingCenter`/`FullOrbit` models select fixed steps; their `Adaptative`
+variants select adaptive steps. The default remains Diffrax. Native defaults
+are I control and `rtol=atol=1e-9`; PI is available with
+`native_controller="pi"`, `native_pcoeff=.4`, `native_icoeff=.3`.
+
+All native stepping, GPU execution and private field adapters live in
+[`essos/rk.py`](essos/rk.py).
+
+Native VMEC CUDA tracing automatically uses one warp per particle for spectra
+padded to at most 128 modes, and four for larger spectra. The shared stage loop
+evaluates the initial derivative once and retains it after a rejected trial,
+avoiding a second compiled RHS body. These are the standard native CUDA defaults
+for the existing field adapters and Dopri5/8 methods.
+
+Both native methods share the same stepping driver, FSAL reuse, standard
+dense output, bounded retries and root-found stopping events. Their standard
+interpolants match the corresponding Diffrax methods. Saves do not constrain
+adaptive steps. Solver results include accepted/rejected counts and explicit
+failure statuses; `solve_rk(..., record_steps=True)` retains accepted times for diagnostics.
+
+The physical embedded error is the maximum of the position and velocity
+block errors, divided by their reference length/birth speed and by
+`atol+rtol`. VMEC position errors are measured in Cartesian coordinates;
+Boozer uses flux-radius, toroidal-radian and birth-speed blocks. These are
+local normalized estimates, **not global trajectory-error guarantees**.
+`native_error_control="standard"` selects the usual componentwise RMS budget.
+
+`essos.rk.prepare_solver(..., execution="cuda")` exposes the
+independent GPU loops for fixed-field Biot–Savart GC/Lorentz and VMEC GC;
+it returns a scalar solver for `jax.jit(jax.vmap(solve))`. Cartesian states
+are `(x,y,z,vpar)` or `(x,y,z,vx,vy,vz)`; VMEC uses ESSOS's existing
+five-component axis-regular chart. This low-level path uses zero electric
+field, standard dense output and I control, and stops VMEC orbits at the LCFS.
+`execution="jax"` uses the portable path. `Tracing` uses the portable driver
+and retains its existing electric-field, stopping and exterior-continuation
+interfaces. The generic `essos.rk.solve_rk` also accepts an arbitrary array RHS.
+
+For Boozer, use `trace_boozer(..., integrator="essos_dopri8",
+native_execution="cuda")`. Its CUDA adapter supports fixed cosine Fourier
+fields with K=0; the portable path also supports sine spectra, angle tables
+and PI. GPU arrays are private solver views of the original field data;
+the public field classes are unchanged. This addition is forward-only:
+split collisions and accepted-step reverse AD belong to separate changes.
+
+### Forward comparison
+
+64 particles, RTX 5060 Laptop GPU, JAX 0.11.2, eight saves, three interleaved
+blocked warm samples. VMEC/Boozer rows were rerun on 2026-10-26 with the shared
+VMEC defaults; coil rows retain their 2026-10-24 measurements. Native and Diffrax
+use Dopri8 and the same physical/chart embedded error and I coefficients;
+controller details and rounding can change adaptive counts. Fixed pairs use
+identical timesteps. Native CUDA includes the private field adapters; Diffrax
+uses public field evaluation. Gains describe the complete forward implementation.
+Coils use the unscaled QA coils at 4 keV, 20 us for GC and 2 us for Lorentz;
+VMEC/Boozer use reactor-scale QA at 4 keV and 20 us. Compare backends within rows.
+
+| Field / model | Stepping | Native / Diffrax warm ms | Native / Diffrax buffers MiB | Measured |
+|---|---|---:|---:|---|
+| boozer / gc | adaptive | 1.659 / 3.769 | 0.026 / 0.151 | 2026-10-26 |
+| boozer / gc | fixed | 18.201 / 50.142 | 0.026 / 0.154 | 2026-10-26 |
+| coils / gc | adaptive | 84.426 / 160.362 | 0.026 / 5.980 | 2026-10-24 |
+| coils / gc | fixed | 419.872 / 676.766 | 0.026 / 5.970 | 2026-10-24 |
+| coils / lorentz | adaptive | 29.429 / 70.426 | 0.070 / 0.731 | 2026-10-24 |
+| coils / lorentz | fixed | 782.063 / 1891.586 | 0.070 / 0.721 | 2026-10-24 |
+| vmec / gc | adaptive | 4.836 / 7.171 | 0.066 / 0.965 | 2026-10-26 |
+| vmec / gc | fixed | 88.169 / 161.807 | 0.066 / 0.965 | 2026-10-26 |
+
+Buffers are compiler estimates of arguments + outputs + temporaries minus aliases,
+excluding resident field data/executable constants; they are not peak VRAM.
+Position errors are Cartesian metres for coils/VMEC and flux-chart units for
+Boozer; velocity errors include both absolute and birth-speed-normalized values
+against a tighter Diffrax reference. The measured gains include the private
+field adapters and describe the complete forward implementation.
+
+Generate all eight comparison workloads and their files on a CUDA machine:
+
+```sh
+python -m examples.benchmarks.benchmark_native_orbits --suite \
+  --execution cuda --output output/native_forward
+```
+
+Choose a fresh output folder. The script creates per-workload `comparison.json`
+and `comparison.csv`, plus aggregate `forward.csv` and `forward.md`. Generated
+results are kept under `output/` and are not versioned. Three blocked warm
+samples alternate backend order after startup; setup, compilation and the tighter
+reference are excluded. Compilation may use a persistent cache and is not
+reported as a cold measurement. Reports include inputs, source hashes, step
+counts, failures, error metrics and compiler buffers.
+
+Defaults reproduce the table's 64 particles, 4 keV, seed 42, eight saves,
+rtol=atol=1e-9 and 20 us GC workloads. Fixed VMEC/Boozer use 160 steps, coil GC
+224, and coil Lorentz 1792 over 2 us. For one workload, omit `--suite` and select
+`--field vmec`, `--field boozer` or `--field coils --model gc/lorentz`, with
+`--stepping adaptive/fixed`. A matching Boozer transform can be supplied with
+`--field-cache`; otherwise the optional `essos[booz]` dependency computes it.
+
+### QA Boozer alpha workload
+
+Previously recorded full workload: 8192 alphas, 3.52 MeV, birth s=0.3,
+seed 42, 20 ms, 101 saves, 16 direct Fourier modes. The preceding profiling
+run identified an A100/JAX 0.7.2; the full console logs identify a CUDA device.
+Compilation and warm execution are separated. This is a CATAPULT-sized
+workload, not a new measurement against CATAPULT.
+
+| Method | Control | Compile s | Warm s | Accepted / rejected | Lost / failed |
+|---|---|---:|---:|---:|---:|
+| Native Dopri5 | I, rtol=atol=1e-10 | 4.247 | 21.554 | 895113025 / 63143676 | 110 / 0 |
+| Native Dopri8 | I, rtol=atol=1e-10 | 5.069 | 18.448 | 351025279 / 62226975 | 111 / 0 |
+| Native Dopri8 | I, rtol=atol=1e-8 | 4.985 | 9.223 | 189259503 / 7909253 | 106 / 0 |
+| Existing RK4 | Fixed dt=1.25e-7 s | 2.728 | 20.244 | 1310720000 grid slots / 0 | 108 / 0 |
+
+These full-workload measurements predate the current extraction and have not
+been rerun after the VMEC and initialization updates. RK4 checks loss at endpoints;
+native adaptive methods refine the LCFS crossing. The differing loss counts are
+not an accuracy proof. Regenerate the workload with the script below when ready.
+
+Run on the machine's normal JAX backend (the alpha example selects CUDA
+execution automatically when available):
+
+```sh
+python -m examples.benchmarks.benchmark_native_boozer_alpha \
+  --integrator essos_dopri8 --particles 8192 --horizon .02 \
+  --rtol 1e-10 --atol 1e-10 --output output/native_boozer_alpha
+```
+
+The example saves its Boozer transform, births, trajectories, statistics,
+timings and a diagnostic plot. Reuse its `boozer_inputs.npz` with
+`--field-cache`; select `essos_rk45` or `rk4` for the corresponding baseline.
+
+## Native split orbit and collisions
+
+`essos.split.trace_split` advances a native Dopri8 orbit, then applies the
+nonrelativistic collision map. Defaults are the moment predictor
+(`moment_tolerance=0.005`), native collision tolerance `0.001`, and separate
+orbit `rtol`/`atol`. These local controls do not bound global statistical error.
+`execution="independent"` selects the specialized GPU loop with the same
+predictor and retained Brownian rejection memory; `"shared"` uses shared JAX.
+
+GC includes perpendicular spatial diffusion with three Wiener components
+independent of speed/pitch noise. VMEC uses its existing Cartesian geometry;
+Boozer additionally requires geometric Fourier tables from the same transform:
+
+```python
+from essos.split import trace_split, BoozerGeometry
+result = trace_split(field, particles, species, tmax=tmax, timestep=dt,
+                     spatial_geometry=BoozerGeometry.from_booz_xform(booz))
+```
+
+The solver applies Cartesian spatial kicks and inverts the regular coordinate
+map, retaining its nonlinear drift. Missing geometry or failed inversion raises
+or reports failure. Lorentz uses its three-component velocity collision map.
+Public field classes are unchanged.
+
+### Timings and compilation
+
+```sh
+python -m examples.benchmarks.benchmark_split_orbits \
+  --field coils --model gc --case native_independent --stepping adaptive \
+  --particles 64 --repeats 3 --output output/native_split_gc_gpu
+```
+
+Select `--model lorentz`, `--stepping fixed` or `--case native_shared` for the
+other native cases. Reports separate compilation, synchronized warm execution,
+orbit/collision counts, compiler buffers and allocator peaks. The legacy Diffrax
+GC baseline omits spatial diffusion; use the explicitly labelled diagnostic
+`--no-spatial-diffusion` for that comparison.
+
+Observed lowering plus compilation for the corrected adaptive 64-particle
+adapter checks (local GPU, 2026-10-28):
+
+| Field / model | Shared JAX, s | Independent GPU, s |
+|---|---:|---:|
+| Biot–Savart / GC | 12.93 | 63.51 |
+| Biot–Savart / Lorentz | 8.49 | 81.50 |
+| VMEC / GC | 9.49 | 369.99 |
+| Boozer / GC | 12.23 | 209.41 |
+
+Both paths use the GPU: 5 keV protons, moment budget .01, collision tolerance
+.001, orbit `rtol=atol=1e-9`, .4 ns horizon, GC spatial diffusion enabled.
+All four shared/GPU adapter pairs passed agreement and repeatability checks.
+Caching was allowed; these are single startup observations, not cold averages
+or independent QA physics validation. The [compilation report](examples/benchmarks/results/native_split_20261025/compilation_20261027.md)
+retains the separate cold measurements and `--cold-compile` reproduction.
+
+### Physical benchmarks
+
+The following figures use 2,000 particles, hot non-Maxwellian births and a
+1 keV proton bath without a source. Black curves are independent references;
+shading shows sampling uncertainty, not particle variance or timestep error.
+The [benchmark guide](examples/benchmarks/results/native_split_20261025/README.md)
+documents the physical models, reference refinements, controller comparisons
+and unresolved discrepancies. Generated reports stay in ignored `output/`;
+only these PNGs are retained with their reproduction scripts.
+
+Thermalization checks speed/pitch moments and distributions. First passage
+checks the first crossing from `5 T` to `<=2 T`, with boundary resolution
+controlled separately from collision accuracy:
+
+```sh
+python -m examples.benchmarks.validate_beam_relaxation \
+  --particles 2000 --batch-size 2000 --coefficient-model impact \
+  --methods conservative --settings fine --output output/thermalization.json
+python -m examples.benchmarks.validate_production_tolerance \
+  --particles 2000 --batch-size 2000 --output output/first_passage.json
+```
+
+![Thermalization](docs/readme_split_thermalization.png)
+![Speed and pitch distributions](docs/readme_split_distributions.png)
+![First-passage moments](docs/readme_split_first_stopping_moments.png)
+![First-passage distribution](docs/readme_split_first_stopping_distribution.png)
+
+Uniform-field spatial and velocity statistics use moment budget .01, collision
+tolerance .001 and orbit `rtol=atol=1e-10`. GC uses explicit spatial kicks;
+Lorentz includes finite gyromotion. The GC chart curves overlap because they
+express the same prescribed field, not distinct MHD equilibria.
+
+```sh
+python -m examples.benchmarks.benchmark_split_coordinate_physics \
+  --study diffusion --particles 2000 --tolerance .01 --output output/uniform
+python -m examples.benchmarks.benchmark_split_coordinate_physics \
+  --study diffusion --models gc lorentz --charts cartesian --particles 2000 \
+  --tolerance .01 --seed 8706 --output output/uniform_seed8706
+```
+
+Original seed 7706: spatial spreading agrees within sampling intervals, but
+speed-variance gaps `+9.19 +/- 7.23%` (GC) and `-11.32 +/- 5.46%` (Lorentz)
+remain recorded. The independent seed 8706 gives `-1.00 +/- 6.30%` and
+`-2.50 +/- 6.14%`; it does not make the original population pass.
+
+![Uniform field, original seed 7706](docs/readme_split_coordinate_diffusion.png)
+![Uniform field, independent seed 8706](docs/readme_split_coordinate_diffusion_seed8706.png)
+
+Mirror and helix cases test coupled orbit/collision moments at budget .01.
+VMEC/Boozer labels below denote manufactured coordinate charts of prescribed
+fields; real equilibrium adapter checks are separate. GC axial references omit
+perpendicular spatial kicks and represent the strong-magnetization limit.
+Lorentz uses independent full-Lorentz numerical references with orbit/collision
+refinement checks; speed retains independent radial theory. Grey and blue
+bands show separate reference and production sampling intervals.
+
+```sh
+python -m examples.benchmarks.benchmark_split_coordinate_physics \
+  --study coupled --models gc lorentz --particles 2000 --tolerance .01 \
+  --output output/coupled_moments
+```
+
+This generates both references. To reuse a full-Lorentz reference, generate it
+with `python -m examples.benchmarks.lorentz_collision_reference --particles 2000
+--steps 400 --phase .1 --output output/lorentz_reference.json` and pass
+`--lorentz-reference output/lorentz_reference.json` to the coupled command.
+Mean position/pitch agree within combined sampling intervals in the corrected
+Lorentz comparison, but some early helix variance/covariance gaps still exceed
+pointwise intervals. These figures do not establish 1% accuracy for all moments.
+
+![GC mirror moments](docs/readme_split_coordinate_mirror_moments.png)
+![GC helix moments](docs/readme_split_coordinate_helix_moments.png)
+![Lorentz mirror moments](docs/readme_split_coordinate_mirror_lorentz_moments.png)
+![Lorentz helix moments](docs/readme_split_coordinate_helix_lorentz_moments.png)
+
+Fixed/adaptive multirate convergence and paired Brownian refinement remain
+available separately. The latter compares budgets .01/.005 on 64 common paths
+for the axial GC model without perpendicular kicks:
+
+```sh
+python -m examples.benchmarks.benchmark_split_multirate \
+  --particles 2000 --models gc lorentz --output output/multirate
+python -m examples.benchmarks.benchmark_split_path_convergence \
+  --control moments --particles 64 --tolerances .01 .005 \
+  --refinements 8 16 32 --max-steps 2000 --max-roots 4096 \
+  --output output/paired_convergence
+```
+
+![GC spatial diffusion convergence](docs/readme_split_multirate_gc.png)
+![Lorentz spatial diffusion convergence](docs/readme_split_multirate.png)
+![Paired numerical convergence](docs/readme_split_moment_numerical_convergence.png)
+
 ## Testing
 
 ```sh
