@@ -203,6 +203,21 @@ is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
 and its derivatives, together with the flux functions `G`, `I` and `iota`.
 
+For smooth near-axis spectra, `axis_regular=True` interpolates each harmonic
+as `s**(m/2)` times a cubic spline in `s`, preserving the input samples:
+
+```python
+field = BoozerField.from_booz_xform(
+    booz, psi0=-phi_edge / (2 * np.pi),
+    axis_regular=True, axis_regular_tolerance=0.01)
+```
+
+Choose the positive consistency tolerance before tracing (`0.01` is an example).
+The option requires at least five positive increasing surfaces and rejects inconsistent
+scaled inner profiles; scaling can amplify noise. Passing this local check does
+not qualify the equilibrium or bound extrapolation error. It uses direct Fourier
+sums regardless of `angle_grid`; the default interpolation is unchanged.
+
 ## Comparison with other codes
 
 256 collisionless 3.5 MeV alphas per equilibrium, started at `s = 0.5` with
