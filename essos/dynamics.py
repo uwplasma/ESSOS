@@ -1060,6 +1060,9 @@ class Tracing():
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
         elif model == 'FullOrbitCollisions':
+            if tuple(map(int, diffrax.__version__.split('.')[:3])) < (0, 7, 1):
+                # diffrax 0.7.0, the last release for Python 3.10, returns inf for this SDE (checked on JAX 0.6.2).
+                raise ImportError("FullOrbitCollisions needs diffrax>=0.7.1, which needs Python>=3.11")
             self.args = (self.field, self.particles, self.species)
             if self.particles.initial_xyz_fullorbit is None:
                 raise ValueError("Initial full orbit positions require field input to Particles")
