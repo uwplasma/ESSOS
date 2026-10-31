@@ -1,8 +1,8 @@
 """ESSOS Dopri5/8 forward orbit solvers and private GPU field adapters.
 
-Fixed/adaptive integration, physical error budgets, standard dense output and
-events share one implementation. Independent GPU particle loops retain the
-same formulas. Diffrax is used only by the existing-Tracing result adapter;
+Fixed/adaptive integration, physical error budgets, dense output and events
+share one tableau-driven implementation. Independent GPU particle loops retain
+the same formulas. Diffrax is used only by the existing-Tracing result adapter;
 native numerical integration defines no custom reverse rule or collisions.
 """
 from dataclasses import dataclass
@@ -18,11 +18,6 @@ from jax.extend.core import Literal
 import numpy as np
 
 # Physical error budgets
-
-def orbit_block_norm(error, velocity_components):
-    """Maximum of position and velocity Euclidean norms after scaling."""
-    return jnp.maximum(jnp.linalg.norm(error[:3]), jnp.linalg.norm(error[3:3 + velocity_components]))
-
 
 @dataclass(frozen=True, eq=False)
 class OrbitErrorNorm:
@@ -54,21 +49,16 @@ class OrbitErrorNorm:
                 raise ValueError(f"orbit {name} must be scalar")
             if not isinstance(value, jax.core.Tracer):
                 value = np.asarray(value)
-                valid = np.isfinite(value) & (value >= 0 if name == "rtol" else value > 0)
-                if not bool(valid):
+                if not (np.isfinite(value) and (value >= 0 if name == "rtol" else value > 0)):
                     raise ValueError(f"orbit {name} must be finite and {'nonnegative' if name == 'rtol' else 'positive'}")
 
     def __call__(self, y0, y1, error):
         del y0  # Reference scales do not depend on the coordinate origin.
-        if self.position_map is None:
-            position_error = error[:3]
-        else:
-            position_error = self.position_map(y1) - self.position_map(y1 - error)
-        velocity_error = error[3:3 + self.velocity_components]
+        position_error = (error[:3] if self.position_map is None
+                          else self.position_map(y1) - self.position_map(y1 - error))
         budget = jnp.asarray(self.atol) + jnp.asarray(self.rtol)
-        normalized = jnp.concatenate([position_error / (budget * self.length_scale),
-                                      velocity_error / (budget * self.speed_scale)])
-        value = orbit_block_norm(normalized, self.velocity_components)
+        value = jnp.maximum(jnp.linalg.norm(position_error) / (budget * self.length_scale),
+                            jnp.linalg.norm(error[3:3 + self.velocity_components]) / (budget * self.speed_scale))
         valid = ((self.length_scale > 0) & jnp.isfinite(self.length_scale) &
                  (self.speed_scale > 0) & jnp.isfinite(self.speed_scale) &
                  (self.rtol >= 0) & (self.atol > 0) & jnp.isfinite(budget) &
@@ -84,12 +74,6 @@ class RKStatus(IntEnum):
     MIN_STEP = 3
     NONFINITE = 4
     INVALID_INPUT = 5
-
-
-class RKStep(NamedTuple):
-    y: jax.Array
-    error: jax.Array
-    stages: jax.Array
 
 
 class _RKTrial(NamedTuple):
@@ -114,7 +98,6 @@ class RKSolution(NamedTuple):
     status: jax.Array
     event_mask: object
     stats: RKStats
-    step_ts: jax.Array
 
 
 # Dormand--Prince stages, with Shampine's embedded error estimator (1986).
@@ -134,6 +117,23 @@ _ERROR = (35 / 384 - 1951 / 21600, 0., 500 / 1113 - 22642 / 50085,
 _MID = (6025192743 / 30085553152 / 2, 0., 51252292925 / 65400821598 / 2,
         -2691868925 / 45128329728 / 2, 187940372067 / 1594534317056 / 2,
         -1776094331 / 19743644256 / 2, 11237099 / 235043384 / 2)
+
+
+def _quartic_dense():
+    """Shampine's quartic as per-stage polynomials, in the _DENSE8 layout.
+
+    Row j holds the descending coefficients of p_j(s) in
+    y(s) = y0 + s * sum_j p_j(s) k_j, built from the endpoint values, the
+    endpoint derivatives k_0, k_6 and the midpoint combination _MID.
+    """
+    first, last, mid = np.eye(7)[0], np.eye(7)[-1], np.array(_MID)
+    delta = np.append(_A[-1], 0.)  # y1 - y0 = sum_j delta_j k_j
+    return np.stack((2 * (last - first) - 8 * delta + 16 * mid,
+                     5 * first - 3 * last + 14 * delta - 32 * mid,
+                     last - 4 * first - 5 * delta + 16 * mid, first), axis=1)
+
+
+_DENSE5 = _quartic_dense()
 
 # Prince--Dormand (1981) 8(7), including the final FSAL derivative.
 _C8 = (1/18, 1/12, 1/8, 5/16, 3/8, 59/400, 93/200,
@@ -201,67 +201,22 @@ _DENSE8 = (
 )
 
 
-def _rk_step(rhs, t, y, h, args, f0, nodes, rows, error_weights):
-    # Keep the differentiable numerical map independent of retries/controller
-    # state. Zero tableau entries create no dependencies in the accepted map.
-    stages = [rhs(t, y, args) if f0 is None else f0]
-    for c, weights in zip(nodes, rows):
-        trial = y + h * sum(a * k for a, k in zip(weights, stages) if a != 0)
-        stages.append(rhs(t + c * h, trial, args))
-    # For both FSAL tableaus the final stage is evaluated at the solution.
-    error = h * sum(a * k for a, k in zip(error_weights, stages) if a != 0)
-    return RKStep(trial, error, jnp.stack(stages))
+_METHODS = {"dopri5": (_C, _A, _ERROR, _DENSE5, 5),
+            "dopri8": (_C8, _A8, _ERROR8, np.asarray(_DENSE8), 8)}
 
 
-def rk45_step(rhs, t, y, h, args=None, *, f0=None):
-    """One DP5(4) trial step. ``stages`` contains derivatives, not h*f.
+def _dense(coefficients, y0, y1, k, fraction):
+    """Continuous extension on an accepted step, 0 <= fraction <= 1."""
+    weights = jax.vmap(jnp.polyval, in_axes=(0, None))(jnp.asarray(coefficients, y0.dtype), fraction) * fraction
+    value = y0 + jnp.tensordot(weights, k, axes=1)
+    return jnp.where(fraction == 0, y0, jnp.where(fraction == 1, y1, value))
 
-    Pass the last derivative of the previous *accepted* step as ``f0`` for
-    FSAL reuse. Rejected trials must leave that cached derivative unchanged.
+
+def _trial(rhs, t, y, h, args, f0, nodes, rows, weights):
+    """One explicit RK trial in component arithmetic, which exposes independent
+    operations to XLA. Stores increments k=h*f for dense output; the final FSAL
+    value stays unscaled, so cache reuse and h=0 need no division by h.
     """
-    return _rk_step(rhs, t, y, h, args, f0, _C, _A, _ERROR)
-
-
-def dopri8_step(rhs, t, y, h, args=None, *, f0=None):
-    """One DP8(7) trial step, with the same FSAL contract as rk45_step."""
-    return _rk_step(rhs, t, y, h, args, f0, _C8, _A8, _ERROR8)
-
-
-def _trial_step(rhs, t, y, h, args, f0, nodes, rows, error_weights):
-    """The same explicit RK formula, storing increments for the forward driver.
-
-    A static stage loop supports ordinary JAX forward/reverse derivatives.
-    Only k is carried; the final FSAL evaluation is outside the loop and is
-    kept unscaled, so cache reuse and h=0 derivatives need no division by h.
-    Both particle models use this map without a physics-specific branch.
-    """
-    f0 = rhs(t, y, args) if f0 is None else f0
-    n = len(error_weights)
-    coefficients = np.zeros((n - 2, n - 1))
-    for i, row in enumerate(rows[:-1]):
-        coefficients[i, :len(row)] = row
-    coefficients = jnp.asarray(coefficients, dtype=y.dtype)
-    times = jnp.asarray(nodes[:-1], dtype=y.dtype)
-    endpoint_weights = jnp.asarray(rows[-1], dtype=y.dtype)
-    bank = jnp.concatenate([(h * f0)[None], jnp.zeros((n - 2,) + y.shape, y.dtype)])
-
-    def stage(i, bank):
-        point = y + jnp.tensordot(coefficients[i - 1], bank, axes=1)
-        increment = h * rhs(t + times[i - 1] * h, point, args)
-        return lax.dynamic_update_index_in_dim(bank, increment, i, axis=0)
-
-    bank = lax.fori_loop(1, n - 1, stage, bank)
-    endpoint = y + jnp.tensordot(endpoint_weights, bank, axes=1)
-    final = rhs(t + h, endpoint, args)
-    error = jnp.tensordot(jnp.asarray(error_weights[:-1], dtype=y.dtype), bank, axes=1)
-    if error_weights[-1] != 0:
-        error = error + error_weights[-1] * (h * final)
-    increments = jnp.concatenate([bank, (h * final)[None]])
-    return _RKTrial(endpoint, error, increments, final)
-
-
-def _trial_unrolled(rhs, t, y, h, args, f0, nodes, rows, weights):
-    """Explicit component arithmetic exposes independent operations to XLA."""
     increments = [tuple(h * value for value in f0)]
     for node, row in zip(nodes, rows):
         point = tuple(value + sum(a*k[i] for a,k in zip(row,increments) if a)
@@ -271,40 +226,6 @@ def _trial_unrolled(rhs, t, y, h, args, f0, nodes, rows, weights):
     error = tuple(sum(a*k[i] for a,k in zip(weights,increments) if a) for i in range(len(y)))
     return _RKTrial(jnp.stack(point), jnp.stack(error),
                     jnp.stack(tuple(jnp.stack(k) for k in increments)), jnp.stack(final))
-
-
-def rk45_interpolate(y0, h, step, fraction):
-    """Quartic dense output on an accepted step, for 0 <= fraction <= 1."""
-    return _rk45_dense(y0, step.y, h * step.stages, fraction)
-
-
-def _rk45_dense(y0, y1, k, fraction):
-    delta = y1 - y0
-    midpoint = jnp.tensordot(jnp.asarray(_MID, dtype=y0.dtype), k, axes=1)
-    # Interpolate the endpoints, endpoint derivatives, and Shampine midpoint.
-    a = 2 * (k[-1] - k[0]) - 8 * delta + 16 * midpoint
-    b = 5 * k[0] - 3 * k[-1] + 14 * delta - 32 * midpoint
-    c = k[-1] - 4 * k[0] - 5 * delta + 16 * midpoint
-    s = fraction
-    value = y0 + s * (k[0] + s * (c + s * (b + s * a)))
-    return jnp.where(s == 0, y0, jnp.where(s == 1, y1, value))
-
-
-def dopri8_interpolate(y0, h, step, fraction):
-    """Dopri8 continuous extension on a trial step, for 0 <= fraction <= 1."""
-    return _dopri8_dense(y0, step.y, h * step.stages, fraction)
-
-
-def _dopri8_dense(y0, y1, k, fraction):
-    coefficients = jnp.asarray(_DENSE8, dtype=y0.dtype)
-    weights = jax.vmap(jnp.polyval, in_axes=(0, None))(coefficients, fraction) * fraction
-    value = y0 + jnp.tensordot(weights, k, axes=1)
-    return jnp.where(fraction == 0, y0, jnp.where(fraction == 1, y1, value))
-
-
-def _concrete_check(value, predicate, message):
-    if not isinstance(value, jax.core.Tracer) and not predicate(np.asarray(value)):
-        raise ValueError(message)
 
 
 def _prepare_rhs(rhs, t0, y0, args):
@@ -343,16 +264,17 @@ def _first_hit(hits):
 
 def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                rtol=1e-9, atol=1e-9, event=None, root_find=True,
-               max_steps=1_000_000, dtmin=0., dtmax=np.inf, record_steps=False, method="dopri5",
-               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, stage_execution="unrolled"):
+               max_steps=1_000_000, dtmin=0., dtmax=np.inf, method="dopri5",
+               error_norm=None, controller="i", pcoeff=.4, icoeff=.3):
     """Integrate an array state forward in time with bounded adaptive retries.
 
-    ``ts`` is an ordered save grid, independent of the integration steps.
-    Unreached saves are filled with infinity. ``t``/``y`` give the last accepted
-    state, including a refined event crossing. Level-set events fire on a sign
-    change (or an initial zero); boolean events fire when true. Event callables
-    have signature ``event(t, y, args)`` and may form a PyTree.
-    The earliest event is reported; ties use PyTree leaf order.
+    ``method`` selects ``"dopri5"`` (Dormand-Prince 5(4)) or ``"dopri8"``
+    (Prince-Dormand 8(7)). ``ts`` is an ordered save grid, independent of the
+    integration steps. Unreached saves are filled with infinity. ``t``/``y``
+    give the last accepted state, including a refined event crossing.
+    Level-set events fire on a sign change (or an initial zero); boolean events
+    fire when true. Event callables have signature ``event(t, y, args)`` and may
+    form a PyTree. The earliest event is reported; ties use PyTree leaf order.
     An initial event leaves all sampled saves empty, while returning t0/y0 as
     the terminal state, matching Diffrax's event/save convention.
 
@@ -370,37 +292,15 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     ``max_steps`` counts accepted and rejected trials. Failures return a status;
     no inaccurate step is forced through a minimum step-size limit.
 
-    By default memory holds only the save grid and current step. Opt into an
-    infinity-padded accepted-time history with ``record_steps=True``; its first
-    ``stats.accepted + 1`` entries are valid. This is diagnostic data for future
-    accepted-step replay, not an implemented AD rule.
-
     Concrete invalid inputs raise ValueError. Invalid dynamic values under JIT
     return INVALID_INPUT. Non-finite states, derivatives or event values are
     rejected, with NONFINITE returned when no smaller trial can proceed.
-
-    ``method`` selects ``"dopri5"`` or ``"dopri8"``. The convenience entry points
-    ``solve_rk45`` and ``solve_dopri8`` fix this choice.
     """
-    if stage_execution not in ("loop", "unrolled"):
-        raise ValueError("stage_execution must be 'loop' or 'unrolled'")
-    trial_step = _trial_step if stage_execution == "loop" else _trial_unrolled
-    if method == "dopri5":
-        nodes, rows, weights, dense, error_order = _C, _A, _ERROR, _rk45_dense, 5
-    elif method == "dopri8":
-        nodes, rows, weights, dense, error_order = _C8, _A8, _ERROR8, _dopri8_dense, 8
-    else:
+    if method not in _METHODS:
         raise ValueError("method must be 'dopri5' or 'dopri8'")
+    nodes, rows, weights, dense_coefficients, error_order = _METHODS[method]
     if controller not in ("i", "pi"):
         raise ValueError("controller must be 'i' or 'pi'")
-    if controller == "pi":
-        for value, name, positive in ((pcoeff, "pcoeff", False), (icoeff, "icoeff", True)):
-            if jnp.asarray(value).ndim != 0:
-                raise ValueError(f"{name} must be scalar")
-            _concrete_check(value, lambda x: np.isfinite(x) & ((x > 0) if positive else (x >= 0)),
-                            f"{name} must be finite and {'positive' if positive else 'nonnegative'}")
-    def interpolate(y, h, trial, fraction):
-        return dense(y, trial.y, trial.increments, fraction)
     if isinstance(max_steps, (bool, np.bool_)) or not isinstance(max_steps, (int, np.integer)) or max_steps <= 0:
         raise ValueError("max_steps must be a positive integer")
     y0 = jnp.asarray(y0)
@@ -412,34 +312,35 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     ts = jnp.asarray(ts, dtype=y0.dtype)
     if ts.ndim != 1:
         raise ValueError("ts must be one-dimensional")
-    for value, name in ((t0, "t0"), (t1, "t1"), (dt0, "dt0"), (dtmin, "dtmin"), (dtmax, "dtmax")):
-        if jnp.asarray(value).ndim != 0:
+    for name, value in (("t0", t0), ("t1", t1), ("dt0", dt0), ("dtmin", dtmin), ("dtmax", dtmax),
+                        ("pcoeff", pcoeff), ("icoeff", icoeff)):
+        if np.ndim(value) != 0:
             raise ValueError(f"{name} must be scalar")
-    for value, name in ((dt0, "dt0"), (dtmax, "dtmax")):
-        _concrete_check(value, lambda x: np.all(x > 0), f"{name} must be positive")
-    _concrete_check(dt0, np.isfinite, "dt0 must be finite")
-    _concrete_check(t0, np.isfinite, "t0 must be finite")
-    _concrete_check(t1, np.isfinite, "t1 must be finite")
-    _concrete_check(dtmin, lambda x: np.isfinite(x) & (x >= 0), "dtmin must be finite and nonnegative")
-    _concrete_check(rtol, lambda x: np.all(np.isfinite(x) & (x >= 0)), "rtol must be finite and nonnegative")
-    _concrete_check(atol, lambda x: np.all(np.isfinite(x) & (x > 0)), "atol must be finite and positive")
-    _concrete_check(jnp.asarray(t1) - t0, lambda x: np.isfinite(x) & (x >= 0), "t1 must be finite and >= t0")
-    _concrete_check(ts, lambda x: np.all(np.isfinite(x)) and np.all(np.diff(x) >= 0), "ts must be finite and ordered")
-    _concrete_check(jnp.asarray(dtmax) - dtmin, lambda x: x >= 0, "dtmax must be >= dtmin")
-    _concrete_check(jnp.asarray(dt0) - dtmin, lambda x: x >= 0, "dt0 must be >= dtmin")
-    _concrete_check((ts >= t0) & (ts <= t1), np.all, "ts must lie in [t0, t1]")
-    t0, t1, h0 = (jnp.asarray(v, dtype=y0.dtype) for v in (t0, t1, dt0))
-    # Comparisons made above may be tracers, so retain runtime validation too.
-    # For ordinary Tracing calls these constants are folded out by XLA.
-    valid_input = (jnp.isfinite(t0) & jnp.isfinite(t1) & (t1 >= t0) &
-                   jnp.isfinite(h0) & (h0 > 0) & jnp.isfinite(dtmin) & (dtmin >= 0) &
-                   (dtmax > 0) & (dtmax >= dtmin) & (h0 >= dtmin) &
-                   jnp.all(jnp.isfinite(jnp.asarray(rtol)) & (jnp.asarray(rtol) >= 0)) &
-                   jnp.all(jnp.isfinite(jnp.asarray(atol)) & (jnp.asarray(atol) > 0)) &
-                   jnp.all(jnp.isfinite(ts) & (ts >= t0) & (ts <= t1)) &
-                   jnp.all(jnp.diff(ts) >= 0))
-    if controller == "pi":
-        valid_input = valid_input & jnp.isfinite(pcoeff) & (pcoeff >= 0) & jnp.isfinite(icoeff) & (icoeff > 0)
+    t0, t1, h0, dtmin, dtmax, pcoeff, icoeff = (jnp.asarray(v, dtype=y0.dtype) for v in
+                                                 (t0, t1, dt0, dtmin, dtmax, pcoeff, icoeff))
+    # One list of conditions serves both purposes: concrete values raise
+    # ValueError at once, traced values are reported as INVALID_INPUT status.
+    # Under jit these constants are folded out by XLA.
+    with jax.ensure_compile_time_eval():
+        rtol_ok = jnp.all(jnp.isfinite(rtol) & (jnp.asarray(rtol) >= 0))
+        atol_ok = jnp.all(jnp.isfinite(atol) & (jnp.asarray(atol) > 0))
+        conditions = {
+            "t0 must be finite": jnp.isfinite(t0),
+            "t1 must be finite and >= t0": jnp.isfinite(t1) & (t1 >= t0),
+            "dt0 must be positive and finite": jnp.isfinite(h0) & (h0 > 0),
+            "dtmin must be finite and nonnegative": jnp.isfinite(dtmin) & (dtmin >= 0),
+            "dtmax must be positive and >= dtmin": (dtmax > 0) & (dtmax >= dtmin),
+            "dt0 must be >= dtmin": h0 >= dtmin,
+            "rtol must be finite and nonnegative": rtol_ok,
+            "atol must be finite and positive": atol_ok,
+            "ts must be finite, ordered and lie in [t0, t1]": (jnp.all(jnp.isfinite(ts) & (ts >= t0) & (ts <= t1))
+                                                              & jnp.all(jnp.diff(ts) >= 0)),
+            "pcoeff must be finite and nonnegative, icoeff finite and positive": (
+                (controller != "pi") | (jnp.isfinite(pcoeff) & (pcoeff >= 0) & jnp.isfinite(icoeff) & (icoeff > 0)))}
+    for message, ok in conditions.items():
+        if not isinstance(ok, jax.core.Tracer) and not ok:
+            raise ValueError(message)
+    valid_input = jnp.all(jnp.asarray(list(conditions.values())))
     functions, structure = tree_util.tree_flatten(event)
 
     def events(t, y):
@@ -463,12 +364,12 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                  values=values0, hits=initial_hits, status=status0,
                  ys=jnp.full((len(ts),) + y0.shape, jnp.inf, dtype=y0.dtype),
                  saved_ts=jnp.full(ts.shape, jnp.inf, dtype=ts.dtype),
-                 index=jnp.array(0), steps=jnp.array(0), accepted=jnp.array(0), rejected=jnp.array(0),
-                 history=jnp.full((max_steps + 1 if record_steps else 0,), jnp.inf, dtype=y0.dtype))
+                 index=jnp.array(0), steps=jnp.array(0), accepted=jnp.array(0), rejected=jnp.array(0))
     if adaptive and controller == "pi":
         state["previous_error"] = jnp.ones((), dtype=y0.dtype)
-    if record_steps:
-        state["history"] = state["history"].at[0].set(t0)
+
+    def interpolate(y, trial, fraction):
+        return _dense(dense_coefficients, y, trial.y, trial.increments, fraction)
 
     def save_initial(s):
         if not len(ts):
@@ -495,7 +396,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             # leave a tiny remainder even when the interval is exactly N*h0.
             end_t = jnp.minimum(t0 + (s["accepted"] + 1) * jnp.minimum(h0, dtmax), t1)
             h = end_t - t
-        trial = trial_step(rhs, t, y, h, args, s["f"], nodes, rows, weights)
+        trial = _trial(rhs, t, y, h, args, s["f"], nodes, rows, weights)
         finite = (jnp.isfinite(trial.y).all() & jnp.isfinite(trial.increments).all() &
                   jnp.isfinite(trial.f1).all() & jnp.isfinite(trial.error).all())
         if adaptive:
@@ -521,7 +422,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                 def bisect(c):
                     lo, hi, iteration, valid = c
                     mid = (lo + hi) / 2
-                    value = f(t + mid * h, interpolate(y, h, trial, mid), args)
+                    value = f(t + mid * h, interpolate(y, trial, mid), args)
                     same = (value > 0) == (old > 0)
                     return (jnp.where(same, mid, lo), jnp.where(same, hi, mid),
                             iteration + 1, valid & jnp.isfinite(value))
@@ -540,7 +441,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
         has_event = jnp.isfinite(first) & accept
         fraction = jnp.minimum(first, 1.)
         stop_t = jnp.where(has_event, t + fraction * h, end_t)
-        stop_y = interpolate(y, h, trial, fraction)
+        stop_y = interpolate(y, trial, fraction)
         hits = _first_hit(tuple(hit & accept & (fraction_i == first) for hit, fraction_i in zip(triggered, fractions)))
         if adaptive and controller == "pi":
             # Work in log space so zero errors and clipped factors stay finite.
@@ -570,13 +471,10 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             # accepted error, including after a non-finite trial.
             history_error = jnp.where(error >= jnp.finfo(y.dtype).tiny, safe_error, 1.)
             updated["previous_error"] = jnp.where(accept, history_error, s["previous_error"])
-        if record_steps:
-            updated["history"] = lax.cond(accept, lambda history: history.at[updated["accepted"]].set(stop_t),
-                                          lambda history: history, s["history"])
         if len(ts):
             def save(s):
                 i = s["index"]
-                value = interpolate(y, h, trial, (ts[i] - t) / h)
+                value = interpolate(y, trial, (ts[i] - t) / h)
                 return dict(s, ys=s["ys"].at[i].set(value), saved_ts=s["saved_ts"].at[i].set(ts[i]), index=i + 1)
             updated = lax.while_loop(lambda s: accept & (s["index"] < len(ts)) &
                                      (ts[jnp.minimum(s["index"], len(ts) - 1)] <= stop_t), save, updated)
@@ -587,17 +485,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     status = jnp.where((state["t"] < t1) & (state["status"] == RKStatus.SUCCESS), RKStatus.MAX_STEPS, state["status"])
     return RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
                       tree_util.tree_unflatten(structure, state["hits"]),
-                      RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"])
-
-
-def solve_rk45(rhs, y0, args=None, **kwargs):
-    """Dormand--Prince 5(4); see solve_rk for integration options and results."""
-    return solve_rk(rhs, y0, args, method="dopri5", **kwargs)
-
-
-def solve_dopri8(rhs, y0, args=None, **kwargs):
-    """Dormand--Prince 8(7); see solve_rk for integration options and results."""
-    return solve_rk(rhs, y0, args, method="dopri8", **kwargs)
+                      RKStats(state["steps"], state["accepted"], state["rejected"]))
 
 # GPU field access and JAX compatibility
 
@@ -748,7 +636,6 @@ def _bind_primitive(primitive, values, parameters):
 
 def _evaluate_inline(graph, constants, *arguments):
     """Expose jit boundaries without entering custom AD/control-flow calls."""
-    from jax.extend.core import Literal
     environment = dict(zip(graph.constvars, constants))
     environment.update(zip(graph.invars, arguments))
 
@@ -1065,7 +952,7 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
     """
     from jax.experimental import pallas as pl
     from jax.experimental.pallas import triton as plt
-    if method not in ("dopri5", "dopri8"):
+    if method not in _METHODS:
         raise ValueError("The fused orbit method must be dopri5 or dopri8")
     if not interpret and (jax.default_backend() != "gpu" or "cuda" not in jax.devices()[0].client.platform_version.lower()):
         raise ValueError("The experimental fused orbit solver requires CUDA")
@@ -1079,7 +966,7 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
     if (isinstance(max_steps, (bool, np.bool_)) or not isinstance(max_steps, (int, np.integer)) or
             not 0 < max_steps <= np.iinfo(np.int32).max):
         raise ValueError("max_steps must be a positive int32 work bound")
-    rows, weights, order = (_A, _ERROR, 5) if method == "dopri5" else (_A8, _ERROR8, 8)
+    _, rows, weights, dense_polynomials, order = _METHODS[method]
     stages = len(weights)
     bank_size = 1 << (stages-1).bit_length()
     matrix = np.zeros((bank_size, bank_size))
@@ -1087,12 +974,8 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
         matrix[i, :len(row)] = row
     coefficients = jnp.asarray(matrix)
     error_weights = jnp.asarray(tuple(weights)+(0.,)*(bank_size-stages))
-    if method == "dopri5":
-        dense_matrix = np.zeros((1, bank_size))
-        dense_matrix[0, :stages] = np.asarray(_MID)
-    else:
-        dense_matrix = np.zeros((len(_DENSE8[0]), bank_size))
-        dense_matrix[:, :stages] = np.asarray(_DENSE8).T
+    dense_matrix = np.zeros((dense_polynomials.shape[1], bank_size))
+    dense_matrix[:, :stages] = dense_polynomials.T
     dense_coefficients = jnp.asarray(dense_matrix)
     tmax = float(times[-1])
     # Load float64 scalars explicitly. Nested Pallas loops must not infer
@@ -1130,18 +1013,6 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
                     (index, condition(index)))[0]
 
             def dense(y, endpoint, bank, fraction):
-                if method == "dopri5":
-                    # Same quartic extension as rk._rk45_dense; the padded
-                    # bank's last row is not the final FSAL stage.
-                    first = _select_one(bank, 0, 0).reshape(state_size)
-                    last = _select_one(bank, stages-1, 0).reshape(state_size)
-                    midpoint = jnp.sum(dref[0, :][:, None]*bank, axis=0)
-                    delta = endpoint-y
-                    a = 2*(last-first)-8*delta+16*midpoint
-                    b = 5*first-3*last+14*delta-32*midpoint
-                    c = last-4*first-5*delta+16*midpoint
-                    value = y+fraction*(first+fraction*(c+fraction*(b+fraction*a)))
-                    return jnp.where(fraction == 0, y, jnp.where(fraction == 1, endpoint, value))
                 weights = jnp.zeros((bank_size,), point.dtype)
                 for power in range(dense_matrix.shape[0]):
                     weights = weights*fraction+dref[power, :]
@@ -1257,7 +1128,7 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
         ys, saved, y, t, h, counts, status = pl.pallas_call(kernel, out_shape=shapes, grid=(),
             interpret=interpret, compiler_params=plt.CompilerParams(num_warps=num_warps))(y0, moment, initial_status, *inputs)
         return RKSolution(saved, ys, t, y, status, status == 1,
-            RKStats(counts[0], counts[1], counts[2]), jnp.zeros((0,), y0.dtype))
+            RKStats(counts[0], counts[1], counts[2]))
 
     solve.method = method
     return solve
@@ -1304,7 +1175,6 @@ def prepare_solver(field, *, mass, charge, energy, times, dt0, model="gc", metho
     the portable path supports I/PI. Use jit(vmap(solve)) for a batch.
     This function prepares fixed fields outside jit. It defines no AD rule.
     """
-    import numpy as np
     from .fields import BiotSavart, Vmec
     from .dynamics import GuidingCenter, Lorentz, _axis_regular, _from_axis_regular
     from .electric_field import Electric_field_zero
@@ -1320,14 +1190,10 @@ def prepare_solver(field, *, mass, charge, energy, times, dt0, model="gc", metho
     if execution=='cuda':
         if controller!='i':
             raise ValueError("CUDA execution supports the I controller")
-        if vmec:
-            prepare_orbit_solver = _prepare_vmec_gpu
-        elif isinstance(field,BiotSavart):
-            prepare_orbit_solver = _prepare_coils_gpu
-        else:
+        if not (vmec or isinstance(field,BiotSavart)):
             raise ValueError("CUDA Cartesian fields must be BiotSavart")
         options={} if vmec else dict(model=model)
-        kernel=prepare_orbit_solver(field,mass,charge,energy,speed,times,dt0,rtol,atol,max_steps,
+        kernel=(_prepare_vmec_gpu if vmec else _prepare_coils_gpu)(field,mass,charge,energy,speed,times,dt0,rtol,atol,max_steps,
             method=method,adaptive=adaptive,length_scale=length_scale,interpret=interpret,**options)
         padded=8 if size in (5,6) else 4
         def solve(y):
@@ -1378,16 +1244,13 @@ def _trace_error_norm(trace, *, exterior=False, flag=False):
     from .dynamics import _from_axis_regular
     if trace.native_error_control == "standard":
         return None
-    position_map = None
-    if trace._axis_regular and not exterior:
-        def position_map(y):
-            state = y[:-1] if flag else y
-            return trace.field.to_xyz(_from_axis_regular(state)[:3])
+    def cartesian(y):
+        return trace.field.to_xyz(_from_axis_regular(y[:-1] if flag else y)[:3])
     return OrbitErrorNorm(
         rtol=trace.rtol, atol=trace.atol, length_scale=trace.orbit_length_scale,
         speed_scale=trace.particles.total_speed if trace.orbit_speed_scale is None else trace.orbit_speed_scale,
         velocity_components=3 if trace.model.startswith("FullOrbit") else 1,
-        position_map=position_map)
+        position_map=cartesian if trace._axis_regular and not exterior else None)
 
 
 def _solve_tracing(trace, terms, controller, t0, y0, args, event, throw, exterior, flag):
@@ -1432,8 +1295,7 @@ def trace_boozer_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, a
     if execution == "cuda":
         if controller != "i":
             raise ValueError("CUDA native orbits require I control")
-        prepare_orbit_solver = _prepare_boozer_gpu
-        solver = prepare_orbit_solver(field, mass, charge, float(speed), times,
+        solver = _prepare_boozer_gpu(field, mass, charge, float(speed), times,
                                       dt0, rtol, atol, max_steps, method=method, adaptive=adaptive)
     return _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                           method, adaptive, controller, pcoeff, icoeff, max_steps, solver)

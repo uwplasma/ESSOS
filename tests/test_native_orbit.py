@@ -16,42 +16,46 @@ def oscillator(t,y,args):
     return jnp.array([y[1],-y[0]])
 
 
-@pytest.mark.parametrize('method', ['dopri5','dopri8'])
-def test_tableau_fsal_and_standard_dense_match_diffrax(method):
-    step_fn,interpolate,solver=((rk.rk45_step,rk.rk45_interpolate,diffrax.Dopri5()) if method=='dopri5'
-                               else (rk.dopri8_step,rk.dopri8_interpolate,diffrax.Dopri8()))
-    y=jnp.array([1.,.2]); h=.1
-    step=step_fn(oscillator,0.,y,h)
-    term=diffrax.ODETerm(oscillator)
-    yn,error,dense,_,_=solver.step(term,0.,h,y,None,solver.init(term,0.,h,y,None),False)
-    np.testing.assert_allclose(step.y,yn,rtol=0,atol=2e-15)
-    np.testing.assert_allclose(step.error,error,rtol=0,atol=2e-15)
-    reference=solver.interpolation_cls(t0=0.,t1=h,**dense)
-    for fraction in (0.,.2,.7,1.):
-        np.testing.assert_allclose(interpolate(y,h,step,fraction),reference.evaluate(fraction*h),atol=2e-14)
-    cached=step_fn(oscillator,h,step.y,h,f0=step.stages[-1])
-    for a,b in zip(cached,step_fn(oscillator,h,step.y,h)):
-        np.testing.assert_array_equal(a,b)
+def diffrax_fixed(solver,y0,h,t1,ts):
+    return diffrax.diffeqsolve(diffrax.ODETerm(oscillator),solver,0.,t1,h,y0,saveat=diffrax.SaveAt(ts=ts),
+                               stepsize_controller=diffrax.ConstantStepSize()).ys
 
 
-@pytest.mark.parametrize('method', ['dopri5','dopri8'])
+@pytest.mark.parametrize('method,solver',[('dopri5',diffrax.Dopri5()),('dopri8',diffrax.Dopri8())])
+def test_fixed_steps_and_dense_output_match_diffrax(method,solver):
+    # Saves fall inside steps, so this checks the stages, FSAL reuse and the standard interpolant.
+    y0,ts=jnp.array([1.,.2]),jnp.array([0.,.03,.27,.5,.7,1.])
+    out=rk.solve_rk(oscillator,y0,t1=1.,dt0=.5,adaptive=False,ts=ts,method=method)
+    assert out.stats.accepted==2
+    np.testing.assert_allclose(out.ys,diffrax_fixed(solver,y0,.5,1.,ts),rtol=0,atol=2e-14)
+
+
+@pytest.mark.parametrize('method,order,steps',[('dopri5',5,(16,32,64)),('dopri8',8,(6,12,24))])
+def test_fixed_step_convergence_order(method,order,steps):
+    # Global error of the harmonic oscillator over one period falls as h^order.
+    def error(n):
+        out=rk.solve_rk(oscillator,jnp.array([1.,0.]),t1=2*np.pi,dt0=2*np.pi/n,adaptive=False,method=method)
+        return float(jnp.abs(out.y[0]-1.))
+    errors=[error(n) for n in steps]
+    assert errors[-1]>1e-13  # above roundoff, so the ratios measure truncation error
+    for coarse,fine in zip(errors[:-1],errors[1:]):
+        assert np.log2(coarse/fine)>order-.5
+
+
+@pytest.mark.parametrize('method',['dopri5','dopri8'])
 def test_adaptive_control_rejects_and_is_independent_of_saves(method):
     for controller in ('i','pi'):
-        opts=dict(t1=2.,dt0=2.,rtol=1e-10,atol=1e-10,method=method,controller=controller,
-                  max_steps=128,record_steps=True)
+        opts=dict(t1=2.,dt0=2.,rtol=1e-10,atol=1e-10,method=method,controller=controller,max_steps=128)
         run=jax.jit(lambda saves:rk.solve_rk(oscillator,jnp.array([1.,0.]),ts=saves,**opts))
         a,b=run(jnp.array([0.,2.])),run(jnp.linspace(0,2,9))
         assert a.status==b.status==rk.RKStatus.SUCCESS and a.stats.rejected>0
         np.testing.assert_array_equal(a.stats,b.stats)
-        np.testing.assert_array_equal(a.step_ts,b.step_ts)
         np.testing.assert_allclose(b.ys,jnp.stack((jnp.cos(b.ts),-jnp.sin(b.ts)),axis=1),atol=3e-8)
-        loop=jax.jit(lambda:rk.solve_rk(oscillator,jnp.array([1.,0.]),ts=jnp.array([0.,2.]),
-                                       stage_execution='loop',**opts))()
-        np.testing.assert_allclose(a.y,loop.y,atol=2e-12)
 
 
 def test_fixed_clock_empty_duplicate_saves_and_zero_span():
-    for solve in (rk.solve_rk45,rk.solve_dopri8):
+    for method in ('dopri5','dopri8'):
+        solve=lambda *a,**k:rk.solve_rk(*a,method=method,**k)
         a=jax.jit(lambda:solve(lambda t,y,a:jnp.ones_like(y),jnp.zeros(1),t0=.2,t1=1.2,
             dt0=.1,adaptive=False,ts=jnp.array([.2,.2,.65,1.2]),max_steps=10))()
         assert a.stats.accepted==10 and a.status==0
@@ -76,6 +80,16 @@ def test_levelset_boolean_initial_and_simultaneous_events():
             assert np.isinf(out.ys).all()
     both=(lambda t,y,a:.3-y[0],)*2
     np.testing.assert_array_equal(rk.solve_rk(rhs,jnp.zeros(1),t1=1.,dt0=.4,event=both).event_mask,[True,False])
+
+
+@pytest.mark.parametrize('method',['dopri5','dopri8'])
+def test_event_root_uses_dense_output_to_integration_accuracy(method):
+    # First zero of cos(t) at pi/2, found inside a step of size ~1 by bisecting the interpolant.
+    out=rk.solve_rk(oscillator,jnp.array([1.,0.]),t1=3.,dt0=1.,event=lambda t,y,a:y[0],method=method,
+                    rtol=1e-10,atol=1e-10)
+    assert out.status==rk.RKStatus.EVENT
+    np.testing.assert_allclose(out.t,np.pi/2,atol=1e-8)
+    np.testing.assert_allclose(out.y,[0.,-1.],atol=1e-8)
 
 
 def test_vmapped_particles_stop_independently():
@@ -103,7 +117,7 @@ def test_work_limits_nonfinite_and_recovery():
 
 def test_static_input_and_event_contracts():
     base=dict(t1=1.,dt0=.1)
-    invalid=[dict(method='rk4'),dict(controller='pid'),dict(stage_execution='x'),dict(max_steps=0),
+    invalid=[dict(method='rk4'),dict(controller='pid'),dict(max_steps=0),
              dict(max_steps=True),dict(dt0=0),dict(dt0=np.inf),dict(t0=np.nan),dict(t1=-1),
              dict(dtmin=-1),dict(dtmax=-1),dict(dtmin=.2),dict(dtmin=.1,dtmax=.01),
              dict(atol=0),dict(rtol=-1),dict(ts=[.7,.2]),dict(ts=[2.]),dict(ts=[[0.]]),
@@ -156,6 +170,12 @@ def test_tracing_native_dispatch_matches_analytic_and_diffrax(model):
         out=Tracing(**opts,integrator=integrator)
         assert out.rtol==out.atol==1e-9
         np.testing.assert_allclose(out.trajectories,ref.trajectories,atol=2e-9)
+        t=out.times
+        if model.startswith('Full'):  # Larmor gyration, omega=qB/m=1
+            analytic=jnp.stack((.3*jnp.sin(t),.3*(jnp.cos(t)-1),.2*t,.3*jnp.cos(t),-.3*jnp.sin(t),.2+0*t),axis=-1)
+        else:  # no drift in a uniform field: streaming along B
+            analytic=jnp.stack((0*t,0*t,.2*t,.2+0*t),axis=-1)
+        np.testing.assert_allclose(out.trajectories[0],analytic,atol=2e-9)
     for options in (dict(integrator='x'),dict(integrator='essos_dopri8',solver=diffrax.Dopri8()),
                     dict(integrator='essos_dopri8',model='FullOrbitCollisions'),
                     dict(native_error_control='x'),dict(native_controller='x')):
@@ -166,6 +186,23 @@ def test_tracing_native_dispatch_matches_analytic_and_diffrax(model):
     assert error_norm(standard) is None
     end=out._solve(*out._terms(None),0.,out.initial_conditions[0],out.args,diffrax.Event(lambda t,y,a:False),throw=True)
     assert end.result==diffrax.RESULTS.successful
+
+
+def test_native_tracing_conserves_energy_in_coil_field():
+    from essos.dynamics import Particles,Tracing
+    field=coil_field(); x=jnp.array([[1.,.03,.01]])
+    p=Particles(x,initial_vparallel_over_v=[.3],mass=1.,charge=1.,energy=.5,initial_xyz_fullorbit=x,
+                initial_vxvyvz=jnp.array([[.3,.2,.4]]),field=field)
+    opts=dict(field=field,particles=p,maxtime=.02,timestep=.002,times_to_trace=5,progress=False,rtol=1e-9,atol=1e-9)
+    for integrator in ('essos_rk45','essos_dopri8'):
+        guiding=Tracing(model='GuidingCenterAdaptative',integrator=integrator,**opts)
+        reference=Tracing(model='GuidingCenterAdaptative',**opts)
+        # E = mu B + m vpar^2/2 with the fixed mu of the guiding-centre equations.
+        assert jnp.max(jnp.abs(guiding.energy()/.5-1))<1e-8
+        np.testing.assert_allclose(guiding.trajectories,reference.trajectories,atol=1e-7)
+        full=Tracing(model='FullOrbitAdaptative',integrator=integrator,**opts)
+        kinetic=(full.trajectories[0,:,3:6]**2).sum(-1)/2
+        np.testing.assert_allclose(kinetic,kinetic[0],rtol=1e-8)
 
 
 def coil_field():
@@ -225,8 +262,7 @@ def test_boozer_public_native_outputs_and_failures(monkeypatch):
         original(SimpleNamespace(table=1.,sine_coef=None),1.,1.,1.,[0.,.1],.1,1e-9,1e-9,8,interpret=True)
 
 
-def test_vmec_private_values_match_current_main(monkeypatch):
-    from functools import partial
+def test_vmec_private_values_match_current_main():
     from essos.fields import Vmec
     from essos.rk import _prepare_vmec_data as prepare, _vmec_quantities as quantities, _vmec_rhs_values as rhs_values, _vmec_xyz_values as xyz_values
     from essos.dynamics import GuidingCenter,Particles,_axis_regular,_to_axis_regular
@@ -246,10 +282,7 @@ def test_vmec_private_values_match_current_main(monkeypatch):
     np.testing.assert_allclose(xyz_values(prepared.arrays,y,prepared.tables),field.to_xyz(x),atol=3e-12)
     from essos.rk import prepare_solver
     args=dict(mass=1.,charge=1.,energy=.5,times=np.array([0.,.001]),dt0=.001,max_steps=8)
-    # Bound the real-equilibrium CPU reference graph on older XLA releases.
-    with monkeypatch.context() as patch:
-        patch.setattr(rk,'solve_rk',partial(rk.solve_rk,stage_execution='loop'))
-        reference=jax.jit(prepare_solver(field,**args))(y[:5])
+    reference=jax.jit(prepare_solver(field,**args))(y[:5])
     gpu=jax.jit(prepare_solver(field,execution='cuda',interpret=True,**args))(y[:5])
     np.testing.assert_allclose(gpu.y,reference.y,atol=3e-12)
     for change in (dict(model='lorentz'),dict(execution='x'),dict(energy=-1),dict(execution='cuda',controller='pi')):
@@ -318,42 +351,31 @@ def test_independent_gpu_loop_on_cpu(method):
             np.testing.assert_allclose(recovered.y,np.full(4,np.e),rtol=1e-10)
 
 
-def test_rhs_preparation_and_gpu_helpers_preserve_values(monkeypatch):
-    # Some supported JAX releases omit this deprecated facade export (CI).
-    from jax.interpreters import partial_eval as facade
-    monkeypatch.delattr(facade,'partial_eval_jaxpr_nounits',raising=False)
-    from essos.rk import _select_one, _kernel_is_finite, _bind_primitive
+def test_rhs_preparation_and_gpu_helpers_preserve_values():
+    from essos.rk import _select_one, _kernel_is_finite
     for dtype in (jnp.float32,jnp.float64):
         values=jnp.array([1.,np.inf,np.nan,-np.inf,-0.],dtype=dtype)
         np.testing.assert_array_equal(_kernel_is_finite(values),jnp.isfinite(values))
         assert np.signbit(_select_one(values,4,0).reshape(()))
-    class Primitive:
-        def get_bind_params(self,p): return ([],p)
-        def bind(self,*args,**kwargs): return args[0]+kwargs['offset']
-    assert _bind_primitive(Primitive(),[2.],dict(offset=3.))==5.
-    # JAX 0.6 calls this boundary "pjit"; current releases call it "jit".
-    nested=jax.make_jaxpr(lambda x:x*jnp.array([2.,3.]))(jnp.ones(2))
-    for name in ('jit','pjit'):
-        graph=SimpleNamespace(constvars=(),invars=('x',),outvars=('y',),eqns=(
-            SimpleNamespace(primitive=SimpleNamespace(name=name),params={'jaxpr':nested},
-                            invars=('x',),outvars=('y',)),))
-        inline=lambda x:rk._evaluate_inline(graph,(),x)[0].sum()
-        np.testing.assert_allclose(jax.jit(inline)(jnp.ones(2)),5.,atol=0)
-        np.testing.assert_array_equal(jax.grad(inline)(jnp.ones(2)),[2.,3.])
+    with pytest.raises(TypeError): _kernel_is_finite(jnp.array([1],dtype=jnp.int32))
+    class LegacyPrimitive:  # JAX <= 0.6 returns (subfunctions, params) from get_bind_params
+        get_bind_params=lambda self,p:([],p)
+        bind=lambda self,*args,**kwargs:args[0]+kwargs['offset']
+    assert rk._bind_primitive(LegacyPrimitive(),[2.],dict(offset=3.))==5.
+    # Slices the kernel cannot express by selection are rejected instead of mis-lowered.
+    from essos import boozer
+    model=SimpleNamespace(modB_derivatives=lambda *a:(1.,0.,0.,0.))
+    for rhs in (lambda field,y,*a:jnp.concatenate((y[:2],y[:2])),
+                lambda field,y,*a:jnp.concatenate((jax.lax.dynamic_slice(y,(y[0].astype(jnp.int32),),(2,)),jnp.ones(2)))):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(boozer,'guiding_center_rhs',rhs)
+            with pytest.raises(ValueError,match='slice'):
+                rk._kernel_rhs(model,jnp.ones(4),.1,1.,1.)(jnp.ones(4))
+    # Parameter-only work is hoisted out of the stages without losing its derivative.
     def value(p):
-        rhs=lambda t,y,args:jnp.sin(p)*y+t
-        prepared=rk._prepare_rhs(rhs,jnp.asarray(0.),jnp.ones(2),None)
+        prepared=rk._prepare_rhs(lambda t,y,args:jnp.sin(p)*y+t,jnp.asarray(0.),jnp.ones(2),None)
         return prepared(.2,jnp.array([2.,3.]),None).sum()
     np.testing.assert_allclose(jax.grad(value)(.3),5*np.cos(.3),atol=2e-14)
-    with pytest.raises(TypeError): _kernel_is_finite(jnp.array([1],dtype=jnp.int32))
-    import essos.rk as module
-    from essos import boozer as boozer_module
-    model=SimpleNamespace(modB_derivatives=lambda *a:(1.,0.,0.,0.))
-    for f in (lambda field,y,*a:jnp.concatenate((y[:2],y[:2])),
-              lambda field,y,*a:jnp.concatenate((jax.lax.dynamic_slice(y,(y[0].astype(jnp.int32),),(2,)),jnp.ones(2)))):
-        monkeypatch.setattr(boozer_module,'guiding_center_rhs',f)
-        with pytest.raises(ValueError,match='slice'):
-            module._kernel_rhs(model,jnp.ones(4),.1,1.,1.)(jnp.ones(4))
 
 
 def test_fixed_field_adapter_solvers_on_cpu():
