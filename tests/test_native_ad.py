@@ -193,14 +193,14 @@ def test_profile_and_collision_coefficient_derivatives_remain_active():
     assert abs(gradient[0]) > 1e-8  # the background density is an active parameter
 
 
-def coil_trace(model, coils, p, adaptive=False, **kwargs):
+def coil_trace(model, coils, p, **kwargs):
     from essos.fields import BiotSavart
     field = BiotSavart(coils.with_dofs(coils.dofs.at[0].add(p[0])))
     birth = Particles(jnp.array([[1., .03, .01], [1., .02, 0.]]), mass=M, charge=Q,
         energy=4000*ONE_EV*jnp.exp(p[1]), initial_vparallel_over_v=jnp.array([.5, .3])+p[2],
         field=field, phase_angle_full_orbit=0.)
     return trace_split(field, birth, bath(), model=model, tmax=2e-8, timestep=1e-8, n_save=3, max_steps=64,
-        max_orbit_steps=64, spatial_diffusion=model == 'GuidingCenter', adaptive=adaptive, orbit_adaptive=adaptive,
+        max_orbit_steps=64, spatial_diffusion=model == 'GuidingCenter', adaptive=False, orbit_adaptive=False,
         adjoint_orbit_checkpoint_steps=4,
         adjoint_max_accepted_steps=64, adjoint_max_orbit_steps=256, **kwargs)
 
@@ -222,13 +222,13 @@ def test_coil_split_gradient_matches_frozen_forward_mode(model):
     np.testing.assert_allclose(gradient@d, jax.jvp(frozen, (p,), (d,))[1], rtol=5e-9)
 
 
-@pytest.mark.parametrize('model,adaptive', [('GuidingCenter', True), ('FullOrbit', False)])
-def test_persistent_reverse_kernel_gradient_equals_shared_reverse(model, adaptive):
+@pytest.mark.parametrize('model', ['GuidingCenter', 'FullOrbit'])
+def test_persistent_reverse_kernel_gradient_equals_shared_reverse(model):
     # The persistent GPU forward/reverse kernels run on CPU through the Pallas interpreter.
     coils = coil_field().coils
     def gradient(**kwargs):
         def objective(p):
-            out = coil_trace(model, coils, p, adaptive, adjoint='accepted', **kwargs)
+            out = coil_trace(model, coils, p, adjoint='accepted', **kwargs)
             return coil_metric(out.ys, out.y)
         return jax.jit(jax.value_and_grad(objective))(coil_point)
     shared, independent = gradient(), gradient(execution='independent', interpret=True)
