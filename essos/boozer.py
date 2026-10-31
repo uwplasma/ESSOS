@@ -232,8 +232,13 @@ def _chart(y):
     return s, r, jnp.arctan2(w, u), cos_t, sin_t, safe
 
 
-def guiding_center_rhs(field, y, mu, mass, charge):
-    """Time derivative of ``(u, w, zeta, v_par)``; ``mu = v_perp^2 / (2 |B|)``."""
+def guiding_center_rhs(field, y, mu, mass, charge, *, t=0., perturbation=None):
+    """Time derivative of ``(u, w, zeta, v_par)``; ``mu = v_perp^2 / (2 |B|)``.
+
+    Optional prescribed potentials add q alpha B0 to the GC one-form and
+    q Phi to H (Paul et al., 2023, Eq. 8). |B0| and mu retain their reduced
+    shear-Alfven meaning; kinetic energy is allowed to change.
+    """
     s, r, theta, cos_t, sin_t, safe = _chart(y)
     zeta, vpar = y[2], y[3]
     B, dB_dr, dB_dtheta_r, dB_dzeta = field.modB_derivatives(r, theta, zeta)
@@ -243,12 +248,41 @@ def guiding_center_rhs(field, y, mu, mass, charge):
     fak1 = mass * (vpar * vpar / B + mu)
     C = -charge * iota + mass * vpar * dG_ds / (psi0 * B)
     F = charge + mass * vpar * dI_ds / (psi0 * B)
+    if perturbation is not None:
+        (alpha, _), derivatives = perturbation.derivatives(field, y[:3], t)
+        da, dp = derivatives
+        # Covariant alpha B0 adds q alpha to the existing m v_parallel/B
+        # coefficient. Keep the same C, F and D_iota equations.
+        C += charge*alpha*dG_ds/psi0
+        F += charge*alpha*dI_ds/psi0
     D_iota = F * G - C * I
     # ds/dt / (2 r), r dtheta/dt and dzeta/dt, all regular on the axis.
     sdot_2r = (I_r * dB_dzeta - G * dB_dtheta_r) * fak1 / (2 * D_iota * psi0)
     r_thetadot = (G * dB_dr / (2 * psi0) * fak1 - r * C * vpar * B) / D_iota
     zetadot = (F * vpar * B - dB_dr * I_r / (2 * psi0) * fak1) / D_iota
     vpardot = (C * r * dB_dtheta_r - F * dB_dzeta) * mu * B / D_iota
+    if perturbation is not None:
+        # Components (d/dr, (d/dtheta)/r, d/dzeta), regular on the axis.
+        grad_alpha = jnp.array([cos_t*da[0]+sin_t*da[1],
+                               -sin_t*da[0]+cos_t*da[1], da[2]])
+        grad_phi = jnp.array([cos_t*dp[0]+sin_t*dp[1],
+                             -sin_t*dp[0]+cos_t*dp[1], dp[2]])
+        force = charge*(grad_phi-vpar*B*grad_alpha)
+        sdot_2r += (I_r*force[2]-G*force[1])/(2*D_iota*psi0)
+        r_thetadot += G*force[0]/(2*D_iota*psi0)
+        zetadot -= I_r*force[0]/(2*D_iota*psi0)
+
+        # Remaining parallel-force terms after explicit elimination of the
+        # same GC equations. k=m v_parallel/B+q alpha, h=m mu B+q Phi.
+        # This scalar cross term retains spatial alpha/Phi coupling;
+        # -q D_iota dt(alpha) supplies the inductive electric force.
+        gradB = jnp.array([dB_dr, dB_dtheta_r, dB_dzeta])
+        dk = -mass*vpar/B**2*gradB+charge*grad_alpha
+        dh = mass*mu*gradB+charge*grad_phi
+        cross = 0.5*(dk[0]*(G*dh[1]-I_r*dh[2])
+                     -(G*dk[1]-I_r*dk[2])*dh[0])
+        vpardot += B/(mass*D_iota)*(charge*(C*r*grad_phi[1]-F*grad_phi[2]-D_iota*da[3])
+                                   +cross/psi0)
     return jnp.array([cos_t * sdot_2r - sin_t * r_thetadot,
                       sin_t * sdot_2r + cos_t * r_thetadot, zetadot, vpardot])
 
@@ -285,10 +319,12 @@ class BoozerTrace:
 
     ``states`` is ``(particles, n_save, 5)``: ``s, theta, zeta, v_par`` and the
     speed ``v``. Every saved state lies inside the plasma: after a loss it is
-    held at the last interior state, and after thermalisation at that point.
+    held at the last interior state, after thermalisation at that point.
     ``loss_times`` is ``-1`` for particles that were not lost;
     ``thermalized_times`` and ``failed_times`` likewise. A failed orbit
     is frozen at its last finite state and is not counted as confined.
+    ``axis_stop_times`` likewise uses -1 for no inner-boundary encounter;
+    these stops are distinct from LCFS exits and numerical failures.
 
     ``energy_error`` covers interior steps only. The step that crosses the
     LCFS ends outside the field tables, where ``|B|`` is an extrapolation, so
@@ -301,8 +337,10 @@ class BoozerTrace:
     states: np.ndarray
     loss_times: np.ndarray
     thermalized_times: np.ndarray
-    energy_error: np.ndarray  # max |E/E0 - 1| per particle (collisionless drift only)
+    energy_error: np.ndarray | None  # unperturbed collisionless drift only
     failed_times: np.ndarray | None = None
+    kinetic_energy_change: np.ndarray | None = None  # max |Ekin/Ekin0-1| with waves
+    axis_stop_times: np.ndarray | None = None  # singular-mode inner boundary, not an LCFS exit
     terminal_states: np.ndarray | None = None
     terminal_energy_error: np.ndarray | None = None
 
@@ -315,28 +353,37 @@ class BoozerTrace:
         return (np.zeros_like(self.loss_times, dtype=bool) if self.failed_times is None
                 else self.failed_times >= 0)
 
-    def loss_fractions(self):
-        """Cumulative losses; failed or nonfinite trajectories are undefined."""
-        if (self.failed.any() or not np.isfinite(self.energy_error).all()
+    @property
+    def axis_stopped(self):
+        return (np.zeros_like(self.loss_times, dtype=bool) if self.axis_stop_times is None
+                else self.axis_stop_times >= 0)
+
+    def loss_fractions(self, *, include_axis=False):
+        """LCFS losses; optionally include singular-mode axis stops (paper convention)."""
+        if (self.failed.any() or (self.energy_error is not None and not np.isfinite(self.energy_error).all())
+                or (self.kinetic_energy_change is not None and not np.isfinite(self.kinetic_energy_change).all())
                 or not np.isfinite(self.states).all()):
             raise RuntimeError("Loss fraction is undefined when particle trajectories fail; inspect failed_times")
         lt = self.loss_times[self.lost]
+        if include_axis and self.axis_stop_times is not None:
+            lt = np.concatenate([lt, self.axis_stop_times[self.axis_stopped & ~self.lost]])
         return np.searchsorted(np.sort(lt), self.times, side="right") / self.loss_times.size
 
 
-def _rk_step(rhs, y, dt, method):
+def _rk_step(rhs, y, dt, method, t=None):
+    evaluate = lambda state, c: rhs(state) if t is None else rhs(t+c*dt, state)
     if method == "rk4":
-        k1 = rhs(y)
-        k2 = rhs(y + 0.5 * dt * k1)
-        k3 = rhs(y + 0.5 * dt * k2)
-        k4 = rhs(y + dt * k3)
+        k1 = evaluate(y, 0.)
+        k2 = evaluate(y + 0.5 * dt * k1, 0.5)
+        k3 = evaluate(y + 0.5 * dt * k2, 0.5)
+        k4 = evaluate(y + dt * k3, 1.)
         return y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
     from diffrax import Dopri5, Dopri8
 
     tableau = {"dopri5": Dopri5, "dopri8": Dopri8}[method].tableau
-    stages = [rhs(y)]
-    for weights in tableau.a_lower[:np.flatnonzero(tableau.b_sol)[-1]]:
-        stages.append(rhs(y + dt * sum(a * k for a, k in zip(weights, stages) if a)))
+    stages = [evaluate(y, 0.)]
+    for c, weights in zip(tableau.c, tableau.a_lower[:np.flatnonzero(tableau.b_sol)[-1]]):
+        stages.append(evaluate(y + dt * sum(a * k for a, k in zip(weights, stages) if a), c))
     return y + dt * sum(b * k for b, k in zip(tableau.b_sol, stages) if b)
 
 
@@ -344,37 +391,66 @@ def _rk_step(rhs, y, dt, method):
 MAX_ATTEMPTS = 1_000_000
 
 
-def _embedded_step(rhs, y, dt, scale, method):
+def _embedded_step(rhs, y, dt, scale, method, t=None):
     """Dormand-Prince solution and its error norm (<= 1 accepts) against ``scale``."""
     from diffrax import Dopri5, Dopri8
 
     tableau = (Dopri8 if method == "adaptive8" else Dopri5).tableau
-    stages = [rhs(y)]
-    for weights in tableau.a_lower:
-        stages.append(rhs(y + dt * sum(a * k for a, k in zip(weights, stages) if a)))
+    evaluate = lambda state, c: rhs(state) if t is None else rhs(t+c*dt, state)
+    stages = [evaluate(y, 0.)]
+    for c, weights in zip(tableau.c, tableau.a_lower):
+        stages.append(evaluate(y + dt * sum(a * k for a, k in zip(weights, stages) if a), c))
     y1 = y + dt * sum(b * k for b, k in zip(tableau.b_sol, stages) if b)
     error = dt * sum(e * k for e, k in zip(tableau.b_error, stages) if e)
     return y1, jnp.sqrt(jnp.mean((error / scale) ** 2))
 
 
+def _axis_intersection(y0, y1, s_stop):
+    """First intersection of an accepted step's (u,w) chord with s=s_stop.
+
+    Returns a hit flag and fraction of the step. Detects a chord crossing
+    even when both endpoints are outside. Time/state interpolation needs
+    timestep and cutoff refinement, as do other accepted-step loss events.
+    """
+    position, change = y0[:2], y1[:2]-y0[:2]
+    a, b = change@change, position@change
+    safe_a = jnp.where(a > 0, a, 1.)
+    closest = position+jnp.clip(-b/safe_a, 0., 1.)*change
+    inside = position@position <= s_stop
+    hit = ((s_stop > 0) & jnp.isfinite(y1).all()
+           & (inside | ((a > 0) & (closest@closest <= s_stop))))
+    discriminant = jnp.maximum(b*b-a*(position@position-s_stop), 0.)
+    # Stable form of the entry root for a step starting outside and moving inward.
+    denominator = -b+jnp.sqrt(discriminant)
+    fraction = (position@position-s_stop)/jnp.where(denominator > 0, denominator, 1.)
+    return hit, jnp.where(inside, 0., jnp.clip(fraction, 0., 1.))
+
+
 @jax.jit
-def _start(field, y0, mu0):
+def _start(field, y0, mu0, axis_stop_s=None):
     def one(y, mu):
         s, r, theta, *_ = _chart(y)
         e0 = 0.5 * y[3] ** 2 + mu * field.modB_derivatives(r, theta, y[2])[0]
         first = jnp.array([s, theta, y[2], y[3], jnp.sqrt(2 * e0)])
+        axis = jnp.asarray(False) if axis_stop_s is None else (axis_stop_s > 0) & (s <= axis_stop_s)
         nan = jnp.full(5, jnp.nan)
-        return (y, mu, 0.0, jnp.asarray(True), -1.0, -1.0, -1.0, 0.0, e0, -1.0, 0, nan, jnp.nan), first
+        return (y, mu, 0.0, ~axis, -1.0, -1.0, -1.0, 0.0, e0, -1.0, 0,
+                jnp.where(axis, 0., -1.), nan, jnp.nan), first
 
     return jax.vmap(one)(y0, mu0)
 
 @partial(jax.jit, static_argnames=("count", "species", "method"))
 def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-             carry, keys, first_interval, count, method="rk4", tolerance=1e-8):
+             carry, keys, first_interval, count, method="rk4", tolerance=1e-8, perturbation=None,
+             axis_stop_s=None):
     def one(carry, key):
         def finish(carry, y1, h):
             """Accept ``y1`` after a step of ``h``: energy, collisions, loss and failure."""
-            y, mu, t, alive, t_loss, t_therm, t_fail, err, e0, h_next, k, terminal, terminal_err = carry
+            y, mu, t, alive, t_loss, t_therm, t_fail, err, e0, h_next, k, t_axis, terminal, terminal_err = carry
+            axis, fraction = (jnp.asarray(False), 1.) if axis_stop_s is None else _axis_intersection(y, y1, axis_stop_s)
+            axis &= alive
+            y1 = jnp.where(axis, y+fraction*(y1-y), y1)
+            stopped_at = t+jnp.where(axis, fraction*h, h)
             s1, r1, th1, *_ = _chart(y1)
             B1 = field.modB_derivatives(r1, th1, y1[2])[0]
             e_orbit = 0.5 * y1[3] ** 2 + mu * B1
@@ -382,22 +458,30 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             exterior = jnp.array([s1, th1, y1[2], y1[3], jnp.sqrt(2 * e_orbit)])
             thermal = jnp.asarray(False)
             if species is not None:
-                v = jnp.sqrt(2 * e_orbit)
-                point = jnp.array([s1, th1, y1[2]])
-                v, lam = collision_kick(species, mass, charge, v, y1[3] / v, point, h,
-                                        jax.random.normal(jax.random.fold_in(key, k), (2,)))
-                y1 = y1.at[3].set(lam * v)
-                mu1 = v * v * (1 - lam * lam) / (2 * B1)
-                t_bulk = species.get_temperature(0, point) * JOULE_PER_EV
-                thermal = 0.5 * mass * v * v < thermal_cutoff * t_bulk
-                e0_new = 0.5 * v * v
+                def kick(_):
+                    v = jnp.sqrt(2 * e_orbit)
+                    point = jnp.array([s1, th1, y1[2]])
+                    v, lam = collision_kick(species, mass, charge, v, y1[3] / v, point, h,
+                                            jax.random.normal(jax.random.fold_in(key, k), (2,)))
+                    new_mu = v * v * (1 - lam * lam) / (2 * B1)
+                    t_bulk = species.get_temperature(0, point) * JOULE_PER_EV
+                    return y1.at[3].set(lam*v), new_mu, .5*v*v, .5*mass*v*v < thermal_cutoff*t_bulk
+
+                if axis_stop_s is None:
+                    y1, mu1, e0_new, thermal = kick(None)
+                else:
+                    # Freeze singular-mode axis stops before another collision kick.
+                    y1, mu1, e0_new, thermal = jax.lax.cond(alive & ~axis, kick,
+                        lambda _: (y1, mu, e0, jnp.asarray(False)), None)
             else:
                 mu1, e0_new = mu, e0
             finite = (jnp.isfinite(y1).all() & jnp.isfinite(mu1) &
                       jnp.isfinite(e_orbit) & jnp.isfinite(e0_new) &
                       jnp.isfinite(B1) & (B1 > 0))
             lost = alive & finite & (s1 >= 1.0)
+            axis &= finite
             failed = alive & ~lost & ~finite
+            t_axis = jnp.where(axis, stopped_at, t_axis)
             t_fail = jnp.where(failed, t + h, t_fail)
             err = jnp.where(alive & finite & ~lost, jnp.maximum(err, step_err), err)
             err = jnp.where(alive & ~finite, jnp.inf, err)
@@ -410,15 +494,19 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             y = jnp.where(keep & ~lost, y1, y)
             mu = jnp.where(keep & ~lost, mu1, mu)
             e0 = jnp.where(keep & ~lost, e0_new, e0)
-            return (y, mu, t + h, keep & ~lost, t_loss, t_therm, t_fail, err, e0, h_next, k + 1,
+            return (y, mu, t + h, keep & ~lost & ~axis, t_loss, t_therm, t_fail, err, e0, h_next, k + 1, t_axis,
                     terminal, terminal_err)
 
         def rhs_of(carry):
             mu = carry[1]
+            if perturbation is not None:
+                return lambda t, state: guiding_center_rhs(field, state, mu, mass, charge,
+                                                           t=t, perturbation=perturbation)
             return lambda state: guiding_center_rhs(field, state, mu, mass, charge)
 
         def fixed(carry):
-            return finish(carry, _rk_step(rhs_of(carry), carry[0], dt, method), dt)
+            return finish(carry, _rk_step(rhs_of(carry), carry[0], dt, method,
+                                          t=carry[2] if perturbation is not None else None), dt)
 
         order = 8 if method == "adaptive8" else 5
 
@@ -429,7 +517,8 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
                 y, t, h = carry[0], carry[2], carry[9]
                 h_try = jnp.minimum(h, t_end - t)
                 scale = tolerance * jnp.array([1.0, 1.0, 1.0, jnp.sqrt(2 * carry[8])])
-                y1, norm = _embedded_step(rhs_of(carry), y, h_try, scale, method)
+                y1, norm = _embedded_step(rhs_of(carry), y, h_try, scale, method,
+                                          t=t if perturbation is not None else None)
                 ok = jnp.isfinite(norm) & (norm <= 1.0)
                 safe = jnp.where(jnp.isfinite(norm) & (norm > 0), norm, jnp.where(ok, 0.0, 1e10))
                 grow = jnp.clip(0.9 * safe ** (-1 / order), 0.1, 5.0)
@@ -472,7 +561,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep=None,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=True, compact=True, method="dopri8", tolerance=1e-8):
+                 progress=True, compact=True, method="dopri8", tolerance=1e-8, perturbation=None):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The default ``timestep`` is ``R0 / (2 nfp speed)``, with ``R0 = |G| / |B|`` on the
@@ -497,7 +586,27 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     ``"adaptive"`` (Dopri5) and ``"adaptive8"`` (Dopri8) control each particle's step so the embedded error
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.
+
+    ``perturbation`` accepts a ``BoozerPerturbation`` from essos.perturbations.
+    ``speed`` may be a positive scalar or one positive birth speed per marker
+    (needed to initialize sections at a common wave-frame invariant).
+    Every RK stage uses its own physical time. With modes, ``energy_error``
+    is None: physical wave work is reported as ``kinetic_energy_change``.
+    Check a wave-frame invariant in exact-QS single-mode benchmarks instead.
+    Modes plus collisions use a fixed RK orbit step followed by the existing
+    Boozer Euler-Maruyama speed/pitch kick. This is velocity-space collision
+    splitting, without GC spatial diffusion, using the main-branch collision
+    coefficients and operator.
+    A singular analytical mode can supply an inner boundary. Axis encounters
+    stop there and populate ``axis_stop_times``; ``lost`` retains LCFS exits.
+    ``loss_fractions(include_axis=True)`` additionally counts axis stops.
     """
+    if perturbation is not None:
+        from essos.perturbations import BoozerPerturbation
+        if not isinstance(perturbation, BoozerPerturbation):
+            raise TypeError("perturbation must implement BoozerPerturbation")
+        if species is not None and method.startswith("adaptive"):
+            raise ValueError("Combined perturbations and collisions require a fixed RK method")
     if method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
         raise ValueError("method must be 'rk4', 'dopri5', 'dopri8', 'adaptive' or 'adaptive8'")
     if not (np.isfinite(tolerance) and tolerance > 0):
@@ -508,15 +617,21 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         raise ValueError("Boozer births must be nonempty, one-dimensional, equally sized and finite")
     if np.any((inputs[0] < 0) | (inputs[0] >= 1)) or np.any(np.abs(inputs[3]) > 1):
         raise ValueError("Boozer births require 0 <= s < 1 and |pitch| <= 1")
-    if timestep is None and np.ndim(speed) == 0 and speed > 0:
+    try:
+        birth_speed = np.broadcast_to(np.asarray(speed, float), (n,)).copy()
+    except ValueError as exc:
+        raise ValueError("speed must be scalar or have one value per particle") from exc
+    if not np.all(np.isfinite(birth_speed) & (birth_speed > 0)):
+        raise ValueError("speed must be positive and finite")
+    if timestep is None:
         G = float(field.profiles(0.0)[0][1])
-        timestep = 0.5 * abs(G / float(field.modB(0.0, 0.0, 0.0))) / (field.nfp * float(speed))
+        timestep = 0.5 * abs(G / float(field.modB(0.0, 0.0, 0.0))) / (field.nfp * float(birth_speed.max()))
     if not (np.isfinite(tmax) and tmax > 0 and np.isfinite(timestep) and timestep > 0
             and np.ndim(n_save) == 0 and np.isfinite(n_save)
             and n_save >= 2 and n_save == int(n_save)):
         raise ValueError("tmax and timestep must be positive and finite; n_save >= 2")
-    if (not all(np.ndim(x) == 0 and np.isfinite(x) for x in (speed, mass, charge))
-            or speed <= 0 or mass <= 0 or charge == 0):
+    if (not all(np.ndim(x) == 0 and np.isfinite(x) for x in (mass, charge))
+            or mass <= 0 or charge == 0):
         raise ValueError("speed and mass must be positive; charge must be nonzero and finite")
     if progress is True and os.environ.get("ESSOS_PROGRESS", "1") != "0":
         from tqdm.auto import tqdm
@@ -528,7 +643,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     n_int = max(int(n_save) - 1, 1)
     n_sub = max(1, int(np.ceil(float(tmax) / n_int / float(timestep) - 1e-9)))
     dt = float(tmax) / (n_int * n_sub)
-    speed = jnp.full(n, float(speed))
+    speed = jnp.asarray(birth_speed)
     r = jnp.sqrt(s)
     B0 = jax.vmap(field.modB)(s, theta, zeta)
     B0_host = np.asarray(B0)
@@ -546,18 +661,19 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         sharding = NamedSharding(Mesh(np.asarray(devices[:ndev]), ("p",)), PartitionSpec("p"))
         args = [jax.device_put(a, sharding) for a in args]
     y0, mu0, keys = args
-    carry, first = _start(field, y0, mu0)
+    axis_stop_s = None if perturbation is None else perturbation.axis_stop_threshold()
+    carry, first = _start(field, y0, mu0, axis_stop_s)
     chunk = n_int if progress is None and not compact else -(-n_int // 10)
     states = np.empty((n, n_int + 1, 5), dtype=np.asarray(first).dtype)
     states[:, 0] = np.asarray(first)[:n]
-    # loss, thermalisation and failure times, interior energy error, terminal (exterior) state and its error
-    status = [np.full(n, -1.0), np.full(n, -1.0), np.full(n, -1.0), np.zeros(n),
+    # loss, thermalisation, failure and axis-stop times, interior energy error, terminal (exterior) state and its error
+    status = [np.full(n, -1.0), np.full(n, -1.0), np.full(n, -1.0), np.zeros(n), np.full(n, -1.0),
               np.full((n, 5), np.nan), np.full(n, np.nan)]
     selected = np.arange(n)
     for start in range(0, n_int, chunk):
         count = min(chunk, n_int - start)
         carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-                               carry, keys, start, count, method, tolerance)
+                               carry, keys, start, count, method, tolerance, perturbation, axis_stop_s)
         states[selected, start + 1:start + count + 1] = np.asarray(part)[:selected.size]
         if progress is not None:
             progress(start + count, n_int)
@@ -569,7 +685,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         last = start + count == n_int
         if last or (compact and size < carry[3].shape[0]):
             done = slice(None) if last else ~alive
-            for result, i in zip(status, (4, 5, 6, 7, 11, 12)):
+            for result, i in zip(status, (4, 5, 6, 7, 11, 12, 13)):
                 result[selected[done]] = np.asarray(carry[i])[:selected.size][done]
         if not last and compact and size < carry[3].shape[0]:
             # drop stopped particles and rebalance the survivors over the devices
@@ -584,6 +700,8 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
             carry, keys = jax.tree.map(lambda x: x[rows], (carry, keys))
             if ndev > 1:
                 carry, keys = jax.device_put((carry, keys), sharding)
-    t_loss, t_therm, t_fail, err, terminal, terminal_err = status
-    return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm, err, t_fail,
-                       terminal, terminal_err)
+    t_loss, t_therm, t_fail, err, t_axis, terminal, terminal_err = status
+    return BoozerTrace(np.linspace(0.0, float(tmax), n_int + 1), states, t_loss, t_therm,
+                       err if perturbation is None else None, t_fail,
+                       err if perturbation is not None else None, t_axis,
+                       terminal_states=terminal, terminal_energy_error=terminal_err)

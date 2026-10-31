@@ -20,3 +20,4 @@ stellarator coils to improve plasma confinement.
    :caption: Contents:
 
    getting_started
+   analytical_perturbations
