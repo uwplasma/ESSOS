@@ -117,7 +117,7 @@ def test_work_limits_nonfinite_and_recovery():
 
 def test_static_input_and_event_contracts():
     base=dict(t1=1.,dt0=.1)
-    invalid=[dict(method='rk4'),dict(controller='pid'),dict(max_steps=0),
+    invalid=[dict(method='rk4'),dict(controller='pid'),dict(stage_execution='x'),dict(max_steps=0),
              dict(max_steps=True),dict(dt0=0),dict(dt0=np.inf),dict(t0=np.nan),dict(t1=-1),
              dict(dtmin=-1),dict(dtmax=-1),dict(dtmin=.2),dict(dtmin=.1,dtmax=.01),
              dict(atol=0),dict(rtol=-1),dict(ts=[.7,.2]),dict(ts=[2.]),dict(ts=[[0.]]),
@@ -262,7 +262,8 @@ def test_boozer_public_native_outputs_and_failures(monkeypatch):
         original(SimpleNamespace(table=1.,sine_coef=None),1.,1.,1.,[0.,.1],.1,1e-9,1e-9,8,interpret=True)
 
 
-def test_vmec_private_values_match_current_main():
+def test_vmec_private_values_match_current_main(monkeypatch):
+    from functools import partial
     from essos.fields import Vmec
     from essos.rk import _prepare_vmec_data as prepare, _vmec_quantities as quantities, _vmec_rhs_values as rhs_values, _vmec_xyz_values as xyz_values
     from essos.dynamics import GuidingCenter,Particles,_axis_regular,_to_axis_regular
@@ -282,7 +283,10 @@ def test_vmec_private_values_match_current_main():
     np.testing.assert_allclose(xyz_values(prepared.arrays,y,prepared.tables),field.to_xyz(x),atol=3e-12)
     from essos.rk import prepare_solver
     args=dict(mass=1.,charge=1.,energy=.5,times=np.array([0.,.001]),dt0=.001,max_steps=8)
-    reference=jax.jit(prepare_solver(field,**args))(y[:5])
+    # Bound the real-equilibrium CPU reference graph: unrolled stages exhaust memory on old XLA.
+    with monkeypatch.context() as patch:
+        patch.setattr(rk,'solve_rk',partial(rk.solve_rk,stage_execution='loop'))
+        reference=jax.jit(prepare_solver(field,**args))(y[:5])
     gpu=jax.jit(prepare_solver(field,execution='cuda',interpret=True,**args))(y[:5])
     np.testing.assert_allclose(gpu.y,reference.y,atol=3e-12)
     for change in (dict(model='lorentz'),dict(execution='x'),dict(energy=-1),dict(execution='cuda',controller='pi')):

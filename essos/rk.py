@@ -228,6 +228,30 @@ def _trial(rhs, t, y, h, args, f0, nodes, rows, weights):
                     jnp.stack(tuple(jnp.stack(k) for k in increments)), jnp.stack(final))
 
 
+def _trial_loop(rhs, t, y, h, args, f0, nodes, rows, weights):
+    """The same trial with one traced stage body: slower to run, far cheaper to
+    compile for large right-hand sides (e.g. a VMEC equilibrium) on CPU XLA."""
+    n = len(weights)
+    coefficients = np.zeros((n - 2, n - 1))
+    for i, row in enumerate(rows[:-1]):
+        coefficients[i, :len(row)] = row
+    coefficients = jnp.asarray(coefficients, dtype=y.dtype)
+    times = jnp.asarray(nodes[:-1], dtype=y.dtype)
+    endpoint_weights = jnp.asarray(rows[-1], dtype=y.dtype)
+    bank = jnp.concatenate([(h * f0)[None], jnp.zeros((n - 2,) + y.shape, y.dtype)])
+
+    def stage(i, bank):
+        point = y + jnp.tensordot(coefficients[i - 1], bank, axes=1)
+        increment = h * rhs(t + times[i - 1] * h, point, args)
+        return lax.dynamic_update_index_in_dim(bank, increment, i, axis=0)
+
+    bank = lax.fori_loop(1, n - 1, stage, bank)
+    endpoint = y + jnp.tensordot(endpoint_weights, bank, axes=1)
+    final = rhs(t + h, endpoint, args)
+    error = jnp.tensordot(jnp.asarray(weights[:-1], dtype=y.dtype), bank, axes=1) + weights[-1] * (h * final)
+    return _RKTrial(endpoint, error, jnp.concatenate([bank, (h * final)[None]]), final)
+
+
 def _prepare_rhs(rhs, t0, y0, args):
     """Separate solve-invariant work from the time/state-dependent RHS.
 
@@ -265,7 +289,7 @@ def _first_hit(hits):
 def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                rtol=1e-9, atol=1e-9, event=None, root_find=True,
                max_steps=1_000_000, dtmin=0., dtmax=np.inf, method="dopri5",
-               error_norm=None, controller="i", pcoeff=.4, icoeff=.3):
+               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, stage_execution="unrolled"):
     """Integrate an array state forward in time with bounded adaptive retries.
 
     ``method`` selects ``"dopri5"`` (Dormand-Prince 5(4)) or ``"dopri8"``
@@ -291,6 +315,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     uses ``dt0`` (bounded by dtmax and t1), and still supplies dense output/events.
     ``max_steps`` counts accepted and rejected trials. Failures return a status;
     no inaccurate step is forced through a minimum step-size limit.
+    ``stage_execution="loop"`` compiles one stage body instead of unrolling the
+    stages, which bounds compile time and memory for very large right-hand sides.
 
     Concrete invalid inputs raise ValueError. Invalid dynamic values under JIT
     return INVALID_INPUT. Non-finite states, derivatives or event values are
@@ -299,8 +325,9 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     if method not in _METHODS:
         raise ValueError("method must be 'dopri5' or 'dopri8'")
     nodes, rows, weights, dense_coefficients, error_order = _METHODS[method]
-    if controller not in ("i", "pi"):
-        raise ValueError("controller must be 'i' or 'pi'")
+    if controller not in ("i", "pi") or stage_execution not in ("loop", "unrolled"):
+        raise ValueError("controller must be 'i' or 'pi'; stage_execution 'loop' or 'unrolled'")
+    trial_step = _trial_loop if stage_execution == "loop" else _trial
     if isinstance(max_steps, (bool, np.bool_)) or not isinstance(max_steps, (int, np.integer)) or max_steps <= 0:
         raise ValueError("max_steps must be a positive integer")
     y0 = jnp.asarray(y0)
@@ -396,7 +423,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
             # leave a tiny remainder even when the interval is exactly N*h0.
             end_t = jnp.minimum(t0 + (s["accepted"] + 1) * jnp.minimum(h0, dtmax), t1)
             h = end_t - t
-        trial = _trial(rhs, t, y, h, args, s["f"], nodes, rows, weights)
+        trial = trial_step(rhs, t, y, h, args, s["f"], nodes, rows, weights)
         finite = (jnp.isfinite(trial.y).all() & jnp.isfinite(trial.increments).all() &
                   jnp.isfinite(trial.f1).all() & jnp.isfinite(trial.error).all())
         if adaptive:
