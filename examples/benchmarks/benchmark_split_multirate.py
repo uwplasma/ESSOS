@@ -24,7 +24,7 @@ from scipy.stats import kstest, norm
 from .validate_beam_relaxation import estimate, statistics
 from .nonrelativistic_collision_reference import ProtonBackground
 from .thermal_relaxation_reference import RelaxationReference, PhysicalRelaxationReference, impact_coefficients
-from .lorentz_spatial_reference import guiding_center_msd
+from .lorentz_collision_reference import guiding_center_msd
 
 PARAMETERS = dict(particles=512, batch_size=64, seed=7706, horizon=.1, saves=5,
     omegas=[128., 512., 2048.], caps=[.0025, .00125], tolerance=.001,
@@ -225,7 +225,7 @@ def main():
     report['source_sha256']={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in (
         'essos/split.py','essos/background_species.py','essos/rk.py',
         'examples/benchmarks/benchmark_split_multirate.py','examples/benchmarks/thermal_relaxation_reference.py',
-        'examples/benchmarks/lorentz_spatial_reference.py','examples/benchmarks/nonrelativistic_collision_reference.py')}
+        'examples/benchmarks/lorentz_collision_reference.py','examples/benchmarks/nonrelativistic_collision_reference.py')}
     save = lambda: (folder/'comparison.json').write_text(json.dumps(report, indent=2)+'\n')
     references={}
     for model in options.models:

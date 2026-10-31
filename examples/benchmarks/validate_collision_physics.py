@@ -30,7 +30,6 @@ def constant_log_coefficients(speed, *, full_orbit=False):
 def thermal_solver(model, method, horizon, times, *, coefficient_law=constant_log_coefficients):
     """Use the actual native collision maps and driver for the analytic control."""
     gc, adaptive = (model == 'gc', method != 'fixed')
-    controller = method if adaptive else 'conservative'
 
     def batch(initial, keys, tolerance, cap, first):
 
@@ -39,7 +38,7 @@ def thermal_solver(model, method, horizon, times, *, coefficient_law=constant_lo
             def kick(t, y, h, dw, args):
                 speed = y[3] if gc else jnp.linalg.norm(y)
                 c = coefficient_law(speed, full_orbit=not gc)
-                kwargs = dict(tolerance=tolerance, return_error_model=adaptive and controller == 'candidate')
+                kwargs = dict(tolerance=tolerance)
                 if gc:
                     trial = guiding_center_collision_step(speed, y[4], h, dw[-2:], c, speed_floor=0.05 * np.sqrt(2.0), **kwargs)
                     dx = guiding_center_spatial_increment(y[4], dw[:3], c, jnp.array([0.0, 0.0, 1.0]), 1.0)
@@ -47,7 +46,7 @@ def thermal_solver(model, method, horizon, times, *, coefficient_law=constant_lo
                     value = value.at[5].add(4 * guiding_center_spatial_diffusion(y[4], c, 1.0) * h)
                     return trial._replace(y=value)
                 return particle_collision_step(y, h, dw, c, **kwargs)
-            return solve_split(lambda t, y, a: jnp.zeros_like(y), kick, y0, t1=horizon, dt0=first, dtmax=cap, ts=jnp.asarray(times), key=key, noise_dim=5 if gc else 3, adaptive=adaptive, collision_controller=controller, collision_wiener_norm=(lambda w: jnp.linalg.norm(w[-2:])) if gc else lambda w: abs(w[2]), method='dopri5', max_steps=100000)
+            return solve_split(lambda t, y, a: jnp.zeros_like(y), kick, y0, t1=horizon, dt0=first, dtmax=cap, ts=jnp.asarray(times), key=key, noise_dim=5 if gc else 3, adaptive=adaptive, method='dopri5', max_steps=100000)
         return jax.vmap(one)(initial, keys)
     return jax.jit(batch)
 

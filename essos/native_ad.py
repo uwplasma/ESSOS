@@ -11,9 +11,9 @@ import jax.numpy as jnp
 import numpy as np
 from jax import lax, tree_util, ad_checkpoint
 from jax._src.interpreters import partial_eval
-from jax.extend.core import Literal
+from jax.extend.core import ClosedJaxpr, Literal
 from jax.custom_derivatives import SymbolicZero, custom_vjp_primal_tree_values
-from .rk import (solve_rk, _trial_step, _trial_unrolled, _C, _A, _ERROR,
+from .rk import (solve_rk, _trial_step, _C, _A, _ERROR,
     _C8, _A8, _ERROR8, _rk45_dense, _dopri8_dense, _RKTrial, RKStatus,
     _evaluate_inline, _bind_primitive)
 from .split import solve_split, SplitStatus
@@ -26,8 +26,11 @@ def gpu_jit_options():
     return ({'compiler_options':{'xla_gpu_enable_command_buffer':''}}
             if jax.default_backend()=='gpu' else {})
 
-def _select_trial_step(execution):
-    return _trial_unrolled if execution == 'unrolled' else _trial_step
+def _tableau(method):
+    """Nodes, stage rows and error weights, with the matching dense output."""
+    if method == "dopri5":
+        return (_C, _A, _ERROR), _rk45_dense
+    return (_C8, _A8, _ERROR8), _dopri8_dense
 
 def _contains_custom_rule(graph):
     """Find opaque derivative rules, including calls nested in control flow."""
@@ -47,7 +50,6 @@ def _partition_graph(graph, unknowns):
     # never transform their bodies. Parameter-only calls still move to setup,
     # avoiding pullbacks of fixed discretization data inside the stage VJP.
     if _contains_custom_rule(graph.jaxpr):
-        from jax.extend.core import ClosedJaxpr, Literal
         if not all(unknowns):
             raise ValueError("opaque RHS partition expects state/time inputs")
         examples = [jax.ShapeDtypeStruct(var.aval.shape, var.aval.dtype) for var in graph.jaxpr.invars]
@@ -304,7 +306,7 @@ def prepare_reverse_rhs(prepare, evaluate, t, y, raw, *, specialize_biot_savart=
     return prepare_values, rhs
 
 
-def prepare_rhs_linearization(rhs, t, y, parameters, *, cache_field_outputs=True):
+def prepare_rhs_linearization(rhs, t, y, parameters):
     """Return ``(evaluate, pullback, initial_cache)`` or None for cheap RHSs.
 
     ``evaluate(t, y)`` returns the original RHS and compact residuals.
@@ -313,13 +315,11 @@ def prepare_rhs_linearization(rhs, t, y, parameters, *, cache_field_outputs=True
     derivative. Other steps reuse the preceding endpoint derivative in AD.
     Named small Biot--Savart outputs remain visible even when their reductions
     are hidden behind a custom JVP. Large geometry arrays are rematerialized.
-    ``cache_field_outputs=False`` isolates this retention in internal benchmarks.
     """
     selected = []
 
     def save_compact_value(primitive, *avals, **params):
-        if (cache_field_outputs and primitive.name == "name"
-                and params.get("name") == "native_biot_savart_output"):
+        if primitive.name == "name" and params.get("name") == "native_biot_savart_output":
             keep = len(avals) == 1 and np.prod(avals[0].shape) <= 12
             if keep:
                 selected.append(True)
@@ -439,8 +439,7 @@ def _step_pullback(rhs, y, t, h, endpoint, increments, parameters,
     live at a time, rather than every stage's field intermediates. The reverse
     recurrence includes all stage dependencies; stages are not frozen in AD.
     """
-    nodes, rows, _ = (_C, _A, _ERROR) if method == "dopri5" else (_C8, _A8, _ERROR8)
-    dense = _rk45_dense if method == "dopri5" else _dopri8_dense
+    (nodes, rows, _), dense = _tableau(method)
     def outputs(y, endpoint, increments, parameters):
         terminal = dense(y, endpoint, increments, fraction)
         samples = jax.vmap(lambda s: dense(y, endpoint, increments, s))(sample_fractions)
@@ -511,6 +510,53 @@ def _trial_with_residuals(linearize, t, y, h, f0, constants, initial_cache):
     return trial, cache
 
 
+def _reverse_segment(rhs, parameters, linearization, method, steps, extras, start, stop, y, f, t0, by, bf, dp,
+                     pull, initial_cache, segment, first):
+    """Rebuild the RK stages of accepted steps ``[start, stop)`` from one checkpoint, then transpose them.
+
+    ``steps(i, t)`` gives the step's ``(time, size)`` (``t`` is the running time, starting at ``t0``) and
+    ``extras(i, t, h)`` its ``(fraction, sample_fractions, owned, saved_bar)``. ``pull`` maps a
+    step's prepared-parameter bar into the accumulator ``dp``. Stage vectors and compact RHS
+    residuals of one segment are live at a time; ``first`` marks the step that owns the initial FSAL.
+    """
+    constants = _tableau(method)[0]
+    n, stages = y.size, len(constants[2])
+    banks = (jnp.zeros((segment, n), y.dtype), jnp.zeros((segment, n), y.dtype),
+             jnp.zeros((segment, stages, n), y.dtype), jnp.zeros((segment, 2), y.dtype),
+             tree_util.tree_map(lambda r: jnp.zeros((segment, stages)+r.shape, r.dtype), initial_cache))
+
+    def reconstruct(c):
+        i, t, y, f, (states, endpoints, increments, times, cache) = c
+        slot = i-start
+        t, h = steps(i, t)
+        if linearization is None:
+            trial, residuals = _trial_step(rhs, t, y, h, parameters, f, *constants), ()
+        else:
+            trial, residuals = _trial_with_residuals(linearization[0], t, y, h, f, constants, initial_cache)
+        cache = tree_util.tree_map(lambda buffer, r: buffer.at[slot].set(r), cache, residuals)
+        # An event can only end the last accepted step; no later slot consumes its full endpoint.
+        return i+1, t+h, trial.y, trial.f1, (states.at[slot].set(y), endpoints.at[slot].set(trial.y),
+            increments.at[slot].set(trial.increments), times.at[slot].set(jnp.stack([t, h])), cache)
+
+    *_, (states, endpoints, increments, times, cache) = lax.while_loop(
+        lambda c: c[0] < stop, reconstruct, (start, t0, y, f, banks))
+
+    def reverse_step(c):
+        i, by, bf, dp = c
+        i -= 1
+        slot = i-start
+        t, h = times[slot]
+        fraction, sample_fractions, owned, saved_bar = extras(i, t, h)
+        cached = None if linearization is None else (lambda stage, seed: linearization[1](
+            tree_util.tree_map(lambda buffer: buffer[slot, stage], cache), seed))
+        dy, df, contribution = _step_pullback(rhs, states[slot], t, h, endpoints[slot], increments[slot], parameters,
+            fraction, sample_fractions, owned, by, bf, saved_bar, method, initial_fsal=(i == first), cached_pullback=cached)
+        return i, dy, df, _add(dp, pull(contribution))
+
+    _, by, bf, dp = lax.while_loop(lambda c: c[0] > start, reverse_step, (stop, by, bf, dp))
+    return by, bf, dp
+
+
 def solve_accepted(rhs, y0, args=None, **options):
     """Return the original forward result with an accepted-step reverse rule.
 
@@ -552,7 +598,6 @@ def solve_accepted(rhs, y0, args=None, **options):
 
     converted_forward, driver_constants = _convert_all(forward, y0, prepare(raw_parameters))
     controls = (driver_constants, t0, ts)
-    constants = (_C, _A, _ERROR) if options.get("method", "dopri5") == "dopri5" else (_C8, _A8, _ERROR8)
     method = options.get("method", "dopri5")
 
     @jax.custom_vjp
@@ -584,75 +629,26 @@ def solve_accepted(rhs, y0, args=None, **options):
         backward_rhs=lambda t,y,p:original_rhs(t,y,_freeze_fixed(p,parameter_flags))
         _, t0, ts = controls
         linearization = prepare_rhs_linearization(backward_rhs, t0, initial, parameters)
-        if linearization is None:
-            initial_cache = ()
-        else:
-            linearize, rhs_pullback, initial_cache = linearization
+        initial_cache = () if linearization is None else linearization[2]
         sample_indices = jnp.arange(len(ts))
         terminal_bar = jnp.zeros_like(initial) if isinstance(bar.y, SymbolicZero) else bar.y
         saved_bar = jnp.zeros((len(ts), initial.size), initial.dtype) if isinstance(bar.ys, SymbolicZero) else bar.ys
 
-        def replay_trial(t, y, h, f):
-            if linearization is None:
-                return _trial_step(backward_rhs, t, y, h, parameters, f, *constants), ()
-            return _trial_with_residuals(linearize, t, y, h, f, constants, initial_cache)
-
-        def reverse_step(carry, y, t, endpoint, increments, cache):
-            i, by, bf, bp = carry
-            i = i-1
-            h = tape.step_sizes[i]
-            fraction = jnp.where(i == tape.count-1, tape.fraction, 1.)
-            end_time = jnp.where(i == tape.count-1, tape.final_time, t+h)
-            owned = (ts > t) & (ts <= end_time)
-            sample_fractions = jnp.where(owned, (ts-t)/h, 0.)
-            def cached_pullback(index, seed):
-                return rhs_pullback(tree_util.tree_map(lambda buffer: buffer[index], cache), seed)
-            dy, df, dp = _step_pullback(backward_rhs, y, t, h, endpoint, increments, parameters,
-                fraction, sample_fractions, owned, by, bf, saved_bar, method,
-                initial_fsal=(i == 0), cached_pullback=None if linearization is None else cached_pullback)
-            contribution = setup_pullback(dp)[0] if parameter_accumulation == "step" else dp
-            return i, dy, df, _add(bp, contribution)
-
         def reverse_segment(carry):
-            end = carry[0]
+            end, by, bf, bp = carry
             segment = jnp.maximum((end-1) // checkpoint_steps, 0)
             start = segment*checkpoint_steps
-            y, f = tape.states[segment], tape.derivatives[segment]
-            t = tape.times[segment]
-            if checkpoint_steps == 1:
-                trial, cache = replay_trial(t, y, tape.step_sizes[start], f)
-                return reverse_step(carry, y, t, trial.y, trial.increments, cache)
-
-            # Reconstruct the segment once. Cache RK stage vectors and compact
-            # RHS reductions; field-sized arrays are rematerialized.
+            def extras(i, t, h):
+                last = i == tape.count-1
+                owned = (ts > t) & (ts <= jnp.where(last, tape.final_time, t+h))
+                return jnp.where(last, tape.fraction, 1.), jnp.where(owned, (ts-t)/h, 0.), owned, saved_bar
+            pull = (lambda dp: setup_pullback(dp)[0]) if parameter_accumulation == "step" else (lambda dp: dp)
             # Rejections and adaptation are absent from this RK reverse replay.
-            states = jnp.zeros((checkpoint_steps, initial.size), initial.dtype)
-            endpoints = jnp.zeros_like(states)
-            increments = jnp.zeros((checkpoint_steps, len(constants[2]), initial.size), initial.dtype)
-            times = jnp.zeros((checkpoint_steps,), initial.dtype)
-            cache = tree_util.tree_map(lambda r: jnp.zeros(
-                (checkpoint_steps, len(constants[2]))+r.shape, r.dtype), initial_cache)
-            def reconstruct(local):
-                i, t, y, f, states, endpoints, increments, times, cache = local
-                slot = i-start
-                states = states.at[slot].set(y)
-                times = times.at[slot].set(t)
-                h = tape.step_sizes[i]
-                trial, residuals = replay_trial(t, y, h, f)
-                cache = tree_util.tree_map(lambda buffer, r: buffer.at[slot].set(r), cache, residuals)
-                endpoints = endpoints.at[slot].set(trial.y)
-                increments = increments.at[slot].set(trial.increments)
-                # An event can only terminate the last accepted step. Its
-                # full endpoint is harmless here: no later slot consumes it.
-                return i+1, t+h, trial.y, trial.f1, states, endpoints, increments, times, cache
-            _, _, _, _, states, endpoints, increments, times, cache = lax.while_loop(
-                lambda local: local[0] < end, reconstruct,
-                (start, t, y, f, states, endpoints, increments, times, cache))
-            def local_reverse(local):
-                index = local[0]-1-start
-                return reverse_step(local, states[index], times[index], endpoints[index], increments[index],
-                                    tree_util.tree_map(lambda buffer: buffer[index], cache))
-            return lax.while_loop(lambda local: local[0] > start, local_reverse, carry)
+            by, bf, bp = _reverse_segment(backward_rhs, parameters, linearization, method,
+                lambda i, t: (t, tape.step_sizes[i]), extras, start, end, tape.states[segment],
+                tape.derivatives[segment], tape.times[segment], by, bf, bp, pull, initial_cache,
+                checkpoint_steps, 0)
+            return start, by, bf, bp
 
         def reverse(carry):
             if parameter_accumulation == "step":
@@ -678,12 +674,10 @@ def solve_accepted(rhs, y0, args=None, **options):
     return integrate(y0, raw_parameters, controls)
 
 
-def replay_accepted(rhs, y0, args, tape, ts, *, method='dopri8', stage_execution='loop'):
+def replay_accepted(rhs, y0, args, tape, ts, *, method='dopri8'):
     """Independent JVP/FD oracle: propagate new inputs on the frozen grid."""
     tape = tree_util.tree_map(lax.stop_gradient, tape)
-    dense = _rk45_dense if method == 'dopri5' else _dopri8_dense
-    constants = (_C, _A, _ERROR) if method == 'dopri5' else (_C8, _A8, _ERROR8)
-    trial_step = _select_trial_step(stage_execution)
+    constants, dense = _tableau(method)
     ts = lax.stop_gradient(jnp.asarray(ts))
     y0 = jnp.asarray(y0)
     t0 = tape.times[0]
@@ -691,7 +685,7 @@ def replay_accepted(rhs, y0, args, tape, ts, *, method='dopri8', stage_execution
     def step(c):
         i,t,y,f,saved=c
         h=tape.step_sizes[i]
-        trial=trial_step(rhs,t,y,h,args,f,*constants)
+        trial=_trial_step(rhs,t,y,h,args,f,*constants)
         end=jnp.where(i==tape.count-1,tape.final_time,t+h)
         fraction=jnp.where(i==tape.count-1,tape.fraction,1.)
         owned=(ts>t)&(ts<=end)
@@ -778,18 +772,16 @@ def _state_projection(prepare, evaluate, raw, *examples):
     return prepare_state,state
 
 
-def _orbit_replay(rhs, initial, parameters, tape, index, method, stage_execution="loop"):
+def _orbit_replay(rhs, initial, parameters, tape, index, method):
     """Forward-only oracle; propagate new physical inputs on the frozen grid."""
-    trial_step = _select_trial_step(stage_execution)
-    constants = (_C, _A, _ERROR) if method == "dopri5" else (_C8, _A8, _ERROR8)
-    dense = _rk45_dense if method == "dopri5" else _dopri8_dense
+    constants, dense = _tableau(method)
     start, end = tape.offsets[index], tape.offsets[index+1]
     f = rhs(tape.orbit_times[start, 0], initial, parameters)
 
     def step(local):
         i, y, f = local
         t, h = tape.orbit_times[i]
-        trial = trial_step(rhs, t, y, h, parameters, f, *constants)
+        trial = _trial_step(rhs, t, y, h, parameters, f, *constants)
         fraction = jnp.where(i == end-1, tape.fractions[index], 1.)
         terminal = dense(y, trial.y, trial.increments, fraction)
         return i+1, terminal, trial.f1
@@ -799,7 +791,7 @@ def _orbit_replay(rhs, initial, parameters, tape, index, method, stage_execution
     return final
 
 
-def replay_accepted_split(rhs, collision, initial, args, tape, ts, *, method="dopri8", stage_execution="loop"):
+def replay_accepted_split(rhs, collision, initial, args, tape, ts, *, method="dopri8"):
     """Forward-only frozen-schedule/noise oracle for finite-difference checks.
 
     New parameters propagate through every orbit and collision map. Recorded
@@ -812,7 +804,7 @@ def replay_accepted_split(rhs, collision, initial, args, tape, ts, *, method="do
 
     def advance(local):
         index, y, saved = local
-        y = _orbit_replay(rhs_bound, y, None, tape, index, method, stage_execution)
+        y = _orbit_replay(rhs_bound, y, None, tape, index, method)
         t, end = tape.times[index]
         y = lax.cond(tape.kicks[index],
             lambda y: collision(end, y, end-t, tape.increments[index], args).y,
@@ -872,7 +864,7 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
             return forward_override(initial,parameters,record=True)
         return solve_split(lambda t, y, p: orbit_rhs(t, y, p[0]),
             lambda t, y, h, dw, p: evaluate_collision((t, y, h, dw), p[1]),
-            initial, parameters, **forward_options, _recorder=_SplitRecorder.from_options(initial, forward_options))
+            initial, parameters, **forward_options, _recorder=_SplitRecorder(initial, forward_options))
 
     raw = (raw_rhs, raw_collision)
     converted_forward, driver_constants = _convert_all(forward, y0, prepare(raw))
@@ -882,7 +874,6 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
     workspace = min(options.get("max_orbit_steps", 10_000),
                     options.get("adjoint_max_orbit_steps") or options.get("max_steps", 100_000))
     method = options.get("method", "dopri8")
-    constants = (_C, _A, _ERROR) if method == "dopri5" else (_C8, _A8, _ERROR8)
 
     @jax.custom_vjp
     def integrate(initial, raw, controls):
@@ -915,10 +906,6 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
         original_rhs=backward_rhs
         backward_rhs=lambda t,y,p:original_rhs(t,y,_freeze_fixed(p,rhs_flags))
         linearization = prepare_rhs_linearization(backward_rhs, t0, initial, rp)
-        if linearization is not None:
-            linearize, rhs_pullback, initial_cache = linearization
-        else:
-            initial_cache = ()
         csp, collision_setup_pullback = jax.vjp(
             lambda values:prepare_collision_state(active_raw(values)[1]),active)
         collision_flags=_prepared_activity(lambda values:prepare_collision_state(active_raw(values)[1]),active)
@@ -961,10 +948,10 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
             # Each collision starts a new orbit: its initial FSAL cache must
             # use this map's state, not the trajectory's original birth state.
             if collision_indices is None:
-                map_initial_cache = (linearize(tape.orbit_times[orbit_start, 0], initial)[1]
+                map_initial_cache = (linearization[0](tape.orbit_times[orbit_start, 0], initial)[1]
                                      if linearization is not None else ())
             elif linearization is not None:
-                map_initial_value, map_initial_cache = linearize(tape.orbit_times[orbit_start, 0], initial)
+                map_initial_value, map_initial_cache = linearization[0](tape.orbit_times[orbit_start, 0], initial)
             else:
                 map_initial_value = backward_rhs(tape.orbit_times[orbit_start, 0], initial, rp)
                 map_initial_cache = ()
@@ -973,60 +960,19 @@ def solve_accepted_split(rhs, collision, y0, args=None, **options):
                 stop, by, bf, bp = local
                 segment = jnp.maximum((stop-orbit_start-1) // inner_segment, 0)
                 start = orbit_start + segment*inner_segment
-                y = states[segment]
                 if collision_indices is None:
                     f = derivatives[segment]
                 else:
-                    f = (jnp.where(segment == 0, map_initial_value, derivatives[jnp.maximum(segment-1,0)])
+                    f = (jnp.where(segment == 0, map_initial_value, derivatives[jnp.maximum(segment-1, 0)])
                          if derivatives.shape[0] else map_initial_value)
-                state_bank = jnp.zeros((inner_segment, initial.size), initial.dtype)
-                endpoint_bank = jnp.zeros_like(state_bank)
-                increment_bank = jnp.zeros((inner_segment, len(constants[2]), initial.size), initial.dtype)
-                cache_bank = tree_util.tree_map(lambda value: jnp.zeros(
-                    (inner_segment, len(constants[2]))+value.shape, value.dtype), initial_cache)
-
-                def reconstruct(values):
-                    i, y, f, state_bank, endpoint_bank, increment_bank, cache_bank = values
-                    slot = i-start
-                    t, h = tape.orbit_times[i]
-                    if linearization is None:
-                        trial = _trial_step(backward_rhs, t, y, h, rp, f, *constants)
-                        residuals = ()
-                    else:
-                        trial, residuals = _trial_with_residuals(
-                            linearize, t, y, h, f, constants, map_initial_cache)
-                    cache_bank = tree_util.tree_map(
-                        lambda buffer,value: buffer.at[slot].set(value), cache_bank, residuals)
-                    return (i+1, trial.y, trial.f1, state_bank.at[slot].set(y),
-                        endpoint_bank.at[slot].set(trial.y), increment_bank.at[slot].set(trial.increments),
-                        cache_bank)
-
-                _, _, _, state_bank, endpoint_bank, increment_bank, cache_bank = lax.while_loop(
-                    lambda values: values[0] < stop, reconstruct,
-                    (start, y, f, state_bank, endpoint_bank, increment_bank, cache_bank))
-
-                def reverse_step(values):
-                    i, by, bf, dp = values
-                    i -= 1
-                    slot = i-start
-                    t, h = tape.orbit_times[i]
-                    fraction = jnp.where(i == orbit_stop-1, tape.fractions[index], 1.)
-                    def cached_pullback(stage, seed):
-                        return rhs_pullback(tree_util.tree_map(
-                            lambda buffer: buffer[slot, stage], cache_bank), seed)
-                    dy, df, contribution = _step_pullback(backward_rhs, state_bank[slot], t, h,
-                        endpoint_bank[slot], increment_bank[slot], rp, fraction,
-                        jnp.empty((0,), initial.dtype), jnp.empty((0,), bool),
-                        by, bf, jnp.empty((0, initial.size), initial.dtype), method,
-                        initial_fsal=(i == orbit_start),
-                        cached_pullback=cached_pullback if linearization is not None else None)
-                    return i, dy, df, _add(dp, contribution)
-
-                # Share the orbit-only segment policy: transpose parameter
-                # preparation once after summing the segment's prepared bars.
-                i, by, bf, dp = lax.while_loop(lambda values: values[0] > start, reverse_step,
-                    (stop, by, bf, _zeros(rp)))
-                return i, by, bf, (_add(bp[0],rhs_setup_pullback(dp)[0]),bp[1])
+                extras = lambda i, t, h: (jnp.where(i == orbit_stop-1, tape.fractions[index], 1.),
+                    jnp.empty((0,), initial.dtype), jnp.empty((0,), bool), jnp.empty((0, initial.size), initial.dtype))
+                # Transpose parameter preparation once, after summing the segment's prepared bars.
+                by, bf, dp = _reverse_segment(backward_rhs, rp, linearization, method,
+                    lambda i, t: tuple(tape.orbit_times[i]), extras, start, stop, states[segment], f,
+                    jnp.zeros((), initial.dtype), by, bf, _zeros(rp), lambda dp: dp, map_initial_cache,
+                    inner_segment, orbit_start)
+                return start, by, bf, (_add(bp[0], rhs_setup_pullback(dp)[0]), bp[1])
 
             _, by, _, bp = lax.while_loop(lambda values: values[0] > orbit_start,
                 reverse_orbit_segment, (orbit_stop, by, jnp.zeros_like(initial), bp))
@@ -1109,100 +1055,78 @@ def _validate_ad_sizes(**values):
 
 class _SplitRecorder:
     """Flat accepted inner schedules, independent retained noise and sparse nodes."""
-    @classmethod
-    def from_options(cls, initial, options):
-        result=cls()
-        result.options=options
-        result.y0=initial
-        _validate_ad_sizes(**{k:v for k,v in options.items() if k.startswith('adjoint_')})
-        return result
+    def __init__(self, initial, options):
+        _validate_ad_sizes(**{k: v for k, v in options.items() if k.startswith('adjoint_')})
+        max_steps = options.get('max_steps', 100000)
+        self.y0, self.noise_dim = initial, options['noise_dim']
+        self.outer = min(max_steps, options.get('adjoint_max_accepted_steps') or max_steps)
+        self.inner = options.get('adjoint_max_orbit_steps') or max_steps
+        self.outer_segment = options.get('adjoint_checkpoint_steps', 16)
+        self.inner_segment = options.get('adjoint_orbit_checkpoint_steps', 16)
+        self.indices = options.get('_collision_state_indices')
 
-    def initialize(self,s):
-        y0=self.y0; o=self.options
-        max_steps=o.get('max_steps',100000); noise_dim=o['noise_dim']
-        adjoint_max_accepted_steps=o.get('adjoint_max_accepted_steps')
-        adjoint_max_orbit_steps=o.get('adjoint_max_orbit_steps')
-        adjoint_checkpoint_steps=o.get('adjoint_checkpoint_steps',16)
-        adjoint_orbit_checkpoint_steps=o.get('adjoint_orbit_checkpoint_steps',16)
-        _collision_state_indices=o.get('_collision_state_indices')
-        outer_capacity = min(max_steps, adjoint_max_accepted_steps or max_steps)
-        inner_capacity = adjoint_max_orbit_steps or max_steps
-        checkpoints = (outer_capacity + adjoint_checkpoint_steps - 1) // adjoint_checkpoint_steps
-        inner_segment = adjoint_orbit_checkpoint_steps
-        # Sum ceil(n_map / inner_segment) <= ceil(total / inner_segment) + maps - 1.
-        # Only committed maps consume this flat bank; rejected outer trials
-        # retain their original Brownian bookkeeping and discard trial nodes.
-        if _collision_state_indices is None:
-            node_capacity = (inner_capacity+inner_segment-1)//inner_segment+outer_capacity-1
+    def initialize(self, s):
+        y0, outer, inner, segment = self.y0, self.outer, self.inner, self.inner_segment
+        if self.indices is None:
+            # Sum ceil(n_map / segment) <= ceil(total / segment) + maps - 1. Only
+            # committed maps use this flat bank; rejected trials discard their nodes.
+            nodes = (inner+segment-1)//segment+outer-1
+            derivatives, endpoint_size = nodes, y0.size
         else:
-            # A nonempty map needs at least one inner step. This bounds the
-            # total checkpoints without reserving impossible map/step pairs.
-            nonempty_maps = min(outer_capacity, inner_capacity)
-            node_capacity = nonempty_maps+(inner_capacity-nonempty_maps)//inner_segment
-        endpoint_size = y0.size if _collision_state_indices is None else len(_collision_state_indices)
-        derivative_capacity = (node_capacity if _collision_state_indices is None else
-                               (inner_capacity-1)//inner_segment)
-        s.update(ad_checkpoint_offsets=jnp.zeros((outer_capacity+1,), jnp.int32),
-            ad_orbit_states=jnp.zeros((node_capacity, y0.size), y0.dtype),
-            ad_orbit_derivatives=jnp.zeros((derivative_capacity, y0.size), y0.dtype),
-            ad_orbit_endpoints=jnp.zeros((outer_capacity, endpoint_size), y0.dtype),
+            # A nonempty map needs at least one inner step, which bounds the total
+            # checkpoints without reserving impossible map/step pairs.
+            nonempty = min(outer, inner)
+            nodes = nonempty+(inner-nonempty)//segment
+            derivatives, endpoint_size = (inner-1)//segment, len(self.indices)
+        s.update(ad_checkpoint_offsets=jnp.zeros((outer+1,), jnp.int32),
+            ad_orbit_states=jnp.zeros((nodes, y0.size), y0.dtype),
+            ad_orbit_derivatives=jnp.zeros((derivatives, y0.size), y0.dtype),
+            ad_orbit_endpoints=jnp.zeros((outer, endpoint_size), y0.dtype),
             ad_checkpoint_count=jnp.array(0, jnp.int32),
-            ad_times=jnp.zeros((outer_capacity, 2), y0.dtype),
-            ad_dw=jnp.zeros((outer_capacity, noise_dim), y0.dtype),
-            ad_kicks=jnp.zeros((outer_capacity,), bool),
-            ad_offsets=jnp.zeros((outer_capacity+1,), jnp.int32),
-            ad_orbit_times=jnp.zeros((inner_capacity, 2), y0.dtype),
-            ad_fractions=jnp.ones((outer_capacity,), y0.dtype),
-            ad_states=jnp.zeros((checkpoints, y0.size), y0.dtype),
+            ad_times=jnp.zeros((outer, 2), y0.dtype),
+            ad_dw=jnp.zeros((outer, self.noise_dim), y0.dtype),
+            ad_kicks=jnp.zeros((outer,), bool),
+            ad_offsets=jnp.zeros((outer+1,), jnp.int32),
+            ad_orbit_times=jnp.zeros((inner, 2), y0.dtype),
+            ad_fractions=jnp.ones((outer,), y0.dtype),
+            ad_states=jnp.zeros(((outer+self.outer_segment-1)//self.outer_segment, y0.size), y0.dtype),
             ad_count=jnp.array(0), ad_orbit_count=jnp.array(0))
         return s
 
-    def record(self,s,state,accepted,orbit_event,orbit,schedule,dw):
-        o=self.options
-        outer_capacity=min(o.get('max_steps',100000),o.get('adjoint_max_accepted_steps') or o.get('max_steps',100000))
-        inner_capacity=o.get('adjoint_max_orbit_steps') or o.get('max_steps',100000)
-        inner_segment=o.get('adjoint_orbit_checkpoint_steps',16)
-        adjoint_checkpoint_steps=o.get('adjoint_checkpoint_steps',16)
-        _collision_state_indices=o.get('_collision_state_indices')
+    def record(self, s, state, accepted, orbit_event, orbit, schedule, dw):
+        segment, indices = self.inner_segment, self.indices
         committed = accepted | orbit_event
         i, k = s["ad_count"], s["ad_orbit_count"]
         def record(state):
-            def checkpoint(states):
-                return states.at[i // adjoint_checkpoint_steps].set(s["y"])
-            states = lax.cond(i % adjoint_checkpoint_steps == 0,
-                checkpoint, lambda states: states, state["ad_states"])
+            states = lax.cond(i % self.outer_segment == 0,
+                lambda states: states.at[i // self.outer_segment].set(s["y"]),
+                lambda states: states, state["ad_states"])
             orbit_times = lax.fori_loop(0, schedule.count,
                 lambda j, rows: rows.at[k+j].set(schedule.times[j]), state["ad_orbit_times"])
             node_start = s["ad_checkpoint_count"]
-            node_count = ((schedule.count+inner_segment-1)//inner_segment).astype(node_start.dtype)
-            if _collision_state_indices is None:
+            node_count = ((schedule.count+segment-1)//segment).astype(node_start.dtype)
+            if indices is None:
                 def node(j, buffers):
                     states, derivatives = buffers
                     return (states.at[node_start+j].set(schedule.states[j]),
                         derivatives.at[node_start+j].set(schedule.derivatives[j]))
-                nodes, derivatives = lax.fori_loop(0,node_count,node,
-                    (state["ad_orbit_states"],state["ad_orbit_derivatives"]))
+                nodes, derivatives = lax.fori_loop(0, node_count, node,
+                    (state["ad_orbit_states"], state["ad_orbit_derivatives"]))
             else:
-                nodes = lax.fori_loop(0,node_count,
-                    lambda j, bank:bank.at[node_start+j].set(schedule.states[j]),
-                    state["ad_orbit_states"])
-                # Every committed interval contains at least one inner
-                # step. Removing its first derivative leaves this flat
-                # offset; no second offsets array is needed.
-                derivative_start = node_start-i
-                derivative_count = jnp.maximum(node_count-1,0)
+                nodes = lax.fori_loop(0, node_count,
+                    lambda j, bank: bank.at[node_start+j].set(schedule.states[j]), state["ad_orbit_states"])
+                # Every committed interval holds at least one inner step; dropping
+                # its first derivative leaves this flat offset (no second offsets array).
                 derivatives = state["ad_orbit_derivatives"]
                 if derivatives.shape[0]:
-                    derivatives = lax.fori_loop(0,derivative_count,
-                        lambda j, bank:bank.at[derivative_start+j].set(schedule.derivatives[j+1]),
-                        derivatives)
+                    derivatives = lax.fori_loop(0, jnp.maximum(node_count-1, 0),
+                        lambda j, bank: bank.at[node_start-i+j].set(schedule.derivatives[j+1]), derivatives)
             return dict(state,
                 ad_orbit_states=nodes, ad_orbit_derivatives=derivatives,
                 ad_checkpoint_offsets=state["ad_checkpoint_offsets"].at[i+1].set(node_start+node_count),
                 ad_checkpoint_count=node_start+node_count,
                 ad_orbit_endpoints=state["ad_orbit_endpoints"].at[i].set(
-                    orbit.y if _collision_state_indices is None else
-                    orbit.y[jnp.asarray(_collision_state_indices)]),
+                    orbit.y if indices is None else orbit.y[jnp.asarray(indices)]),
                 ad_times=state["ad_times"].at[i].set(jnp.stack([s["t"], state["t"]])),
                 ad_dw=state["ad_dw"].at[i].set(dw),
                 ad_kicks=state["ad_kicks"].at[i].set(accepted),
@@ -1210,11 +1134,10 @@ class _SplitRecorder:
                 ad_orbit_times=orbit_times,
                 ad_fractions=state["ad_fractions"].at[i].set(schedule.fraction),
                 ad_states=states)
-        can_record = committed & (i < outer_capacity) & (k+schedule.count <= inner_capacity)
+        can_record = committed & (i < self.outer) & (k+schedule.count <= self.inner)
         state = lax.cond(can_record, record, lambda state: state, state)
-        state = dict(state, ad_count=i+committed.astype(i.dtype),
+        return dict(state, ad_count=i+committed.astype(i.dtype),
             ad_orbit_count=k+jnp.where(committed, schedule.count, 0))
-        return state
 
     def finish(self,s,solution,initial_saves):
         return solution,_SplitCheckpointTape(s['ad_times'],s['ad_dw'],s['ad_kicks'],
@@ -1393,11 +1316,8 @@ def _kick(y, geometry, constants, floor, h, dw, graph, nc, nq, gc, spatial_diffu
 def physical_graphs(geometry, species, floor, nc, nq, gc, *, active_coefficients=True, active_floor=True,
                     spatial_diffusion=False, coefficient_data=None):
     """Expose the exact primal and transpose graphs before kernel lowering."""
-    if coefficient_data is None:
-        coefficients = coefficient_graph(species, not gc)
-    else:
-        from jax.extend.core import ClosedJaxpr
-        coefficients = ClosedJaxpr(*coefficient_data)
+    coefficients = (coefficient_graph(species, not gc) if coefficient_data is None
+                    else ClosedJaxpr(*coefficient_data))
     constants = tuple(coefficients.consts)
     y = tuple(jnp.asarray(v, jnp.float64) for v in
         ((1.23, 0., 0., 2e5, 1e-15, 0., 0., 0.) if gc else
@@ -1408,11 +1328,9 @@ def physical_graphs(geometry, species, floor, nc, nq, gc, *, active_coefficients
         cache = B+tuple(value for row in J for value in row) if gc else B
         return _rhs_from_field(y,B,J,gc)+cache
     def trace(function, *examples):
-        from jax._src.interpreters.partial_eval import dce_jaxpr
-        from jax.extend.core import ClosedJaxpr
         leaves, structure = tree_util.tree_flatten(examples)
         graph = flatten(lambda *args: function(*tree_util.tree_unflatten(structure,args)), *leaves)
-        pruned, _ = dce_jaxpr(graph.jaxpr, [True]*len(graph.out_avals), instantiate=True)
+        pruned, _ = partial_eval.dce_jaxpr(graph.jaxpr, [True]*len(graph.out_avals), instantiate=True)
         return ClosedJaxpr(pruned, graph.consts)
     rhs_graph = trace(rhs, y, geometry)
     cache = tuple(jnp.asarray(1.) for _ in range(12 if gc else 3))
@@ -1625,7 +1543,8 @@ def reverse_kernel(terminal_state, parameters, tape, saved_bar, terminal_bar, ti
         else jnp.zeros(value.shape,jax.dtypes.float0) for i, value in enumerate(coefficients)), result[3]
 
 
-def solve_gpu_accepted(forward, initial, field, species, *, gc, speed_floor, options, arrays, spatial_diffusion):
+def solve_gpu_accepted(forward, initial, field, species, *, gc, speed_floor, options, arrays, spatial_diffusion,
+                       interpret=False):
     """Keep the current production forward and replay its physical accepted maps."""
     coefficient_model=coefficient_graph(species,not gc)
     coefficients=tuple(coefficient_model.consts)
@@ -1651,7 +1570,8 @@ def solve_gpu_accepted(forward, initial, field, species, *, gc, speed_floor, opt
             active_coefficients=any(activity.flags[6:-1]),active_floor=activity.flags[-1],
             spatial_diffusion=spatial_diffusion,coefficient_data=(coefficient_body,p[1]))
         by,bg,bc,bf=reverse_kernel(final,p,tape,saved,terminal,times,graphs[:3],gc=gc,
-            segment_steps=options.get('adjoint_orbit_checkpoint_steps',16),spatial_diffusion=spatial_diffusion)
+            segment_steps=options.get('adjoint_orbit_checkpoint_steps',16),spatial_diffusion=spatial_diffusion,
+            interpret=interpret)
         return by,(bg,bc,bf),None
     integrate.defvjp(fwd,bwd,symbolic_zeros=True)
     return integrate(initial,parameters,controls)

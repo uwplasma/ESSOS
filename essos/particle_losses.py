@@ -22,19 +22,6 @@ def mean_final_radius(trajectories, axis_r, axis_z):
     return jnp.mean(minor_radius(trajectories, axis_r, axis_z)[:, -1])
 
 
-def legacy_rcross_cost(trajectories, axis_r, axis_z):
-    """Exact main loss_particle_rcross_final reduction: time mean then norm."""
-    return jnp.linalg.norm(jnp.mean(minor_radius(trajectories, axis_r, axis_z), axis=1))
-
-
-def _sample(trajectories, stride, final_timestep_only):
-    if isinstance(stride, bool) or not isinstance(stride, int) or stride < 1:
-        raise ValueError("stride must be a positive integer")
-    if trajectories.ndim != 3 or trajectories.shape[1] == 0:
-        raise ValueError("trajectories must have shape (particles, nonempty saves, state)")
-    return trajectories[:, -1:, :] if final_timestep_only else trajectories[:, ::stride, :]
-
-
 def _loss_probabilities(trajectories, boundary, softness):
     xyz = trajectories[..., :3]
     finite = jnp.isfinite(xyz).all(axis=-1)
@@ -48,16 +35,13 @@ def _loss_probabilities(trajectories, boundary, softness):
     return safe, probability, jnp.maximum(weights, 0.)
 
 
-def classifier_loss_fraction(trajectories, boundary, softness=10., stride=1, final_timestep_only=False):
-    sampled = _sample(trajectories, stride, final_timestep_only)
-    _, probability, _ = _loss_probabilities(sampled, boundary, softness)
+def classifier_loss_fraction(trajectories, boundary, softness=10.):
+    _, probability, _ = _loss_probabilities(trajectories, boundary, softness)
     return jnp.mean(jnp.max(probability, axis=1))
 
 
-def classifier_loss_location(trajectories, target_position, boundary, softness=10.,
-                             stride=1, final_timestep_only=False):
-    sampled = _sample(trajectories, stride, final_timestep_only)
-    xyz, _, weights = _loss_probabilities(sampled, boundary, softness)
+def classifier_loss_location(trajectories, target_position, boundary, softness=10.):
+    xyz, _, weights = _loss_probabilities(trajectories, boundary, softness)
     distance = jnp.linalg.norm(xyz-jnp.asarray(target_position)[None, None, :], axis=-1)
     return jnp.sum(weights*distance)/(jnp.sum(weights)+1e-8)
 
@@ -105,12 +89,10 @@ def kinetic_components(trajectories, field, mass, birth_energy, model):
 
 
 def classifier_energy_cost(trajectories, field, mass, birth_energy, model, boundary,
-                           softness=10., stride=1, final_timestep_only=False, kind="heat_jax10"):
+                           softness=10., kind="heat_jax10"):
     if kind not in ("heat_jax10", "perpendicular_jax9", "perpendicular_jax10"):
         raise ValueError("unknown classifier energy objective")
-    sampled = _sample(trajectories, stride, final_timestep_only)
-    _, _, weights = _loss_probabilities(sampled, boundary, softness)
-    # Reconstruct mu from the original birth save before temporal subsampling.
+    _, _, weights = _loss_probabilities(trajectories, boundary, softness)
     valid = jnp.isfinite(trajectories).all(axis=-1)
     safe = jnp.where(valid[..., None], trajectories, 0.)
     total, perpendicular, speed_perp = kinetic_components(safe, field, mass, birth_energy, model)
@@ -120,7 +102,5 @@ def classifier_energy_cost(trajectories, field, mass, birth_energy, model, bound
         value = perpendicular/(birth_energy+1e-12)
     else:
         value = perpendicular
-    selected = value[:, -1:] if final_timestep_only else value[:, ::stride]
-    mask = valid[:, -1:] if final_timestep_only else valid[:, ::stride]
-    weights = jnp.where(mask, weights, 0.)
-    return jnp.sum(weights*jnp.where(mask, selected, 0.))/(jnp.sum(weights)+1e-8)
+    weights = jnp.where(valid, weights, 0.)
+    return jnp.sum(weights*jnp.where(valid, value, 0.))/(jnp.sum(weights)+1e-8)

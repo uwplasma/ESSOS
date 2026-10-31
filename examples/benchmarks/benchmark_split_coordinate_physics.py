@@ -20,12 +20,86 @@ from essos.electric_field import Electric_field_zero
 from essos.rk import OrbitErrorNorm
 from essos.split import (solve_split,collision_coefficients,guiding_center_collision_step,
     guiding_center_spatial_increment,particle_collision_step,native_step_limit,move_in_cartesian,BoozerGeometry)
-from .benchmark_split_mirror import MagneticMirror
-from .benchmark_split_helix import HelicalField
 from .benchmark_split_multirate import UniformMagneticField
 from .nonrelativistic_collision_reference import ProtonBackground
 from .validate_beam_relaxation import estimate
 from .collision_plotting import presentation, series, save
+
+
+# Prescribed fields with exact collisionless axial GC orbits
+
+class MagneticMirror:
+    """B/B0=(-a*x*z,-a*y*z,1+a*z*z), a=strength/L**2; div B=0."""
+    def __init__(self,magnitude,length,strength=1.):
+        self.magnitude,self.length,self.strength=magnitude,length,strength
+    def B_contravariant(self,point):
+        x,y,z=point;a=self.strength/self.length**2
+        return self.magnitude*jnp.array([-a*x*z,-a*y*z,1+a*z*z])
+    B_covariant=B_contravariant
+    def AbsB(self,point):return jnp.linalg.norm(self.B_contravariant(point))
+    def sqrtg(self,point):return 1.
+    def gc_quantities(self,point):
+        x,y,z=point;a=self.strength/self.length**2
+        B=self.B_contravariant(point);value=jnp.linalg.norm(B);b=B/value
+        jac=self.magnitude*jnp.array([[-a*z,0.,-a*x],[0.,-a*z,-a*y],[0.,0.,2*a*z]])
+        gradient=jac.T@b
+        db=(jac-b[:,None]*gradient[None,:])/value
+        curl=jnp.array([db[2,1]-db[1,2],db[0,2]-db[2,0],db[1,0]-db[0,1]])
+        return B,B,value,gradient,curl,db@b,1.
+    def dAbsB_by_dX(self,point):return self.gc_quantities(point)[3]
+    def curl_b(self,point):return self.gc_quantities(point)[4]
+    def kappa(self,point):return self.gc_quantities(point)[5]
+
+def exact_mirror_orbit(y,h,field):
+    """Exact collisionless on-axis GC flow, including the mu=0 limit."""
+    w=jnp.sqrt(2*y[4]*field.magnitude/(M*field.length**2));phase=w*h
+    return y.at[2].set(y[2]*jnp.cos(phase)+y[3]*h*jnp.sinc(phase/jnp.pi)).at[3].set(
+        y[3]*jnp.cos(phase)-y[2]*w*jnp.sin(phase))
+
+
+class TransitField:
+    """Uniform B along x so native radial profiles vary along the orbit."""
+    def __init__(self,magnitude):self.magnitude=magnitude
+    def AbsB(self,x):return self.magnitude
+    def gc_quantities(self,x):
+        b=jnp.array([self.magnitude,0.,0.]);z=jnp.zeros(3)
+        return b,b,self.magnitude,z,z,z,1.
+
+def background(physical,*,varying=False):
+    from essos.background_species import BackgroundSpecies
+    return BackgroundSpecies(1,jnp.array([1.]),jnp.array([1.]),
+        jnp.array([[.2e20,1.8e20]]) if varying else jnp.array([1e20]),
+        jnp.array([[500.,1500.]]) if varying else jnp.array([1000.]),
+        radial_grid=jnp.array([-.1,.1])*physical.sigma/physical.nu if varying else None,
+        coulomb_log_model='impact')
+
+
+class HelicalField:
+    """B/B0=(sqrt(1-c*c)cos(kz), sqrt(1-c*c)sin(kz), c)."""
+    def __init__(self, magnitude, wave, c=.5):
+        self.magnitude, self.wave, self.c = magnitude, wave, c
+
+    def gc_quantities(self, point):
+        phase = self.wave*point[2]; a = jnp.sqrt(1-self.c**2)
+        x, y = a*jnp.cos(phase), a*jnp.sin(phase)
+        B = self.magnitude*jnp.array([x, y, self.c])
+        return B, B, self.magnitude, jnp.zeros(3), -self.wave*jnp.array([x, y, 0.]), self.wave*self.c*jnp.array([-y, x, 0.]), 1.
+
+    def B_contravariant(self, point): return self.gc_quantities(point)[0]
+    B_covariant = B_contravariant
+    def AbsB(self, point): return self.magnitude
+    def dAbsB_by_dX(self, point): return jnp.zeros(3)
+    def curl_b(self, point): return self.gc_quantities(point)[4]
+    def kappa(self, point): return self.gc_quantities(point)[5]
+    def sqrtg(self, point): return 1.
+
+def exact_orbit(y, h, field):
+    """Exact full B-star GC flow, including the v_parallel=0 limit."""
+    omega = Q*field.magnitude/M; k, c = field.wave, field.c
+    z = y[2]+h*y[3]*c/(1-(1-c*c)*k*y[3]/omega)
+    amplitude = jnp.sqrt(1-c*c)/c*(1-k*y[3]/omega)/k
+    return y.at[0].add(amplitude*(jnp.sin(k*z)-jnp.sin(k*y[2]))).at[1].add(
+        amplitude*(jnp.cos(k*y[2])-jnp.cos(k*z))).at[2].set(z)
 
 
 def chart_maps(chart,scale):
@@ -117,7 +191,6 @@ def solver(fieldname,chart,options,*,spatial=True,model='gc'):
             error_norm=OrbitErrorNorm(1e-10,1e-10,float(sigma*np.sqrt(10)),velocity_components=1 if gc else 3,
                 position_map=lambda y:to_cartesian(y)[:3]),
             step_limit=lambda t,y,a:bound(t,to_cartesian(y),a),align_orbit=True,
-            collision_wiener_norm=(lambda w:jnp.linalg.norm(w[-2:])) if gc else lambda w:jnp.abs(w[2]),
             max_steps=10000,max_orbit_steps=4096)
         return out._replace(ys=jax.vmap(to_cartesian)(out.ys),y=to_cartesian(out.y))
     return jax.jit(jax.vmap(one)),p,field,times
@@ -157,7 +230,7 @@ def apply_lorentz_reference(report,reference):
 
 
 def run(options):
-    from .benchmark_combined_validation import references,add_speed_reference,physical_moments
+    from .mirror_collision_reference import references,add_speed_reference,physical_moments
     output=options.output;output.mkdir(parents=True,exist_ok=True)
     reference_path=options.reference or output/'reference.json'
     times=np.linspace(0.,options.horizon,options.save_points)
@@ -204,7 +277,7 @@ def run(options):
             counts=out.stats
             record=dict(field=name,model=model,chart=chart,spatial_diffusion=options.spatial_diffusion and model=='gc',compile_s=compile_s,execution_s=elapsed,
                 reference_scope='Independent axial GC reference' if model=='gc' else 'Independent speed theory; GC-limit comparison only for position/pitch/parallel moments',
-                collision_updates=int(counts.collision_updates.sum()),accepted_orbit_steps=int(counts.accepted_orbit_steps.sum()),
+                collision_updates=int(counts.accepted.sum()),accepted_orbit_steps=int(counts.accepted_orbit_steps.sum()),
                 max_orbit_steps_per_collision=int(counts.max_orbit_steps_per_collision.max()),evolution=checks)
             report['rows'].append(record)
             if numerical is not None:apply_lorentz_reference(report,numerical)
@@ -246,7 +319,7 @@ def plot(report,output,times,charts=None):
 def diffusion(options):
     """Known transient velocity and perpendicular-diffusion references."""
     from .benchmark_split_multirate import velocity_reference,observables
-    from .lorentz_spatial_reference import guiding_center_msd
+    from .lorentz_collision_reference import guiding_center_msd
     output=options.output;output.mkdir(parents=True,exist_ok=True)
     times=np.linspace(0.,options.horizon,options.save_points);rows=[];omega=2048.
     for model in options.models:
@@ -269,7 +342,7 @@ def diffusion(options):
                 evolution.append({name:estimate(value[:,i],expected[i] if name=='spatial' else target[name][i],
                     variance='variance' in name) for name,value in zip(names,values)})
             label=model+' / '+chart
-            row=dict(model=model,chart=chart,evolution=evolution,collision_updates=int(out.stats.collision_updates.sum()),
+            row=dict(model=model,chart=chart,evolution=evolution,collision_updates=int(out.stats.accepted.sum()),
                 accepted_orbit_steps=int(out.stats.accepted_orbit_steps.sum()),
                 max_orbit_steps_per_collision=int(out.stats.max_orbit_steps_per_collision.max()))
             rows.append(row)
@@ -356,7 +429,7 @@ def adapters(options):
                 if np.any(first.status) or not np.array_equal(first.ys,second.ys):raise RuntimeError((name,clock,execution,'failure or nonrepeatable'))
                 outputs[execution]=first
                 rows.append(dict(field=name,clock=clock,execution=execution,compile_s=compile_s,failed=0,
-                    collision_updates=int(first.stats.collision_updates.sum()),accepted_orbit_steps=int(first.stats.accepted_orbit_steps.sum())))
+                    collision_updates=int(first.stats.accepted.sum()),accepted_orbit_steps=int(first.stats.accepted_orbit_steps.sum())))
                 (options.output/'comparison.json').write_text(json.dumps(dict(particles=options.particles,moment_tolerance=options.tolerance,
                     mboz=options.mboz,nboz=options.nboz,scope='Real QA field tables; repeatability and shared/GPU path agreement, not an independent statistical physics reference.',rows=rows),indent=2)+'\n')
             if 'independent' in outputs:
