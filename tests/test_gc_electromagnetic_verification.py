@@ -36,7 +36,7 @@ def test_volume_density_has_a_nonzero_time_derivative():
     densities = [float(phase_space_density(field, wave, y.at[:2].set(jnp.array([r, 0.])), 0.))
                  for r in (.01, .001)]
     assert min(densities) > 1.
-    assert densities[0] == pytest.approx(densities[1], rel=.01)
+    assert float(densities[0]) == pytest.approx(float(densities[1]), rel=.01)
 
 
 def test_uniform_inductive_force_has_the_exact_sign_and_normalization():
@@ -46,8 +46,8 @@ def test_uniform_inductive_force_has_the_exact_sign_and_normalization():
     dy = guiding_center_rhs(field, y, 1e12, MASS, CHARGE, t=t, perturbation=wave)
     expected = -CHARGE*5./MASS*wave.amplitude*wave.omega*np.cos(wave.omega*t+wave.phase)
     np.testing.assert_allclose(dy[:2], 0., atol=1e-12)
-    assert float(dy[2]) == pytest.approx(5./40.*y[3], rel=1e-13)
-    assert float(dy[3]) == pytest.approx(expected, rel=1e-13)
+    assert float(dy[2]) == pytest.approx(float(5./40.*y[3]), rel=1e-13)
+    assert float(dy[3]) == pytest.approx(float(expected), rel=1e-13)
 
 
 def test_adaptive_inductive_trajectory_matches_exact_velocity_and_position():
