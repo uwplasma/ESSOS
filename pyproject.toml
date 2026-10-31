@@ -22,6 +22,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
@@ -45,9 +46,9 @@ dependencies = [
     "jaxtyping>=0.2.33",
     "tqdm",
     "matplotlib",
-    "diffrax>=0.7.2",
+    "diffrax>=0.7.0",
     "optax",
-    "optimistix>=0.1.0",
+    "optimistix>=0.0.11",
     "scipy",
     "jaxkd",
     "netcdf4",
@@ -62,7 +63,7 @@ dependencies = [
 # The near-axis entry points import it lazily and raise with the install
 # command; see "Optional: near-axis fields" in the README.
 #   pip install git+https://github.com/uwplasma/pyQSC_JAX.git 
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 
 [project.urls]
 Homepage = "https://github.com/uwplasma/ESSOS"
