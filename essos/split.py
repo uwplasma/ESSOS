@@ -278,7 +278,7 @@ def solve_split(rhs, collision, y0, args=None, *, t0=0.0, t1, dt0, ts, key, nois
             options.pop(name)
         if adjoint == 'accepted':
             return solve_accepted_split(rhs,collision,y0,args,**options)
-        _recorder=_SplitRecorder.from_options(jnp.asarray(y0),options)
+        _recorder=_SplitRecorder(jnp.asarray(y0),options)
     if align_orbit and (not adaptive or not orbit_adaptive or not reuse_orbit_step):
         raise ValueError('orbit endpoint alignment requires adaptive orbit and collision clocks and orbit-step reuse')
     for name, value in (('max_steps', max_steps), ('max_orbit_steps', max_orbit_steps)):
@@ -682,7 +682,7 @@ def trace_split(field, particles, species, *, model='GuidingCenter', tmax, times
         if _replay_tapes is not None:
             from .native_ad import replay_accepted_split
             saved,final=replay_accepted_split(rhs,kick,initial,None,tape,times,
-                method='dopri5' if integrator=='essos_rk45' else 'dopri8',stage_execution=orbit_stage_execution)
+                method='dopri5' if integrator=='essos_rk45' else 'dopri8')
             return jax.vmap(public)(saved),public(final)
         solve = solve_split
         if execution == 'independent':
@@ -1671,7 +1671,7 @@ def _solve_independent(rhs, collision, initial, args=None, *, field, species, gc
             raise ValueError('independent reverse currently requires direct alpha coils and uniform background')
         if direct and options.get('_reverse_execution','auto')!='shared':
             return solve_gpu_accepted(forward,initial,field,species,gc=gc,speed_floor=speed_floor,
-                options=options,arrays=arrays,spatial_diffusion=spatial_diffusion)
+                options=options,arrays=arrays,spatial_diffusion=spatial_diffusion,interpret=interpret)
         ad_options={k:v for k,v in options.items() if k not in ('adjoint','_record_ad','_reverse_execution')}
         return solve_accepted_split(rhs,collision,initial,args,_forward_override=forward,**ad_options)
     return forward(initial,record=options.get('_record_ad',False))

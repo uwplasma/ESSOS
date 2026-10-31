@@ -2,7 +2,8 @@
 
 Run an objective-specific entry point with ``python -m``; importing this module
 does not trace particles or start an optimization. All particles are traced
-together. Birth parameters, reference axis and classifier remain fixed.
+together; birth parameters, reference axis and classifier stay fixed. Every
+setting in ``DEFAULTS`` is a command-line option and an editable script default.
 """
 import argparse
 import csv
@@ -13,599 +14,277 @@ from time import perf_counter
 
 os.environ.setdefault("ESSOS_PROGRESS", "0")
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import minimize
 
+from essos.background_species import BackgroundSpecies
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, ONE_EV
 from essos.dynamics import Particles, Tracing
 from essos.fields import BiotSavart
 from essos.particle_losses import mean_final_radius, minor_radius, classifier_loss_fraction
+from essos.split import trace_split, SplitStatus
 from essos.surfaces import BdotN_over_B, SurfaceClassifier, SurfaceRZFourier
 
-ROOT = Path(__file__).resolve().parents[2]
-COILS = ROOT / "examples/input_files/ESSOS_biot_savart_LandremanPaulQA.json"
-WOUT = ROOT / "examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+INPUT = Path(__file__).resolve().parents[1] / "input_files"
 PARTICLE_OBJECTIVES = ("loss_fraction", "final_radius", "radial_increment")
+DEFAULTS = dict(
+    output=None, coils=INPUT / "ESSOS_biot_savart_LandremanPaulQA.json",  # coils=None: planar circles
+    coil_count=3, coil_order=6, coil_major_radius=7.74, coil_minor_radius=4.5, coil_current=1.84e7,
+    coil_nfp=2, coil_stellsym=True, coil_segments=60, coil_scaling_factor=0.,
+    wout=INPUT / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc", target_surface="qa",
+    target_minor_radius=.2, reference_major_radius=1., safety_minor_radius=None,
+    model="gc", method="dopri8", particles=8, particle_setup="line", birth_seed=42,
+    pitch_min=-1., pitch_max=1., gyrophase=float(np.pi), horizon=None, initial_step=None, saves=32,
+    energy_ev=4000., tolerance=1e-9, checkpoint_steps=16, accepted_capacity=512, max_steps=4096,
+    collisions=False, collision_adaptive=True, collision_controller="moments", collision_tolerance=.001,
+    moment_tolerance=.005, collision_step=1e-7, collision_dtmax=1e-6, collision_spatial_diffusion=None,
+    collision_checkpoint_steps=16, collision_accepted_capacity=4096, max_orbit_steps=4096,
+    background_density=1e20, background_temperature_ev=1000., coulomb_log_model="nrl",
+    maxiter=10, max_change=.01, particle_weight=1., length_weight=1., length_target=None,
+    curvature_weight=1., curvature_target=None, bdotn_weight=1., surface_ntheta=30, surface_nphi=30,
+    axis_field_weight=0., axis_field_target=5.7, axis_field_points=15, softness=10., save_plots=True)
 
 
-def save_optimization_plots(output, initial_coils, optimized_coils,
-                            initial_trajectories, final_trajectories, *, axis,
-                            count=10, seed=42, target_torus=None, safety_torus=None,
-                            target_label="Soft target"):
-    """Save matched 3D and R-Z views of a random subset of stored trajectories.
-
-    R-Z panels are poloidal projections across all toroidal angles, not
-    Poincare sections. No additional particle tracing or random births occur.
-    """
-    from matplotlib import colormaps
+def save_optimization_plots(output, initial_coils, optimized_coils, initial_trajectories,
+                            final_trajectories, *, axis, count=10, seed=42):
+    """Save matched 3D and R-Z views of one random subset of particles before/after."""
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
-
-    before = np.asarray(initial_trajectories)[..., :3]
-    after = np.asarray(final_trajectories)[..., :3]
-    if before.ndim != 3 or before.shape != after.shape or not len(before) or count < 1:
-        raise ValueError("plotting requires matching nonempty trajectories and a positive particle count")
-    indices = np.random.default_rng(seed).choice(len(before), min(count, len(before)), replace=False)
-    curves = [np.asarray(coils.gamma) for coils in (initial_coils, optimized_coils)]
-    xyz = np.concatenate([curves[0].reshape(-1,3), curves[1].reshape(-1,3),
-                          before[indices].reshape(-1,3), after[indices].reshape(-1,3)])
-    lo, hi = xyz.min(axis=0), xyz.max(axis=0)
-    spans = np.maximum(hi-lo, 1e-6)
-    rz = [np.stack((np.hypot(paths[indices,...,0], paths[indices,...,1]),
-                    paths[indices,...,2]), axis=-1) for paths in (before, after)]
-    angle = np.linspace(0., 2*np.pi, 97)
-    outlines = [np.column_stack((major+minor*np.cos(angle), z_axis+minor*np.sin(angle)))
-                for torus in (target_torus, safety_torus) if torus is not None
-                for major, minor, z_axis in (torus,)]
-    rz_all = np.concatenate([values.reshape(-1,2) for values in rz] +
-                            [np.asarray(axis)[None,:]] + outlines)
-    rz_lo, rz_hi = rz_all.min(axis=0), rz_all.max(axis=0)
-    rz_pad = .08*np.maximum(rz_hi-rz_lo, 1e-6)
-    figure = Figure(figsize=(14,11))
-    FigureCanvasAgg(figure)  # Save headlessly without changing the user's pyplot backend.
-    axes3d = [figure.add_subplot(2,2,i+1, projection="3d") for i in range(2)]
-    axesrz = [figure.add_subplot(2,2,i+3) for i in range(2)]
-    for column, (title, paths) in enumerate((("Initial", before), ("Optimized", after))):
-        ax3d, axrz = axes3d[column], axesrz[column]
-        for torus, color, label in ((target_torus, "black", target_label),
-                                    (safety_torus, "crimson", "Safety stop")):
-            if torus is None:
-                continue
-            major, minor, z_axis = torus
-            radius, height = major + minor*np.cos(angle), z_axis + minor*np.sin(angle)
-            axrz.plot(radius, height, "--", color=color, linewidth=1., label=label)
-            for phi in np.linspace(0., 2*np.pi, 9)[:-1]:
-                ax3d.plot(radius*np.cos(phi), radius*np.sin(phi), height,
-                          "--", color=color, linewidth=.6, alpha=.35)
-        for curve in curves[column]:
-            closed = np.concatenate((curve, curve[:1]))
-            ax3d.plot(*closed.T, color="0.45", linewidth=1., alpha=.65)
+    paths = [np.asarray(t)[..., :3] for t in (initial_trajectories, final_trajectories)]
+    indices = np.random.default_rng(seed).choice(len(paths[0]), min(count, len(paths[0])), replace=False)
+    figure = Figure(figsize=(14, 11), layout="constrained")
+    FigureCanvasAgg(figure)  # headless: leaves the user's pyplot backend alone
+    for column, (title, coils, trajectories) in enumerate(
+            zip(("Initial", "Optimized"), (initial_coils, optimized_coils), paths)):
+        ax3d = figure.add_subplot(2, 2, column+1, projection="3d")
+        axrz = figure.add_subplot(2, 2, column+3)
+        for curve in np.asarray(coils.gamma):
+            ax3d.plot(*np.concatenate((curve, curve[:1])).T, color="0.45", linewidth=1., alpha=.65)
         for rank, index in enumerate(indices):
-            color = colormaps["tab10"](rank % 10)
-            points = paths[index]
+            points, color = trajectories[index], f"C{rank % 10}"
             ax3d.plot(*points.T, color=color, linewidth=1.3)
-            ax3d.scatter(*points[0], color=color, s=12)
-            axrz.plot(*rz[column][rank].T, color=color, linewidth=1.3, label=f"Particle {index}")
-            axrz.scatter(*rz[column][rank,0], color=color, s=12)
+            axrz.plot(np.hypot(points[:, 0], points[:, 1]), points[:, 2], color=color, linewidth=1.3,
+                      label=f"Particle {index}")
         ax3d.set(title=f"{title} coils and trajectories", xlabel="x [m]", ylabel="y [m]", zlabel="z [m]")
-        ax3d.set_xlim(lo[0]-.05*spans[0], hi[0]+.05*spans[0])
-        ax3d.set_ylim(lo[1]-.05*spans[1], hi[1]+.05*spans[1])
-        ax3d.set_zlim(lo[2]-.05*spans[2], hi[2]+.05*spans[2])
-        ax3d.set_box_aspect(spans)
-        ax3d.view_init(elev=25, azim=-55)
+        ax3d.set_box_aspect(np.ptp(np.concatenate([np.asarray(coils.gamma).reshape(-1, 3), trajectories[indices].reshape(-1, 3)]), axis=0))
         axrz.scatter(*axis, marker="+", color="black", s=40, zorder=4)
-        axrz.set(title=f"{title}: R-Z poloidal projection", xlabel="R [m]", ylabel="Z [m]",
-                 xlim=(rz_lo[0]-rz_pad[0],rz_hi[0]+rz_pad[0]),
-                 ylim=(rz_lo[1]-rz_pad[1],rz_hi[1]+rz_pad[1]))
-        axrz.set_aspect("equal", adjustable="box")
-        axrz.grid(alpha=.25)
-    figure.suptitle(f"Coil optimization: {len(indices)} sampled particle trajectories")
-    figure.legend(*axesrz[0].get_legend_handles_labels(), loc="lower center",
-                  ncol=min(5,len(indices)), frameon=False)
-    figure.subplots_adjust(left=.07, right=.97, bottom=.10, top=.94, hspace=.25, wspace=.20)
-    paths = [Path(output)/"orbit_comparison.png"]
-    try:
-        for path in paths:
-            figure.savefig(path, dpi=160)
-    finally:
-        figure.clear()
-    return dict(files=[path.name for path in paths], seed=seed, requested=count,
-        particle_indices=indices.tolist(),
-        selection="Same random subset of the optimization population before and after optimization",
-        poloidal_view="R-Z projection across all toroidal angles")
+        axrz.set(title=f"{title}: R-Z projection over all toroidal angles", xlabel="R [m]", ylabel="Z [m]")
+        axrz.set_aspect("equal", adjustable="datalim")
+    figure.legend(*axrz.get_legend_handles_labels(), loc="outside lower center", ncol=5, frameon=False)
+    figure.savefig(Path(output) / "orbit_comparison.png", dpi=160)
 
 
 def radial_increment_cost(trajectories, axis_r, axis_z):
-    """Reference full-orbit metric, with Cartesian/time indexing corrected.
-
-    This is sum_i(mean_j(r[i,j+1]-r[i,j]))**2, without division by dt.
-    It depends on save count and measures net drift, not oscillatory excursions.
-    """
-    radius = minor_radius(trajectories, axis_r, axis_z)
-    return jnp.sum(jnp.mean(jnp.diff(radius, axis=1), axis=1)**2)
+    """sum_i(mean_j(r[i,j+1]-r[i,j]))**2: net radial drift, dependent on the save count."""
+    return jnp.sum(jnp.mean(jnp.diff(minor_radius(trajectories, axis_r, axis_z), axis=1), axis=1)**2)
 
 
 def fixed_surface(wout, *, ntheta=64, nphi=64, range_torus="full torus", major_radius=1.,
                   shape="qa", minor_radius=.2, nfp=1):
-    """QA shape or circular torus, held fixed during coil optimization."""
+    """QA shape rescaled to ``major_radius``, or a circular torus, held fixed during optimization."""
     if shape == "torus":
-        if not (np.isfinite(major_radius) and np.isfinite(minor_radius)
-                and 0 < minor_radius < major_radius):
-            raise ValueError("torus radii must be finite with 0 < minor radius < major radius")
-        return SurfaceRZFourier(jnp.array([major_radius, minor_radius]),
-            jnp.array([0., minor_radius]), nfp, 1, 0, ntheta=ntheta, nphi=nphi,
-            range_torus=range_torus)
-    if shape != "qa":
-        raise ValueError("target surface must be 'qa' or 'torus'")
+        return SurfaceRZFourier(jnp.array([major_radius, minor_radius]), jnp.array([0., minor_radius]),
+            nfp, 1, 0, ntheta=ntheta, nphi=nphi, range_torus=range_torus)
     surface = SurfaceRZFourier.from_wout_file(str(wout))
-    scale = surface.rc[0]
-    return SurfaceRZFourier(surface.rc * (major_radius / scale), surface.zs * (major_radius / scale),
-        surface.nfp, surface.mpol, surface.ntor, ntheta=ntheta, nphi=nphi,
-        range_torus=range_torus)
+    scale = major_radius / surface.rc[0]
+    return SurfaceRZFourier(surface.rc*scale, surface.zs*scale, surface.nfp, surface.mpol, surface.ntor,
+        ntheta=ntheta, nphi=nphi, range_torus=range_torus)
 
 
-def fixed_classifier(wout, *, major_radius=1., shape="qa", minor_radius=.2, nfp=1):
-    """Fixed reference surface classifier used by the orbit benchmarks.
-
-    This is a geometric confinement target, not an equilibrium recalculated
-    after a coil update. Periodic cubic angular interpolation also matches
-    derivatives at the toroidal seam. Distances are positive inside.
-    """
-    return SurfaceClassifier(fixed_surface(wout, major_radius=major_radius,
-                             shape=shape, minor_radius=minor_radius, nfp=nfp),
-                             h=.03 * major_radius, padding=.16 * major_radius,
-                             angular_interpolation="periodic_cubic")
+def fixed_classifier(wout, *, major_radius=1., **target):
+    """Geometric confinement target (positive inside); not recomputed after a coil update."""
+    return SurfaceClassifier(fixed_surface(wout, major_radius=major_radius, **target), h=.03*major_radius,
+        padding=.16*major_radius)
 
 
 def toroidal_safety_stop(major_radius, minor_radius, axis_z=0.):
-    """Cheap analytic level set, independent of the soft loss classifier.
-
-    Positive inside, zero at/outside the safety torus. The squared minor
-    radius avoids a square-root derivative at axis births. Clamping to zero
-    also stops particles initially outside instead of waiting for re-entry.
-    """
+    """Analytic hard-stop level set, positive inside the safety torus and clamped to zero outside."""
     def stop(t, y, args, **kwargs):
-        del t, args, kwargs
-        radial = jnp.hypot(y[0], y[1]) - major_radius
-        return jnp.maximum(0., minor_radius**2 - radial**2 - (y[2]-axis_z)**2)
+        return jnp.maximum(0., minor_radius**2 - (jnp.hypot(y[0], y[1])-major_radius)**2 - (y[2]-axis_z)**2)
     return stop
 
 
-def coil_penalties(field, surface, options):
-    """Scalar penalties matching optimize_coils_vmec_surface.py.
-
-    Length and pointwise curvature use the mean positive excess above their
-    targets. The normal-field term is the sum of abs(B dot n / |B|) on the
-    fixed surface. Zero weights omit the corresponding calculation entirely.
-    """
-    return dict(
-        length_penalty=jnp.mean(jnp.maximum(field.coils.length - options.length_target, 0.))
-            if options.length_weight else jnp.array(0.),
-        curvature_penalty=jnp.mean(jnp.maximum(field.coils.curvature - options.curvature_target, 0.))
-            if options.curvature_weight else jnp.array(0.),
-        bdotn_penalty=jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
-            if options.bdotn_weight else jnp.array(0.))
-
-
-def build_objective(options, objective):
-    """Return the coil-only scalar objective with saved trajectories as aux."""
-    if objective not in PARTICLE_OBJECTIVES:
-        raise ValueError("unknown particle objective")
-    if options.coils is None:
-        # Higher Fourier modes start at zero; optimization can deform circles.
-        curves = CreateEquallySpacedCurves(n_curves=options.coil_count,
-            order=options.coil_order, R=options.coil_major_radius, r=options.coil_minor_radius,
-            n_segments=options.coil_segments, nfp=options.coil_nfp, stellsym=options.coil_stellsym,
-            scaling_type="L2", scaling_factor=options.coil_scaling_factor)
-        base = Coils(curves, jnp.full(options.coil_count, options.coil_current))
+def build_objective(o, objective):
+    """Return the coil-only scalar objective ``delta -> (cost, (components, states))``."""
+    if o.coils is None:  # higher Fourier modes start at zero, so optimization can deform the circles
+        curves = CreateEquallySpacedCurves(n_curves=o.coil_count, order=o.coil_order, R=o.coil_major_radius,
+            r=o.coil_minor_radius, n_segments=o.coil_segments, nfp=o.coil_nfp, stellsym=o.coil_stellsym,
+            scaling_type="L2", scaling_factor=o.coil_scaling_factor)
+        base = Coils(curves, jnp.full(o.coil_count, o.coil_current))
     else:
-        base = Coils.from_json(str(options.coils))
-    theta0 = jnp.asarray(base.dofs)
-    initial_field = BiotSavart(base)
+        base = Coils.from_json(str(o.coils))
+    theta0, initial_field = jnp.asarray(base.dofs), BiotSavart(base)
     axis = (float(initial_field.r_axis), float(initial_field.z_axis))
-    if options.length_target is None:
-        options.length_target = 1.05 * float(jnp.max(base.length))
-    if options.curvature_target is None:
-        options.curvature_target = 1.05 * float(jnp.max(base.curvature))
-    target = dict(major_radius=options.reference_major_radius,
-        shape=getattr(options, "target_surface", "qa"),
-        minor_radius=getattr(options, "target_minor_radius", .2), nfp=base.nfp)
-    classifier = fixed_classifier(options.wout, **target) if objective == "loss_fraction" else None
-    surface = fixed_surface(options.wout, ntheta=options.surface_ntheta,
-        nphi=options.surface_nphi, range_torus="half period", **target) if options.bdotn_weight else None
-    if options.particle_setup == "axis":
-        # Match the reference examples, including the duplicated 0/2pi birth.
-        phi = jnp.linspace(0., 2*jnp.pi, options.particles)
-        xyz = jnp.column_stack((axis[0]*jnp.cos(phi), axis[0]*jnp.sin(phi),
-                               jnp.full_like(phi, axis[1])))
-        pitches = jax.random.uniform(jax.random.PRNGKey(options.birth_seed), (options.particles,),
-            minval=options.pitch_min, maxval=options.pitch_max)
+    o.length_target = 1.05*float(jnp.max(base.length)) if o.length_target is None else o.length_target
+    o.curvature_target = 1.05*float(jnp.max(base.curvature)) if o.curvature_target is None else o.curvature_target
+    target = dict(major_radius=o.reference_major_radius, shape=o.target_surface,
+                  minor_radius=o.target_minor_radius, nfp=base.nfp)
+    classifier = fixed_classifier(o.wout, **target) if objective == "loss_fraction" else None
+    surface = fixed_surface(o.wout, ntheta=o.surface_ntheta, nphi=o.surface_nphi, range_torus="half period",
+        **target) if o.bdotn_weight else None
+    if o.particle_setup == "axis":  # equally spaced around the axis, including the duplicated 0/2pi birth
+        phi = jnp.linspace(0., 2*jnp.pi, o.particles)
+        xyz = jnp.column_stack((axis[0]*jnp.cos(phi), axis[0]*jnp.sin(phi), jnp.full_like(phi, axis[1])))
+        pitches = jax.random.uniform(jax.random.PRNGKey(o.birth_seed), (o.particles,),
+            minval=o.pitch_min, maxval=o.pitch_max)
     else:
-        xyz = jnp.column_stack((jnp.linspace(1.23, 1.27, options.particles),
-                                jnp.zeros((options.particles, 2))))
-        pitches = jnp.linspace(.35, .65, options.particles)
-    model = "GuidingCenterAdaptative" if options.model == "gc" else "FullOrbitAdaptative"
-    integrator = "essos_dopri8" if options.method == "dopri8" else "essos_rk45"
-    phi_axis = jnp.linspace(0., 2*jnp.pi, options.axis_field_points)
-    axis_points = jnp.column_stack((axis[0]*jnp.cos(phi_axis), axis[0]*jnp.sin(phi_axis),
-                                   jnp.full_like(phi_axis, axis[1])))
-    safety_radius = getattr(options, "safety_minor_radius", None)
-    safety_stop = toroidal_safety_stop(axis[0], safety_radius, axis[1]) if safety_radius is not None else None
-    collisions = getattr(options, "collisions", False)
-    if collisions:
-        from essos.background_species import BackgroundSpecies
-        from essos.split import trace_split, SplitStatus
-        import equinox as eqx
-
-        background = BackgroundSpecies(1, jnp.array([options.background_mass_proton]),
-            jnp.array([options.background_charge_e]), jnp.array([options.background_density]),
-            jnp.array([options.background_temperature_ev]), coulomb_log_model=options.coulomb_log_model)
+        xyz = jnp.column_stack((jnp.linspace(1.23, 1.27, o.particles), jnp.zeros((o.particles, 2))))
+        pitches = jnp.linspace(.35, .65, o.particles)
+    phi = jnp.linspace(0., 2*jnp.pi, o.axis_field_points)
+    axis_points = jnp.column_stack((axis[0]*jnp.cos(phi), axis[0]*jnp.sin(phi), jnp.full_like(phi, axis[1])))
+    stop = (toroidal_safety_stop(axis[0], o.safety_minor_radius, axis[1])
+            if o.safety_minor_radius is not None else None)
+    integrator = "essos_dopri8" if o.method == "dopri8" else "essos_rk45"
+    initial_step = o.initial_step if o.initial_step is not None else o.horizon/2
+    if o.collisions:
+        background = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([o.background_density]),
+            jnp.array([o.background_temperature_ev]), coulomb_log_model=o.coulomb_log_model)
 
     def evaluate(delta):
-        # Coils.dofs already applies the public curve/current normalization.
-        # A dimensionless bounded displacement makes max_change an explicit
-        # absolute limit in those DOFs, including initially zero coefficients.
-        field = BiotSavart(base.with_dofs(theta0 + options.max_change * delta))
-        birth = Particles(xyz, initial_vparallel_over_v=pitches,
-            mass=ALPHA_PARTICLE_MASS, charge=ALPHA_PARTICLE_CHARGE,
-            energy=options.energy_ev * ONE_EV,
-            field=field if options.model == "lorentz" else None,
-            phase_angle_full_orbit=options.gyrophase)
-        if collisions:
-            out = trace_split(field, birth, background,
-                model="GuidingCenter" if options.model == "gc" else "FullOrbit",
-                integrator=integrator, tmax=options.horizon, n_save=options.saves,
-                timestep=options.collision_step, collision_dtmax=options.collision_dtmax,
-                collision_tolerance=options.collision_tolerance,
-                collision_controller=options.collision_controller, adaptive=options.collision_adaptive,
-                moment_tolerance=options.moment_tolerance,
-                orbit_dt0=options.initial_step if options.initial_step is not None else options.horizon / 2,
-                spatial_diffusion=options.collision_spatial_diffusion,
-                rtol=options.tolerance, atol=options.tolerance, event=safety_stop,
-                max_steps=options.max_steps, max_orbit_steps=options.max_orbit_steps,
-                execution="independent" if jax.default_backend()=="gpu" and options.method=="dopri8" and options.collision_adaptive else "shared",
-                adjoint="accepted", adjoint_checkpoint_steps=options.collision_checkpoint_steps,
-                adjoint_orbit_checkpoint_steps=options.checkpoint_steps,
-                adjoint_max_accepted_steps=options.collision_accepted_capacity,
-                adjoint_max_orbit_steps=options.accepted_capacity)
+        # Coils.dofs already carries the public normalization: max_change bounds those DOFs directly.
+        field = BiotSavart(base.with_dofs(theta0 + o.max_change*delta))
+        birth = Particles(xyz, initial_vparallel_over_v=pitches, mass=ALPHA_PARTICLE_MASS,
+            charge=ALPHA_PARTICLE_CHARGE, energy=o.energy_ev*ONE_EV,
+            field=field if o.model == "lorentz" else None, phase_angle_full_orbit=o.gyrophase)
+        work = {}
+        if o.collisions:
+            out = trace_split(field, birth, background, model="GuidingCenter" if o.model == "gc" else "FullOrbit",
+                integrator=integrator, tmax=o.horizon, n_save=o.saves, timestep=o.collision_step,
+                collision_dtmax=o.collision_dtmax, collision_tolerance=o.collision_tolerance,
+                collision_controller=o.collision_controller, adaptive=o.collision_adaptive,
+                moment_tolerance=o.moment_tolerance, orbit_dt0=initial_step,
+                spatial_diffusion=o.collision_spatial_diffusion, rtol=o.tolerance, atol=o.tolerance, event=stop,
+                max_steps=o.max_steps, max_orbit_steps=o.max_orbit_steps,
+                execution="independent" if jax.default_backend() == "gpu" and o.method == "dopri8" and o.collision_adaptive else "shared",
+                adjoint="accepted", adjoint_checkpoint_steps=o.collision_checkpoint_steps,
+                adjoint_orbit_checkpoint_steps=o.checkpoint_steps,
+                adjoint_max_accepted_steps=o.collision_accepted_capacity, adjoint_max_orbit_steps=o.accepted_capacity)
             states = eqx.error_if(out.ys, jnp.any(out.status > SplitStatus.EVENT),
                 "split optimization solve failed; inspect collision/orbit work limits")
             stop_fraction = jnp.mean((out.status == SplitStatus.EVENT).astype(float))
-            work = dict(mean_collision_accepted=jnp.mean(out.stats.accepted.astype(float)),
-                mean_collision_rejected=jnp.mean(out.stats.rejected.astype(float)),
-                mean_orbit_trials=jnp.mean(out.stats.orbit_steps.astype(float)),
-                mean_orbit_rejected=jnp.mean(out.stats.orbit_rejected.astype(float)))
+            work = {f"mean_{name}": jnp.mean(getattr(out.stats, name).astype(float))
+                    for name in ("accepted", "rejected", "orbit_steps", "orbit_rejected")}
         else:
-            trace = Tracing(field=field, particles=birth, model=model,
-                integrator=integrator, native_adjoint="accepted",
-                native_adjoint_checkpoint_steps=options.checkpoint_steps,
-                native_adjoint_parameter_accumulation=getattr(options, "parameter_accumulation", "segment"),
-                native_adjoint_max_accepted_steps=options.accepted_capacity,
-                native_controller="i",
-                rtol=options.tolerance, atol=options.tolerance,
-                maxtime=options.horizon,
-                timestep=options.initial_step if options.initial_step is not None else options.horizon / 2,
-                times_to_trace=options.saves, max_steps=options.max_steps,
-                stopping_criteria=safety_stop,
-                progress=False)
-            states, stop_fraction, work = trace.trajectories, jnp.mean(trace.boundary_hits.astype(float)), {}
-        if objective == "loss_fraction":
-            metric = classifier_loss_fraction(states, classifier, softness=options.softness)
-        elif objective == "final_radius":
-            metric = mean_final_radius(states, *axis)
-        else:
-            metric = radial_increment_cost(states, *axis)
-        components = dict(particle_metric=metric,
-            safety_stop_fraction=stop_fraction,
-            **work, **coil_penalties(field, surface, options),
-            axis_field_penalty=jnp.abs(jnp.mean(jax.vmap(field.AbsB)(axis_points)) - options.axis_field_target)
-                if options.axis_field_weight else jnp.array(0.),
-            regularization_penalty=jnp.mean(delta**2))
-        cost = (options.particle_weight * metric
-            + options.length_weight * components["length_penalty"]
-            + options.curvature_weight * components["curvature_penalty"]
-            + options.bdotn_weight * components["bdotn_penalty"]
-            + options.axis_field_weight * components["axis_field_penalty"]
-            + options.regularization * components["regularization_penalty"])
+            trace = Tracing(field=field, particles=birth,
+                model="GuidingCenterAdaptative" if o.model == "gc" else "FullOrbitAdaptative",
+                integrator=integrator, native_adjoint="accepted", native_adjoint_checkpoint_steps=o.checkpoint_steps,
+                native_adjoint_max_accepted_steps=o.accepted_capacity, native_controller="i", rtol=o.tolerance,
+                atol=o.tolerance, maxtime=o.horizon, timestep=initial_step, times_to_trace=o.saves,
+                max_steps=o.max_steps, stopping_criteria=stop, progress=False)
+            states, stop_fraction = trace.trajectories, jnp.mean(trace.boundary_hits.astype(float))
+        metric = (classifier_loss_fraction(states, classifier, softness=o.softness) if objective == "loss_fraction"
+                  else mean_final_radius(states, *axis) if objective == "final_radius"
+                  else radial_increment_cost(states, *axis))
+        zero = jnp.array(0.)
+        components = dict(particle_metric=metric, safety_stop_fraction=stop_fraction, **work,
+            length_penalty=jnp.mean(jnp.maximum(field.coils.length-o.length_target, 0.)) if o.length_weight else zero,
+            curvature_penalty=jnp.mean(jnp.maximum(field.coils.curvature-o.curvature_target, 0.)) if o.curvature_weight else zero,
+            bdotn_penalty=jnp.sum(jnp.abs(BdotN_over_B(surface, field))) if o.bdotn_weight else zero,
+            axis_field_penalty=jnp.abs(jnp.mean(jax.vmap(field.AbsB)(axis_points))-o.axis_field_target)
+                if o.axis_field_weight else zero)
+        cost = (o.particle_weight*metric + o.length_weight*components["length_penalty"]
+            + o.curvature_weight*components["curvature_penalty"] + o.bdotn_weight*components["bdotn_penalty"]
+            + o.axis_field_weight*components["axis_field_penalty"])
         return cost, (components, states)
 
-    return base, theta0, axis, xyz, pitches, evaluate
+    return base, theta0, axis, evaluate
 
 
 def run(objective, argv=None, *, defaults=None):
     """Run a selected native objective with optional editable script defaults."""
-    defaults = {} if defaults is None else dict(defaults)
-    if objective not in PARTICLE_OBJECTIVES:
-        raise ValueError("unknown particle objective")
-    parser = argparse.ArgumentParser(description=
-        "Optimize coil geometry and currents using native accepted-step reverse AD.")
+    settings = dict(DEFAULTS, **(defaults or {}))
+    if objective not in PARTICLE_OBJECTIVES or settings.keys() - DEFAULTS.keys():
+        raise ValueError(f"unknown objective or settings: {objective}, {sorted(settings.keys() - DEFAULTS.keys())}")
+    parser = argparse.ArgumentParser(description="Optimize coil geometry and currents with accepted-step reverse AD.")
     parser.add_argument("--objective", choices=PARTICLE_OBJECTIVES, default=objective)
-    parser.add_argument("--output", type=Path, required="output" not in defaults, help="New output directory")
-    coil_source = parser.add_mutually_exclusive_group()
-    coil_source.add_argument("--coils", type=Path, default=COILS, help="Initial coil JSON")
-    coil_source.add_argument("--circular-coils", dest="coils", action="store_const", const=None,
-        help="Create equally spaced planar circular coils")
-    parser.add_argument("--coil-count", type=int, default=3, help="Independent coils per half field period")
-    parser.add_argument("--coil-order", type=int, default=6)
-    parser.add_argument("--coil-major-radius", type=float, default=7.74)
-    parser.add_argument("--coil-minor-radius", type=float, default=4.5)
-    parser.add_argument("--coil-current", type=float, default=1.84e7, help="Amperes per independent coil")
-    parser.add_argument("--coil-nfp", type=int, default=2)
-    parser.add_argument("--coil-stellsym", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--coil-segments", type=int, default=60)
-    parser.add_argument("--coil-scaling-factor", type=float, default=0.)
-    parser.add_argument("--wout", type=Path, default=WOUT, help="VMEC target file when target-surface is qa")
-    parser.add_argument("--target-surface", choices=("qa", "torus"), default="qa",
-        help="Fixed geometry shared by the loss classifier and B dot n / |B|")
-    parser.add_argument("--target-minor-radius", type=float, default=.2,
-        help="Metres; circular target torus minor radius")
-    safety = parser.add_mutually_exclusive_group()
-    safety.add_argument("--safety-minor-radius", type=float,
-        help="Metres; separate hard stopping torus about the fixed initial axis (disabled if omitted)")
-    safety.add_argument("--no-safety-stop", dest="safety_minor_radius", action="store_const", const=None,
-        help="Disable the separate safety stopping torus")
-    parser.add_argument("--model", choices=("gc", "lorentz"), default="gc")
-    parser.add_argument("--method", choices=("dopri5", "dopri8"), default="dopri8")
-    parser.add_argument("--particles", type=int, default=8)
-    parser.add_argument("--particle-setup", choices=("line", "axis"), default="line")
-    parser.add_argument("--birth-seed", type=int, default=42)
-    parser.add_argument("--pitch-min", type=float, default=-1.)
-    parser.add_argument("--pitch-max", type=float, default=1.)
-    parser.add_argument("--gyrophase", type=float, default=float(jnp.pi), help="Radians")
-    parser.add_argument("--horizon", type=float, help="Seconds; default GC 20 us, Lorentz 2 us")
-    parser.add_argument("--initial-step", type=float, help="Initial adaptive step in seconds; default horizon/2")
-    parser.add_argument("--saves", type=int, default=32)
-    parser.add_argument("--energy-ev", type=float, default=4000.)
-    parser.add_argument("--tolerance", type=float, default=1e-9)
-    parser.add_argument("--checkpoint-steps", type=int, default=16)
-    parser.add_argument("--parameter-accumulation", choices=("step", "segment"), default="segment",
-                        help="Collisionless RHS parameter pullback per step or checkpoint segment")
-    parser.add_argument("--accepted-capacity", type=int, default=512)
-    parser.add_argument("--max-steps", type=int, default=4096)
-    parser.add_argument("--collisions", action=argparse.BooleanOptionalAction, default=False,
-        help="Use production split orbit/collision tracing with accepted-step reverse AD")
-    parser.add_argument("--collision-adaptive", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--collision-controller", choices=("moments", "conservative", "paper", "candidate"), default="moments")
-    parser.add_argument("--collision-tolerance", type=float, default=.001)
-    parser.add_argument("--moment-tolerance", type=float, default=.005)
-    parser.add_argument("--collision-step", type=float, default=1e-7, help="Initial or fixed collision interval [s]")
-    parser.add_argument("--collision-dtmax", type=float, default=1e-6, help="Collision/splitting interval ceiling [s]")
-    parser.add_argument("--collision-spatial-diffusion", action=argparse.BooleanOptionalAction, default=None,
-        help="Enable the Cartesian GC spatial collision increment")
-    parser.add_argument("--collision-checkpoint-steps", type=int, default=16, help="Accepted split maps per checkpoint")
-    parser.add_argument("--collision-accepted-capacity", type=int, default=4096,
-        help="Maximum recorded accepted split maps per particle")
-    parser.add_argument("--max-orbit-steps", type=int, default=4096,
-        help="Orbit trial limit within each collision interval; accepted-capacity bounds the total inner tape")
-    parser.add_argument("--background-density", type=float, default=1e20, help="Uniform background density [m^-3]")
-    parser.add_argument("--background-temperature-ev", type=float, default=1000.)
-    parser.add_argument("--background-mass-proton", type=float, default=1.)
-    parser.add_argument("--background-charge-e", type=float, default=1.)
-    parser.add_argument("--coulomb-log-model", choices=("nrl", "impact"), default="nrl")
-    parser.add_argument("--maxiter", type=int, default=10)
-    parser.add_argument("--max-evaluations", type=int, help="L-BFGS-B function evaluation limit")
-    parser.add_argument("--max-change", type=float, default=.01,
-                        help="Absolute displacement bound in each public normalized coil DOF")
-    parser.add_argument("--regularization", type=float, default=0.,
-                        help="Optional mean-square bounded-displacement penalty")
-    parser.add_argument("--particle-weight", type=float, default=1.)
-    parser.add_argument("--length-weight", type=float, default=1., help="Weight of mean positive coil-length excess")
-    parser.add_argument("--curvature-weight", type=float, default=1., help="Weight of mean positive pointwise curvature excess")
-    parser.add_argument("--bdotn-weight", type=float, default=1., help="Weight of summed abs(B dot n / |B|) on the fixed surface")
-    parser.add_argument("--axis-field-weight", type=float, default=0., help="Weight of abs(mean axis |B| - target)")
-    parser.add_argument("--axis-field-target", type=float, default=5.7, help="Tesla")
-    parser.add_argument("--axis-field-points", type=int, default=15)
-    parser.add_argument("--length-target", type=float, help="Metres; default 1.05 times the largest initial coil length")
-    parser.add_argument("--curvature-target", type=float, help="1/metre; default 1.05 times the largest initial pointwise curvature")
-    parser.add_argument("--surface-ntheta", type=int, default=30, help="Poloidal points for the normal-field objective")
-    parser.add_argument("--surface-nphi", type=int, default=30, help="Toroidal points over a half field period for the normal-field objective")
-    parser.add_argument("--reference-major-radius", type=float, default=1., help="Metres; fixed target major radius")
-    parser.add_argument("--softness", type=float, default=10., help="Loss sigmoid slope in 1/metre")
-    parser.add_argument("--save-plots", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--plot-particles", type=int, default=10, help="Random subset size, capped by traced population")
-    parser.add_argument("--plot-seed", type=int, default=42)
-    unknown = defaults.keys() - {action.dest for action in parser._actions}
-    if unknown:
-        raise ValueError(f"unknown native optimization settings: {sorted(unknown)}")
-    parser.set_defaults(**defaults)
-    options = parser.parse_args(argv)
-    for action in parser._actions:
-        if action.choices is not None and getattr(options, action.dest) not in action.choices:
-            parser.error(f"invalid {action.dest} in script settings; choose from {action.choices}")
-    objective = options.objective
-    if options.horizon is None:
-        options.horizon = 2e-5 if options.model == "gc" else 2e-6
-    positive = (options.horizon, options.energy_ev, options.tolerance,
-                options.max_change, options.softness, options.reference_major_radius,
-                options.coil_major_radius, options.coil_minor_radius)
-    if any(not np.isfinite(value) or value <= 0 for value in positive):
-        parser.error("horizon, energy, tolerance, max-change, softness and radii must be finite and positive")
-    if options.target_surface == "torus":
-        if not (np.isfinite(options.target_minor_radius)
-                and 0 < options.target_minor_radius < options.reference_major_radius):
-            parser.error("target torus requires 0 < target-minor-radius < reference-major-radius")
-        if options.coils is None and options.target_minor_radius >= options.coil_minor_radius:
-            parser.error("target-minor-radius must be smaller than the initial circular coil radius")
-    if options.safety_minor_radius is not None:
-        if not (np.isfinite(options.safety_minor_radius) and options.safety_minor_radius > 0):
-            parser.error("safety-minor-radius must be finite and positive")
-        if options.target_surface == "torus" and options.safety_minor_radius <= options.target_minor_radius:
-            parser.error("safety-minor-radius must be larger than target-minor-radius")
-        if options.coils is None and options.safety_minor_radius >= options.coil_minor_radius:
-            parser.error("safety-minor-radius must be smaller than the initial circular coil radius")
-    if options.initial_step is not None and (not np.isfinite(options.initial_step) or options.initial_step <= 0):
-        parser.error("initial-step must be finite and positive")
-    if options.collisions:
-        if any(not np.isfinite(value) or value <= 0 for value in
-               (options.collision_tolerance, options.collision_step, options.collision_dtmax,
-                options.background_temperature_ev, options.background_mass_proton)):
-            parser.error("collision intervals/tolerance and background mass/temperature must be finite and positive")
-        if not np.isfinite(options.background_density) or options.background_density < 0:
-            parser.error("background-density must be finite and nonnegative")
-        if not np.isfinite(options.background_charge_e) or options.background_charge_e == 0:
-            parser.error("background-charge-e must be finite and nonzero")
-        if min(options.collision_checkpoint_steps, options.collision_accepted_capacity, options.max_orbit_steps) < 1:
-            parser.error("positive collision checkpoint/capacity and orbit work limits required")
-        if options.collision_spatial_diffusion and options.model != "gc":
-            parser.error("collision-spatial-diffusion requires the GC model")
-    if (not -1 <= options.pitch_min < options.pitch_max <= 1 or
-        not np.isfinite(options.gyrophase) or not np.isfinite(options.coil_current) or
-        options.coil_current == 0 or not np.isfinite(options.coil_scaling_factor)):
-        parser.error("invalid pitch range, gyrophase, coil current or Fourier scaling")
-    if (min(options.coil_count, options.coil_order, options.coil_nfp) < 1 or
-        options.coil_segments < 3 or options.coil_minor_radius >= options.coil_major_radius or
-        (options.max_evaluations is not None and options.max_evaluations < 1)):
-        parser.error("positive coil counts/order, at least three segments, major > minor radius and positive evaluation limit required")
-    if min(options.particles, options.checkpoint_steps, options.accepted_capacity,
-           options.max_steps, options.maxiter, options.plot_particles) < 1 or min(options.saves,
-               options.surface_ntheta, options.surface_nphi, options.axis_field_points) < 2:
-        parser.error("positive particle/step/iteration counts and at least two saves and surface points per direction required")
-    weights = (options.particle_weight, options.length_weight,
-               options.curvature_weight, options.bdotn_weight, options.axis_field_weight, options.regularization)
-    if any(not np.isfinite(value) or value < 0 for value in weights) or not any(weights):
-        parser.error("weights must be finite and nonnegative, with at least one nonzero weight")
-    targets = (options.length_target, options.curvature_target, options.axis_field_target)
-    if any(value is not None and (not np.isfinite(value) or value < 0) for value in targets):
-        parser.error("length, curvature and axis-field targets must be finite and nonnegative")
-    if options.output.exists():
+    for name, value in settings.items():
+        kwargs = dict(default=value)
+        if isinstance(value, bool) or name == "collision_spatial_diffusion":
+            kwargs["action"] = argparse.BooleanOptionalAction
+        elif isinstance(value, Path) or name in ("output", "coils"):
+            kwargs["type"] = Path
+        elif value is None:
+            kwargs["type"] = float
+        else:
+            kwargs["type"] = type(value)
+        if name == "coils":
+            kwargs["help"] = "Initial coil JSON; --circular-coils creates equally spaced planar circles"
+        if name == "collision_controller":
+            kwargs["choices"] = ("moments", "conservative")
+        if name in ("model", "method", "target_surface", "particle_setup"):
+            kwargs["choices"] = dict(model=("gc", "lorentz"), method=("dopri5", "dopri8"),
+                target_surface=("qa", "torus"), particle_setup=("line", "axis"))[name]
+        parser.add_argument("--"+name.replace("_", "-"), **kwargs)
+    parser.add_argument("--circular-coils", dest="coils", action="store_const", const=None)
+    o = parser.parse_args(argv)
+    if o.output is None:
+        parser.error("--output is required")
+    if o.output.exists():
         parser.error("output directory already exists; choose a new path")
-    print(f"JAX backend: {jax.default_backend()}; devices: {jax.devices()}", flush=True)
-    options.output.mkdir(parents=True)
-    print(f"Building {objective}, {options.model}, {options.particles} particles; coil DOFs only", flush=True)
-    base, theta0, axis, xyz, pitches, objective_fn = build_objective(options, objective)
-    base.to_json(str(options.output / "initial_coils.json"))
-    print("Initial coils: " + (str(options.coils) if options.coils is not None else
-        f"{base.gamma.shape[0]} planar circles ({options.coil_count} independent), "
-        f"R={options.coil_major_radius:g} m, r={options.coil_minor_radius:g} m, "
-        f"current={options.coil_current:g} A"), flush=True)
-    print(f"Length target {options.length_target:.6g} m; curvature target "
-          f"{options.curvature_target:.6g} /m; particle/length/curvature/Bn/axis weights "
-          f"{weights[:5]}", flush=True)
-    print(f"Fixed target surface: {options.target_surface}; "
-          f"major radius {options.reference_major_radius:g} m" +
-          (f"; minor radius {options.target_minor_radius:g} m" if options.target_surface == "torus" else ""),
-          flush=True)
-    if options.safety_minor_radius is not None:
-        print(f"Safety stopping torus: R={axis[0]:g} m, Z={axis[1]:g} m; "
-              f"minor radius {options.safety_minor_radius:g} m (separate from the soft target)", flush=True)
-    if options.collisions:
-        print(f"Split collisions: {'adaptive' if options.collision_adaptive else 'fixed'}, "
-              f"{options.collision_controller} controller, tolerance {options.collision_tolerance:g}; "
-              f"n={options.background_density:g} /m^3, T={options.background_temperature_ev:g} eV; "
-              "production per-particle keys (seed 42)", flush=True)
+    objective = o.objective
+    if o.horizon is None:
+        o.horizon = 2e-5 if o.model == "gc" else 2e-6
+    print(f"JAX backend: {jax.default_backend()}; building {objective}, {o.model}, {o.particles} particles", flush=True)
+    o.output.mkdir(parents=True)
+    base, theta0, axis, objective_fn = build_objective(o, objective)
+    base.to_json(str(o.output/"initial_coils.json"))
     evaluate = jax.jit(jax.value_and_grad(objective_fn, has_aux=True))
-    history = []
-    cached = None
+    history, cached = [], None
+    stream = (o.output/"history.csv").open("w", newline="")
+    writer = None
 
-    with (options.output / "history.csv").open("w", newline="") as stream:
-        fieldnames = ("evaluation", "cost", "particle_metric",
-            "safety_stop_fraction", "length_penalty", "curvature_penalty", "bdotn_penalty", "axis_field_penalty", "regularization_penalty",
-            "gradient_l2", "max_abs_displacement", "seconds")
-        if options.collisions:
-            fieldnames += ("mean_collision_accepted", "mean_collision_rejected", "mean_orbit_trials", "mean_orbit_rejected")
-        writer = csv.DictWriter(stream, fieldnames=fieldnames)
-        writer.writeheader()
+    def value_gradient(delta):
+        nonlocal cached, writer
+        delta = np.asarray(delta, dtype=np.float64)
+        if cached is not None and np.array_equal(delta, cached[0]):
+            return cached[1], cached[2]
+        start = perf_counter()
+        (value, (components, trajectories)), gradient = jax.block_until_ready(evaluate(jnp.asarray(delta)))
+        components = {name: float(term) for name, term in components.items()}
+        gradient, trajectories = np.asarray(gradient), np.asarray(trajectories)
+        if not (np.isfinite(float(value)) and np.isfinite(list(components.values())).all()
+                and np.isfinite(gradient).all() and np.isfinite(trajectories).all()):
+            raise RuntimeError("nonfinite orbit, objective or gradient")
+        row = dict(evaluation=len(history), cost=float(value), **components,
+            gradient_l2=float(np.linalg.norm(gradient)), seconds=perf_counter()-start)
+        if writer is None:
+            writer = csv.DictWriter(stream, fieldnames=list(row))
+            writer.writeheader()
+        history.append(row)
+        writer.writerow(row)
+        stream.flush()
+        print(f"eval {row['evaluation']:3d}: metric={components['particle_metric']:.10g}, cost={row['cost']:.10g}, "
+              f"|grad|={row['gradient_l2']:.4g}, safety stops={components['safety_stop_fraction']:.1%}, "
+              f"{row['seconds']:.2f} s", flush=True)
+        cached = (delta.copy(), row["cost"], gradient, components, trajectories)
+        return row["cost"], gradient
 
-        def value_gradient(delta):
-            nonlocal cached
-            delta = np.asarray(delta, dtype=np.float64)
-            if cached is not None and np.array_equal(delta, cached[0]):
-                return cached[1], cached[2]
-            start = perf_counter()
-            (value, (components, trajectories)), gradient = jax.block_until_ready(evaluate(jnp.asarray(delta)))
-            value = float(value)
-            components = {name: float(term) for name, term in components.items()}
-            metric = components["particle_metric"]
-            gradient, trajectories = np.asarray(gradient), np.asarray(trajectories)
-            if not (np.isfinite(value) and all(np.isfinite(list(components.values())))
-                    and np.isfinite(gradient).all() and np.isfinite(trajectories).all()):
-                raise RuntimeError("nonfinite orbit, objective or gradient")
-            row = dict(evaluation=len(history), cost=value, **components,
-                gradient_l2=float(np.linalg.norm(gradient)),
-                max_abs_displacement=float(options.max_change * np.max(np.abs(delta))),
-                seconds=perf_counter() - start)
-            history.append(row)
-            writer.writerow(row)
-            stream.flush()
-            print(f"eval {row['evaluation']:3d}: metric={metric:.10g}, "
-                  f"cost={value:.10g}, |grad|={row['gradient_l2']:.4g}, "
-                  f"safety stops={components['safety_stop_fraction']:.1%}, "
-                  f"{row['seconds']:.2f} s", flush=True)
-            cached = (delta.copy(), value, gradient, components, trajectories)
-            return value, gradient
-
-        delta0 = np.zeros(theta0.size)
-        initial_value, initial_gradient = value_gradient(delta0)
-        initial_components, initial_trajectories = cached[3], cached[4].copy()
-        optimizer_options = dict(maxiter=options.maxiter, maxls=12, ftol=1e-12, gtol=1e-10)
-        if options.max_evaluations is not None:
-            optimizer_options["maxfun"] = options.max_evaluations
-        result = minimize(value_gradient, delta0, method="L-BFGS-B", jac=True,
-            bounds=[(-1., 1.)] * theta0.size,
-            options=optimizer_options)
-        final_value, final_gradient = value_gradient(result.x)
-        final_components, final_trajectories = cached[3], cached[4]
-
-    final_dofs = theta0 + options.max_change * jnp.asarray(result.x)
-    base.with_dofs(final_dofs).to_json(str(options.output / "optimized_coils.json"))
-    np.savez_compressed(options.output / "orbits.npz",
-        times=np.linspace(0., options.horizon, options.saves),
-        initial_trajectories=initial_trajectories, final_trajectories=final_trajectories,
-        initial_coil_dofs=np.asarray(theta0), final_coil_dofs=np.asarray(final_dofs),
-        birth_xyz=np.asarray(xyz), birth_pitch=np.asarray(pitches))
-    plots = save_optimization_plots(options.output, base, base.with_dofs(final_dofs),
-        initial_trajectories, final_trajectories, axis=axis,
-        count=options.plot_particles, seed=options.plot_seed,
-        target_torus=(options.reference_major_radius, options.target_minor_radius, 0.)
-            if options.target_surface == "torus" else None,
-        safety_torus=(axis[0], options.safety_minor_radius, axis[1])
-            if options.safety_minor_radius is not None else None) if options.save_plots else None
-    units = {"loss_fraction": "probability", "final_radius": "metres", "radial_increment": "metres squared"}
-    report = dict(objective=objective, metric_units=units[objective],
-        coil_initialization="planar_circular" if options.coils is None else "json_file",
-        initial_cost=initial_value, final_cost=final_value,
-        initial_particle_metric=initial_components["particle_metric"],
-        final_particle_metric=final_components["particle_metric"],
-        initial_components=initial_components, final_components=final_components,
-        loss_weights=dict(particle_metric=options.particle_weight, length_penalty=options.length_weight,
-            curvature_penalty=options.curvature_weight, bdotn_penalty=options.bdotn_weight,
-            axis_field_penalty=options.axis_field_weight,
-            regularization_penalty=options.regularization),
-        loss_definitions=dict(length_penalty="mean(max(coil_length_m - length_target_m, 0))",
-            curvature_penalty="mean(max(pointwise_curvature_per_m - curvature_target_per_m, 0))",
-            bdotn_penalty="sum(abs(B dot unitnormal / |B|)) over fixed half-period surface mesh",
-            axis_field_penalty="abs(mean(|B| on fixed initial axis circle) - axis_field_target_T)",
-            radial_increment="sum_i(mean_j(r[i,j+1]-r[i,j]))**2; no division by dt; save-count dependent",
-            regularization_penalty="mean(delta**2)"),
-        initial_gradient_l2=float(np.linalg.norm(initial_gradient)),
-        final_gradient_l2=float(np.linalg.norm(final_gradient)),
-        optimizer_success=bool(result.success), optimizer_message=str(result.message),
-        iterations=int(result.nit), function_evaluations=int(result.nfev),
-        recorded_evaluations=len(history), coil_dof_names=list(base.dof_names),
-        reference_axis_r_z_m=axis, backend=jax.default_backend(),
-        devices=[str(device) for device in jax.devices()], jax=jax.__version__,
-        settings={name: str(value.resolve()) if isinstance(value, Path) else value
-                  for name, value in vars(options).items()},
-        plots=plots,
-        derivative_policy="Accepted-step reverse AD with frozen adaptive times; segment checkpoints; full population vmap" +
-            ("; collision coefficients and kicks differentiated with exact recorded production Wiener increments" if options.collisions else ""),
-        birth_policy="Fixed GC birth XYZ, pitch, energy and gyrophase; Lorentz conversion remains field-dependent",
-        target_policy="Fixed initial reference axis and fixed soft target; separate optional safety stopping torus",
-        safety_policy=("Split orbit crossings are root-found; velocity kicks follow the production split event rules; "
-            "later saves hold the terminal state. " if options.collisions else
-            "Stop on the first accepted step reaching the safety torus; hold the last saved interior state; ") +
-            "accepted step times, stopping decisions and saved-time masks are frozen in reverse AD. "
-            "The safety-stop fraction is a diagnostic, not an added objective.",
-        collision_policy="Production split sampler and per-particle keys (seed 42); exact accepted increments frozen in AD; "
-            "one uniform Maxwellian background; splitting error is not bounded by collision tolerance"
-            if options.collisions else "disabled",
-        gradient_coordinates="Dimensionless delta; coil DOFs = initial DOFs + max_change * delta",
-        timing_scope="First evaluation includes compilation; later evaluations reuse compiled value_and_grad")
-    (options.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"Cost {initial_value:.10g} -> {final_value:.10g}; particle metric "
-          f"{initial_components['particle_metric']:.10g} -> {final_components['particle_metric']:.10g}; {result.message}; "
-          f"saved {options.output}", flush=True)
-
+    delta0 = np.zeros(theta0.size)
+    value_gradient(delta0)
+    initial_components, initial_trajectories = cached[3], cached[4].copy()
+    result = minimize(value_gradient, delta0, method="L-BFGS-B", jac=True, bounds=[(-1., 1.)]*theta0.size,
+        options=dict(maxiter=o.maxiter, maxls=12, ftol=1e-12, gtol=1e-10))
+    value_gradient(result.x)
+    stream.close()
+    final_components, final_trajectories = cached[3], cached[4]
+    final_dofs = theta0 + o.max_change*jnp.asarray(result.x)
+    base.with_dofs(final_dofs).to_json(str(o.output/"optimized_coils.json"))
+    np.savez_compressed(o.output/"orbits.npz", initial_trajectories=initial_trajectories,
+        final_trajectories=final_trajectories, initial_coil_dofs=np.asarray(theta0), final_coil_dofs=np.asarray(final_dofs))
+    if o.save_plots:
+        save_optimization_plots(o.output, base, base.with_dofs(final_dofs), initial_trajectories,
+                                final_trajectories, axis=axis)
+    report = dict(objective=objective, initial_components=initial_components, final_components=final_components,
+        optimizer_success=bool(result.success), optimizer_message=str(result.message), iterations=int(result.nit),
+        function_evaluations=int(result.nfev), backend=jax.default_backend(), jax=jax.__version__,
+        settings={name: str(v) if isinstance(v, Path) else v for name, v in vars(o).items()},
+        note="Gradients freeze adaptive step times, stopping decisions and saved-time masks; collision runs "
+             "differentiate coefficients and kicks with the recorded Wiener increments. "
+             "Coil DOFs = initial DOFs + max_change * delta.")
+    (o.output/"summary.json").write_text(json.dumps(report, indent=2)+"\n")
+    print(f"Particle metric {initial_components['particle_metric']:.10g} -> "
+          f"{final_components['particle_metric']:.10g}; {result.message}; saved {o.output}", flush=True)
