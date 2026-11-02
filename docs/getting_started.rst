@@ -26,6 +26,33 @@ To run the one of the examples, use the following command:
 
 More examples are in the `examples` folder.
 
+CPU, GPU and multi-device defaults
+----------------------------------
+
+ESSOS requests one JAX CPU device per CPU, shards particles over all devices of the default backend, and enables float64 at import. Compiled traces are cached in ``~/.cache/essos/xla``.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Setting
+     - Default
+     - Change it when
+   * - ``devices=``
+     - all JAX devices
+     - Sharing a node, or some devices are busy
+   * - ``ESSOS_CPU_DEVICES``
+     - one per CPU
+     - Sharing a node; ``1`` gives a single device
+   * - ``JAX_PLATFORMS=cpu``
+     - GPU when a CUDA ``jaxlib`` is installed
+     - The GPU is busy, or a small trace runs faster on CPU
+   * - ``XLA_PYTHON_CLIENT_PREALLOCATE=false``
+     - JAX preallocates most GPU memory
+     - Several processes share one GPU
+   * - ``ESSOS_XLA_CACHE``
+     - ``~/.cache/essos/xla``
+     - The filesystem is slow or small; empty disables it
+
 Optimization geometry
 ---------------------
 
