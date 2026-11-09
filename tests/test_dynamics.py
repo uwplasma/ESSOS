@@ -1111,6 +1111,65 @@ def test_vmec_non_finite_steps_are_reported():
     assert jnp.isinf(tracing.failure_times[~failed]).all()
 
 
+def _toroidal_source(xyz, params):
+    R2 = xyz[:, 0]**2 + xyz[:, 1]**2
+    return jnp.stack([-params[0] * xyz[:, 1] / R2, params[0] * xyz[:, 0] / R2, params[1] + 0 * R2], 1)
+
+
+def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and_field_parameters():
+    """A strike, an orbit that re-enters twice and one that never leaves: jax.jvp, jax.grad and jit agree with finite differences."""
+    import diffrax
+    from essos.fields import ExternalField
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    finite = lambda x: jnp.sum(jnp.where(jnp.isfinite(x), x, 0.0))
+
+    def objective(s, params, adjoint=None):
+        xyz = jnp.stack([s, jnp.array([2.2941, 0.6628, 1.0]), jnp.array([5.0876, 3.5216, 1.0])], 1)
+        particles = Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([-0.9872, 0.5453, 0.3]))
+        tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3e-6, timestep=1e-9,
+                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(_toroidal_source, params),
+                          wall=0.05, max_returns=2, adjoint=adjoint)
+        return 1e6 * (finite(tracing.wall_times) + finite(tracing.lcfs_times)) + finite(tracing.wall_positions[:, 2])
+
+    s, params = jnp.array([0.9732, 0.9821, 0.5]), jnp.array([60.0, 0.5])
+    ds, dparams = jnp.array([1.0, -0.5, 0.3]) * 1e-4, jnp.array([1.0, 0.05])
+    tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", maxtime=3e-6, timestep=1e-9, times_to_trace=4, atol=1e-8,
+                      rtol=1e-8, exterior_field=ExternalField(_toroidal_source, params), wall=0.05, max_returns=2,
+                      particles=Particles(initial_xyz=jnp.array([[0.9732, 2.2941, 5.0876], [0.9821, 0.6628, 3.5216], [0.5, 1.0, 1.0]]),
+                                          initial_vparallel_over_v=jnp.array([-0.9872, 0.5453, 0.3])))
+    assert list(tracing.status) == [5, 3, 0] and list(tracing.returns) == [2, 0, 0]
+    h = 0.1
+    finite_difference = (objective(s + h * ds, params + h * dparams) - objective(s - h * ds, params - h * dparams)) / (2 * h)
+    forward = jax.jvp(lambda s, p: objective(s, p, diffrax.ForwardMode()), (s, params), (ds, dparams))[1]
+    grad_s, grad_p = jax.jit(jax.grad(objective, (0, 1)))(s, params)
+    assert jnp.isfinite(grad_s).all() and jnp.isfinite(grad_p).all() and grad_s[2] == 0.0
+    np.testing.assert_allclose(forward, finite_difference, rtol=1e-3)
+    np.testing.assert_allclose(grad_s @ ds + grad_p @ dparams, forward, rtol=1e-5)
+
+
+def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
+    """Trapped protons whose radial excursion just reaches the LCFS (pitch 0.0755940631) cross, graze or stay inside.
+
+    Which side of the knife edge an orbit lands on depends on rounding, so only the gradients are asserted finite."""
+    from essos.constants import ELEMENTARY_CHARGE
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    pitch = jnp.concatenate([jnp.zeros(1), 0.0755940631 + jnp.array([-1e-6, 1e-12, 1e-9, 1e-7, 1e-5, 1e-3, 0.2])])
+
+    def crossing_times(s):
+        xyz = jnp.stack([s, jnp.full_like(s, 0.3), jnp.full_like(s, 0.2)], 1)
+        particles = Particles(initial_xyz=xyz, initial_vparallel_over_v=pitch, mass=PROTON_MASS, charge=ELEMENTARY_CHARGE,
+                              energy=1e6 * ELEMENTARY_CHARGE)
+        return Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=1e-4, timestep=1e-9,
+                       times_to_trace=3, atol=1e-10, rtol=1e-10).lcfs_times
+
+    objective = lambda s: jnp.sum(jnp.where(jnp.isfinite(t := crossing_times(s)), t, 0.0))
+    s = jnp.full(8, 0.9)
+    times, gradient = crossing_times(s), jax.grad(objective)(s)
+    assert jnp.isinf(times[0]) and jnp.isfinite(times[-1]) and jnp.isfinite(gradient).all()
+    h = jnp.zeros(8).at[-1].set(1e-6)
+    np.testing.assert_allclose(gradient[-1], (objective(s + h) - objective(s - h)) / 2e-6, rtol=1e-4)
+
+
 def test_exterior_arguments_are_validated():
     particles = Particles(initial_xyz=jnp.array([[0.5, 0.0, 0.0]]))
     with pytest.raises(ValueError, match="exterior_field"):
