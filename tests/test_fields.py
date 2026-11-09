@@ -733,8 +733,9 @@ def test_combined_field_fused_gc_quantities_match_generic_path():
     ext = ExternalField(lambda xyz: 0.01 * jnp.stack([-xyz[:, 1], xyz[:, 0], xyz[:, 2] ** 2], axis=-1))
     x = jnp.array([1.7, 0.1, 0.05])
     combined = CombinedField(bs, ext)
-    assert type(ext).gc_quantities is MagneticField.gc_quantities  # ExternalField is not fused: generic path
+    assert type(ext).gc_quantities is not MagneticField.gc_quantities  # every member is fused
     generic = MagneticField.gc_quantities(combined, x)
     for a, b in zip(CombinedField(bs, bs).gc_quantities(x), MagneticField.gc_quantities(CombinedField(bs, bs), x)):
         assert jnp.allclose(a, b, rtol=1e-9, atol=1e-12)
-    assert all(jnp.allclose(a, b, rtol=1e-12) for a, b in zip(combined.gc_quantities(x), generic))
+    assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(combined.gc_quantities(x), generic))
+    assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(ext.gc_quantities(x), MagneticField.gc_quantities(ext, x)))

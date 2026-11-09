@@ -97,6 +97,12 @@ def _gc_from_jacobian(field, jacobian):
     return field, field, magnitude, grad_magnitude, curl_unit, curvature, 1.0
 
 
+def _cartesian_gc_quantities(field, points):
+    """``gc_quantities`` of a Cartesian field (sqrtg = 1) from one forward-mode Jacobian of ``field.B``."""
+    jacobian, value = jacfwd(lambda x: (field.B(x),) * 2, has_aux=True)(jnp.asarray(points))
+    return _gc_from_jacobian(value, jacobian)
+
+
 class BiotSavart(MagneticField):
     def __init__(self, coils):
         self.coils = coils
@@ -125,8 +131,7 @@ class BiotSavart(MagneticField):
         grad|B| = (dB/dX)^T b, curl b = curl B/|B| + B x grad|B|/|B|^2 and
         kappa = -B x curl b / |B| follow algebraically.
         """
-        jacobian, field = jacfwd(lambda x: (self.B(x), self.B(x)), has_aux=True)(jnp.asarray(points))
-        return _gc_from_jacobian(field, jacobian)
+        return _cartesian_gc_quantities(self, points)
 
     @jit
     def B(self, points):
@@ -710,6 +715,11 @@ class ExternalField(MagneticField):
             return jnp.array([BR * jnp.cos(phi) - Bphi * jnp.sin(phi), BR * jnp.sin(phi) + Bphi * jnp.cos(phi), BZ])
         return getattr(self.source, "B", self.source)(points[None], *extra)[0]
 
+    @jit
+    def gc_quantities(self, points):
+        """Guiding-center quantities from one forward-mode Jacobian of the source (Cartesian, sqrtg = 1)."""
+        return _cartesian_gc_quantities(self, points)
+
 
 tree_util.register_pytree_node(ExternalField,
                                lambda f: ((f.params,), f.source),
@@ -747,8 +757,7 @@ class CombinedField(MagneticField):
         """
         if any(type(f).gc_quantities is MagneticField.gc_quantities for f in self.fields):
             return MagneticField.gc_quantities(self, points)
-        jacobian, field = jacfwd(lambda x: (self.B(x),) * 2, has_aux=True)(jnp.asarray(points))
-        return _gc_from_jacobian(field, jacobian)
+        return _cartesian_gc_quantities(self, points)
 
     @jit
     def sqrtg(self, points):
@@ -820,8 +829,10 @@ class InterpolatedField(MagneticField):
             phi, z, r = np.meshgrid(np.arange(nph) * 2 * np.pi / (nfp * nphi), np.linspace(*Z, nz),
                                     np.linspace(*R, nr), indexing="ij")
             xyz = jnp.stack((r * np.cos(phi), r * np.sin(phi), z), -1).reshape(-1, 3)
-            if chunk_size is None:  # bound points x source size (e.g. coil segments, dipoles) to ~2^24
-                chunk_size = max(1, 2**24 // max(1, sum(np.size(x) for x in tree_util.tree_leaves(field))))
+            if chunk_size is None:  # as many points per batch as fit in ~64 MiB of the source's compiled temporaries
+                probe = 64
+                temp = jit(vmap(field.B)).lower(xyz[:probe]).compile().memory_analysis().temp_size_in_bytes
+                chunk_size = max(probe, probe * 2**26 // max(1, temp))
             B = lax.map(field.B, xyz, batch_size=min(chunk_size, len(xyz))).reshape(phi.shape + (3,))
             c, s = jnp.cos(phi), jnp.sin(phi)
             table = jnp.stack((c * B[..., 0] + s * B[..., 1], c * B[..., 1] - s * B[..., 0], B[..., 2]), -1)
