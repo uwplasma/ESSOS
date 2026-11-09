@@ -673,7 +673,6 @@ class near_axis:
         )
 
 
-@tree_util.register_static
 class ExternalField(MagneticField):
     """A Cartesian field from a batched source, traced one point at a time.
 
@@ -682,10 +681,17 @@ class ExternalField(MagneticField):
     VMEX ``VmecExtender``), or is a callable ``xyz (n, 3) -> B (n, 3)``, in
     metres and tesla, traceable by JAX. The derivatives come from automatic
     differentiation (:class:`MagneticField`).
+
+    With ``params`` (any pytree of numbers) the source is called with it as an
+    extra last argument, ``source(xyz, params)`` or ``source.b_cyl(R, phi, Z, params)``.
+    ``params`` are pytree children, so ``jax.grad`` differentiates with respect to
+    them and instances with same-shaped params and the same source share one
+    compilation. Without ``params`` the source is static metadata.
     """
 
-    def __init__(self, source):
+    def __init__(self, source, params=None):
         self.source = source
+        self.params = params
 
     @jit
     def sqrtg(self, points):
@@ -697,11 +703,17 @@ class ExternalField(MagneticField):
 
     @jit
     def B(self, points):
+        extra = () if self.params is None else (self.params,)
         if hasattr(self.source, "b_cyl"):
             R, phi = jnp.hypot(points[0], points[1]), jnp.arctan2(points[1], points[0])
-            BR, Bphi, BZ = (jnp.ravel(b)[0] for b in self.source.b_cyl(R[None], phi[None], points[2][None]))
+            BR, Bphi, BZ = (jnp.ravel(b)[0] for b in self.source.b_cyl(R[None], phi[None], points[2][None], *extra))
             return jnp.array([BR * jnp.cos(phi) - Bphi * jnp.sin(phi), BR * jnp.sin(phi) + Bphi * jnp.cos(phi), BZ])
-        return getattr(self.source, "B", self.source)(points[None])[0]
+        return getattr(self.source, "B", self.source)(points[None], *extra)[0]
+
+
+tree_util.register_pytree_node(ExternalField,
+                               lambda f: ((f.params,), f.source),
+                               lambda source, children: ExternalField(source, children[0]))
 
 
 class CombinedField(MagneticField):
@@ -725,6 +737,18 @@ class CombinedField(MagneticField):
     @jit
     def B_contravariant(self, points):
         return sum(field.B_contravariant(points) for field in self.fields)
+
+    @jit
+    def gc_quantities(self, points):
+        """Fused guiding-centre quantities when every member provides them, else the generic path.
+
+        Fused members are Cartesian (sqrtg = 1), so B and dB/dX of the sum come
+        from one forward-mode pass and the quantities follow algebraically.
+        """
+        if any(type(f).gc_quantities is MagneticField.gc_quantities for f in self.fields):
+            return MagneticField.gc_quantities(self, points)
+        jacobian, field = jacfwd(lambda x: (self.B(x),) * 2, has_aux=True)(jnp.asarray(points))
+        return _gc_from_jacobian(field, jacobian)
 
     @jit
     def sqrtg(self, points):

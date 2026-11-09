@@ -702,3 +702,39 @@ def test_half_grid_interpolation_keeps_its_slope_up_to_the_lcfs():
         return _radial_interp(s, grid, table, jnp.array([0]), half_grid=True)[0]
     for s in (0.994, 0.996, 0.999, 1.0):
         assert jnp.isclose(f(s), 1 + s, rtol=1e-12) and jnp.isclose(jax.grad(f)(s), 1.0, rtol=1e-9)
+
+
+def test_external_field_params_are_differentiable_and_share_one_compile():
+    import jax
+    import jax.numpy as jnp
+    from essos.fields import ExternalField
+
+    source = lambda xyz, p: p[0] * jnp.stack([-xyz[:, 1], xyz[:, 0], p[1] * xyz[:, 2]], axis=-1) ** 2  # noqa: E731
+    x = jnp.array([1.1, 0.2, 0.05])
+    loss = lambda p: jnp.sum(ExternalField(source, p).dAbsB_by_dX(x) ** 2) + ExternalField(source, p).AbsB(x)  # noqa: E731
+    p = jnp.array([1.3, 0.7])
+    g = jax.grad(loss)(p)
+    fd = jnp.array([(loss(p + 1e-6 * e) - loss(p - 1e-6 * e)) / 2e-6 for e in jnp.eye(2)])
+    assert jnp.all(g != 0) and jnp.allclose(g, fd, rtol=1e-6)
+    traces = []
+    f = jax.jit(lambda fld: traces.append(1) or fld.AbsB(x))
+    f(ExternalField(source, p)); f(ExternalField(source, 2 * p))
+    assert len(traces) == 1
+
+
+def test_combined_field_fused_gc_quantities_match_generic_path():
+    import jax
+    import jax.numpy as jnp
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart, CombinedField, ExternalField, MagneticField
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    bs = BiotSavart(Coils(curves=curves, currents=[1.1e6, 0.9e6]))
+    ext = ExternalField(lambda xyz: 0.01 * jnp.stack([-xyz[:, 1], xyz[:, 0], xyz[:, 2] ** 2], axis=-1))
+    x = jnp.array([1.7, 0.1, 0.05])
+    combined = CombinedField(bs, ext)
+    assert type(ext).gc_quantities is MagneticField.gc_quantities  # ExternalField is not fused: generic path
+    generic = MagneticField.gc_quantities(combined, x)
+    for a, b in zip(CombinedField(bs, bs).gc_quantities(x), MagneticField.gc_quantities(CombinedField(bs, bs), x)):
+        assert jnp.allclose(a, b, rtol=1e-9, atol=1e-12)
+    assert all(jnp.allclose(a, b, rtol=1e-12) for a, b in zip(combined.gc_quantities(x), generic))
