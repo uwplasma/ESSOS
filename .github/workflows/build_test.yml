@@ -20,6 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: [ '3.11', '3.12', '3.13', '3.14']
+        jax: ['']
         include:
           - python-version: '3.12'
             jax: '0.8.2'
