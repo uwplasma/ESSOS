@@ -18,8 +18,12 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        python-version: [ '3.11', '3.12']
-    name: Python ${{ matrix.python-version }} Test
+        python-version: [ '3.11', '3.12', '3.13', '3.14']
+        include:
+          - python-version: '3.12'
+            jax: '0.8.2'
+            suffix: ', JAX 0.8.2'
+    name: Python ${{ matrix.python-version }} Test${{ matrix.suffix }}
 
     steps:
     - uses: actions/checkout@v4
@@ -36,6 +40,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install . flake8 pytest pytest-cov pytest-xdist
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        if [ -n "${{ matrix.jax }}" ]; then pip install "jax==${{ matrix.jax }}" "jaxlib==${{ matrix.jax }}"; fi
         echo "JAX_VERSION=$(python -c 'import jax; print(jax.__version__)')" >> $GITHUB_ENV
     - name: Cache JAX compilations
       uses: actions/cache@v4
@@ -51,15 +56,15 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=examples_old
 
     - name: Run tests
-      if: matrix.python-version != '3.12'
+      if: matrix.python-version != '3.12' || matrix.jax
       run: pytest -n auto
 
     - name: Run tests with coverage
-      if: matrix.python-version == '3.12'
+      if: matrix.python-version == '3.12' && !matrix.jax
       run: pytest -n auto --cov-branch --cov-report=xml --cov=essos
 
     - name: Upload coverage reports to Codecov
-      if: matrix.python-version == '3.12'
+      if: matrix.python-version == '3.12' && !matrix.jax
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
@@ -79,7 +84,7 @@ jobs:
     - name: Install ESSOS at the declared floors
       run: |
         python -m pip install --upgrade pip
-        pip install ".[multiobjective]" pytest pytest-xdist "jax==0.6.2" "jaxlib==0.6.2" "equinox==0.13.3" "diffrax==0.7.0" "optimistix==0.0.11" "jaxtyping<0.3.8" "numpy<2.3"
+        pip install ".[multiobjective]" pytest pytest-xdist "jax==0.6.2" "jaxlib==0.6.2" "equinox==0.13.3" "diffrax==0.7.0" "optimistix==0.0.11"
     - name: Cache JAX compilations
       uses: actions/cache@v4
       with:
