@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from pathlib import Path
 from essos.coils import Coils, Curves
-from essos.fields import BiotSavart, Vmec, VMEC_WOUT_ARRAYS
+from essos.fields import BiotSavart, BiotSavart_from_gamma, Vmec, VMEC_WOUT_ARRAYS
 import jax
 import jax.numpy as jnp
 from jax import random, vmap
@@ -19,6 +19,15 @@ class MockCoils:
         self.gamma_dash = random.uniform(random.PRNGKey(0), (3, 3, 3))
         self.gamma_dashdash = random.uniform(random.PRNGKey(0), (3, 3, 3))
         self.dofs_curves = random.uniform(random.PRNGKey(0), (3, 3, 3))
+
+def test_biot_savart_scan_matches_direct_sum():
+    coils = MockCoils()  # 3 coils, so the last scan chunk is padded
+    point = jnp.array([0.3, -0.2, 0.5])
+    dif = point - coils.gamma
+    direct = 1e-7 * jnp.mean(jnp.einsum("i,iqk->qk", coils.currents, jnp.cross(coils.gamma_dash, dif)
+                                        / jnp.linalg.norm(dif, axis=-1, keepdims=True)**3), axis=0)
+    field = BiotSavart_from_gamma(coils.gamma, coils.gamma_dash, currents=coils.currents)
+    assert jnp.allclose(field.B(point), direct, rtol=1e-12)
 
 def test_biot_savart_initialization():
     coils = MockCoils()
