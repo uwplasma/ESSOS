@@ -29,7 +29,7 @@ More examples are in the `examples` folder.
 CPU, GPU and multi-device defaults
 ----------------------------------
 
-ESSOS requests one JAX CPU device per CPU, shards particles over all devices of the default backend, and enables float64 at import. Compiled traces are cached in ``~/.cache/essos/xla``.
+ESSOS requests one JAX CPU device per core it may use, shards particles over all devices of the default backend, and enables float64 when a submodule such as ``essos.fields`` is imported. Compiled traces are cached in ``~/.cache/essos/xla``.
 
 .. list-table::
    :header-rows: 1
@@ -41,7 +41,7 @@ ESSOS requests one JAX CPU device per CPU, shards particles over all devices of 
      - all JAX devices
      - Sharing a node, or some devices are busy
    * - ``ESSOS_CPU_DEVICES``
-     - one per CPU
+     - one per usable core (affinity, ``SLURM_CPUS_PER_TASK``)
      - Sharing a node; ``1`` gives a single device
    * - ``JAX_PLATFORMS=cpu``
      - GPU when a CUDA ``jaxlib`` is installed
