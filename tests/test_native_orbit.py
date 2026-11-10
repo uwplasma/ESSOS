@@ -321,6 +321,7 @@ def test_rhs_preparation_and_gpu_helpers_preserve_values(monkeypatch):
         np.testing.assert_array_equal(_kernel_is_finite(values),jnp.isfinite(values))
         assert np.signbit(_select_one(values,4,0).reshape(()))
     class Primitive:
+        name='fake'
         def get_bind_params(self,p): return ([],p)
         def bind(self,*args,**kwargs): return args[0]+kwargs['offset']
     assert _bind_primitive(Primitive(),[2.],dict(offset=3.))==5.

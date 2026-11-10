@@ -2250,6 +2250,8 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
         return value
     def device_scalar(value,dtype):
         while isinstance(value,np.ndarray) and not value.shape:value=value.item()
+        if np.dtype(dtype)==np.uint64 and not isinstance(value,jax.core.Tracer) and value>=2**63:
+            return np.asarray(value,dtype)  # host constant: _bind_primitive keeps its top bit out of Triton
         return jnp.asarray(value,dtype=dtype)
     def reduced(value,axes,combine):
         result=value
