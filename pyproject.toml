@@ -78,3 +78,5 @@ multiobjective = ["optuna", "pandas", "plotly"]
 # Examples that build VMEX equilibria, mgrid fields or free-boundary
 # (virtual-casing) fields. 0.11.3 is the first VMEX with MgridField(order=...).
 vmex = ["vmex[freeb]>=0.11.3"]
+# Test tools used by CI and the contributor workflow.
+test = ["pytest", "pytest-xdist", "pytest-cov"]

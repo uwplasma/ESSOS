@@ -2,7 +2,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from functools import partial
-from jax import jit, jacfwd, grad, vmap, tree_util, lax
+from jax import jit
 
 
 class Electric_field_flux():
@@ -12,8 +12,6 @@ class Electric_field_flux():
         self.h5 = File(self.Er_filename,'r')
         self.rho=jnp.array(self.h5['rho'][()])
         self.Er=jnp.array(self.h5['Er'][()])
-        self.E_theta=0.0*self.Er
-        self.E_phi=0.0*self.Er
         self.Aminor_p=vmec.Aminor_p
         self.Es=self.Er*0.5/self.rho*self.Aminor_p
         #Setting E_s(0) = 0, because the transformation is singular

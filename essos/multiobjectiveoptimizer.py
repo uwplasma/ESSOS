@@ -2,6 +2,8 @@ import jax
 import jax.numpy as jnp
 import optuna
 import inspect
+import os
+import datetime
 import optax
 import matplotlib.pyplot as plt
 from jax import jit
@@ -9,8 +11,6 @@ from functools import partial
 from essos.coils import Coils, Curves, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 import numpy as np
-from pandas.plotting import parallel_coordinates
-import pandas as pd
 
 
 def _require_plotly():
@@ -18,6 +18,31 @@ def _require_plotly():
         import plotly  # noqa: F401  (optuna.visualization needs it too)
     except ImportError as err:
         raise ImportError("This plot needs plotly: pip install 'essos[multiobjective]'") from err
+
+
+_EPS = 1e-12
+
+
+def _log10(values, log):
+    return np.log10(np.clip(values, _EPS, None)) if log else values
+
+
+def _z_limit(values, z_thresh):
+    """mean + z_thresh * std of ``values``, or None when no filtering applies."""
+    return values.mean() + float(z_thresh) * values.std() if (z_thresh is not None and values.std() > 0) else None
+
+
+def _save_figure(fig, save, stem, ext, derive=lambda path: path):
+    """Save ``fig`` when ``save`` is True (./output/<stem>_<timestamp>.<ext>) or a path string (``derive(save)``)."""
+    if not (isinstance(save, str) or save is True):
+        return
+    if save is True:
+        os.makedirs("output", exist_ok=True)
+        path = os.path.join("output", f"{stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}")
+    else:
+        path = derive(save)
+    fig.savefig(path, dpi=300) if ext == "png" else fig.write_html(path)
+    print(f"Saved figure to {path}")
 
 
 class MultiObjectiveOptimizer:
@@ -123,9 +148,6 @@ class MultiObjectiveOptimizer:
             if loss < self.tol:
                 break
 
-        final_coils = self._build_coils_from_x(x)
-        field = BiotSavart(final_coils)
-
         available_inputs = self._build_available_inputs(x)
 
         losses = []
@@ -176,17 +198,10 @@ class MultiObjectiveOptimizer:
         ncols: Number of columns in the grid layout for 2D projections.
         save: str (exact path) or True (auto-save in ./output/) or None (no save)
         """
-        import numpy as np
-        import matplotlib.pyplot as plt
-        import optuna
-        import os, datetime
-
         if not hasattr(self, "loss_names"):
             raise ValueError("loss_names must be set before plotting.")
         names = self.loss_names
 
-        eps = 1e-12
-        tol = 1e-4
         completed = [t for t in self.study.trials
                     if t.state == optuna.trial.TrialState.COMPLETE and t.values is not None]
         if not completed:
@@ -211,14 +226,14 @@ class MultiObjectiveOptimizer:
 
         for i in range(m):
             x_raw = pf[:, i].astype(float)
-            x = np.log10(np.clip(x_raw, eps, None)) if logx else x_raw
-            x_lim = x.mean() + float(z_thresh) * x.std() if (z_thresh is not None and x.std() > 0) else None
+            x = _log10(x_raw, logx)
+            x_lim = _z_limit(x, z_thresh)
 
             js = [j for j in range(m) if j != i]
             for c, j in enumerate(js):
                 y_raw = pf[:, j].astype(float)
-                y = np.log10(np.clip(y_raw, eps, None)) if logy else y_raw
-                y_lim = y.mean() + float(z_thresh) * y.std() if (z_thresh is not None and y.std() > 0) else None
+                y = _log10(y_raw, logy)
+                y_lim = _z_limit(y, z_thresh)
 
                 keep = np.ones_like(x, dtype=bool)
                 if x_lim is not None:
@@ -244,33 +259,17 @@ class MultiObjectiveOptimizer:
         fig.suptitle("2D Pareto Projections (row i: x = loss_i; columns: y = other losses)", y=1.02, fontsize=12)
         plt.tight_layout()
 
-        if isinstance(save, str) or save is True:
-            if save is True:
-                os.makedirs("output", exist_ok=True)
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                out_path = os.path.join("output", f"plot_pareto_fronts_{ts}.png")
-            else:
-                out_path = save
-            fig.savefig(out_path, dpi=300)
-            print(f"Saved figure to {out_path}")
-
+        _save_figure(fig, save, "plot_pareto_fronts", "png")
         plt.show()
 
         # 3D 
         if m == 3:
-            from mpl_toolkits.mplot3d import Axes3D
-            x = np.log10(np.clip(pf[:, 0], eps, None)) if logx else pf[:, 0]
-            y = np.log10(np.clip(pf[:, 1], eps, None)) if logy else pf[:, 1]
-            z = np.log10(np.clip(pf[:, 2], eps, None)) if logz else pf[:, 2]
-
-            x_lim = x.mean() + float(z_thresh) * x.std() if (z_thresh is not None and x.std() > 0) else None
-            y_lim = y.mean() + float(z_thresh) * y.std() if (z_thresh is not None and y.std() > 0) else None
-            z_lim = z.mean() + float(z_thresh) * z.std() if (z_thresh is not None and z.std() > 0) else None
-
+            x, y, z = (_log10(pf[:, k], flag) for k, flag in enumerate((logx, logy, logz)))
             keep = np.ones_like(x, dtype=bool)
-            if x_lim is not None: keep &= (x <= x_lim)
-            if y_lim is not None: keep &= (y <= y_lim)
-            if z_lim is not None: keep &= (z <= z_lim)
+            for v in (x, y, z):
+                v_lim = _z_limit(v, z_thresh)
+                if v_lim is not None:
+                    keep &= (v <= v_lim)
             filtered = int((~keep).sum())
 
             fig3d = plt.figure(figsize=(8, 6))
@@ -286,21 +285,9 @@ class MultiObjectiveOptimizer:
             ax3.legend(loc='best')
             plt.tight_layout()
 
-            if isinstance(save, str) or save is True:
-                if save is True:
-                    os.makedirs("output", exist_ok=True)
-                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    out_path3d = os.path.join("output", f"plot_pareto_fronts_3d_{ts}.png")
-                else:
-                    base = save
-                    if base.lower().endswith((".png", ".jpg", ".jpeg")):
-                        root, ext = os.path.splitext(base)
-                        out_path3d = f"{root}_3d{ext}"
-                    else:
-                        out_path3d = base + "_3d.png"
-                fig3d.savefig(out_path3d, dpi=300)
-                print(f"Saved figure to {out_path3d}")
-
+            _save_figure(fig3d, save, "plot_pareto_fronts_3d", "png",
+                         lambda base: "_3d".join(os.path.splitext(base)) if base.lower().endswith((".png", ".jpg", ".jpeg"))
+                         else base + "_3d.png")
             plt.show()
 
     def plot_parallel_coordinates(self, logy=False, z_thresh=None, include_params=None, save=None):
@@ -314,10 +301,8 @@ class MultiObjectiveOptimizer:
                 For True/str, a separate file per objective is saved.
         """
         _require_plotly()
-        import numpy as np
         import plotly.graph_objects as go
         import optuna.visualization as vis
-        import os, datetime
 
         if not hasattr(self, "loss_names"):
             raise ValueError("loss_names must be set before plotting.")
@@ -328,8 +313,7 @@ class MultiObjectiveOptimizer:
             print("No completed trials to plot.")
             return
 
-        eps = 1e-12
-        params = include_params if include_params is not None else None
+        params = include_params
 
         for i, name in enumerate(names):
             subfig = vis.plot_parallel_coordinate(
@@ -358,8 +342,7 @@ class MultiObjectiveOptimizer:
                 keep = None
                 if obj_idx is not None:
                     vals = np.array(dims[obj_idx]["values"], dtype=float)
-                    if logy:
-                        vals = np.log10(np.clip(vals, eps, None))
+                    vals = _log10(vals, logy)
                     dims[obj_idx]["values"] = vals.tolist()
 
                     if z_thresh is not None and vals.size > 1 and np.isfinite(vals.std()) and vals.std() > 0:
@@ -379,22 +362,10 @@ class MultiObjectiveOptimizer:
                 showlegend=False
             )
 
-            if isinstance(save, str) or save is True:
-                if save is True:
-                    os.makedirs("output", exist_ok=True)
-                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    out_html = os.path.join("output", f"plot_parallel_coordinates_{name}_{ts}.html")
-                else:
-                    # if a single path string is given, create per-objective filenames by inserting name
-                    base = save
-                    if base.lower().endswith(".html"):
-                        root, ext = os.path.splitext(base)
-                        out_html = f"{root}_{name}{ext}"
-                    else:
-                        out_html = base + f"_{name}.html"
-                fig.write_html(out_html)
-                print(f"Saved figure to {out_html}")
-
+            # a single path string gives per-objective filenames by inserting the name
+            _save_figure(fig, save, f"plot_parallel_coordinates_{name}", "html",
+                         lambda base: f"_{name}".join(os.path.splitext(base)) if base.lower().endswith(".html")
+                         else base + f"_{name}.html")
             fig.show()
 
     def plot_optimization_history(self, logy=False, z_thresh=None, ncols=2, save=None):
@@ -407,13 +378,10 @@ class MultiObjectiveOptimizer:
         save: str (exact path) or True (auto-save in ./output/) or None (no save).
         """
         _require_plotly()
-        import numpy as np
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
         import optuna.visualization as vis
-        import os, datetime
 
-        eps = 1e-12
         if not hasattr(self, "loss_names"):
             raise ValueError("loss_names must be set before plotting.")
         names = self.loss_names
@@ -442,9 +410,8 @@ class MultiObjectiveOptimizer:
                 if "x" in tr and "y" in tr and tr.get("type") in ("scatter", "scattergl"):
                     x = np.array(tr["x"], dtype=float)
                     y = np.array(tr["y"], dtype=float)
-                    if logy:
-                        y = np.log10(np.clip(y, eps, None))
-                    
+                    y = _log10(y, logy)
+
                     if z_thresh is not None and y.size > 1 and np.isfinite(y.std()) and y.std() > 0:
                         y_lim = y.mean() + float(z_thresh) * y.std()
                         keep = (y <= y_lim)
@@ -469,24 +436,14 @@ class MultiObjectiveOptimizer:
             showlegend=False
         )
 
-        if isinstance(save, str) or save is True:
-            if save is True:
-                os.makedirs("output", exist_ok=True)
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                out_html = os.path.join("output", f"plot_optimization_history_{ts}.html")
-            else:
-                out_html = save
-            fig.write_html(out_html)
-            print(f"Saved figure to {out_html}")
-
+        _save_figure(fig, save, "plot_optimization_history", "html")
         fig.show()
     
     def plot_param_importances(self, save=None, ncols=2):
         _require_plotly()
         import optuna.visualization as vis
         from plotly.subplots import make_subplots
-        import plotly.graph_objects as go
-        import math, os, datetime
+        import math
 
         horizontal_spacing=0.3
         vertical_spacing=0.2
@@ -534,16 +491,8 @@ class MultiObjectiveOptimizer:
             showlegend=False,
         )
 
-        if isinstance(save, str) or save is True:
-            if save is True:
-                os.makedirs("output", exist_ok=True)
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                out_html = os.path.join("output", f"plot_param_importances_{ts}.html")
-            else:
-                out_html = save if save.lower().endswith(".html") else (save + ".html")
-            fig.write_html(out_html)
-            print(f"Saved figure to {out_html}")
-
+        _save_figure(fig, save, "plot_param_importances", "html",
+                     lambda path: path if path.lower().endswith(".html") else path + ".html")
         fig.show()
 
 
