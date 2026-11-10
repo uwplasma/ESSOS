@@ -380,27 +380,23 @@ Boozer; velocity errors include both absolute and birth-speed-normalized values
 against a tighter Diffrax reference. The measured gains include the private
 field adapters and describe the complete forward implementation.
 
-Generate all eight comparison workloads and their files on a CUDA machine:
+Time the shared and CUDA forward workloads on a CUDA machine:
 
 ```sh
-python -m examples.benchmarks.benchmark_native_orbits --suite \
-  --execution cuda --output output/native_forward
+for field in coils vmec boozer; do
+  python -m examples.benchmarks.benchmark_native --suite orbit --field $field \
+    --execution both --out output/native_forward/$field
+done
 ```
 
-Choose a fresh output folder. The script creates per-workload `comparison.json`
-and `comparison.csv`, plus aggregate `forward.csv` and `forward.md`. Generated
-results are kept under `output/` and are not versioned. Three blocked warm
-samples alternate backend order after startup; setup, compilation and the tighter
-reference are excluded. Compilation may use a persistent cache and is not
-reported as a cold measurement. Reports include inputs, source hashes, step
-counts, failures, error metrics and compiler buffers.
-
-Defaults reproduce the table's 64 particles, 4 keV, seed 42, eight saves,
-rtol=atol=1e-9 and 20 us GC workloads. Fixed VMEC/Boozer use 160 steps, coil GC
-224, and coil Lorentz 1792 over 2 us. For one workload, omit `--suite` and select
-`--field vmec`, `--field boozer` or `--field coils --model gc/lorentz`, with
-`--stepping adaptive/fixed`. A matching Boozer transform can be supplied with
-`--field-cache`; otherwise the optional `essos[booz]` dependency computes it.
+Choose a fresh output folder per workload. The script writes `result.json` (compile time,
+first execution, warm median, particles per second, compiler buffers, peak memory, lost and
+failed counts) and, with `--save-states`, `states.npz`. Generated results are kept under
+`output/` and are not versioned. The Diffrax comparison and error columns of the table above
+came from an earlier script that has been removed. Defaults are 64 particles, 4 keV, seed 42,
+eight saves and rtol=atol=1e-9; fixed steps default to 224 over 20 us (GC) and 1792 over 2 us
+(`--model lorentz`). Select `--stepping adaptive/fixed`. The Boozer field needs the optional
+`essos[booz]` dependency.
 
 ### QA Boozer alpha workload
 
@@ -426,14 +422,13 @@ Run on the machine's normal JAX backend (the alpha example selects CUDA
 execution automatically when available):
 
 ```sh
-python -m examples.benchmarks.benchmark_native_boozer_alpha \
-  --integrator essos_dopri8 --particles 8192 --horizon .02 \
-  --rtol 1e-10 --atol 1e-10 --output output/native_boozer_alpha
+python -m examples.benchmarks.benchmark_native --suite orbit --field boozer \
+  -N 8192 --horizon .02 --energy-ev 3.52e6 --saves 101 --rtol 1e-10 --atol 1e-10 \
+  --max-steps 1000000 --boozer-modes 32 --out output/native_boozer_alpha
 ```
 
-The example saves its Boozer transform, births, trajectories, statistics,
-timings and a diagnostic plot. Reuse its `boozer_inputs.npz` with
-`--field-cache`; select `essos_rk45` or `rk4` for the corresponding baseline.
+Use `--method dopri5` for the Dopri5 row; the existing RK4 baseline and the saved
+trajectory plots of the earlier script are no longer provided.
 
 ## Native split orbit and collisions
 
@@ -496,9 +491,10 @@ particle chunking. Field classes and their storage are unchanged.
 `"independent"` requires the direct-coil kernel. `tests/test_native_ad.py` (CPU, fast) checks reverse
 gradients against forward mode and finite differences through the frozen schedule, the adjoint
 identity, checkpoint independence, conservation laws, and the persistent kernel (run through the
-Pallas interpreter) against shared reverse. `examples/benchmarks/benchmark_native_ad.py` repeats the
-frozen-path check at production size and records compilation, warm time and compiled buffer sizes;
-run each case in a fresh process for allocator peaks.
+Pallas interpreter) against shared reverse. `benchmark_native --suite ad` (see
+`examples/benchmarks/benchmark_native.py`) times value-and-gradient against forward, compares the
+native and shared reverse gradients at production size and records compilation, warm time and
+compiled buffer sizes; run each case in a fresh process for allocator peaks.
 
 ### Coil optimization examples
 
