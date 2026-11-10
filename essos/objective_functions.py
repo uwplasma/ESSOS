@@ -50,7 +50,7 @@ def loss_r0_near_axis(field_nearaxis, r0_target=1.0):
 
 
 ##############################Particle confinement losses ##############################
-def loss_particle_radial_drift_fullorbit(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_radial_drift_fullorbit(field, particles, timestep=None, maxtime=1e-5, num_steps=300, trace_tolerance=1e-7, model='GuidingCenterAdaptative',boundary=None):
     particles.to_full_orbit(field)
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
                       timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
@@ -62,7 +62,7 @@ def loss_particle_radial_drift_fullorbit(field, particles, timestep=1.e-8, maxti
     v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime     
     return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
 
-def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_radial_drift(field, particles, timestep=None, maxtime=1e-5, num_steps=300, trace_tolerance=1e-7, model='GuidingCenterAdaptative',boundary=None):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
                       timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
@@ -74,7 +74,7 @@ def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-5, n
     return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
 
 
-def loss_particle_alpha_drift(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_alpha_drift(field, particles, timestep=None, maxtime=1e-5, num_steps=300, trace_tolerance=1e-7, model='GuidingCenterAdaptative',boundary=None):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
                       timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
@@ -95,7 +95,7 @@ def loss_particle_alpha_drift(field, particles, timestep=1.e-8, maxtime=1e-5, nu
     v_theta=jnp.diff(theta,axis=1)#/tracing.times_to_trace*tracing.maxtime                               
     return jnp.sum(jnp.square(jnp.average(v_theta,axis=1)))  
 
-def loss_particle_gammac(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_gammac(field, particles, timestep=None, maxtime=1e-5, num_steps=300, trace_tolerance=1e-7, model='GuidingCenterAdaptative',boundary=None):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
                       timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
@@ -119,7 +119,7 @@ def loss_particle_gammac(field, particles, timestep=1.e-8, maxtime=1e-5, num_ste
     #return jnp.sum(jnp.square((2./jnp.pi*jnp.absolute(jnp.arctan2(jnp.average(v_r_cross,axis=1),jnp.average(v_theta,axis=1))))))
     return jnp.max(2./jnp.pi*jnp.absolute(jnp.arctan2(jnp.average(v_r_cross,axis=1),jnp.average(v_theta,axis=1))))
     
-def loss_particle_rcross_final(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_rcross_final(field, particles, timestep=None, maxtime=1e-5, num_steps=300, trace_tolerance=1e-7, model='GuidingCenterAdaptative',boundary=None):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
                       timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
@@ -130,7 +130,7 @@ def loss_particle_rcross_final(field, particles, timestep=1.e-8, maxtime=1e-5, n
 
 
 
-def loss_particle_Br(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_Br(field, particles, timestep=None, maxtime=1e-5, num_steps=300, trace_tolerance=1e-7, model='GuidingCenterAdaptative',boundary=None):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
                       timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
@@ -145,7 +145,7 @@ def loss_particle_Br(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=3
     B_r=jnp.multiply(B_particle[:,:,0],dr_cross_dx)+jnp.multiply(B_particle[:,:,1],dr_cross_dy)+jnp.multiply(B_particle[:,:,2],dr_cross_dz)
     return jnp.sum(jnp.abs(B_r))
 
-def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None,target_iota=0.41):
+def loss_particle_iota(field, particles, timestep=None, maxtime=1e-5, num_steps=300, trace_tolerance=1e-7, model='GuidingCenterAdaptative',boundary=None,target_iota=0.41):
     tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
                       timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]

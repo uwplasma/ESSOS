@@ -585,7 +585,7 @@ def test_tracing_max_steps_is_configurable_and_bounded():
     from essos.dynamics import Tracing
 
     default = inspect.signature(Tracing).parameters["max_steps"].default
-    assert default == 1_000_000
+    assert default is None  # derived from maxtime and timestep
 
     source = inspect.getsource(Tracing)
     assert "max_steps=10000000000" not in source
@@ -1229,3 +1229,30 @@ def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
     B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
     mu = particles.initial_vperpendicular[0]**2 / (2 * B * SPEED_OF_LIGHT**2)
     np.testing.assert_allclose(trace.initial_conditions[0, 4], mu, rtol=1e-6)
+
+
+@pytest.fixture(scope="module")
+def qa_coil_alphas():
+    from essos.coils import Coils
+    from essos.fields import BiotSavart
+    path = Path(__file__).resolve().parents[1] / "examples" / "input_files" / "ESSOS_biot_savart_LandremanPaulQA.json"
+    R0 = jnp.array([1.23, 1.27])
+    particles = Particles(initial_xyz=jnp.stack([R0, 0 * R0, 0 * R0], axis=1), initial_vparallel_over_v=jnp.array([0.3, -0.5]),
+                          energy=4000 * 1.602176634e-19)
+    return BiotSavart(Coils.from_json(str(path))), particles
+
+
+@pytest.mark.parametrize("model, options, bound", [
+    ("GuidingCenterAdaptative", {}, 1e-6),  # default tolerance
+    ("GuidingCenter", {}, 1e-6),  # default timestep
+])
+def test_default_tracing_conserves_energy(qa_coil_alphas, model, options, bound):
+    field, particles = qa_coil_alphas
+    tracing = Tracing(field=field, model=model, particles=particles, maxtime=1e-4, times_to_trace=20, **options)
+    assert float(jnp.max(jnp.abs(tracing.energy() / particles.energy - 1))) < bound
+
+
+def test_truncated_tracing_warns(qa_coil_alphas):
+    field, particles = qa_coil_alphas
+    with pytest.warns(RuntimeWarning, match="did not finish"):
+        Tracing(field=field, model="GuidingCenterAdaptative", particles=particles, maxtime=1e-5, max_steps=20)

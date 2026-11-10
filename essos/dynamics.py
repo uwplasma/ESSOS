@@ -1,5 +1,6 @@
 from pyexpat import model
 import os
+import warnings
 import jax
 jax.config.update("jax_enable_x64", True)
 # Every Tracing compiles a new solve, since maxtime and the save times are constants of it: about 4 s on a CPU
@@ -776,6 +777,16 @@ def _axis_regular(vector_field):
     return wrapped
 
 
+# Steps per transit time R0/speed of the default timestep: Dopri8 conserves energy to ~1e-6 (see tests).
+_STEPS_PER_TRANSIT = 400
+
+
+def _warn_unfinished(count, max_steps):
+    if count:
+        warnings.warn(f"{count} orbit(s) did not finish: non-finite state or max_steps={max_steps} reached; "
+                      "raise max_steps or the timestep", RuntimeWarning, stacklevel=3)
+
+
 # Outcome of each VMEC guiding center, ``Tracing.status``.
 VMEC_STATUS = {
     0: "inside the LCFS at maxtime",
@@ -899,10 +910,10 @@ def _wall_function(field, wall):
 
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
-                 field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
-                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
+                 field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep=None,
+                 rtol=1.e-8, atol=None, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
                  solver=None, stopping_criteria=None, progress=True, devices=None,
-                 max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
+                 max_steps=None, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None, adjoint=None):
 
         if condition is not None and stopping_criteria is not None:
@@ -938,9 +949,16 @@ class Tracing():
         self.initial_conditions = initial_conditions
         self.times_to_trace = times_to_trace
         self.maxtime = maxtime
+        # timestep=None: 1/_STEPS_PER_TRANSIT of the transit time R0/speed; maxtime/100 for a field line, or when
+        # the field or particles are being differentiated (traced values cannot size a step).
+        if timestep is None:
+            scales = [getattr(field, "r_axis", 1.0), jnp.max(particles.total_speed) if particles is not None else jnp.nan]
+            timestep = (maxtime / 100 if any(isinstance(x, jax.core.Tracer) for x in scales) or np.isnan(scales[1])
+                        else float(abs(scales[0]) / scales[1]) / _STEPS_PER_TRANSIT)
         self.timestep = timestep
         self.rtol = rtol
-        self.atol = atol
+        # An absolute tolerance above rtol floors the error, so atol follows rtol by default.
+        self.atol = rtol if atol is None else atol
         self._trajectories = trajectories_input
         self.particles = particles
         self.species=species
@@ -970,7 +988,8 @@ class Tracing():
         self.reentry_depth = reentry_depth
         # Diffrax's ceiling was effectively unbounded, so a trace that could not
         # finish ran until the process was killed rather than returning.
-        self.max_steps = max_steps
+        # max_steps=None: 16 times the steps of a fixed-step solve, enough for tolerances down to 1e-12.
+        self.max_steps = int(16 * np.ceil(maxtime / timestep)) + 16 if max_steps is None else max_steps
         # Reverse mode (jax.grad) by default; diffrax.ForwardMode() for jax.jvp and jax.jacfwd, which
         # diffrax's checkpointed adjoint cannot do.
         self.adjoint = diffrax.RecursiveCheckpointAdjoint() if adjoint is None else adjoint
@@ -1081,7 +1100,10 @@ class Tracing():
 
             
         if self._vmec_default:
-            return self._set_vmec_outputs(self.trace())
+            self._set_vmec_outputs(self.trace())
+            if not isinstance(self.failed, jax.core.Tracer):
+                _warn_unfinished(int(np.sum(self.failed)), self.max_steps)
+            return
         trace_result = self.trace()
         if self.stopping_criteria is not None:
             trajectories, self.event_mask = trace_result
@@ -1097,6 +1119,8 @@ class Tracing():
             self.axis_hits = jnp.zeros(len(self._trajectories), dtype=bool)
             self.boundary_hits = jnp.zeros(len(self._trajectories), dtype=bool)
         self.total_particles_unresolved = jnp.sum(self.axis_hits)
+        if not isinstance(self._trajectories, jax.core.Tracer):
+            _warn_unfinished(int(jnp.sum(~jnp.isfinite(self._trajectories[:, -1]).all(-1))), self.max_steps)
         
         trajectory_points = self.trajectories[:, :, :3]
         if hasattr(self.field, "toroidal_angle_batch"):
@@ -1246,7 +1270,6 @@ class Tracing():
 
     def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False):
         """diffeqsolve from t0 to maxtime, saving at self.times (clipped to t0) and at the end."""
-        import warnings
         warnings.simplefilter("ignore", category=FutureWarning)  # see https://github.com/patrick-kidger/diffrax/issues/445
         return diffeqsolve(terms, solver, t0=t0, t1=self.maxtime, dt0=self.timestep, y0=y0, args=args,
                            saveat=SaveAt(subs=[diffrax.SubSaveAt(ts=jnp.clip(self.times, t0, self.maxtime)),
