@@ -1050,8 +1050,8 @@ class _OrbitRecorder:
 
 def _validate_ad_sizes(**values):
     for name,value in values.items():
-        if value is not None and (isinstance(value,(bool,np.bool_)) or not isinstance(value,(int,np.integer)) or value<=0):
-            raise ValueError(name+' must be a positive integer or None')
+        if value is not None:
+            check_work_bound(name,value)
 
 class _SplitRecorder:
     """Flat accepted inner schedules, independent retained noise and sparse nodes."""
@@ -1164,10 +1164,8 @@ class _TapeView:
 
 
 # Independent direct-coil reverse: exact field transposes, compact stage caches.
-from jax.experimental import pallas as pl
-from jax.experimental.pallas import triton as plt
 from .constants import ALPHA_PARTICLE_MASS as M, ALPHA_PARTICLE_CHARGE as Q
-from .rk import _DENSE8, _cross as cross, _dot as dot, _coil_field_values as field_values, _pack as pack
+from .rk import kernel_tableau, launch_kernel, check_work_bound, _cross as cross, _dot as dot, _coil_field_values as field_values, _pack as pack
 from .split import (_evaluate_kernel, scalar,
     _coefficient_graph as coefficient_graph, CollisionCoefficients,
     guiding_center_collision_step, _diffusion_root,_register_kernel_placement)
@@ -1375,12 +1373,7 @@ def reverse_kernel(terminal_state, parameters, tape, saved_bar, terminal_bar, ti
     geometry, coefficients, floor = parameters
     nstate, noise_dim = (5, 5 if spatial_diffusion else 2) if gc else (6, 3)
     nsave, ncoeff = len(times), len(coefficients)
-    rows = np.zeros((16, 16))
-    for i, row in enumerate(_A8, 1):
-        rows[i, :len(row)] = row
-    dense = np.zeros((len(_DENSE8[0]), 16))
-    dense[:, :len(_ERROR8)] = np.asarray(_DENSE8).T
-    nstage = len(_ERROR8)
+    rows, _, dense, nstage, _, _ = kernel_tableau("dopri8")
     cache_size, cache_width = (12,16) if gc else (3,4)
     scratch_rows = 1 << (segment_steps-1).bit_length()
     field_size = geometry[0].size
@@ -1534,10 +1527,9 @@ def reverse_kernel(terminal_state, parameters, tape, saved_bar, terminal_bar, ti
 
     final_padding=(0,8-terminal_state.size)
     inputs=(*geometry,*coefficients,floor,jnp.pad(terminal_state,final_padding),
-            saved_bar, terminal_bar, times, jnp.asarray(rows), jnp.asarray(dense),
+            saved_bar, terminal_bar, times, rows, dense,
             *tape_values, *graph_constants)
-    result = pl.pallas_call(kernel, out_shape=out_shapes, grid=(),
-        compiler_params=plt.CompilerParams(num_warps=warps),interpret=interpret)(*inputs)
+    result = launch_kernel(kernel, out_shapes, inputs, warps=warps, interpret=interpret)
     return result[0][:nstate], tuple(result[1][i] for i in range(6)), tuple(
         result[2][i].reshape(value.shape).astype(value.dtype) if jnp.issubdtype(value.dtype,jnp.inexact)
         else jnp.zeros(value.shape,jax.dtypes.float0) for i, value in enumerate(coefficients)), result[3]

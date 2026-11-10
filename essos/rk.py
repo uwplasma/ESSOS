@@ -14,7 +14,6 @@ import jax.numpy as jnp
 from jax import lax, tree_util
 # Some JAX versions omit this helper from the public partial_eval facade.
 from jax._src.interpreters import partial_eval
-from jax.extend.core import Literal
 import numpy as np
 
 # Physical error budgets
@@ -621,28 +620,6 @@ def solve_dopri8(rhs, y0, args=None, **kwargs):
 
 # GPU field access and JAX compatibility
 
-def _padded_spline(knots, coefficients):
-    """Power-of-two kernel view of the same piecewise cubics.
-
-    End extrapolation is expressed about the last knot. Recentring and a
-    different reduction order can introduce ordinary floating-point changes.
-    This setup is outside jit and intended for fixed, nondifferentiated fields.
-    """
-    knots, coefficients = np.asarray(knots), np.asarray(coefficients)
-    count = len(knots)
-    size = 1 << (count-1).bit_length()
-    width = 1 << (coefficients.shape[1]-1).bit_length()
-    grid = np.full(size, np.inf)
-    grid[:count] = knots
-    values = np.zeros((size, width, 4))
-    values[:count-1, :coefficients.shape[1]] = coefficients
-    a, b, c, d = np.moveaxis(coefficients[-1], -1, 0)
-    h = knots[-1]-knots[-2]
-    shifted = np.stack((a, b+3*a*h, c+2*b*h+3*a*h*h, ((a*h+b)*h+c)*h+d), axis=-1)
-    values[count-1:, :coefficients.shape[1]] = shifted
-    return jnp.asarray(grid), jnp.asarray(values)
-
-
 def _select_one(value, index, axis):
     """Bit-preserving scalar/slice selection on a kernel-local array."""
     shape = [1]*value.ndim
@@ -672,85 +649,6 @@ def _kernel_is_finite(value):
     return jax.lax.bitwise_and(bits, mask) != mask
 
 
-class _KernelField:
-    """Kernel-local Ref adapter; evaluation uses the original field methods."""
-    table = sine_coef = None
-    def modB_derivatives(self, *args):
-        from .boozer import BoozerField
-        return BoozerField.modB_derivatives(self, *args)
-
-    def __init__(self, refs, psi0):
-        radial, b, flux, profiles, xm, xn = refs
-        self.r_knots, self.b_coef = radial[...], b
-        self.s_knots, self.profile_coef = flux[...], profiles
-        self.xm, self.xn, self.psi0 = xm[...], xn[...], psi0
-
-    def profiles(self, s):
-        from .boozer import BoozerField
-        value, slope = BoozerField.profiles(self, s)
-        return tuple(value[i] for i in range(3)), tuple(slope[i] for i in range(3))
-
-
-def _kernel_rhs(model, y0, moment, mass, charge):
-    """Lower the original checked RHS; adapt unsupported local-array indexing."""
-    from .boozer import guiding_center_rhs, _chart
-
-    def physical(y):
-        value = guiding_center_rhs(model, y, moment, mass, charge)
-        _, r, theta, *_ = _chart(y)
-        B = model.modB_derivatives(r, theta, y[2])[0]
-        return jnp.where(jnp.isfinite(B) & (B > 0), value, jnp.nan)
-
-    original = jax.make_jaxpr(physical)(y0)
-    flat = jax.make_jaxpr(lambda y: _evaluate_inline(original.jaxpr, original.consts, y)[0])(y0)
-
-    def evaluate(y):
-        graph = flat.jaxpr
-        env = dict(zip(graph.constvars, flat.consts))
-        env.update(zip(graph.invars, (y,)))
-        def read(v):
-            return v.val if isinstance(v, Literal) else env[v]
-        for equation in graph.eqns:
-            values = [read(v) for v in equation.invars]
-            name = equation.primitive.name
-            if name == "slice":
-                value = values[0]
-                for axis, (start, end, size) in enumerate(zip(equation.params["start_indices"],
-                        equation.params["limit_indices"], value.shape)):
-                    if start != 0 or end != size:
-                        if end-start != 1:
-                            raise ValueError("Unsupported kernel-local RHS slice")
-                        value = _select_one(value, start, axis)
-                result = [value]
-            elif name == "dynamic_slice":
-                value = values[0]
-                for axis, (index, size, wanted) in enumerate(zip(values[1:], value.shape,
-                        equation.params["slice_sizes"])):
-                    if size != wanted:
-                        if wanted != 1:
-                            raise ValueError("Unsupported kernel-local dynamic RHS slice")
-                        value = _select_one(value, jnp.clip(index, 0, size-1), axis)
-                result = [value]
-            elif name == "concatenate" and len(values) > 2:
-                value = jnp.zeros((len(values),), values[0].dtype)
-                for i, v in enumerate(values):
-                    value = jnp.where(jnp.arange(len(values)) == i, jnp.reshape(v, ()), value)
-                result = [value]
-            elif name == "le_to":
-                # Positive finite knots followed by +inf; NaN queries sort last.
-                result = [jnp.less_equal(values[0], values[1]) | jnp.isnan(values[1])]
-            elif name == "is_finite":
-                result = [_kernel_is_finite(values[0])]
-            else:
-                result = _bind_primitive(equation.primitive, values, equation.params)
-                if not equation.primitive.multiple_results:
-                    result = [result]
-            env.update(zip(equation.outvars, result))
-        return read(graph.outvars[0])
-    return evaluate
-
-
-
 def _bind_primitive(primitive, values, parameters):
     """Bind an equation using either supported JAX get_bind_params ABI.
 
@@ -759,11 +657,35 @@ def _bind_primitive(primitive, values, parameters):
     primitives rather than discarding them while adapting ordinary equations.
     This Python dispatch runs during graph preparation, not each RK stage.
     """
+    if primitive.name in ("and", "or", "xor"):
+        values = _signed_wide_words(values)
+        if values[0] is not None:
+            result = _bind_primitive(primitive, values[1], parameters)
+            return jax.lax.bitcast_convert_type(result, jnp.uint64)
+        values = values[1]
     binding = primitive.get_bind_params(parameters)
     if isinstance(binding, tuple):
         subfunctions, binding = binding
         return primitive.bind(*subfunctions, *values, **binding)
     return primitive.bind(*values, **binding)
+
+
+def _signed_wide_words(values):
+    """Return (True, int64 views) when a uint64 literal has its top bit set.
+
+    Pallas Triton builds integer constants as signed values, and since JAX 0.12
+    a literal such as 0xFFFFFFFFF8000000 raises ``std::bad_cast`` (it is the
+    mantissa mask inside the erf expansion). Bitwise operations act on the
+    same bits in either signedness, so run them on int64 views. Otherwise
+    return (None, values).
+    """
+    wide = [v for v in values if getattr(v, 'dtype', None) == jnp.uint64 and not isinstance(v, jax.core.Tracer)
+            and np.any(np.asarray(v) >> np.uint64(63))]
+    if not wide:
+        return None, values
+    return True, [(np.asarray(v).view(np.int64) if not isinstance(v, jax.core.Tracer) else
+                   jax.lax.bitcast_convert_type(v, jnp.int64)) if getattr(v, 'dtype', None) == jnp.uint64 else v
+                  for v in values]
 
 
 def _evaluate_inline(graph, constants, *arguments):
@@ -1099,6 +1021,75 @@ def _prepare_vmec_gpu(field,mass,charge,energy,speed,times,dt0,rtol,atol,max_ste
 
 # Independent GPU particle loops
 
+# Shared persistent-kernel setup (used by the orbit and split solvers)
+
+def require_cuda(interpret):
+    """Reject non-CUDA backends unless the Pallas interpreter is requested."""
+    if not interpret and (jax.default_backend() != "gpu" or "cuda" not in jax.devices()[0].client.platform_version.lower()):
+        raise ValueError("The experimental fused orbit solver requires CUDA")
+
+
+def check_save_times(times):
+    """Return save times as float64; they must be ordered, start at zero and end positive."""
+    times = np.asarray(times, dtype=np.float64)
+    if (times.ndim != 1 or len(times) < 2 or not np.isfinite(times).all() or
+            times[0] != 0 or times[-1] <= 0 or np.any(np.diff(times) < 0)):
+        raise ValueError("Save times must be ordered, start at zero and end at a positive time")
+    return times
+
+
+def check_work_bound(name, value, limit=np.iinfo(np.int32).max):
+    """Require a positive int (not bool) no larger than ``limit``."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or not 0 < value <= limit:
+        raise ValueError(f"{name} must be a positive int32 work bound")
+
+
+class KernelTableau(NamedTuple):
+    """Padded Runge-Kutta banks: stage matrix, error and dense-output weights."""
+    matrix: jnp.ndarray
+    error: jnp.ndarray
+    dense: jnp.ndarray
+    stages: int
+    bank_size: int
+    order: int
+
+
+def kernel_tableau(method):
+    """Pad Dopri5/Dopri8 coefficients to a power-of-two stage bank."""
+    if method not in ("dopri5", "dopri8"):
+        raise ValueError("The fused orbit method must be dopri5 or dopri8")
+    rows, weights, order = (_A, _ERROR, 5) if method == "dopri5" else (_A8, _ERROR8, 8)
+    stages = len(weights)
+    bank_size = 1 << (stages-1).bit_length()
+    matrix = np.zeros((bank_size, bank_size))
+    for i, row in enumerate(rows, 1):
+        matrix[i, :len(row)] = row
+    dense = np.zeros((1 if method == "dopri5" else len(_DENSE8[0]), bank_size))
+    dense[:, :stages] = np.asarray(_MID)[None] if method == "dopri5" else np.asarray(_DENSE8).T
+    return KernelTableau(jnp.asarray(matrix), jnp.asarray(tuple(weights)+(0.,)*(bank_size-stages)),
+                         jnp.asarray(dense), stages, bank_size, order)
+
+
+def save_loop(condition, write, index):
+    """Run ``write`` while ``condition(index)``; refs are read in the body, not the condition.
+
+    JAX 0.6 cannot discharge Pallas ref reads in while conditions, so the
+    next condition is carried through the loop.
+    """
+    def advance(carry):
+        index = write(carry[0])
+        return index, condition(index)
+    return jax.lax.while_loop(lambda c: c[1], advance, (index, condition(index)))[0]
+
+
+def launch_kernel(kernel, shapes, arguments, *, warps, interpret):
+    """Launch a gridless Pallas kernel with ``warps`` warps per program."""
+    from jax.experimental import pallas as pl
+    from jax.experimental.pallas import triton as plt
+    return pl.pallas_call(kernel, out_shape=shapes, grid=(), interpret=interpret,
+                          compiler_params=plt.CompilerParams(num_warps=warps))(*arguments)
+
+
 def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_steps, *,
                        state_size=4, method="dopri8", adaptive=True, num_warps=1, interpret=False):
     """Prepare a CUDA solver outside jit; return solve(y0, invariant).
@@ -1109,43 +1100,20 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
     no particle chunking or compaction. Numerical equivalence is subject to
     ordinary floating-point changes from a different compiler execution path.
     """
-    from jax.experimental import pallas as pl
-    from jax.experimental.pallas import triton as plt
-    if method not in ("dopri5", "dopri8"):
-        raise ValueError("The fused orbit method must be dopri5 or dopri8")
-    if not interpret and (jax.default_backend() != "gpu" or "cuda" not in jax.devices()[0].client.platform_version.lower()):
-        raise ValueError("The experimental fused orbit solver requires CUDA")
-    times = np.asarray(times, dtype=np.float64)
-    if (times.ndim != 1 or len(times) < 2 or not np.isfinite(times).all() or
-            times[0] != 0 or times[-1] <= 0 or np.any(np.diff(times) < 0)):
-        raise ValueError("Save times must be ordered, start at zero and end at a positive time")
+    require_cuda(interpret)
+    times = check_save_times(times)
     if not (np.isfinite(dt0) and dt0 > 0 and np.isfinite(speed) and speed > 0 and
             np.isfinite(rtol) and rtol >= 0 and np.isfinite(atol) and atol > 0):
         raise ValueError("Require positive finite dt0, speed, atol and finite rtol >= 0")
-    if (isinstance(max_steps, (bool, np.bool_)) or not isinstance(max_steps, (int, np.integer)) or
-            not 0 < max_steps <= np.iinfo(np.int32).max):
-        raise ValueError("max_steps must be a positive int32 work bound")
-    rows, weights, order = (_A, _ERROR, 5) if method == "dopri5" else (_A8, _ERROR8, 8)
-    stages = len(weights)
-    bank_size = 1 << (stages-1).bit_length()
-    matrix = np.zeros((bank_size, bank_size))
-    for i, row in enumerate(rows, 1):
-        matrix[i, :len(row)] = row
-    coefficients = jnp.asarray(matrix)
-    error_weights = jnp.asarray(tuple(weights)+(0.,)*(bank_size-stages))
-    if method == "dopri5":
-        dense_matrix = np.zeros((1, bank_size))
-        dense_matrix[0, :stages] = np.asarray(_MID)
-    else:
-        dense_matrix = np.zeros((len(_DENSE8[0]), bank_size))
-        dense_matrix[:, :stages] = np.asarray(_DENSE8).T
-    dense_coefficients = jnp.asarray(dense_matrix)
+    check_work_bound("max_steps", max_steps)
+    coefficients, error_weights, dense_coefficients, stages, bank_size, order = kernel_tableau(method)
     tmax = float(times[-1])
     # Load float64 scalars explicitly. Nested Pallas loops must not infer
     # their device scalar precision from weak Python constant initializers.
     scalars = jnp.asarray([0., dt0, tmax, 8*np.finfo(np.float64).eps*tmax,
                            speed, rtol+atol], jnp.float64)
     inputs = tuple(arrays)+(coefficients, error_weights, dense_coefficients, jnp.asarray(times), scalars)
+    dense_rows = dense_coefficients.shape[0]
     nsave = len(times)
 
     def solve(y0, moment):
@@ -1167,14 +1135,6 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
             def finite(value):
                 return jnp.min(_kernel_is_finite(value).astype(jnp.int32)) > 0
 
-            def save_loop(condition, write, index):
-                # JAX 0.6 cannot discharge Pallas ref reads in while conditions.
-                def advance(carry):
-                    index = write(carry[0])
-                    return index, condition(index)
-                return jax.lax.while_loop(lambda c: c[1], advance,
-                    (index, condition(index)))[0]
-
             def dense(y, endpoint, bank, fraction):
                 if method == "dopri5":
                     # Same quartic extension as rk._rk45_dense; the padded
@@ -1189,7 +1149,7 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
                     value = y+fraction*(first+fraction*(c+fraction*(b+fraction*a)))
                     return jnp.where(fraction == 0, y, jnp.where(fraction == 1, endpoint, value))
                 weights = jnp.zeros((bank_size,), point.dtype)
-                for power in range(dense_matrix.shape[0]):
+                for power in range(dense_rows):
                     weights = weights*fraction+dref[power, :]
                 value = y+jnp.sum((weights*fraction)[:, None]*bank, axis=0)
                 return jnp.where(fraction == 0, y, jnp.where(fraction == 1, endpoint, value))
@@ -1300,35 +1260,13 @@ def _prepare_gpu_solver(arrays, factory, speed, times, dt0, rtol, atol, max_step
             jax.ShapeDtypeStruct((state_size,), y0.dtype), jax.ShapeDtypeStruct((), y0.dtype),
             jax.ShapeDtypeStruct((), y0.dtype), jax.ShapeDtypeStruct((3,), jnp.int32),
             jax.ShapeDtypeStruct((), jnp.int32))
-        ys, saved, y, t, h, counts, status = pl.pallas_call(kernel, out_shape=shapes, grid=(),
-            interpret=interpret, compiler_params=plt.CompilerParams(num_warps=num_warps))(y0, moment, initial_status, *inputs)
+        ys, saved, y, t, h, counts, status = launch_kernel(kernel, shapes, (y0, moment, initial_status, *inputs),
+            warps=num_warps, interpret=interpret)
         return RKSolution(saved, ys, t, y, status, status == 1,
             RKStats(counts[0], counts[1], counts[2]), jnp.zeros((0,), y0.dtype), h)
 
     solve.method = method
     return solve
-
-# Boozer GPU preparation
-
-def _prepare_boozer_gpu(field, mass, charge, speed, times, dt0, rtol, atol, max_steps, *,
-                         method="dopri8", adaptive=True, interpret=False):
-    if field.table is not None or field.sine_coef is not None:
-        raise ValueError("The CUDA adapter requires a fixed cosine Fourier Boozer field")
-    radial, b = _padded_spline(field.r_knots, field.b_coef)
-    flux, profiles = _padded_spline(field.s_knots, field.profile_coef)
-    modes = b.shape[1]
-    arrays = (radial, b, flux, profiles, jnp.pad(field.xm, (0,modes-len(field.xm))),
-              jnp.pad(field.xn, (0,modes-len(field.xn))))
-    scalar = lambda y,i: _select_one(y,i,0).reshape(())
-    def factory(refs, point, moment):
-        model = _KernelField(refs, float(field.psi0))
-        evaluate = _kernel_rhs(model, point, moment, mass, charge)
-        def estimate(endpoint, error, speed):
-            a,b,c,d = (scalar(error,i) for i in range(4))
-            return jnp.maximum(jnp.sqrt(a*a+b*b),jnp.maximum(jnp.abs(c),jnp.abs(d)/speed))
-        return evaluate, estimate, lambda y: 1.-scalar(y,0)**2-scalar(y,1)**2
-    return _prepare_gpu_solver(arrays,factory,speed,times,dt0,rtol,atol,max_steps,
-                              method=method,adaptive=adaptive,interpret=interpret)
 
 # Existing Tracing integration
 
@@ -1469,28 +1407,20 @@ def _boozer_error_norm(error, speed, rtol, atol):
 
 def trace_boozer_orbits(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
                   method, adaptive, controller, pcoeff, icoeff, max_steps, *, execution="jax"):
-    """Select portable JAX or fixed-field CUDA execution without changing physics.
+    """Trace Boozer orbits on the portable JAX path.
 
-    CUDA supports fixed steps and adaptive I control for cosine Fourier fields. The portable
-    path also supports fixed steps, PI control, sine modes and angle tables.
-    The choice is explicit: no backend, field layout or controller is changed.
+    A fused CUDA kernel for Boozer fields was slower than this path, so
+    ``execution="cuda"`` is rejected instead of silently changed.
     """
-    if execution not in ("jax", "cuda"):
-        raise ValueError("native_execution must be 'jax' or 'cuda'")
-    solver = None
-    if execution == "cuda":
-        if controller != "i":
-            raise ValueError("CUDA native orbits require I control")
-        prepare_orbit_solver = _prepare_boozer_gpu
-        solver = prepare_orbit_solver(field, mass, charge, float(speed), times,
-                                      dt0, rtol, atol, max_steps, method=method, adaptive=adaptive)
+    if execution != "jax":
+        raise ValueError("Boozer native_execution must be 'jax'; the CUDA kernel was slower")
     return _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
-                          method, adaptive, controller, pcoeff, icoeff, max_steps, solver)
+                          method, adaptive, controller, pcoeff, icoeff, max_steps)
 
 
-@partial(jax.jit, static_argnames=("method", "adaptive", "controller", "max_steps", "orbit_solver"))
+@partial(jax.jit, static_argnames=("method", "adaptive", "controller", "max_steps"))
 def _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
-                   method, adaptive, controller, pcoeff, icoeff, max_steps, orbit_solver=None):
+                   method, adaptive, controller, pcoeff, icoeff, max_steps):
     """One shared native RK solve per orbit, independent of the save grid."""
     from .boozer import _chart, guiding_center_rhs
 
@@ -1513,13 +1443,10 @@ def _boozer_batch(field, y0, mu0, mass, charge, speed, times, dt0, rtol, atol,
             # a parallel turning point; these are chart errors, not metres.
             return _boozer_error_norm(error, speed, rtol, atol)
 
-        if orbit_solver is None:
-            solution = solve_rk(rhs, y0, t1=times[-1], dt0=dt0, ts=times,
-                method=method, adaptive=adaptive, rtol=rtol, atol=atol,
-                error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
-                max_steps=max_steps, event=lambda t, y, args: 1. - y[0]**2 - y[1]**2)
-        else:
-            solution = orbit_solver(y0, mu)
+        solution = solve_rk(rhs, y0, t1=times[-1], dt0=dt0, ts=times,
+            method=method, adaptive=adaptive, rtol=rtol, atol=atol,
+            error_norm=error_norm, controller=controller, pcoeff=pcoeff, icoeff=icoeff,
+            max_steps=max_steps, event=lambda t, y, args: 1. - y[0]**2 - y[1]**2)
 
         def output(y):
             s, _, theta, *_ = _chart(y)

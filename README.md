@@ -343,12 +343,13 @@ field, standard dense output and I control, and stops VMEC orbits at the LCFS.
 and retains its existing electric-field, stopping and exterior-continuation
 interfaces. The generic `essos.rk.solve_rk` also accepts an arbitrary array RHS.
 
-For Boozer, use `trace_boozer(..., integrator="essos_dopri8",
-native_execution="cuda")`. Its CUDA adapter supports fixed cosine Fourier
-fields with K=0; the portable path also supports sine spectra, angle tables
-and PI. GPU arrays are private solver views of the original field data;
-the public field classes are unchanged. This addition is forward-only:
-split collisions and accepted-step reverse AD belong to separate changes.
+For Boozer, use `trace_boozer(..., integrator="essos_dopri8")`. Boozer runs on
+the portable path only (`native_execution="cuda"` raises): a fused kernel was
+slower than the vmapped one. The same holds for `trace_split(...,
+execution="independent")`, which supports coil and VMEC fields. GPU arrays are
+private solver views of the original field data; the public field classes are
+unchanged. This addition is forward-only: split collisions and accepted-step
+reverse AD belong to separate changes.
 
 ### Forward comparison
 
@@ -364,8 +365,6 @@ VMEC/Boozer use reactor-scale QA at 4 keV and 20 us. Compare backends within row
 
 | Field / model | Stepping | Native / Diffrax warm ms | Native / Diffrax buffers MiB | Measured |
 |---|---|---:|---:|---|
-| boozer / gc | adaptive | 1.659 / 3.769 | 0.026 / 0.151 | 2026-10-26 |
-| boozer / gc | fixed | 18.201 / 50.142 | 0.026 / 0.154 | 2026-10-26 |
 | coils / gc | adaptive | 84.426 / 160.362 | 0.026 / 5.980 | 2026-10-24 |
 | coils / gc | fixed | 419.872 / 676.766 | 0.026 / 5.970 | 2026-10-24 |
 | coils / lorentz | adaptive | 29.429 / 70.426 | 0.070 / 0.731 | 2026-10-24 |
@@ -383,7 +382,7 @@ field adapters and describe the complete forward implementation.
 Time the shared and CUDA forward workloads on a CUDA machine:
 
 ```sh
-for field in coils vmec boozer; do
+for field in coils vmec; do
   python -m examples.benchmarks.benchmark_native --suite orbit --field $field \
     --execution both --out output/native_forward/$field
 done
@@ -396,7 +395,7 @@ failed counts) and, with `--save-states`, `states.npz`. Generated results are ke
 came from an earlier script that has been removed. Defaults are 64 particles, 4 keV, seed 42,
 eight saves and rtol=atol=1e-9; fixed steps default to 224 over 20 us (GC) and 1792 over 2 us
 (`--model lorentz`). Select `--stepping adaptive/fixed`. The Boozer field needs the optional
-`essos[booz]` dependency.
+`essos[booz]` dependency and always uses the portable JAX path.
 
 ### QA Boozer alpha workload
 
@@ -418,8 +417,7 @@ been rerun after the VMEC and initialization updates. RK4 checks loss at endpoin
 native adaptive methods refine the LCFS crossing. The differing loss counts are
 not an accuracy proof. Regenerate the workload with the script below when ready.
 
-Run on the machine's normal JAX backend (the alpha example selects CUDA
-execution automatically when available):
+Boozer runs on the portable JAX path (`--execution jax`):
 
 ```sh
 python -m examples.benchmarks.benchmark_native --suite orbit --field boozer \

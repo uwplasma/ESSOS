@@ -557,13 +557,12 @@ def test_independent_kernel_matches_shared_execution_in_coil_fields(model, adapt
     assert_equivalent(*run_pair(coil_field(), bath(), model, **options))
 
 
-def test_independent_kernel_matches_shared_execution_in_vmec_and_boozer_fields():
+def test_independent_kernel_matches_shared_execution_in_vmec_fields():
     from essos.fields import Vmec
     vmec = Vmec(str(VMEC_FILE), ntheta=3, nphi=3)
     assert_equivalent(*run_pair(vmec, bath(), adaptive=False, orbit_adaptive=False, spatial_diffusion=False))
-    # Adaptive Boozer with the moment predictor and nonlinear Cartesian spatial kicks.
-    assert_equivalent(*run_pair(tokamak(), bath(), adaptive=True, orbit_adaptive=True, spatial_diffusion=True,
-        spatial_geometry=boozer_geometry()))
+    with pytest.raises(ValueError, match='Boozer'):
+        run_pair(tokamak(), bath(), adaptive=False, orbit_adaptive=False, spatial_diffusion=False)
 
 
 def test_independent_kernel_handles_radial_profiles_events_and_failures():

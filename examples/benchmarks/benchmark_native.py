@@ -569,7 +569,7 @@ def parse(argv):
         parser.error('fixed steps must be divisible by saves - 1')
     names = ['cuda' if jax.default_backend() == 'gpu' else 'jax'] if options.execution is None else (
         ['jax', 'cuda'] if options.execution == 'both' else [options.execution])
-    options.executions = [EXECUTIONS[name] for name in names]
+    options.executions = ['jax'] if options.field == 'boozer' else [EXECUTIONS[name] for name in names]
     return options
 
 

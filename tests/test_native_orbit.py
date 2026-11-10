@@ -214,15 +214,8 @@ def test_boozer_public_native_outputs_and_failures(monkeypatch):
     assert legacy.terminal_states.shape==(1,5) and np.isnan(legacy.terminal_states).all()
     for change in (dict(integrator='x'),dict(method='rk4'),dict(species=object()),dict(adaptive='yes'),dict(rtol=-1.),dict(atol=0.)):
         with pytest.raises(ValueError): trace_boozer(field,[.3],[.4],[0.],[.2],**(kwargs|change))
-    from essos import rk as module
-    original=module._prepare_boozer_gpu
-    monkeypatch.setattr(module,'_prepare_boozer_gpu',lambda *a,**k:original(*a,**k,interpret=True))
-    out=trace_boozer(field,[.3],[.4],[0.],[.2],**(kwargs|dict(native_execution='cuda',progress=lambda *a:None)))
-    assert not out.failed.any()
-    with pytest.raises(ValueError,match='I control'):
-        trace_boozer(field,[.3],[.4],[0.],[.2],**(kwargs|dict(native_execution='cuda',native_controller='pi')))
-    with pytest.raises(ValueError,match='cosine'):
-        original(SimpleNamespace(table=1.,sine_coef=None),1.,1.,1.,[0.,.1],.1,1e-9,1e-9,8,interpret=True)
+    with pytest.raises(ValueError,match='native_execution'):
+        trace_boozer(field,[.3],[.4],[0.],[.2],**(kwargs|dict(native_execution='cuda')))
 
 
 def test_vmec_private_values_match_current_main(monkeypatch):
@@ -346,20 +339,15 @@ def test_rhs_preparation_and_gpu_helpers_preserve_values(monkeypatch):
         return prepared(.2,jnp.array([2.,3.]),None).sum()
     np.testing.assert_allclose(jax.grad(value)(.3),5*np.cos(.3),atol=2e-14)
     with pytest.raises(TypeError): _kernel_is_finite(jnp.array([1],dtype=jnp.int32))
-    import essos.rk as module
-    from essos import boozer as boozer_module
-    model=SimpleNamespace(modB_derivatives=lambda *a:(1.,0.,0.,0.))
-    for f in (lambda field,y,*a:jnp.concatenate((y[:2],y[:2])),
-              lambda field,y,*a:jnp.concatenate((jax.lax.dynamic_slice(y,(y[0].astype(jnp.int32),),(2,)),jnp.ones(2)))):
-        monkeypatch.setattr(boozer_module,'guiding_center_rhs',f)
-        with pytest.raises(ValueError,match='slice'):
-            module._kernel_rhs(model,jnp.ones(4),.1,1.,1.)(jnp.ones(4))
+    wide=np.uint64(0xFFFFFFFFF8000000)
+    for name,op in (('and',jnp.bitwise_and),('or',jnp.bitwise_or),('xor',jnp.bitwise_xor)):
+        bits=jnp.asarray(0x123456789ABCDEF0,jnp.uint64)
+        primitive={'and':jax.lax.and_p,'or':jax.lax.or_p,'xor':jax.lax.xor_p}[name]
+        np.testing.assert_array_equal(_bind_primitive(primitive,[bits,np.asarray(wide)],{}),op(bits,wide))
 
 
 def test_fixed_field_adapter_solvers_on_cpu():
     from essos.rk import prepare_solver
-    from essos.rk import _prepare_boozer_gpu as prepare_orbit_solver
-    from essos.rk import _boozer_batch as _native_orbits
     field=coil_field()
     args=dict(mass=1.,charge=1.,energy=.5,times=np.array([0.,.001]),dt0=.001,max_steps=8)
     with pytest.raises(ValueError): prepare_solver(UniformField(),execution='cuda',**args)
@@ -372,11 +360,3 @@ def test_fixed_field_adapter_solvers_on_cpu():
         gpu=jax.jit(prepare_solver(field,execution='cuda',interpret=True,**args))(y)
         assert gpu.status==0
         np.testing.assert_allclose(gpu.y,reference.y,atol=3e-13)
-    boozer=tokamak(); y=jnp.array([[.5,0.,0.,.2]]); moments=jnp.array([.08])
-    times=np.array([0.,.001])
-    for method in ('dopri5','dopri8'):
-        solve=prepare_orbit_solver(boozer,1.,1.,1.,times,.001,1e-9,1e-9,8,method=method,interpret=True)
-        args=(boozer,y,moments,1.,1.,1.,jnp.asarray(times),.001,1e-9,1e-9,method,True,'i',.4,.3,8)
-        expected=_native_orbits(*args)
-        actual=_native_orbits(*args,orbit_solver=solve)
-        for a,b in zip(actual,expected): np.testing.assert_allclose(a,b,atol=3e-13)
