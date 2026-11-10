@@ -650,24 +650,30 @@ class Vmec():
         phi = jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2 * jnp.pi)
         target = jnp.array([R, Z])
 
-        def rz(x):
+        def rz(x, phi):
             p = self.to_xyz(jnp.array([x[0]**2 + x[1]**2, jnp.arctan2(x[1], x[0]), phi]))
             return jnp.array([jnp.hypot(p[0], p[1]), p[2]])
 
+        # The iterations run on constants. Differentiating them gives NaN once a step is exactly zero (the norm of
+        # the step); the converged point is differentiated by one more Newton step instead, whose value is exactly 0.
+        phi0, target0 = lax.stop_gradient((phi, target))
         rho, theta = [a.ravel() for a in jnp.meshgrid(jnp.linspace(0.08, 1.0, 12),
                                                      jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False))]
         seeds = jnp.stack([rho * jnp.cos(theta), rho * jnp.sin(theta)], 1)
-        x = seeds[jnp.argmin(jnp.sum((vmap(rz)(seeds) - target)**2, 1))]
+        x = seeds[jnp.argmin(jnp.sum((vmap(lambda x: rz(x, phi0))(seeds) - target0)**2, 1))]
 
         def newton(x, _):
-            dx = jnp.linalg.solve(jacfwd(rz)(x), rz(x) - target)
+            dx = jnp.linalg.solve(jacfwd(rz)(x, phi0), rz(x, phi0) - target0)
             x = x - dx * jnp.minimum(1.0, 0.1 / (jnp.linalg.norm(dx) + 1e-300))
             # Stay in s <= 1: beyond it the extrapolated map can fold back over the plasma.
             return x / jnp.maximum(1.0, jnp.linalg.norm(x)), None
 
         x, _ = lax.scan(newton, x, None, length=40)
+        step = jnp.linalg.solve(jacfwd(rz)(x, phi), rz(x, phi) - target)
+        residual = jnp.linalg.norm(rz(x, phi0) - target0)
+        x = x + (lax.stop_gradient(step) - step)
         s = x[0]**2 + x[1]**2
-        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), jnp.linalg.norm(rz(x) - target)
+        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), residual
 
 class near_axis:
     def __init__(self, *args, **kwargs):
