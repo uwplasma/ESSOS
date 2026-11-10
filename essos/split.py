@@ -1633,14 +1633,13 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
                 status = jnp.where((t < end) & (status == 0), 2, status).astype(jnp.int32)
                 return (t, y, guess, status, trials, rejected, fraction)
 
-            save_times = tsref[...]
-
             def save(y, t, index):
 
-                def store(i):
+                def store(state):
+                    i = state[0]
                     ysout[i, :] = y
-                    return i + 1
-                return jax.lax.while_loop(lambda i: (i < nsave) & (save_times[jnp.minimum(i, nsave - 1)] <= t), store, index)
+                    return i + 1, tsref[jnp.minimum(i + 1, nsave - 1)]
+                return jax.lax.while_loop(lambda state: (state[0] < nsave) & (state[1] <= t), store, (index, tsref[jnp.minimum(index, nsave - 1)]))[0]
             valid_inputs = (first_h > 0) & finite(first_h) & (ceiling > 0) & ~jnp.isnan(ceiling) & (first_orbit_h > 0) & finite(first_orbit_h) & (birth_speed > 0) & finite(birth_speed) & (budget > 0) & finite(budget) & (final_t >= 0) & finite(final_t)
             previous = zero
             for i in range(nsave):
