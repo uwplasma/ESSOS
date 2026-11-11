@@ -1,5 +1,4 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -13,7 +12,7 @@ tmax = 1.e-4
 timestep=1.e-8
 times_to_trace=1000
 nparticles_per_core=2
-nparticles = number_of_processors_to_use*nparticles_per_core
+nparticles = nparticles_per_core
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 atol = 1e-7
 rtol = 1e-7
