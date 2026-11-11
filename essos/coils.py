@@ -550,7 +550,8 @@ def _initialize_currents_scale(currents, currents_scale):
     """Return a fixed current scale for normalized current dofs."""
     currents = jnp.atleast_1d(jnp.asarray(currents))
     if currents_scale is None:
-        return jnp.mean(jnp.abs(currents))
+        scale = jnp.mean(jnp.abs(currents))
+        return jnp.where(scale > 0, scale, 1.0)  # all-zero currents: dofs_currents = 0, not 0/0
     return currents_scale
 
 def _normalize_base_currents(currents, curves):
