@@ -51,3 +51,13 @@ Existing SIMSOPT coil files can be loaded directly:
 The JAX-native ``loss_coil_separation`` and ``loss_coil_surface_distance``
 functions in ``essos.objective_functions`` provide blockwise, differentiable
 coil-clearance penalties; ``block_size`` bounds their temporary memory.
+
+Tracing many VMEC orbits
+------------------------
+
+``Tracing`` converts each saved VMEC state to Cartesian one point at a time, so the memory of a trace grows slowly with
+``times_to_trace``. Peak memory for 500 guiding centres on one CPU device, with the old vectorized conversion for
+comparison:
+
+.. image:: _static/vmec_tracing_memory.png
+   :alt: Peak resident memory against saved points per orbit, before and after.
