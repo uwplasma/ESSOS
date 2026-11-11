@@ -97,6 +97,12 @@ def _gc_from_jacobian(field, jacobian):
     return field, field, magnitude, grad_magnitude, curl_unit, curvature, 1.0
 
 
+def _cartesian_gc_quantities(field, points):
+    """``gc_quantities`` of a Cartesian field (sqrtg = 1) from one forward-mode Jacobian of ``field.B``."""
+    jacobian, value = jacfwd(lambda x: (field.B(x),) * 2, has_aux=True)(jnp.asarray(points))
+    return _gc_from_jacobian(value, jacobian)
+
+
 class BiotSavart(MagneticField):
     def __init__(self, coils):
         self.coils = coils
@@ -125,8 +131,7 @@ class BiotSavart(MagneticField):
         grad|B| = (dB/dX)^T b, curl b = curl B/|B| + B x grad|B|/|B|^2 and
         kappa = -B x curl b / |B| follow algebraically.
         """
-        jacobian, field = jacfwd(lambda x: (self.B(x), self.B(x)), has_aux=True)(jnp.asarray(points))
-        return _gc_from_jacobian(field, jacobian)
+        return _cartesian_gc_quantities(self, points)
 
     @jit
     def B(self, points):
@@ -645,24 +650,30 @@ class Vmec():
         phi = jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2 * jnp.pi)
         target = jnp.array([R, Z])
 
-        def rz(x):
+        def rz(x, phi):
             p = self.to_xyz(jnp.array([x[0]**2 + x[1]**2, jnp.arctan2(x[1], x[0]), phi]))
             return jnp.array([jnp.hypot(p[0], p[1]), p[2]])
 
+        # The iterations run on constants. Differentiating them gives NaN once a step is exactly zero (the norm of
+        # the step); the converged point is differentiated by one more Newton step instead, whose value is exactly 0.
+        phi0, target0 = lax.stop_gradient((phi, target))
         rho, theta = [a.ravel() for a in jnp.meshgrid(jnp.linspace(0.08, 1.0, 12),
                                                      jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False))]
         seeds = jnp.stack([rho * jnp.cos(theta), rho * jnp.sin(theta)], 1)
-        x = seeds[jnp.argmin(jnp.sum((vmap(rz)(seeds) - target)**2, 1))]
+        x = seeds[jnp.argmin(jnp.sum((vmap(lambda x: rz(x, phi0))(seeds) - target0)**2, 1))]
 
         def newton(x, _):
-            dx = jnp.linalg.solve(jacfwd(rz)(x), rz(x) - target)
+            dx = jnp.linalg.solve(jacfwd(rz)(x, phi0), rz(x, phi0) - target0)
             x = x - dx * jnp.minimum(1.0, 0.1 / (jnp.linalg.norm(dx) + 1e-300))
             # Stay in s <= 1: beyond it the extrapolated map can fold back over the plasma.
             return x / jnp.maximum(1.0, jnp.linalg.norm(x)), None
 
         x, _ = lax.scan(newton, x, None, length=40)
+        step = jnp.linalg.solve(jacfwd(rz)(x, phi), rz(x, phi) - target)
+        residual = jnp.linalg.norm(rz(x, phi0) - target0)
+        x = x + (lax.stop_gradient(step) - step)
         s = x[0]**2 + x[1]**2
-        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), jnp.linalg.norm(rz(x) - target)
+        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), residual
 
 class near_axis:
     def __init__(self, *args, **kwargs):
@@ -673,7 +684,6 @@ class near_axis:
         )
 
 
-@tree_util.register_static
 class ExternalField(MagneticField):
     """A Cartesian field from a batched source, traced one point at a time.
 
@@ -682,10 +692,17 @@ class ExternalField(MagneticField):
     VMEX ``VmecExtender``), or is a callable ``xyz (n, 3) -> B (n, 3)``, in
     metres and tesla, traceable by JAX. The derivatives come from automatic
     differentiation (:class:`MagneticField`).
+
+    With ``params`` (any pytree of numbers) the source is called with it as an
+    extra last argument, ``source(xyz, params)`` or ``source.b_cyl(R, phi, Z, params)``.
+    ``params`` are pytree children, so ``jax.grad`` differentiates with respect to
+    them and instances with same-shaped params and the same source share one
+    compilation. Without ``params`` the source is static metadata.
     """
 
-    def __init__(self, source):
+    def __init__(self, source, params=None):
         self.source = source
+        self.params = params
 
     @jit
     def sqrtg(self, points):
@@ -697,11 +714,22 @@ class ExternalField(MagneticField):
 
     @jit
     def B(self, points):
+        extra = () if self.params is None else (self.params,)
         if hasattr(self.source, "b_cyl"):
             R, phi = jnp.hypot(points[0], points[1]), jnp.arctan2(points[1], points[0])
-            BR, Bphi, BZ = (jnp.ravel(b)[0] for b in self.source.b_cyl(R[None], phi[None], points[2][None]))
+            BR, Bphi, BZ = (jnp.ravel(b)[0] for b in self.source.b_cyl(R[None], phi[None], points[2][None], *extra))
             return jnp.array([BR * jnp.cos(phi) - Bphi * jnp.sin(phi), BR * jnp.sin(phi) + Bphi * jnp.cos(phi), BZ])
-        return getattr(self.source, "B", self.source)(points[None])[0]
+        return getattr(self.source, "B", self.source)(points[None], *extra)[0]
+
+    @jit
+    def gc_quantities(self, points):
+        """Guiding-center quantities from one forward-mode Jacobian of the source (Cartesian, sqrtg = 1)."""
+        return _cartesian_gc_quantities(self, points)
+
+
+tree_util.register_pytree_node(ExternalField,
+                               lambda f: ((f.params,), f.source),
+                               lambda source, children: ExternalField(source, children[0]))
 
 
 class CombinedField(MagneticField):
@@ -725,6 +753,17 @@ class CombinedField(MagneticField):
     @jit
     def B_contravariant(self, points):
         return sum(field.B_contravariant(points) for field in self.fields)
+
+    @jit
+    def gc_quantities(self, points):
+        """Fused guiding-centre quantities when every member provides them, else the generic path.
+
+        Fused members are Cartesian (sqrtg = 1), so B and dB/dX of the sum come
+        from one forward-mode pass and the quantities follow algebraically.
+        """
+        if any(type(f).gc_quantities is MagneticField.gc_quantities for f in self.fields):
+            return MagneticField.gc_quantities(self, points)
+        return _cartesian_gc_quantities(self, points)
 
     @jit
     def sqrtg(self, points):
@@ -796,8 +835,10 @@ class InterpolatedField(MagneticField):
             phi, z, r = np.meshgrid(np.arange(nph) * 2 * np.pi / (nfp * nphi), np.linspace(*Z, nz),
                                     np.linspace(*R, nr), indexing="ij")
             xyz = jnp.stack((r * np.cos(phi), r * np.sin(phi), z), -1).reshape(-1, 3)
-            if chunk_size is None:  # bound points x source size (e.g. coil segments, dipoles) to ~2^24
-                chunk_size = max(1, 2**24 // max(1, sum(np.size(x) for x in tree_util.tree_leaves(field))))
+            if chunk_size is None:  # as many points per batch as fit in ~64 MiB of the source's compiled temporaries
+                probe = 64
+                temp = jit(vmap(field.B)).lower(xyz[:probe]).compile().memory_analysis().temp_size_in_bytes
+                chunk_size = max(probe, probe * 2**26 // max(1, temp))
             B = lax.map(field.B, xyz, batch_size=min(chunk_size, len(xyz))).reshape(phi.shape + (3,))
             c, s = jnp.cos(phi), jnp.sin(phi)
             table = jnp.stack((c * B[..., 0] + s * B[..., 1], c * B[..., 1] - s * B[..., 0], B[..., 2]), -1)
