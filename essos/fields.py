@@ -103,7 +103,7 @@ def _cartesian_gc_quantities(field, points):
     return _gc_from_jacobian(value, jacobian)
 
 
-def _biot_savart(points, gamma, gamma_dash, currents, chunk=4):
+def _biot_savart(points, gamma, gamma_dash, currents, chunk=8):
     """Biot-Savart field at one point, summed ``chunk`` coils at a time with ``lax.scan``.
 
     Only chunk x quadrature points are live at once (also in reverse mode, via ``checkpoint``),
@@ -118,8 +118,9 @@ def _biot_savart(points, gamma, gamma_dash, currents, chunk=4):
     @jax.checkpoint
     def step(B, c):
         g, gd, i = c
-        dif = x - g
-        return B + jnp.einsum("c,cqk->k", i, jnp.cross(gd, dif) / jnp.linalg.norm(dif, axis=-1, keepdims=True)**3), None
+        dif = (x - g).T
+        dB = jnp.cross(gd.T, dif, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif, axis=0)**3
+        return B + jnp.einsum("i,bai->b", i, dB, optimize="greedy"), None
 
     B0 = jnp.zeros(3, jnp.result_type(x, gamma, currents))
     return 1e-7 * lax.scan(step, B0, xs)[0] / gamma.shape[1]
