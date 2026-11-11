@@ -53,9 +53,9 @@ def test_gradient_of_field_with_respect_to_dofs_matches_analytic_loop():
         return BiotSavart(coils.with_dofs(dofs)).B(point)[2]
 
     g = jax.jit(jax.grad(bz))(coils.dofs)
-    # The public current DOF is normalized by currents_scale.
+    # The public current DOF is normalized: current = currents_scale * dof.
     current_index = coils.dof_names.index("coil[0].current")
-    assert jnp.allclose(g[current_index] * coils.currents_scale, _axis_bz() / CURRENT, rtol=1e-4)
+    assert jnp.allclose(g[current_index] / coils.currents_scale, _axis_bz() / CURRENT, rtol=1e-4)
     # Scaling the radius moves the on-axis field by dBz/dR.
     q = RADIUS**2 + Z**2
     dbz_dr = 2.0e-7 * jnp.pi * CURRENT * RADIUS * (2.0 * Z**2 - RADIUS**2) * q**-2.5
