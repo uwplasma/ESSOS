@@ -814,7 +814,8 @@ VMEC_STATUS = {
 # starts on one side of zero, so its first sign change is the crossing sought.
 _EVENT_ROOT_FINDER = optx.Newton(rtol=1e-8, atol=1e-11)
 _VMEC_HOST_RESULTS = ("status", "returns", "region", "failed", "wall_hits", "failure_times", "lcfs_times", "lcfs_states",
-                      "lcfs_energies", "lcfs_positions", "wall_times", "wall_positions", "wall_energies")
+                      "lcfs_energies", "lcfs_positions", "wall_times", "wall_positions", "wall_energies",
+                      "axis_stop_times", "axis_stop_states", "axis_stopped")
 
 
 def _with_failure_flag(vector_field, drift=True):
@@ -1437,7 +1438,8 @@ class Tracing():
         """
         r = dict(status=o["status"], returns=o["returns"], region=o["region"])
         r.update(failed=r["status"] == 4, wall_hits=r["status"] == 3, lcfs_times=o["lcfs_time"],
-                 lcfs_states=o["lcfs_state"], lcfs_energies=o["lcfs_energy"], _trajectories=o["traj"],
+                 lcfs_states=o["lcfs_state"], lcfs_energies=o["lcfs_energy"], axis_stop_times=o["axis_stop_time"],
+                 axis_stop_states=o["axis_stop_state"], axis_stopped=r["status"] == 6, _trajectories=o["traj"],
                  trajectories_xyz=o["xyz"], axis_hits=jnp.zeros(len(o["t"]), dtype=bool))
         r.update(failure_times=jnp.where(r["failed"], o["t"], jnp.inf), wall_times=jnp.where(r["wall_hits"], o["t"], jnp.inf),
                  lcfs_positions=vmap(self.field.to_xyz)(o["lcfs_state"][:, :3]),
