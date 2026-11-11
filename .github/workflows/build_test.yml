@@ -40,7 +40,7 @@ jobs:
 
   build:
     # never run fork code on the org's own machines
-    runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && matrix.python-version == '3.12')) && fromJSON('["self-hosted","macOS","uwplasma-cpu"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && matrix.python-version == '3.12')) && fromJSON('["self-hosted","uwplasma-cpu"]') || 'ubuntu-latest' }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -76,7 +76,7 @@ jobs:
         slug: uwplasma/ESSOS
 
   oldest:
-    runs-on: ${{ (github.event_name != 'pull_request') && fromJSON('["self-hosted","macOS","uwplasma-cpu"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request') && fromJSON('["self-hosted","uwplasma-cpu"]') || 'ubuntu-latest' }}
     name: Python 3.10, oldest supported JAX
     timeout-minutes: 120
     steps:
