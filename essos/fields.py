@@ -5,6 +5,7 @@ from jax import vmap
 from essos.coils import Curves
 import jax.numpy as jnp
 import numpy as np
+from scipy import ndimage
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
 from essos.surfaces import SurfaceRZFourier, BdotN_over_B, SurfaceClassifier
@@ -808,6 +809,21 @@ def _bspline_weights(u, n, periodic):
     return (i - 1) % n if periodic else i, jnp.stack((w, dw))
 
 
+def _inside(surface, nphi, nfp, nph, z, r):
+    """Boolean (nph, nz, nr) mask of the table nodes inside the toroidal ``surface`` (nearest cross-section, even-odd rule)."""
+    g = np.asarray(surface.gamma)
+    RR, ZZ, planes = np.hypot(g[..., 0], g[..., 1]), g[..., 2], np.mod(np.arctan2(g[:, 0, 1], g[:, 0, 0]), 2 * np.pi)
+    zq, rq = np.meshgrid(z, r, indexing="ij")
+    out = np.zeros((nph,) + zq.shape, bool)
+    for k, phi in enumerate(np.arange(nph) * 2 * np.pi / (nfp * nphi)):
+        d = np.abs(np.mod(planes - phi + np.pi, 2 * np.pi) - np.pi)
+        pr, pz = RR[d.argmin()], ZZ[d.argmin()]
+        qr, qz, nr_, nz_ = rq[..., None], zq[..., None], np.roll(pr, -1), np.roll(pz, -1)
+        cross = ((pz > qz) != (nz_ > qz)) & (qr < (nr_ - pr) * (qz - pz) / np.where(nz_ == pz, 1, nz_ - pz) + pr)
+        out[k] = cross.sum(-1) % 2 == 1
+    return out
+
+
 class InterpolatedField(MagneticField):
     """Any Cartesian field tabulated on a cylindrical grid and evaluated by tricubic B-splines.
 
@@ -820,11 +836,22 @@ class InterpolatedField(MagneticField):
     are interpolated by a C2 tricubic spline (periodic in phi, not-a-knot in R
     and Z) that is exact at the nodes, so B converges as h^4 and dB/dX as h^3.
     ``B``, ``dB_by_dX`` and the fused ``gc_quantities`` come from one 4x4x4
-    stencil; points outside the R, Z box are extrapolated from the edge cells.
+    stencil. Points outside the R, Z box return NaN (no extrapolation).
+
+    A source that jumps across a surface (e.g. the exterior field of a
+    free-boundary equilibrium, which differs inside the plasma) cannot be
+    splined across the jump. Pass ``exclude=surface`` (anything with ``gamma``,
+    e.g. the LCFS): nodes inside it are not evaluated, are filled with the
+    nearest outside value, and B and its Jacobian are NaN in every cell whose
+    spline support lies within ``guard`` cells of the excluded region.
+    Outside that margin the error is the interpolation error of the exterior
+    field plus the ringing of the fill, which decays by about a factor 4 per
+    cell; to reach the wall of a thin exterior shell the table spacing must be
+    a small fraction of the shell thickness.
     """
 
     def __init__(self, field=None, R=(1.0, 2.0), Z=(-0.5, 0.5), nr=32, nz=32, nphi=32, nfp=1,
-                 stellsym=False, chunk_size=None, table=None):
+                 stellsym=False, chunk_size=None, table=None, exclude=None, guard=3):
         (self.rmin, self.rmax), (self.zmin, self.zmax), self.nfp = map(float, R), map(float, Z), int(nfp)
         if field is not None and not isinstance(field, MagneticField):
             field = ExternalField(field)  # a batched source, e.g. a VMEX VmecExtender or MgridField
@@ -835,19 +862,27 @@ class InterpolatedField(MagneticField):
             phi, z, r = np.meshgrid(np.arange(nph) * 2 * np.pi / (nfp * nphi), np.linspace(*Z, nz),
                                     np.linspace(*R, nr), indexing="ij")
             xyz = jnp.stack((r * np.cos(phi), r * np.sin(phi), z), -1).reshape(-1, 3)
+            keep = np.arange(len(xyz)) if exclude is None else np.flatnonzero(~_inside(exclude, nphi, nfp, nph, np.linspace(*Z, nz), np.linspace(*R, nr))[:nph].ravel())
             if chunk_size is None:  # as many points per batch as fit in ~64 MiB of the source's compiled temporaries
-                probe = 64
-                temp = jit(vmap(field.B)).lower(xyz[:probe]).compile().memory_analysis().temp_size_in_bytes
-                chunk_size = max(probe, probe * 2**26 // max(1, temp))
-            B = lax.map(field.B, xyz, batch_size=min(chunk_size, len(xyz))).reshape(phi.shape + (3,))
+                temp = jit(vmap(field.B)).lower(xyz[:8]).compile().memory_analysis().temp_size_in_bytes
+                chunk_size = max(1, 8 * 2**26 // max(1, temp))
+            B = jnp.zeros((len(xyz), 3)).at[keep].set(lax.map(field.B, xyz[keep], batch_size=min(chunk_size, len(keep)))).reshape(phi.shape + (3,))
             c, s = jnp.cos(phi), jnp.sin(phi)
             table = jnp.stack((c * B[..., 0] + s * B[..., 1], c * B[..., 1] - s * B[..., 0], B[..., 2]), -1)
             if stellsym:  # B_R(R, -phi, -Z) = -B_R(R, phi, Z); B_phi, B_Z even
                 table = jnp.concatenate((table, table[1:nphi // 2, ::-1][::-1] * jnp.array([-1., 1., 1.])))
+        self.valid = np.ones((table.shape[0], table.shape[1] - 1, table.shape[2] - 1))
+        if exclude is not None:
+            out = ~_inside(exclude, table.shape[0], nfp, table.shape[0], np.linspace(*Z, table.shape[1]), np.linspace(*R, table.shape[2]))
+            table = jnp.where(out[..., None], table, table[tuple(ndimage.distance_transform_edt(~out, return_distances=False, return_indices=True))])
+            bad = ndimage.binary_dilation(~out, np.ones((3, 3, 3)), iterations=guard)
+            self.valid = 1. - (bad[:, :-1, :-1] | bad[:, 1:, :-1] | bad[:, :-1, 1:] | bad[:, 1:, 1:])  # float: a pytree leaf grad can pass through
+        self.valid = jnp.asarray(self.valid)
         self.table = jnp.asarray(table)  # (nphi, nz, nr, 3) node values of (B_R, B_phi, B_Z), mgrid layout
         nphi, nz, nr, _ = self.table.shape
-        self.coefficients = jnp.einsum("pi,zj,rk,ijkc->pzrc", _bspline_prefilter(nphi, True),
-                                       _bspline_prefilter(nz, False), _bspline_prefilter(nr, False), self.table)
+        c = jnp.einsum("pi,ijkc->pjkc", _bspline_prefilter(nphi, True), self.table)  # one axis at a time: no large intermediate
+        c = jnp.einsum("zj,pjkc->pzkc", _bspline_prefilter(nz, False), c)
+        self.coefficients = jnp.einsum("rk,pzkc->pzrc", _bspline_prefilter(nr, False), c)
 
     @classmethod
     def around(cls, field, surface, margin=0.05, n=48, **kwargs):
@@ -896,6 +931,9 @@ class InterpolatedField(MagneticField):
         iz, wz = _bspline_weights((z - self.zmin) / hz, nz2 - 2, False)
         ir, wr = _bspline_weights((R - self.rmin) / hr, nr2 - 2, False)
         C = self.coefficients[ip[:, None, None], iz[None, :, None], ir[None, None, :]]  # (4, 4, 4, 3)
+        eps = 1e-9 * (self.rmax - self.rmin)  # the box faces belong to the box
+        ok = (R >= self.rmin - eps) & (R <= self.rmax + eps) & (z >= self.zmin - eps) & (z <= self.zmax + eps)
+        ok &= self.valid[ip[1], iz[0], ir[0]] > 0
         Cr = jnp.einsum("abrc,nr->nabc", C, wr)
         Cz = jnp.einsum("nabc,mb->nmac", Cr, wz)
         V = jnp.einsum("nmac,la->lmnc", Cz, wp)  # V[l, m, n] = d^l/dphi d^m/dZ d^n/dR of (B_R, B_phi, B_Z)
@@ -905,7 +943,8 @@ class InterpolatedField(MagneticField):
         drot = jnp.array([[-s, -c, 0.], [c, -s, 0.], [0., 0., 0.]])
         dB_dcyl = jnp.stack((rot @ dR, rot @ dphi + drot @ b, rot @ dZ), -1)  # d B_xyz / d(R, phi, Z)
         dcyl_dx = jnp.array([[c, s, 0.], [-s / R, c / R, 0.], [0., 0., 1.]])
-        return rot @ b, dB_dcyl @ dcyl_dx
+        nan = jnp.where(ok, 1., jnp.nan)  # outside the box or the valid region: NaN, never an extrapolation
+        return nan * (rot @ b), nan * (dB_dcyl @ dcyl_dx)
 
     @jit
     def B(self, points):
@@ -920,12 +959,12 @@ class InterpolatedField(MagneticField):
         return _gc_from_jacobian(*self.B_and_dB_by_dX(points))
 
     def _tree_flatten(self):
-        return (self.table, self.coefficients), (self.rmin, self.rmax, self.zmin, self.zmax, self.nfp)
+        return (self.table, self.coefficients, self.valid), (self.rmin, self.rmax, self.zmin, self.zmax, self.nfp)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         obj = object.__new__(cls)
-        obj.table, obj.coefficients = children
+        obj.table, obj.coefficients, obj.valid = children
         obj.rmin, obj.rmax, obj.zmin, obj.zmax, obj.nfp = aux_data
         return obj
 
