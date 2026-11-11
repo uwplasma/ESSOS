@@ -178,7 +178,7 @@ Install the transform extra with `pip install 'essos[booz]'`.
 import numpy as np
 from netCDF4 import Dataset
 from booz_xform_jax import Booz_xform
-from essos.boozer import BoozerField, trace_boozer
+from essos.boozer import BoozerField, psi0_from_vmec, trace_boozer
 from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
 
 booz = Booz_xform(verbose=0, mboz=32, nboz=32)
@@ -186,7 +186,7 @@ booz.read_wout("wout.nc", flux=False)
 booz.run()
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
-field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi))
+field = BoozerField.from_booz_xform(booz, psi0=psi0_from_vmec(phi_edge))
 
 n = 1000
 speed = np.sqrt(2 * 3.5e6 * ONE_EV / ALPHA_PARTICLE_MASS)
@@ -197,8 +197,39 @@ result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np
 print(result.lost.mean(), result.loss_fractions())
 ```
 
-`psi0` is minus VMEC's boundary toroidal flux over `2 pi`. A particle
+`psi0_from_vmec` returns minus VMEC's boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
+
+### Guiding-centre equations and the `K` term
+
+In Boozer coordinates `(psi, theta, zeta)` with `psi = psi0 s`,
+`B = G grad(zeta) + I grad(theta) + K grad(psi)` and
+`B = grad(psi) x grad(theta) + iota grad(zeta) x grad(psi)` (Boozer 1981, White 2014).
+The guiding-centre Lagrangian gives, with `mu = v_perp^2 / (2 B)`, `D = F G - C I`,
+`C = -q iota + m v_par (G' - dK/dzeta) / B` and `F = q + m v_par (I' - dK/dtheta) / B`,
+
+```
+dpsi/dt     =  (I dB/dzeta - G dB/dtheta) m (v_par^2/B + mu) / D
+dtheta/dt   =  [(G dB/dpsi - K dB/dzeta) m (v_par^2/B + mu) - C v_par B] / D
+dzeta/dt    =  [F v_par B - (I dB/dpsi - K dB/dtheta) m (v_par^2/B + mu)] / D
+dv_par/dt   =  (C dB/dtheta - F dB/dzeta) mu B / D
+```
+
+`K = B . dr/dpsi` is the radial covariant component. It vanishes in vacuum and is nonzero
+at finite beta or with net current, so the common canonical form `P_zeta = m v_par G / B - psi_p`
+omits it (White and Zakharov 2003; Bierwage et al. 2022 discuss when that is accurate).
+No `dK/dpsi` appears. `BoozerField.from_booz_xform` computes `K` from the `R, Z, nu`
+harmonics (`K = (g_{psi zeta} + iota g_{psi theta}) / sqrt(g)`) and keeps it unless it is
+negligible; pass `with_K=False` for the previous behaviour. The flux convention is
+`psi0 = -phi_edge / (2 pi)` because VMEC's `(s, theta, phi)` is left-handed, so that `psi`
+and `-phi_edge` share a sign; it reproduces the VMEC `grad B` drift of QA, QH and W7-X
+equilibria for either sign of `phi_edge` (SIMSOPT's `+phi_edge / (2 pi)` traces the
+opposite charge).
+
+![Orbit with and without K, SIMSOPT, and K on a flux surface](docs/boozer_K.png)
+
+Left and centre: a 3.5 MeV alpha in a finite-beta (5%) QH equilibrium, ESSOS with and
+without `K` against SIMSOPT's `gc` (`K` shifts `s` by about `3 x 10^-4` in 80 microseconds). Right: `K` at `s = 0.5`.
 
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
 and its derivatives, together with the flux functions `G`, `I` and `iota`.
