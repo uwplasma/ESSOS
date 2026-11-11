@@ -49,8 +49,36 @@ cache disabled; 2 alpha particles, 1 ns, adaptive Dopri8 with the moment predict
 | Boozer / GC | shared JAX | 3.22 | 10.26 | 0.025 |
 | Boozer / GC | independent GPU | 5.07 | 66.88 | 0.039 |
 
-A warm-throughput comparison of the independent kernel against shared execution at
-production particle counts is still needed to justify its compile cost.
+## Warm throughput and memory (RTX A4000, JAX 0.12, float64)
+
+`--suite orbit` and `--suite split`, 32 fixed Dopri8 steps over 2e-7 s with four saves and
+no losses in that window, best of up to three runs on a GPU shared with other jobs (about
+30% run-to-run noise). The kernel's memory peak is the device allocator peak; XLA's is the
+compiler's buffer estimate, which equals the measured peak wherever the case fit (1e3 and 1e4).
+
+![Warm time and GPU memory against particle count](../../../docs/_static/native_gpu_scaling.png)
+
+| 1e4 particles | kernel s | XLA s | kernel GiB | XLA GiB |
+|---|---:|---:|---:|---:|
+| orbit, coils | 6.4 | 9.4 | 0.10 | 2.1 |
+| orbit, VMEC | 1.44 | 0.93 | 0.014 | 0.13 |
+| split, coils | 6.8 | 14.7 | 0.13 | 4.5 |
+| split, VMEC | 1.79 | 2.12 | 0.27 | 6.8 |
+
+At 1e5 particles the kernel runs split coils in 152 s (1.0 GiB) and split VMEC in 46 s
+(0.34 GiB); XLA would need 45 and 68 GiB and does not fit the 16 GiB card. The kernel's
+advantage is memory and, for coil fields, speed; for collisionless VMEC orbits XLA is as fast.
+Adaptive stepping with losses was not re-timed. Reverse AD of 64 coil particles
+(`--suite ad`): native and shared gradients differ by 1.7e-16 (relative), warm 0.77 s against
+3.6 s, but the kernel compile took 22 min against 35 s.
+
+## Spitzer slowing-down
+
+The split solver against the analytic energy relaxation of 10 keV protons in a 1 keV,
+1e20 m^-3 electron bath (`test_fast_ions_slow_down_on_electrons_and_relax_to_the_background_temperature`):
+`<E>(t) = 3T/2 + (E0 - 3T/2) exp(-2 t / tau_s)` with the Spitzer slowing-down time `tau_s`.
+
+![Mean energy against the Spitzer slowing-down law](../../../docs/_static/native_spitzer.png)
 
 ## Reproduction
 
