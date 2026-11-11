@@ -2,9 +2,10 @@ from pyexpat import model
 import os
 import jax
 jax.config.update("jax_enable_x64", True)
-# Every Tracing compiles a new solve, since maxtime and the save times are constants of it: about 4 s on a CPU
-# and 20 s on a GPU. XLA's persistent cache, keyed by the compiled program, serves a repeated trace (an
-# optimization loop, a rerun) from disk instead. ESSOS_XLA_CACHE names the directory; an empty value disables it.
+# Tracings that differ only in array values (particles, coil currents, field coefficients) share one compiled solve
+# within a process; maxtime and the save times are constants of it, so a new one compiles: about 4 s on a CPU and
+# 20 s on a GPU. XLA's persistent cache, keyed by the compiled program, serves it from disk in a rerun.
+# ESSOS_XLA_CACHE names the directory; an empty value disables it.
 _XLA_CACHE = os.environ.get("ESSOS_XLA_CACHE", os.path.join(os.path.expanduser("~"), ".cache", "essos", "xla"))
 if _XLA_CACHE and not jax.config.jax_compilation_cache_dir:
     jax.config.update("jax_compilation_cache_dir", _XLA_CACHE)
@@ -15,11 +16,12 @@ from matplotlib.colors import is_color_like
 import numpy as np
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax import jit, vmap, tree_util, random, lax, device_put
-from functools import partial
+from functools import lru_cache, partial
 from time import perf_counter
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, TqdmProgressMeter, NoProgressMeter
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
+import equinox as eqx
 import optimistix as optx
 import equinox.internal as eqxi
 from essos.coils import Coils
@@ -881,6 +883,14 @@ def _place_on_devices(x, target):
 ## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
 ## !!!!  Here particle_key was added to compute_trajectories (E. Neto collisions modifications)
 ## This is important for correct sampling of Brownian motion
+def _never(t, y, args, **kwargs):
+    return False
+
+
+def _vmec_edge(t, y, args, **kwargs):
+    return y[0] - 1
+
+
 def _wall_function(field, wall):
     """``Tracing``'s wall as ``xyz -> signed distance`` (positive inside), or None.
 
@@ -895,6 +905,89 @@ def _wall_function(field, wall):
             scale = max(1.0, float(jnp.mean(jnp.linalg.norm(jnp.asarray(wall.gamma)[..., :2], axis=-1))))
             wall = SurfaceClassifier(wall, h=0.02 * scale, padding=0.05 * scale)
     return getattr(wall, "evaluate_xyz", wall)
+
+
+class _ParticlesNode:
+    """A ``Particles`` as a pytree whose arrays are children, for the shared solver (``Particles`` itself is opaque)."""
+
+    names = ("initial_xyz", "initial_xyz_fullorbit", "initial_vxvyvz", "particle_index", "random_keys",
+             "initial_vparallel_over_v", "total_speed", "initial_vparallel", "initial_vperpendicular")
+
+    def __init__(self, particles):
+        self.particles = particles
+
+
+def _node_flatten(node):
+    d = vars(node.particles)
+    names = tuple(k for k in _ParticlesNode.names if k in d)
+    return tuple(d[k] for k in names), (names, tuple((k, v) for k, v in d.items() if k not in names))
+
+
+def _node_unflatten(aux, children):
+    particles = object.__new__(Particles)
+    particles.__dict__.update(aux[1], **dict(zip(aux[0], children)))
+    return _ParticlesNode(particles)
+
+
+tree_util.register_pytree_node(_ParticlesNode, _node_flatten, _node_unflatten)
+
+
+class _Static:
+    """The non-array attributes of a Tracing, equal when every one of them is: the key of a shared compilation."""
+
+    def __init__(self, tree):
+        self.tree = tree
+        self.leaves, self.treedef = tree_util.tree_flatten(tree, is_leaf=lambda x: x is None)
+
+    def __hash__(self):
+        return hash((len(self.leaves), tuple(type(leaf).__name__ for leaf in self.leaves)))
+
+    def __eq__(self, other):
+        def same(a, b):
+            try:
+                return a is b or bool(a == b)
+            except Exception:
+                return False
+        return (len(self.leaves) == len(other.leaves) and same(self.treedef, other.treedef)
+                and all(map(same, self.leaves, other.leaves)))
+
+
+@lru_cache(maxsize=16)
+def _compiled_solver(static, place):
+    """``jit(vmap(trajectory))`` of every Tracing that has the static part ``static`` and these devices."""
+    def solve(y0, keys, arrays):
+        tracing = object.__new__(Tracing)
+        tracing.__dict__.update(_unwrap(eqx.combine(arrays, static.tree)))
+        return vmap(tracing._trajectory_function())(y0, keys)
+    if isinstance(place, NamedSharding):
+        every = NamedSharding(place.mesh, PartitionSpec())
+        return jit(solve, in_shardings=(place, place, every), out_shardings=place)
+    return jit(solve)
+
+
+def _wrap(tree):
+    return tree_util.tree_map(lambda x: _ParticlesNode(x) if isinstance(x, Particles) else x, tree,
+                              is_leaf=lambda x: isinstance(x, Particles))
+
+
+def _unwrap(tree):
+    return tree_util.tree_map(lambda x: x.particles if isinstance(x, _ParticlesNode) else x, tree,
+                              is_leaf=lambda x: isinstance(x, _ParticlesNode))
+
+
+def _batch_solver(tracing, place):
+    """``solve(y0, keys)`` of ``tracing``, compiled once for all Tracings that differ only in array values.
+
+    Arrays (fields' coefficients, particles, tolerances held as arrays) are arguments of the compiled function;
+    everything else, from the model to the stopping criteria, selects it. Criteria, walls and fields that are not
+    pytrees (``Vmec``) count as the same only if they are the same objects, so a new lambda each time compiles anew,
+    and a ``Vmec`` mutated in place keeps the compilation made with its earlier values: build a new one instead.
+    """
+    arrays, static = eqx.partition(_wrap(dict(vars(tracing))), lambda x: isinstance(x, (jax.Array, np.ndarray)))
+    solver = _compiled_solver(_Static(static), place)
+    if isinstance(place, NamedSharding):  # replicated over the devices that share the particles
+        arrays = tree_util.tree_map(lambda x: _place_on_devices(x, NamedSharding(place.mesh, PartitionSpec())), arrays)
+    return lambda y0, keys: solver(y0, keys, arrays)
 
 
 class Tracing():
@@ -997,13 +1090,10 @@ class Tracing():
         # differentiability of the traced trajectories.
         self.solver = solver
         if condition is None:
-            self.condition = lambda t, y, args, **kwargs: False
+            self.condition = _never
             if isinstance(field, Vmec):
                 if model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
-                    def condition_Vmec(t, y, args, **kwargs):
-                        s, _, _ = y
-                        return s-1	 
-                    self.condition = condition_Vmec
+                    self.condition = _vmec_edge
             elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
                 if model in _GUIDING_CENTER_COLLISION_MODELS:
                     def condition_BioSavart(t, y, args, **kwargs):
@@ -1124,8 +1214,7 @@ class Tracing():
             else:                
                 self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction_BioSavart(boundary)
 
-    def trace(self):
-        @jit
+    def _trajectory_function(self):
         def compute_trajectory(initial_condition, particle_key) -> jnp.ndarray:
             if self._vmec_default:
                 return self._vmec_orbit(initial_condition, particle_key)
@@ -1182,6 +1271,9 @@ class Tracing():
                 return trajectory, solution.event_mask
             return trajectory
 
+        return compute_trajectory
+
+    def trace(self):
         y0, keys = self.initial_conditions, self.particles.random_keys if self.particles else None
         n = len(y0)
         traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys, self.args, self.exterior_field)))
@@ -1193,9 +1285,9 @@ class Tracing():
         batch = -(-batch // count) * count  # padded below so every device traces equally many particles
         if count > 1:
             place = NamedSharding(Mesh(np.asarray(self.devices[:count], dtype=object), ("dev",)), PartitionSpec("dev"))
-            solve = jit(vmap(compute_trajectory), in_shardings=place, out_shardings=place)
         else:
-            place, solve = self.devices[0], jit(vmap(compute_trajectory))
+            place = self.devices[0]
+        solve = _batch_solver(self, place)
 
         def run(y0, keys):
             with jax.default_device(self.devices[0]):
