@@ -863,10 +863,16 @@ class InterpolatedField(MagneticField):
                                     np.linspace(*R, nr), indexing="ij")
             xyz = jnp.stack((r * np.cos(phi), r * np.sin(phi), z), -1).reshape(-1, 3)
             keep = np.arange(len(xyz)) if exclude is None else np.flatnonzero(~_inside(exclude, nphi, nfp, nph, np.linspace(*Z, nz), np.linspace(*R, nr))[:nph].ravel())
-            if chunk_size is None:  # as many points per batch as fit in ~64 MiB of the source's compiled temporaries
-                temp = jit(vmap(field.B)).lower(xyz[:8]).compile().memory_analysis().temp_size_in_bytes
+            source = field.source if isinstance(field, ExternalField) and field.params is None and not hasattr(field.source, "b_cyl") else None
+            batched = getattr(source, "B", source) if source is not None else vmap(field.B)  # one batched call is far cheaper than a vmap of single-point calls
+            if chunk_size is None and source is not None:
+                chunk_size = 256  # a batched source bounds its own temporaries; 64 to 256 points per call are equally fast
+            elif chunk_size is None:  # as many points per batch as fit in ~64 MiB of the source's compiled temporaries
+                temp = jit(batched).lower(xyz[:8]).compile().memory_analysis().temp_size_in_bytes
                 chunk_size = max(1, 8 * 2**26 // max(1, temp))
-            B = jnp.zeros((len(xyz), 3)).at[keep].set(lax.map(field.B, xyz[keep], batch_size=min(chunk_size, len(keep)))).reshape(phi.shape + (3,))
+            pts, size = xyz[keep], min(chunk_size, len(keep))
+            pad = jnp.concatenate((pts, jnp.broadcast_to(pts[:1], (-len(pts) % size, 3))))
+            B = jnp.zeros((len(xyz), 3)).at[keep].set(lax.map(batched, pad.reshape(-1, size, 3)).reshape(-1, 3)[:len(pts)]).reshape(phi.shape + (3,))
             c, s = jnp.cos(phi), jnp.sin(phi)
             table = jnp.stack((c * B[..., 0] + s * B[..., 1], c * B[..., 1] - s * B[..., 0], B[..., 2]), -1)
             if stellsym:  # B_R(R, -phi, -Z) = -B_R(R, phi, Z); B_phi, B_Z even
