@@ -1149,8 +1149,11 @@ def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and
 
 def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_reverse_mode():
     """Saves of orbits that are not in a segment must not put NaN partials into the VMEC coefficient gradients."""
+    import diffrax
     from essos.dynamics import _wall_function
     from essos.fields import ExternalField, VMEC_WOUT_ARRAYS
+    if tuple(map(int, diffrax.__version__.split(".")[:3])) < (0, 7, 1):
+        pytest.skip("diffrax 0.7.0 (the last for Python 3.10) cannot differentiate its checkpointed loop through traced field coefficients")
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
     arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
     wall = _wall_function(vmec, 0.05)  # a wall is built from concrete fields
