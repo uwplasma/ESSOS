@@ -961,7 +961,8 @@ class Tracing():
                 if model not in ('GuidingCenterAdaptative', 'FullOrbitAdaptative'):
                     raise ValueError("timestep=None needs the axis radius and particle speed as concrete values; "
                                      "they are traced here, so pass an explicit timestep")
-                timestep = maxtime / 100  # only the first trial step of an adaptive solve
+                timestep = maxtime / 100  # only the first trial step of an adaptive solve, which cannot size max_steps
+                max_steps = 1_000_000 if max_steps is None else max_steps
             else:
                 timestep = float(abs(scales[0]) / scales[1]) / _STEPS_PER_TRANSIT.get(type(field), 400)
         self.timestep = timestep

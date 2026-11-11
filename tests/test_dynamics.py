@@ -1309,3 +1309,15 @@ def test_default_timestep_is_a_transit_fraction_and_survives_grad(qa_coil_alphas
     assert jnp.isfinite(jax.grad(end)(particles.initial_xyz)).all()
     with pytest.raises(ValueError, match="explicit timestep"):
         jax.grad(lambda energy: end(particles.initial_xyz, energy))(particles.energy)
+
+    seen = []  # an adaptive trace of a traced energy starts from maxtime/100 and keeps a generous step budget
+
+    def adaptive_end(energy):
+        launched = Particles(initial_xyz=particles.initial_xyz, energy=energy,
+                             initial_vparallel_over_v=particles.initial_vparallel_over_v)
+        tracing = Tracing(field=field, particles=launched, **{**kwargs, "model": "GuidingCenterAdaptative"})
+        seen.append((tracing.timestep, tracing.max_steps))
+        return tracing.trajectories[0, -1, 0]
+
+    jax.grad(adaptive_end)(particles.energy)
+    assert seen[0] == (pytest.approx(1e-9), 1_000_000)
