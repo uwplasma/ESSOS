@@ -1,5 +1,4 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nfieldlines
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
