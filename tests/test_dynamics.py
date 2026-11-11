@@ -1229,3 +1229,22 @@ def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
     B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
     mu = particles.initial_vperpendicular[0]**2 / (2 * B * SPEED_OF_LIGHT**2)
     np.testing.assert_allclose(trace.initial_conditions[0, 4], mu, rtol=1e-6)
+
+
+def test_loss_fraction_of_analytic_gyro_orbits():
+    """Gyro-orbits of radius rho about guiding centres at distance d are lost
+    iff d + rho > R, at the first sample where the orbit crosses R."""
+    class Sphere:
+        evaluate_xyz = staticmethod(lambda xyz: 1.0 - jnp.linalg.norm(xyz))
+    rho, d = 0.1, jnp.array([0.0, 0.5, 0.85, 1.5])
+    times = jnp.linspace(0.0, 2.0 * jnp.pi, 65)
+    xyz = d[:, None, None] * jnp.array([1.0, 0.0, 0.0]) + rho * jnp.stack(
+        (jnp.cos(times), jnp.sin(times), 0.0 * times), axis=-1)
+    tracing = Tracing.__new__(Tracing)
+    tracing.times, tracing.trajectories, tracing.model = times, xyz, "Lorentz"
+
+    fractions, n_lost, lost_times = tracing.loss_fraction(Sphere())
+    # d=0.85 only reaches 0.95 < 1 and stays confined; d=1.5 starts outside
+    assert n_lost == 1 and fractions[0] == 0.25 and fractions[-1] == 0.25
+    assert jnp.array_equal(lost_times, jnp.array([-1.0, -1.0, -1.0, 0.0]))
+    assert tracing.loss_fraction(r_max=0.9)[1] == 2  # x >= 0.9 also by d=0.85
