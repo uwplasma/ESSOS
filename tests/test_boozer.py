@@ -675,3 +675,22 @@ def test_orbits_match_simsopt_boozer_guiding_centre_at_finite_beta(with_K, refer
     # K moves the final s by up to 3.5e-4 here; SIMSOPT interpolation limits the agreement to ~3e-5.
     np.testing.assert_allclose(out.states[:, -1, 0], reference, atol=5e-5)
     assert np.abs(np.array(SIMSOPT_GC) - SIMSOPT_GC_NOK).max() > 3e-4
+
+
+def test_vacuum_K_is_negligible_at_high_boozer_resolution():
+    """In vacuum B = grad(G zeta + I theta), so K = 0; high-m noise must not be amplified near the axis."""
+    pytest.importorskip("booz_xform_jax")
+    from pathlib import Path
+    from netCDF4 import Dataset
+    from booz_xform_jax import Booz_xform
+
+    wout = str(Path(__file__).parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+    booz = Booz_xform(verbose=0, mboz=32, nboz=32)
+    booz.read_wout(wout, flux=False)
+    booz.run()
+    with Dataset(wout) as d:
+        field = BoozerField.from_booz_xform(booz, psi0_from_vmec(d["phi"][-1]), angle_grid=None)
+    r = jnp.sqrt(jnp.array([0.011, 0.1, 0.5, 0.99]))
+    K, _, dK_dtheta_r, dK_dzeta = jax.vmap(field.K.modB_derivatives)(r, 0.3 + 0 * r, 0.2 + 0 * r)
+    G = field.profiles(0.5)[0][1]
+    assert np.all(np.isfinite(dK_dtheta_r)) and np.abs(K).max() < 1e-4 * abs(G)

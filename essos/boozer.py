@@ -194,7 +194,7 @@ def k_harmonics(booz, psi0):
     ``K = (g_{psi zeta} + iota g_{psi theta}) sqrt(g)^-1`` with ``g_{psi x} = dr/dpsi . dr/dx``
     (White 2014, ch. 2; SIMSOPT ``BoozerRadialInterpolant.compute_K``). Positions are
     ``(R, phi, Z)`` with ``phi = zeta - nu`` and ``psi = psi0 s``. ``d/ds`` of each
-    harmonic divided by ``sqrt(s)^m`` is a cubic spline in ``sqrt(s)``. The (0, 0)
+    harmonic divided by ``sqrt(s)^min(m, 1)`` is a cubic spline in ``sqrt(s)``. The (0, 0)
     harmonic is dropped: it is a gauge of the poloidal angle.
     """
     xm, xn, nfp = np.asarray(booz.xm_b, int), np.asarray(booz.xn_b, float), int(booz.nfp)
@@ -206,10 +206,11 @@ def k_harmonics(booz, psi0):
     harm = {n: zero if getattr(booz, n, None) is None or not np.size(getattr(booz, n)) else
             np.asarray(getattr(booz, n), float) for n in names}
     asym = bool(getattr(booz, "asym", False))
-    scale = np.where(xm[:, None] > 0, rad ** xm[:, None], 1.0)
+    p = np.minimum(xm, 1)[:, None]  # x / sqrt(s)^m overflows noise for large m; m <= 1 is enough
+    scale = rad**p
 
     def d_ds(x):
-        return (xm[:, None] * x / rad + scale * CubicSpline(rad, (x / scale).T)(rad, 1).T) / (2 * rad)
+        return (p * x / rad + scale * CubicSpline(rad, (x / scale).T)(rad, 1).T) / (2 * rad)
 
     dharm = {n: d_ds(harm[n]) for n in names[2:]}
     nt, nz = 2 * (2 * xm.max() + 1), 2 * (2 * int(abs(xn).max()) // nfp + 1)
