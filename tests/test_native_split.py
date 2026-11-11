@@ -200,14 +200,13 @@ def test_fast_ions_slow_down_on_electrons_and_relax_to_the_background_temperatur
     log = float(coulomb_logarithm(M, Q, 0, np.sqrt(2*energy*ONE_EV/M), jnp.zeros(3), electrons))
     nu_e = 4*np.sqrt(2*np.pi)*density*Q**4*log/(3*(4*np.pi*EPSILON_0)**2*np.sqrt(ELECTRON_MASS)*kelvin**1.5)
     rate = ELECTRON_MASS/M*nu_e                                           # 1/tau_s
-    times = jnp.linspace(0., 2/rate, 9)
+    times = jnp.linspace(0., 1/rate, 9)
     out = s.trace_split(field, birth, electrons, tmax=float(times[-1]), timestep=float(times[-1])/100, times=times,
                         orbit=False, adaptive=False, speed_floor=1.)
     assert (out.status == 0).all()
     mean = np.mean(.5*M*out.ys[..., 3]**2+out.ys[..., 4], axis=0)         # mu B, with B = 1 T
     analytic = 1.5*kelvin+(energy*ONE_EV-1.5*kelvin)*np.exp(-2*rate*np.asarray(times))
-    np.testing.assert_allclose(mean[:5], analytic[:5], rtol=3e-2)
-    np.testing.assert_allclose(mean[-1], analytic[-1], rtol=6e-2)
+    np.testing.assert_allclose(mean, analytic, rtol=3e-2)
 
 
 def test_particle_map_and_spatial_kick_have_the_diffusion_tensor_covariance():
