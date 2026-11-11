@@ -21,6 +21,7 @@ from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, T
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
 import optimistix as optx
+import equinox.internal as eqxi
 from essos.coils import Coils
 from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
@@ -788,6 +789,8 @@ VMEC_STATUS = {
 # Event times are refined to |dt| < 1e-8 t + 1e-11 s. Every event function
 # starts on one side of zero, so its first sign change is the crossing sought.
 _EVENT_ROOT_FINDER = optx.Newton(rtol=1e-8, atol=1e-11)
+_VMEC_HOST_RESULTS = ("status", "returns", "region", "failed", "wall_hits", "failure_times", "lcfs_times", "lcfs_states",
+                      "lcfs_energies", "lcfs_positions", "wall_times", "wall_positions", "wall_energies")
 
 
 def _with_failure_flag(vector_field, drift=True):
@@ -818,7 +821,9 @@ def _keep_energy(vpar, mu, E, B, m):
     orbit mirrors there, with v_par = 0 and mu = E / B.
     """
     mu = jnp.minimum(mu, E / B)
-    return jnp.sign(vpar) * jnp.sqrt(jnp.maximum(2 * (E - mu * B) / m, 0.0)), mu
+    kinetic = 2 * (E - mu * B) / m
+    positive = kinetic > 0.0  # a mirror point has zero slope, not the infinite one of sqrt(0): finite gradients
+    return jnp.sign(vpar) * jnp.where(positive, jnp.sqrt(jnp.where(positive, kinetic, 1.0)), 0.0), mu
 
 
 # Drift, diffusion, solver and noise dimension of the stochastic models.
@@ -883,11 +888,12 @@ def _wall_function(field, wall):
     (classified on a grid of 2% of its major radius, at least 2 cm), an object
     with ``evaluate_xyz`` or a callable.
     """
-    if isinstance(wall, (int, float)):
-        wall = SurfaceRZFourier.from_vmec(field, ntheta=64, nphi=128, offset=wall)
-    if hasattr(wall, "gamma"):
-        scale = max(1.0, float(jnp.mean(jnp.linalg.norm(jnp.asarray(wall.gamma)[..., :2], axis=-1))))
-        wall = SurfaceClassifier(wall, h=0.02 * scale, padding=0.05 * scale)
+    with jax.ensure_compile_time_eval():  # a wall built from constants stays concrete inside jit and grad
+        if isinstance(wall, (int, float)):
+            wall = SurfaceRZFourier.from_vmec(field, ntheta=64, nphi=128, offset=wall)
+        if hasattr(wall, "gamma"):
+            scale = max(1.0, float(jnp.mean(jnp.linalg.norm(jnp.asarray(wall.gamma)[..., :2], axis=-1))))
+            wall = SurfaceClassifier(wall, h=0.02 * scale, padding=0.05 * scale)
     return getattr(wall, "evaluate_xyz", wall)
 
 
@@ -901,7 +907,7 @@ class Tracing():
                  orbit_length_scale=1., orbit_speed_scale=None,
                  native_controller="i", native_pcoeff=.4, native_icoeff=.3,
                  native_adjoint="none", native_adjoint_checkpoint_steps=16,
-                 native_adjoint_max_accepted_steps=None, native_adjoint_parameter_accumulation="segment"):
+                 native_adjoint_max_accepted_steps=None, native_adjoint_parameter_accumulation="segment", adjoint=None):
 
         self.native_adjoint, self.native_adjoint_checkpoint_steps = native_adjoint, native_adjoint_checkpoint_steps
         self.native_adjoint_max_accepted_steps = native_adjoint_max_accepted_steps
@@ -973,11 +979,14 @@ class Tracing():
         # the LCFS (default 1e-3 minor radii), so an orbit skimming the surface,
         # where the two fields differ slightly, does not bounce between them.
         if reentry_depth is None and self._vmec_default:
-            reentry_depth = 1e-3 * float(jnp.abs(jnp.asarray(field.Aminor_p)))
+            reentry_depth = 1e-3 * jnp.abs(jnp.asarray(field.Aminor_p))
         self.reentry_depth = reentry_depth
         # Diffrax's ceiling was effectively unbounded, so a trace that could not
         # finish ran until the process was killed rather than returning.
         self.max_steps = max_steps
+        # Reverse mode (jax.grad) by default; diffrax.ForwardMode() for jax.jvp and jax.jacfwd, which
+        # diffrax's checkpointed adjoint cannot do.
+        self.adjoint = diffrax.RecursiveCheckpointAdjoint() if adjoint is None else adjoint
         # ESSOS_PROGRESS=0 turns every default progress bar off (the test suite does).
         self.progress = bool(progress) and os.environ.get("ESSOS_PROGRESS", "1") != "0"
         # With particle_batch_size, particles are traced in batches of that
@@ -1188,7 +1197,7 @@ class Tracing():
 
         y0, keys = self.initial_conditions, self.particles.random_keys if self.particles else None
         n = len(y0)
-        traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys)))
+        traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys, self.args, self.exterior_field)))
         batch = n if self.particle_batch_size is None or traced else min(self.particle_batch_size, n)
         # Sharding pays off for plain traces. A differentiated trace stays on one device: XLA 0.6 aborts compiling
         # a gradient through a while loop sharded over several CPU devices.
@@ -1261,7 +1270,7 @@ class Tracing():
                            saveat=SaveAt(subs=[diffrax.SubSaveAt(ts=jnp.clip(self.times, t0, self.maxtime)),
                                                diffrax.SubSaveAt(t1=True)]),
                            stepsize_controller=controller, event=event, throw=throw, max_steps=self.max_steps,
-                           progress_meter=self.progress_meter)
+                           progress_meter=self.progress_meter, adjoint=self.adjoint)
 
     # -- VMEC guiding centers: exact LCFS crossing, failures, exterior continuation --
 
@@ -1275,6 +1284,13 @@ class Tracing():
         and magnetic moment, until it strikes the wall, reaches maxtime or
         re-enters the LCFS; it then continues inside, up to max_returns times.
         Solves of inactive orbits start at maxtime and take no steps.
+
+        Differentiable with respect to the launch states and the parameters of the fields: jax.grad by default, jax.jvp
+        and jax.jacfwd with ``adjoint=diffrax.ForwardMode()``. Event times differentiate by the implicit function
+        theorem; the state restarts at each re-entry from flux_coordinates, whose derivative is the inverse of the
+        map's Jacobian. Hysteresis: an orbit outside re-enters only once reentry_depth inside the LCFS, so a graze
+        does not toggle the segment. The derivative is that of the orbit's own sequence of segments: where a small
+        change adds or removes a crossing or a re-entry, the result jumps (it is finite, not smoothed).
         """
         T, times, ext = self.maxtime, self.times, self.exterior_field
         inside = (*self._terms(key, flag=True), self.args,
@@ -1334,11 +1350,15 @@ class Tracing():
             return o
 
         nt, d = len(times), y0.shape[0]
-        o = dict(t=jnp.zeros(()), y=y0, x=jnp.zeros(5), inside=jnp.array(True), active=jnp.array(True),
+        o = dict(t=jnp.zeros(()), y=y0, x=self._vmec_to_exterior(y0)[0], inside=jnp.array(True), active=jnp.array(True),
                  status=jnp.zeros((), jnp.int8), returns=jnp.zeros((), int), lcfs_time=jnp.full((), jnp.inf),
                  lcfs_state=jnp.full(d, jnp.nan), lcfs_energy=jnp.full((), jnp.nan), traj=jnp.full((nt, d), jnp.inf),
                  xyz=jnp.full((nt, 3), jnp.nan), region=jnp.full(nt, -1, dtype=jnp.int8))
-        o = lax.while_loop(lambda o: o["active"], step, o)
+        # Every pass ends an inside and an outside segment, so max_returns + 1 passes finish every orbit. A bounded scan
+        # (not a while loop) differentiates in reverse mode; the cond, taken once no orbit of the batch is active, skips
+        # the remaining passes, so the forward cost is that of the loop.
+        o = lax.scan(lambda o, _: (lax.cond(eqxi.unvmap_any(o["active"]), step, lambda o: o, o), None), o, None,
+                     length=self.max_returns * (ext is not None) + 1)[0]
         if ext is not None:  # energy at the end outside, the strike for a wall hit
             o["x_energy"] = 0.5 * self.particles.mass * o["x"][3]**2 + o["x"][4] * ext.AbsB(o["x"][:3])
         return o
@@ -1374,30 +1394,37 @@ class Tracing():
             return jnp.concatenate([point, jnp.array([v, vpar / v])])
         return jnp.concatenate([point, jnp.array([vpar / c, mu / (c**2 * m)])])
 
-    def _set_vmec_outputs(self, o):
-        """Per-orbit results of _vmec_orbit, and losses at the exact wall (with an exterior field) or LCFS times."""
-        o = {k: np.asarray(v) for k, v in o.items()}
-        self.status, self.returns, self.region = o["status"], o["returns"], o["region"]
-        self.failed, self.wall_hits = self.status == 4, self.status == 3
-        self.failure_times = np.where(self.failed, o["t"], np.inf)
-        self.lcfs_times, self.lcfs_states, self.lcfs_energies = o["lcfs_time"], o["lcfs_state"], o["lcfs_energy"]
-        self.lcfs_positions = np.asarray(vmap(self.field.to_xyz)(jnp.asarray(o["lcfs_state"][:, :3])))
-        self.wall_times = np.where(self.wall_hits, o["t"], np.inf)
-        self.wall_positions = np.where(self.wall_hits[:, None], o["x"][:, :3], np.nan)
-        self.wall_energies = np.where(self.wall_hits, o.get("x_energy", np.nan), np.nan)
-        self._trajectories, self.trajectories_xyz = jnp.asarray(o["traj"]), jnp.asarray(o["xyz"])
-        self.boundary_hits = self.event_mask = jnp.asarray(np.isfinite(self.lcfs_times))
-        self.axis_hits = jnp.zeros(len(o["t"]), dtype=bool)
-        self.total_particles_unresolved, self.toroidal_angles = jnp.sum(self.axis_hits), None
+    def _vmec_results(self, o):
+        """Per-orbit results of _vmec_orbit, and losses at the exact wall (with an exterior field) or LCFS times.
+
+        Pure JAX arrays, so jax.grad and jax.jvp differentiate them with respect to the launch states and the
+        parameters of the fields. Times and states of orbits that do not strike (or cross) are inf (nan), and
+        reset to the surface that stopped them at each re-entry.
+        """
+        r = dict(status=o["status"], returns=o["returns"], region=o["region"])
+        r.update(failed=r["status"] == 4, wall_hits=r["status"] == 3, lcfs_times=o["lcfs_time"],
+                 lcfs_states=o["lcfs_state"], lcfs_energies=o["lcfs_energy"], _trajectories=o["traj"],
+                 trajectories_xyz=o["xyz"], axis_hits=jnp.zeros(len(o["t"]), dtype=bool))
+        r.update(failure_times=jnp.where(r["failed"], o["t"], jnp.inf), wall_times=jnp.where(r["wall_hits"], o["t"], jnp.inf),
+                 lcfs_positions=vmap(self.field.to_xyz)(o["lcfs_state"][:, :3]),
+                 wall_positions=jnp.where(r["wall_hits"][:, None], o["x"][:, :3], jnp.nan),
+                 wall_energies=jnp.where(r["wall_hits"], o.get("x_energy", jnp.nan), jnp.nan),
+                 boundary_hits=jnp.isfinite(o["lcfs_time"]), total_particles_unresolved=jnp.zeros((), int))
+        r["event_mask"] = r["boundary_hits"]
         wall = self.exterior_field is not None
-        lost = self.wall_times if wall else self.lcfs_times
-        self.loss_fractions = jnp.asarray(np.mean(lost[:, None] <= np.asarray(self.times)[None, :], axis=0))
-        self.total_particles_lost = jnp.sum(jnp.isfinite(lost))
-        self.lost_times = jnp.asarray(np.where(np.isfinite(lost), lost, -1))
+        lost = r["wall_times"] if wall else r["lcfs_times"]
+        r.update(loss_fractions=jnp.mean(lost[:, None] <= self.times[None, :], axis=0),
+                 total_particles_lost=jnp.sum(jnp.isfinite(lost)), lost_times=jnp.where(jnp.isfinite(lost), lost, -1))
         if self.model in _GUIDING_CENTER_COLLISION_MODELS:
-            hit = np.isfinite(lost)[:, None]
-            self.lost_energies = jnp.asarray(np.where(hit[:, 0], self.wall_energies if wall else self.lcfs_energies, 0.0))
-            self.lost_positions = jnp.asarray(np.where(hit, self.wall_positions if wall else self.lcfs_states[:, :3], 0.0))
+            hit = jnp.isfinite(lost)
+            r.update(lost_energies=jnp.where(hit, r["wall_energies"] if wall else r["lcfs_energies"], 0.0),
+                     lost_positions=jnp.where(hit[:, None], r["wall_positions"] if wall else r["lcfs_states"][:, :3], 0.0))
+        return r
+
+    def _set_vmec_outputs(self, o):
+        """Set the attributes of _vmec_results (and toroidal_angles = None); NumPy arrays outside a transformation."""
+        host = lambda k, v: np.asarray(v) if k in _VMEC_HOST_RESULTS and not isinstance(v, jax.core.Tracer) else v
+        self.__dict__.update({k: host(k, v) for k, v in self._vmec_results(o).items()}, toroidal_angles=None)
 
     def _vector_field(self, vector_field):
         return _axis_regular(vector_field) if self._axis_regular else vector_field

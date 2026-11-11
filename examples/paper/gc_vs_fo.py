@@ -1,5 +1,4 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 from jax import vmap
 from time import time
 import jax.numpy as jnp
@@ -21,7 +20,7 @@ coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
 
 # Particle parameters
-nparticles = number_of_processors_to_use
+nparticles = 1
 mass=PROTON_MASS
 energy=5000*ONE_EV
 cyclotron_frequency = ELEMENTARY_CHARGE*0.3/mass
