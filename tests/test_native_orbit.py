@@ -35,6 +35,24 @@ def test_tableau_fsal_and_standard_dense_match_diffrax(method):
 
 
 @pytest.mark.parametrize('method', ['dopri5','dopri8'])
+def test_trajectories_match_diffrax_with_the_same_tolerances(method):
+    """Fixed steps and the PI controller reproduce diffrax's Dopri5/Dopri8 solves step for step."""
+    def rhs(t,y,args):
+        return jnp.array([y[1],-y[0]*(1+.3*jnp.sin(3*t))-.05*y[1]])
+    y0,ts,solver=jnp.array([1.,.2]),jnp.linspace(0,6,7),(diffrax.Dopri5() if method=='dopri5' else diffrax.Dopri8())
+    def reference(dt0,controller):
+        return diffrax.diffeqsolve(diffrax.ODETerm(rhs),solver,0.,6.,dt0,y0,saveat=diffrax.SaveAt(ts=ts),
+                                   stepsize_controller=controller,max_steps=10000)
+    fixed=rk.solve_rk(rhs,y0,ts=ts,t1=6.,dt0=.05,adaptive=False,method=method)
+    np.testing.assert_allclose(fixed.ys,reference(.05,diffrax.ConstantStepSize()).ys,rtol=0,atol=1e-14)
+    for rtol in (1e-6,1e-9):
+        native=rk.solve_rk(rhs,y0,ts=ts,t1=6.,dt0=.1,rtol=rtol,atol=rtol,method=method,controller='pi')
+        other=reference(.1,diffrax.PIDController(rtol=rtol,atol=rtol,pcoeff=.4,icoeff=.3))
+        assert native.stats.accepted==other.stats['num_accepted_steps']
+        np.testing.assert_allclose(native.ys,other.ys,rtol=0,atol=1e-10)
+
+
+@pytest.mark.parametrize('method', ['dopri5','dopri8'])
 def test_adaptive_control_rejects_and_is_independent_of_saves(method):
     for controller in ('i','pi'):
         opts=dict(t1=2.,dt0=2.,rtol=1e-10,atol=1e-10,method=method,controller=controller,
