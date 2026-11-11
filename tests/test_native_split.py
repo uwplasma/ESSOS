@@ -182,6 +182,34 @@ def test_guiding_center_map_has_lorentz_and_speed_generator_moments():
     np.testing.assert_allclose(basis.T@basis, np.eye(3), atol=3e-16)
 
 
+def test_fast_ions_slow_down_on_electrons_and_relax_to_the_background_temperature():
+    """Spitzer slowing-down time and the energy relaxation of a test population.
+
+    Ions with v_ti << v << v_te in a Maxwellian electron bath lose speed at the rate 1/tau_s,
+    tau_s = m_i / (m_e nu_e), with nu_e = 4 sqrt(2 pi) n e^4 ln(Lambda) / (3 (4 pi eps0)^2 sqrt(m_e) T^(3/2))
+    (Spitzer; Helander & Sigmar, ch. 3). Brownian motion in the light bath relaxes the mean energy to 3T/2
+    at twice that rate: <E>(t) = 3T/2 + (E0 - 3T/2) exp(-2 t / tau_s).
+    """
+    from essos.constants import ELECTRON_MASS
+    temperature, density, energy, count = 1000., 1e20, 10e3, 2000
+    electrons = BackgroundSpecies(1, jnp.array([ELECTRON_MASS/M]), jnp.array([-1.]), jnp.array([density]), jnp.array([temperature]))
+    field = UniformField()
+    birth = Particles(jnp.tile(jnp.array([1., 0., 0.]), (count, 1)), mass=M, charge=Q, energy=energy*ONE_EV,
+                      initial_vparallel_over_v=jnp.linspace(-.9, .9, count), field=field)
+    kelvin = temperature*ONE_EV
+    log = float(coulomb_logarithm(M, Q, 0, np.sqrt(2*energy*ONE_EV/M), jnp.zeros(3), electrons))
+    nu_e = 4*np.sqrt(2*np.pi)*density*Q**4*log/(3*(4*np.pi*EPSILON_0)**2*np.sqrt(ELECTRON_MASS)*kelvin**1.5)
+    rate = ELECTRON_MASS/M*nu_e                                           # 1/tau_s
+    times = jnp.linspace(0., 2/rate, 9)
+    out = s.trace_split(field, birth, electrons, tmax=float(times[-1]), timestep=float(times[-1])/100, times=times,
+                        orbit=False, adaptive=False, speed_floor=1.)
+    assert (out.status == 0).all()
+    mean = np.mean(.5*M*out.ys[..., 3]**2+out.ys[..., 4], axis=0)         # mu B, with B = 1 T
+    analytic = 1.5*kelvin+(energy*ONE_EV-1.5*kelvin)*np.exp(-2*rate*np.asarray(times))
+    np.testing.assert_allclose(mean[:5], analytic[:5], rtol=3e-2)
+    np.testing.assert_allclose(mean[-1], analytic[-1], rtol=6e-2)
+
+
 def test_particle_map_and_spatial_kick_have_the_diffusion_tensor_covariance():
     c = s.CollisionCoefficients(.8, .4, .12, -.3, .07, .02)
     velocity = jnp.array([1.2, 0., 1.6]); speed = jnp.linalg.norm(velocity); direction = velocity/speed
