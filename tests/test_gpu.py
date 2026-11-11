@@ -45,14 +45,22 @@ def test_biot_savart_jacobian_is_traceless():
     assert abs(float(jnp.trace(J))) < 1e-4 * float(scale)
 
 
-def test_gradient_of_field_with_respect_to_current_is_linear_response():
+def test_gradient_of_field_with_respect_to_dofs_matches_analytic_loop():
+    coils = _loop()
     point = jnp.array([0.0, 0.0, Z])
 
-    def bz(current):
-        return BiotSavart(_loop(current)).B(point)[2]
+    def bz(dofs):
+        return BiotSavart(coils.with_dofs(dofs)).B(point)[2]
 
-    g = jax.jit(jax.grad(bz))(CURRENT)
-    assert jnp.allclose(g, _axis_bz(1.0), rtol=1e-4)
+    g = jax.jit(jax.grad(bz))(coils.dofs)
+    # The public current DOF is normalized by currents_scale.
+    current_index = coils.dof_names.index("coil[0].current")
+    assert jnp.allclose(g[current_index] * coils.currents_scale, _axis_bz() / CURRENT, rtol=1e-4)
+    # Scaling the radius moves the on-axis field by dBz/dR.
+    q = RADIUS**2 + Z**2
+    dbz_dr = 2.0e-7 * jnp.pi * CURRENT * RADIUS * (2.0 * Z**2 - RADIUS**2) * q**-2.5
+    radius_dofs = [coils.dof_names.index(n) for n in ("coil[0].xc(1)", "coil[0].ys(1)")]
+    assert jnp.allclose(g[radius_dofs[0]] + g[radius_dofs[1]], dbz_dr, rtol=1e-4)
 
 
 def test_field_line_tracing_in_a_coil_field_is_differentiable():
