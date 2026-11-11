@@ -270,7 +270,7 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
   and read the per-line mask from `tracing.boundary_hits`.
 - **Step budget and defaults.** `max_steps` (default 16 times the steps of a fixed-step solve) bounds every
   Diffrax solve and a `RuntimeWarning` reports orbits that did not finish. `timestep` defaults to 1/400 of the
-  transit time `R0 / v`, `rtol` to `1e-8` and `atol` to `rtol`.
+  transit time `R0 / v` (1/100 on a VMEC field), `rtol` to `1e-8` and `atol` to `rtol`.
 - **Progress bars** are off by default; pass `progress=True` when interactive.
   With `particle_batch_size=n` particles are traced `n` at a time and the bar
   counts completed particles (batches are bypassed under `jax.jit`/`grad`).

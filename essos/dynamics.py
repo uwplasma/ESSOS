@@ -777,8 +777,9 @@ def _axis_regular(vector_field):
     return wrapped
 
 
-# Steps per transit time R0/speed of the default timestep: Dopri8 conserves energy to ~1e-6 (see tests).
-_STEPS_PER_TRANSIT = 400
+# Steps per transit time R0/speed of the default timestep. 400 holds the Dopri8 energy error of a coil field at
+# ~1e-7; the smooth VMEC Fourier field is converged (endpoint 1e-10) from 100 and costs 2.3 times more at 400.
+_STEPS_PER_TRANSIT = {Vmec: 100}
 
 
 def _warn_unfinished(count, max_steps):
@@ -949,12 +950,20 @@ class Tracing():
         self.initial_conditions = initial_conditions
         self.times_to_trace = times_to_trace
         self.maxtime = maxtime
-        # timestep=None: 1/_STEPS_PER_TRANSIT of the transit time R0/speed; maxtime/100 for a field line, or when
-        # the field or particles are being differentiated (traced values cannot size a step).
+        # timestep=None: 1/_STEPS_PER_TRANSIT (400, 100 for VMEC) of the transit time R0/speed, evaluated eagerly
+        # (also under jit); maxtime/100 for a field line. A traced R0 or speed (coil dofs, energy under jax.grad) cannot size a step.
         if timestep is None:
-            scales = [getattr(field, "r_axis", 1.0), jnp.max(particles.total_speed) if particles is not None else jnp.nan]
-            timestep = (maxtime / 100 if any(isinstance(x, jax.core.Tracer) for x in scales) or np.isnan(scales[1])
-                        else float(abs(scales[0]) / scales[1]) / _STEPS_PER_TRANSIT)
+            with jax.ensure_compile_time_eval():
+                scales = [getattr(field, "r_axis", 1.0), jnp.max(particles.total_speed) if particles is not None else 1.0]
+            if particles is None:
+                timestep = maxtime / 100
+            elif any(isinstance(x, jax.core.Tracer) for x in scales):
+                if model not in ('GuidingCenterAdaptative', 'FullOrbitAdaptative'):
+                    raise ValueError("timestep=None needs the axis radius and particle speed as concrete values; "
+                                     "they are traced here, so pass an explicit timestep")
+                timestep = maxtime / 100  # only the first trial step of an adaptive solve
+            else:
+                timestep = float(abs(scales[0]) / scales[1]) / _STEPS_PER_TRANSIT.get(type(field), 400)
         self.timestep = timestep
         self.rtol = rtol
         # An absolute tolerance above rtol floors the error, so atol follows rtol by default.

@@ -1256,3 +1256,56 @@ def test_truncated_tracing_warns(qa_coil_alphas):
     field, particles = qa_coil_alphas
     with pytest.warns(RuntimeWarning, match="did not finish"):
         Tracing(field=field, model="GuidingCenterAdaptative", particles=particles, maxtime=1e-5, max_steps=20)
+
+
+@pytest.mark.parametrize("method, steps, order", [
+    ("rk4", (8e-7, 4e-7, 2e-7, 1e-7), 4), ("dopri5", (8e-7, 4e-7, 2e-7, 1e-7), 5), ("dopri8", (5e-6, 2.5e-6, 1.25e-6, 6.25e-7), 8)])
+def test_fixed_step_error_converges_at_the_scheme_order(method, steps, order):
+    """The global error of a fixed-step scheme of order p falls as h**p (Hairer, Norsett and Wanner 1993, II.3)."""
+    from essos.boozer import trace_boozer
+    from tests.test_boozer import tokamak, V0, M, Q
+    births = (jnp.full(4, .3), jnp.linspace(.5, 3, 4), jnp.zeros(4), jnp.linspace(-.6, .6, 4))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=4e-5, n_save=2, devices=jax.devices()[:1])
+    scale = np.array([1, 1, 1, V0])
+    final = lambda m, h: trace_boozer(tokamak(), *births, timestep=h, method=m, **kwargs).states[:, -1, :4]
+    reference = final("dopri8", 2e-7)  # error ~1e-15 at this step
+    errors = [np.max(np.abs(final(method, h) - reference) / scale) for h in steps]
+    assert np.polyfit(np.log(steps), np.log(errors), 1)[0] == pytest.approx(order, abs=0.6)
+
+
+def test_full_orbit_magnetic_moment_is_an_adiabatic_invariant(qa_coil_alphas):
+    """mu = m v_perp^2 / 2B oscillates at O(rho/L) with the gyrophase but its gyro-average is conserved
+    (Littlejohn 1983; Cary and Brizard 2009), and the energy is exact in a static field."""
+    field, particles = qa_coil_alphas
+    cold = Particles(initial_xyz=particles.initial_xyz, initial_vparallel_over_v=particles.initial_vparallel_over_v,
+                     energy=40 * 1.602176634e-19, field=field)
+    tracing = Tracing(field=field, model="FullOrbitAdaptative", particles=cold, maxtime=2e-5, times_to_trace=400)
+    y = tracing.trajectories
+    B = jax.vmap(jax.vmap(field.AbsB))(y[:, :, :3])
+    vpar = jnp.sum(y[:, :, 3:6] * jax.vmap(jax.vmap(field.B))(y[:, :, :3]), -1) / B
+    mu = np.asarray(cold.mass * (jnp.sum(y[:, :, 3:6]**2, -1) - vpar**2) / (2 * B))
+    windows = mu.reshape(2, 4, 100).mean(-1)  # ten gyro periods each
+    assert np.all(mu.max(1) / mu.min(1) - 1 > 5e-3)
+    assert np.all(np.abs(windows / windows[:, :1] - 1) < 1e-3)
+    assert float(jnp.max(jnp.abs(tracing.energy() / cold.energy - 1))) < 1e-6
+
+
+def test_default_timestep_is_a_transit_fraction_and_survives_grad(qa_coil_alphas):
+    field, particles = qa_coil_alphas
+    speed = float(particles.total_speed.max())
+    kwargs = dict(model="GuidingCenter", maxtime=1e-7, times_to_trace=2)
+    assert Tracing(field=field, particles=particles, **kwargs).timestep == pytest.approx(float(field.r_axis) / speed / 400)
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    near_axis = _near_axis_particles()
+    assert Tracing(field=vmec, particles=near_axis, **kwargs).timestep == pytest.approx(
+        vmec.r_axis / float(near_axis.total_speed.max()) / 100)
+
+    def end(x0, energy=particles.energy):
+        launched = Particles(initial_xyz=x0, initial_vparallel_over_v=particles.initial_vparallel_over_v, energy=energy)
+        tracing = Tracing(field=field, particles=launched, **kwargs)
+        assert tracing.timestep == pytest.approx(float(field.r_axis) / speed / 400)  # concrete R0 and speed under grad
+        return tracing.trajectories[0, -1, 0]
+
+    assert jnp.isfinite(jax.grad(end)(particles.initial_xyz)).all()
+    with pytest.raises(ValueError, match="explicit timestep"):
+        jax.grad(lambda energy: end(particles.initial_xyz, energy))(particles.energy)
