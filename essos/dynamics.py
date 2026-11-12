@@ -23,6 +23,7 @@ from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipSte
 import diffrax
 import equinox as eqx
 import optimistix as optx
+import equinox as eqx
 import equinox.internal as eqxi
 from essos.coils import Coils
 from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
@@ -812,6 +813,24 @@ def _with_failure_flag(vector_field, drift=True):
     return wrapped
 
 
+class _EventSteps(PIDController):
+    """PID control that also rejects a step over which an event function ``g(y)`` keeps its sign at both ends but
+    changes by more than half the smaller end value: diffrax detects a crossing only as a sign change between steps,
+    and a shallow excursion through zero inside one step would pass unseen (a graze, found or missed with the step).
+    Below ``floor`` (in the units of ``g``, far under any physical margin) the test is off, which bounds the number of
+    halvings of an approach to the surface to about log(g / floor)."""
+    events: tuple = eqx.field(default=(), static=True)
+    floor: float = eqx.field(default=1e-10, static=True)
+
+    def adapt_step_size(self, t0, t1, y0, y1, *rest):
+        keep, next_t0, next_t1, jump, state, result = super().adapt_step_size(t0, t1, y0, y1, *rest)
+        for g in self.events:
+            a, b = lax.stop_gradient(g(y0)), lax.stop_gradient(g(y1))
+            coarse = (a * b > 0) & (jnp.minimum(jnp.abs(a), jnp.abs(b)) > self.floor) & (jnp.abs(b - a) > 0.5 * jnp.minimum(jnp.abs(a), jnp.abs(b)))
+            keep, next_t0, next_t1 = keep & ~coarse, jnp.where(coarse, t0, next_t0), jnp.where(coarse, t0 + (t1 - t0) / 2, next_t1)
+        return keep, next_t0, next_t1, jump, state, result
+
+
 def _failed_event(t, y, args, **kwargs):
     return (y[-1] > 0) | ~jnp.isfinite(y).all()
 
@@ -1309,7 +1328,7 @@ class Tracing():
                 bar.update(done)
         return tree_util.tree_map(lambda *x: jnp.asarray(np.concatenate(x)), *results)
 
-    def _terms(self, key, flag=False):
+    def _terms(self, key, flag=False, events=()):
         """Diffrax terms, solver and step-size controller of self.model (with _with_failure_flag if ``flag``)."""
         flagged = (lambda f, drift=True: _with_failure_flag(f, drift)) if flag else (lambda f, drift=True: f)
         dt0, model = self.timestep, self.model
@@ -1332,8 +1351,8 @@ class Tracing():
                                          dtmin=dt0, dtmax=1.e-4, force_dtmin=True),
                 step_ts=self.times, store_rejected_steps=self.rejected_steps)
         elif model in _ADAPTIVE_MODELS:
-            controller = PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
-                                       dtmin=dt0 if model == 'FullOrbitCollisions' else None)
+            controller = _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
+                                     dtmin=dt0 if model == 'FullOrbitCollisions' else None, events=events)
         return terms, solver, controller
 
     def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False):
@@ -1367,17 +1386,19 @@ class Tracing():
         change adds or removes a crossing or a re-entry, the result jumps (it is finite, not smoothed).
         """
         T, times, ext = self.maxtime, self.times, self.exterior_field
-        inside = (*self._terms(key, flag=True), self.args,
-                  Event((lambda t, y, args, **kwargs: 1.0 - y[0]**2 - y[1]**2, _failed_event),
+        lcfs = lambda y: 1.0 - y[0]**2 - y[1]**2
+        inside = (*self._terms(key, flag=True, events=(lcfs,)), self.args,
+                  Event((lambda t, y, args, **kwargs: lcfs(y), _failed_event),
                         root_finder=_EVENT_ROOT_FINDER))
         if ext is not None:
             wall = self.wall if self.wall is not None else (lambda x: jnp.ones(()))
+            depth = lambda y: self.field.boundary_distance(y[:3]) - self.reentry_depth
             outside = (ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else
-                       diffrax.Dopri8(), PIDController(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol),
+                       diffrax.Dopri8(), _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
+                                                     events=(lambda y: wall(y[:3]), depth)),
                        (ext, self.particles, Electric_field_zero()),
-                       Event((lambda t, y, args, **kwargs: wall(y[:3]),
-                              lambda t, y, args, **kwargs: self.field.boundary_distance(y[:3]) - self.reentry_depth,
-                              _failed_event), root_finder=_EVENT_ROOT_FINDER))
+                       Event((lambda t, y, args, **kwargs: wall(y[:3]), lambda t, y, args, **kwargs: depth(y), _failed_event),
+                             root_finder=_EVENT_ROOT_FINDER))
 
         def segment(o, run, spec, y, code, to_flux=lambda y: y):
             """Solve one segment of the orbits in ``run`` and record its saves."""
@@ -1415,12 +1436,14 @@ class Tracing():
                 return o
             # Outside, to the wall, maxtime, or back inside.
             run = o["active"] & ~o["inside"]
-            o, t_end, end, (struck, returned), failed = segment(o, run, outside, o["x"], 1)
+            behind = run & (wall(o["x"][:3]) <= 0)  # the wall is already crossed at the exit point: a hit at the exit time
+            o, t_end, end, (struck, returned), failed = segment(o, run & ~behind, outside, o["x"], 1)
+            struck = struck | behind
             returned &= ~struck
             back = returned & (o["returns"] < self.max_returns)
             o.update(t=t_end, returns=o["returns"] + back, inside=o["inside"] | back, active=o["active"] & ~(run & ~back),
                      status=jnp.select([failed, struck, returned & ~back, run & ~back], [4, 3, 5, 2], o["status"]),
-                     x=jnp.where(run, end, o["x"]), y=jnp.where(back, self._vmec_from_exterior(end), o["y"]))
+                     x=jnp.where(run & ~behind, end, o["x"]), y=jnp.where(back, self._vmec_from_exterior(end), o["y"]))
             return o
 
         nt, d = len(times), y0.shape[0]
@@ -1484,12 +1507,15 @@ class Tracing():
                  lcfs_positions=jnp.where(boundary[:, None], vmap(self.field.to_xyz)(jnp.where(boundary[:, None], o["lcfs_state"][:, :3], 0.5)), jnp.nan),
                  wall_positions=jnp.where(r["wall_hits"][:, None], o["x"][:, :3], jnp.nan),
                  wall_energies=jnp.where(r["wall_hits"], o.get("x_energy", jnp.nan), jnp.nan),
-                 boundary_hits=jnp.isfinite(o["lcfs_time"]), total_particles_unresolved=jnp.zeros((), int))
+                 boundary_hits=jnp.isfinite(o["lcfs_time"]))
         r["event_mask"] = r["boundary_hits"]
         wall = self.exterior_field is not None
         lost = r["wall_times"] if wall else r["lcfs_times"]
-        r.update(loss_fractions=jnp.mean(lost[:, None] <= self.times[None, :], axis=0),
-                 total_particles_lost=jnp.sum(jnp.isfinite(lost)), lost_times=jnp.where(jnp.isfinite(lost), lost, -1))
+        unresolved = jnp.sum(r["failed"])  # a failed orbit is neither lost nor confined: the aggregates are NaN
+        r.update(loss_fractions=jnp.where(unresolved > 0, jnp.nan, jnp.mean(lost[:, None] <= self.times[None, :], axis=0)),
+                 total_particles_lost=jnp.where(unresolved > 0, jnp.nan, jnp.sum(jnp.isfinite(lost))),
+                 lost_times=jnp.where(r["failed"], jnp.nan, jnp.where(jnp.isfinite(lost), lost, -1)),
+                 total_particles_unresolved=unresolved)
         if self.model in _GUIDING_CENTER_COLLISION_MODELS:
             hit = jnp.isfinite(lost)
             r.update(lost_energies=jnp.where(hit, r["wall_energies"] if wall else r["lcfs_energies"], 0.0),

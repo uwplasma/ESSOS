@@ -1109,6 +1109,14 @@ def test_vmec_non_finite_steps_are_reported():
     assert failed.any() and jnp.all(tracing.status[failed] == 4)
     assert jnp.all(tracing.failure_times[failed] >= tracing.lcfs_times[failed])
     assert jnp.isinf(tracing.failure_times[~failed]).all()
+    # a failed orbit is neither lost nor confined: the aggregates say so instead of counting it
+    assert tracing.total_particles_unresolved == failed.sum() and jnp.isnan(tracing.lost_times[failed]).all()
+    assert jnp.isnan(tracing.loss_fractions).all() and jnp.isnan(tracing.total_particles_lost)
+
+
+def test_vmec_wall_already_crossed_at_the_exit_point_is_a_hit_at_the_exit_time():
+    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6, wall_gap=-1e-3)
+    assert tracing.wall_hits.all() and jnp.allclose(tracing.wall_times, tracing.lcfs_times, rtol=1e-12)
 
 
 def _toroidal_source(xyz, params):
@@ -1175,7 +1183,8 @@ def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_rever
 def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
     """Trapped protons whose radial excursion just reaches the LCFS (pitch 0.0755940631) cross, graze or stay inside.
 
-    Which side of the knife edge an orbit lands on depends on rounding, so only the gradients are asserted finite."""
+    Every pitch from -1e-6 up crosses, at the time the orbit reaches the surface whatever the margin (a shallow excursion
+    through the LCFS inside one step is not skipped); the gradients are finite."""
     from essos.constants import ELEMENTARY_CHARGE
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
     pitch = jnp.concatenate([jnp.zeros(1), 0.0755940631 + jnp.array([-1e-6, 1e-12, 1e-9, 1e-7, 1e-5, 1e-3, 0.2])])
@@ -1190,7 +1199,8 @@ def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
     objective = lambda s: jnp.sum(jnp.where(jnp.isfinite(t := crossing_times(s)), t, 0.0))
     s = jnp.full(8, 0.9)
     times, gradient = crossing_times(s), jax.grad(objective)(s)
-    assert jnp.isinf(times[0]) and jnp.isfinite(times[-1]) and jnp.isfinite(gradient).all()
+    assert jnp.isinf(times[0]) and jnp.isfinite(times[1:]).all() and jnp.isfinite(gradient).all()
+    np.testing.assert_allclose(times[2:4], 2.320923e-5, rtol=1e-5)
     h = jnp.zeros(8).at[-1].set(1e-6)
     np.testing.assert_allclose(gradient[-1], (objective(s + h) - objective(s - h)) / 2e-6, rtol=1e-4)
 
