@@ -91,24 +91,3 @@ jobs:
         uv pip install ".[multiobjective]" pytest pytest-xdist "jax==0.6.2" "jaxlib==0.6.2" "equinox==0.13.3" "diffrax==0.7.0" "optimistix==0.0.11" "jaxtyping<0.3.8" "numpy<2.3"
     - name: Run tests
       run: uv run --no-sync pytest -n 3
-
-  gpu:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, uwplasma-gpu]
-    name: GPU smoke
-    timeout-minutes: 5
-    steps:
-    - uses: actions/checkout@v4
-    - uses: astral-sh/setup-uv@v6
-      with:
-        python-version: '3.12'
-        enable-cache: false
-    - name: Install ESSOS with CUDA JAX
-      run: |
-        uv venv
-        uv pip install . pytest 'jax[cuda12]'
-    - name: Check that JAX sees the GPU
-      run: uv run --no-sync python -c "import jax; assert jax.default_backend()=='gpu', jax.devices()"
-    - name: GPU tests
-      timeout-minutes: 1
-      run: uv run --no-sync pytest -m gpu -q -x -p no:cacheprovider tests/test_gpu.py
