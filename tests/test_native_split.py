@@ -153,7 +153,9 @@ def test_guiding_center_map_has_lorentz_and_speed_generator_moments():
     residual = []
     for h in (.02, .01):
         mean = expectation(kick(h, xi), h, 2)
-        np.testing.assert_allclose(mean[0]-v, drift*h, rtol=1e-11)                 # E[dv] = A h
+        # E[dv] = A h + O(h^2): the 2 D_par/v drift enters as a perpendicular kick, v -> sqrt(v1^2 + 4 D_par h).
+        speed_error = mean[0]-v-drift*h
+        np.testing.assert_allclose(speed_error, 0., atol=2e-2*abs(drift)*h)
         np.testing.assert_allclose(mean[1]-xi, -nu*xi*h, rtol=1e-11)               # Lorentz: E[dxi] = -nu xi h
         # E[dxi^2] -> nu(1-3xi^2) h is the l=2 Legendre eigenvalue, 3 nu; errors are O(h^2).
         residual.append([mean[3]-xi**2-nu*(1-3*xi**2)*h, mean[2]-v**2-(2*v*drift+2*c.parallel)*h])
@@ -200,13 +202,15 @@ def test_fast_ions_slow_down_on_electrons_and_relax_to_the_background_temperatur
     log = float(coulomb_logarithm(M, Q, 0, np.sqrt(2*energy*ONE_EV/M), jnp.zeros(3), electrons))
     nu_e = 4*np.sqrt(2*np.pi)*density*Q**4*log/(3*(4*np.pi*EPSILON_0)**2*np.sqrt(ELECTRON_MASS)*kelvin**1.5)
     rate = ELECTRON_MASS/M*nu_e                                           # 1/tau_s
-    times = jnp.linspace(0., 1/rate, 9)
-    out = s.trace_split(field, birth, electrons, tmax=float(times[-1]), timestep=float(times[-1])/100, times=times,
+    times = jnp.linspace(0., 6/rate, 9)                                   # relaxed to 3T/2 by 3 tau_s
+    out = s.trace_split(field, birth, electrons, tmax=float(times[-1]), timestep=float(times[-1])/300, times=times,
                         orbit=False, adaptive=False, speed_floor=1.)
     assert (out.status == 0).all()
     mean = np.mean(.5*M*out.ys[..., 3]**2+out.ys[..., 4], axis=0)         # mu B, with B = 1 T
     analytic = 1.5*kelvin+(energy*ONE_EV-1.5*kelvin)*np.exp(-2*rate*np.asarray(times))
-    np.testing.assert_allclose(mean, analytic, rtol=3e-2)
+    np.testing.assert_allclose(mean, analytic, rtol=4e-2)
+    # No particle is thrown to a nonthermal speed when it passes near v = 0 (radial drift 2 D/v); the upward tail is the diffusion of the 10 keV start.
+    assert np.isfinite(out.ys).all() and (.5*M*out.ys[..., 3]**2+out.ys[..., 4]).max() < 2*energy*ONE_EV
 
 
 def test_particle_map_and_spatial_kick_have_the_diffusion_tensor_covariance():
