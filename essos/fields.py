@@ -8,6 +8,7 @@ import numpy as np
 from scipy import ndimage
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
+from jax.custom_batching import custom_vmap
 from essos.surfaces import SurfaceRZFourier, BdotN_over_B, SurfaceClassifier
 from essos.plot import fix_matplotlib_3d
 from essos.util import newton
@@ -955,9 +956,19 @@ class InterpolatedField(MagneticField):
         nan = jnp.where(ok, 1., jnp.nan)  # outside the box (or the guard band without a source): NaN, never an extrapolation
         B, J = nan * (rot @ b), nan * (dB_dcyl @ dcyl_dx)
         if self.field is not None:  # the guard band inside the box is evaluated directly from the source
-            direct = lambda p: (self.field.B(p), jacfwd(self.field.B)(p))
-            Bd, Jd = lax.cond(inbox & ~good, direct, lambda p: (jnp.full(3, jnp.nan), jnp.full((3, 3), jnp.nan)), points)
-            B, J = jnp.where(inbox & ~good, Bd, B), jnp.where(inbox & ~good, Jd, J)
+            field, miss = self.field, inbox & ~good
+
+            @custom_vmap
+            def direct(p, need):  # one cond per point, so only the points that need the source evaluate it
+                return lax.cond(need, lambda p: (field.B(p), jacfwd(field.B)(p)), lambda p: (jnp.full(3, jnp.nan), jnp.full((3, 3), jnp.nan)), p)
+
+            @direct.def_vmap
+            def _(size, batched, p, need):  # a vmap of the source would run all points through it at once: map instead
+                p, need = (jnp.broadcast_to(a, (size,) + jnp.shape(a)[int(bt):]) if not bt else a for a, bt in zip((p, need), batched))
+                return lax.map(lambda a: direct.fun(*a), (p, need)), (True, True)
+
+            Bd, Jd = direct(points, miss)
+            B, J = jnp.where(miss, Bd, B), jnp.where(miss, Jd, J)
         return B, J
 
     @jit
