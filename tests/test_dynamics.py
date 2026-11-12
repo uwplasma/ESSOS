@@ -1229,3 +1229,24 @@ def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
     B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
     mu = particles.initial_vperpendicular[0]**2 / (2 * B * SPEED_OF_LIGHT**2)
     np.testing.assert_allclose(trace.initial_conditions[0, 4], mu, rtol=1e-6)
+
+
+def test_tracings_with_the_same_shapes_share_one_compiled_solve():
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart
+    from essos.constants import ONE_EV
+    from essos.dynamics import _compiled_solver
+
+    def trace(currents, shift):
+        coils = Coils(curves=CreateEquallySpacedCurves(n_curves=2, order=2, R=1.0, r=0.4, nfp=2, stellsym=True), currents=currents)
+        particles = Particles(initial_xyz=jnp.array([[1.1 + shift, 0., 0.], [1.2 + shift, 0., 0.]]), energy=1e3 * ONE_EV)
+        return Tracing(field=BiotSavart(coils), model='GuidingCenter', particles=particles, maxtime=1e-6, timestep=1e-8,
+                       times_to_trace=10, progress=False).trajectories
+
+    _compiled_solver.cache_clear()
+    first, second = trace([1e6, 2e6], 0.), trace([2e6, 1e6], 0.01)
+    info = _compiled_solver.cache_info()
+    assert (info.misses, info.hits) == (1, 1)
+    _compiled_solver.cache_clear()
+    np.testing.assert_array_equal(second, trace([2e6, 1e6], 0.01))  # a fresh compilation gives the same orbits
+    assert not np.allclose(first, second)
