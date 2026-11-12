@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,6 +16,7 @@ permissions:
 jobs:
   # Hosted and cheap: runs for fork PRs too, which never reach the self-hosted runners.
   lint:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-22.04
     name: Lint and import smoke
     timeout-minutes: 15
@@ -39,6 +41,7 @@ jobs:
       run: python -c "import essos, essos.fields, essos.dynamics, essos.coils"
 
   build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     # never run fork code on the org's own machines
     runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && matrix.python-version == '3.12')) && fromJSON('["self-hosted","uwplasma-cpu"]') || 'ubuntu-latest' }}
     timeout-minutes: 90
@@ -76,6 +79,7 @@ jobs:
         slug: uwplasma/ESSOS
 
   oldest:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ (github.event_name != 'pull_request') && fromJSON('["self-hosted","uwplasma-cpu"]') || 'ubuntu-latest' }}
     name: Python 3.10, oldest supported JAX
     timeout-minutes: 120
