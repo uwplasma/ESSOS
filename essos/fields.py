@@ -810,13 +810,13 @@ def _bspline_weights(u, n, periodic):
     return (i - 1) % n if periodic else i, jnp.stack((w, dw))
 
 
-def _inside(surface, nphi, nfp, nph, z, r):
-    """Boolean (nph, nz, nr) mask of the table nodes inside the toroidal ``surface`` (nearest cross-section, even-odd rule)."""
+def _inside(surface, nfp, nphi, z, r):
+    """Boolean (nphi, nz, nr) mask of the table nodes inside the toroidal ``surface`` (nearest cross-section, even-odd rule)."""
     g = np.asarray(surface.gamma)
     RR, ZZ, planes = np.hypot(g[..., 0], g[..., 1]), g[..., 2], np.mod(np.arctan2(g[:, 0, 1], g[:, 0, 0]), 2 * np.pi)
     zq, rq = np.meshgrid(z, r, indexing="ij")
-    out = np.zeros((nph,) + zq.shape, bool)
-    for k, phi in enumerate(np.arange(nph) * 2 * np.pi / (nfp * nphi)):
+    out = np.zeros((nphi,) + zq.shape, bool)
+    for k, phi in enumerate(np.arange(nphi) * 2 * np.pi / (nfp * nphi)):
         d = np.abs(np.mod(planes - phi + np.pi, 2 * np.pi) - np.pi)
         pr, pz = RR[d.argmin()], ZZ[d.argmin()]
         qr, qz, nr_, nz_ = rq[..., None], zq[..., None], np.roll(pr, -1), np.roll(pz, -1)
@@ -857,6 +857,8 @@ class InterpolatedField(MagneticField):
         (self.rmin, self.rmax), (self.zmin, self.zmax), self.nfp = map(float, R), map(float, Z), int(nfp)
         if field is not None and not isinstance(field, MagneticField):
             field = ExternalField(field)  # a batched source, e.g. a VMEX VmecExtender or MgridField
+        dims = (nphi, nz, nr) if table is None else table.shape[:3]
+        inside = None if exclude is None else _inside(exclude, nfp, dims[0], np.linspace(*Z, dims[1]), np.linspace(*R, dims[2]))
         if table is None:
             if stellsym and (nphi % 2 or not np.isclose(self.zmin, -self.zmax)):
                 raise ValueError("stellsym needs an even nphi and Z = (-zmax, zmax)")
@@ -864,7 +866,7 @@ class InterpolatedField(MagneticField):
             phi, z, r = np.meshgrid(np.arange(nph) * 2 * np.pi / (nfp * nphi), np.linspace(*Z, nz),
                                     np.linspace(*R, nr), indexing="ij")
             xyz = jnp.stack((r * np.cos(phi), r * np.sin(phi), z), -1).reshape(-1, 3)
-            keep = np.arange(len(xyz)) if exclude is None else np.flatnonzero(~_inside(exclude, nphi, nfp, nph, np.linspace(*Z, nz), np.linspace(*R, nr))[:nph].ravel())
+            keep = np.arange(len(xyz)) if exclude is None else np.flatnonzero(~inside[:nph].ravel())
             source = field.source if isinstance(field, ExternalField) and field.params is None and not hasattr(field.source, "b_cyl") else None
             batched = getattr(source, "B", source) if source is not None else vmap(field.B)  # one batched call is far cheaper than a vmap of single-point calls
             if chunk_size is None and source is not None:
@@ -879,13 +881,11 @@ class InterpolatedField(MagneticField):
             table = jnp.stack((c * B[..., 0] + s * B[..., 1], c * B[..., 1] - s * B[..., 0], B[..., 2]), -1)
             if stellsym:  # B_R(R, -phi, -Z) = -B_R(R, phi, Z); B_phi, B_Z even
                 table = jnp.concatenate((table, table[1:nphi // 2, ::-1][::-1] * jnp.array([-1., 1., 1.])))
-        self.valid = np.ones((table.shape[0], table.shape[1] - 1, table.shape[2] - 1))
+        self.valid = jnp.ones((dims[0], dims[1] - 1, dims[2] - 1))  # float: a pytree leaf grad can pass through
         if exclude is not None:
-            out = ~_inside(exclude, table.shape[0], nfp, table.shape[0], np.linspace(*Z, table.shape[1]), np.linspace(*R, table.shape[2]))
-            table = jnp.where(out[..., None], table, table[tuple(ndimage.distance_transform_edt(~out, return_distances=False, return_indices=True))])
-            bad = ndimage.binary_dilation(~out, np.ones((3, 3, 3)), iterations=guard)
-            self.valid = 1. - (bad[:, :-1, :-1] | bad[:, 1:, :-1] | bad[:, :-1, 1:] | bad[:, 1:, 1:])  # float: a pytree leaf grad can pass through
-        self.valid = jnp.asarray(self.valid)
+            table = jnp.where(~inside[..., None], table, table[tuple(ndimage.distance_transform_edt(inside, return_distances=False, return_indices=True))])
+            bad = ndimage.binary_dilation(inside, np.ones((3, 3, 3)), iterations=guard)
+            self.valid = 1. - jnp.asarray(bad[:, :-1, :-1] | bad[:, 1:, :-1] | bad[:, :-1, 1:] | bad[:, 1:, 1:])
         self.field = field if exclude is not None and field is not None else None  # direct evaluation inside the guard band
         self.table = jnp.asarray(table)  # (nphi, nz, nr, 3) node values of (B_R, B_phi, B_Z), mgrid layout
         nphi, nz, nr, _ = self.table.shape
@@ -942,8 +942,8 @@ class InterpolatedField(MagneticField):
         C = self.coefficients[ip[:, None, None], iz[None, :, None], ir[None, None, :]]  # (4, 4, 4, 3)
         eps = 1e-9 * (self.rmax - self.rmin)  # the box faces belong to the box
         ok = (R >= self.rmin - eps) & (R <= self.rmax + eps) & (z >= self.zmin - eps) & (z <= self.zmax + eps)
-        inbox, good = ok, self.valid[ip[1], iz[0], ir[0]] > 0
-        ok = inbox & good
+        good = self.valid[ip[1], iz[0], ir[0]] > 0
+        inbox, ok = ok, ok & good
         Cr = jnp.einsum("abrc,nr->nabc", C, wr)
         Cz = jnp.einsum("nabc,mb->nmac", Cr, wz)
         V = jnp.einsum("nmac,la->lmnc", Cz, wp)  # V[l, m, n] = d^l/dphi d^m/dZ d^n/dR of (B_R, B_phi, B_Z)
