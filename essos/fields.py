@@ -842,12 +842,13 @@ class InterpolatedField(MagneticField):
     free-boundary equilibrium, which differs inside the plasma) cannot be
     splined across the jump. Pass ``exclude=surface`` (anything with ``gamma``,
     e.g. the LCFS): nodes inside it are not evaluated, are filled with the
-    nearest outside value, and B and its Jacobian are NaN in every cell whose
-    spline support lies within ``guard`` cells of the excluded region.
-    Outside that margin the error is the interpolation error of the exterior
+    nearest outside value, and every cell whose spline support lies within
+    ``guard`` cells of the excluded region is not read from the table: B and its
+    Jacobian there come from the source itself (exact, at the cost of a direct
+    evaluation, so the shell between the surface and a wall is always right).
+    Beyond that margin the error is the interpolation error of the exterior
     field plus the ringing of the fill, which decays by about a factor 4 per
-    cell; to reach the wall of a thin exterior shell the table spacing must be
-    a small fraction of the shell thickness.
+    cell.
     """
 
     def __init__(self, field=None, R=(1.0, 2.0), Z=(-0.5, 0.5), nr=32, nz=32, nphi=32, nfp=1,
@@ -884,6 +885,7 @@ class InterpolatedField(MagneticField):
             bad = ndimage.binary_dilation(~out, np.ones((3, 3, 3)), iterations=guard)
             self.valid = 1. - (bad[:, :-1, :-1] | bad[:, 1:, :-1] | bad[:, :-1, 1:] | bad[:, 1:, 1:])  # float: a pytree leaf grad can pass through
         self.valid = jnp.asarray(self.valid)
+        self.field = field if exclude is not None and field is not None else None  # direct evaluation inside the guard band
         self.table = jnp.asarray(table)  # (nphi, nz, nr, 3) node values of (B_R, B_phi, B_Z), mgrid layout
         nphi, nz, nr, _ = self.table.shape
         c = jnp.einsum("pi,ijkc->pjkc", _bspline_prefilter(nphi, True), self.table)  # one axis at a time: no large intermediate
@@ -939,7 +941,8 @@ class InterpolatedField(MagneticField):
         C = self.coefficients[ip[:, None, None], iz[None, :, None], ir[None, None, :]]  # (4, 4, 4, 3)
         eps = 1e-9 * (self.rmax - self.rmin)  # the box faces belong to the box
         ok = (R >= self.rmin - eps) & (R <= self.rmax + eps) & (z >= self.zmin - eps) & (z <= self.zmax + eps)
-        ok &= self.valid[ip[1], iz[0], ir[0]] > 0
+        inbox, good = ok, self.valid[ip[1], iz[0], ir[0]] > 0
+        ok = inbox & good
         Cr = jnp.einsum("abrc,nr->nabc", C, wr)
         Cz = jnp.einsum("nabc,mb->nmac", Cr, wz)
         V = jnp.einsum("nmac,la->lmnc", Cz, wp)  # V[l, m, n] = d^l/dphi d^m/dZ d^n/dR of (B_R, B_phi, B_Z)
@@ -949,8 +952,13 @@ class InterpolatedField(MagneticField):
         drot = jnp.array([[-s, -c, 0.], [c, -s, 0.], [0., 0., 0.]])
         dB_dcyl = jnp.stack((rot @ dR, rot @ dphi + drot @ b, rot @ dZ), -1)  # d B_xyz / d(R, phi, Z)
         dcyl_dx = jnp.array([[c, s, 0.], [-s / R, c / R, 0.], [0., 0., 1.]])
-        nan = jnp.where(ok, 1., jnp.nan)  # outside the box or the valid region: NaN, never an extrapolation
-        return nan * (rot @ b), nan * (dB_dcyl @ dcyl_dx)
+        nan = jnp.where(ok, 1., jnp.nan)  # outside the box (or the guard band without a source): NaN, never an extrapolation
+        B, J = nan * (rot @ b), nan * (dB_dcyl @ dcyl_dx)
+        if self.field is not None:  # the guard band inside the box is evaluated directly from the source
+            direct = lambda p: (self.field.B(p), jacfwd(self.field.B)(p))
+            Bd, Jd = lax.cond(inbox & ~good, direct, lambda p: (jnp.full(3, jnp.nan), jnp.full((3, 3), jnp.nan)), points)
+            B, J = jnp.where(inbox & ~good, Bd, B), jnp.where(inbox & ~good, Jd, J)
+        return B, J
 
     @jit
     def B(self, points):
@@ -965,13 +973,13 @@ class InterpolatedField(MagneticField):
         return _gc_from_jacobian(*self.B_and_dB_by_dX(points))
 
     def _tree_flatten(self):
-        return (self.table, self.coefficients, self.valid), (self.rmin, self.rmax, self.zmin, self.zmax, self.nfp)
+        return (self.table, self.coefficients, self.valid), (self.rmin, self.rmax, self.zmin, self.zmax, self.nfp, self.field)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         obj = object.__new__(cls)
         obj.table, obj.coefficients, obj.valid = children
-        obj.rmin, obj.rmax, obj.zmin, obj.zmax, obj.nfp = aux_data
+        obj.rmin, obj.rmax, obj.zmin, obj.zmax, obj.nfp, obj.field = aux_data
         return obj
 
 
