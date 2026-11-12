@@ -671,6 +671,7 @@ class Vmec():
             return x / jnp.maximum(1.0, jnp.linalg.norm(x)), None
 
         x, _ = lax.scan(newton, x, None, length=40)
+        x = lax.stop_gradient(x)  # reverse mode through the iterations is NaN once a step is exactly 0
         step = jnp.linalg.solve(jacfwd(rz)(x, phi), rz(x, phi) - target)
         residual = jnp.linalg.norm(rz(x, phi0) - target0)
         x = x + (lax.stop_gradient(step) - step)

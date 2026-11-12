@@ -1381,14 +1381,17 @@ class Tracing():
 
         def segment(o, run, spec, y, code, to_flux=lambda y: y):
             """Solve one segment of the orbits in ``run`` and record its saves."""
-            solution = self._solve(*spec[:3], jnp.where(run, o["t"], T), jnp.append(y, 0.0), *spec[3:])
+            # A lane that does not run starts just before maxtime, not at it: diffrax 0.7.0 differentiates an event root
+            # find over a zero-length step with a non-finite Jacobian, which its linear solver rejects in reverse mode.
+            solution = self._solve(*spec[:3], jnp.where(run, o["t"], T * (1 - 1e-9)), jnp.append(y, 0.0), *spec[3:])
             saves, end = vmap(to_flux)(solution.ys[0][:, :-1]), to_flux(solution.ys[1][-1, :-1])
             failed = run & (solution.event_mask[-1] | ~((solution.result == diffrax.RESULTS.successful)
                             | (solution.result == diffrax.RESULTS.event_occurred)
                             | (solution.result == diffrax.RESULTS.nonlinear_max_steps_reached)))
             t_end = jnp.where(run, solution.ts[1][-1], o["t"])
             window = run & (times >= o["t"]) & (times <= t_end) & jnp.isfinite(saves).all(1)
-            xyz = vmap(self.field.to_xyz)(saves[:, :3]) if code == 0 else saves[:, :3]
+            # to_xyz of the unused (inf) saves would put NaN partials into the coefficient gradients
+            xyz = vmap(self.field.to_xyz)(jnp.where(window[:, None], saves[:, :3], 0.5)) if code == 0 else saves[:, :3]
             o = dict(o, xyz=jnp.where(window[:, None], xyz, o["xyz"]), region=jnp.where(window, code, o["region"]))
             if code == 0:
                 o["traj"] = jnp.where(window[:, None], saves, o["traj"])
@@ -1473,11 +1476,12 @@ class Tracing():
         reset to the surface that stopped them at each re-entry.
         """
         r = dict(status=o["status"], returns=o["returns"], region=o["region"])
+        boundary = jnp.isfinite(o["lcfs_time"])
         r.update(failed=r["status"] == 4, wall_hits=r["status"] == 3, lcfs_times=o["lcfs_time"],
                  lcfs_states=o["lcfs_state"], lcfs_energies=o["lcfs_energy"], _trajectories=o["traj"],
                  trajectories_xyz=o["xyz"], axis_hits=jnp.zeros(len(o["t"]), dtype=bool))
         r.update(failure_times=jnp.where(r["failed"], o["t"], jnp.inf), wall_times=jnp.where(r["wall_hits"], o["t"], jnp.inf),
-                 lcfs_positions=vmap(self.field.to_xyz)(o["lcfs_state"][:, :3]),
+                 lcfs_positions=jnp.where(boundary[:, None], vmap(self.field.to_xyz)(jnp.where(boundary[:, None], o["lcfs_state"][:, :3], 0.5)), jnp.nan),
                  wall_positions=jnp.where(r["wall_hits"][:, None], o["x"][:, :3], jnp.nan),
                  wall_energies=jnp.where(r["wall_hits"], o.get("x_energy", jnp.nan), jnp.nan),
                  boundary_hits=jnp.isfinite(o["lcfs_time"]), total_particles_unresolved=jnp.zeros((), int))

@@ -1142,11 +1142,34 @@ def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and
     finite_difference = (objective(s + h * ds, params + h * dparams) - objective(s - h * ds, params - h * dparams)) / (2 * h)
     forward = jax.jvp(lambda s, p: objective(s, p, diffrax.ForwardMode()), (s, params), (ds, dparams))[1]
     np.testing.assert_allclose(forward, finite_difference, rtol=1e-3)
-    if tuple(map(int, diffrax.__version__.split(".")[:3])) < (0, 7, 1):
-        return  # diffrax 0.7.0 (the last for Python 3.10) differentiates in reverse mode only batches whose orbits are all active
     grad_s, grad_p = jax.jit(jax.grad(objective, (0, 1)))(s, params)
     assert jnp.isfinite(grad_s).all() and jnp.isfinite(grad_p).all() and grad_s[2] == 0.0
     np.testing.assert_allclose(grad_s @ ds + grad_p @ dparams, forward, rtol=1e-5)
+
+
+def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_reverse_mode():
+    """Saves of orbits that are not in a segment must not put NaN partials into the VMEC coefficient gradients."""
+    import diffrax
+    from essos.dynamics import _wall_function
+    from essos.fields import ExternalField, VMEC_WOUT_ARRAYS
+    if tuple(map(int, diffrax.__version__.split(".")[:3])) < (0, 7, 1):
+        pytest.skip("diffrax 0.7.0 (the last for Python 3.10) cannot differentiate its checkpointed loop through traced field coefficients")
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    wall = _wall_function(vmec, 0.05)  # a wall is built from concrete fields
+
+    def objective(scale):
+        rows = jnp.ones(vmec.ns).at[-1].set(scale)[:, None]
+        field = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, ntheta=8, nphi=8,
+                                 **{**arrays, 'rmnc': arrays['rmnc'] * rows, 'zmns': arrays['zmns'] * rows})
+        particles = Particles(initial_xyz=jnp.array([[0.9732, 2.2941, 5.0876], [0.5, 1.0, 1.0]]),
+                              initial_vparallel_over_v=jnp.array([-0.9872, 0.3]))
+        tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles, maxtime=1e-6, timestep=1e-9,
+                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(_toroidal_source, jnp.array([60.0, 0.5])),
+                          wall=wall, max_returns=1)
+        return jnp.sum(jnp.where(jnp.isfinite(tracing.trajectories_xyz), tracing.trajectories_xyz, 0.0))
+
+    assert jnp.isfinite(jax.grad(objective)(1.0))
 
 
 def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
