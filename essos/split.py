@@ -155,7 +155,11 @@ def guiding_center_collision_step(speed, pitch, h, dw, c, *, tolerance=1e-3, spe
     dp, dt, ddp, q, dq, _ = c
     nu = 2*dt/speed**2
     drift = q + ddp + 2*dp/speed
-    v = speed + drift*h + _diffusion_root(2*dp)*dw[0] + .5*ddp*(dw[0]**2-h)
+    # The 2 D_par/v part of the drift is the radial (Bessel) drift of a speed whose perpendicular
+    # velocity components also diffuse; explicit Euler overshoots when v^2 < 2 D_par h. It is applied
+    # as the perpendicular kick instead, v -> sqrt(v1^2 + 4 D_par h): same drift to O(h), v > 0.
+    v = speed + (drift-2*dp/speed)*h + _diffusion_root(2*dp)*dw[0] + .5*ddp*(dw[0]**2-h)
+    v = jnp.sqrt(v*v + 4*dp*h)
     v = speed_floor + jnp.abs(v-speed_floor)
     angular_noise = _diffusion_root((1-pitch**2)*nu)
     xi = pitch - pitch*nu*h + angular_noise*dw[1] - .5*pitch*nu*(dw[1]**2-h)
