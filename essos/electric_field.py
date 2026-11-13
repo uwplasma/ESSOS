@@ -6,6 +6,12 @@ from jax import jit, jacfwd, grad, vmap, tree_util, lax
 
 
 class Electric_field_flux():
+    """Radial electric field read from an HDF5 file and mapped to VMEC ``s``.
+
+    The file needs datasets ``rho`` (normalized minor radius) and ``Er``.
+    ``E_covariant`` returns ``(E_s, 0, 0)``, with ``E_s = Er / (2 rho) * a``
+    and ``a`` the VMEC ``Aminor_p``; ``E_s`` is set to zero on the axis.
+    """
     def __init__(self, Er_filename,vmec):
         self.Er_filename = Er_filename
         from h5py import File
@@ -28,8 +34,16 @@ class Electric_field_flux():
         return jnp.array([Er_interp,0.0,0.0])
     
 class Electric_field_zero():
+    """No electric field; ``E_covariant`` returns zeros."""
     def __init__(self):
         self.Er_filename = None
+
+    # Stateless: every instance equals every other, so jit calls with it as a static argument share one compilation.
+    def __eq__(self, other):
+        return type(other) is Electric_field_zero
+
+    def __hash__(self):
+        return hash(Electric_field_zero)
         
     @partial(jit, static_argnames=['self'])
     def E_covariant(self, points):
