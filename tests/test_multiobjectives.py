@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 import essos.objective_functions as objf
@@ -151,3 +152,49 @@ def test_plots_without_plotly_raise_clear_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "plotly", None)
     with pytest.raises(ImportError, match="essos\\[multiobjective\\]"):
         MultiObjectiveOptimizer.plot_param_importances(None)
+
+
+def _length(coils):
+    return jnp.sum(coils.length)
+
+
+def _curvature(coils):
+    return jnp.max(coils.curvature)
+
+
+def _axis_vmec():
+    import types
+    return types.SimpleNamespace(nfp=2, r_axis=1.0, surface=None)
+
+
+def test_optax_descent_shrinks_coils_and_the_optuna_study_picks_a_pareto_point(tmp_path, monkeypatch):
+    """Descending on the coil length alone must shorten the coils (a circle of radius r has length 2 pi r), and a
+    two-objective optuna study returns non-dominated trials from which one is selected and rebuilt."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    opt = MultiObjectiveOptimizer([_length, _curvature], _axis_vmec(),
+                                  opt_config={"order_Fourier": 1, "num_coils": 2, "maximum_function_evaluations": 4,
+                                              "n_trials": 3, "optimizer_choices": ["adam", "sgd"]})
+    assert opt.loss_names == ["_length", "_curvature"] and opt.initial_coils.nfp == 2
+    start = float(jnp.sum(opt.initial_coils.length))
+    shorter = opt.optimize_with_optax([1.0, 0.0], method="adam", lr=1e-2)
+    assert float(jnp.sum(shorter.length)) < start
+    with pytest.raises(ValueError, match="missing parameter"):
+        opt._call_loss_fn(lambda missing: missing, opt._build_available_inputs(opt.initial_coils.x))
+
+    opt.run(seed=1)
+    assert len(opt.study.trials) == 3 and opt.study.user_attrs["seed"] == 1
+    for t in opt.study.trials:
+        assert len(t.values) == 2 and np.all(np.isfinite(t.values))
+    best = opt.select_best_from_pareto(weights=[1.0, 0.0])
+    assert best in opt.study.best_trials
+    scores = [t.values[0] for t in opt.study.best_trials]
+    assert best.values[0] == min(scores)  # weight only on the first objective
+    assert opt.select_best_from_pareto(limits=[-1.0, None]) is None
+    with pytest.raises(ValueError, match="No valid trial"):
+        opt.rebuild_best_coils(limits=[-1.0, None])
+    rebuilt = opt.rebuild_best_coils(weights=[1.0, 1.0])
+    assert isinstance(rebuilt, Coils) and rebuilt is opt.best_coils
+    opt.plot_pareto_fronts(save=str(tmp_path / "pareto.png"))
+    plt.close("all")
