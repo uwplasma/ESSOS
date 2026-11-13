@@ -987,7 +987,18 @@ class SurfaceClassifier():
         return d
     
 
-partial(jit, static_argnames=['surface'])
+def _single_or_batch(single):
+    """Let a one-point signed-distance function also accept an ``(N, 3)`` array of points."""
+    def wrapped(xyz, surface):
+        if jnp.ndim(xyz) == 2:
+            return vmap(lambda p: single(p, surface)[0])(xyz)
+        return single(xyz, surface)
+    wrapped.__doc__ = single.__doc__
+    wrapped.__name__ = single.__name__
+    return wrapped
+
+
+@_single_or_batch
 def signed_distance_from_surface_jax(xyz, surface):
     """
     Compute the signed distances from points ``xyz`` to a surface.  The sign is
@@ -1010,7 +1021,7 @@ def signed_distance_from_surface_jax(xyz, surface):
     signed_dists = mindist * sign_of_interiorpoint
     return signed_dists
 
-#@partial(jit, static_argnames=['surface'])
+@_single_or_batch
 def signed_distance_from_surface_extras(xyz, surface):
     """
     Compute the signed distances from points ``xyz`` to a surface.  The sign is
@@ -1030,11 +1041,3 @@ def signed_distance_from_surface_extras(xyz, surface):
     sign_of_interiorpoint = jnp.sign(jnp.sum((a_point_in_the_surface-gammas[0, :])*n[0, :]))
     signed_dists = mindist * sign_of_interiorpoint
     return signed_dists
-
-
-
-def plot_scalar_on_flux_surface(surface, scalar_map):
-    '''
-        surface: the surface object in which to plot the scalar_map
-        scalar_map: a scalar_map as function of theta and phi
-    ''' 

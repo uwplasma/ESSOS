@@ -165,3 +165,4 @@ def test_surface_setters_validation_exports_and_signed_distance(tmp_path):
     for fun in (signed_distance_from_surface_jax, signed_distance_from_surface_extras):  # one point per call
         got = np.concatenate([np.asarray(fun(p, t)) for p in pts])
         np.testing.assert_allclose(got, expected, atol=2e-3)
+        np.testing.assert_allclose(fun(pts, t), expected, atol=2e-3)  # a batch of points gives one distance each

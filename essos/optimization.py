@@ -1,3 +1,4 @@
+import numpy as np
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -39,19 +40,19 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     
     loss_partial = partial(func, dofs_curves=coils.dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym, **kwargs)
     
-    ## Without JAX gradients, using finite differences
-    result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,
-                            ftol=tolerance_optimization, gtol=tolerance_optimization,
-                            xtol=1e-14, max_nfev=maximum_function_evaluations)
-    
-    ## With JAX gradients
-    ##jac_loss_partial = jit(grad(loss_partial))
-    # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
-    #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
-    #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
-    ##result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
-    ##                  tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
-    
+    # Exact forward-mode Jacobian when the loss is JAX-differentiable. A finite-difference step relative to |x|
+    # (scipy's diff_step) does not move dofs that are exactly or nearly zero, so it is only the fallback.
+    jac = '2-point'
+    try:
+        jacobian = jax.jit(jax.jacfwd(loss_partial))
+        jacobian(jnp.asarray(initial_dofs))
+        jac = lambda x: np.asarray(jacobian(jnp.asarray(x)))
+    except Exception:
+        pass
+    result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac, diff_step=1e-4,
+                           ftol=tolerance_optimization, gtol=tolerance_optimization,
+                           xtol=1e-14, max_nfev=maximum_function_evaluations)
+
     dofs_curves = jnp.reshape(result.x[:len_dofs_curves], (dofs_curves_shape))
     try:
         if len(initial_dofs) == len(coils.x):

@@ -232,6 +232,13 @@ class BiotSavart_from_gamma(MagneticField):
         self._r_axis = None
         self._z_axis = None
 
+    def _tree_flatten(self):
+        return (self.gamma, self._gamma_dash, self._gamma_dashdash, self.currents), None
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(*children)
+
     @property
     def gamma_dash(self):
         if self._gamma_dash is None:
@@ -677,6 +684,11 @@ class Vmec():
         x = x + (lax.stop_gradient(step) - step)
         s = x[0]**2 + x[1]**2
         return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), residual
+
+tree_util.register_pytree_node(BiotSavart_from_gamma,
+                               BiotSavart_from_gamma._tree_flatten,
+                               BiotSavart_from_gamma._tree_unflatten)
+
 
 class near_axis:
     def __init__(self, *args, **kwargs):

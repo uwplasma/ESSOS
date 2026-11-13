@@ -781,6 +781,12 @@ def test_biot_savart_from_gamma_on_axis_field_of_a_circular_loop():
     B = field.B(centre + jnp.array([0.0, 0.0, z]))
     np.testing.assert_allclose(B, [0.0, 0.0, expected], rtol=1e-10, atol=1e-9)
     assert field.sqrtg(centre) == 1.0 and jnp.allclose(field.to_xyz(centre), centre)
+    # a registered pytree: it passes through jit and tree maps, and the abstract base can be constructed
+    import jax
+    from essos.fields import MagneticField
+    np.testing.assert_allclose(jax.jit(lambda f, x: f.B(x))(field, centre + jnp.array([0.0, 0.0, z])), B)
+    assert len(jax.tree_util.tree_leaves(field)) >= 2  # gamma and currents, plus any derivatives already computed
+    assert isinstance(MagneticField(), MagneticField)
 
 
 def test_biot_savart_dof_passthrough_axis_position_and_removed_near_axis_stub():

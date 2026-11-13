@@ -22,10 +22,8 @@ def _residual(target, n_extra=0):
 
 
 def test_optimize_loss_function_solves_a_linear_least_squares_problem_for_every_dof_layout(monkeypatch):
-    """The residual x - t is linear, so one finite-difference Newton step lands on t for each dof layout.
-
-    Starts are shifted away from zero: the optimiser differentiates with a step relative to |x|, so
-    entries that are exactly (or nearly) zero do not move."""
+    """The residual x - t is linear, so one Gauss-Newton step with the exact JAX Jacobian lands on t for each dof
+    layout, also for starting dofs that are exactly zero (a step relative to |x| would not move those)."""
     coils = _coils()
     ncv, cs = coils.dofs_curves.size, float(coils.currents_scale)
     kw = dict(tolerance_optimization=1e-12, maximum_function_evaluations=10)
@@ -34,13 +32,13 @@ def test_optimize_loss_function_solves_a_linear_least_squares_problem_for_every_
         np.testing.assert_allclose(new.dofs_curves.ravel(), t[:ncv], atol=1e-6)
         np.testing.assert_allclose(new.dofs_currents_raw, t[ncv:ncv + 2] * cs, rtol=1e-6)
 
-    x0 = coils.x + 0.3
+    x0 = coils.x
     t = x0 + 0.05
     check_coils(optimize_loss_function(_residual(t), x0, coils, **kw), t)
 
     # coils + surface: the trailing dofs are written back into a fresh surface
     surface = SurfaceRZFourier(jnp.array([1.0, 0.2]), jnp.array([0.0, 0.2]), nfp=1, mpol=1, ntor=0, ntheta=8, nphi=8)
-    x0 = jnp.concatenate([coils.x, surface.x]) + 0.3
+    x0 = jnp.concatenate([coils.x, surface.x])
     t = x0 + 0.05
     new_coils, new_surface = optimize_loss_function(_residual(t), x0, coils, surface_all=surface, **kw)
     check_coils(new_coils, t)
@@ -54,7 +52,7 @@ def test_optimize_loss_function_solves_a_linear_least_squares_problem_for_every_
     axis = types.SimpleNamespace(rc=jnp.array([1.0, 0.1]), zs=jnp.array([0.0, -0.1]),
                                  x=jnp.array([1.0, 0.1, 0.0, -0.1, -0.9]),
                                  B0=1.0, sigma0=0.0, I2=0.0, nphi=31, spsi=1, sG=1, nfp=3)
-    x0 = jnp.concatenate([coils.x, axis.x]) + 0.3
+    x0 = jnp.concatenate([coils.x, axis.x])
     t = x0 + 0.05
     new_coils, new_axis = optimize_loss_function(_residual(t), x0, coils, field_nearaxis=axis, **kw)
     check_coils(new_coils, t)
@@ -63,7 +61,7 @@ def test_optimize_loss_function_solves_a_linear_least_squares_problem_for_every_
     assert seen["nphi"] == 31 and seen["nfp"] == 3 and abs(float(seen["etabar"]) - float(t[-1])) < 1e-6
 
     # surface and near-axis together
-    x0 = jnp.concatenate([coils.x, surface.x, axis.x]) + 0.3
+    x0 = jnp.concatenate([coils.x, surface.x, axis.x])
     t = x0 + 0.05
     new_coils, new_surface, new_axis = optimize_loss_function(
         _residual(t), x0, coils, surface_all=surface, field_nearaxis=axis, **kw)
@@ -81,3 +79,60 @@ def test_near_axis_dependency_error_is_actionable(monkeypatch):
     monkeypatch.setitem(sys.modules, "pyqsc_jax", None)  # import raises ImportError
     with pytest.raises(ImportError, match="pyQSC_JAX"):
         new_nearaxis_from_x_and_old_nearaxis(jnp.zeros(3), types.SimpleNamespace(rc=[0, 0], zs=[0]))
+
+
+def test_non_differentiable_loss_falls_back_to_finite_differences():
+    coils = _coils()
+    x0 = coils.x + 0.3
+    t = np.asarray(x0) + 0.05
+
+    def numpy_residual(x, **kwargs):  # NumPy only: jax.jacfwd cannot trace it
+        return np.asarray(x) - t
+    new = optimize_loss_function(numpy_residual, x0, coils, tolerance_optimization=1e-12,
+                                 maximum_function_evaluations=10)
+    np.testing.assert_allclose(new.dofs_curves.ravel(), t[:coils.dofs_curves.size], atol=1e-6)
+
+
+def test_command_line_entry_point_runs_with_stubbed_heavy_stages(monkeypatch):
+    """The CLI loss (near-axis field mismatch, length and curvature) is finite on the initial coils; the
+    optimiser, near-axis model and tracer are replaced."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import essos.__main__ as cli
+
+    n = 8
+    phi = jnp.linspace(0, 2 * jnp.pi / 3, n, endpoint=False)
+
+    class Axis:
+        B0, R0, Z0 = 1.0, jnp.ones(n), jnp.zeros(n)
+        B_axis = jnp.zeros((3, n)).at[2].set(1.0)
+        grad_B_axis = jnp.zeros((3, 3, n))
+        def __init__(self, **kw):
+            self.phi = phi
+        def plot(self, **kw):
+            pass
+
+    class Trace:
+        def __init__(self, **kw):
+            assert kw["model"] == "FieldLine"
+        def plot(self, **kw):
+            pass
+
+    seen = {}
+
+    def fake_optimize(loss, initial_dofs, coils, **kw):
+        values = loss(initial_dofs, dofs_curves=coils.dofs_curves, currents_scale=coils.currents_scale, nfp=coils.nfp,
+                      n_segments=coils.n_segments, stellsym=coils.stellsym, field_nearaxis=kw["field_nearaxis"],
+                      max_coil_length=kw["max_coil_length"], max_coil_curvature=kw["max_coil_curvature"])
+        seen["finite"] = bool(jnp.all(jnp.isfinite(values)))
+        return coils
+
+    monkeypatch.setitem(sys.modules, "pyqsc_jax", types.ModuleType("pyqsc_jax"))
+    monkeypatch.setitem(sys.modules, "pyqsc_jax.near_axis", types.SimpleNamespace(near_axis=Axis))
+    monkeypatch.setattr(cli, "optimize_loss_function", fake_optimize)
+    monkeypatch.setattr(cli, "Tracing", Trace)
+    monkeypatch.setattr(plt, "show", lambda: seen.setdefault("shown", True))
+    cli.main([])
+    assert seen["finite"] and seen["shown"]
+    plt.close("all")
