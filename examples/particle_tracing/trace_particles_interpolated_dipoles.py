@@ -101,7 +101,7 @@ for name, f in (("direct", field), ("interpolated", interp)):
                                      times_to_trace=200, atol=1e-8, rtol=1e-8,
                                      condition=lambda t, y, args, **kwargs: classifier.evaluate_xyz(y[:3]))
     tracing.trajectories.block_until_ready()
-    tracing.lost_times = tracing.loss_fraction_BioSavart(classifier)[2]
+    tracing.lost_times = tracing.loss_fraction(classifier)[2]
     print(f"GC tracing of {nparticles} particles, {name}: {time() - time0:.2f} s, "
           f"loss fraction {float(jnp.mean(tracing.lost_times > 0)):.3f}")
 lost = (traces["direct"].lost_times > 0) | (traces["interpolated"].lost_times > 0)
