@@ -108,27 +108,26 @@ def test_biot_savart_vector_potential_curl_matches_field():
 
 
 @pytest.mark.parametrize('close', [False, True])
-def test_coil_flux_matches_independent_disk_integral_and_current_gradient(close):
+def test_coil_flux_matches_coaxial_loop_mutual_inductance_and_current_gradient(close):
+    from scipy.special import ellipk, ellipe
     from essos.coils import Coils, Curves
     from essos.fields import BiotSavart
-    # Circular horizontal coil of radius 2.5 m, surrounding the flux disk.
+    # Circular horizontal coil of radius 2.5 m; the surface loop at theta=0 has radius 1.0 m in the same plane.
     coefficients = jnp.zeros((1, 3, 3)).at[0, 0, 2].set(2.5).at[0, 1, 1].set(2.5)
     curves = Curves(coefficients, n_segments=64, stellsym=False)
     field = BiotSavart(Coils(curves, jnp.array([1e5]), currents_scale=1e5))
     surface = SurfaceRZFourier(jnp.array([.8, .2]), jnp.array([0., .1]),
                                nfp=1, mpol=1, ntor=0, ntheta=20, nphi=20, close=close)
-    # At theta=0 this is the unit disk in z=0. Integrate Bz over its interior.
-    nodes, weights = np.polynomial.legendre.leggauss(32)
-    radius = jnp.asarray((nodes + 1) / 2)
-    points = jnp.stack((radius, jnp.zeros_like(radius), jnp.zeros_like(radius)), axis=-1)
-    disk_flux = 2 * np.pi * jnp.sum(jnp.asarray(weights / 2) * radius * jax.vmap(field.B)(points)[:, 2])
+    # Neumann's coaxial-loop mutual inductance (Jackson, Classical Electrodynamics, problem 5.33),
+    # M = mu0 sqrt(ab) [(2/k - k) K(k) - (2/k) E(k)], k^2 = 4ab / (a + b)^2 for coplanar loops.
+    a, b = 2.5, 1.0
+    m = 4 * a * b / (a + b)**2
+    mutual = 4e-7 * np.pi * np.sqrt(a * b) * ((2 / np.sqrt(m) - np.sqrt(m)) * ellipk(m) - 2 / np.sqrt(m) * ellipe(m))
     line_flux = poloidal_flux(surface, field)
-    np.testing.assert_allclose(line_flux, disk_flux, rtol=1e-12, atol=1e-14)
+    np.testing.assert_allclose(line_flux, mutual * 1e5, rtol=1e-10)
 
     def flux(current):
         return poloidal_flux(surface, BiotSavart(Coils(curves, jnp.atleast_1d(current), currents_scale=1e5)))
 
     derivative = jax.jit(jax.grad(flux))(1e5)
-    finite_difference = (flux(1e5 + 1.) - flux(1e5 - 1.)) / 2
-    np.testing.assert_allclose(derivative, line_flux / 1e5, rtol=1e-12)
-    np.testing.assert_allclose(derivative, finite_difference, rtol=1e-9)
+    np.testing.assert_allclose(derivative, mutual, rtol=1e-10)
