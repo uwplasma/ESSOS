@@ -303,7 +303,7 @@ These renames are breaking and have no aliases. Tracing options are keyword-only
 | `trace_boozer`, `trace_field_lines`, `connection_length` `tolerance`; loss functions `trace_tolerance` | `rtol`, plus `atol=None` meaning `atol = rtol` |
 | `optimize_loss_function(maximum_function_evaluations=...)`, `MultiObjectiveOptimizer` option of the same name | `max_nfev` |
 | `optimize_loss_function(tolerance_optimization=...)`, `MultiObjectiveOptimizer` option of the same name | `tol` |
-| `loss_BdotN`, `loss_BdotN_constraint` | `loss_bdotn`, `loss_bdotn_constraint` |
+| `loss_bdotn`, `loss_bdotn_constraint` | `loss_bdotn`, `loss_bdotn_constraint` |
 
 `max_steps` was already the step-cap name and is unchanged; the loss functions now accept it too.
 

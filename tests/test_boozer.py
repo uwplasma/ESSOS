@@ -578,8 +578,8 @@ def test_adaptive_error_follows_the_tolerance(method):
     assert errors[0] > errors[1] > errors[2] and errors[2] < 1e-8
 
 
-def test_adaptive_tolerance_is_validated():
-    with pytest.raises(ValueError, match="tolerance"):
+def test_adaptive_rtol_is_validated():
+    with pytest.raises(ValueError, match="rtol"):
         trace_boozer(tokamak(), [0.3], [0.0], [0.0], [0.2], speed=V0, mass=M, charge=Q,
                      tmax=1e-6, timestep=1e-8, method="adaptive", rtol=0.0)
 
