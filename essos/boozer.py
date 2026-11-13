@@ -14,7 +14,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import os
-from functools import partial
+from functools import lru_cache, partial
 from types import SimpleNamespace
 
 import equinox as eqx
@@ -62,6 +62,9 @@ def _evaluate(knots, coef, x):
 
 
 K_TOLERANCE = 1e-3  # K below this fraction of G + iota I is dropped: vacuum QA gives 4e-4, finite-beta QH 5e-3
+DEGREE = 5  # angular B-spline degree: cubic (C2) breaks Dopri8's order at the cell edges
+K_DEGREE = 3  # K is ~1e-2 of G + iota I, so its cell-edge jumps stay below the |B| error; 16 weights instead of 36
+K_SURFACES, K_MODE_TOLERANCE, K_ANGLE_GRID = 24, 1e-2, 4  # K is kept on a coarse grid
 TABLE_MODES = 48  # below about 48 modes the direct sum is cheaper than the table
 
 
@@ -78,11 +81,12 @@ class BoozerField(eqx.Module):
     nfp: int = eqx.field(static=True)
     sine_coef: jax.Array | None = None
     table: jax.Array | None = None  # theta row 0: m=0; remaining rows: m>0
+    degree: int = eqx.field(static=True, default=DEGREE)  # angular B-spline degree of the table
     K: "BoozerField | None" = None  # spectrum of K(psi, theta, zeta); None means K = 0
 
     @classmethod
     def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6, *, bmns=None,
-                  angle_grid=6, k=None):
+                  angle_grid=6, k=None, degree=DEGREE):
         """Build from half-mesh Boozer tables.
 
         ``bmnc`` and optional sine coefficients ``bmns`` are ``(modes, len(s))``;
@@ -128,7 +132,7 @@ class BoozerField(eqx.Module):
                        max(16, angle_grid * int(np.abs(xn).max()) // int(nfp)))
                       if np.ndim(angle_grid) == 0 else map(int, angle_grid))
             table = _angle_table(np.asarray(b_coef), None if sine_coef is None else np.asarray(sine_coef),
-                                 xm, xn, int(nfp), nt, nz)
+                                 xm, xn, int(nfp), nt, nz, degree)
         profiles = np.stack([iota, G, np.asarray(I, float)], axis=1)
         # Axis row: iota and G extrapolated linearly, I(0) = 0.
         axis = profiles[0] - s[0] * (profiles[1] - profiles[0]) / (s[1] - s[0])
@@ -139,20 +143,27 @@ class BoozerField(eqx.Module):
         K = None
         if k is not None and max(np.abs(x).max() for x in k) * abs(psi0) > K_TOLERANCE * np.abs(
                 np.asarray(G, float) + np.asarray(iota, float) * np.asarray(I, float)).max():
-            K = cls.from_booz(s, k[0], xm_all, xn_all, iota, G, I, psi0, nfp, mode_tolerance,
-                              bmns=k[1], angle_grid=angle_grid)
+            # K is smooth and small: a coarse radial grid and its few leading modes keep its table in cache.
+            ix = np.unique(np.r_[np.arange(0, s.size, max(1, s.size // K_SURFACES)), s.size - 1])
+            K = cls.from_booz(s[ix], np.asarray(k[0])[:, ix], xm_all, xn_all, np.asarray(iota)[ix], np.asarray(G)[ix],
+                              np.asarray(I)[ix], psi0, nfp, K_MODE_TOLERANCE, bmns=np.asarray(k[1])[:, ix],
+                              angle_grid=K_ANGLE_GRID, degree=K_DEGREE)
         return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
-                   float(psi0), int(nfp), sine_coef, table, K)
+                   float(psi0), int(nfp), sine_coef, table, degree, K)
 
     @classmethod
-    def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6, angle_grid=6, with_K=True):
+    def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6, angle_grid=6, with_K=False):
         """Build from a ``Booz_xform`` that has read a wout.
 
         A transform that has not been run takes one jitted, batched pass over every
         surface (``magnetic_only`` when ``booz_xform_jax`` offers it and ``K`` is not
         needed), several times faster than ``booz.run()``; a run transform is used as it is.
         ``with_K`` adds the finite-beta ``K`` from the transform's ``R, Z, nu``
-        harmonics (:func:`k_harmonics`); a vacuum field drops it.
+        harmonics (:func:`k_harmonics`); a vacuum field drops it. It is off by default: it
+        costs 1.5x in CPU wall time (1.2x on GPU) and leaves loss fractions unchanged within
+        the statistical error (alphas of 3.5 MeV, 10 ms, 1000 orbits, QH, QA, NCSX, ARIES-CS and
+        W7-X at 4-5% beta). Use it for single orbits at finite beta or large Shafranov shift,
+        where it moves ``s`` by up to ``4.6e-3`` in 80 microseconds on W7-X and ``3.5e-4`` on QH.
         """
         if getattr(booz, "bmnc_b", None) is None:
             options = {"magnetic_only": True} if not with_K and "magnetic_only" in inspect.signature(
@@ -187,7 +198,7 @@ class BoozerField(eqx.Module):
     def modB_derivatives(self, r, theta, zeta):
         """``|B|``, ``d|B|/dr``, ``(d|B|/dtheta)/r`` and ``d|B|/dzeta``."""
         if self.table is not None:
-            return _table_derivatives(self.r_knots, self.table, self.nfp, r, theta, zeta)
+            return _table_derivatives(self.r_knots, self.table, self.nfp, r, theta, zeta, self.degree)
         a, da = _evaluate(self.r_knots, self.b_coef, r)
         phase = self.xm * theta - self.xn * zeta
         c, s = jnp.cos(phase), jnp.sin(phase)
@@ -261,10 +272,7 @@ def k_harmonics(booz, psi0):
     return kc / psi0, ks / psi0
 
 
-DEGREE = 5  # angular B-spline degree: cubic (C2) breaks Dopri8's order at the cell edges
-
-
-def _angle_table(b_coef, sine_coef, xm, xn, nfp, nt, nz):
+def _angle_table(b_coef, sine_coef, xm, xn, nfp, nt, nz, degree):
     """Periodic B-spline coefficients in the angles of the radial spline
     coefficients, split into ``m = 0`` and ``m > 0`` (still divided by ``r``)."""
     from scipy.ndimage import spline_filter1d
@@ -279,43 +287,42 @@ def _angle_table(b_coef, sine_coef, xm, xn, nfp, nt, nz):
     table = np.stack([np.moveaxis(np.moveaxis(coef[:, sel], 1, 2) @ basis[sel].reshape(sel.sum(), nt * nz), 1, 2)
                       .reshape(len(coef), nt, nz, 4) for sel in (m0, ~m0)], -2)
     for axis in (1, 2):
-        table = spline_filter1d(table, DEGREE, axis=axis, mode="grid-wrap")
-    pad = ((DEGREE - 1) // 2, (DEGREE + 1) // 2)
+        table = spline_filter1d(table, degree, axis=axis, mode="grid-wrap")
+    pad = ((degree - 1) // 2, (degree + 1) // 2)
     # Keep radial pieces continuous; float32 rounding introduces knot jumps.
     table = np.pad(table, ((0, 0), pad, pad, (0, 0), (0, 0)), mode="wrap")
     return jnp.asarray(np.concatenate([table[:, :1, :, 0], table[:, :, :, 1]], axis=1))
 
 
-def _bspline_matrix():
+@lru_cache(maxsize=None)
+def _bspline_matrix(degree):
     """Rows: power coefficients in ``t`` of the B-spline weights on one cell."""
     from scipy.interpolate import BSpline
 
-    beta = BSpline.basis_element(np.arange(DEGREE + 2) - (DEGREE + 1) / 2, extrapolate=False)
-    t = np.linspace(0, 1, DEGREE + 1, endpoint=False) + 0.5 / (DEGREE + 1)
-    return np.array([np.polyfit(t, beta(t - o), DEGREE) for o in range(-(DEGREE - 1) // 2, (DEGREE + 3) // 2)])
+    beta = BSpline.basis_element(np.arange(degree + 2) - (degree + 1) / 2, extrapolate=False)
+    t = np.linspace(0, 1, degree + 1, endpoint=False) + 0.5 / (degree + 1)
+    return np.array([np.polyfit(t, beta(t - o), degree) for o in range(-(degree - 1) // 2, (degree + 3) // 2)])
 
 
-_WEIGHTS = _bspline_matrix()
-
-
-def _bspline(t):
+def _bspline(t, degree):
     """Uniform B-spline weights and their derivatives at offset ``t`` in a cell."""
-    powers = t ** np.arange(DEGREE, -1, -1)
-    return _WEIGHTS @ powers, (_WEIGHTS[:, :-1] * np.arange(DEGREE, 0, -1)) @ powers[1:]
+    powers = t ** np.arange(degree, -1, -1)
+    weights = _bspline_matrix(degree)
+    return weights @ powers, (weights[:, :-1] * np.arange(degree, 0, -1)) @ powers[1:]
 
 
-def _table_derivatives(knots, table, nfp, r, theta, zeta):
+def _table_derivatives(knots, table, nfp, r, theta, zeta, degree):
     k = jnp.clip(jnp.searchsorted(knots, r, side="right", method="compare_all") - 1, 0, knots.size - 2)
     d = r - knots[k]
-    n = jnp.array(table.shape[1:3]) - jnp.array([DEGREE + 1, DEGREE])
+    n = jnp.array(table.shape[1:3]) - jnp.array([degree + 1, degree])
     h = jnp.array([2 * np.pi, 2 * np.pi / nfp]) / n
     x = jnp.mod(jnp.stack([theta, zeta]), n * h) / h
     i = jnp.minimum(jnp.floor(x), n - 1).astype(k.dtype)
-    (wt, dt), (wz, dz) = _bspline(x[0] - i[0]), _bspline(x[1] - i[1])
+    (wt, dt), (wz, dz) = _bspline(x[0] - i[0], degree), _bspline(x[1] - i[1], degree)
     m0 = jax.lax.dynamic_slice(table, (k, 0*k, i[1], 0*k),
-                               (1, 1, DEGREE+1, 4))[0, 0].astype(d.dtype)
+                               (1, 1, degree+1, 4))[0, 0].astype(d.dtype)
     mp = jax.lax.dynamic_slice(table, (k, i[0]+1, i[1], 0*k),
-                               (1, DEGREE+1, DEGREE+1, 4))[0].astype(d.dtype)
+                               (1, degree+1, degree+1, 4))[0].astype(d.dtype)
     one = jnp.ones_like(d)
     powers, deriv = jnp.stack([d**3, d**2, d, one]), jnp.stack([3*d**2, 2*d, one, 0*d])
     a, b = m0 @ powers, mp @ powers

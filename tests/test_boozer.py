@@ -709,5 +709,5 @@ def test_vacuum_K_is_negligible_at_high_boozer_resolution():
     booz.read_wout(wout, flux=False)
     booz.run()
     with Dataset(wout) as d:
-        field = BoozerField.from_booz_xform(booz, psi0_from_vmec(d["phi"][-1]), angle_grid=None)
+        field = BoozerField.from_booz_xform(booz, psi0_from_vmec(d["phi"][-1]), angle_grid=None, with_K=True)
     assert field.K is None  # vacuum K is ~4e-4 noise of G + iota I; keeping it only costs time

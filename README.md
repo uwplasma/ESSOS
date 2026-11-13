@@ -220,9 +220,14 @@ dv_par/dt   =  (C dB/dtheta - F dB/dzeta) mu B / D
 at finite beta or with net current, so the common canonical form `P_zeta = m v_par G / B - psi_p`
 omits it (White and Zakharov 2003; Bierwage et al. 2022 discuss when that is accurate).
 No `dK/dpsi` appears. `BoozerField.from_booz_xform` computes `K` from the `R, Z, nu`
-harmonics (`K = (g_{psi zeta} + iota g_{psi theta}) / sqrt(g)`) and drops it when its spectrum is below `1e-3` of
-`G + iota I` (vacuum QA gives `4e-4`, the finite-beta QH `5e-3`), because it makes the orbit
-right-hand side about 1.7 times slower; pass `with_K=False` for the previous behaviour. The flux convention is
+harmonics (`K = (g_{psi zeta} + iota g_{psi theta}) / sqrt(g)`) when asked with `with_K=True`; it is off by default
+and a spectrum below `1e-3` of `G + iota I` (vacuum QA gives `4e-4`, the finite-beta QH `5e-3`) is dropped anyway.
+`K` costs 1.5 times the CPU wall time of a trace (1.2 on GPU). It moves a single orbit by `s` up to `4.6e-3` in
+80 microseconds in W7-X at 5% beta and `3.5e-4` in the 5% QH (SIMSOPT agreement `1.4e-4` and `2.8e-5`), but it does not change loss
+fractions: 1000 alphas of 3.5 MeV from `s = 0.5` over 10 ms at reactor scale lose the same fraction with and without `K`
+within the statistical error (differences of at most 0.004 +- 0.007) in the 4-5% beta QH, QA, NCSX, ARIES-CS and W7-X cases.
+Use `with_K=True` for individual orbits at finite beta or large Shafranov shift
+(`examples/particle_tracing/trace_particles_boozer_with_K.py` compares loss fractions). The flux convention is
 `psi0 = -phi_edge / (2 pi)` because VMEC's `(s, theta, phi)` is left-handed, so that `psi`
 and `-phi_edge` share a sign; it reproduces the VMEC `grad B` drift of QA, QH and W7-X
 equilibria for either sign of `phi_edge` (SIMSOPT's `+phi_edge / (2 pi)` traces the
