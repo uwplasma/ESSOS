@@ -256,3 +256,38 @@ def test_simsopt_to_mgrid_parity_when_simsopt_is_available(tmp_path):
     np.testing.assert_allclose(essos_grid.bp_arr[0], simsopt_grid.bp_arr[0], rtol=5.0e-12, atol=1.0e-16)
     np.testing.assert_allclose(essos_grid.bz_arr[0], simsopt_grid.bz_arr[0], rtol=5.0e-12, atol=1.0e-16)
     np.testing.assert_allclose(imported_simsopt_grid.bvec, essos_grid.bvec, rtol=5.0e-12, atol=1.0e-16)
+
+
+@pytest.mark.filterwarnings("ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning")
+def test_mgrid_file_metadata_is_validated_on_write_and_read(tmp_path):
+    grid = MGrid(nr=2, nz=2, nphi=1, nfp=1)
+    ones = np.ones((1, 2, 2))
+    grid.add_field_cylindrical(ones, ones, ones)
+    grid.raw_coil_current = [1.0, 2.0]
+    with pytest.raises(ValueError, match="nextcur"):
+        grid.write(tmp_path / "currents.nc")
+    grid.raw_coil_current = [1.0]
+    grid.mode = "X"
+    with pytest.raises(ValueError, match="mgrid_mode"):
+        grid.write(tmp_path / "mode.nc")
+    grid.mode = "R"
+    filename = tmp_path / "ok.nc"
+    grid.write(filename)
+    assert MGrid.from_file(filename).mode == "R"
+
+    def edited(name, change):
+        out = tmp_path / name
+        out.write_bytes(filename.read_bytes())
+        with Dataset(out, "a") as ds:
+            change(ds)
+        return out
+
+    bad_mode = edited("badmode.nc", lambda ds: ds.variables["mgrid_mode"].__setitem__(slice(None), np.array(b"Q", dtype="S1")))
+    with pytest.raises(ValueError, match="unsupported mgrid_mode"):
+        MGrid.from_file(bad_mode)
+    zero_groups = edited("none.nc", lambda ds: ds.variables["nextcur"].assignValue(0))
+    with pytest.raises(ValueError, match="no external coil groups"):
+        MGrid.from_file(zero_groups)
+    bad_currents = edited("cur.nc", lambda ds: ds.variables["raw_coil_cur"].__setitem__(0, np.inf))
+    with pytest.raises(ValueError, match="finite"):
+        MGrid.from_file(bad_currents)
