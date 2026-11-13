@@ -1109,6 +1109,14 @@ def test_vmec_non_finite_steps_are_reported():
     assert failed.any() and jnp.all(tracing.status[failed] == 4)
     assert jnp.all(tracing.failure_times[failed] >= tracing.lcfs_times[failed])
     assert jnp.isinf(tracing.failure_times[~failed]).all()
+    # a failed orbit is neither lost nor confined: the aggregates say so instead of counting it
+    assert tracing.total_particles_unresolved == failed.sum() and jnp.isnan(tracing.lost_times[failed]).all()
+    assert jnp.isnan(tracing.loss_fractions).all() and jnp.isnan(tracing.total_particles_lost)
+
+
+def test_vmec_wall_already_crossed_at_the_exit_point_is_a_hit_at_the_exit_time():
+    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6, wall_gap=-1e-3)
+    assert tracing.wall_hits.all() and jnp.allclose(tracing.wall_times, tracing.lcfs_times, rtol=1e-12)
 
 
 def _toroidal_source(xyz, params):
@@ -1142,17 +1150,41 @@ def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and
     finite_difference = (objective(s + h * ds, params + h * dparams) - objective(s - h * ds, params - h * dparams)) / (2 * h)
     forward = jax.jvp(lambda s, p: objective(s, p, diffrax.ForwardMode()), (s, params), (ds, dparams))[1]
     np.testing.assert_allclose(forward, finite_difference, rtol=1e-3)
-    if tuple(map(int, diffrax.__version__.split(".")[:3])) < (0, 7, 1):
-        return  # diffrax 0.7.0 (the last for Python 3.10) differentiates in reverse mode only batches whose orbits are all active
     grad_s, grad_p = jax.jit(jax.grad(objective, (0, 1)))(s, params)
     assert jnp.isfinite(grad_s).all() and jnp.isfinite(grad_p).all() and grad_s[2] == 0.0
     np.testing.assert_allclose(grad_s @ ds + grad_p @ dparams, forward, rtol=1e-5)
 
 
+def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_reverse_mode():
+    """Saves of orbits that are not in a segment must not put NaN partials into the VMEC coefficient gradients."""
+    import diffrax
+    from essos.dynamics import _wall_function
+    from essos.fields import ExternalField, VMEC_WOUT_ARRAYS
+    if tuple(map(int, diffrax.__version__.split(".")[:3])) < (0, 7, 1):
+        pytest.skip("diffrax 0.7.0 (the last for Python 3.10) cannot differentiate its checkpointed loop through traced field coefficients")
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    wall = _wall_function(vmec, 0.05)  # a wall is built from concrete fields
+
+    def objective(scale):
+        rows = jnp.ones(vmec.ns).at[-1].set(scale)[:, None]
+        field = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, ntheta=8, nphi=8,
+                                 **{**arrays, 'rmnc': arrays['rmnc'] * rows, 'zmns': arrays['zmns'] * rows})
+        particles = Particles(initial_xyz=jnp.array([[0.9732, 2.2941, 5.0876], [0.5, 1.0, 1.0]]),
+                              initial_vparallel_over_v=jnp.array([-0.9872, 0.3]))
+        tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles, maxtime=1e-6, timestep=1e-9,
+                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(_toroidal_source, jnp.array([60.0, 0.5])),
+                          wall=wall, max_returns=1)
+        return jnp.sum(jnp.where(jnp.isfinite(tracing.trajectories_xyz), tracing.trajectories_xyz, 0.0))
+
+    assert jnp.isfinite(jax.grad(objective)(1.0))
+
+
 def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
     """Trapped protons whose radial excursion just reaches the LCFS (pitch 0.0755940631) cross, graze or stay inside.
 
-    Which side of the knife edge an orbit lands on depends on rounding, so only the gradients are asserted finite."""
+    Every pitch from -1e-6 up crosses, at the time the orbit reaches the surface whatever the margin (a shallow excursion
+    through the LCFS inside one step is not skipped); the gradients are finite."""
     from essos.constants import ELEMENTARY_CHARGE
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
     pitch = jnp.concatenate([jnp.zeros(1), 0.0755940631 + jnp.array([-1e-6, 1e-12, 1e-9, 1e-7, 1e-5, 1e-3, 0.2])])
@@ -1167,7 +1199,8 @@ def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
     objective = lambda s: jnp.sum(jnp.where(jnp.isfinite(t := crossing_times(s)), t, 0.0))
     s = jnp.full(8, 0.9)
     times, gradient = crossing_times(s), jax.grad(objective)(s)
-    assert jnp.isinf(times[0]) and jnp.isfinite(times[-1]) and jnp.isfinite(gradient).all()
+    assert jnp.isinf(times[0]) and jnp.isfinite(times[1:]).all() and jnp.isfinite(gradient).all()
+    np.testing.assert_allclose(times[2:4], 2.320923e-5, rtol=1e-5)
     h = jnp.zeros(8).at[-1].set(1e-6)
     np.testing.assert_allclose(gradient[-1], (objective(s + h) - objective(s - h)) / 2e-6, rtol=1e-4)
 
@@ -1229,3 +1262,24 @@ def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
     B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
     mu = particles.initial_vperpendicular[0]**2 / (2 * B * SPEED_OF_LIGHT**2)
     np.testing.assert_allclose(trace.initial_conditions[0, 4], mu, rtol=1e-6)
+
+
+def test_tracings_with_the_same_shapes_share_one_compiled_solve():
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart
+    from essos.constants import ONE_EV
+    from essos.dynamics import _compiled_solver
+
+    def trace(currents, shift):
+        coils = Coils(curves=CreateEquallySpacedCurves(n_curves=2, order=2, R=1.0, r=0.4, nfp=2, stellsym=True), currents=currents)
+        particles = Particles(initial_xyz=jnp.array([[1.1 + shift, 0., 0.], [1.2 + shift, 0., 0.]]), energy=1e3 * ONE_EV)
+        return Tracing(field=BiotSavart(coils), model='GuidingCenter', particles=particles, maxtime=1e-6, timestep=1e-8,
+                       times_to_trace=10, progress=False).trajectories
+
+    _compiled_solver.cache_clear()
+    first, second = trace([1e6, 2e6], 0.), trace([2e6, 1e6], 0.01)
+    info = _compiled_solver.cache_info()
+    assert (info.misses, info.hits) == (1, 1)
+    _compiled_solver.cache_clear()
+    np.testing.assert_array_equal(second, trace([2e6, 1e6], 0.01))  # a fresh compilation gives the same orbits
+    assert not np.allclose(first, second)
