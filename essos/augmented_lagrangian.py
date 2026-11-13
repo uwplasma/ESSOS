@@ -758,7 +758,35 @@ class ALM(NamedTuple):
 
 
 
-#Inner solve with optimistix L-BFGS; a (lower, upper) box is enforced by a tanh reparametrization
+def _bound_reparametrization(params, bounds):
+    """Finite intervals use tanh; one-sided bounds reflect at their finite endpoint."""
+    lower, upper = (jnp.asarray(bound, dtype=params.dtype) for bound in bounds)
+    has_lower, has_upper = jnp.isfinite(lower), jnp.isfinite(upper)
+    both = has_lower & has_upper
+    # Keep inactive branches finite too: their derivatives are traced by JAX.
+    lo, hi = jnp.where(has_lower, lower, 0.0), jnp.where(has_upper, upper, 0.0)
+    fixed = both & (lo == hi)
+    mid = (lo + hi) / 2
+    half = jnp.where(both & ~fixed, (hi - lo) / 2, 1.0)
+    margin = jnp.maximum(1e-12, jnp.finfo(params.dtype).eps)
+    box_initial = jnp.arctanh(jnp.clip((params - mid) / half, -1 + margin, 1 - margin))
+    distance = jnp.where(has_lower, params - lo, hi - params)
+    initial = jnp.where(both, box_initial,
+                        jnp.where(has_lower | has_upper, distance, params))
+    initial = jnp.where(fixed, 0.0, initial)
+
+    def to_params(z):
+        # Reflection includes the endpoint exactly and lets a boundary start
+        # move inward, unlike an exponential/softplus inverse at zero distance.
+        one_sided = jnp.where(has_lower, lo + jnp.abs(z), hi - jnp.abs(z))
+        result = jnp.where(both, mid + half * jnp.tanh(z),
+                           jnp.where(has_lower | has_upper, one_sided, z))
+        return jnp.where(fixed, lo, result)
+
+    return to_params, initial
+
+
+#Inner solve with optimistix L-BFGS; bounds are enforced by reparametrization
 def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
     loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
     model_lagrangian='Standard',
@@ -812,8 +840,7 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
         if bounds is None:
             to_x, z0 = (lambda z: z), main_params
         else:
-            mid, half = (bounds[1] + bounds[0]) / 2, (bounds[1] - bounds[0]) / 2
-            to_x, z0 = (lambda z: mid + half * jnp.tanh(z)), jnp.arctanh(jnp.clip((main_params - mid) / half, -1 + 1e-12, 1 - 1e-12))
+            to_x, z0 = _bound_reparametrization(main_params, bounds)
         solver = optimistix.LBFGS(rtol=omega_min, atol=omega_min, history_length=history_size)
         sol = optimistix.minimise(lambda z, lp: lagrangian(to_x(z), lp, **kargs), solver, z0, lagrange_params,
                                   has_aux=True, max_steps=inner_maxiter, throw=False)
