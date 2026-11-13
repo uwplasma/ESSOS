@@ -192,8 +192,7 @@ class MGrid(MagneticField):
         return jnp.asarray(points)
 
     def _tree_flatten(self):
-        children = (self.br_arr, self.bp_arr, self.bz_arr,
-                    jnp.asarray(self.raw_coil_current, dtype=float))
+        children = (self.br_arr, self.bp_arr, self.bz_arr, self.raw_coil_current)
         aux = (self.nr, self.nz, self.nphi, self.nfp, self.rmin, self.rmax,
                self.zmin, self.zmax, tuple(self.coil_names), self.mode)
         return children, aux
