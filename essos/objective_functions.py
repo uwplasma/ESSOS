@@ -50,124 +50,57 @@ def loss_r0_near_axis(field_nearaxis, r0_target=1.0):
 
 
 ##############################Particle confinement losses ##############################
-def loss_particle_radial_drift_fullorbit(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def _orbit(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5,
+           model='GuidingCenterAdaptative', boundary=None):
+    """Trace and return xyz, the cylindrical radius and the offsets (R, Z) from the axis."""
+    xyz = Tracing(field=field, model=model, particles=particles, maxtime=maxtime, timestep=timestep,
+                  times_to_trace=num_steps, atol=trace_tolerance, rtol=trace_tolerance,
+                  boundary=boundary).trajectories[:, :, :3]
+    fac_xy = jnp.sqrt(jnp.square(xyz[:, :, 0]) + jnp.square(xyz[:, :, 1]))
+    return xyz, fac_xy, fac_xy - field.r_axis + 1.e-12, xyz[:, :, 2] - field.z_axis + 1.e-12
+
+def _r_cross(dR, dZ):
+    return jnp.sqrt(jnp.square(dR) + jnp.square(dZ))
+
+def _mean_step(x):
+    return jnp.average(jnp.diff(x, axis=1), axis=1)  # TODO: differentiate in time through diffrax
+
+def loss_particle_radial_drift(field, particles, **trace):
+    _, _, dR, dZ = _orbit(field, particles, **trace)
+    return jnp.sum(jnp.square(_mean_step(_r_cross(dR, dZ))))
+
+def loss_particle_radial_drift_fullorbit(field, particles, **trace):
     particles.to_full_orbit(field)
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    xyz = tracing.trajectories[:,:, :3]
-    R_axis=field.r_axis
-    Z_axis=field.z_axis
-    #Ideally here one would differentiate in time through diffrax !TODO
-    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
-    v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime     
-    return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
+    return loss_particle_radial_drift(field, particles, **trace)
 
-def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    xyz = tracing.trajectories[:,:, :3]
-    R_axis=field.r_axis
-    Z_axis=field.z_axis
-    #Ideally here one would differentiate in time through diffrax !TODO
-    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
-    v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime     
-    return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
+def loss_particle_alpha_drift(field, particles, **trace):
+    _, _, dR, dZ = _orbit(field, particles, **trace)
+    return jnp.sum(jnp.square(_mean_step(jnp.arctan2(dZ, dR))))
 
+def loss_particle_gammac(field, particles, **trace):
+    _, _, dR, dZ = _orbit(field, particles, **trace)
+    return jnp.max(2. / jnp.pi * jnp.absolute(jnp.arctan2(_mean_step(_r_cross(dR, dZ)), _mean_step(jnp.arctan2(dZ, dR)))))
 
-def loss_particle_alpha_drift(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    xyz = tracing.trajectories[:,:, :3]
-    R_axis=field.r_axis
-    Z_axis=field.z_axis
-    #def theta(x,R_axis=R_axis,Z_axis=Z_axis):
-    #    return jnp.arctan2(x[2]-Z_axis+1.e-12, jnp.sqrt(x[0]**2+x[1]**2)-R_axis+1.e-12)
-    #def phi(x):
-    #    return jnp.arctan2(x[1], x[0])
-    ##AbsB = vmap(self.field.AbsB)(xyz)
-    ##B_contravariant=vmap(self.field.B_contravariant,in_axes=(0))(xyz)
-    #Ideally here one would differentiate in time through diffrax !TODO                    
-    #grad_theta=vmap(jax.jacfwd(theta,argnums=0),in_axes=0)(xyz)
-    #grad_phi=vmap(jax.jacfwd(phi,argnums=0),in_axes=0)(xyz)
-    #v_theta=jnp.tensordot(v_xyz,grad_theta,axes=(1,1))
-    #v_alpha=v_theta-jnp.tensordot(B_contravariant,grad_theta,axes=(1,1))/jnp.tensordot(B_contravariant,grad_phi,axes=(1,1))*jnp.tensordot(v_xyz,grad_phi,axes=(1,1))                
-    theta=jnp.arctan2(xyz[:,:,2]-Z_axis+1.e-12, jnp.sqrt(xyz[:,:,0]**2+xyz[:,:,1]**2)-R_axis+1.e-12)
-    v_theta=jnp.diff(theta,axis=1)#/tracing.times_to_trace*tracing.maxtime                               
-    return jnp.sum(jnp.square(jnp.average(v_theta,axis=1)))  
+def loss_particle_rcross_final(field, particles, **trace):
+    _, _, dR, dZ = _orbit(field, particles, **trace)
+    return jnp.linalg.norm(jnp.average(_r_cross(dR, dZ), axis=1))
 
-def loss_particle_gammac(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    xyz = tracing.trajectories[:,:, :3]
-    R_axis=field.r_axis
-    Z_axis=field.z_axis
-    #def theta(x,R_axis=R_axis,Z_axis=Z_axis):
-    #    return jnp.arctan2(x[2]-Z_axis+1.e-12, jnp.sqrt(x[0]**2+x[1]**2)-R_axis+1.e-12)
-    #def phi(x):
-    #    return jnp.arctan2(x[1], x[0])
-    ##AbsB = vmap(self.field.AbsB)(xyz)
-    ##B_contravariant=vmap(self.field.B_contravariant,in_axes=(0))(xyz)
-    #Ideally here one would differentiate in time through diffrax !TODO                    
-    #grad_theta=vmap(jax.jacfwd(theta,argnums=0),in_axes=0)(xyz)
-    #grad_phi=vmap(jax.jacfwd(phi,argnums=0),in_axes=0)(xyz)
-    #v_theta=jnp.tensordot(v_xyz,grad_theta,axes=(1,1))
-    #v_alpha=v_theta-jnp.tensordot(B_contravariant,grad_theta,axes=(1,1))/jnp.tensordot(B_contravariant,grad_phi,axes=(1,1))*jnp.tensordot(v_xyz,grad_phi,axes=(1,1)) 
-    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
-    v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.times_to_trace*tracing.maxtime                        
-    theta=jnp.arctan2(xyz[:,:,2]-Z_axis+1.e-12, jnp.sqrt(xyz[:,:,0]**2+xyz[:,:,1]**2)-R_axis+1.e-12)
-    v_theta=jnp.diff(theta,axis=1)#/tracing.times_to_trace*tracing.maxtime                          
-    #return jnp.sum(jnp.square((2./jnp.pi*jnp.absolute(jnp.arctan2(jnp.average(v_r_cross,axis=1),jnp.average(v_theta,axis=1))))))
-    return jnp.max(2./jnp.pi*jnp.absolute(jnp.arctan2(jnp.average(v_r_cross,axis=1),jnp.average(v_theta,axis=1))))
-    
-def loss_particle_rcross_final(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    xyz = tracing.trajectories[:,:, :3]
-    R_axis=field.r_axis
-    Z_axis=field.z_axis
-    r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
-    return jnp.linalg.norm((jnp.average(r_cross,axis=1)))
-
-
-
-def loss_particle_Br(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    xyz = tracing.trajectories[:,:, :3]
-    R_axis=tracing.field.r_axis
-    Z_axis=tracing.field.z_axis
-    fac_xy=jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))
-    r_cross=jnp.sqrt(jnp.square(fac_xy-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12))
-    dr_cross_dx=(fac_xy-R_axis+1.e-12)*xyz[:,:,0]/(r_cross*fac_xy+1.e-12)
-    dr_cross_dy=(fac_xy-R_axis+1.e-12)*xyz[:,:,1]/(r_cross*fac_xy+1.e-12)
-    dr_cross_dz=(xyz[:,:,2]-Z_axis+1.e-12)/(r_cross+1.e-12)    
-    B_particle=jax.vmap(jax.vmap(field.B_covariant,in_axes=0),in_axes=0)(xyz)
-    B_r=jnp.multiply(B_particle[:,:,0],dr_cross_dx)+jnp.multiply(B_particle[:,:,1],dr_cross_dy)+jnp.multiply(B_particle[:,:,2],dr_cross_dz)
+def loss_particle_Br(field, particles, **trace):
+    xyz, fac_xy, dR, dZ = _orbit(field, particles, **trace)
+    r_cross = _r_cross(dR, dZ)
+    B = jax.vmap(jax.vmap(field.B_covariant))(xyz)
+    B_r = (B[:, :, 0] * (dR * xyz[:, :, 0] / (r_cross * fac_xy + 1.e-12))
+           + B[:, :, 1] * (dR * xyz[:, :, 1] / (r_cross * fac_xy + 1.e-12)) + B[:, :, 2] * (dZ / (r_cross + 1.e-12)))
     return jnp.sum(jnp.abs(B_r))
 
-def loss_particle_iota(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None,target_iota=0.41):
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
-    xyz = tracing.trajectories[:,:, :3]
-    R_axis=tracing.field.r_axis
-    Z_axis=tracing.field.z_axis
-    #theta=jnp.arctan2(xyz[:,:,2]-Z_axis+1.e-12, jnp.sqrt(xyz[:,:,0]**2+xyz[:,:,1]**2)-R_axis+1.e-12)    
-    fac_xy=jnp.sqrt(jnp.square(xyz[:,:,0])+jnp.square(xyz[:,:,1]))
-    dtheta_dx=-(xyz[:,:,2]-Z_axis+1.e-12)*xyz[:,:,0]/(fac_xy+1.e-12)/(jnp.square(fac_xy-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12)+1.e-12)
-    dtheta_dy=-(xyz[:,:,2]-Z_axis+1.e-12)*xyz[:,:,1]/(fac_xy+1.e-12)/(jnp.square(fac_xy-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12)+1.e-12)    
-    dtheta_dz=(fac_xy-R_axis+1.e-12)/(jnp.square(fac_xy-R_axis+1.e-12)+jnp.square(xyz[:,:,2]-Z_axis+1.e-12)+1.e-12)      
-    dphi_dx=-(xyz[:,:,1])/(fac_xy**2+1.e-12)
-    dphi_dy=xyz[:,:,0]/(fac_xy**2+1.e-12)    
-    B_particle=jax.vmap(jax.vmap(tracing.field.B_covariant,in_axes=0),in_axes=0)(xyz)
-    B_theta=jnp.multiply(B_particle[:,:,0],dtheta_dx)+jnp.multiply(B_particle[:,:,1],dtheta_dy)+jnp.multiply(B_particle[:,:,2],dtheta_dz)
-    B_phi=jnp.multiply(B_particle[:,:,0],dphi_dx)+jnp.multiply(B_particle[:,:,1],dphi_dy)
-    return jnp.sum(jnp.maximum(target_iota-B_theta/B_phi,0.0))
-
-
-
-
-
-
+def loss_particle_iota(field, particles, target_iota=0.41, **trace):
+    xyz, fac_xy, dR, dZ = _orbit(field, particles, **trace)
+    den = jnp.square(dR) + jnp.square(dZ) + 1.e-12
+    B = jax.vmap(jax.vmap(field.B_covariant))(xyz)
+    B_theta = (B[:, :, 0] * (-dZ * xyz[:, :, 0] / (fac_xy + 1.e-12) / den)
+               + B[:, :, 1] * (-dZ * xyz[:, :, 1] / (fac_xy + 1.e-12) / den) + B[:, :, 2] * (dR / den))
+    B_phi = B[:, :, 0] * (-xyz[:, :, 1] / (fac_xy**2 + 1.e-12)) + B[:, :, 1] * (xyz[:, :, 0] / (fac_xy**2 + 1.e-12))
+    return jnp.sum(jnp.maximum(target_iota - B_theta / B_phi, 0.0))
 
 
 ###################  B ON SURAFCE LOSSES ##########################

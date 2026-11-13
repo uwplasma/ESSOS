@@ -240,6 +240,28 @@ def test_vmec_mode_tolerance_keeps_the_field():
     assert jnp.array_equal(jax.vmap(rebuilt.AbsB)(points), jax.vmap(truncated.AbsB)(points))
 
 
+def test_vmec_flux_coordinates_gradient_in_the_surface_is_finite_in_reverse_mode():
+    """Reverse mode used to give NaN at points where the Newton inversion converges exactly: its iterations were differentiated."""
+    from essos.fields import Vmec
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    xyz = jnp.array([[10.547857968497258, -4.418389073898554, 0.15706857515147074],
+                     [11.444576424285373, 0.0011546032999600522, 1.9023593019105387]])
+
+    def flux(scale):
+        rows = jnp.ones(vmec.ns).at[-1].set(scale)[:, None]
+        field = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, ntheta=8, nphi=8,
+                                 **{**arrays, 'rmnc': arrays['rmnc'] * rows, 'zmns': arrays['zmns'] * rows})
+        return jax.vmap(lambda x: field.flux_coordinates(x)[0])(xyz)
+
+    reverse, forward = jax.jacrev(flux)(1.0), jax.jacfwd(flux)(1.0)
+    finite_difference = (flux(1.0 + 1e-6) - flux(1.0 - 1e-6)) / 2e-6
+    assert jnp.isfinite(reverse).all()
+    np.testing.assert_allclose(reverse, forward, atol=1e-8)
+    np.testing.assert_allclose(reverse, finite_difference, rtol=1e-4, atol=1e-6)
+
+
 def test_vmec_flux_coordinates_invert_to_xyz_and_boundary_distance_is_signed():
     from essos.fields import Vmec
 
@@ -702,3 +724,40 @@ def test_half_grid_interpolation_keeps_its_slope_up_to_the_lcfs():
         return _radial_interp(s, grid, table, jnp.array([0]), half_grid=True)[0]
     for s in (0.994, 0.996, 0.999, 1.0):
         assert jnp.isclose(f(s), 1 + s, rtol=1e-12) and jnp.isclose(jax.grad(f)(s), 1.0, rtol=1e-9)
+
+
+def test_external_field_params_are_differentiable_and_share_one_compile():
+    import jax
+    import jax.numpy as jnp
+    from essos.fields import ExternalField
+
+    source = lambda xyz, p: p[0] * jnp.stack([-xyz[:, 1], xyz[:, 0], p[1] * xyz[:, 2]], axis=-1) ** 2  # noqa: E731
+    x = jnp.array([1.1, 0.2, 0.05])
+    loss = lambda p: jnp.sum(ExternalField(source, p).dAbsB_by_dX(x) ** 2) + ExternalField(source, p).AbsB(x)  # noqa: E731
+    p = jnp.array([1.3, 0.7])
+    g = jax.grad(loss)(p)
+    fd = jnp.array([(loss(p + 1e-6 * e) - loss(p - 1e-6 * e)) / 2e-6 for e in jnp.eye(2)])
+    assert jnp.all(g != 0) and jnp.allclose(g, fd, rtol=1e-6)
+    traces = []
+    f = jax.jit(lambda fld: traces.append(1) or fld.AbsB(x))
+    f(ExternalField(source, p)); f(ExternalField(source, 2 * p))
+    assert len(traces) == 1
+
+
+def test_combined_field_fused_gc_quantities_match_generic_path():
+    import jax
+    import jax.numpy as jnp
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart, CombinedField, ExternalField, MagneticField
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    bs = BiotSavart(Coils(curves=curves, currents=[1.1e6, 0.9e6]))
+    ext = ExternalField(lambda xyz: 0.01 * jnp.stack([-xyz[:, 1], xyz[:, 0], xyz[:, 2] ** 2], axis=-1))
+    x = jnp.array([1.7, 0.1, 0.05])
+    combined = CombinedField(bs, ext)
+    assert type(ext).gc_quantities is not MagneticField.gc_quantities  # every member is fused
+    generic = MagneticField.gc_quantities(combined, x)
+    for a, b in zip(CombinedField(bs, bs).gc_quantities(x), MagneticField.gc_quantities(CombinedField(bs, bs), x)):
+        assert jnp.allclose(a, b, rtol=1e-9, atol=1e-12)
+    assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(combined.gc_quantities(x), generic))
+    assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(ext.gc_quantities(x), MagneticField.gc_quantities(ext, x)))
