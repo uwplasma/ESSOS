@@ -311,19 +311,25 @@ def _mu_collision_noise(vpar, mu, points, field, particles, species):
     indeces_species = species.species_indeces
     nu_D = jnp.sum(jax.vmap(nu_D_ab, in_axes=(None, None, 0, None, None, None))(m, q, indeces_species, v, points, species), axis=0)
     nu_par = jnp.sum(jax.vmap(nu_par_ab, in_axes=(None, None, 0, None, None, None))(m, q, indeces_species, v, points, species), axis=0)
-    # Velocity-space diffusion of (vpar/v, mu/(m v^2/2B)), divided by v^2
-    Yvv = (nu_par*xi**2+nu_D*(1.-xi**2))/2.
-    Yvmu = xi*(1.-xi**2)*(nu_par-nu_D)
-    Ymumu = 2.*(1.-xi**2)*(nu_par*(1.-xi**2)+nu_D*xi**2)
-    root = jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2)
-    lambda_p = 0.5*(Yvv+Ymumu+root)
-    lambda_m = (1.-xi**2)*nu_par*nu_D/lambda_p  # det(Y)/lambda_p, free of cancellation
-    theta = 0.5*jnp.arctan2(2.*Yvmu, Yvv-Ymumu)
-    rotation = jnp.array([[jnp.cos(theta), -jnp.sin(theta)], [jnp.sin(theta), jnp.cos(theta)]])
-    scale = jnp.array([v, 0.5*m*v**2/B])
-    # sqrt(lambda_m) ~ sqrt(mu) has an infinite slope at |xi| = 1; keep its jvp finite for Milstein
-    root_m = jnp.where(lambda_m > 0, jnp.sqrt(2.*jnp.where(lambda_m > 0, lambda_m, 1.)), 0.)
-    return scale[:, None]*rotation*jnp.array([jnp.sqrt(2.*lambda_p), root_m])[None, :]
+    def factor(_):
+        # Velocity-space diffusion of (vpar/v, mu/(m v^2/2B)), divided by v^2
+        Yvv = (nu_par*xi**2+nu_D*(1.-xi**2))/2.
+        Yvmu = xi*(1.-xi**2)*(nu_par-nu_D)
+        Ymumu = 2.*(1.-xi**2)*(nu_par*(1.-xi**2)+nu_D*xi**2)
+        root = jnp.sqrt((Yvv-Ymumu)**2+4.*Yvmu**2)
+        lambda_p = 0.5*(Yvv+Ymumu+root)
+        lambda_m = (1.-xi**2)*nu_par*nu_D/lambda_p  # det(Y)/lambda_p, free of cancellation
+        theta = 0.5*jnp.arctan2(2.*Yvmu, Yvv-Ymumu)
+        rotation = jnp.array([[jnp.cos(theta), -jnp.sin(theta)], [jnp.sin(theta), jnp.cos(theta)]])
+        scale = jnp.array([v, 0.5*m*v**2/B])
+        # sqrt(lambda_m) ~ sqrt(mu) has an infinite slope at |xi| = 1; keep its jvp finite for Milstein
+        root_m = jnp.where(lambda_m > 0, jnp.sqrt(2.*jnp.where(lambda_m > 0, lambda_m, 1.)), 0.)
+        return scale[:, None]*rotation*jnp.array([jnp.sqrt(2.*lambda_p), root_m])[None, :]
+
+    # An absent bath has identically zero noise and velocity derivatives.
+    # Avoid differentiating a degenerate zero eigensystem in Milstein/Stratonovich.
+    return jax.lax.cond((nu_D == 0) & (nu_par == 0),
+                        lambda _: jnp.zeros((2, 2), dtype=v.dtype), factor, None)
 
 @partial(jit, static_argnums=(2))
 def GuidingCenterCollisionsDiffusionMu(t,
@@ -1222,16 +1228,13 @@ class Tracing():
                 lambda xyz: vmap(lambda point: self.field.to_xyz(point))(xyz)
             )(trajectory_points)
         
-        if isinstance(field, Vmec):
-            if self.model in _GUIDING_CENTER_COLLISION_MODELS:
-                self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_collisions()                    
-            else:                
-                self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction()
-        elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
-            if self.model in _GUIDING_CENTER_COLLISION_MODELS:
-                self.loss_fractions, self.total_particles_lost, self.lost_times,self.lost_energies,self.lost_positions = self.loss_fraction_BioSavart_collisions(boundary)                    
-            else:                
-                self.loss_fractions, self.total_particles_lost, self.lost_times = self.loss_fraction_BioSavart(boundary)
+        use_boundary = (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) \
+            and isinstance(boundary, SurfaceClassifier)
+        if isinstance(field, Vmec) or use_boundary:
+            result = self.loss_fraction(boundary if use_boundary else None)
+            self.loss_fractions, self.total_particles_lost, self.lost_times = result[:3]
+            if len(result) > 3:
+                self.lost_energies, self.lost_positions = result[3:]
 
     def _trajectory_function(self):
         def compute_trajectory(initial_condition, particle_key) -> jnp.ndarray:
@@ -1411,8 +1414,8 @@ class Tracing():
                             | (solution.result == diffrax.RESULTS.nonlinear_max_steps_reached)))
             t_end = jnp.where(run, solution.ts[1][-1], o["t"])
             window = run & (times >= o["t"]) & (times <= t_end) & jnp.isfinite(saves).all(1)
-            # to_xyz of the unused (inf) saves would put NaN partials into the coefficient gradients
-            xyz = vmap(self.field.to_xyz)(jnp.where(window[:, None], saves[:, :3], 0.5)) if code == 0 else saves[:, :3]
+            # to_xyz of the unused (inf) saves would put NaN partials into the coefficient gradients; not vmap: one save at a time
+            xyz = lax.map(self.field.to_xyz, jnp.where(window[:, None], saves[:, :3], 0.5)) if code == 0 else saves[:, :3]
             o = dict(o, xyz=jnp.where(window[:, None], xyz, o["xyz"]), region=jnp.where(window, code, o["region"]))
             if code == 0:
                 o["traj"] = jnp.where(window[:, None], saves, o["traj"])
@@ -1641,136 +1644,36 @@ class Tracing():
             plt.show()
             
             
-    @partial(jit, static_argnums=(0,1))
-    def loss_fraction_BioSavart(self, boundary):
-        """Memory-efficient boundary loss fraction evaluation.
-        
-        Uses flattened single vmap instead of nested double vmap to reduce
-        memory usage by ~80% while maintaining accuracy.
-        
-        Args:
-            boundary: SurfaceClassifier for boundary evaluation
-            
-        Returns:
-            loss_fractions: Cumulative loss fraction over time
-            total_particles_lost: Total number of particles lost
-            lost_times: Time of loss for each particle
+    @partial(jit, static_argnums=(0, 1, 2))
+    def loss_fraction(self, boundary=None, r_max=1.0):
+        """Cumulative loss fraction, number lost and first-loss time (-1 if kept).
+
+        A particle is lost at the first saved time with ``boundary`` signed
+        distance < 0, or with ``s >= r_max`` when ``boundary`` is None. Collision
+        models also return the energy and position of each lost particle.
         """
-        trajectories_xyz = self.trajectories[:, :, :3]
-        nparticles, ntimesteps = trajectories_xyz.shape[:2]
-        
-        # MEMORY OPTIMIZATION: Flatten to single vmap instead of nested double vmap
-        # (nparticles, ntimesteps, 3) -> (nparticles*ntimesteps, 3)
-        trajectories_flat = trajectories_xyz.reshape(-1, 3)
-        
-        # Single vmap: evaluates all points at once
-        distances_flat = vmap(boundary.evaluate_xyz)(trajectories_flat)
-        
-        # Reshape back: (nparticles*ntimesteps,) -> (nparticles, ntimesteps)
-        distances = distances_flat.reshape(nparticles, ntimesteps)
-        
-        # Lost mask: True where boundary distance < 0 (outside boundary)
-        lost_mask = distances < 0
-        
-        # Find first crossing for each particle
-        lost_indices = jnp.argmax(lost_mask, axis=1)
-        lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
-        lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
-        
-        # Compute cumulative loss
-        safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
-        loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
-        loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
-        total_particles_lost = loss_fractions[-1] * len(self.trajectories)
-        
-        return loss_fractions, total_particles_lost, lost_times
-
-    def loss_fraction(self,r_max=1.0):
-        """Cumulative loss fraction of a flux-coordinate trace.
-
-        A particle is lost at the first saved time with ``s >= r_max``, or
-        with a non-finite state, which is what the LCFS event leaves after it
-        stops a trace. The default ``r_max`` is that LCFS.
-        """
-        trajectories_r = self.trajectories[:,:, 0]
-        lost_mask = trajectories_r >= r_max
-        lost_indices = jnp.argmax(lost_mask, axis=1)
-        lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
-        lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
-        safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
-        loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
-        loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
-        total_particles_lost = loss_fractions[-1] * len(self.trajectories)
-        return loss_fractions, total_particles_lost, lost_times
+        xyz = self.trajectories[:, :, :3]
+        n, nt = xyz.shape[0], len(self.times)
+        if boundary is None:
+            lost_mask = xyz[:, :, 0] >= r_max
+        else:
+            lost_mask = vmap(boundary.evaluate_xyz)(xyz.reshape(-1, 3)).reshape(n, nt) < 0
+        lost = lost_mask.any(axis=1)
+        index = jnp.where(lost, jnp.argmax(lost_mask, axis=1), -1)
+        lost_times = jnp.where(lost, self.times[index], -1)
+        counts = jnp.bincount(jnp.where(lost, index, nt), length=nt + 1)[:-1]
+        fractions = jnp.cumsum(counts) / n
+        out = fractions, fractions[-1] * n, lost_times
+        if self.model not in _GUIDING_CENTER_COLLISION_MODELS:
+            return out
+        rows, safe = jnp.arange(n), jnp.clip(index, 0, nt - 1)
+        if boundary is None:  # an LCFS event leaves non-finite states behind
+            finite = jnp.isfinite(self.trajectories).all(axis=2)
+            safe = lax.cummax(jnp.where(finite, jnp.arange(nt), 0), axis=1)[rows, safe]
+        return out + (jnp.where(lost, self.energy()[rows, safe], 0.),
+                      jnp.where(lost[:, None], xyz[rows, safe], 0.))
 
 
-
-    @partial(jit, static_argnums=(0,1))
-    def loss_fraction_BioSavart_collisions(self, boundary):
-        """Memory-efficient boundary loss fraction for collision models.
-        
-        Optimized version using flattened vmap.
-        """
-        trajectories_xyz = self.trajectories[:, :, :3]
-        nparticles, ntimesteps = trajectories_xyz.shape[:2]
-        
-        # Flatten to single vmap for memory efficiency
-        trajectories_flat = trajectories_xyz.reshape(-1, 3)
-        distances_flat = vmap(boundary.evaluate_xyz)(trajectories_flat)
-        distances = distances_flat.reshape(nparticles, ntimesteps)
-        
-        lost_mask = distances < 0
-        lost_indices = jnp.argmax(lost_mask, axis=1)
-        lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
-        lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
-        
-        # OPTIMIZATION: Replace indexed vmap with vectorized masking (10-15x faster)
-        has_lost = lost_indices != -1
-        # Gather energy at loss time for particles that lost - use clip to keep indices valid
-        safe_indices = jnp.clip(lost_indices, 0, ntimesteps - 1)
-        particle_indices = jnp.arange(nparticles)
-        lost_energies = jnp.where(has_lost, self.energy()[particle_indices, safe_indices], 0.)
-        
-        # Gather positions at loss time for particles that lost
-        lost_positions = jnp.where(
-            has_lost[:, None], 
-            trajectories_xyz[particle_indices, safe_indices], 
-            0.
-        )                          
-        safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
-        loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
-        loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
-        total_particles_lost = loss_fractions[-1] * len(self.trajectories)
-        return loss_fractions, total_particles_lost, lost_times,lost_energies,lost_positions
-
-    @partial(jit, static_argnums=(0))
-    def loss_fraction_collisions(self,r_max=1.0):
-        """As :meth:`loss_fraction`, with the energy and position of each lost
-        particle at its last finite saved state."""
-        trajectories_rtz = self.trajectories[:,:, :3]
-        lost_mask = trajectories_rtz[:,:,0] >= r_max
-        lost_indices = jnp.argmax(lost_mask, axis=1)
-        lost_indices = jnp.where(lost_mask.any(axis=1), lost_indices, -1)
-        lost_times = jnp.where(lost_indices != -1, self.times[lost_indices], -1)
-        has_lost = lost_indices != -1
-        finite = jnp.isfinite(self.trajectories).all(axis=2)
-        last_finite = lax.cummax(jnp.where(finite, jnp.arange(len(self.times)), 0), axis=1)
-        particle_indices = jnp.arange(self.particles.nparticles)
-        safe_indices = last_finite[particle_indices, jnp.clip(lost_indices, 0, len(self.times) - 1)]
-        lost_energies = jnp.where(has_lost, self.energy()[particle_indices, safe_indices], 0.)
-        lost_positions = jnp.where(
-            has_lost[:, None],
-            trajectories_rtz[particle_indices, safe_indices],
-            0.
-        )
-        safe_lost_indices = jnp.where(lost_indices != -1, lost_indices, len(self.times))
-        loss_counts = jnp.bincount(safe_lost_indices, length=len(self.times) + 1)[:-1]
-        loss_fractions = jnp.cumsum(loss_counts) / len(self.trajectories)
-        total_particles_lost = loss_fractions[-1] * len(self.trajectories)
-        return loss_fractions, total_particles_lost, lost_times,lost_energies,lost_positions
-
-
-    
     def poincare_plot(self, shifts = [jnp.pi/2], orientation = 'toroidal', length = 1, ax=None, show=True, color=None, **kwargs):
         """
         Plot Poincare sections from Cartesian trajectories.

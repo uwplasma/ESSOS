@@ -49,6 +49,7 @@ dependencies = [
     "diffrax>=0.7.0",
     "optax",
     "optimistix>=0.0.11",
+    "lineax>=0.1.0",  # 0.0.8 raises TracerBoolConversionError in the Kvaerno5 Newton solve under jax 0.10
     "scipy",
     "jaxkd",
     "netcdf4",
