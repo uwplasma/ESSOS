@@ -998,6 +998,7 @@ def _single_or_batch(single):
     return wrapped
 
 
+@partial(jit, static_argnames=['surface'])
 @_single_or_batch
 def signed_distance_from_surface_jax(xyz, surface):
     """

@@ -9,6 +9,16 @@ from scipy.optimize import least_squares, minimize
 from essos.surfaces import SurfaceRZFourier
 
 def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
+    """Rebuild a near-axis field from a flat degree-of-freedom vector.
+
+    Args:
+        new_field_nearaxis_x: Concatenated ``rc``, ``zs`` and ``etabar``.
+        field_nearaxis: Near-axis field that supplies ``B0``, ``sigma0``,
+            ``I2``, ``nphi``, ``spsi``, ``sG`` and ``nfp``.
+
+    Returns:
+        A new near-axis field with the updated axis shape and ``etabar``.
+    """
     try:
         from pyqsc_jax.near_axis import near_axis
     except ImportError as exc:  # pragma: no cover - exercised only without pyQSC_JAX
@@ -31,6 +41,27 @@ def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
     return new_field_nearaxis
 
 def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, method='L-BFGS-B', **kwargs):
+    """Minimize a coil loss with ``scipy.optimize.least_squares``.
+
+    Gradients are finite differences (``diff_step=1e-4``). ``method`` is only
+    used by the commented ``minimize`` alternative below and has no effect.
+
+    Args:
+        func: Loss called as ``func(dofs, dofs_curves=..., currents_scale=...,
+            nfp=..., n_segments=..., stellsym=..., **kwargs)``.
+        initial_dofs: Starting vector: coil curve dofs, then currents, then
+            optionally surface and near-axis dofs.
+        coils: Initial ``Coils``; supplies the symmetry and scaling arguments.
+        tolerance_optimization: Used for both ``ftol`` and ``gtol``.
+        maximum_function_evaluations: ``max_nfev`` of the solver.
+        **kwargs: Passed to ``func``. ``field_nearaxis`` and ``surface_all``
+            select which extra objects are returned.
+
+    Returns:
+        The optimized ``Coils``, followed by the optimized surface and/or
+        near-axis field when they were optimized. ``None`` if the result could
+        not be unpacked; the error is printed.
+    """
     len_dofs_curves = len(jnp.ravel(coils.dofs_curves))
     nfp = coils.nfp
     stellsym = coils.stellsym
