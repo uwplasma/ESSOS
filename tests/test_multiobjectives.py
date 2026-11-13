@@ -198,3 +198,68 @@ def test_optax_descent_shrinks_coils_and_the_optuna_study_picks_a_pareto_point(t
     assert isinstance(rebuilt, Coils) and rebuilt is opt.best_coils
     opt.plot_pareto_fronts(save=str(tmp_path / "pareto.png"))
     plt.close("all")
+
+
+def _synthetic_study(loss_names, n=14, seed=0):
+    """A study of ``n`` completed trials whose objectives trade off, built without running any optimisation."""
+    import optuna
+    from optuna.distributions import CategoricalDistribution, FloatDistribution
+    rng = np.random.default_rng(seed)
+    study = optuna.create_study(directions=["minimize"] * len(loss_names))
+    dists = {"method": CategoricalDistribution(["adam", "sgd"]), "lr": FloatDistribution(1e-4, 1e-1, log=True)}
+    dists.update({f"weight_{k}": FloatDistribution(1e-3, 10.0, log=True) for k in loss_names})
+    for i in range(n):
+        params = {"method": "adam" if i % 2 else "sgd", "lr": float(10 ** rng.uniform(-4, -1))}
+        params.update({f"weight_{k}": float(10 ** rng.uniform(-3, 1)) for k in loss_names})
+        t = rng.uniform(0.1, 1.0)
+        values = [t + 0.05 * rng.random(), 1.1 - t + 0.05 * rng.random(), rng.random() + 0.5][:len(loss_names)]
+        study.add_trial(optuna.trial.create_trial(params=params, distributions=dists, values=values))
+    return study
+
+
+def test_multiobjective_plots_render_for_two_and_three_objectives(tmp_path, monkeypatch):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    monkeypatch.setattr(plt, "show", lambda *a, **k: None)
+
+    def build(fns):
+        opt = MultiObjectiveOptimizer(fns, _axis_vmec(), opt_config={"order_Fourier": 1, "num_coils": 2})
+        opt.study = _synthetic_study(opt.loss_names, seed=len(fns))
+        return opt
+
+    two, three = build([_length, _curvature]), build([_length, _curvature, lambda coils: jnp.sum(coils.length ** 2)])
+    three.loss_names[2] = "_length2"
+    three.study = _synthetic_study(three.loss_names, seed=3)
+    # every trial carries the weights the study samples, so the study is consistent with the optimizer
+    assert all(f"weight_{n}" in three.study.trials[0].params for n in three.loss_names)
+    assert len(three.study.best_trials) >= 2  # trade-off between the first two objectives
+
+    two.plot_pareto_fronts(logx=True, logy=True, z_thresh=1.0, ncols=2, save=str(tmp_path / "p2.png"))
+    three.plot_pareto_fronts(logx=True, logy=True, logz=True, z_thresh=0.5, save=str(tmp_path / "p3"))
+    three.plot_pareto_fronts(save=str(tmp_path / "p3.jpg"))
+    assert (tmp_path / "p2.png").exists() and (tmp_path / "p3_3d.png").exists() and (tmp_path / "p3_3d.jpg").exists()
+    plt.close("all")
+    # nothing to plot for a study without completed trials, or a single objective
+    empty = build([_length, _curvature])
+    import optuna
+    empty.study = optuna.create_study(directions=["minimize", "minimize"])
+    empty.plot_pareto_fronts()
+    one = build([_length])
+    one.study = _synthetic_study(one.loss_names)
+    one.plot_pareto_fronts()
+
+    pytest.importorskip("plotly")
+    import plotly.graph_objects as go
+    monkeypatch.setattr(go.Figure, "show", lambda self, *a, **k: None)
+    two.plot_optimization_history(logy=True, z_thresh=1.0, ncols=1, save=str(tmp_path / "hist.html"))
+    three.plot_optimization_history(save=str(tmp_path / "hist3.html"))
+    two.plot_parallel_coordinates(logy=True, z_thresh=1.0, save=str(tmp_path / "par.html"))
+    three.plot_parallel_coordinates(include_params=["lr"], save=str(tmp_path / "par3"))
+    two.plot_param_importances(save=str(tmp_path / "imp"), ncols=1)
+    for name in ("hist.html", "hist3.html", "par__length.html", "par3__length2.html", "imp.html"):
+        assert (tmp_path / name).stat().st_size > 1000, name
+    empty.plot_optimization_history()
+    empty.plot_parallel_coordinates()
+    two.study = None
+    two.plot_param_importances()
