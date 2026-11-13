@@ -196,47 +196,31 @@ result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np
 print(result.lost.mean(), result.loss_fractions())
 ```
 
-`BoozerField.from_booz_xform` runs the transform on all surfaces in one jitted pass (with `K`, the full one); a `booz.run()` beforehand (the NumPy loop over surfaces) is accepted and takes about twice as long for the 100-surface ARIES-CS `wout`.
+`BoozerField.from_booz_xform` runs the transform on all surfaces in one jitted pass (the full transform when `with_K=True`); a `booz.run()` beforehand (the NumPy loop over surfaces) is accepted and takes about twice as long for the 100-surface ARIES-CS `wout`.
 
 `psi0_from_vmec` returns minus VMEC's boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 
-### Guiding-centre equations and the `K` term
+### The `K` term
 
-In Boozer coordinates `(psi, theta, zeta)` with `psi = psi0 s`,
-`B = G grad(zeta) + I grad(theta) + K grad(psi)` and
-`B = grad(psi) x grad(theta) + iota grad(zeta) x grad(psi)` (Boozer 1981, White 2014).
-The guiding-centre Lagrangian gives, with `mu = v_perp^2 / (2 B)`, `D = F G - C I`,
-`C = -q iota + m v_par (G' - dK/dzeta) / B` and `F = q + m v_par (I' - dK/dtheta) / B`,
+In Boozer coordinates `B = G grad(zeta) + I grad(theta) + K grad(psi)` (Boozer 1981, White 2014). `K = B . dr/dpsi`
+vanishes in vacuum and is nonzero at finite beta, so the canonical form `P_zeta = m v_par G / B - psi_p` omits it
+(White and Zakharov 2003). `BoozerField.from_booz_xform(..., with_K=True)` computes `K` from the `R, Z, nu`
+harmonics and adds it to the guiding-centre equations (`essos.boozer.guiding_center_rhs`). It is off by default and
+a spectrum below `1e-3` of `G + iota I` is dropped.
 
-```
-dpsi/dt     =  (I dB/dzeta - G dB/dtheta) m (v_par^2/B + mu) / D
-dtheta/dt   =  [(G dB/dpsi - K dB/dzeta) m (v_par^2/B + mu) - C v_par B] / D
-dzeta/dt    =  [F v_par B - (I dB/dpsi - K dB/dtheta) m (v_par^2/B + mu)] / D
-dv_par/dt   =  (C dB/dtheta - F dB/dzeta) mu B / D
-```
-
-`K = B . dr/dpsi` is the radial covariant component. It vanishes in vacuum and is nonzero
-at finite beta or with net current, so the common canonical form `P_zeta = m v_par G / B - psi_p`
-omits it (White and Zakharov 2003; Bierwage et al. 2022 discuss when that is accurate).
-No `dK/dpsi` appears. `BoozerField.from_booz_xform` computes `K` from the `R, Z, nu`
-harmonics (`K = (g_{psi zeta} + iota g_{psi theta}) / sqrt(g)`) when asked with `with_K=True`; it is off by default
-and a spectrum below `1e-3` of `G + iota I` (vacuum QA gives `4e-4`, the finite-beta QH `5e-3`) is dropped anyway.
 `K` costs 1.5 times the CPU wall time of a trace (1.2 on GPU). It moves a single orbit by `s` up to `4.6e-3` in
-80 microseconds in W7-X at 5% beta and `3.5e-4` in the 5% QH (SIMSOPT agreement `1.4e-4` and `2.8e-5`), but it does not change loss
-fractions: 1000 alphas of 3.5 MeV from `s = 0.5` over 10 ms at reactor scale lose the same fraction with and without `K`
-within the statistical error (differences of at most 0.004 +- 0.007) in the 4-5% beta QH, QA, NCSX, ARIES-CS and W7-X cases.
-Use `with_K=True` for individual orbits at finite beta or large Shafranov shift
-(`examples/particle_tracing/trace_particles_boozer_with_K.py` compares loss fractions). The flux convention is
-`psi0 = -phi_edge / (2 pi)` because VMEC's `(s, theta, phi)` is left-handed, so that `psi`
-and `-phi_edge` share a sign; it reproduces the VMEC `grad B` drift of QA, QH and W7-X
-equilibria for either sign of `phi_edge` (SIMSOPT's `+phi_edge / (2 pi)` traces the
-opposite charge).
+80 microseconds in W7-X at 5% beta and `3.5e-4` in the 5% QH (SIMSOPT agreement `1.4e-4` and `2.8e-5`), but
+loss fractions of 1000 alphas of 3.5 MeV over 10 ms agree with and without `K` within the statistical error
+(differences of at most 0.004 +- 0.007, 4-5% beta QH, QA, NCSX, ARIES-CS, W7-X). Use it for single orbits at finite
+beta or large Shafranov shift; `examples/particle_tracing/trace_particles_boozer_with_K.py` compares loss fractions.
+
+`psi0 = -phi_edge / (2 pi)` because VMEC's `(s, theta, phi)` is left-handed; it reproduces the VMEC grad-B drift
+for either sign of `phi_edge`, whereas SIMSOPT's `+phi_edge / (2 pi)` traces the opposite charge.
 
 ![Orbit with and without K, SIMSOPT, and K on a flux surface](docs/boozer_K.png)
 
-Left and centre: a 3.5 MeV alpha in a finite-beta (5%) QH equilibrium, ESSOS with and
-without `K` against SIMSOPT's `gc` (`K` shifts `s` by about `3 x 10^-4` in 80 microseconds). Right: `K` at `s = 0.5`.
+Left and centre: a 3.5 MeV alpha in a finite-beta QH, ESSOS with and without `K` against SIMSOPT `gc`. Right: `K` at `s = 0.5`.
 
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
 and its derivatives, together with the flux functions `G`, `I` and `iota`.
