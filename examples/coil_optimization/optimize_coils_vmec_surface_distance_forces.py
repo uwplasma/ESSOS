@@ -37,7 +37,6 @@ NORMAL_FIELD_WEIGHT = 1.
 SURFACE_DISTANCE_WEIGHT = 1.
 COIL_DISTANCE_WEIGHT = 1.
 FORCE_WEIGHT = 1.
-LINKING_WEIGHT = 1.
 
 MIN_SURFACE_DISTANCE = 0.2
 MIN_COIL_DISTANCE = 0.2
@@ -88,8 +87,7 @@ def print_loss_costs(label, field):
         NORMAL_FIELD_WEIGHT * loss(field, surface)
         + SURFACE_DISTANCE_WEIGHT * loss_surface_distance(field)
         + COIL_DISTANCE_WEIGHT * loss_coil_distance(field)
-        + FORCE_WEIGHT * loss_force(field)
-        + LINKING_WEIGHT * loss_linking(field),
+        + FORCE_WEIGHT * loss_force(field),
     )
 
 
@@ -98,7 +96,6 @@ L_normal_field = custom_loss(loss, "field", surface=surface)
 L_surface_distance = custom_loss(loss_surface_distance, "field")
 L_coil_distance = custom_loss(loss_coil_distance, "field")
 L_force = custom_loss(loss_force, "field")
-L_linking = custom_loss(loss_linking, "field")
 
 """ Defining total loss + setting dependencies """
 L_total = (
@@ -106,7 +103,6 @@ L_total = (
     + SURFACE_DISTANCE_WEIGHT * L_surface_distance
     + COIL_DISTANCE_WEIGHT * L_coil_distance
     + FORCE_WEIGHT * L_force
-    + LINKING_WEIGHT * L_linking
 )
 L_total.dependencies = {"field": init_field}
 
@@ -133,6 +129,9 @@ opt_coils = opt_field.coils
 
 print_loss_costs("Loss costs before optimization", init_field)
 print_loss_costs("Loss costs after optimization", opt_field)
+# The linking number is integer-valued (zero gradient), so check it rather than optimize it.
+if loss_linking(opt_field) != 0:
+    print("Warning: optimized coils are linked")
 
 fig = plt.figure(figsize=(8, 4))
 
