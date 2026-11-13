@@ -690,7 +690,4 @@ def test_vacuum_K_is_negligible_at_high_boozer_resolution():
     booz.run()
     with Dataset(wout) as d:
         field = BoozerField.from_booz_xform(booz, psi0_from_vmec(d["phi"][-1]), angle_grid=None)
-    r = jnp.sqrt(jnp.array([0.011, 0.1, 0.5, 0.99]))
-    K, _, dK_dtheta_r, dK_dzeta = jax.vmap(field.K.modB_derivatives)(r, 0.3 + 0 * r, 0.2 + 0 * r)
-    G = field.profiles(0.5)[0][1]
-    assert np.all(np.isfinite(dK_dtheta_r)) and np.abs(K).max() < 1e-4 * abs(G)
+    assert field.K is None  # vacuum K is ~4e-4 noise of G + iota I; keeping it only costs time

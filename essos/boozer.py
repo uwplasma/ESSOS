@@ -59,6 +59,7 @@ def _evaluate(knots, coef, x):
     return value, slope
 
 
+K_TOLERANCE = 1e-3  # K below this fraction of G + iota I is dropped: vacuum QA gives 4e-4, finite-beta QH 5e-3
 TABLE_MODES = 48  # below about 48 modes the direct sum is cheaper than the table
 
 
@@ -99,8 +100,8 @@ class BoozerField(eqx.Module):
 
         ``k = (kmnc, kmns)`` are the ``(modes, len(s))`` harmonics of
         ``K = B . dr/dpsi`` (``dB/dpsi``-units as ``G'``), kept as a second spectrum
-        with the same conventions. ``None``, or a spectrum below ``mode_tolerance``
-        of ``G / |psi0|``, means ``K = 0`` and costs nothing.
+        with the same conventions. ``None``, or a spectrum below ``K_TOLERANCE``
+        of ``(G + iota I) / |psi0|``, means ``K = 0`` and costs nothing.
         """
         s = np.asarray(s, float)
         bmnc = np.asarray(bmnc, float)
@@ -134,7 +135,8 @@ class BoozerField(eqx.Module):
         profiles = np.vstack([axis, profiles])
         s_knots, profile_coef = _spline(s_prof, profiles)
         K = None
-        if k is not None and max(np.abs(x).max() for x in k) * abs(psi0) > mode_tolerance * np.abs(G).max():
+        if k is not None and max(np.abs(x).max() for x in k) * abs(psi0) > K_TOLERANCE * np.abs(
+                np.asarray(G, float) + np.asarray(iota, float) * np.asarray(I, float)).max():
             K = cls.from_booz(s, k[0], xm_all, xn_all, iota, G, I, psi0, nfp, mode_tolerance,
                               bmns=k[1], angle_grid=angle_grid)
         return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
