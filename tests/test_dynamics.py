@@ -700,6 +700,32 @@ def _enable_x64():
         from jax.experimental import enable_x64
     return enable_x64
 
+
+@pytest.mark.parametrize("xi", [0., .3, 1., -1.])
+def test_zero_density_mu_collisions_have_zero_noise_and_collisionless_drift(xi):
+    from essos.dynamics import (GuidingCenterCollisionsDiffusionMu,
+                                GuidingCenterCollisionsDriftMuIto,
+                                GuidingCenterCollisionsDriftMuStratonovich)
+    with _enable_x64()():
+        state, scale, args = _mu_collision_setup(1e5, xi)
+        absent = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]),
+                                   jnp.array([0.]), jnp.array([1e3]))
+        args = (*args[:3], absent, args[4])
+        noise = lambda y: GuidingCenterCollisionsDiffusionMu(0., y, args)
+        sigma, tangent = jax.jvp(noise, (state,), (jnp.ones(5),))
+        np.testing.assert_array_equal(sigma, np.zeros((5, 5)))
+        np.testing.assert_array_equal(tangent, np.zeros((5, 5)))
+        batch = jnp.stack([state, state])
+        sigma, tangent = jax.jvp(jax.vmap(noise), (batch,), (jnp.ones_like(batch),))
+        np.testing.assert_array_equal(sigma, np.zeros((2, 5, 5)))
+        np.testing.assert_array_equal(tangent, np.zeros((2, 5, 5)))
+        expected = np.array([0., 0., state[3]*scale[0], 0., 0.])
+        for drift in (GuidingCenterCollisionsDriftMuIto, GuidingCenterCollisionsDriftMuStratonovich):
+            np.testing.assert_allclose(drift(0., state, args), expected, rtol=1e-14, atol=1e-14)
+            np.testing.assert_allclose(jax.vmap(lambda y: drift(0., y, args))(batch),
+                                       np.stack([expected, expected]), rtol=1e-14, atol=1e-14)
+
+
 @pytest.mark.parametrize("v,xi", [(1e5, 0.0), (1e6, 0.0), (1e5, 0.3), (1e5, 1.0), (1e6, -1.0)])
 def test_mu_collision_noise_is_finite_and_matches_the_diffusion_tensor(v, xi):
     """The eigenvectors were 0/0 at xi = 0, and jnp.select returned zero noise
@@ -1394,3 +1420,19 @@ def test_tracings_with_the_same_shapes_share_one_compiled_solve():
     _compiled_solver.cache_clear()
     np.testing.assert_array_equal(second, trace([2e6, 1e6], 0.01))  # a fresh compilation gives the same orbits
     assert not np.allclose(first, second)
+
+
+def test_implicit_solver_guiding_center_trace():
+    """Kvaerno5 (implicit) guiding-centre trace in a coil field; lineax 0.0.8 failed to trace its Newton solve."""
+    import diffrax
+    from essos.coils import Coils
+    from essos.constants import ONE_EV
+    from essos.fields import BiotSavart
+    coils = Coils.from_json(str(Path(__file__).parent.parent / "examples" / "input_files" / "ESSOS_biot_savart_LandremanPaulQA.json"))
+    field = BiotSavart(coils)
+    particles = Particles(initial_xyz=jnp.array([[1.23, 0, 0]]), mass=PROTON_MASS, energy=5000 * ONE_EV,
+                          initial_vparallel_over_v=[0.8], field=field)
+    tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles, maxtime=1e-7,
+                      timestep=5e-8, times_to_trace=2, atol=1e-4, rtol=1e-4, solver=diffrax.Kvaerno5())
+    assert tracing.trajectories.shape == (1, 2, 4)
+    assert jnp.isfinite(tracing.trajectories).all()
