@@ -183,7 +183,6 @@ from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
 
 booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout("wout.nc", flux=False)
-booz.run()
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
 field = BoozerField.from_booz_xform(booz, psi0=psi0_from_vmec(phi_edge))
@@ -196,6 +195,8 @@ result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np
                       tmax=1e-2)      # species=BackgroundSpecies(...) adds collisions
 print(result.lost.mean(), result.loss_fractions())
 ```
+
+`BoozerField.from_booz_xform` runs the transform on all surfaces in one jitted pass (with `K`, the full one); a `booz.run()` beforehand (the NumPy loop over surfaces) is accepted and takes about twice as long for the 100-surface ARIES-CS `wout`.
 
 `psi0_from_vmec` returns minus VMEC's boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
@@ -219,8 +220,9 @@ dv_par/dt   =  (C dB/dtheta - F dB/dzeta) mu B / D
 at finite beta or with net current, so the common canonical form `P_zeta = m v_par G / B - psi_p`
 omits it (White and Zakharov 2003; Bierwage et al. 2022 discuss when that is accurate).
 No `dK/dpsi` appears. `BoozerField.from_booz_xform` computes `K` from the `R, Z, nu`
-harmonics (`K = (g_{psi zeta} + iota g_{psi theta}) / sqrt(g)`) and keeps it unless it is
-negligible; pass `with_K=False` for the previous behaviour. The flux convention is
+harmonics (`K = (g_{psi zeta} + iota g_{psi theta}) / sqrt(g)`) and drops it when its spectrum is below `1e-3` of
+`G + iota I` (vacuum QA gives `4e-4`, the finite-beta QH `5e-3`), because it makes the orbit
+right-hand side about 1.7 times slower; pass `with_K=False` for the previous behaviour. The flux convention is
 `psi0 = -phi_edge / (2 pi)` because VMEC's `(s, theta, phi)` is left-handed, so that `psi`
 and `-phi_edge` share a sign; it reproduces the VMEC `grad B` drift of QA, QH and W7-X
 equilibria for either sign of `phi_edge` (SIMSOPT's `+phi_edge / (2 pi)` traces the

@@ -12,8 +12,10 @@ slowing down and energy diffusion (Boozer & Kuo-Petravic, 1981).
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import os
 from functools import partial
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
@@ -144,11 +146,30 @@ class BoozerField(eqx.Module):
 
     @classmethod
     def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6, angle_grid=6, with_K=True):
-        """Build from a run ``Booz_xform`` (every surface computed).
+        """Build from a ``Booz_xform`` that has read a wout.
 
+        A transform that has not been run takes one jitted, batched pass over every
+        surface (``magnetic_only`` when ``booz_xform_jax`` offers it and ``K`` is not
+        needed), several times faster than ``booz.run()``; a run transform is used as it is.
         ``with_K`` adds the finite-beta ``K`` from the transform's ``R, Z, nu``
         harmonics (:func:`k_harmonics`); a vacuum field drops it.
         """
+        if getattr(booz, "bmnc_b", None) is None:
+            options = {"magnetic_only": True} if not with_K and "magnetic_only" in inspect.signature(
+                booz.run_jax).parameters else {}
+            out = booz.run_jax(**options)
+            sine = np.asarray(out["bmns_b"]).T if booz.asym else None
+            surfaces = slice(None) if booz.compute_surfs is None else list(booz.compute_surfs)
+            s = np.asarray(booz.s_in)[surfaces]
+            k = None
+            if with_K:
+                run = SimpleNamespace(s_b=s, xm_b=out["ixm_b"], xn_b=out["ixn_b"], nfp=booz.nfp, asym=booz.asym,
+                                      iota=out["iota_b"], Boozer_G=out["bvco_b"], Boozer_I=out["buco_b"],
+                                      **{n: np.asarray(out[n]).T for n in out if n.endswith(("mnc_b", "mns_b"))})
+                k = k_harmonics(run, psi0)
+            return cls.from_booz(s, np.asarray(out["bmnc_b"]).T,
+                                 out["ixm_b"], out["ixn_b"], out["iota_b"], out["bvco_b"], out["buco_b"],
+                                 psi0, int(booz.nfp), mode_tolerance, bmns=sine, angle_grid=angle_grid, k=k)
         sine = getattr(booz, "bmns_b", None)
         if sine is not None and not np.size(sine):
             sine = None
