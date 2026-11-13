@@ -153,7 +153,8 @@ def test_guiding_center_map_has_lorentz_and_speed_generator_moments():
     residual = []
     for h in (.02, .01):
         mean = expectation(kick(h, xi), h, 2)
-        np.testing.assert_allclose(mean[0]-v, drift*h, rtol=1e-11)                 # E[dv] = A h
+        # E[dv] = A h + O(h^2): the 2 D_par/v drift enters as a perpendicular kick, v -> sqrt(v1^2 + 4 D_par h).
+        np.testing.assert_allclose(mean[0]-v-drift*h, 0., atol=2e-2*abs(drift)*h)
         np.testing.assert_allclose(mean[1]-xi, -nu*xi*h, rtol=1e-11)               # Lorentz: E[dxi] = -nu xi h
         # E[dxi^2] -> nu(1-3xi^2) h is the l=2 Legendre eigenvalue, 3 nu; errors are O(h^2).
         residual.append([mean[3]-xi**2-nu*(1-3*xi**2)*h, mean[2]-v**2-(2*v*drift+2*c.parallel)*h])
