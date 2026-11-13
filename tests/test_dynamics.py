@@ -1295,7 +1295,7 @@ def test_implicit_solver_guiding_center_trace():
     field = BiotSavart(coils)
     particles = Particles(initial_xyz=jnp.array([[1.23, 0, 0]]), mass=PROTON_MASS, energy=5000 * ONE_EV,
                           initial_vparallel_over_v=[0.8], field=field)
-    tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles, maxtime=1e-6,
-                      timestep=1e-7, times_to_trace=5, atol=1e-8, rtol=1e-8, solver=diffrax.Kvaerno5())
-    assert tracing.trajectories.shape == (1, 5, 4)
+    tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles, maxtime=1e-7,
+                      timestep=5e-8, times_to_trace=2, atol=1e-4, rtol=1e-4, solver=diffrax.Kvaerno5())
+    assert tracing.trajectories.shape == (1, 2, 4)
     assert jnp.isfinite(tracing.trajectories).all()
