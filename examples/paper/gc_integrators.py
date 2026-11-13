@@ -1,9 +1,9 @@
 """Guiding-centre integrators: accuracy against cost (ESSOS paper).
 
-Teaches how the adaptive explicit Runge-Kutta solvers (Tsit5, Dopri5, Dopri8) trade relative energy error
+Teaches how the adaptive solvers (Tsit5, Dopri5, Dopri8 and the implicit Kvaerno5) trade relative energy error
 against run time and tolerance for the guiding-centre model.
 
-Runtime: about 5-10 minutes on a CPU.
+Runtime: about 5-10 minutes for the explicit solvers; the Kvaerno5 sweep takes over an hour (it slows as the tolerance tightens).
 """
 import os
 import gc
@@ -46,12 +46,12 @@ fig, ax = plt.subplots(figsize=(9, 6))
 fig_tol, ax_tol = plt.subplots(figsize=(9, 6))
 markers = ["o-", "^-", "*-", "s-"]
 # For each adaptive solver, sweep the integration tolerance and record both the
-# resulting energy error and the wall-clock time. The solvers are explicit
-# Runge-Kutta methods.
+# resulting energy error and the wall-clock time. Kvaerno5 is implicit (needs
+# lineax >= 0.1.0); the others are explicit Runge-Kutta methods.
 solvers = [('Tsit5', diffrax.Tsit5),
            ('Dopri5', diffrax.Dopri5),
-           ('Dopri8', diffrax.Dopri8)]
-           # ('Kvaerno5', diffrax.Kvaerno5)]  # implicit: fails on main with TracerBoolConversionError
+           ('Dopri8', diffrax.Dopri8),
+           ('Kvaerno5', diffrax.Kvaerno5)]
 for (method, solver_class), marker in zip(solvers, markers):
     energies = []
     tracing_times = []
