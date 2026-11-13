@@ -185,7 +185,8 @@ def test_collision_maps_reflections_and_physical_noise_covariance():
     dw = jnp.array([.1, -.2])
     out = s.guiding_center_collision_step(v, xi, h, dw, c, tolerance=tol, return_error_model=True)
     nu = 2*c.perpendicular/v**2
-    expected = [v+(-.3+.12+.8)*h+np.sqrt(1.6)*dw[0]+.06*(dw[0]**2-h),
+    v1 = v+(-.3+.12)*h+np.sqrt(1.6)*dw[0]+.06*(dw[0]**2-h)   # the 2 D_par/v drift is the perpendicular kick below
+    expected = [np.sqrt(v1**2+4*.8*h),
         xi-xi*nu*h+np.sqrt((1-xi*xi)*nu)*dw[1]-.5*xi*nu*(dw[1]**2-h)]
     np.testing.assert_allclose(out.y, expected, rtol=2e-14)
     np.testing.assert_allclose(s.reflect_pitch(jnp.array([-5.2, -1.2, 1.2, 7.3])), [-.8, -.8, .8, -.7], atol=2e-15)
