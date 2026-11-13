@@ -1328,6 +1328,26 @@ class Tracing():
                 bar.update(done)
         return tree_util.tree_map(lambda *x: jnp.asarray(np.concatenate(x)), *results)
 
+    def _adaptive_tolerances(self, flag=False):
+        """Use a fixed one-radian scale for periodic angles, independent of winding."""
+        if self._axis_regular:
+            size = self.initial_conditions.shape[-1] + 1 + int(flag)
+            angles = (2, size - 1 - int(flag))  # phi and Theta, before any failure flag
+        elif self.model == 'FieldLineToroidal' or (isinstance(self.field, Vmec)
+                and self.model in ('FieldLineAdaptative', 'FieldLineArclength')):
+            size, angles = self.initial_conditions.shape[-1] + int(flag), (1, 2)
+        else:
+            return self.rtol, self.atol
+        rtol = jnp.broadcast_to(jnp.asarray(self.rtol, dtype=float), (size,))
+        atol = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float), (size,))
+        indices = jnp.asarray(angles)
+        # atol + rtol * (1 rad) also supports purely relative user tolerances.
+        atol = atol.at[indices].add(rtol[indices])
+        if flag:
+            # The failure flag is identically zero on valid steps: avoid 0/0 for atol=0.
+            atol = atol.at[-1].set(jnp.where(atol[-1] == 0, rtol[-1], atol[-1]))
+        return rtol.at[indices].set(0), atol
+
     def _terms(self, key, flag=False, events=()):
         """Diffrax terms, solver and step-size controller of self.model (with _with_failure_flag if ``flag``)."""
         flagged = (lambda f, drift=True: _with_failure_flag(f, drift)) if flag else (lambda f, drift=True: f)
@@ -1346,12 +1366,14 @@ class Tracing():
             solver = self.solver if self.solver is not None else diffrax.Dopri8()
         controller = diffrax.ConstantStepSize()
         if model == 'GuidingCenterCollisionsMuAdaptative':
+            rtol, atol = self._adaptive_tolerances(flag)
             controller = ClipStepSizeController(
-                controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,
+                controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=rtol, atol=atol,
                                          dtmin=dt0, dtmax=1.e-4, force_dtmin=True),
                 step_ts=self.times, store_rejected_steps=self.rejected_steps)
         elif model in _ADAPTIVE_MODELS:
-            controller = _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
+            rtol, atol = self._adaptive_tolerances(flag)
+            controller = _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=rtol, atol=atol,
                                      dtmin=dt0 if model == 'FullOrbitCollisions' else None, events=events)
         return terms, solver, controller
 
@@ -1907,7 +1929,8 @@ def trace_field_lines(
         toroidal_turns: Number of full toroidal turns to follow.
         length: Physical arclength to follow for a Cartesian field.
         samples: Number of saved points along each line.
-        tolerance: Relative and absolute adaptive-integration tolerance.
+        tolerance: Relative and absolute adaptive-integration tolerance. Flux-coordinate
+            angles use a fixed one-radian reference scale, independent of winding.
         stopping_criteria: Optional event callable or sequence of callables.
         progress: Show Diffrax's terminal progress bar.
         label: Text printed before compilation and after completion; set to
