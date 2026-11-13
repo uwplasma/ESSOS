@@ -3,7 +3,7 @@
 Teaches how to trace in VMEC coordinates inside the LCFS and in Cartesian coordinates outside it through
 a VmecExtender, with a wall at a fixed gap. Needs vmex.
 
-Runtime: a few minutes on a CPU.
+Runtime: about 5-15 minutes on a CPU (the VMEX free-boundary solve dominates).
 """
 import os
 number_of_processors_to_use = 4 # Parallelization, this should divide nparticles
