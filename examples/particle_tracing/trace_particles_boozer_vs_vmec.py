@@ -16,7 +16,7 @@ from essos.dynamics import Tracing, Particles
 # Needs booz_xform_jax (pip install booz_xform_jax).
 tmax = 1e-4
 nparticles = number_of_processors_to_use*16
-times_to_trace = 200
+n_save = 200
 j = 69 # half-grid surface of the births, s = (j + 1/2) / (ns - 1)
 
 # Wall time without JIT: subtract the tracing, lowering and compile events JAX reports
@@ -56,13 +56,13 @@ for _ in range(30): # Newton for theta + lambda(theta, phi) = theta*
 speed = np.sqrt(2*FUSION_ALPHA_PARTICLE_ENERGY/ALPHA_PARTICLE_MASS)
 boozer, time_boozer = run_time(lambda: trace_boozer(
     boozer_field, s, theta_b, zeta_b, pitch, speed=speed, mass=ALPHA_PARTICLE_MASS,
-    charge=ALPHA_PARTICLE_CHARGE, tmax=tmax, timestep=1.25e-7, n_save=times_to_trace))
+    charge=ALPHA_PARTICLE_CHARGE, tmax=tmax, timestep=1.25e-7, n_save=n_save))
 
 # Trace in VMEC coordinates (adaptive guiding centre)
 particles = Particles(initial_xyz=jnp.array([s, theta, phi]).T, initial_vparallel_over_v=pitch,
                       mass=ALPHA_PARTICLE_MASS, charge=ALPHA_PARTICLE_CHARGE, energy=FUSION_ALPHA_PARTICLE_ENERGY)
 tracing, time_vmec = run_time(lambda: Tracing(field=vmec, model='GuidingCenterAdaptative', particles=particles,
-    maxtime=tmax, timestep=1e-8, times_to_trace=times_to_trace, atol=1e-7, rtol=1e-7))
+    tmax=tmax, timestep=1e-8, n_save=n_save, atol=1e-7, rtol=1e-7))
 
 # Loss fractions with binomial errors, and wall times without compilation
 for name, lost, run in (("Boozer", boozer.lost.mean(), time_boozer),

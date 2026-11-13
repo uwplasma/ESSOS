@@ -17,8 +17,8 @@ dt=1.e-8
 nparticles_per_core=100
 nparticles = nparticles_per_core
 s=0.25
-trace_tolerance = 1e-7
-times_to_trace=1000
+rtol = 1e-7
+n_save=1000
 mass=PROTON_MASS
 mass_a=4.*mass
 mass_e=ELECTRON_MASS
@@ -82,7 +82,7 @@ pitch_sigma=jnp.sqrt(2.**2/12)
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuFixed', particles=particles,
-                  maxtime=tmax, timestep=dt,times_to_trace=times_to_trace,species=species,tag_gc=0.)
+                  tmax=tmax, timestep=dt,n_save=n_save,species=species,tag_gc=0.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 fig = plt.figure(figsize=(9, 8))

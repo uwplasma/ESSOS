@@ -81,7 +81,7 @@ relative_energy_error_ESSOS_array = []
 
 # Creating a tracing object for compilation
 compile_tracing = Tracing(field=field_essos, model='GuidingCenter', particles=particles,
-                  maxtime=tmax_gc, timestep=tmax_gc/100, times_to_trace=100,
+                  tmax=tmax_gc, timestep=tmax_gc/100, n_save=100,
                   atol=trace_tolerance_array[0], rtol=trace_tolerance_array[0])
 block_until_ready(compile_tracing.trajectories)
 
@@ -91,7 +91,7 @@ for index, trace_tolerance_ESSOS in enumerate(trace_tolerance_array):
     start_time = time()
     num_steps_int = int(num_steps_essos)
     tracing = Tracing(field=field_essos, model='GuidingCenter', particles=particles,
-                    maxtime=tmax_gc, timestep=tmax_gc/num_steps_int, times_to_trace=num_steps_int,
+                    tmax=tmax_gc, timestep=tmax_gc/num_steps_int, n_save=num_steps_int,
                     atol=trace_tolerance_ESSOS, rtol=trace_tolerance_ESSOS)
     block_until_ready(tracing.trajectories)
     runtime_ESSOS = time() - start_time

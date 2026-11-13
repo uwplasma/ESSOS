@@ -86,8 +86,8 @@ class DummyTracing:
         self.trajectories = xyz
         self.field = kwargs.get("field", DummyField())
         self.loss_fractions = jnp.array([0.1, 0.2, 1.0])
-        self.times_to_trace = 4
-        self.maxtime = 1e-5
+        self.n_save = 4
+        self.tmax = 1e-5
 
 
 @jax.tree_util.register_pytree_node_class

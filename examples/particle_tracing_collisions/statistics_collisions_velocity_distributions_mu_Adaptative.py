@@ -17,7 +17,7 @@ config.update("jax_enable_x64", True)
 # Input parameters
 tmax = 1e-4
 dt=1.e-14
-times_to_trace=1000
+n_save=1000
 nparticles_per_core=10
 nparticles = nparticles_per_core
 s=0.25
@@ -73,7 +73,7 @@ pitch_sigma=jnp.sqrt(2.**2/12)
 
 time0 = time()
 tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuAdaptative', particles=particles,
-                  maxtime=tmax, timestep=dt,times_to_trace=times_to_trace,species=species,tag_gc=0.)
+                  tmax=tmax, timestep=dt,n_save=n_save,species=species,tag_gc=0.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 

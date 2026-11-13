@@ -29,7 +29,7 @@ def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
                                     nphi=field_nearaxis.nphi, spsi=field_nearaxis.spsi, sG=field_nearaxis.sG, nfp=field_nearaxis.nfp)
     return new_field_nearaxis
 
-def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, method='L-BFGS-B', **kwargs):
+def optimize_loss_function(func, initial_dofs, coils, tol=1e-4, max_nfev=30, method='L-BFGS-B', **kwargs):
     len_dofs_curves = len(jnp.ravel(coils.dofs_curves))
     nfp = coils.nfp
     stellsym = coils.stellsym
@@ -41,16 +41,16 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     
     ## Without JAX gradients, using finite differences
     result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,
-                            ftol=tolerance_optimization, gtol=tolerance_optimization,
-                            xtol=1e-14, max_nfev=maximum_function_evaluations)
+                            ftol=tol, gtol=tol,
+                            xtol=1e-14, max_nfev=max_nfev)
     
     ## With JAX gradients
     ##jac_loss_partial = jit(grad(loss_partial))
     # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
-    #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
-    #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
+    #                        ftol=tol, gtol=tol,
+    #                        xtol=1e-14, max_nfev=max_nfev)
     ##result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
-    ##                  tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
+    ##                  tol=tol, options={'maxiter': max_nfev, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
     
     dofs_curves = jnp.reshape(result.x[:len_dofs_curves], (dofs_curves_shape))
     try:

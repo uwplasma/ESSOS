@@ -135,7 +135,7 @@ def test_orbits_conserve_energy_and_toroidal_canonical_momentum(method):
     theta = jnp.linspace(0, 2 * np.pi, n, endpoint=False)
     out = trace_boozer(field, jnp.full(n, 0.3), theta, jnp.zeros(n), pitch, speed=V0, mass=M,
                        charge=Q, tmax=2e-4, timestep=2e-8, n_save=5,
-                       devices=jax.devices()[:1], method=method, tolerance=1e-11)
+                       devices=jax.devices()[:1], method=method, rtol=1e-11)
     assert not out.lost.any() and np.all(out.energy_error < 1e-8)
     s, th, ze, vpar, v = np.moveaxis(out.states, -1, 0)
     B = B0 * (1 - EPS * np.sqrt(s) * np.cos(th))
@@ -572,7 +572,7 @@ def test_adaptive_error_follows_the_tolerance(method):
     errors = []
     for tolerance, first in ((1e-6, 1e-9), (1e-9, 1e-6), (1e-11, 1e-8)):
         out = trace_boozer(field, *args, speed=V0, mass=M, charge=Q, tmax=1e-4, timestep=first,
-                           n_save=5, method=method, tolerance=tolerance, devices=jax.devices()[:1])
+                           n_save=5, method=method, rtol=tolerance, devices=jax.devices()[:1])
         assert not out.lost.any() and not out.failed.any()
         errors.append(out.energy_error.max())
     assert errors[0] > errors[1] > errors[2] and errors[2] < 1e-8
@@ -581,5 +581,5 @@ def test_adaptive_error_follows_the_tolerance(method):
 def test_adaptive_tolerance_is_validated():
     with pytest.raises(ValueError, match="tolerance"):
         trace_boozer(tokamak(), [0.3], [0.0], [0.0], [0.2], speed=V0, mass=M, charge=Q,
-                     tmax=1e-6, timestep=1e-8, method="adaptive", tolerance=0.0)
+                     tmax=1e-6, timestep=1e-8, method="adaptive", rtol=0.0)
 

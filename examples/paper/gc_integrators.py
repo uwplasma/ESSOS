@@ -34,11 +34,11 @@ particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, initial
 # Tracing parameters
 tmax = 1e-4
 
-# Two figures: energy error vs computation time, and energy error vs tolerance.
+# Two figures: energy error vs computation time, and energy error vs rtol.
 fig, ax = plt.subplots(figsize=(9, 6))
 fig_tol, ax_tol = plt.subplots(figsize=(9, 6))
 markers = ["o-", "^-", "*-", "s-"]
-# For each adaptive solver, sweep the integration tolerance and record both the
+# For each adaptive solver, sweep the integration rtol and record both the
 # resulting energy error and the wall-clock time. Kvaerno5 is implicit; the
 # others are explicit Runge-Kutta methods.
 solvers = [('Tsit5', diffrax.Tsit5),
@@ -49,16 +49,16 @@ for (method, solver_class), marker in zip(solvers, markers):
     energies = []
     tracing_times = []
     tolerances = [1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16]
-    for tolerance in tolerances:
+    for rtol in tolerances:
         time0 = time()
         tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
-                          maxtime=tmax, timestep=1e-7,
-                          atol=tolerance, rtol=tolerance,
+                          tmax=tmax, timestep=1e-7,
+                          rtol=rtol,
                           solver=solver_class())
         block_until_ready(tracing.trajectories)
         tracing_times += [time() - time0]
 
-        print(f"Tracing with adaptive {method} and {tolerance=:.0e} took {tracing_times[-1]:.2f} seconds")
+        print(f"Tracing with adaptive {method} and {rtol=:.0e} took {tracing_times[-1]:.2f} seconds")
 
         energies += [jnp.max(jnp.abs(tracing.energy()-particles.energy)/particles.energy)]
     ax.plot(tracing_times, energies, label=f'{method} adapt', marker='o', markersize=3)
@@ -66,7 +66,7 @@ for (method, solver_class), marker in zip(solvers, markers):
     gc.collect()
 
 ax.set_xlabel('Computation time (s)')
-ax_tol.set_xlabel('Tracing tolerance')
+ax_tol.set_xlabel('Tracing rtol')
 ax.set_xlim(1e-1, 1e2)
 ax_tol.set_xlim(tolerances[-1], tolerances[0])
 

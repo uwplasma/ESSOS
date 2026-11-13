@@ -50,12 +50,11 @@ def loss_r0_near_axis(field_nearaxis, r0_target=1.0):
 
 
 ##############################Particle confinement losses ##############################
-def _orbit(field, particles, timestep=None, maxtime=1e-5, num_steps=300, trace_tolerance=1e-7,
+def _orbit(field, particles, *, timestep=None, tmax=1e-5, n_save=300, rtol=1e-7, atol=None, max_steps=None,
            model='GuidingCenterAdaptative', boundary=None):
     """Trace and return xyz, the cylindrical radius and the offsets (R, Z) from the axis."""
-    xyz = Tracing(field=field, model=model, particles=particles, maxtime=maxtime, timestep=timestep,
-                  times_to_trace=num_steps, atol=trace_tolerance, rtol=trace_tolerance,
-                  boundary=boundary).trajectories[:, :, :3]
+    xyz = Tracing(field=field, particles=particles, model=model, tmax=tmax, timestep=timestep, n_save=n_save,
+                  rtol=rtol, atol=atol, max_steps=max_steps, boundary=boundary).trajectories[:, :, :3]
     fac_xy = jnp.sqrt(jnp.square(xyz[:, :, 0]) + jnp.square(xyz[:, :, 1]))
     return xyz, fac_xy, fac_xy - field.r_axis + 1.e-12, xyz[:, :, 2] - field.z_axis + 1.e-12
 
@@ -117,7 +116,7 @@ def loss_normB_axis_average(field,npoints=15, target_B=5.7):
     return jnp.abs(jnp.average(B_axis)-target_B)
 
 
-def loss_BdotN(field,surface):
+def loss_bdotn(field,surface):
     return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
 
 def _sqrt_sum_positive(u):
@@ -126,7 +125,7 @@ def _sqrt_sum_positive(u):
     return jnp.where(total > 0, jnp.sqrt(jnp.where(total > 0, total, 1.0)), 0.0)
 
 @partial(jit, static_argnames=['target_tol'])
-def loss_BdotN_constraint(field,surface,target_tol=1.e-6):
+def loss_bdotn_constraint(field,surface,target_tol=1.e-6):
     bdotn_over_b = BdotN_over_B(surface, field)
     return _sqrt_sum_positive(jnp.square(bdotn_over_b)-target_tol)
 
@@ -480,7 +479,7 @@ def rectangular_xsection_delta(a, b):
     return jnp.exp(-25/6 + rectangular_xsection_k(a, b))
 
 
-#def loss_BdotN_only_with_perturbation(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, N_stells=10):
+#def loss_bdotn_only_with_perturbation(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, N_stells=10):
 #    """
 #    Compute the loss function for BdotN with a perturbation applied to the BdotN value.):
 #    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)

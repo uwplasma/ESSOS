@@ -70,7 +70,7 @@ relative_energy_error_ESSOS_array = []
 # Creating a tracing object for compilation
 compile_tracing = Tracing(field=field_essos, model='FieldLine',
                           initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
-                          maxtime=tmax_fl, timestep=tmax_fl/100, times_to_trace=100,
+                          tmax=tmax_fl, timestep=tmax_fl/100, n_save=100,
                           atol=trace_tolerance_array[0], rtol=trace_tolerance_array[0])
 block_until_ready(compile_tracing.trajectories)
 
@@ -80,7 +80,7 @@ for index, trace_tolerance_ESSOS in enumerate(trace_tolerance_array):
     start_time = time()
     tracing = Tracing(field=field_essos, model='FieldLine',
                       initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
-                      maxtime=tmax_fl, timestep=tmax_fl/num_steps_essos, times_to_trace=num_steps_essos,
+                      tmax=tmax_fl, timestep=tmax_fl/num_steps_essos, n_save=num_steps_essos,
                       atol=trace_tolerance_ESSOS, rtol=trace_tolerance_ESSOS)
     block_until_ready(tracing.trajectories)
     runtime_ESSOS = time() - start_time

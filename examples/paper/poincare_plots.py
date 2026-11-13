@@ -22,7 +22,7 @@ tmax_fo = 1e-3
 nparticles = 1
 nfieldlines = 8
 s = 0.25 # s-coordinate: flux surface label
-trace_tolerance = 1e-15
+rtol = 1e-15
 dt_fo = 1e-9
 dt_gc = 1e-7
 timesteps_gc = int(tmax_gc/dt_gc)
@@ -51,13 +51,13 @@ particles = Particles(initial_xyz=initial_xyz_particles, mass=mass, energy=energ
 # Trace in ESSOS
 # time0 = time()
 # tracing_fl = Tracing(field=field, model='FieldLine', initial_conditions=initial_xyz_fieldlines,
-#                      maxtime=tmax_fl, timesteps=tmax_fl*10, tol_step_size=trace_tolerance)
+#                      tmax=tmax_fl, timesteps=tmax_fl*10, tol_step_size=rtol)
 # block_until_ready(tracing_fl)
 # print(f"ESSOS tracing of {nfieldlines} field lines took {time()-time0:.2f} seconds")
 
 time0 = time()
-tracing_fo = Tracing(field=field, model='FullOrbit', particles=particles, maxtime=tmax_fo,
-                     timestep=dt_fo, atol=trace_tolerance, rtol=trace_tolerance)
+tracing_fo = Tracing(field=field, model='FullOrbit', particles=particles, tmax=tmax_fo,
+                     timestep=dt_fo, rtol=rtol)
 # tracing_fo.trajectories = tracing_fo.trajectories[:, 0::100, :]
 # tracing_fo.times = tracing_fo.times[0::100]
 # tracing_fo.energy = tracing_fo.energy[:, 0::100]
@@ -65,8 +65,8 @@ block_until_ready(tracing_fo)
 print(f"ESSOS tracing of {nparticles} particles with FO for {tmax_fo:.1e}s took {time()-time0:.2f} seconds")
 
 time0 = time()
-tracing_gc = Tracing(field=field, model='GuidingCenter', particles=particles, maxtime=tmax_gc,
-                     timestep=dt_gc, atol=trace_tolerance, rtol=trace_tolerance)
+tracing_gc = Tracing(field=field, model='GuidingCenter', particles=particles, tmax=tmax_gc,
+                     timestep=dt_gc, rtol=rtol)
 block_until_ready(tracing_gc)
 print(f"ESSOS tracing of {nparticles} particles with GC for {tmax_gc:.1e}s took {time()-time0:.2f} seconds")
 

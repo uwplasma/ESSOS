@@ -4,7 +4,7 @@ import warnings
 import jax
 jax.config.update("jax_enable_x64", True)
 # Tracings that differ only in array values (particles, coil currents, field coefficients) share one compiled solve
-# within a process; maxtime and the save times are constants of it, so a new one compiles: about 4 s on a CPU and
+# within a process; tmax and the save times are constants of it, so a new one compiles: about 4 s on a CPU and
 # 20 s on a GPU. XLA's persistent cache, keyed by the compiled program, serves it from disk in a rerun.
 # ESSOS_XLA_CACHE names the directory; an empty value disables it.
 _XLA_CACHE = os.environ.get("ESSOS_XLA_CACHE", os.path.join(os.path.expanduser("~"), ".cache", "essos", "xla"))
@@ -793,9 +793,9 @@ def _warn_unfinished(count, max_steps):
 
 # Outcome of each VMEC guiding center, ``Tracing.status``.
 VMEC_STATUS = {
-    0: "inside the LCFS at maxtime",
+    0: "inside the LCFS at tmax",
     1: "stopped at the LCFS (no exterior field)",
-    2: "outside the LCFS at maxtime",
+    2: "outside the LCFS at tmax",
     3: "struck the wall",
     4: "failed: non-finite state or solver failure",
     5: "stopped after max_returns re-entries",
@@ -1022,10 +1022,10 @@ def _batch_solver(tracing, place):
 
 
 class Tracing():
-    def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
-                 field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep=None,
-                 rtol=1.e-8, atol=None, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
-                 solver=None, stopping_criteria=None, progress=True, devices=None,
+    def __init__(self, field=None, particles=None, initial_conditions=None, *, trajectories_input=None,
+                 electric_field=None, model=None, tmax: float = 1e-7, timestep: float | None = None,
+                 n_save=None, rtol=1.e-8, atol=None, condition=None, species=None, tag_gc=1., boundary=None,
+                 rejected_steps=None, solver=None, stopping_criteria=None, progress=True, devices=None,
                  max_steps=None, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None, adjoint=None):
 
@@ -1060,20 +1060,20 @@ class Tracing():
 
         self.model = model
         self.initial_conditions = initial_conditions
-        self.times_to_trace = times_to_trace
-        self.maxtime = maxtime
+        self.n_save = n_save
+        self.tmax = tmax
         # timestep=None: 1/_STEPS_PER_TRANSIT (400, 100 for VMEC) of the transit time R0/speed, evaluated eagerly
-        # (also under jit); maxtime/100 for a field line. A traced R0 or speed (coil dofs, energy under jax.grad) cannot size a step.
+        # (also under jit); tmax/100 for a field line. A traced R0 or speed (coil dofs, energy under jax.grad) cannot size a step.
         if timestep is None:
             with jax.ensure_compile_time_eval():
                 scales = [getattr(field, "r_axis", 1.0), jnp.max(particles.total_speed) if particles is not None else 1.0]
             if particles is None:
-                timestep = maxtime / 100
+                timestep = tmax / 100
             elif any(isinstance(x, jax.core.Tracer) for x in scales):
                 if model not in ('GuidingCenterAdaptative', 'FullOrbitAdaptative'):
                     raise ValueError("timestep=None needs the axis radius and particle speed as concrete values; "
                                      "they are traced here, so pass an explicit timestep")
-                timestep = maxtime / 100  # only the first trial step of an adaptive solve, which cannot size max_steps
+                timestep = tmax / 100  # only the first trial step of an adaptive solve, which cannot size max_steps
                 max_steps = 1_000_000 if max_steps is None else max_steps
             else:
                 timestep = float(abs(scales[0]) / scales[1]) / _STEPS_PER_TRANSIT.get(type(field), 400)
@@ -1111,7 +1111,7 @@ class Tracing():
         # Diffrax's ceiling was effectively unbounded, so a trace that could not
         # finish ran until the process was killed rather than returning.
         # max_steps=None: 16 times the steps of a fixed-step solve, enough for tolerances down to 1e-12.
-        self.max_steps = int(16 * np.ceil(maxtime / timestep)) + 16 if max_steps is None else max_steps
+        self.max_steps = int(16 * np.ceil(tmax / timestep)) + 16 if max_steps is None else max_steps
         # Reverse mode (jax.grad) by default; diffrax.ForwardMode() for jax.jvp and jax.jacfwd, which
         # diffrax's checkpointed adjoint cannot do.
         self.adjoint = diffrax.RecursiveCheckpointAdjoint() if adjoint is None else adjoint
@@ -1165,8 +1165,8 @@ class Tracing():
         elif model == 'GuidingCenterCollisions':
             # Brownian motion
             #t0=0.0
-            #t1=self.maxtime
-            #tol=self.maxtime / self.timesteps*0.5
+            #t1=self.tmax
+            #tol=self.tmax / self.timesteps*0.5
             #print('tol: ', tol)
             #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)            
             #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
@@ -1176,8 +1176,8 @@ class Tracing():
         elif model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative':
             # Brownian motion
             #t0=0.0
-            #t1=self.maxtime
-            #tol=self.maxtime / self.timesteps*0.5   
+            #t1=self.tmax
+            #tol=self.tmax / self.timesteps*0.5   
             #print('tol: ', tol)
             #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)
             #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))
@@ -1212,10 +1212,10 @@ class Tracing():
             self.ODE_term = ODETerm(field_line_rhs)
             self.args = self.field
         
-        if self.times_to_trace is None:
-            self.times = jnp.linspace(0, self.maxtime, 100,endpoint=True)
+        if self.n_save is None:
+            self.times = jnp.linspace(0, self.tmax, 100,endpoint=True)
         else:
-            self.times = jnp.linspace(0, self.maxtime, self.times_to_trace,endpoint=True)
+            self.times = jnp.linspace(0, self.tmax, self.n_save,endpoint=True)
 
             
         if self._vmec_default:
@@ -1271,12 +1271,12 @@ class Tracing():
             if self._axis_regular:
                 initial_condition = _to_axis_regular(initial_condition)
             if self.model == 'FullOrbit_Boris':
-                # Integrate the whole [0, maxtime] span: an inner scan of
+                # Integrate the whole [0, tmax] span: an inner scan of
                 # Boris pushes between consecutive save times, with dt
                 # adjusted (<= timestep) so the saves land on self.times.
                 n_saves = len(self.times) - 1
-                per_save = max(1, int(np.ceil(float(self.maxtime) / (n_saves * float(self.timestep)) - 1e-9)))
-                dt = self.maxtime / (n_saves * per_save)
+                per_save = max(1, int(np.ceil(float(self.tmax) / (n_saves * float(self.timestep)) - 1e-9)))
+                dt = self.tmax / (n_saves * per_save)
                 charge_over_mass = self.particles.charge / self.particles.mass
                 criteria = self.stopping_criteria
 
@@ -1365,9 +1365,9 @@ class Tracing():
         dt0, model = self.timestep, self.model
         if model in _SDE_MODELS:
             drift, diffusion, solver, dim = _SDE_MODELS[model]
-            # With flag (segments), a vmapped solve of an orbit that starts at maxtime evaluates the path
+            # With flag (segments), a vmapped solve of an orbit that starts at tmax evaluates the path
             # one step past it.
-            bm = diffrax.VirtualBrownianTree(0.0, self.maxtime + flag * dt0, tol=dt0 * 0.5, shape=(dim,), key=key,
+            bm = diffrax.VirtualBrownianTree(0.0, self.tmax + flag * dt0, tol=dt0 * 0.5, shape=(dim,), key=key,
                                              levy_area=diffrax.SpaceTimeTimeLevyArea)
             terms = MultiTerm(ODETerm(flagged(self._vector_field(drift))),
                               ControlTerm(flagged(self._vector_field(diffusion), drift=False), bm))
@@ -1387,10 +1387,10 @@ class Tracing():
         return terms, solver, controller
 
     def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False):
-        """diffeqsolve from t0 to maxtime, saving at self.times (clipped to t0) and at the end."""
+        """diffeqsolve from t0 to tmax, saving at self.times (clipped to t0) and at the end."""
         warnings.simplefilter("ignore", category=FutureWarning)  # see https://github.com/patrick-kidger/diffrax/issues/445
-        return diffeqsolve(terms, solver, t0=t0, t1=self.maxtime, dt0=self.timestep, y0=y0, args=args,
-                           saveat=SaveAt(subs=[diffrax.SubSaveAt(ts=jnp.clip(self.times, t0, self.maxtime)),
+        return diffeqsolve(terms, solver, t0=t0, t1=self.tmax, dt0=self.timestep, y0=y0, args=args,
+                           saveat=SaveAt(subs=[diffrax.SubSaveAt(ts=jnp.clip(self.times, t0, self.tmax)),
                                                diffrax.SubSaveAt(t1=True)]),
                            stepsize_controller=controller, event=event, throw=throw, max_steps=self.max_steps,
                            progress_meter=self.progress_meter, adjoint=self.adjoint)
@@ -1400,13 +1400,13 @@ class Tracing():
     def _vmec_orbit(self, y0, key):
         """Trace one VMEC guiding center segment by segment: inside, outside, and back inside.
 
-        Inside the LCFS the model runs in the axis-regular chart until maxtime,
+        Inside the LCFS the model runs in the axis-regular chart until tmax,
         the root-found LCFS crossing, or a non-finite state. Without
         exterior_field a crossing ends the orbit. With it, the orbit continues
         as a collisionless guiding center (x, y, z, v_par, mu) with its energy
-        and magnetic moment, until it strikes the wall, reaches maxtime or
+        and magnetic moment, until it strikes the wall, reaches tmax or
         re-enters the LCFS; it then continues inside, up to max_returns times.
-        Solves of inactive orbits start at maxtime and take no steps.
+        Solves of inactive orbits start at tmax and take no steps.
 
         Differentiable with respect to the launch states and the parameters of the fields: jax.grad by default, jax.jvp
         and jax.jacfwd with ``adjoint=diffrax.ForwardMode()``. Event times differentiate by the implicit function
@@ -1415,7 +1415,7 @@ class Tracing():
         does not toggle the segment. The derivative is that of the orbit's own sequence of segments: where a small
         change adds or removes a crossing or a re-entry, the result jumps (it is finite, not smoothed).
         """
-        T, times, ext = self.maxtime, self.times, self.exterior_field
+        T, times, ext = self.tmax, self.times, self.exterior_field
         lcfs = lambda y: 1.0 - y[0]**2 - y[1]**2
         inside = (*self._terms(key, flag=True, events=(lcfs,)), self.args,
                   Event((lambda t, y, args, **kwargs: lcfs(y), _failed_event),
@@ -1432,7 +1432,7 @@ class Tracing():
 
         def segment(o, run, spec, y, code, to_flux=lambda y: y):
             """Solve one segment of the orbits in ``run`` and record its saves."""
-            # A lane that does not run starts just before maxtime, not at it: diffrax 0.7.0 differentiates an event root
+            # A lane that does not run starts just before tmax, not at it: diffrax 0.7.0 differentiates an event root
             # find over a zero-length step with a non-finite Jacobian, which its linear solver rejects in reverse mode.
             solution = self._solve(*spec[:3], jnp.where(run, o["t"], T * (1 - 1e-9)), jnp.append(y, 0.0), *spec[3:])
             saves, end = vmap(to_flux)(solution.ys[0][:, :-1]), to_flux(solution.ys[1][-1, :-1])
@@ -1464,7 +1464,7 @@ class Tracing():
                      inside=o["inside"] & ~crossed, x=jnp.where(crossed, x, o["x"]))
             if ext is None:
                 return o
-            # Outside, to the wall, maxtime, or back inside.
+            # Outside, to the wall, tmax, or back inside.
             run = o["active"] & ~o["inside"]
             behind = run & (wall(o["x"][:3]) <= 0)  # the wall is already crossed at the exit point: a hit at the exit time
             o, t_end, end, (struck, returned), failed = segment(o, run & ~behind, outside, o["x"], 1)
@@ -1788,7 +1788,7 @@ class Tracing():
     
     def _tree_flatten(self):
         # Rebuilding through __init__ would trace again and mapped times onto
-        # times_to_trace; every attribute holding arrays is a child instead.
+        # n_save; every attribute holding arrays is a child instead.
         def has_arrays(value):
             return any(isinstance(leaf, (jax.Array, np.ndarray)) for leaf in tree_util.tree_leaves(value))
         names = tuple(name for name, value in vars(self).items() if has_arrays(value))
@@ -1815,8 +1815,9 @@ def trace_field_lines(
     *,
     toroidal_turns=None,
     length=None,
-    samples=1000,
-    tolerance=1.0e-7,
+    n_save=1000,
+    rtol=1.0e-7,
+    atol=None,
     stopping_criteria=None,
     progress=True,
     label="field lines",
@@ -1827,7 +1828,7 @@ def trace_field_lines(
     Specify exactly one of ``toroidal_turns`` or ``length``. Toroidal tracing
     is intended for fields represented in flux coordinates; Cartesian coil
     fields use arclength, so multiplying the magnetic field does not change
-    the traced distance. ``samples`` includes both endpoints. The returned
+    the traced distance. ``n_save`` includes both endpoints. The returned
     :class:`Tracing` object provides trajectories, event flags, plotting, and
     Poincare sections.
 
@@ -1836,8 +1837,9 @@ def trace_field_lines(
         initial_conditions: One seed per row, in the field's coordinates.
         toroidal_turns: Number of full toroidal turns to follow.
         length: Physical arclength to follow for a Cartesian field.
-        samples: Number of saved points along each line.
-        tolerance: Relative and absolute adaptive-integration tolerance.
+        n_save: Number of saved points along each line.
+        rtol: Relative adaptive-integration tolerance.
+        atol: Absolute tolerance; ``None`` means ``atol = rtol``.
         stopping_criteria: Optional event callable or sequence of callables.
         progress: Show Diffrax's terminal progress bar.
         label: Text printed before compilation and after completion; set to
@@ -1846,8 +1848,8 @@ def trace_field_lines(
     """
     if (toroidal_turns is None) == (length is None):
         raise ValueError("specify exactly one of toroidal_turns or length")
-    if int(samples) < 2:
-        raise ValueError("samples must be at least 2")
+    if int(n_save) < 2:
+        raise ValueError("n_save must be at least 2")
     if toroidal_turns is not None and float(toroidal_turns) <= 0.0:
         raise ValueError("toroidal_turns must be positive")
     if length is not None and float(length) <= 0.0:
@@ -1863,11 +1865,11 @@ def trace_field_lines(
         field=field,
         model=model,
         initial_conditions=initial_conditions,
-        maxtime=extent,
-        timestep=extent / (int(samples) - 1),
-        times_to_trace=int(samples),
-        atol=float(tolerance),
-        rtol=float(tolerance),
+        tmax=extent,
+        timestep=extent / (int(n_save) - 1),
+        n_save=int(n_save),
+        rtol=float(rtol),
+        atol=None if atol is None else float(atol),
         stopping_criteria=stopping_criteria,
         progress=bool(progress),
         devices=devices,
@@ -1883,13 +1885,13 @@ def trace_field_lines(
 
 
 def connection_length(field, initial_conditions, wall, *, max_length,
-                      tolerance=1.0e-8, max_steps=100000):
+                      rtol=1.0e-8, atol=None, max_steps=100000):
     """Connection length and wall strike points of field lines.
 
     Each seed is followed along ``+B`` and ``-B`` by physical arclength until
     it crosses the wall or reaches ``max_length``. The crossing is located by
     Diffrax event root finding, so the strike point is exact up to
-    ``tolerance`` rather than limited by a sampling interval. The result is
+    ``rtol`` rather than limited by a sampling interval. The result is
     differentiable with respect to the seeds and field parameters.
 
     Args:
@@ -1899,7 +1901,8 @@ def connection_length(field, initial_conditions, wall, *, max_length,
         wall: Object with ``evaluate_xyz(xyz)`` (e.g. :class:`SurfaceClassifier`)
             or a callable ``wall(xyz)``, positive inside the wall and zero on it.
         max_length: Cap on the length followed in each direction.
-        tolerance: Relative and absolute integration and root-finding tolerance.
+        rtol: Relative integration and root-finding tolerance.
+        atol: Absolute tolerance; ``None`` means ``atol = rtol``.
         max_steps: Maximum adaptive steps per direction; a line that exhausts
             them returns ``nan`` length and ``hit`` false.
 
@@ -1911,9 +1914,10 @@ def connection_length(field, initial_conditions, wall, *, max_length,
     if float(max_length) <= 0.0:
         raise ValueError("max_length must be positive")
     distance = wall.evaluate_xyz if hasattr(wall, "evaluate_xyz") else wall
-    controller = PIDController(rtol=tolerance, atol=tolerance)
+    atol = rtol if atol is None else atol
+    controller = PIDController(rtol=rtol, atol=atol)
     event = Event(lambda t, y, args, **kwargs: distance(y),
-                  root_finder=optx.Newton(rtol=tolerance, atol=tolerance))
+                  root_finder=optx.Newton(rtol=rtol, atol=atol))
 
     def vector_field(t, y, sign):
         B = field.B_contravariant(y)
