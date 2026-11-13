@@ -177,6 +177,21 @@ def test_single_plane_raw_modes_and_pytree_roundtrip(tmp_path, mode):
     assert loaded.n_ext_cur == 2
 
 
+def test_mgrid_can_be_traced_directly():
+    """A guiding centre in a uniform-B_z mgrid (one external-current group) streams along z at v_parallel."""
+    from essos.constants import ELEMENTARY_CHARGE, PROTON_MASS
+    from essos.dynamics import Particles, Tracing
+    mgrid = MGrid(nr=2, nz=2, nphi=1, nfp=1, rmin=0.5, rmax=2.0, zmin=-1.0, zmax=1.0)
+    ones = np.ones((1, 2, 2))
+    mgrid.add_field_cylindrical(0 * ones, 0 * ones, ones)
+    particles = Particles(initial_xyz=jnp.array([[1.0, 0.0, 0.0]]), initial_vparallel_over_v=jnp.array([0.5]),
+                          mass=PROTON_MASS, charge=ELEMENTARY_CHARGE, energy=1e3 * ELEMENTARY_CHARGE)
+    tracing = Tracing(field=mgrid, model="GuidingCenter", particles=particles, maxtime=1e-7, timestep=1e-9,
+                      times_to_trace=3, progress=False)
+    v = jnp.sqrt(2 * 1e3 * ELEMENTARY_CHARGE / PROTON_MASS)
+    np.testing.assert_allclose(tracing.trajectories[0, -1, 2], 0.5 * v * 1e-7, rtol=1e-6)
+
+
 @pytest.mark.parametrize("kwargs", [
     {"nr": 1}, {"nphi": 0}, {"nr": 2.5}, {"nfp": 1.5},
     {"rmin": -0.1}, {"rmax": np.inf},
