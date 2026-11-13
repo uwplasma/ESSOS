@@ -833,8 +833,7 @@ def test_fused_gc_quantities_gradient_matches_autodiff_path():
     points = jnp.array([[1.0, 0.2, 0.1], [0.8, -0.3, 0.2]])
 
     def loss(dofs, fused):
-        f = BiotSavart(Coils.from_json(str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
-                                           / "ESSOS_biot_savart_LandremanPaulQA.json")))
+        f = _coil_field()
         f.dofs = dofs
         q = (f.gc_quantities if fused else
              lambda p: _gc_from_jacobian(f.B(p), jax.jacfwd(f.B)(p)))
