@@ -761,3 +761,42 @@ def test_combined_field_fused_gc_quantities_match_generic_path():
         assert jnp.allclose(a, b, rtol=1e-9, atol=1e-12)
     assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(combined.gc_quantities(x), generic))
     assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(ext.gc_quantities(x), MagneticField.gc_quantities(ext, x)))
+
+
+def test_biot_savart_from_gamma_on_axis_field_of_a_circular_loop():
+    """Jackson (5.37): on the axis of a loop B_z = mu0 I a^2 / (2 (a^2 + z^2)^(3/2)); the FFT derivatives of
+    the sampled loop are spectrally exact, so the quadrature agrees to rounding."""
+    from essos.fields import BiotSavart_from_gamma
+    a, I, n, centre = 0.8, 3.0e5, 128, jnp.array([0.3, 0.0, 0.2])
+    t = 2 * jnp.pi * jnp.arange(n) / n
+    gamma = (centre + jnp.stack([a * jnp.cos(t), a * jnp.sin(t), 0 * t], axis=1))[None]
+    field = BiotSavart_from_gamma(gamma, currents=jnp.array([I]))
+    np.testing.assert_allclose(field.gamma_dash[0, :, 1], a * jnp.cos(t) * 2 * jnp.pi, atol=1e-10)
+    np.testing.assert_allclose(field.gamma_dashdash[0, :, 0], -a * jnp.cos(t) * (2 * jnp.pi) ** 2, atol=1e-8)
+    np.testing.assert_allclose(field.coils_length, 2 * np.pi * a, rtol=1e-12)
+    np.testing.assert_allclose(field.coils_curvature, 1 / a, rtol=1e-10)
+    np.testing.assert_allclose([field.r_axis, field.z_axis], [0.3, 0.2], atol=1e-12)
+    z = 0.7
+    expected = 4e-7 * np.pi * I * a ** 2 / (2 * (a ** 2 + z ** 2) ** 1.5)
+    B = field.B(centre + jnp.array([0.0, 0.0, z]))
+    np.testing.assert_allclose(B, [0.0, 0.0, expected], rtol=1e-10, atol=1e-9)
+    assert field.sqrtg(centre) == 1.0 and jnp.allclose(field.to_xyz(centre), centre)
+
+
+def test_biot_savart_dof_passthrough_axis_position_and_removed_near_axis_stub():
+    from essos.coils import CreateEquallySpacedCurves
+    from essos.fields import near_axis
+    coils = Coils(CreateEquallySpacedCurves(2, 1, 1.5, 0.3, 16, 2, True), jnp.array([1e5, 2e5]))
+    field = BiotSavart(coils)
+    np.testing.assert_allclose(field.dofs, coils.dofs)
+    field.dofs = field.dofs * 1.0
+    np.testing.assert_allclose(field.coils.dofs, coils.dofs)
+    # the coils' Fourier constant terms are (R cos a, R sin a, 0): the mean radius is R and the height 0
+    np.testing.assert_allclose([field.r_axis, field.z_axis], [1.5, 0.0], atol=1e-12)
+    # CombinedField takes the coordinate helpers from its first member
+    from essos.fields import CombinedField
+    both = CombinedField(field, field)
+    point = jnp.array([1.0, 2.0, 3.0])
+    assert both.sqrtg(point) == field.sqrtg(point) and jnp.allclose(both.to_xyz(point), point)
+    with pytest.raises(ImportError, match="pyQSC_JAX"):
+        near_axis()
