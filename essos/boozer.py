@@ -11,6 +11,7 @@ slowing down and energy diffusion (Boozer & Kuo-Petravic, 1981).
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import os
 from functools import partial
 
@@ -158,7 +159,21 @@ class BoozerField(eqx.Module):
     @classmethod
     def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6, angle_grid=6, *,
                         axis_regular=False, axis_regular_tolerance=None):
-        """Build from a run ``Booz_xform`` (every surface computed)."""
+        """Build from a ``Booz_xform`` that has read a wout.
+
+        A transform that has not been run takes one jitted, batched pass over every
+        surface (``magnetic_only`` when ``booz_xform_jax`` offers it), several times
+        faster than ``booz.run()``; a run transform (``booz.run()``) is used as it is.
+        """
+        if getattr(booz, "bmnc_b", None) is None:
+            options = {"magnetic_only": True} if "magnetic_only" in inspect.signature(booz.run_jax).parameters else {}
+            out = booz.run_jax(**options)
+            sine = np.asarray(out["bmns_b"]).T if booz.asym else None
+            surfaces = slice(None) if booz.compute_surfs is None else list(booz.compute_surfs)
+            return cls.from_booz(np.asarray(booz.s_in)[surfaces], np.asarray(out["bmnc_b"]).T,
+                                 out["ixm_b"], out["ixn_b"], out["iota_b"], out["bvco_b"], out["buco_b"],
+                                 psi0, int(booz.nfp), mode_tolerance, bmns=sine, angle_grid=angle_grid,
+                                 axis_regular=axis_regular, axis_regular_tolerance=axis_regular_tolerance)
         sine = getattr(booz, "bmns_b", None)
         if bool(getattr(booz, "asym", False)) and sine is None:
             raise ValueError("Asymmetric Boozer transform requires bmns_b")

@@ -611,6 +611,26 @@ def _bundled_wout_field():
                                  psi0_from_vmec(v["phi"][-1]), int(v["nfp"]))
 
 
+def test_unrun_booz_xform_takes_the_batched_pass_and_matches_the_host_run():
+    """``from_booz_xform`` on a transform that has only read the wout equals the host ``run()`` field."""
+    pytest.importorskip("booz_xform_jax")
+    from pathlib import Path
+    from booz_xform_jax import Booz_xform
+
+    wout = Path(__file__).parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+    fields = []
+    for run in (lambda booz: booz.run(), lambda booz: None):
+        booz = Booz_xform(verbose=0, mboz=8, nboz=8)
+        booz.read_wout(str(wout), flux=False)
+        run(booz)
+        fields.append(BoozerField.from_booz_xform(booz, PSI0, angle_grid=None))
+    host, batched = fields
+    assert batched.xm.shape == host.xm.shape and np.array_equal(batched.xn, host.xn)
+    for point in ((0.3, 0.7, 0.2), (0.9, 2.0, 1.1)):
+        np.testing.assert_allclose(batched.modB_derivatives(*point), host.modB_derivatives(*point), rtol=1e-9, atol=1e-10)
+    np.testing.assert_allclose(batched.profiles(0.5)[0], host.profiles(0.5)[0], rtol=1e-12)
+
+
 @pytest.mark.parametrize("compact", [True, False])
 def test_lost_orbits_keep_exterior_terminal_diagnostics_apart(compact):
     """Issue #115: coarse steps that leave the tables must not pollute interior diagnostics."""
