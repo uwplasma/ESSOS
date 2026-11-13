@@ -72,6 +72,8 @@ Homepage = "https://github.com/uwplasma/ESSOS"
 essos = "essos.__main__:main"
 
 [project.optional-dependencies]
+# Optional coefficient-driven helium residence diagnostics; orbit tracing stays independent.
+ash = ["solvax>=0.28.2"]
 booz = ["booz_xform_jax>=0.4.3"]
 # MultiObjectiveOptimizer; plotly only for its interactive plot_* figures.
 multiobjective = ["optuna", "pandas", "plotly"]

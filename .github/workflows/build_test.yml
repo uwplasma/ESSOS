@@ -60,7 +60,7 @@ jobs:
     - name: Install ESSOS and test tools
       run: |
         uv venv
-        uv pip install . pytest pytest-cov pytest-xdist
+        uv pip install ".[ash]" pytest pytest-cov pytest-xdist
         if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
 
     - name: Run tests
