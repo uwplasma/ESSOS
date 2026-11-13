@@ -1,5 +1,4 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nfieldlines
 from time import time
 import jax.numpy as jnp
 from jax import block_until_ready
@@ -11,7 +10,7 @@ from essos.dynamics import Tracing
 # Input parameters
 tmax = 1000
 nfieldlines_per_core=3
-nfieldlines = number_of_processors_to_use*nfieldlines_per_core
+nfieldlines = nfieldlines_per_core
 R0 = jnp.linspace(1.21, 1.4, nfieldlines)
 trace_tolerance = 1e-8
 num_steps = 6000

@@ -214,7 +214,6 @@ from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
 
 booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout("wout.nc", flux=False)
-booz.run()
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
 field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi))
@@ -227,6 +226,8 @@ result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np
                       tmax=1e-2)      # species=BackgroundSpecies(...) adds collisions
 print(result.lost.mean(), result.loss_fractions())
 ```
+
+`BoozerField.from_booz_xform` runs the transform on all surfaces in one jitted pass; a `booz.run()` beforehand (the NumPy loop over surfaces) is accepted and takes about twice as long for the 100-surface ARIES-CS `wout`.
 
 `psi0` is minus VMEC's boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.

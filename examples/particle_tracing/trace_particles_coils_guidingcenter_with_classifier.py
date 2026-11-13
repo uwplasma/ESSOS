@@ -1,5 +1,4 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 import jax
 print(jax.devices())
 from time import time
@@ -18,7 +17,7 @@ tmax = 1.e-4
 timestep=1.e-8
 times_to_trace=1000
 nparticles_per_core=2
-nparticles = number_of_processors_to_use*nparticles_per_core
+nparticles = nparticles_per_core
 R0 = 17.0
 atol=1.e-7
 rtol=1.e-7

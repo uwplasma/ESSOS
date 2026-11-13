@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,50 +14,62 @@ permissions:
   contents: read
 
 jobs:
-  build:
-
+  # Hosted and cheap: runs for fork PRs too, which never reach the self-hosted runners.
+  lint:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        python-version: [ '3.11', '3.12']
-    name: Python ${{ matrix.python-version }} Test
-
+    name: Lint and import smoke
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - uses: actions/setup-python@v5
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.12'
         cache: pip
-        cache-dependency-path: |
-          pyproject.toml
-          requirements.txt
-    - name: Install ESSOS and test tools
+        cache-dependency-path: pyproject.toml
+    - name: Install ESSOS and flake8
       run: |
         python -m pip install --upgrade pip
-        pip install ".[ash]" flake8 pytest pytest-cov pytest-xdist
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-        echo "JAX_VERSION=$(python -c 'import jax; print(jax.__version__)')" >> $GITHUB_ENV
-    - name: Cache JAX compilations
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/essos/xla
-        key: xla-${{ runner.os }}-py${{ matrix.python-version }}-jax${{ env.JAX_VERSION }}-${{ github.sha }}
-        restore-keys: xla-${{ runner.os }}-py${{ matrix.python-version }}-jax${{ env.JAX_VERSION }}-
+        pip install . flake8
     - name: Lint with flake8
       run: |
         # stop the build if there are Python syntax errors or undefined names
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=examples_old
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=examples_old
+    - name: Import smoke test
+      run: python -c "import essos, essos.fields, essos.dynamics, essos.coils"
+
+  build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    # never run fork code on the org's own machines
+    runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && matrix.python-version == '3.12')) && fromJSON('["self-hosted","macOS","ARM64"]') || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [ '3.11', '3.12']
+    name: Python ${{ matrix.python-version }} Test
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: astral-sh/setup-uv@v6
+      with:
+        python-version: ${{ matrix.python-version }}
+        enable-cache: false
+    - name: Install ESSOS and test tools
+      run: |
+        uv venv
+        uv pip install ".[ash]" pytest pytest-cov pytest-xdist
+        if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
 
     - name: Run tests
       if: matrix.python-version != '3.12'
-      run: pytest -n auto
+      run: uv run --no-sync pytest -n 3
 
     - name: Run tests with coverage
       if: matrix.python-version == '3.12'
-      run: pytest -n auto --cov-branch --cov-report=xml --cov=essos
+      run: uv run --no-sync pytest -n 3 --cov-branch --cov-report=xml --cov=essos
 
     - name: Upload coverage reports to Codecov
       if: matrix.python-version == '3.12'
@@ -66,25 +79,19 @@ jobs:
         slug: uwplasma/ESSOS
 
   oldest:
-    runs-on: ubuntu-22.04
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ${{ (github.event_name != 'pull_request') && fromJSON('["self-hosted","macOS","ARM64"]') || 'ubuntu-latest' }}
     name: Python 3.10, oldest supported JAX
-    timeout-minutes: 150
+    timeout-minutes: 120
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
+    - uses: astral-sh/setup-uv@v6
       with:
         python-version: '3.10'
-        cache: pip
-        cache-dependency-path: pyproject.toml
+        enable-cache: false
     - name: Install ESSOS at the declared floors
       run: |
-        python -m pip install --upgrade pip
-        pip install ".[multiobjective]" pytest pytest-xdist "jax==0.6.2" "jaxlib==0.6.2" "equinox==0.13.3" "diffrax==0.7.0" "optimistix==0.0.11" "jaxtyping<0.3.8" "numpy<2.3"
-    - name: Cache JAX compilations
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/essos/xla
-        key: xla-${{ runner.os }}-py3.10-jax0.6.2-${{ github.sha }}
-        restore-keys: xla-${{ runner.os }}-py3.10-jax0.6.2-
+        uv venv
+        uv pip install ".[multiobjective]" pytest pytest-xdist "jax==0.6.2" "jaxlib==0.6.2" "equinox==0.13.3" "diffrax==0.7.0" "optimistix==0.0.11" "jaxtyping<0.3.8" "numpy<2.3"
     - name: Run tests
-      run: pytest -n auto
+      run: uv run --no-sync pytest -n 3
