@@ -1426,8 +1426,8 @@ class Tracing():
                             | (solution.result == diffrax.RESULTS.nonlinear_max_steps_reached)))
             t_end = jnp.where(run, solution.ts[1][-1], o["t"])
             window = run & (times >= o["t"]) & (times <= t_end) & jnp.isfinite(saves).all(1)
-            # to_xyz of the unused (inf) saves would put NaN partials into the coefficient gradients
-            xyz = vmap(self.field.to_xyz)(jnp.where(window[:, None], saves[:, :3], 0.5)) if code == 0 else saves[:, :3]
+            # to_xyz of the unused (inf) saves would put NaN partials into the coefficient gradients; not vmap: one save at a time
+            xyz = lax.map(self.field.to_xyz, jnp.where(window[:, None], saves[:, :3], 0.5)) if code == 0 else saves[:, :3]
             o = dict(o, xyz=jnp.where(window[:, None], xyz, o["xyz"]), region=jnp.where(window, code, o["region"]))
             if code == 0:
                 o["traj"] = jnp.where(window[:, None], saves, o["traj"])
