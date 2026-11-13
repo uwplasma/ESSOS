@@ -11,7 +11,7 @@ from essos.losses import custom_loss
 from essos.objective_functions import (
     loss_BdotN_mean_squared, loss_coil_curvature_from_field, loss_coil_length_max,
     loss_cross_sectional_area_mean, loss_iota_approx, loss_quasi_symmetry,
-    quasi_symmetry_residual_on_surface,
+    loss_quasi_symmetry_two_term, quasi_symmetry_residual_on_surface,
 )
 from essos.surfaces import (BdotN_over_B, B_contravariant_theta_phi_on_surface,
                             SurfaceRZFourier, iota_approx_on_surface)
@@ -297,3 +297,153 @@ def test_curvature_sampling_is_independent_of_field_quadrature():
         np.testing.assert_allclose(a, b, rtol=1e-12, atol=1e-12)
     assert not np.isclose(float(resolved(coefficients)), float(penalty(coefficients, 8)))
     directional_check(resolved, coefficients)
+
+
+class MixedAngleField(eqx.Module):
+    """Manufactured tangential flow with known theta*; not a vacuum model."""
+    cosine: float
+
+    def B(self, x):
+        R = jnp.hypot(x[0], x[1])
+        theta, phi = jnp.arctan2(x[2], R-3.), jnp.arctan2(x[1], x[0])
+        h = .08*jnp.cos(2*theta-2*phi)-self.cosine*jnp.sin(2*theta-2*phi)
+        et = -x[2]*jnp.array([x[0]/R, x[1]/R, 0.])+jnp.array([0., 0., R-3.])
+        return jnp.array([-x[1], x[0], 0.])+(.41+2*h)/(1+2*h)*et
+
+
+def test_two_term_rejects_zero_helicity():
+    with pytest.raises(ValueError, match='helicity cannot be'):
+        loss_quasi_symmetry_two_term(None, None, helicity_m=0, helicity_n=0)
+
+
+@pytest.mark.parametrize('asymmetric', [False, True])
+def test_straight_angle_diagnostics_match_known_derivatives_and_pointwise_pde(asymmetric):
+    partners = dict(rs=jnp.zeros(2), zc=jnp.zeros(2)) if asymmetric else {}
+    surface = SurfaceRZFourier(jnp.array([3., .4]), jnp.array([0., .4]), 2, 1, 0,
+                               ntheta=20, nphi=19, close=False, **partners)
+    cosine = .035 if asymmetric else 0.
+    fit = iota_approx_on_surface(surface, MixedAngleField(cosine), regularization=1e-12,
+                                 lambda_mpol=2, lambda_ntor=1, return_diagnostics=True)
+    phase = 2*surface.theta2d-2*surface.phi2d
+    h = .08*jnp.cos(phase)-cosine*jnp.sin(phase)
+    np.testing.assert_allclose(fit['iota'], .41, atol=2e-10)
+    np.testing.assert_allclose(fit['lambda_theta'], 2*h, atol=1e-9)
+    np.testing.assert_allclose(fit['lambda_phi'], -2*h, atol=1e-9)
+    expected = np.zeros(14 if asymmetric else 7)
+    expected[6] = .08  # sin(2 theta - 2 phi), the final sine mode.
+    if asymmetric:
+        expected[13] = cosine
+    np.testing.assert_allclose(fit['lambda_coefficients'], expected, atol=1e-9)
+    slope = (.41+2*h)/(1+2*h)
+    np.testing.assert_allclose((1+fit['lambda_theta'])*slope+fit['lambda_phi'], .41, atol=1e-9)
+    assert float(fit['minimum_angle_jacobian']) > .7
+
+
+@pytest.mark.parametrize('nfp', [1, 3])
+def test_two_term_toroidal_vacuum_has_zero_qa_and_analytic_qh_loss(nfp):
+    R0, a = 2., .4
+    surface = SurfaceRZFourier(jnp.array([R0, a]), jnp.array([0., a]), nfp, 1, 0,
+                               ntheta=32, nphi=9, close=False)
+    # B=C/R e_phi is curl-free and tangent. Direct integration gives
+    # <w r_N^2>/<w> = N^2 a^2 / (2 R0^2 + a^2), with w proportional to R^2.
+    expected = nfp**2*a*a/(2*R0*R0+a*a)
+    for amplitude in (1., -3., 1e-12):
+        field = ToroidalField(jnp.array(amplitude))
+        assert float(loss_quasi_symmetry_two_term(field, surface)) < 1e-24
+        for helicity in (-1, 1):
+            np.testing.assert_allclose(loss_quasi_symmetry_two_term(field, surface, helicity_n=helicity),
+                                       expected, rtol=2e-12, atol=1e-14)
+
+
+def test_two_term_actual_coil_and_surface_derivatives_separately():
+    curve_dofs = jnp.array([[[2., 0., .8], [0., 0., 0.], [0., .8, 0.]]])
+    field = BiotSavart(Coils(Curves(curve_dofs, n_segments=12, nfp=4, stellsym=False), jnp.array([1e5])))
+    surface = torus(ntheta=6, nphi=5)
+    bphi = B_contravariant_theta_phi_on_surface(surface, field)[..., 1]
+    assert jnp.all(bphi < 0.) and jnp.min(jnp.abs(bphi)) > .05*jnp.max(jnp.abs(bphi))
+    objective = custom_loss(loss_quasi_symmetry_two_term, 'field', 'surface',
+                            lambda_mpol=2, lambda_ntor=1, helicity_n=-1)
+    objective.dependencies = {'field': field, 'surface': surface}
+    x = objective.starting_dofs
+    value, gradient = jax.jit(jax.value_and_grad(objective))(x)
+    assert np.isfinite(value) and np.isfinite(gradient).all()
+    doubled = loss_quasi_symmetry_two_term(field, surface, helicity_m=2, helicity_n=-2,
+                                           lambda_mpol=2, lambda_ntor=1)
+    np.testing.assert_allclose(doubled, 4*value, rtol=2e-13)
+    for selected in (slice(0, field.dofs.size), slice(field.dofs.size, x.size)):
+        direction = jnp.zeros_like(x).at[selected].set(jnp.cos(jnp.arange(x[selected].size)+.31))
+        direction /= jnp.linalg.norm(direction)
+        derivative = gradient @ direction
+        assert abs(float(derivative)) > 1e-8
+        step = 1e-5
+        difference = (objective(x+step*direction)-objective(x-step*direction))/(2*step)
+        np.testing.assert_allclose(derivative, difference, rtol=2e-4, atol=1e-8)
+
+
+class SurfaceTableField(eqx.Module):
+    """Frozen Cartesian samples, only for this on-grid value comparison."""
+    points: jax.Array
+    field: jax.Array
+    gradient: jax.Array
+
+    def B(self, x):
+        return self.field[jnp.argmin(jnp.sum((self.points-x)**2, axis=1))]
+
+    def dAbsB_by_dX(self, x):
+        return self.gradient[jnp.argmin(jnp.sum((self.points-x)**2, axis=1))]
+
+
+@pytest.mark.parametrize('filename', ['wout_LandremanPaul2021_QA_reactorScale_lowres.nc',
+                                      'wout_QH_simple_scaled.nc'])
+def test_two_term_matches_independent_vmec_covariant_table_reference(filename):
+    from pathlib import Path
+    from netCDF4 import Dataset
+
+    path = Path(__file__).resolve().parents[1]/'examples'/'input_files'/filename
+    with Dataset(path) as nc:
+        data = {name: np.asarray(nc[name][:]) for name in
+                ('ns', 'nfp', 'xm', 'xn', 'xm_nyq', 'xn_nyq', 'rmnc', 'zmns',
+                 'bmnc', 'gmnc', 'bsubumnc', 'bsubvmnc', 'bsupumnc', 'bsupvmnc',
+                 'iotas', 'bvco', 'buco', 'phi')}
+    ns, nfp = int(data['ns']), int(data['nfp'])
+    j = round(.75*(ns-1)+.5)
+    s = (j-.5)/(ns-1)
+    m, n = data['xm'], data['xn']
+    sf = np.arange(ns)/(ns-1)
+    def geometry(name):
+        left, right = data[name][j-1], data[name][j]
+        return np.where(m.astype(int)%2, .5*(left/np.sqrt(sf[j-1])+right/np.sqrt(sf[j]))*np.sqrt(s),
+                         .5*(left+right))
+    surface = SurfaceRZFourier(jnp.asarray(geometry('rmnc')), jnp.asarray(geometry('zmns')),
+                               nfp, int(m.max()), int(np.max(abs(n))//nfp),
+                               ntheta=32, nphi=33, close=False, range_torus='half period')
+    theta, phi = np.asarray(surface.theta2d), np.asarray(surface.phi2d)
+    mn, nn = data['xm_nyq'], data['xn_nyq']
+    phase = theta[..., None]*mn-phi[..., None]*nn
+    cos, sin = np.cos(phase), np.sin(phase)
+    table = lambda name: cos @ data[name][j]
+    magnitude, jacobian = table('bmnc'), table('gmnc')
+    bu, bv, btheta, bphi = [table(k) for k in ('bsubumnc', 'bsubvmnc', 'bsupumnc', 'bsupvmnc')]
+    dt, dp = (-sin*mn) @ data['bmnc'][j], (sin*nn) @ data['bmnc'][j]
+    et, ep = np.asarray(surface.gammadash_theta), np.asarray(surface.gammadash_phi)
+    gtt, gpp, gtp = np.sum(et*et, -1), np.sum(ep*ep, -1), np.sum(et*ep, -1)
+    det = gtt*gpp-gtp*gtp
+    field = btheta[..., None]*et+bphi[..., None]*ep
+    gradient = ((gpp*dt-gtp*dp)[..., None]*et+(gtt*dp-gtp*dt)[..., None]*ep)/det[..., None]
+    frozen = SurfaceTableField(surface.gamma.reshape(-1, 3), jnp.asarray(field.reshape(-1, 3)),
+                                jnp.asarray(gradient.reshape(-1, 3)))
+    iota, G, I = (float(data[k][j]) for k in ('iotas', 'bvco', 'buco'))
+    assert abs(I/G) < 1e-10  # These bundled equilibria are vacuum fixtures.
+    # Independent reference uses covariant tables, signed VMEC Jacobian and
+    # physical toroidal flux, without reconstructing grad(alpha) or grad(psi).
+    cross = -float(data['phi'][-1])/(2*np.pi)*(bu*dp-bv*dt)/jacobian
+    parallel = btheta*dt+bphi*dp
+    weights = abs(jacobian)/np.sum(abs(jacobian))
+    for helicity in (-1, 0, 1):
+        N = helicity*nfp
+        residual = ((N-iota)*cross-(G+N*I)*parallel)/magnitude**3
+        expected = np.sum(weights*residual**2)
+        actual = loss_quasi_symmetry_two_term(frozen, surface, helicity_n=helicity)
+        # VMEC's separate geometry/B tables leave a small interpolation floor.
+        # Reversing grad(psi) or omitting nfp produces much larger discrepancies.
+        np.testing.assert_allclose(actual, expected, rtol=5e-3, atol=1e-10)
