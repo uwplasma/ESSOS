@@ -1,3 +1,11 @@
+"""Boozer against VMEC-coordinate tracing of the same alphas.
+
+Teaches the speed and accuracy of the two guiding-centre paths: trace_boozer (fixed-step RK4, see
+losses_fast_boozer.py) and Tracing on a Vmec field (adaptive), with loss fractions and timings without
+compilation. Needs booz_xform_jax.
+
+Runtime: about 3-5 minutes on a CPU.
+"""
 import os
 number_of_processors_to_use = 8 # Parallelization, this should divide nparticles
 from time import time

@@ -1,3 +1,9 @@
+"""ESSOS against SIMSOPT: reading a VMEC equilibrium.
+
+Teaches agreement and speed of the field and geometry from a wout file. Needs simsopt and VMEC.
+
+Runtime: a few minutes with simsopt installed (estimate; not run).
+"""
 import os
 from time import time
 import jax.numpy as jnp

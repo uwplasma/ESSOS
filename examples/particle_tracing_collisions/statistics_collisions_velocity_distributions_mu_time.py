@@ -1,3 +1,10 @@
+"""Time evolution of the collisional velocity distributions.
+
+Teaches how to follow the slowing-down and relaxation of an alpha ensemble under the guiding-centre
+collision operator in time.
+
+Runtime: about 5-10 minutes on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp

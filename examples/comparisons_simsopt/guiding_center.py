@@ -1,3 +1,9 @@
+"""ESSOS against SIMSOPT: guiding-centre tracing.
+
+Teaches agreement and speed of guiding-centre orbits across tolerances. Needs simsopt.
+
+Runtime: a few minutes with simsopt installed (estimate; not run).
+"""
 import os
 from time import time
 import jax.numpy as jnp

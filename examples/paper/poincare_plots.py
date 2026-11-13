@@ -1,3 +1,10 @@
+"""Poincare sections from full-orbit tracing (ESSOS paper).
+
+Teaches how to trace Lorentz orbits in a coil field, record their crossings of a toroidal plane and
+plot the section.
+
+Runtime: about 5-10 minutes on a CPU.
+"""
 import os
 from functools import partial
 from time import time

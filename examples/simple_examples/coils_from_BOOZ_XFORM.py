@@ -1,4 +1,11 @@
 #!/usr/bin/env python3.11
+"""Build coils from a Boozer-transformed VMEC equilibrium and trace field lines.
+
+Teaches the route VMEC -> booz_xform -> Fourier coils fitted with fit_dofs_from_coils, and the Poincare
+plot of the coils. Needs simsopt and booz_xform.
+
+Runtime: a few minutes on a CPU (estimate; not run, needs simsopt and booz_xform).
+"""
 import os
 number_of_processors_to_use = 6 # Parallelization, this should divide nfieldlines
 import numpy as np

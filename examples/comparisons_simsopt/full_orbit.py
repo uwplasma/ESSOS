@@ -1,3 +1,9 @@
+"""ESSOS against SIMSOPT: full-orbit particle tracing.
+
+Teaches agreement and speed of Lorentz orbits across tolerances. Needs simsopt.
+
+Runtime: a few minutes with simsopt installed (estimate; not run).
+"""
 import os
 from time import time
 import jax.numpy as jnp

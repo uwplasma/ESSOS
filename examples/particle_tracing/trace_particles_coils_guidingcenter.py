@@ -1,3 +1,9 @@
+"""Guiding-centre alpha tracing in a coil field.
+
+Teaches the guiding-centre model with BiotSavart: adaptive tolerances, orbit and energy-error plots.
+
+Runtime: about 1 minute on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp

@@ -1,3 +1,9 @@
+"""ESSOS against SIMSOPT: coil objective functions and gradients.
+
+Teaches agreement and speed of length, curvature and separation losses. Needs simsopt.
+
+Runtime: a few minutes with simsopt installed (estimate; not run).
+"""
 import os
 from time import perf_counter as time
 import jax.numpy as jnp

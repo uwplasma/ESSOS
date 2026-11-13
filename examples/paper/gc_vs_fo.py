@@ -1,3 +1,9 @@
+"""Guiding-centre against full-orbit tracing of the same particles (ESSOS paper).
+
+Teaches how the two models agree in orbit and energy and how much cheaper the guiding centre is.
+
+Runtime: about 1 minute on a CPU.
+"""
 import os
 from jax import vmap
 from time import time

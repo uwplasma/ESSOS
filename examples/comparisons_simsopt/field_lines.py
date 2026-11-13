@@ -1,3 +1,9 @@
+"""ESSOS against SIMSOPT: field-line tracing.
+
+Teaches agreement and speed of field lines across tolerances. Needs simsopt.
+
+Runtime: a few minutes with simsopt installed (estimate; not run).
+"""
 import os
 from time import time
 import jax.numpy as jnp

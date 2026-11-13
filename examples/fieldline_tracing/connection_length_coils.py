@@ -1,3 +1,10 @@
+"""Connection length of field lines in the scrape-off layer.
+
+Teaches how to define a wall as an offset of the plasma boundary and trace field lines from the
+outboard gap until they strike it.
+
+Runtime: about 5-9 minutes on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp

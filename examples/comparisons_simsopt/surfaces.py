@@ -1,3 +1,9 @@
+"""ESSOS against SIMSOPT: surfaces, B.n and squared flux.
+
+Teaches agreement and speed of surface quantities from VMEC files. Needs simsopt.
+
+Runtime: a few minutes with simsopt installed (estimate; not run).
+"""
 import os
 from time import perf_counter as time
 import matplotlib.pyplot as plt

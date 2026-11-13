@@ -4,10 +4,13 @@ A stellarator-symmetric shell of point dipoles (a stand-in for a permanent-
 magnet array) is added to the Landreman-Paul QA coils. Every evaluation of
 the direct field sums over all coil segments and dipoles; the interpolated
 field reads a 4x4x4 spline stencil, so tracing cost no longer grows with the
-number of magnets. Usage: python trace_particles_interpolated_dipoles.py [ndipoles] [nparticles] [grid] [tmax]
+number of magnets.
+
+Teaches how to combine fields (``CombinedField``), tabulate them once
+(``InterpolatedField``) and trace through the cheap copy, checking the interpolation error
+and the orbit deviation against the direct sum. Runtime: about 1-2 minutes on a CPU.
 """
 import os
-import sys
 from time import time
 import jax
 import jax.numpy as jnp
@@ -19,8 +22,12 @@ from essos.dynamics import Particles, Tracing
 from essos.fields import BiotSavart, CombinedField, InterpolatedField, MagneticField
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 
-args = sys.argv[1:] + ["4000", "32", "48", "2e-5"][len(sys.argv) - 1:]
-ndipoles, nparticles, grid, tmax, energy = int(args[0]), int(args[1]), int(args[2]), float(args[3]), 5000 * ONE_EV
+# Parameters
+ndipoles = 4000         # point dipoles in the shell (all symmetric images included)
+nparticles = 32         # guiding centres started on the outboard midplane
+grid = 48               # interpolation nodes per direction (toroidal: 2 * grid)
+tmax = 2e-5             # horizon [s]
+energy = 5000 * ONE_EV  # particle energy
 input_dir = os.path.join(os.path.dirname(__file__), '..', 'input_files')
 coils = Coils.from_json(os.path.join(input_dir, 'ESSOS_biot_savart_LandremanPaulQA.json'))
 wout = SurfaceRZFourier.from_wout_file(os.path.join(input_dir, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'))

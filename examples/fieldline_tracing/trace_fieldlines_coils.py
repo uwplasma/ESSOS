@@ -1,3 +1,10 @@
+"""Trace magnetic field lines in a coil field.
+
+Teaches the basic Tracing call for model='FieldLine' with a BiotSavart field and plots the lines and
+the Poincare section.
+
+Runtime: under 1 minute on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp

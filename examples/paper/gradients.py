@@ -1,3 +1,10 @@
+"""Automatic differentiation against finite differences for a coil objective (ESSOS paper).
+
+Teaches the cost of one gradient against the loss, and the agreement of jax.grad with finite differences
+of decreasing step.
+
+Runtime: about 1-2 minutes on a CPU.
+"""
 import os
 import jax.numpy as jnp
 from jax import block_until_ready

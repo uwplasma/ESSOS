@@ -1,3 +1,10 @@
+"""Optimize coils robust to manufacturing errors with an augmented Lagrangian.
+
+Teaches how to average the B.n objective over random coil perturbations (essos.coil_perturbation) so the
+result tolerates systematic and statistical coil errors.
+
+Runtime: about 5-8 minutes on a CPU.
+"""
 import os
 from time import time
 
