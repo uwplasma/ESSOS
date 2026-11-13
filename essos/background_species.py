@@ -86,7 +86,7 @@ def d_nu_D_ab(ma: float, ea: float,species_b: int,v:float, points,species: Backg
 
 @partial(jit, static_argnames=['species'])
 def nu_par_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
-    """Parallel collision frequency"""
+    """Parallel collision frequency."""
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     return (
@@ -95,7 +95,7 @@ def nu_par_ab(ma: float, ea: float,species_b: int,v:float, points,species: Backg
 
 @partial(jit, static_argnames=['species'])
 def d_nu_par_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies):
-    """d(Parallel collision frequency)/ dv"""
+    """Speed derivative of the parallel collision frequency."""
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     return (
@@ -105,7 +105,7 @@ def d_nu_par_ab(ma: float, ea: float,species_b: int,v:float, points,species: Bac
 
 @partial(jit, static_argnames=['species'])
 def nu_s_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
-    """Slowing collision frequency"""
+    """Slowing-down collision frequency."""
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     mb = species.mass[species_b]   

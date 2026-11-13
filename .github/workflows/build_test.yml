@@ -43,13 +43,18 @@ jobs:
   build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     # never run fork code on the org's own machines
-    runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && matrix.python-version == '3.12')) && fromJSON('["self-hosted","macOS","ARM64"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && matrix.python-version == '3.12' && !matrix.jax)) && fromJSON('["self-hosted","macOS","ARM64"]') || 'ubuntu-latest' }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        python-version: [ '3.11', '3.12']
-    name: Python ${{ matrix.python-version }} Test
+        python-version: [ '3.11', '3.12', '3.13', '3.14']
+        jax: ['']
+        include:
+          - python-version: '3.12'
+            jax: '0.8.2'
+            suffix: ', JAX 0.8.2'
+    name: Python ${{ matrix.python-version }} Test${{ matrix.suffix }}
 
     steps:
     - uses: actions/checkout@v4
@@ -60,19 +65,26 @@ jobs:
     - name: Install ESSOS and test tools
       run: |
         uv venv
-        uv pip install . pytest pytest-cov pytest-xdist
+        uv pip install ".[booz]" pytest pytest-cov pytest-xdist ${{ matrix.jax && format('jax=={0} jaxlib=={0}', matrix.jax) || '' }}
         if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
+        echo "JAX_VERSION=$(uv run --no-sync python -c 'import jax; print(jax.__version__)')" >> $GITHUB_ENV
+    - name: Cache JAX compilations
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/essos/xla
+        key: xla-${{ runner.os }}-py${{ matrix.python-version }}-jax${{ env.JAX_VERSION }}-${{ github.sha }}
+        restore-keys: xla-${{ runner.os }}-py${{ matrix.python-version }}-jax${{ env.JAX_VERSION }}-
 
     - name: Run tests
-      if: matrix.python-version != '3.12'
+      if: matrix.python-version != '3.12' || matrix.jax
       run: uv run --no-sync pytest -n 3
 
     - name: Run tests with coverage
-      if: matrix.python-version == '3.12'
+      if: matrix.python-version == '3.12' && !matrix.jax
       run: uv run --no-sync pytest -n 3 --cov-branch --cov-report=xml --cov=essos
 
     - name: Upload coverage reports to Codecov
-      if: matrix.python-version == '3.12'
+      if: matrix.python-version == '3.12' && !matrix.jax
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
@@ -92,6 +104,12 @@ jobs:
     - name: Install ESSOS at the declared floors
       run: |
         uv venv
-        uv pip install ".[multiobjective]" pytest pytest-xdist "jax==0.6.2" "jaxlib==0.6.2" "equinox==0.13.3" "diffrax==0.7.0" "optimistix==0.0.11" "jaxtyping<0.3.8" "numpy<2.3"
+        uv pip install ".[multiobjective]" pytest pytest-xdist "jax==0.6.2" "jaxlib==0.6.2" "equinox==0.13.3" "diffrax==0.7.0" "optimistix==0.0.11"
+    - name: Cache JAX compilations
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/essos/xla
+        key: xla-${{ runner.os }}-py3.10-jax0.6.2-${{ github.sha }}
+        restore-keys: xla-${{ runner.os }}-py3.10-jax0.6.2-
     - name: Run tests
       run: uv run --no-sync pytest -n 3
