@@ -299,3 +299,253 @@ def test_zero_currents_give_finite_dofs():
     curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
     coils = Coils(curves=curves, currents=[0.0, 0.0])
     assert jnp.all(jnp.isfinite(coils.dofs)) and jnp.all(jnp.isfinite(coils.currents))
+
+
+def _circle_dofs(radius=1.5, z=0.0):
+    """Fourier dofs of x = R cos 2 pi t, y = R sin 2 pi t, z = const: layout [a0, sin1, cos1] per axis."""
+    d = np.zeros((1, 3, 3))
+    d[0, 0, 2] = radius
+    d[0, 1, 1] = radius
+    d[0, 2, 0] = z
+    return jnp.asarray(d)
+
+
+def test_curves_circle_length_curvature_and_scaling_options(tmp_path):
+    """Circle of radius R: length 2 pi R, curvature 1/R, gamma'' = -(2 pi)^2 (gamma - centre)."""
+    R = 1.5
+    c = Curves(_circle_dofs(R), n_segments=64, nfp=1, stellsym=False)
+    np.testing.assert_allclose(c.length, 2 * np.pi * R, rtol=1e-12)
+    np.testing.assert_allclose(c.curvature, 1 / R, rtol=1e-10)
+    np.testing.assert_allclose(c.gamma_dashdash, -(2 * np.pi) ** 2 * c.gamma, atol=1e-10)
+    np.testing.assert_allclose(c.gamma_dashdash, c.gamma_dashdash)  # cached second access
+
+    # scaling_type spellings are equivalent for the 1D mode measure; unknown ones raise
+    for spelling in ("L1", 1, "L2", 2, "Linfty", -1, jnp.inf):
+        assert Curves(_circle_dofs(), 16, 1, False, scaling_type=spelling).scaling.shape == (3,)
+    with pytest.raises(ValueError, match="Unknown scaling_type"):
+        Curves(_circle_dofs(), 16, 1, False, scaling_type="L3")
+    with pytest.raises(AssertionError):
+        Curves(jnp.zeros((1, 3, 4)))  # even number of Fourier slots
+
+    # exp(scaling_factor * order) * scale_fixed, applied mode by mode; setters invalidate the cache
+    c.scaling_type = "L1"
+    c.scaling_factor = 0.5
+    c.scale_fixed = 2.0
+    assert c.scaling_type == 1
+    np.testing.assert_allclose(c.scaling, 2.0 * np.exp(0.5 * np.array([0, 1, 1])), rtol=1e-12)
+    np.testing.assert_allclose(c.dofs[0, 0, 2] * c.scaling[2], c.dofs[0, 0, 2] * c.scaling[2])
+    np.testing.assert_allclose(c.copy().scaling, c.scaling)
+
+    # order setter pads with zeros (higher) or truncates (lower) without touching the circle
+    gamma0 = c.gamma
+    c.order = 3
+    assert c.order == 3 and c._dofs.shape == (1, 3, 7)
+    np.testing.assert_allclose(c.gamma, gamma0, atol=1e-12)
+    c.order = 1
+    assert c._dofs.shape == (1, 3, 3)
+    np.testing.assert_allclose(c.gamma, gamma0, atol=1e-12)
+
+
+def test_curves_container_protocol_errors_and_exports(tmp_path):
+    a = Curves(_circle_dofs(1.0), 32, 1, False)
+    b = Curves(_circle_dofs(2.0), 32, 1, False)
+    ab = a + b
+    assert len(ab) == 2 and (a == a) and not (a == b) and (a != b) and not (a != a)
+    assert (ab[0:1] == a) and (ab[jnp.array([1])] == b)
+    assert a in ab and b in ab
+    assert not (a == ab)  # different shape
+    for bad in (lambda: a["x"], lambda: a + 1, lambda: 1 in a, lambda: a == 1):
+        with pytest.raises(TypeError):
+            bad()
+    # a close=True plot adds the first point again; derivative arrows and a non-3d axis are accepted
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    ax = plt.figure().add_subplot(projection="3d")
+    ab.plot(ax=ax, show=False, plot_derivative=True, close=True, label="c")
+    assert len(ax.lines) == 2
+    ab.plot(ax=None, show=False, axis_equal=False)
+    plt.close("all")
+    # VTK: closed polylines carry one extra point per coil, open ones do not
+    ab.to_vtk(str(tmp_path / "closed"), extra_data={"w": np.zeros(66)})
+    ab.to_vtk(str(tmp_path / "open"), close=False, extra_data={"w": np.zeros(64)})
+    assert (tmp_path / "closed.vtu").exists() or (tmp_path / "closed.vtp").exists()
+    assert not np.isnan(a.length).any()
+
+
+def test_coils_container_protocol_json_and_dof_setters(tmp_path):
+    import json
+    from essos.coils import CreateEquallySpacedCurves
+    coils = Coils(CreateEquallySpacedCurves(2, 2, 1.0, 0.3, 32, 2, True), jnp.array([1e5, 2e5]))
+    assert len(coils) == 8 and "nfp" in str(coils) and "Currents scaling factor" in repr(coils)
+    assert coils == coils.copy() and coils in coils and coils.curvature.shape == (8, 32) and coils.length.shape == (8,)
+    assert coils.gamma_dashdash.shape == (8, 32, 3) and coils.n_segments == 32 and coils.order == 2
+    for bad in (lambda: coils["x"], lambda: coils + 1, lambda: 1 in coils, lambda: coils == 1):
+        with pytest.raises(TypeError):
+            bad()
+    assert not (coils == coils[0:3])  # different dof count
+
+    # dof setters round trip: raw currents, normalised currents, the scale and the stacked vector
+    cs = float(coils.currents_scale)
+    c2 = coils.with_dofs(coils.dofs * 1.0)
+    c2.dofs_currents = jnp.array([2.0, 4.0])
+    np.testing.assert_allclose(c2.dofs_currents_raw, jnp.array([2.0, 4.0]) * cs)
+    np.testing.assert_allclose(c2.currents[:2], jnp.array([2.0, 4.0]) * cs)
+    c2.currents_scale = 2 * cs  # the normalised dofs are held, so the physical currents follow the scale
+    np.testing.assert_allclose(c2.dofs_currents_raw, jnp.array([2.0, 4.0]) * 2 * cs)
+    c2.dofs_currents_raw = 3.0  # scalar -> atleast_1d
+    assert c2.dofs_currents_raw.shape == (1,)
+    c3 = coils.copy()
+    c3.x = coils.x
+    np.testing.assert_allclose(c3.dofs, coils.dofs)
+    c3.dofs_curves = coils.dofs_curves * 1.0
+    assert c3.dofs_curves.shape == coils.dofs_curves.shape
+
+    # to_json / from_json: current format and the legacy key names
+    coils.to_json(str(tmp_path / "new.json"))
+    back = Coils.from_json(str(tmp_path / "new.json"))
+    np.testing.assert_allclose(back.gamma, coils.gamma, atol=1e-13)
+    np.testing.assert_allclose(back.currents, coils.currents)
+    data = json.load(open(tmp_path / "new.json"))
+    legacy = {k: data[k] for k in ("nfp", "stellsym", "n_segments")}
+    legacy["dofs_curves"] = data["dofs_curves_raw"]
+    legacy["dofs_currents"] = data["dofs_currents_raw"]
+    json.dump(legacy, open(tmp_path / "old.json", "w"))
+    old = Coils.from_json(str(tmp_path / "old.json"))
+    np.testing.assert_allclose(old.gamma, coils.gamma, atol=1e-13)
+
+    # save_coils appends a readable text record including the extra note
+    path = tmp_path / "coils.txt"
+    coils.save_coils(str(path), text="note")
+    txt = path.read_text()
+    assert "Curves scaling type" in txt and txt.rstrip().endswith("note")
+    # plot/to_vtk delegate to the curves
+    import matplotlib
+    matplotlib.use("Agg")
+    coils.plot(show=False)
+    coils.to_vtk(str(tmp_path / "coils"))
+    import matplotlib.pyplot as plt
+    plt.close("all")
+
+
+def test_fit_dofs_from_coils_recovers_circle_for_any_parametrisation():
+    """Arclength resampling makes the fit independent of the input parametrisation."""
+    from essos.coils import fit_dofs_from_coils
+    R, M = 1.5, 50
+    s = jnp.linspace(0, 1, M, endpoint=False)
+    t = s + 0.08 * jnp.sin(2 * jnp.pi * s)  # monotone non-uniform parametrisation
+    circle = jnp.stack([R * jnp.cos(2 * jnp.pi * t), R * jnp.sin(2 * jnp.pi * t), 0 * t], axis=1)[None]
+    dofs, gam = fit_dofs_from_coils(circle, order=3, n_segments=64)  # arclength path
+    assert dofs.shape == (1, 3, 7) and gam.shape == (1, 64, 3)
+    np.testing.assert_allclose(jnp.linalg.norm(gam[0, :, :2], axis=1), R, rtol=5e-3)
+    np.testing.assert_allclose([dofs[0, 0, 2], dofs[0, 1, 1]], R, rtol=5e-3)  # cos1 of x, sin1 of y
+    # uniform fast path: equal M (identity) and index-space subsampling
+    u = jnp.stack([R * jnp.cos(2 * jnp.pi * jnp.arange(48) / 48), R * jnp.sin(2 * jnp.pi * jnp.arange(48) / 48),
+                   jnp.zeros(48)], axis=1)[None]
+    d_same, g_same = fit_dofs_from_coils(u, 2, 48, assume_uniform=True)
+    np.testing.assert_allclose(g_same, u)
+    np.testing.assert_allclose(d_same[0, 0, 2], R, rtol=1e-12)
+    np.testing.assert_allclose(d_same[0, 1, 1], R, rtol=1e-12)
+    d_sub, g_sub = fit_dofs_from_coils(u, 2, 24, assume_uniform=True)
+    assert g_sub.shape == (1, 24, 3)
+    np.testing.assert_allclose(d_sub[0, 0, 2], R, rtol=1e-12)
+    # order above Nyquist is zero padded
+    d_pad, _ = fit_dofs_from_coils(u[:, ::6], order=6, n_segments=8, assume_uniform=True)
+    assert d_pad.shape == (1, 3, 13) and jnp.all(d_pad[..., 9:] == 0)
+
+
+def test_discretized_coils_properties_symmetry_and_roundtrips(tmp_path):
+    """Finite-difference derivatives of a circle, symmetry expansion, setters, conversions and errors."""
+    import json
+    from essos.coils import DiscretizedCoils
+    n, R = 128, 2.0
+    th = 2 * jnp.pi * jnp.arange(n) / n
+    ring = jnp.stack([R * jnp.cos(th), R * jnp.sin(th), 0.3 + 0 * th], axis=1)
+    dc = DiscretizedCoils(ring[None], 2.0e5)  # scalar current is broadcast
+    assert dc.gamma.shape == (1, n, 3) and dc.n_base_curves == 1 and len(dc) == 1
+    np.testing.assert_allclose(dc.length, 2 * np.pi * R, rtol=1e-3)  # central-difference error O(1/n^2)
+    np.testing.assert_allclose(dc.curvature, 1 / R, rtol=1e-3)
+    np.testing.assert_allclose(dc.gamma_dash, dc.gamma_dash)  # cached
+    np.testing.assert_allclose(dc.curvature, dc.curvature)
+    assert "DiscretizedCoils" in str(dc) and "DiscretizedCoils" in repr(dc)
+    np.testing.assert_allclose(dc.currents, [2.0e5])
+    assert dc.x.shape == dc.dofs.shape
+
+    # an already expanded stellarator-symmetric set is folded back to its base curves
+    full = DiscretizedCoils(ring[None], 1e5, nfp=2, stellsym=True)
+    assert full.gamma.shape == (4, n, 3) and full.currents.shape == (4,)
+    refolded = DiscretizedCoils(full.gamma, full.currents, nfp=2, stellsym=True)
+    assert refolded.n_base_curves == 1
+    np.testing.assert_allclose(refolded.gamma, full.gamma, atol=1e-12)
+    # setters: expanded gamma is accepted, wrong counts rejected; dofs round trip
+    full.gamma = full.gamma
+    full.gamma = ring[None] * 1.0
+    with pytest.raises(AssertionError):
+        full.gamma = jnp.zeros((3, n, 3))
+    with pytest.raises(AssertionError):
+        full.gamma = jnp.zeros((1, n))
+    with pytest.raises(AssertionError):
+        full.dofs_gamma = jnp.zeros((1, n))
+    with pytest.raises(AssertionError):
+        full.dofs_currents_raw = jnp.ones(3)
+    full.dofs = full.dofs * 1.0
+    full.dofs_gamma = full.dofs_gamma * 1.0
+    full.scale_fixed = 2.0 * full.scale_fixed  # normalised dofs are held, so gamma follows the scale
+    np.testing.assert_allclose(full.gamma[0], 2 * ring, atol=1e-12)
+    s = float(full.currents_scale)
+    full.currents_scale = 2 * s
+    np.testing.assert_allclose(full.dofs_currents_raw, [2e5])
+    full.dofs_currents = jnp.array([3.0])
+    np.testing.assert_allclose(full.dofs_currents_raw, jnp.array([3.0]) * full.currents_scale)
+
+    # container protocol
+    two = DiscretizedCoils(jnp.stack([ring, ring + jnp.array([0, 0, 1.0])]), jnp.array([1.0, 2.0]) * 1e5)
+    assert two[0].gamma.shape == (1, n, 3) and two[0:2].gamma.shape == (2, n, 3)
+    assert two[jnp.array([1])].gamma.shape == (1, n, 3)
+    assert (two + two).gamma.shape == (4, n, 3)
+    assert two in two and two == two.copy() and not (two != two) and two != two[0:1]
+    assert [c.gamma.shape for c in two] == [(1, n, 3)] * 2
+    for bad in (lambda: two["x"], lambda: two + 1, lambda: 1 in two, lambda: two == 1):
+        with pytest.raises(TypeError):
+            bad()
+    with pytest.raises(AssertionError):
+        DiscretizedCoils(ring, 1.0)  # not 3D
+    with pytest.raises(AssertionError):
+        DiscretizedCoils(ring[None, :, :2], 1.0)
+    with pytest.raises(AssertionError):
+        DiscretizedCoils(ring[None], jnp.ones(2))
+
+    # pytree round trip and jit
+    leaves, tree = jax.tree_util.tree_flatten(two)
+    again = jax.tree_util.tree_unflatten(tree, leaves)
+    np.testing.assert_allclose(again.gamma, two.gamma, atol=1e-12)
+    np.testing.assert_allclose(jax.jit(lambda c: c.gamma.sum())(two), two.gamma.sum(), rtol=1e-12)
+
+    # text / json (all legacy key spellings) / plot / vtk
+    two.save_coils(str(tmp_path / "d.txt"), text="hi")
+    assert "Base gamma dofs" in (tmp_path / "d.txt").read_text()
+    two.to_json(str(tmp_path / "d.json"))
+    d = json.load(open(tmp_path / "d.json"))
+    for key, name in (("dofs_gamma", "a"), ("gamma", "b")):
+        legacy = {"dofs_currents": d["dofs_currents"], "currents_scale": d["currents_scale"], "nfp": 1, "stellsym": False,
+                  "fixed_scale": d["scale_fixed"], key: (jnp.asarray(d["dofs_gamma_raw"]) / d["scale_fixed"]).tolist()}
+        json.dump(legacy, open(tmp_path / f"{name}.json", "w"))
+        loaded = DiscretizedCoils.from_json(str(tmp_path / f"{name}.json"))
+        np.testing.assert_allclose(loaded.gamma, two.gamma, atol=1e-10)
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    two.plot(show=False, plot_derivative=True, close=True, label="x")
+    two.plot(show=False, axis_equal=False)
+    plt.close("all")
+    two.to_vtk(str(tmp_path / "dv"))
+    two.to_vtk(str(tmp_path / "dv_open"), close=False, extra_data={"w": np.zeros(2 * n)})
+
+    # conversion to Fourier Coils and back keeps the geometry of a smooth curve
+    cc = DiscretizedCoils(ring[None], 1e5, nfp=3, stellsym=True)
+    fourier = cc.to_Coils(order=4)
+    np.testing.assert_allclose(fourier.gamma, cc.gamma, atol=1e-10)
+    default_order = cc.to_Coils()
+    assert default_order.order == n // 2 - 1
+    back = DiscretizedCoils.from_Coils(fourier)
+    np.testing.assert_allclose(back.gamma, cc.gamma, atol=1e-10)

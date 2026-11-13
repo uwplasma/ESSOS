@@ -414,7 +414,7 @@ class Curves:
     def plot(self, ax=None, show=True, plot_derivative=False, close=False, axis_equal=True,color="brown", linewidth=3,label=None,**kwargs):
         def rep(data):
             if close:
-                return jnp.concatenate((data, [data[0]]))
+                return jnp.concatenate((data, data[:1]))
             else:
                 return data
         import matplotlib.pyplot as plt 
@@ -1598,7 +1598,7 @@ class DiscretizedCoils:
         """Plot the coils"""
         def rep(data):
             if close:
-                return jnp.concatenate((data, [data[0]]))
+                return jnp.concatenate((data, data[:1]))
             else:
                 return data
         import matplotlib.pyplot as plt
