@@ -139,7 +139,6 @@ def run_essos(births, speed, tmax, consts):
     jax.config.update("jax_enable_x64", True)
     booz = Booz_xform(verbose=0, mboz=MBOOZ, nboz=MBOOZ)
     booz.read_wout(str(WOUT), flux=False)
-    booz.run()
     with Dataset(WOUT) as ds:
         psi0 = -float(ds["phi"][-1]) / (2 * np.pi)
     field = BoozerField.from_booz_xform(booz, psi0=psi0)
