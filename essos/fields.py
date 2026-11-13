@@ -40,6 +40,11 @@ class MagneticField():
         return jacfwd(self.B)(points)
     
     @jit
+    def B_and_dB_by_dX(self, points):
+        jacobian, value = jacfwd(lambda x: (self.B(x),) * 2, has_aux=True)(jnp.asarray(points))
+        return value, jacobian
+
+    @jit
     def dAbsB_by_dX(self, points):
         return grad(self.AbsB)(points)
     
@@ -98,17 +103,19 @@ def _gc_from_jacobian(field, jacobian):
 
 
 def _cartesian_gc_quantities(field, points):
-    """``gc_quantities`` of a Cartesian field (sqrtg = 1) from one forward-mode Jacobian of ``field.B``."""
-    jacobian, value = jacfwd(lambda x: (field.B(x),) * 2, has_aux=True)(jnp.asarray(points))
-    return _gc_from_jacobian(value, jacobian)
+    """``gc_quantities`` of a Cartesian field (sqrtg = 1) from ``field.B_and_dB_by_dX``."""
+    return _gc_from_jacobian(*field.B_and_dB_by_dX(jnp.asarray(points)))
 
 
-def _biot_savart(points, gamma, gamma_dash, currents, chunk=8):
+def _biot_savart(points, gamma, gamma_dash, currents, chunk=8, gradient=False):
     """Biot-Savart field at one point, summed ``chunk`` coils at a time with ``lax.scan``.
 
     Only chunk x quadrature points are live at once (also in reverse mode, via ``checkpoint``),
-    so temporaries do not grow with the number of coils. The last chunk is filled with zero-current copies.
+    so temporaries do not grow with the number of coils. The last chunk is filled with zero-current copies,
+    and a set smaller than ``chunk`` runs as one step. With ``gradient=True`` the same pass also sums
+    dB_i/dx_j = mu0 I/4pi [(dl x e_j)_i / r^3 - 3 (dl x r)_i r_j / r^5] and returns ``(B, dB/dx)``.
     """
+    chunk = min(chunk, gamma.shape[0])
     pad = -gamma.shape[0] % chunk
     fill = lambda a, v=None: jnp.concatenate([a, jnp.repeat(a[-1:] if v is None else v, pad, axis=0)])
     xs = [fill(a).reshape(-1, chunk, *a.shape[1:]) for a in (gamma, gamma_dash)]
@@ -116,14 +123,24 @@ def _biot_savart(points, gamma, gamma_dash, currents, chunk=8):
     x = jnp.asarray(points)
 
     @jax.checkpoint
-    def step(B, c):
+    def step(acc, c):
         g, gd, i = c
-        dif = (x - g).T
-        dB = jnp.cross(gd.T, dif, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif, axis=0)**3
-        return B + jnp.einsum("i,bai->b", i, dB, optimize="greedy"), None
+        r = x - g
+        w = i[:, None] * jnp.sum(r**2, axis=-1)**-1.5
+        cross = jnp.cross(gd, r)
+        B = acc[0] + jnp.einsum("ca,cai->i", w, cross, optimize="greedy")
+        if not gradient:
+            return (B,), None
+        S = jnp.einsum("ca,cai->i", w, gd, optimize="greedy")
+        r2 = jnp.sum(r**2, axis=-1)
+        J = jnp.cross(S, jnp.eye(3)).T - 3 * jnp.einsum("ca,cai,caj->ij", w / r2, cross, r, optimize="greedy")
+        return (B, acc[1] + J), None
 
-    B0 = jnp.zeros(3, jnp.result_type(x, gamma, currents))
-    return 1e-7 * lax.scan(step, B0, xs)[0] / gamma.shape[1]
+    dtype = jnp.result_type(x, gamma, currents)
+    acc0 = (jnp.zeros(3, dtype),) + ((jnp.zeros((3, 3), dtype),) if gradient else ())
+    out = lax.scan(step, acc0, xs)[0]
+    scale = 1e-7 / gamma.shape[1]
+    return tuple(scale * o for o in out) if gradient else scale * out[0]
 
 
 class BiotSavart(MagneticField):
@@ -149,7 +166,7 @@ class BiotSavart(MagneticField):
         """Guiding-center field quantities from one pass over the coils.
 
         The separate methods each rebuild B and its Jacobian (``kappa`` even
-        recomputes ``curl_b``). Here a single forward-mode Jacobian yields B
+        recomputes ``curl_b``). Here one analytic pass over the coils yields B
         and dB/dX together, and in Cartesian coordinates (sqrtg = 1)
         grad|B| = (dB/dX)^T b, curl b = curl B/|B| + B x grad|B|/|B|^2 and
         kappa = -B x curl b / |B| follow algebraically.
@@ -159,6 +176,15 @@ class BiotSavart(MagneticField):
     @jit
     def B(self, points):
         return _biot_savart(points, self.coils.gamma, self.coils.gamma_dash, self.coils.currents)
+
+    @jit
+    def B_and_dB_by_dX(self, points):
+        """B and its Cartesian Jacobian dB_i/dx_j from one pass over the coils."""
+        return _biot_savart(points, self.coils.gamma, self.coils.gamma_dash, self.coils.currents, gradient=True)
+
+    @jit
+    def dB_by_dX(self, points):
+        return self.B_and_dB_by_dX(points)[1]
 
     @jit
     def b_cyl(self, R, phi, Z):
