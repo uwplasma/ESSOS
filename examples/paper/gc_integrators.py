@@ -3,7 +3,7 @@
 Teaches how the adaptive solvers (Tsit5, Dopri5, Dopri8 and the implicit Kvaerno5) trade relative energy error
 against run time and tolerance for the guiding-centre model.
 
-Runtime: about 5-10 minutes for the explicit solvers; the Kvaerno5 sweep takes over an hour (it slows as the tolerance tightens).
+Runtime: about 5-10 minutes on a CPU (Kvaerno5 adds two slower runs).
 """
 import os
 import gc
@@ -47,7 +47,8 @@ fig_tol, ax_tol = plt.subplots(figsize=(9, 6))
 markers = ["o-", "^-", "*-", "s-"]
 # For each adaptive solver, sweep the integration tolerance and record both the
 # resulting energy error and the wall-clock time. Kvaerno5 is implicit (needs
-# lineax >= 0.1.0); the others are explicit Runge-Kutta methods.
+# lineax >= 0.1.0) and much slower, so it runs at two tolerances only; the
+# others are explicit Runge-Kutta methods.
 solvers = [('Tsit5', diffrax.Tsit5),
            ('Dopri5', diffrax.Dopri5),
            ('Dopri8', diffrax.Dopri8),
@@ -55,7 +56,7 @@ solvers = [('Tsit5', diffrax.Tsit5),
 for (method, solver_class), marker in zip(solvers, markers):
     energies = []
     tracing_times = []
-    tolerances = [1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16]
+    tolerances = [1e-7, 1e-8] if method == 'Kvaerno5' else [1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16]
     for tolerance in tolerances:
         time0 = time()
         tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
