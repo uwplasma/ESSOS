@@ -223,5 +223,80 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertGreater(float(params[0][0]), 99.0)
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+
+@pytest.mark.parametrize("model,mu", [("Standard", "Mu_Tolerance"), ("Squared", "Mu_Adaptative_1"),
+                                      ("Standard", "Mu_Adaptative_2"), ("Squared", "Mu_Tolerance")])
+def test_alm_recovers_minimum_norm_point_and_multiplier(model, mu):
+    """min ||x|| (Standard) or ||x||^2 (Squared) on x0 + x1 = 1 gives x = (1/2, 1/2); the multiplier is the
+    objective gradient along the constraint normal, lambda = 1/sqrt(2) or 1 (Nocedal & Wright, Thm 12.1)."""
+    constraint = eq(lambda x: x[0] + x[1] - 1.0, model_lagrangian=model)
+    x0 = jnp.array([3.0, -1.0])
+    params = x0, constraint.init(x0)
+    alm = ALM_model_lbfgs(constraint, loss=lambda x: x, model_lagrangian=model, model_mu=mu)
+    state, grad, info = alm.init(params)
+    for _ in range(25):
+        params, state, grad, info = alm.update(params, state, grad, info)
+    x, lag = params
+    assert jnp.allclose(x, 0.5, atol=2e-3)
+    lam = float(jnp.ravel(lag["lambda"].value)[0])
+    assert abs(lam - (1 / 2 ** 0.5 if model == "Standard" else 1.0)) < 2e-2
+    assert abs(float(total_infeasibility(info[2]))) < 2e-3
+
+
+def test_constraint_containers_named_dependencies_and_errors():
+    from essos.augmented_lagrangian import CompositeConstraint, _multiplier_like
+    with pytest.raises(ValueError, match="returned None"):
+        _multiplier_like(None, 0.0, 1.0, 1.0, 1.0, 0.0)
+    with pytest.raises(TypeError):
+        SelectiveConstraint(object(), "a")
+    with pytest.raises(ValueError):
+        SelectiveConstraint(eq(lambda a: a), )
+    with pytest.raises(ValueError):
+        combine()
+    with pytest.raises(TypeError, match="must be SelectiveConstraint"):
+        combine(42)
+
+    sa = SelectiveConstraint(eq(lambda a: a - 1.0), "a")
+    sb = SelectiveConstraint(ineq(lambda b, shift: b - shift), "b", shift=0.5)
+    with pytest.raises(TypeError):
+        sa.dependencies = [1.0]
+    with pytest.raises(RuntimeError):
+        sa.starting_dofs
+    with pytest.raises(KeyError, match="depends on 'a'"):
+        sa.init()
+    combined = combine(sa, sb)
+    assert isinstance(combined, CompositeConstraint) and combined.arg_names == ["a", "b"]
+    with pytest.raises(TypeError):
+        combined.dependencies = 3
+    with pytest.raises(RuntimeError):
+        combined.starting_dofs
+    deps = {"a": jnp.array([2.0, 3.0]), "b": jnp.array([4.0])}
+    combined.dependencies = deps
+
+    # stored-dependency calls, explicit-argument calls and flat dof vectors all give the same Lagrangian terms
+    params = combined.init()
+    assert set(params[0]) == {"lambda"} and jnp.allclose(params[1]["lambda"].penalty, 1.0)
+    loss_stored, info = combined.loss(params)
+    # eq: sum(-0 * g + g^2 / 2) with g = a - 1 = (1, 2) -> 2.5; ineq: min(b - 0.5, 0/1) = 0 -> 0
+    assert jnp.allclose(loss_stored, 2.5) and jnp.allclose(info[0], jnp.array([1.0, 2.0])) and jnp.allclose(info[1], 0.0)
+    flat = combined.starting_dofs
+    params_flat = combined.init(flat)  # a flat vector of all dofs is split by name (composite fallback)
+    assert jnp.allclose(params_flat[0]["lambda"].penalty, 1.0)
+    loss_flat, _ = combined.loss(params, flat)
+    assert jnp.allclose(loss_flat, loss_stored)
+    assert combined.dofs_to_pytree(flat)[0].shape == (2,)
+    assert sa.dofs_to_pytree(jnp.array([2.0, 3.0]))[0].shape == (2,)
+    explicit_loss, _ = sa.loss(sa.init(deps["a"]), deps["a"])
+    assert jnp.allclose(explicit_loss, 2.5)
+    # plain tuples are accepted too
+    tup = combine((eq(lambda x: x).init, eq(lambda x: x).loss))
+    assert len(tup.init(jnp.ones(2))) == 1
+
+
+def test_penalty_and_infeasibility_norms_on_multiplier_trees():
+    tree = {"c": LagrangeMultiplier(jnp.zeros(2), jnp.array([1.0, 3.0]), jnp.ones(2), jnp.ones(2), jnp.zeros(2))}
+    assert jnp.allclose(penalty_average(tree), 2.0)
+    infos = {"u": jnp.array([3.0, -4.0]), "v": jnp.array([0.0])}
+    assert jnp.allclose(norm_constraints(infos), 5.0)
+    assert jnp.allclose(infty_norm_constraints(infos), 4.0)
+    assert jnp.allclose(total_infeasibility(infos), 7.0)
