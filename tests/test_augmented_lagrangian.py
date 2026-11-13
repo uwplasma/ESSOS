@@ -223,10 +223,6 @@ class TestAugmentedLagrangian(unittest.TestCase):
         self.assertGreater(float(params[0][0]), 99.0)
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
-
-
 @pytest.mark.parametrize('bounds,start,target', [
     ((0., jnp.inf), [1.], [3.]),
     ((0., jnp.inf), [0.], [3.]),
@@ -239,14 +235,12 @@ if __name__ == "__main__":
      [1., -1., 0., 2., 0.], [3., -3., 7., 2., .5]),
 ])
 def test_alm_lbfgs_supports_infinite_and_fixed_bounds(bounds, start, target):
-    # These bounds were forwarded to JAXopt by the former public entry point.
-    # Check actual ALM updates, including mixed bound types in one parameter array.
-    from essos.augmented_lagrangian import ALM_model_jaxopt_lbfgsb
+    # Constraint x = target with target inside the box; starts include a point on the bound.
     target = jnp.asarray(target)
     constraint = eq(lambda x: x - target)
     x = jnp.asarray(start)
     params = x, constraint.init(x)
-    solver = ALM_model_jaxopt_lbfgsb(constraint, bounds=bounds)
+    solver = ALM_model_lbfgs(constraint, bounds=bounds)
     state, gradient, info = solver.init(params)
     for _ in range(10):
         params, state, gradient, info = solver.update(params, state, gradient, info)
@@ -255,3 +249,7 @@ def test_alm_lbfgs_supports_infinite_and_fixed_bounds(bounds, start, target):
     assert bool(jnp.all(params[0] >= bounds[0]))
     assert bool(jnp.all(params[0] <= bounds[1]))
     assert bool(jnp.allclose(params[0], target, rtol=1e-3, atol=1e-3))
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])
