@@ -126,21 +126,21 @@ def _biot_savart(points, gamma, gamma_dash, currents, chunk=8, gradient=False):
     def step(acc, c):
         g, gd, i = c
         r = x - g
-        w = i[:, None] * jnp.sum(r**2, axis=-1)**-1.5
-        cross = jnp.cross(gd, r)
-        B = acc[0] + jnp.einsum("ca,cai->i", w, cross, optimize="greedy")
-        if not gradient:
-            return (B,), None
-        S = jnp.einsum("ca,cai->i", w, gd, optimize="greedy")
-        r2 = jnp.sum(r**2, axis=-1)
-        J = jnp.cross(S, jnp.eye(3)).T - 3 * jnp.einsum("ca,cai,caj->ij", w / r2, cross, r, optimize="greedy")
-        return (B, acc[1] + J), None
+        r2 = jnp.sum(r**2, axis=-1, keepdims=True)
+        w = i[:, None, None] * r2**-1.5
+        cross = w * jnp.cross(gd, r)
+        terms = [cross]
+        if gradient:  # S = sum w dl gives the (dl x e_j)/r^3 part, the rest is -3 (dl x r) r^T / r^2
+            terms += [w * gd, (-3 / r2 * cross)[..., :, None] * r[..., None, :]]
+        terms[1:] = [t.reshape(*t.shape[:2], -1) for t in terms[1:]]
+        total = jnp.sum(jnp.concatenate(terms, axis=-1), axis=(0, 1))
+        return acc + total, None
 
-    dtype = jnp.result_type(x, gamma, currents)
-    acc0 = (jnp.zeros(3, dtype),) + ((jnp.zeros((3, 3), dtype),) if gradient else ())
-    out = lax.scan(step, acc0, xs)[0]
-    scale = 1e-7 / gamma.shape[1]
-    return tuple(scale * o for o in out) if gradient else scale * out[0]
+    acc0 = jnp.zeros(15 if gradient else 3, jnp.result_type(x, gamma, currents))
+    out = (step(acc0, [a[0] for a in xs])[0] if xs[0].shape[0] == 1 else lax.scan(step, acc0, xs)[0]) * (1e-7 / gamma.shape[1])
+    if not gradient:
+        return out
+    return out[:3], jnp.cross(out[3:6], jnp.eye(3)).T + out[6:].reshape(3, 3)
 
 
 class BiotSavart(MagneticField):
