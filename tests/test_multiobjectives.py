@@ -154,7 +154,6 @@ def test_plots_without_plotly_raise_clear_error(monkeypatch):
         MultiObjectiveOptimizer.plot_param_importances(None)
 
 
-
 def test_scaling_an_initialized_custom_loss_preserves_dependencies():
     loss = custom_loss(lambda x: jnp.sum(x*x), 'x')
     loss.dependencies = {'x': jnp.array([2., 3.])}
