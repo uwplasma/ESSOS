@@ -398,6 +398,56 @@ def test_surface_classifier_signed_distance_for_circular_torus():
         SurfaceClassifier(surface, h=0.1, padding=0.0)
 
 
+def test_particles_initialised_around_the_surface_axis_sit_at_the_requested_distance():
+    """The m = 0 modes of a circular torus give the axis circle R = R0, Z = 0.  Particles displaced by d in the
+    plane normal to its tangent satisfy sqrt((rho - R0)^2 + z^2) = d, in absolute units or as a fraction of the
+    distance to the boundary (radius a for this torus)."""
+    R0, a = 1.0, 0.2
+    torus = SurfaceRZFourier(jnp.array([R0, a]), jnp.array([0.0, a]), nfp=1, mpol=1, ntor=0, ntheta=16, nphi=16,
+                             close=False)
+    make = Particles.InitializeParticlesAroundSurfaceAxis
+    on_axis = make(torus, 4, distance_from_axis=0.0, n_arc_samples=32, min_vparallel_over_v=0.2,
+                   max_vparallel_over_v=0.4)
+    rho = jnp.hypot(on_axis.initial_xyz[:, 0], on_axis.initial_xyz[:, 1])
+    np.testing.assert_allclose(rho, R0, atol=1e-6)
+    np.testing.assert_allclose(on_axis.initial_xyz[:, 2], 0.0, atol=1e-6)
+    assert jnp.all((on_axis.initial_vparallel_over_v >= 0.2) & (on_axis.initial_vparallel_over_v <= 0.4))
+
+    ring = make(torus, 4, distance_from_axis=0.05, n_arc_samples=32, random_seed=3)
+    xyz = ring.initial_xyz
+    np.testing.assert_allclose(jnp.hypot(jnp.hypot(xyz[:, 0], xyz[:, 1]) - R0, xyz[:, 2]), 0.05, atol=1e-6)
+    again = make(torus, 4, distance_from_axis=0.05, n_arc_samples=32, random_seed=3)
+    np.testing.assert_allclose(again.initial_xyz, xyz)  # same seed, same particles
+
+    frac = make(torus, 2, distance_from_axis=0.5, n_arc_samples=32, distance_mode="fraction_to_boundary",
+                boundary_surface=torus, boundary_bisection_steps=8)
+    xyz = frac.initial_xyz
+    np.testing.assert_allclose(jnp.hypot(jnp.hypot(xyz[:, 0], xyz[:, 1]) - R0, xyz[:, 2]), 0.5 * a, atol=1.5e-2)
+
+    with pytest.raises(ValueError, match="distance_mode"):
+        make(torus, 2, distance_mode="bogus")
+    with pytest.raises(ValueError, match="boundary_surface is required"):
+        make(torus, 2, distance_mode="fraction_to_boundary")
+    with pytest.raises(ValueError, match="in \\[0, 1\\]"):
+        make(torus, 2, distance_from_axis=1.5, distance_mode="fraction_to_boundary", boundary_surface=torus)
+
+
+def test_joining_particle_sets_concatenates_and_requires_matching_species():
+    a = Particles(initial_xyz=jnp.zeros((2, 3)), initial_vparallel_over_v=jnp.array([0.1, 0.2]))
+    b = Particles(initial_xyz=jnp.ones((3, 3)), initial_vparallel_over_v=jnp.array([0.3, 0.4, 0.5]))
+    both = a.join(b)
+    assert both.nparticles == 5 and both.energy == a.energy and both.charge == a.charge
+    np.testing.assert_allclose(both.initial_vparallel_over_v, [0.1, 0.2, 0.3, 0.4, 0.5])
+    np.testing.assert_allclose(both.initial_xyz[2:], 1.0)
+    for other in (Particles(initial_xyz=jnp.ones((1, 3)), charge=-1.0 * a.charge),
+                  Particles(initial_xyz=jnp.ones((1, 3)), mass=2 * a.mass),
+                  Particles(initial_xyz=jnp.ones((1, 3)), energy=2 * a.energy)):
+        with pytest.raises(AssertionError):
+            a.join(other)
+    with pytest.raises(AssertionError, match="non-Particles"):
+        a.join(object())
+
+
 def test_vmec_fieldline_uses_the_lcfs_event():
     tracing = Tracing(
         field=MockVmec(), model="FieldLineArclength",
