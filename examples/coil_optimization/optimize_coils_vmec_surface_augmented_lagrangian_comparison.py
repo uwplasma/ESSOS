@@ -134,7 +134,7 @@ C_Total_constraint.dependencies = {"field": init_field}
 
 
 #If loss=cost_function(x) is not prescribed, f(x)=0 is considered, uncomment second line to use B dot N as a loss and not a constraint
-ALM=alm.ALM_model_lbfgs(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+ALM=alm.alm_model_lbfgs(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
 #Initializing lagrange multipliers
 lagrange_params=C_Total_constraint.init(init_field.dofs)

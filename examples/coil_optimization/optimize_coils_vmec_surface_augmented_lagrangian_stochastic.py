@@ -132,7 +132,7 @@ C_length_constraint.dependencies = {"field": field_initial}
 C_curvature_constraint.dependencies = {"field": field_initial}
 C_total_constraint.dependencies = {"field": field_initial}
 
-ALM = alm.ALM_model_lbfgs(constraints=C_total_constraint, model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max, alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol)
+ALM = alm.alm_model_lbfgs(constraints=C_total_constraint, model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max, alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol)
 
 """ Optimizing with alm """
 lagrange_params = C_total_constraint.init(field_initial.dofs)

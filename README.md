@@ -309,6 +309,18 @@ command if it is missing.
 pytest
 ```
 
+## API changes: names
+
+The PEP 8 renames below are breaking; update calls as shown.
+
+| Old | New |
+| --- | --- |
+| `Electric_field_flux` | `ElectricFieldFlux` |
+| `Electric_field_zero` | `ElectricFieldZero` |
+| `BackgroundSpecies.species_indeces` | `BackgroundSpecies.species_indices` |
+| `ALM_model_lbfgs` | `alm_model_lbfgs` |
+| `ALM_model_jaxopt_lbfgsb` (alias) | `alm_model_lbfgs` |
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

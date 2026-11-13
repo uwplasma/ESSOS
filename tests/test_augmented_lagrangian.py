@@ -15,7 +15,7 @@ from essos.augmented_lagrangian import (
     penalty_average,
     BaseConstraint,
     ALM,
-    ALM_model_lbfgs,
+    alm_model_lbfgs,
 )
 
 class TestAugmentedLagrangian(unittest.TestCase):
@@ -161,13 +161,13 @@ class TestAugmentedLagrangian(unittest.TestCase):
 
     # ---- ALM model tests ----
 
-    def test_ALM_model_lbfgs_init_and_update(self):
+    def test_alm_model_lbfgs_init_and_update(self):
         def fun(x): return x - 1
         constraint = eq(fun)
         main_params = jnp.array([6.0,2.0])        
         lagrange_params = constraint.init(main_params)
         params = main_params,lagrange_params            
-        alm = ALM_model_lbfgs(constraint)
+        alm = alm_model_lbfgs(constraint)
         self.assertIsInstance(alm, ALM)
         state,grad,info = alm.init(params)
         alm.update(params, state,grad,info)
@@ -178,7 +178,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = ineq(h, model_lagrangian=model_lagrangian)
         main_params = jnp.array([0.0])
         params = main_params, constraint.init(main_params)
-        alm = ALM_model_lbfgs(
+        alm = alm_model_lbfgs(
             constraint, loss=loss, model_lagrangian=model_lagrangian)
         state, grad, info = alm.init(params)
         for _ in range(iters):
@@ -205,7 +205,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         constraint = eq(lambda x: x - 150.0)
         main_params = jnp.array([0.0])
         params = main_params, constraint.init(main_params)
-        alm = ALM_model_lbfgs(constraint)
+        alm = alm_model_lbfgs(constraint)
         state, grad, info = alm.init(params)
         for _ in range(10):
             params, state, grad, info = alm.update(params, state, grad, info)
@@ -215,7 +215,7 @@ class TestAugmentedLagrangian(unittest.TestCase):
         # eq constraint x = 150 inside the box [0, 100] -> x at the upper bound
         constraint = eq(lambda x: x - 150.0)
         params = jnp.array([10.0]), constraint.init(jnp.array([10.0]))
-        alm = ALM_model_lbfgs(constraint, bounds=(0.0, 100.0))
+        alm = alm_model_lbfgs(constraint, bounds=(0.0, 100.0))
         state, grad, info = alm.init(params)
         for _ in range(5):
             params, state, grad, info = alm.update(params, state, grad, info)

@@ -268,7 +268,7 @@ def guiding_center_rhs(field, y, mu, mass, charge):
 
 
 def _collision_rates(species, mass, charge, v, point):
-    idx = species.species_indeces
+    idx = species.species_indices
 
     def total(nu):
         return jnp.sum(jax.vmap(nu, in_axes=(None, None, 0, None, None, None))(

@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from essos.fields import Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.dynamics import Tracing, Particles
-from essos.electric_field import Electric_field_flux
+from essos.electric_field import ElectricFieldFlux
 import numpy as np
 
 # Input parameters
@@ -27,7 +27,7 @@ vmec = Vmec(wout_file)
 
 #Load electric field
 Er_file = os.path.join(os.path.dirname(__file__), "..", "input_files", "Er.h5")
-Electric_field=Electric_field_flux(Er_filename=Er_file,vmec=vmec)
+electric_field = ElectricFieldFlux(Er_filename=Er_file,vmec=vmec)
 
 # Initialize particles
 Z0 = jnp.zeros(nparticles)
@@ -38,7 +38,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=vmec, electric_field=Electric_field,model='GuidingCenterAdaptative', particles=particles, maxtime=tmax,
+tracing = Tracing(field=vmec, electric_field=electric_field,model='GuidingCenterAdaptative', particles=particles, maxtime=tmax,
                   timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")

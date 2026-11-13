@@ -759,7 +759,7 @@ class ALM(NamedTuple):
 
 
 #Inner solve with optimistix L-BFGS; a (lower, upper) box is enforced by a tanh reparametrization
-def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
+def alm_model_lbfgs(constraints: BaseConstraint,#List of constraints
     loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
     model_lagrangian='Standard',
     model_mu='Mu_Tolerance',
@@ -852,7 +852,6 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
     return ALM(init_fn,partial(update_fn,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol))
 
 
-ALM_model_jaxopt_lbfgsb = ALM_model_lbfgs  # former name
 
 
 

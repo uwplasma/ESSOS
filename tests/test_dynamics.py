@@ -683,14 +683,14 @@ class _MuField:
 
 def _mu_collision_setup(v, xi):
     from essos.constants import SPEED_OF_LIGHT
-    from essos.dynamics import Electric_field_zero
+    from essos.dynamics import ElectricFieldZero
     m = PROTON_MASS
     particles = type("P", (), {"mass": m, "charge": 1.602176634e-19})()
     species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e20]), jnp.array([1e3]))
     scale = jnp.array([SPEED_OF_LIGHT, SPEED_OF_LIGHT**2 * m])
     z = jnp.array([xi * v, m * v**2 * (1 - xi**2) / 4.0])
     state = jnp.concatenate([jnp.array([1., 0., 0.]), z / scale])
-    return state, scale, (_MuField(), particles, Electric_field_zero(), species, 1.0)
+    return state, scale, (_MuField(), particles, ElectricFieldZero(), species, 1.0)
 
 
 def _enable_x64():
@@ -1215,12 +1215,12 @@ def test_exterior_arguments_are_validated():
 
 def test_guiding_center_mu_matches_guiding_center():
     from essos.dynamics import GuidingCenterMu
-    from essos.electric_field import Electric_field_zero
+    from essos.electric_field import ElectricFieldZero
 
     field, particles = MockField(), Particles(jnp.array([[1.0, 0.0, 0.0]]))
     y = jnp.array([1.0, 0.2, 0.1, 3e6])
     mu = (particles.energy - 0.5 * particles.mass * y[3]**2) / field.AbsB(y[:3])
-    args = (field, particles, Electric_field_zero())
+    args = (field, particles, ElectricFieldZero())
     assert jnp.allclose(GuidingCenterMu(0.0, jnp.append(y, mu), args)[:4], GuidingCenter(0.0, y, args))
     assert GuidingCenterMu(0.0, jnp.append(y, mu), args)[4] == 0.0
 
