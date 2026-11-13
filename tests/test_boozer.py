@@ -538,6 +538,38 @@ def test_unrun_booz_xform_takes_the_batched_pass_and_matches_the_host_run():
     np.testing.assert_allclose(batched.profiles(0.5)[0], host.profiles(0.5)[0], rtol=1e-12)
 
 
+def test_unrun_booz_xform_takes_the_magnetic_only_pass(monkeypatch):
+    """With ``booz_xform_jax >= 0.5.2`` the batched pass computes only the magnetic quantities and agrees with ``run()``."""
+    pytest.importorskip("booz_xform_jax")
+    import functools
+    import inspect
+    from pathlib import Path
+    from booz_xform_jax import Booz_xform
+
+    if "magnetic_only" not in inspect.signature(Booz_xform.run_jax).parameters:
+        pytest.skip("booz_xform_jax < 0.5.2")
+    wout = Path(__file__).parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+    calls = []
+    run_jax = Booz_xform.run_jax
+
+    @functools.wraps(run_jax)
+    def spy(self, **kw):
+        calls.append(kw)
+        return run_jax(self, **kw)
+
+    monkeypatch.setattr(Booz_xform, "run_jax", spy)
+    batched, host = (Booz_xform(verbose=0, mboz=8, nboz=8) for _ in range(2))
+    for booz in (batched, host):
+        booz.read_wout(str(wout), flux=False)
+    host.run()
+    magnetic = BoozerField.from_booz_xform(batched, PSI0, angle_grid=None)
+    assert calls == [{"magnetic_only": True}]
+    reference = BoozerField.from_booz_xform(host, PSI0, angle_grid=None)
+    for point in ((0.3, 0.7, 0.2), (0.9, 2.0, 1.1)):
+        np.testing.assert_allclose(magnetic.modB_derivatives(*point), reference.modB_derivatives(*point), rtol=1e-12, atol=1e-13)
+    np.testing.assert_allclose(magnetic.profiles(0.5)[0], reference.profiles(0.5)[0], rtol=1e-13)
+
+
 @pytest.mark.parametrize("compact", [True, False])
 def test_lost_orbits_keep_exterior_terminal_diagnostics_apart(compact):
     """Issue #115: coarse steps that leave the tables must not pollute interior diagnostics."""
