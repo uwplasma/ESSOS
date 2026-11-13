@@ -103,6 +103,8 @@ def iota_approx_on_surface(surface, field, regularization=None, *,
     The fit does not enforce invertibility of theta*. Optional diagnostics give
     the RMS PDE residual and minimum ``1 + d(lambda)/d(theta)``; a small residual
     alone does not establish a valid straight-field-line coordinate system.
+    Diagnostic lambda coefficients are ordered as sine modes, followed by
+    cosine partners for an asymmetric surface; the constant mode is omitted.
     By default, the normal-field error sets the ridge strength: resolving a
     coordinate correction below that surface error is unreliable. An explicit
     ``regularization`` overrides this choice. Check the result independently.
@@ -126,11 +128,14 @@ def iota_approx_on_surface(surface, field, regularization=None, *,
     derivative = xm[None, :] * slope[:, None] - xn[None, :]
     columns = -derivative * jnp.cos(angles)
     theta_derivative_columns = xm[None, :] * jnp.cos(angles)
+    phi_derivative_columns = -xn[None, :] * jnp.cos(angles)
     if surface.rs is not None or surface.zc is not None:
         # Cosine lambda modes are needed when stellarator symmetry is absent.
         columns = jnp.concatenate((columns, derivative * jnp.sin(angles)), axis=1)
         theta_derivative_columns = jnp.concatenate(
             (theta_derivative_columns, -xm[None, :] * jnp.sin(angles)), axis=1)
+        phi_derivative_columns = jnp.concatenate(
+            (phi_derivative_columns, xn[None, :] * jnp.sin(angles)), axis=1)
     A = jnp.concatenate((jnp.ones((slope.size, 1)), columns), axis=1)
 
     # Apply the same endpoint quadrature as surface integrals. Normalize it so
@@ -157,6 +162,9 @@ def iota_approx_on_surface(surface, field, regularization=None, *,
         mean_squared_residual = jnp.sum(weights * (A @ solution - slope)**2)
         angle_jacobian = 1 + theta_derivative_columns @ solution[1:]
         return {"iota": solution[0],
+                "lambda_coefficients": solution[1:],
+                "lambda_theta": angle_jacobian.reshape(surface.nphi, surface.ntheta) - 1,
+                "lambda_phi": (phi_derivative_columns @ solution[1:]).reshape(surface.nphi, surface.ntheta),
                 "rms_residual": jnp.sqrt(mean_squared_residual),
                 "minimum_angle_jacobian": jnp.min(angle_jacobian)}
     return solution[0]

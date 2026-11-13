@@ -16,14 +16,10 @@ from essos.surfaces import ( SurfaceRZFourier, BdotN_over_B,
 from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean_squared, loss_coil_curvature_from_field,
                                         loss_coil_length_max, loss_cross_sectional_area_mean,
-                                        loss_quasi_symmetry, loss_iota_approx,
+                                        loss_quasi_symmetry_two_term, loss_iota_approx,
                                         quasi_symmetry_residual_on_surface )
 
 from scipy.optimize import minimize
-
-# Imports to run VMEX after the optimization is obtained.
-from dataclasses import replace
-import vmex as vj
 
 import datetime
 
@@ -50,13 +46,15 @@ LOAD_RESULT = False
 RESTART_FROM = False
 restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it00")
 SURFACE_MPOL = 1; SURFACE_NTOR = 1   # maximum boundary m and |n|
-VMEC_MPOL = max(SURFACE_MPOL + 2, 5); VMEC_NTOR = max(SURFACE_NTOR + 2, 5)
-# Boundary modes + 2 (minimum 5) is a starting resolution; refine VMEX to check QA/iota.
-# Continuation: set RESTART_FROM, restart_filepath, output_filepath, and surface modes.
-# Short continuation: mode 2 uses IOTA_MODES=8; mode 3 uses 12 and a 64 x 65 grid.
-# For mode 3, start with CONSTRAINT_WEIGHT=3e7, QS_WEIGHT=1e5 and scales 0.05/0.02.
-# IOTA_MODES can be raised independently when checking the fitted angle.
-# Coil order follows the surface limits; check final VMEX resolution independently.
+VMEC_MPOL = SURFACE_MPOL + 2; VMEC_NTOR = SURFACE_NTOR + 2
+# Start mode 1 cold, then restart modes 2 through 5 from the preceding mode folder.
+# Set RESTART_FROM, restart_filepath, output_filepath, and boundary modes for each run.
+# Keep the same six weights; the defaults below follow the cold mode 1-to-5 ladder.
+# For a resolved mode-5 polish, restart from mode 5 with the same boundary/coil order;
+# override IOTA_MODES=12, ntheta=64, nphi=65, N_SEGMENTS=192, MAXITER=80 below.
+# Check final QA/iota with denser ESSOS quadrature and refined VMEX equilibria.
+IOTA_MODES = 6 if max(SURFACE_MPOL, SURFACE_NTOR) == 1 else max(8, max(SURFACE_MPOL, SURFACE_NTOR) + 5)
+# Shared QS/iota straight-angle cutoffs, independent of boundary modes.
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -64,13 +62,15 @@ input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_input = os.path.join(input_filepath, 'input.toroidal_surface_02')
 
 # SURFACE PARAMETERS -----------------------------------------------------------------
-ntheta = 32; nphi = 33
+ntheta = 24 if max(SURFACE_MPOL, SURFACE_NTOR) == 1 else max(32, 4 * IOTA_MODES)
+nphi = ntheta + 1
 
 # COILS PARAMETERS -------------------------------------------------------------------
 # The coils are initialized as equally spaced curves around a torus.
 N_COILS = 4; FOURIER_ORDER = 2 * max(SURFACE_MPOL, SURFACE_NTOR) + 2
 LARGE_R = 10; SMALL_R = 5.6; NFP = 2;
-N_SEGMENTS = 64; STELLSYM = True
+N_SEGMENTS = 32 if max(SURFACE_MPOL, SURFACE_NTOR) == 1 else max(64, 8 * FOURIER_ORDER)
+STELLSYM = True
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 #  CONTROL PARAMETERS FOR THE OPTIMIZATION -------------------------------------------
@@ -80,19 +80,18 @@ COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 # Six physical objectives: normal field, QS, iota, section area, length, curvature.
 CONSTRAINT_WEIGHT = 3e6  # Common weight for B.n/B, target iota, and section area.
-QS_WEIGHT = 1e4          # Globally normalized helicity-free three-term product.
+QS_WEIGHT = 2e5          # Vacuum two-term QA objective; requires a regular flux-surface fit.
 LENGTH_WEIGHT = 30.; LENGTH_TARGET = 50.
 CURVATURE_WEIGHT = 1500.; CURVATURE_TARGET = 2.
-CURVATURE_SEGMENTS = 256  # Resolve curvature independently of field quadrature.
+CURVATURE_SEGMENTS = max(128, 16 * FOURIER_ORDER)  # Independent curvature quadrature.
 IOTA_APPROX_TARGET = 0.41
-IOTA_MODES = 6           # Resolve the straight-field-angle correction.
 
 # B) x_scale  → controls how easily variables move
 SCALE_FIELD = 2.18
 SCALE_SURFACE = 1.
 
 # Numerical method parameters --------------------------------------------------------
-MAXITER=80
+MAXITER = 80 if max(SURFACE_MPOL, SURFACE_NTOR) == 1 else 40
 
 
 # ====================================================================================
@@ -149,7 +148,8 @@ CROSS_SECTIONAL_AREA_TARGET = float(jnp.mean(surface_reference.area_section_by_p
 L_normal_field = custom_loss( loss_BdotN_mean_squared, "field", "surface" )
 L_length_max = custom_loss( loss_coil_length_max , "field", max_coil_length=LENGTH_TARGET, squared=True )
 L_curvature = custom_loss( loss_coil_curvature_from_field , "field" , max_coil_curvature=CURVATURE_TARGET, n_segments=CURVATURE_SEGMENTS )
-L_quasi_symmetry = custom_loss(loss_quasi_symmetry, "field", "surface")
+L_quasi_symmetry = custom_loss(loss_quasi_symmetry_two_term, "field", "surface",
+                               lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES)
 L_cross_sectional_area = custom_loss( loss_cross_sectional_area_mean, "surface", target_area=CROSS_SECTIONAL_AREA_TARGET )
 L_iota_approx = custom_loss( loss_iota_approx, "field", "surface", iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES )
 
@@ -208,14 +208,21 @@ else:
         return float(value), np.asarray(gradient * x_scale_optimization)
     x_initial = np.asarray(L_total.starting_dofs / x_scale_optimization)
     bounds = [(None, None)] * x_initial.size
-    # R00 is the first surface coefficient; keep the major radius fixed.
-    bounds[NN_field_dofs] = (x_initial[NN_field_dofs], x_initial[NN_field_dofs])
+    # Fix the major radius and the identically zero ZBS(0,0) sine coefficient.
+    # All coil currents remain free.
+    for index in (NN_field_dofs, NN_field_dofs + surface_init.rc.size):
+        bounds[index] = (x_initial[index], x_initial[index])
     res = minimize(scaled_value_and_grad, x_initial,
                    jac=True, method="L-BFGS-B", bounds=bounds,
                    callback=lambda intermediate_result: print(f"Cost: {intermediate_result.fun:.6e}"),
-                   options={'maxiter': MAXITER, 'maxcor': 128, 'maxls': 40, 'ftol': 1e-12, 'gtol': 1e-8})
+                   options={'maxiter': MAXITER, 'maxcor': 50, 'maxls': 30, 'ftol': 1e-12, 'gtol': 1e-8})
     res.x = np.asarray(res.x * x_scale_optimization)
-    jnp.save(os.path.join(output_filepath, "res_x.npy"), res.x)
+    jnp.save(os.path.join(output_filepath, "res_x.npy"), res.x)  # Retain the checkpoint on failure.
+    print("Optimizer stop:", res.status, res.message)
+    if not (np.isfinite(res.fun) and np.all(np.isfinite(res.x))):
+        raise RuntimeError("L-BFGS-B returned a nonfinite objective or state")
+    if not (res.success or (res.status == 1 and res.nit >= MAXITER)):
+        raise RuntimeError(f"L-BFGS-B stopped before convergence or the iteration budget: {res.message}")
 
 t_end = time()
 
@@ -253,7 +260,7 @@ print("Optimizer status:", getattr(res, 'message', 'loaded result'))
 print("\nLOSSES (initial, optimized; raw and weighted):")
 for name, weight, loss in (
     ("Normal field", CONSTRAINT_WEIGHT, L_normal_field),
-    ("Quasisymmetry", QS_WEIGHT, L_quasi_symmetry),
+    ("Two-term QA", QS_WEIGHT, L_quasi_symmetry),
     ("Iota", CONSTRAINT_WEIGHT, L_iota_approx),
     ("Section area", CONSTRAINT_WEIGHT, L_cross_sectional_area),
     ("Coil length", LENGTH_WEIGHT, L_length_max),
@@ -275,7 +282,7 @@ print("mean abs residual (optimized):",jnp.mean(jnp.abs(B_dot_n_over_B_opt)) )
 print("max abs residual (initial):",jnp.max(jnp.abs(B_dot_n_over_B_init)) )
 print("max abs residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) )
 print("\n---------------------------------------------------------------------------")
-print("Quasi-symmetry residuals and losses:")
+print("Three-term QS diagnostic (the optimized objective is two-term QA):")
 QS_residual_xyz_init = quasi_symmetry_residual_on_surface(field_init, surface_init)
 QS_residual_xyz_opt = quasi_symmetry_residual_on_surface(field_opt, surface_opt)
 print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz_init)))
@@ -290,6 +297,9 @@ fit = iota_approx_on_surface(surface_opt, field_opt, lambda_mpol=IOTA_MODES, lam
 print("iota (optimized):", fit["iota"])
 print("Straight-angle fit RMS and minimum Jacobian:", fit["rms_residual"], fit["minimum_angle_jacobian"])
 print("RMS B.n/B:", jnp.sqrt(jnp.mean(B_dot_n_over_B_opt**2)))
+if (not np.all(np.isfinite([fit["iota"], fit["rms_residual"], fit["minimum_angle_jacobian"]]))
+        or float(fit["minimum_angle_jacobian"]) <= 0):
+    raise ValueError("Final straight-angle fit is invalid; refine or restart before interpreting QA")
 
 print("\n---------------------------------------------------------------------------")
 print("Nonaxisymmetric coefficient amplitude:")
@@ -463,11 +473,15 @@ if EXPORT:
     if not np.isfinite(phiedge) or phiedge == 0 or bool(jnp.any(signed_area == 0)):
         raise ValueError("VMEX requires finite nonzero toroidal flux and valid boundary sections")
     print("Toroidal flux (Wb), relative spread:", phiedge, float(jnp.ptp(fluxes) / abs(phiedge)))
-    vmec_inp = replace(vj.VmecInput.from_file(vmec_input_file), ncurr=1, phiedge=phiedge)
-    vmec_inp.to_indata(vmec_input_file)
+    # Patch only the physical flux, preserving boundary array indices and formatting.
+    import f90nml
+    f90nml.patch(vmec_input_file, {"indata": {"phiedge": phiedge}}, vmec_input_file + ".tmp")
+    os.replace(vmec_input_file + ".tmp", vmec_input_file)
 
     """ Fixed-boundary VMEX equilibrium of the optimized surface """
     if RUN_VMEX:
+        import vmex as vj
+        vmec_inp = vj.VmecInput.from_file(vmec_input_file)
         # All VMEX results (wout, boozmn and figures) go to their own subfolder inside the run folder.
         vmex_output_filepath = os.path.join(output_filepath, "vmex_output")
         os.makedirs(vmex_output_filepath, exist_ok=True)
