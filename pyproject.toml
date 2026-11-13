@@ -56,6 +56,7 @@ dependencies = [
     "f90nml",
     # Used internally by SurfaceRZFourier.to_vtk() and Coils.to_vtk().
     "pyevtk",
+    "tomli; python_version < '3.11'",
 ]
 
 # pyQSC_JAX is not on PyPI, and PyPI rejects any distribution that names a
