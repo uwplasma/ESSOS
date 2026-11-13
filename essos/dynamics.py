@@ -1018,10 +1018,16 @@ def _batch_solver(tracing, place):
 class Tracing():
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
-                 rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
+                 rtol=None, atol=None, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
                  solver=None, stopping_criteria=None, progress=True, devices=None,
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
-                 particle_batch_size=None, adjoint=None):
+                 particle_batch_size=None, integrator="diffrax", native_error_control="physics",
+                 orbit_length_scale=1., orbit_speed_scale=None,
+                 native_controller="i", native_pcoeff=.4, native_icoeff=.3, adjoint=None):
+
+        from essos.rk import _configure_tracing as configure
+        configure(self, integrator, model, solver, native_error_control, orbit_length_scale,
+                  orbit_speed_scale, native_controller, native_pcoeff, native_icoeff)
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")
@@ -1057,8 +1063,9 @@ class Tracing():
         self.times_to_trace = times_to_trace
         self.maxtime = maxtime
         self.timestep = timestep
-        self.rtol = rtol
-        self.atol = atol
+        default_tolerance = 1e-7 if integrator == "diffrax" else 1e-9
+        self.rtol = default_tolerance if rtol is None else rtol
+        self.atol = default_tolerance if atol is None else atol
         self._trajectories = trajectories_input
         self.particles = particles
         self.species=species
@@ -1332,9 +1339,11 @@ class Tracing():
         return tree_util.tree_map(lambda *x: jnp.asarray(np.concatenate(x)), *results)
 
     def _terms(self, key, flag=False, events=()):
-        """Diffrax terms, solver and step-size controller of self.model (with _with_failure_flag if ``flag``)."""
+        """Terms and stepping configuration, with a failure flag for VMEC segments."""
         flagged = (lambda f, drift=True: _with_failure_flag(f, drift)) if flag else (lambda f, drift=True: f)
         dt0, model = self.timestep, self.model
+        if self.integrator != "diffrax":
+            return flagged(self.ODE_term.vector_field), None, model in _ADAPTIVE_MODELS
         if model in _SDE_MODELS:
             drift, diffusion, solver, dim = _SDE_MODELS[model]
             # With flag (segments), a vmapped solve of an orbit that starts at maxtime evaluates the path
@@ -1358,8 +1367,11 @@ class Tracing():
                                      dtmin=dt0 if model == 'FullOrbitCollisions' else None, events=events)
         return terms, solver, controller
 
-    def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False):
-        """diffeqsolve from t0 to maxtime, saving at self.times (clipped to t0) and at the end."""
+    def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False, *, exterior=False, flag=False):
+        """Integrate to maxtime, saving at self.times (clipped to t0) and at the end."""
+        if self.integrator != "diffrax":
+            from essos.rk import _solve_tracing as solve_trace
+            return solve_trace(self, terms, controller, t0, y0, args, event, throw, exterior, flag)
         import warnings
         warnings.simplefilter("ignore", category=FutureWarning)  # see https://github.com/patrick-kidger/diffrax/issues/445
         return diffeqsolve(terms, solver, t0=t0, t1=self.maxtime, dt0=self.timestep, y0=y0, args=args,
@@ -1396,9 +1408,11 @@ class Tracing():
         if ext is not None:
             wall = self.wall if self.wall is not None else (lambda x: jnp.ones(()))
             depth = lambda y: self.field.boundary_distance(y[:3]) - self.reentry_depth
-            outside = (ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else
-                       diffrax.Dopri8(), _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
-                                                     events=(lambda y: wall(y[:3]), depth)),
+            exterior_terms = ((_with_failure_flag(GuidingCenterMu), None, True) if self.integrator != "diffrax" else
+                              (ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else
+                               diffrax.Dopri8(), _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
+                                                             events=(lambda y: wall(y[:3]), depth))))
+            outside = (*exterior_terms,
                        (ext, self.particles, Electric_field_zero()),
                        Event((lambda t, y, args, **kwargs: wall(y[:3]), lambda t, y, args, **kwargs: depth(y), _failed_event),
                              root_finder=_EVENT_ROOT_FINDER))
@@ -1407,7 +1421,8 @@ class Tracing():
             """Solve one segment of the orbits in ``run`` and record its saves."""
             # A lane that does not run starts just before maxtime, not at it: diffrax 0.7.0 differentiates an event root
             # find over a zero-length step with a non-finite Jacobian, which its linear solver rejects in reverse mode.
-            solution = self._solve(*spec[:3], jnp.where(run, o["t"], T * (1 - 1e-9)), jnp.append(y, 0.0), *spec[3:])
+            solution = self._solve(*spec[:3], jnp.where(run, o["t"], T * (1 - 1e-9)), jnp.append(y, 0.0), *spec[3:],
+                                   exterior=code != 0, flag=True)
             saves, end = vmap(to_flux)(solution.ys[0][:, :-1]), to_flux(solution.ys[1][-1, :-1])
             failed = run & (solution.event_mask[-1] | ~((solution.result == diffrax.RESULTS.successful)
                             | (solution.result == diffrax.RESULTS.event_occurred)
