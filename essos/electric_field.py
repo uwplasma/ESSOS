@@ -30,6 +30,13 @@ class Electric_field_flux():
 class Electric_field_zero():
     def __init__(self):
         self.Er_filename = None
+
+    # Stateless: every instance equals every other, so jit calls with it as a static argument share one compilation.
+    def __eq__(self, other):
+        return type(other) is Electric_field_zero
+
+    def __hash__(self):
+        return hash(Electric_field_zero)
         
     @partial(jit, static_argnames=['self'])
     def E_covariant(self, points):
