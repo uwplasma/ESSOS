@@ -91,3 +91,45 @@ def test_a_batched_source_is_wrapped(field):
     kwargs = dict(R=(1.5, 2.0), Z=(-0.2, 0.2), nr=6, nz=6, nphi=8)
     np.testing.assert_allclose(InterpolatedField(batched, **kwargs).table, InterpolatedField(field, **kwargs).table,
                                atol=1e-15)  # entries that vanish analytically are round-off
+
+
+def test_queries_outside_the_box_are_nan_and_small_chunks_change_nothing(field):
+    f = InterpolatedField(field, nr=8, nz=8, nphi=12, **BOX)
+    inside, outside = jnp.array([1.7, 0.1, 0.05]), jnp.array([[2.1, 0.0, 0.0], [1.7, 0.0, 0.4], [1.2, 0.0, 0.0]])
+    assert jnp.isfinite(f.B(inside)).all() and jnp.isfinite(f.dB_by_dX(inside)).all()
+    assert jnp.isnan(vmap(f.B)(outside)).all() and jnp.isnan(vmap(f.dB_by_dX)(outside)).all()
+    np.testing.assert_allclose(InterpolatedField(field, nr=8, nz=8, nphi=12, chunk_size=1, **BOX).table, f.table, atol=1e-12)
+
+
+def test_a_table_of_a_field_that_jumps_across_a_surface_is_exact_outside_a_guard_band():
+    a, R0 = 0.25, 1.7
+    th, ph = np.linspace(0, 2 * np.pi, 48, endpoint=False), np.linspace(0, 2 * np.pi, 48, endpoint=False)
+    rho = (R0 + a * np.cos(th))[None] * np.ones((48, 1))
+    torus = type("Torus", (), {"gamma": np.stack((rho * np.cos(ph)[:, None], rho * np.sin(ph)[:, None],
+                                                   a * np.sin(th)[None] * np.ones((48, 1))), -1)})()
+
+    def smooth(x):
+        return jnp.array([jnp.sin(x[0]) * jnp.cos(x[1]), 0.3 * x[2] + x[0] * x[1], jnp.cos(x[2] + x[0])])
+
+    class Jumping(MagneticField):  # the smooth field outside the torus, zero inside it
+        def B(self, x):
+            return jnp.where(jnp.hypot(jnp.hypot(x[0], x[1]) - R0, x[2]) < a, 0.0, smooth(x))
+
+    f = InterpolatedField(Jumping(), R=(R0 - a - 0.2, R0 + a + 0.2), Z=(-a - 0.2, a + 0.2), nr=32, nz=32, nphi=48,
+                          nfp=1, exclude=torus, guard=3)
+    rng = np.random.default_rng(0)
+    th, ph, d = rng.uniform(0, 2 * np.pi, 400), rng.uniform(0, 2 * np.pi, 400), rng.uniform(0, 0.2, 400)
+    r = a + d
+    xyz = jnp.array(np.c_[(R0 + r * np.cos(th)) * np.cos(ph), (R0 + r * np.cos(th)) * np.sin(ph), r * np.sin(th)])
+    got, ref = vmap(f.B)(xyz), vmap(smooth)(xyz)
+    ok = jnp.isfinite(got).all(1)
+    h = 2 * (a + 0.2) / 31
+    assert ok.all()  # the guard band is evaluated from the source, never NaN
+    scale = float(jnp.abs(ref).max())
+    assert float(jnp.abs(got - ref)[d < 2 * h].max()) < 1e-12 * scale  # exact in the guard band
+    assert float(jnp.abs(got - ref)[d > 5 * h].max()) < 1e-3 * scale  # table beyond it
+    np.testing.assert_allclose(vmap(f.dB_by_dX)(xyz[d < 2 * h]), vmap(jax.jacfwd(smooth))(xyz[d < 2 * h]), atol=1e-12)
+    naive = InterpolatedField(Jumping(), R=(R0 - a - 0.2, R0 + a + 0.2), Z=(-a - 0.2, a + 0.2), nr=32, nz=32, nphi=48, nfp=1)
+    assert float(jnp.abs(vmap(naive.B)(xyz) - ref)[d < 2 * h].max()) > 0.3 * scale  # a spline across the jump is wrong by O(1)
+    assert jnp.isnan(f.B(jnp.array([R0 + a + 0.3, 0.0, 0.0]))).all()  # outside the box stays NaN
+    assert jnp.abs(f.B(jnp.array([R0, 0.0, 0.0]))).max() == 0  # inside the surface: the source itself
