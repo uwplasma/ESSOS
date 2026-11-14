@@ -57,10 +57,10 @@ CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.4
 BAXIS_WEIGHT = 1.; BAXIS_TARGET = 5.7
 RADIAL_DRIFT_WEIGHT = 1.
 
-def loss_particle_radial_drift(field, particles, timestep=1.e-8, maxtime=1e-4, num_steps=300, trace_tolerance=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_radial_drift(field, particles, timestep=1.e-8, tmax=1e-4, n_save=300, rtol=1e-5, model='GuidingCenterAdaptative',boundary=None):
     particles.to_full_orbit(field)
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime,
-                      timestep=timestep,times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance,boundary=boundary)
+    tracing = Tracing(field=field, model=model, particles=particles, tmax=tmax,
+                      timestep=timestep,n_save=n_save, rtol=rtol,boundary=boundary)
     xyz = tracing.trajectories[:,:, :3]
     R_axis=field.r_axis
     Z_axis=field.z_axis
@@ -93,7 +93,7 @@ particles = Particles(initial_xyz=initial_xyz)
 
 
 """ Defining custom losses """
-L_radial_drift= custom_loss(loss_particle_radial_drift, "field", particles=particles, timestep=TIMESTEP, maxtime=MAXTIME_TRACING, num_steps=NUM_STEPS, trace_tolerance=TRACE_TOLERANCE, model=MODEL) 
+L_radial_drift= custom_loss(loss_particle_radial_drift, "field", particles=particles, timestep=TIMESTEP, tmax=MAXTIME_TRACING, n_save=NUM_STEPS, rtol=TRACE_TOLERANCE, model=MODEL) 
 L_B_axis= custom_loss(loss_normB_axis_average, "field")
 L_length = custom_loss(loss_length, "field")
 L_curvature = custom_loss(loss_curvature, "field")
@@ -119,8 +119,8 @@ phi_array_plot = jnp.linspace(0, 2*jnp.pi, NPARTICLES_PLOT)
 initial_xyz_plot=jnp.array([LARGE_R*jnp.cos(phi_array_plot), LARGE_R*jnp.sin(phi_array_plot), 0*phi_array_plot]).T
 particles_plot = Particles(initial_xyz=initial_xyz_plot)
 particles_plot.to_full_orbit(opt_field)
-tracing_initial = Tracing(field=init_field, particles=particles_plot, maxtime=MAXTIME_TRACING_PLOT, model=MODEL, times_to_trace=NUM_STEPS, timestep=TIMESTEP, atol=TRACE_TOLERANCE, rtol=TRACE_TOLERANCE)
-tracing_optimized = Tracing(field=opt_field, particles=particles_plot, maxtime=MAXTIME_TRACING_PLOT, model=MODEL, times_to_trace=NUM_STEPS, timestep=TIMESTEP, atol=TRACE_TOLERANCE, rtol=TRACE_TOLERANCE)
+tracing_initial = Tracing(field=init_field, particles=particles_plot, tmax=MAXTIME_TRACING_PLOT, model=MODEL, n_save=NUM_STEPS, timestep=TIMESTEP, atol=TRACE_TOLERANCE, rtol=TRACE_TOLERANCE)
+tracing_optimized = Tracing(field=opt_field, particles=particles_plot, tmax=MAXTIME_TRACING_PLOT, model=MODEL, n_save=NUM_STEPS, timestep=TIMESTEP, atol=TRACE_TOLERANCE, rtol=TRACE_TOLERANCE)
 
 # Plot trajectories, before and after optimization
 fig = plt.figure(figsize=(9, 8))

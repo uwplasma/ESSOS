@@ -34,9 +34,9 @@ class MultiObjectiveOptimizer:
         self.order_Fourier = self.opt_config.get("order_Fourier", 6)
         self.num_points = self.order_Fourier * 10
         self.num_coils = self.opt_config.get("num_coils", 4)
-        self.max_eval = self.opt_config.get("maximum_function_evaluations", 300)
+        self.max_nfev = self.opt_config.get("max_nfev", 300)
         self.n_trials = self.opt_config.get("n_trials", 1)
-        self.tol = self.opt_config.get("tolerance_optimization", 1e-5)
+        self.tol = self.opt_config.get("tol", 1e-5)
         self.optimizer_choices = self.opt_config.get("optimizer_choices", ["adam", "amsgrad", "sgd"])
 
         self.initial_coils = coils_init or self._generate_initial_coils()
@@ -115,7 +115,7 @@ class MultiObjectiveOptimizer:
         opt = getattr(optax, method)(lr)
         state = opt.init(x)
 
-        for _ in range(self.max_eval):
+        for _ in range(self.max_nfev):
             loss = loss_fn(x)
             grads = grad_fn(x)
             updates, state = opt.update(grads, state)
@@ -156,7 +156,7 @@ class MultiObjectiveOptimizer:
         optimizer = getattr(optax, method)(lr)
         state = optimizer.init(x)
 
-        for _ in range(self.max_eval):
+        for _ in range(self.max_nfev):
             loss = loss_fn(x)
             grads = grad_fn(x)
             updates, state = optimizer.update(grads, state)
