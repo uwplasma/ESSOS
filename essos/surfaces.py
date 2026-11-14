@@ -259,32 +259,68 @@ class SurfaceRZFourier:
 
 
     @classmethod
-    def from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus'):
-        """Read indexed boundary coefficients; truncate outside MPOL/NTOR as VMEC does."""
+    def from_input_file(cls, file, ntheta=30, nphi=30, close=True, range_torus='full torus',
+                        *, mpol=None, ntor=None, max_mode=None):
+        """Read a boundary independently of the VMEC solver's MPOL and NTOR.
+
+        By default the surface contains the nonzero boundary modes (including
+        asymmetric partners when LASYM is true). Explicit ``mpol`` and ``ntor``
+        are maximum surface mode numbers: smaller limits truncate the boundary,
+        while larger limits pad it with zeros. ``max_mode`` sets both limits.
+        """
         from f90nml import Parser
         nml = Parser().read(file)['indata']
 
-        nfp, mpol, ntor = int(nml.get('nfp', 1)), int(nml.get('mpol', 6)) - 1, int(nml.get('ntor', 0))
-        if mpol < 0 or ntor < 0:
-            raise ValueError('Require MPOL >= 1 and NTOR >= 0')
-        def coefficients(name):
-            matrix = np.zeros((mpol + 1, 2 * ntor + 1))
-            if name not in nml:
-                return jnp.asarray(matrix.T)
-            n0, m0 = nml.start_index[name]
-            for i, row in enumerate(nml[name]):
-                for j, value in enumerate(row or []):
-                    m, n = m0 + i, n0 + j
-                    if value is not None and 0 <= m <= mpol and abs(n) <= ntor:
+        def mode_limit(value, name):
+            if value is not None and (isinstance(value, bool) or
+                                      not isinstance(value, (int, np.integer)) or value < 0):
+                raise ValueError(f'{name} must be a non-negative integer')
+            return int(value) if value is not None else None
+
+        mpol, ntor = mode_limit(mpol, 'mpol'), mode_limit(ntor, 'ntor')
+        max_mode = mode_limit(max_mode, 'max_mode')
+        if max_mode is not None:
+            if any(value is not None and value != max_mode for value in (mpol, ntor)):
+                raise ValueError('max_mode conflicts with mpol or ntor')
+            mpol = ntor = max_mode
+
+        # f90nml reverses Fortran's axes: rows vary m, entries within a row
+        # vary n. Each family can have its own lower bounds and ragged rows.
+        names = ['rbc', 'zbs']
+        if nml.get('lasym', False):
+            names += [name for name in ('rbs', 'zbc') if name in nml]
+        tables = {}
+        for name in names:
+            table = {}
+            if name in nml:
+                n0, m0 = nml.start_index[name]
+                for i, row in enumerate(nml[name]):
+                    for j, value in enumerate(row or []):
+                        m, n = m0 + i, n0 + j
+                        if value is None or m < 0:
+                            continue
+                        # The m=0 negative-n modes duplicate positive-n modes.
                         sign = -1 if m == 0 and n < 0 and name in ('rbs', 'zbs') else 1
                         n = abs(n) if m == 0 else n
-                        matrix[m, n + ntor] += sign * value
-            return jnp.asarray(matrix.T)
-        partners = {name: coefficients(name) for name in ('rbs', 'zbc')
-                    if nml.get('lasym', False) and name in nml}
-        return surfacerzfourier_from_boundary(coefficients('rbc'), coefficients('zbs'), nfp,
+                        table[m, n] = table.get((m, n), 0.0) + sign * value
+            tables[name] = table
+        support = [(m, n) for table in tables.values() for (m, n), value in table.items() if value != 0]
+        if mpol is None:
+            mpol = max((m for m, n in support), default=0)
+        if ntor is None:
+            ntor = max((abs(n) for m, n in support), default=0)
+
+        def coefficients(name):
+            matrix = np.zeros((2 * ntor + 1, mpol + 1))
+            for (m, n), value in tables[name].items():
+                if m <= mpol and abs(n) <= ntor:
+                    matrix[n + ntor, m] = value
+            return jnp.asarray(matrix)
+
+        partners = {name: coefficients(name) for name in ('rbs', 'zbc') if name in tables}
+        return surfacerzfourier_from_boundary(coefficients('rbc'), coefficients('zbs'), int(nml.get('nfp', 1)),
                                              ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus, _cls=cls, **partners)
-    
+
     @classmethod
     def from_vmec(cls, vmec, s=1, ntheta=30, nphi=30, close=True, range_torus='full torus', offset=0.):
         """Flux surface ``s`` of a VMEC field; ``offset`` [m] grows its m = 1, n = 0 modes, e.g. a wall that far outside the LCFS."""
@@ -809,12 +845,27 @@ class SurfaceRZFourier:
             pointData = {**pointData, **extra_data}
         gridToVTK(str(filename), x, y, z, pointData=pointData)
 
-    def to_vmec(self, filename):
-        """Write a VMEC boundary namelist, including any asymmetric partners."""
+    def to_vmec(self, filename, *, mpol=None, ntor=None,
+                ftol_array=(1e-12,), ns_array=(51,), niter_array=(3500,)):
+        """Write a vacuum VMEC input, including any asymmetric boundary partners.
+
+        Solver MPOL/NTOR default to the boundary maxima plus two. Since MPOL
+        is a count, this retains m through boundary m + 1 and |n| through
+        boundary |n| + 2. Override these independently and check convergence.
+        The default zero-current constraint lets VMEC compute vacuum iota.
+        """
         families = {'RBC': self.rc, 'ZBS': self.zs, 'RBS': self.rs, 'ZBC': self.zc}
         asym = self.rs is not None or self.zc is not None
+        solver_mpol = self.mpol + 2 if mpol is None else mpol
+        solver_ntor = self.ntor + 2 if ntor is None else ntor
+        if (not isinstance(solver_mpol, (int, np.integer)) or solver_mpol <= self.mpol or
+                not isinstance(solver_ntor, (int, np.integer)) or solver_ntor < self.ntor):
+            raise ValueError('Solver MPOL/NTOR must retain all surface modes')
         lines = ['&INDATA', f'LASYM = .{str(asym).upper()}.', f'NFP = {self.nfp}',
-                 f'MPOL = {self.mpol + 1}', f'NTOR = {self.ntor}']
+                 f'MPOL = {solver_mpol}', f'NTOR = {solver_ntor}',
+                 'NCURR = 1', 'CURTOR = 0.0', 'AC = 0.0', 'AM = 0.0']
+        for name, values in (('FTOL_ARRAY', ftol_array), ('NS_ARRAY', ns_array), ('NITER_ARRAY', niter_array)):
+            lines.append(f'{name} = ' + ', '.join(str(value) for value in np.atleast_1d(values)))
         for m, xn, i in zip(self.xm, self.xn, range(len(self.xm))):
             if int(xn) % self.nfp:
                 raise ValueError('Toroidal mode numbers must be multiples of nfp')
@@ -823,7 +874,7 @@ class SurfaceRZFourier:
                                    for name, table in families.items() if table is not None))
         with open(filename, 'w') as f:
             f.write('\n'.join(lines) + '\n/\n')
-            
+
     def mean_cross_sectional_area(self):
         """Mean over phi of the constant-phi cross-section area ``int R dZ/dtheta dtheta``.
 
