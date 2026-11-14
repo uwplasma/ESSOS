@@ -1,4 +1,4 @@
-"""Full-geometry MHD corrections, including nonorthogonal radial components."""
+"""Full-geometry GC corrections (nonorthogonal radial components) and the VMEC -> Boozer wave map."""
 
 from pathlib import Path
 from functools import partial
@@ -8,13 +8,16 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from essos.boozer import BoozerField, psi0_from_vmec
 from essos.constants import ALPHA_PARTICLE_MASS as MASS, ALPHA_PARTICLE_CHARGE as CHARGE, ONE_EV
 from essos.dynamics import (GuidingCenterMu, Particles, Tracing, _axis_regular,
                              _guiding_center_velocity, _to_axis_regular)
 from essos.electric_field import Electric_field_zero
 from essos.fields import Vmec
 from essos.gc_perturbations import (AnalyticalVmecAlfvenMode, GuidingCenterPerturbation,
-                                    MappedBoozerPerturbation)
+                                    MappedBoozerPerturbation, VmecBoozerMap)
+from essos.perturbations import AnalyticalAlfvenMode
+from tests.test_perturbations import equilibrium, spectrum
 
 
 SPEED = np.sqrt(2*3.5e6*ONE_EV/MASS)
@@ -160,21 +163,21 @@ def test_vmec_ideal_wave_and_radial_covariant_field_are_retained():
                            (field, particles, Electric_field_zero()))).all()
 
 
-def test_boozer_adapter_includes_coordinate_map_derivatives():
-    from examples.benchmarks.alfven_gc_verification import equilibrium, spectrum
-    background, wave = equilibrium(), spectrum(np.pi/2)
-    mapping = lambda x: jnp.array([x[0], x[1]+.2*jnp.sin(x[2]), x[2]+.1*x[0]*jnp.sin(x[1])])
-    adapter = MappedBoozerPerturbation(background, wave, mapping)
-    x, t = jnp.array([.35, .7, .3]), 1.3e-6
-    _, derivative = adapter.derivatives(None, x, t)
-    z, steps = np.append(x, t), [1e-6, 1e-6, 1e-6, 1e-11]
-    columns = []
-    for i, step in enumerate(steps):
-        dz = np.eye(4)[i]*step
-        plus, minus = z+dz, z-dz
+def assert_chain_rule(adapter, x, t, rtol, atol):
+    """Autodiff Jacobian of (alpha, Phi) through a coordinate map against central differences."""
+    _, derivative = jax.jit(lambda x, t: adapter.derivatives(None, x, t))(x, t)
+    z, columns = np.append(x, t), []
+    for i, step in enumerate([1e-6, 1e-6, 1e-6, 1e-11]):
+        plus, minus = z+np.eye(4)[i]*step, z-np.eye(4)[i]*step
         columns.append((adapter.potentials(None, plus[:3], plus[3])
                         -adapter.potentials(None, minus[:3], minus[3]))/(2*step))
-    np.testing.assert_allclose(derivative, np.stack(columns, axis=1), rtol=1e-6, atol=1e-7)
+    np.testing.assert_allclose(derivative, np.stack(columns, axis=1), rtol=rtol, atol=atol)
+
+
+def test_boozer_adapter_includes_coordinate_map_derivatives():
+    mapping = lambda x: jnp.array([x[0], x[1]+.2*jnp.sin(x[2]), x[2]+.1*x[0]*jnp.sin(x[1])])
+    adapter = MappedBoozerPerturbation(equilibrium(), spectrum(np.pi/2), mapping)
+    assert_chain_rule(adapter, jnp.array([.35, .7, .3]), 1.3e-6, 1e-6, 1e-7)
 
 
 def test_adaptive_trace_uses_constant_mu_while_inductive_field_changes_energy():
@@ -220,3 +223,62 @@ def test_unsupported_models_and_fixed_energy_shortcut_are_rejected():
         Tracing(model="GuidingCenterCollisions", perturbation=Wave())
     with pytest.raises(ValueError, match="exterior wave model"):
         Tracing(model="GuidingCenterAdaptative", perturbation=Wave(), exterior_field=ShearedField())
+
+
+@pytest.fixture(scope="module")
+def transformed():
+    Booz_xform = pytest.importorskip("booz_xform_jax").Booz_xform
+    from netCDF4 import Dataset
+    booz = Booz_xform(verbose=0, mboz=16, nboz=16)
+    booz.read_wout(str(WOUT), flux=False)
+    booz.run()
+    with Dataset(WOUT) as nc:
+        psi = psi0_from_vmec(nc.variables["phi"][-1])
+    return booz, VmecBoozerMap.from_booz_xform(booz), BoozerField.from_booz_xform(booz, psi, angle_grid=None)
+
+
+def test_vmec_boozer_map_agrees_with_booz_xform_and_chain_rule(transformed):
+    booz, mapping, background = transformed
+    j = len(booz.s_b)//2
+    point = jnp.array([booz.s_b[j], .7, .3])
+    mapped = mapping(point)
+    nu = np.sin(float(mapped[1])*np.asarray(booz.xm_b)
+                -float(mapped[2])*np.asarray(booz.xn_b))@np.asarray(booz.numns_b)[:, j]
+    assert float(mapped[2]-point[2]) == pytest.approx(nu, abs=2e-6)
+    np.testing.assert_allclose(mapping.inverse(mapped), point, atol=2e-13)
+    wave = AnalyticalAlfvenMode(15, 7, 399000., 1e4, regularize_axis=False)
+    adapter = MappedBoozerPerturbation(background, wave, mapping)
+    assert adapter.axis_stop_threshold() == 1e-8
+    assert_chain_rule(adapter, point, 1e-6, 2e-6, 1e-6)
+
+
+def test_wave_inner_cutoff_is_separate_from_lcfs_loss_and_failure(transformed):
+    _, mapping, background = transformed
+    field = Vmec(str(WOUT), ntheta=8, nphi=8, mode_tolerance=.01)
+    # An enlarged cutoff exercises both t=0 stopping and a root-found crossing cheaply.
+    wave = AnalyticalAlfvenMode(3, 2, 9e5, 1e3, regularize_axis=False, axis_stop_s=.36)
+    adapter = MappedBoozerPerturbation(background, wave, mapping)
+    particles = Particles(initial_xyz=jnp.array([[.35, .7, .3]]), initial_vparallel_over_v=jnp.array([.65]))
+    speed = particles.total_speed
+    angles = jnp.linspace(0., 2*jnp.pi, 9)[:-1]
+
+    def radial_speed(theta):
+        point = jnp.array([.36, theta, .3])
+        mu = particles.mass*speed**2*(1-.65**2)/(2*field.AbsB(point))
+        state = jnp.concatenate([point, jnp.array([.65*speed, mu])])
+        return GuidingCenterMu(0., state, (field, particles, Electric_field_zero()), perturbation=adapter)[0]
+
+    speeds = jax.jit(jax.vmap(radial_speed))(angles)
+    inward = int(jnp.argmin(speeds))
+    assert speeds[inward] < 0
+    moving = jnp.array([.36-float(speeds[inward])*5e-9, angles[inward], .3])
+    particles = Particles(initial_xyz=jnp.vstack([particles.initial_xyz, moving]),
+                          initial_vparallel_over_v=jnp.array([.65, .65]))
+    trace = Tracing(field=field, particles=particles, model="GuidingCenterAdaptative", perturbation=adapter,
+                    maxtime=2e-8, timestep=1e-9, times_to_trace=3, max_steps=32, progress=False,
+                    devices=jax.devices()[:1])
+    assert trace.status[0] == 6 and trace.axis_stopped[0] and trace.axis_stop_times[0] == 0.
+    assert trace.status[1] == 6 and 0 < trace.axis_stop_times[1] < 2e-8
+    assert trace.axis_stop_states[1, 0] == pytest.approx(.36, abs=1e-9)
+    assert not trace.failed.any() and not trace.boundary_hits.any()
+    np.testing.assert_allclose(trace.axis_stop_states[0, :3], particles.initial_xyz[0])
