@@ -349,8 +349,7 @@ the portable path only (`native_execution="cuda"` raises): a fused kernel was
 slower than the vmapped one. The same holds for `trace_split(...,
 execution="independent")`, which supports coil and VMEC fields. GPU arrays are
 private solver views of the original field data; the public field classes are
-unchanged. This addition is forward-only: split collisions and accepted-step
-reverse AD belong to separate changes.
+unchanged.
 
 ### Forward comparison
 
@@ -398,73 +397,33 @@ eight saves and rtol=atol=1e-9; fixed steps default to 224 over 20 us (GC) and 1
 (`--model lorentz`). Select `--stepping adaptive/fixed`. The Boozer field needs the optional
 `essos[booz]` dependency and always uses the portable JAX path.
 
-### QA Boozer alpha workload
-
-Previously recorded full workload: 8192 alphas, 3.52 MeV, birth s=0.3,
-seed 42, 20 ms, 101 saves, 16 direct Fourier modes. The preceding profiling
-run identified an A100/JAX 0.7.2; the full console logs identify a CUDA device.
-Compilation and warm execution are separated. This is a CATAPULT-sized
-workload, not a new measurement against CATAPULT.
-
-| Method | Control | Compile s | Warm s | Accepted / rejected | Lost / failed |
-|---|---|---:|---:|---:|---:|
-| Native Dopri5 | I, rtol=atol=1e-10 | 4.247 | 21.554 | 895113025 / 63143676 | 110 / 0 |
-| Native Dopri8 | I, rtol=atol=1e-10 | 5.069 | 18.448 | 351025279 / 62226975 | 111 / 0 |
-| Native Dopri8 | I, rtol=atol=1e-8 | 4.985 | 9.223 | 189259503 / 7909253 | 106 / 0 |
-| Existing RK4 | Fixed dt=1.25e-7 s | 2.728 | 20.244 | 1310720000 grid slots / 0 | 108 / 0 |
-
-These full-workload measurements predate the current extraction and have not
-been rerun after the VMEC and initialization updates. RK4 checks loss at endpoints;
-native adaptive methods refine the LCFS crossing. The differing loss counts are
-not an accuracy proof. Regenerate the workload with the script below when ready.
-
-Boozer runs on the portable JAX path (`--execution jax`):
-
-```sh
-python -m examples.benchmarks.benchmark_native --suite orbit --field boozer \
-  -N 8192 --horizon .02 --energy-ev 3.52e6 --saves 101 --rtol 1e-10 --atol 1e-10 \
-  --max-steps 1000000 --boozer-modes 32 --out output/native_boozer_alpha
-```
-
-Use `--method dopri5` for the Dopri5 row; the existing RK4 baseline and the saved
-trajectory plots of the earlier script are no longer provided.
-
 ## Native split orbit and collisions
 
-`essos.split.trace_split` advances a native Dopri orbit, then applies a Milstein
-Coulomb-collision map per interval (nonrelativistic, guiding-center or full orbit),
-with Brownian bridge memory so rejected steps never redraw the path:
+`essos.split.trace_split` advances a native Dopri orbit and applies a Milstein Coulomb-collision
+map per interval (guiding center or full orbit), with Brownian bridge memory so rejected steps
+never redraw the path. Guiding-center speed uses `v -> sqrt(v1^2 + 4 D_par h)` for the radial
+part of the drift, which keeps `v > 0`.
 
 ```python
 from essos.split import trace_split
-result = trace_split(field, particles, species, tmax=tmax, timestep=dt)  # SplitSolution
+result = trace_split(field, particles, species, tmax=tmax, timestep=dt)  # check result.status
 ```
 
-Defaults: moment-predictor interval ceiling (`moment_tolerance=0.005`), collision
-tolerance `0.001`, orbit `rtol=atol=1e-9`. These are local controls, not global error
-bounds; refine `timestep`/`collision_dtmax` to check splitting error. GC includes
-perpendicular spatial diffusion (paper Eq. 69). VMEC fields use their own geometry;
-Boozer fields need `spatial_geometry=BoozerGeometry.from_booz_xform(booz)`. Always
-check `result.status`. `execution="independent"` runs one persistent GPU kernel per
-particle (float64 GPU, Dopri8, zero electric field); `"shared"` is ordinary JAX, and
-`interpret=True` runs the GPU kernel on CPU for testing.
-
-Validation against independent Fokker-Planck references, including unresolved
-discrepancies, and compile/startup timings are in
-[`examples/benchmarks/results/native_split.md`](examples/benchmarks/results/native_split.md).
-
-![Thermalization](docs/readme_split_thermalization.png)
+The interval and tolerance controls are local; refine `timestep` and `collision_dtmax` to check
+the splitting error. VMEC fields use their own geometry, Boozer fields need
+`spatial_geometry=BoozerGeometry.from_booz_xform(booz)`. `execution="independent"` runs one
+persistent GPU kernel per particle (float64, Dopri8, coil or VMEC fields); `interpret=True` runs it
+on CPU. `tests/test_native_split.py` checks Spitzer slowing down, the Lorentz eigenvalues,
+Ito/Stratonovich consistency and the absent-bath and lost-particle limits;
+`examples/particle_tracing_collisions/native_split_slowing_down.py` prints the Spitzer comparison.
 
 ## Accepted-map native reverse AD
 
-Reverse AD is opt-in: `solve_rk(..., adjoint="accepted")` handles Dopri5/Dopri8 orbits and
-`trace_split(..., adjoint="accepted")` the full orbit/collision map (implementation:
-[essos/native_ad.py](essos/native_ad.py)). The forward solve selects accepted intervals and
-retains its Wiener increments; reverse freezes those intervals, increments, rejection decisions
-and event fractions, and differentiates the RK stages, dense saves, collision coefficients,
-pitch deflection, speed diffusion and GC spatial kicks (coordinate kicks through the derivative
-of the converged Cartesian inverse). It does not differentiate first-hit times or the adaptive
-mesh, so a finite difference that reruns adaptation measures a different map.
+`solve_rk(..., adjoint="accepted")` and `trace_split(..., adjoint="accepted")` give gradients of the
+accepted-step map: the forward solve keeps accepted intervals, Wiener increments, rejection decisions
+and event fractions, and reverse differentiates the stages, dense saves and collision maps
+([essos/native_ad.py](essos/native_ad.py)). First-hit times and the adaptive mesh are not differentiated,
+so a finite difference that reruns adaptation measures a different map.
 
 ```python
 def objective(dofs):
@@ -474,58 +433,16 @@ def objective(dofs):
 gradient = jax.grad(objective)(dofs)
 ```
 
-Collisionless orbits use `Tracing(..., native_adjoint="accepted")`. Checkpoint segments hold 16
-accepted steps by default (`adjoint_checkpoint_steps`, `adjoint_orbit_checkpoint_steps`); the
-segment length trades live replay workspace against stored checkpoints and never changes the
-gradient. `adjoint_max_accepted_steps` and `adjoint_max_orbit_steps` bound the stored tapes, and
-exceeding them raises during reverse rather than returning a truncated gradient. There is no
-particle chunking. Field classes and their storage are unchanged.
-
-| Field / model | Reverse execution |
-|---|---|
-| Direct Biot-Savart, GC or Lorentz | persistent GPU kernel for uniform alpha cases under `execution="independent"`; otherwise checkpointed JAX |
-| VMEC / GC, Boozer / GC (needs `spatial_geometry`) | checkpointed JAX on the selected device |
-
-`reverse_execution="auto"` picks the available implementation, `"shared"` forces JAX reverse and
-`"independent"` requires the direct-coil kernel. `tests/test_native_ad.py` (CPU, fast) checks reverse
-gradients against forward mode and finite differences through the frozen schedule, the adjoint
-identity, checkpoint independence, conservation laws, and the persistent kernel (run through the
-Pallas interpreter) against shared reverse. `benchmark_native --suite ad` (see
-`examples/benchmarks/benchmark_native.py`) times value-and-gradient against forward, compares the
-native and shared reverse gradients at production size and records compilation, warm time and
-compiled buffer sizes; run each case in a fresh process for allocator peaks.
-
-### Coil optimization examples
-
-```sh
-python -m examples.coil_optimization.optimize_coils_native_final_radius --output output/final_radius
-python -m examples.coil_optimization.optimize_coils_native_loss_fraction --output output/loss_fraction
-python -m examples.coil_optimization.optimize_coils_particle_confinement_native --model gc --output output/gc
-```
-
-These minimize final radius or a soft classifier loss fraction plus length, curvature and B.n/|B|
-penalties with L-BFGS-B over bounded coil DOFs; add `--collisions` for the split adjoint.
-Every setting is an option (`--help`) and an editable default in the entry script.
-
-Three QI guiding-center examples (the classic `en/jax_13` setups, with their bundled coils and
-equilibrium) use the ESSOS augmented Lagrangian with 20 fixed alphas, a 5.7 T axis field and
-length/curvature limits; the particle metric is an equality constraint targeting zero:
-
-```sh
-python -m examples.coil_optimization.optimize_coils_native_gc_alm_loss_fraction
-python -m examples.coil_optimization.optimize_coils_native_gc_alm_distance
-python -m examples.coil_optimization.optimize_coils_native_gc_alm_heat_flux
-```
-
-The default is collisional GC tracing with an electron/deuterium bath (`--no-collisions` for
-collisionless); `--execution auto` uses the persistent kernels on GPU and shared JAX on CPU.
-`--max-change` bounds changes of the normalized coil DOFs, `--evaluate-only` performs one
-value/gradient, and `--optimizer scipy` runs the inner L-BFGS-B on the host with one reused
-native value/gradient executable. "Distance" is the per-save escape-centroid distance to the
-tangent line at theta=3pi/2, phi=pi; "heat" is the first-loss-weighted `E_total*v_perp`
-normalized by birth `E*v` (a proxy, not a power density). Runs write `history.csv`,
-`summary.json`, coils, trajectories and PNGs under `output/`; `plot_native_gc_alm` redraws the
-overview from a finished run without tracing again.
+Collisionless orbits use `Tracing(..., native_adjoint="accepted")`. The tape capacities
+`adjoint_max_accepted_steps` and `adjoint_max_orbit_steps` raise during reverse when exceeded;
+`adjoint_checkpoint_steps` (default 16) trades replay workspace against stored checkpoints and does not
+change the gradient. Direct coil fields can use the persistent GPU reverse kernel with
+`execution="independent"`; VMEC and Boozer fields use checkpointed JAX. `tests/test_native_ad.py` checks
+gradients against forward mode and finite differences through the frozen schedule, the adjoint identity,
+checkpoint independence and the persistent kernel against shared reverse.
+`examples/coil_optimization/optimize_coils_native_ad.py` minimizes the final minor radius of alpha
+guiding centers over the coil dofs. `examples/benchmarks/benchmark_native.py` times the orbit, split, AD
+and collision suites (`--help`).
 
 ## Testing
 
