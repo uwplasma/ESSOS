@@ -444,6 +444,9 @@ class Vmec():
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier.from_vmec(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
         self.Aminor_p = Aminor_p
+        # The pytree children; the mode numbers stay static, as _radial_interp reads them as concrete values.
+        self._arrays = tuple(k for k, v in vars(self).items() if isinstance(v, jax.Array)
+                             and k not in ('xm', 'xn', 'xm_nyq', 'xn_nyq'))
         #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
 
     def _drop_small_modes(self, tolerance):
@@ -685,6 +688,45 @@ class near_axis:
             "Please run 'pip install git+https://github.com/uwplasma/pyQSC_JAX.git' "
             "and import it via 'from pyqsc_jax.near_axis import near_axis'."
         )
+
+
+class _VmecStatic:
+    """Non-array state of a ``Vmec`` (mode counts, nfp, ...): equal when those are. The file handle and the
+    boundary surface ride along but do not take part in the comparison."""
+    __slots__ = ("items", "extra", "key")
+
+    def __init__(self, items, extra):
+        self.items, self.extra = items, extra
+        self.key = tuple((k, tuple(np.asarray(v).tolist()) if isinstance(v, jax.Array) else v) for k, v in items)
+
+    def __eq__(self, other):
+        return isinstance(other, _VmecStatic) and self.key == other.key
+
+    def __hash__(self):
+        return hash(self.key)
+
+
+_VMEC_UNCOMPARED = ("nc", "wout_filename", "_surface")
+
+
+def _vmec_flatten(vmec):
+    d = vars(vmec)
+    names = d["_arrays"]
+    items = tuple((k, v) for k, v in d.items() if k not in names and k not in _VMEC_UNCOMPARED)
+    extra = tuple((k, d[k]) for k in _VMEC_UNCOMPARED if k in d)
+    return tuple(d[k] for k in names), (names, _VmecStatic(items, extra))
+
+
+def _vmec_unflatten(aux, children):
+    names, static = aux
+    vmec = object.__new__(Vmec)
+    vmec.__dict__.update(static.items, **dict(static.extra), **dict(zip(names, children)))
+    return vmec
+
+
+# A pytree, so that Tracing's shared compilation takes the coefficient tables as arguments and is reused by every
+# Vmec with the same shapes and mode counts.
+tree_util.register_pytree_node(Vmec, _vmec_flatten, _vmec_unflatten)
 
 
 class ExternalField(MagneticField):

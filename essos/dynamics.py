@@ -774,7 +774,23 @@ def _axis_regular(vector_field):
     the position has no noise, so Ito and Stratonovich forms need no extra
     drift.
     """
-    def wrapped(t, y, args):
+    return _AxisRegular(vector_field)
+
+
+class _AxisRegular:
+    """The vector field of ``_axis_regular``; two of the same vector field are equal, so Tracing's compilation is shared."""
+
+    def __init__(self, vector_field):
+        self.vector_field = vector_field
+
+    def __eq__(self, other):
+        return isinstance(other, _AxisRegular) and self.vector_field == other.vector_field
+
+    def __hash__(self):
+        return hash(self.vector_field)
+
+    def __call__(self, t, y, args):
+        vector_field = self.vector_field
         u, w = y[0], y[1]
         s = u**2 + w**2
         half = jnp.where(s > 0, 0.5 / jnp.where(s > 0, s, 1.0), 0.0)
@@ -782,7 +798,6 @@ def _axis_regular(vector_field):
         jacobian = jnp.array([[u * half, -(1 - c) * w], [w * half, (1 - c) * u]])
         f = vector_field(t, _from_axis_regular(y), args)
         return jnp.concatenate([jnp.tensordot(jacobian, f[:2], axes=1), f[2:], c * f[1:2]])
-    return wrapped
 
 
 # Outcome of each VMEC guiding center, ``Tracing.status``.

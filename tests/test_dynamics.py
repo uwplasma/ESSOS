@@ -1330,6 +1330,33 @@ def test_tracings_with_the_same_shapes_share_one_compiled_solve():
     assert not np.allclose(first, second)
 
 
+def test_vmec_tracings_share_one_compiled_solve():
+    from essos.dynamics import _compiled_solver
+    from essos.fields import VMEC_WOUT_ARRAYS
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    scaled = Vmec.from_arrays(vmec.nfp, vmec.ns, *(getattr(vmec, n) * (1.1 if n == 'bmnc' else 1) for n in VMEC_WOUT_ARRAYS),
+                              ntheta=8, nphi=8)  # same shapes, 10% stronger |B|
+    compiles = []
+    jax.monitoring.register_event_duration_secs_listener(
+        lambda event, duration, **kw: compiles.append(event) if event.endswith('backend_compile_duration') else None)
+
+    def trace(field):
+        return Tracing(field=field, model="GuidingCenterAdaptative", particles=_near_axis_particles(), maxtime=1e-7,
+                       timestep=1e-9, times_to_trace=5, progress=False).trajectories
+
+    _compiled_solver.cache_clear()
+    first = trace(vmec)
+    n = len(compiles)
+    again = trace(vmec)
+    assert len(compiles) == n  # no compilation after the first
+    other = trace(scaled)
+    info = _compiled_solver.cache_info()
+    assert (info.misses, info.hits) == (1, 2)
+    np.testing.assert_array_equal(first, again)
+    assert not np.allclose(first, other)
+
+
 def test_implicit_solver_guiding_center_trace():
     """Kvaerno5 (implicit) guiding-centre trace in a coil field; lineax 0.0.8 failed to trace its Newton solve."""
     import diffrax
