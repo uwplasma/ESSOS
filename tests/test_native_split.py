@@ -183,6 +183,78 @@ def test_guiding_center_map_has_lorentz_and_speed_generator_moments():
     np.testing.assert_allclose(basis.T@basis, np.eye(3), atol=3e-16)
 
 
+@pytest.mark.parametrize('energy', [10e3, 500.])  # 500 eV: below the 2 keV regime, up through 3T/2
+def test_fast_ions_slow_down_on_electrons_and_relax_to_the_background_temperature(energy):
+    """Spitzer slowing-down time and the energy relaxation of a test population.
+
+    Ions with v_ti << v << v_te in a Maxwellian electron bath lose speed at the rate 1/tau_s,
+    tau_s = m_i / (m_e nu_e), with nu_e = 4 sqrt(2 pi) n e^4 ln(Lambda) / (3 (4 pi eps0)^2 sqrt(m_e) T^(3/2))
+    (Spitzer; Helander & Sigmar, ch. 3). Brownian motion in the light bath relaxes the mean energy to 3T/2
+    at twice that rate: <E>(t) = 3T/2 + (E0 - 3T/2) exp(-2 t / tau_s).
+    """
+    from essos.constants import ELECTRON_MASS
+    temperature, density, count = 1000., 1e20, 2000
+    electrons = BackgroundSpecies(1, jnp.array([ELECTRON_MASS/M]), jnp.array([-1.]), jnp.array([density]), jnp.array([temperature]))
+    field = UniformField()
+    birth = Particles(jnp.tile(jnp.array([1., 0., 0.]), (count, 1)), mass=M, charge=Q, energy=energy*ONE_EV,
+                      initial_vparallel_over_v=jnp.linspace(-.9, .9, count), field=field)
+    kelvin = temperature*ONE_EV
+    log = float(coulomb_logarithm(M, Q, 0, np.sqrt(2*energy*ONE_EV/M), jnp.zeros(3), electrons))
+    nu_e = 4*np.sqrt(2*np.pi)*density*Q**4*log/(3*(4*np.pi*EPSILON_0)**2*np.sqrt(ELECTRON_MASS)*kelvin**1.5)
+    rate = ELECTRON_MASS/M*nu_e                                           # 1/tau_s
+    times = jnp.linspace(0., 6/rate, 9)                                   # relaxed to 3T/2 by 3 tau_s
+    out = s.trace_split(field, birth, electrons, tmax=float(times[-1]), timestep=float(times[-1])/300, times=times,
+                        orbit=False, adaptive=False, speed_floor=1.)
+    assert (out.status == 0).all() and out.ys.dtype == jnp.float64
+    mean = np.mean(.5*M*out.ys[..., 3]**2+out.ys[..., 4], axis=0)         # mu B, with B = 1 T
+    analytic = 1.5*kelvin+(energy*ONE_EV-1.5*kelvin)*np.exp(-2*rate*np.asarray(times))
+    np.testing.assert_allclose(mean, analytic, rtol=4e-2)
+    # No particle is thrown to a nonthermal speed when it passes near v = 0 (radial drift 2 D/v); the upward tail is the diffusion of the 10 keV start.
+    assert np.isfinite(out.ys).all() and (.5*M*out.ys[..., 3]**2+out.ys[..., 4]).max() < 2*max(energy, 10e3)*ONE_EV
+
+
+def test_milstein_speed_map_is_the_ito_form_of_the_stratonovich_sde():
+    # dv = (q + D' + 2D/v) dt + sqrt(2D) dW (Ito) is dv = (q + D'/2 + 2D/v) dt + sqrt(2D) o dW (Stratonovich).
+    # Same Wiener paths: the Milstein map and the Heun scheme agree to O(h); the unconverted drift does not.
+    d, v0, tmax, n, paths = .05, 1., .5, 2000, 400
+    h = tmax/n
+    dw = jax.random.normal(jax.random.PRNGKey(0), (n, paths))*np.sqrt(h)
+    sigma = lambda v: jnp.sqrt(2*d)*v
+    def coefficients(v):
+        return s.CollisionCoefficients(d*v**2, 0., 2*d*v, 0., 0., 0.)
+    milstein = lambda v, w: s.guiding_center_collision_step(v, 0., h, jnp.array([w, 0.]), coefficients(v)).y[0]
+    def heun(shift):
+        def step(v, w):
+            a = shift*d*v + 2*d*v                                         # D' = 2 d v, D'/2 = d v, 2D/v = 2 d v
+            first = v + a*h + sigma(v)*w
+            return v + a*h + .5*(sigma(v) + sigma(first))*w
+        return step
+    run = lambda step: jax.lax.scan(lambda v, w: (jax.vmap(step)(v, w), None), jnp.full(paths, v0), dw)[0]
+    ito = run(milstein)
+    strat = run(heun(1.))
+    wrong = run(heun(2.))                                       # Ito drift read as Stratonovich
+    assert float(jnp.sqrt(jnp.mean((ito - strat)**2))) < 1e-3 < .5*float(jnp.sqrt(jnp.mean((ito - wrong)**2)))
+
+
+def test_absent_bath_is_a_collisionless_orbit_and_lost_particles_are_held():
+    # Zero density: v_parallel and mu are constants and z = z0 + v_parallel t exactly (uniform B).
+    field = UniformField()
+    birth = Particles(jnp.array([[1., 0., 0.]]*2), mass=M, charge=Q, energy=3e3*ONE_EV,
+                      initial_vparallel_over_v=jnp.array([.4, -.6]), field=field)
+    v0 = np.asarray(birth.initial_vparallel)
+    wall = .01*v0[0]*1e-6*50                                              # reached by particle 0 at t = 5e-7
+    for model in ('nrl', 'impact'):
+        out = s.trace_split(field, birth, bath(density=0., coulomb_log_model=model), tmax=1e-6, timestep=1e-7,
+                            n_save=5, adaptive=False, event=lambda t, y, a: wall - y[2])
+        t = np.asarray(out.ys)
+        assert out.ys.dtype == jnp.float64 and list(np.asarray(out.status)) == [s.SplitStatus.EVENT, 0]
+        np.testing.assert_allclose(out.t[0], wall/v0[0], rtol=1e-9)         # lost mid-step, at the crossing
+        np.testing.assert_allclose(t[0, 2:, 2], wall, rtol=1e-12)           # then held at the wall
+        np.testing.assert_allclose(t[1, :, 3], v0[1], rtol=1e-14)           # no bath: v_parallel constant
+        np.testing.assert_allclose(t[1, :, 2], v0[1]*np.linspace(0, 1e-6, 5), atol=1e-12)
+        np.testing.assert_allclose(t[:, :, 4], np.repeat(t[:, :1, 4], 5, axis=1), rtol=1e-14)   # mu constant
+
+
 def test_particle_map_and_spatial_kick_have_the_diffusion_tensor_covariance():
     c = s.CollisionCoefficients(.8, .4, .12, -.3, .07, .02)
     velocity = jnp.array([1.2, 0., 1.6]); speed = jnp.linalg.norm(velocity); direction = velocity/speed

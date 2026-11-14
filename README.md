@@ -456,11 +456,10 @@ check `result.status`. `execution="independent"` runs one persistent GPU kernel 
 particle (float64 GPU, Dopri8, zero electric field); `"shared"` is ordinary JAX, and
 `interpret=True` runs the GPU kernel on CPU for testing.
 
-Validation against independent Fokker-Planck references, including unresolved
-discrepancies, and compile/startup timings are in
-[`examples/benchmarks/results/native_split.md`](examples/benchmarks/results/native_split.md).
-
-![Thermalization](docs/readme_split_thermalization.png)
+`tests/test_native_split.py` checks Spitzer slowing down, the Lorentz eigenvalues, Ito/Stratonovich
+consistency and the absent-bath and lost-particle limits; `examples/particle_tracing_collisions/native_split_slowing_down.py`
+prints the Spitzer comparison. Guiding-center speed uses `v -> sqrt(v1^2 + 4 D_par h)` for the radial part of
+the drift, which keeps `v > 0`. `examples/benchmarks/benchmark_split_orbits.py` times the solver.
 
 ## Testing
 
