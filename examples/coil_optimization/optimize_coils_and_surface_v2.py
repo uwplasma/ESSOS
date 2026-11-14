@@ -81,7 +81,7 @@ COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 # Six physical objectives: normal field, QS, iota, section area, length, curvature.
 CONSTRAINT_WEIGHT = 3e6  # Common weight for B.n/B, target iota, and section area.
-QS_WEIGHT = 2.2493766610787115e4  # Cold calibration; three-term tested only through mode 1.
+QS_WEIGHT = 2.2493766610787115e4  # Cold-gradient calibration; mode-ladder comparison ongoing.
 LENGTH_WEIGHT = 30.; LENGTH_TARGET = 50.
 CURVATURE_WEIGHT = 1500.; CURVATURE_TARGET = 2.
 CURVATURE_SEGMENTS = max(128, 16 * FOURIER_ORDER)  # Independent curvature quadrature.
@@ -480,6 +480,9 @@ if EXPORT:
     import f90nml
     f90nml.patch(vmec_input_file, {"indata": {"phiedge": phiedge}}, vmec_input_file + ".tmp")
     os.replace(vmec_input_file + ".tmp", vmec_input_file)
+    # Free boundary: vmex input.coils_surface_free --coils opt_coils_coils_surface.json
+    f90nml.patch(vmec_input_file, {"indata": {"lfreeb": True, "mgrid_file": "DIRECT_COILS"}},
+                 os.path.join(output_filepath, "input.coils_surface_free"))
 
     """ Fixed-boundary VMEX equilibrium of the optimized surface """
     if RUN_VMEX:
