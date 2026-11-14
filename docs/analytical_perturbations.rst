@@ -80,9 +80,9 @@ in a Boozer background without QS-breaking harmonics and in the full VMEC equili
 (scaled to :math:`a=1.7` m, :math:`B_{00}=5.86` T), with the same markers weighted to uniform
 physical volume. It needs ``pip install -e '.[booz]'``. Edit ``PARTICLES``, ``HISTORICAL`` and
 ``PLOT`` at the top of the script; ``HISTORICAL`` applies the sign and alpha-mass conventions of
-the 2023 SIMSOPT adapter. The table is the run with ``PARTICLES = 100`` and ``HISTORICAL = True`` with the bundled ``wout_LandremanPaul2021_QA_lowres.nc`` (tens of
+the 2023 SIMSOPT adapter. The table is the run with ``PARTICLES = 100`` and ``HISTORICAL = True`` with the bundled ``wout_LandremanPaul2021_QA_reactorScale_lowres.nc`` (tens of
 minutes on one CPU core); the unperturbed curves of the two backgrounds coincide in the figure.
-Both waves lose 13 markers through the LCFS and eight at the inner stop.
+The waves lose 14 markers through the LCFS in both backgrounds, and eight (Boozer) or ten (VMEC) at the inner stop.
 
 .. list-table:: Weighted losses at 1 ms (100 markers; paper used 5000)
    :header-rows: 1
@@ -99,8 +99,8 @@ Both waves lose 13 markers through the LCFS and eight at the inner stop.
      - 6.6%
    * - Boozer / Perfect QS
      - Wave
-     - 21.62%
-     - 14.65-30.71%
+     - 22.29%
+     - 15.21-31.45%
      - 16.2%
    * - VMEC / full equilibrium
      - Unperturbed
@@ -109,8 +109,8 @@ Both waves lose 13 markers through the LCFS and eight at the inner stop.
      - 8.3%
    * - VMEC / full equilibrium
      - Wave
-     - 21.56%
-     - 14.59-30.65%
+     - 24.30%
+     - 16.91-33.62%
      - 19.4%
 
 .. image:: _static/analytical_perturbations/paul_loss_100.png
