@@ -7,11 +7,11 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELECTRON_MASS,PROTON_MASS
 from essos.dynamics import (
-    FieldLine,
-    FieldLineArclength,
-    FieldLineToroidal,
-    GuidingCenter,
-    Lorentz,
+    field_line,
+    field_line_arclength,
+    field_line_toroidal,
+    guiding_center,
+    lorentz,
     Particles,
     Tracing,
     LevelsetStoppingCriterion,
@@ -118,7 +118,7 @@ def test_arclength_fieldline_has_unit_speed_without_changing_direction():
         def B_contravariant(self, points):
             return jnp.array([3.0, 4.0, 0.0])
 
-    derivative = FieldLineArclength(0.0, jnp.zeros(3), ScaledField())
+    derivative = field_line_arclength(0.0, jnp.zeros(3), ScaledField())
     assert jnp.allclose(derivative, jnp.array([0.6, 0.8, 0.0]))
 
     tracing = Tracing(
@@ -152,7 +152,7 @@ def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
         def toroidal_angle_batch(self, points):
             return points[:, 2]
 
-    derivative = FieldLineToroidal(0.0, jnp.zeros(3), FluxField())
+    derivative = field_line_toroidal(0.0, jnp.zeros(3), FluxField())
     assert jnp.allclose(derivative, jnp.array([0.0, 0.5, 1.0]))
 
     tracing = Tracing(
@@ -253,19 +253,19 @@ def test_particles_initialization(particles):
 def test_guiding_center(field, particles,electric_field):
     initial_conditions = jnp.array([1.0, 0.0, 0.0, 1])
     t = 0.0
-    result = GuidingCenter(t, initial_conditions, (field, particles,electric_field))
+    result = guiding_center(t, initial_conditions, (field, particles,electric_field))
     assert result.shape == (4,)
 
 def test_lorentz(field, particles):
     initial_condition = jnp.array([1.0, 0.0, 0.0, 0.1, 0.1, 0.1])
     t = 0.0
-    result = Lorentz(t, initial_condition, (field, particles))
+    result = lorentz(t, initial_condition, (field, particles))
     assert result.shape == (6,)
 
 def test_field_line(field):
     initial_condition = jnp.array([1.0, 0.0, 0.0])
     t = 0.0
-    result = FieldLine(t, initial_condition, field)
+    result = field_line(t, initial_condition, field)
     assert result.shape == (3,)
 
 
@@ -703,15 +703,15 @@ def _enable_x64():
 
 @pytest.mark.parametrize("xi", [0., .3, 1., -1.])
 def test_zero_density_mu_collisions_have_zero_noise_and_collisionless_drift(xi):
-    from essos.dynamics import (GuidingCenterCollisionsDiffusionMu,
-                                GuidingCenterCollisionsDriftMuIto,
-                                GuidingCenterCollisionsDriftMuStratonovich)
+    from essos.dynamics import (guiding_center_collisions_diffusion_mu,
+                                guiding_center_collisions_drift_mu_ito,
+                                guiding_center_collisions_drift_mu_stratonovich)
     with _enable_x64()():
         state, scale, args = _mu_collision_setup(1e5, xi)
         absent = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]),
                                    jnp.array([0.]), jnp.array([1e3]))
         args = (*args[:3], absent, args[4])
-        noise = lambda y: GuidingCenterCollisionsDiffusionMu(0., y, args)
+        noise = lambda y: guiding_center_collisions_diffusion_mu(0., y, args)
         sigma, tangent = jax.jvp(noise, (state,), (jnp.ones(5),))
         np.testing.assert_array_equal(sigma, np.zeros((5, 5)))
         np.testing.assert_array_equal(tangent, np.zeros((5, 5)))
@@ -720,7 +720,7 @@ def test_zero_density_mu_collisions_have_zero_noise_and_collisionless_drift(xi):
         np.testing.assert_array_equal(sigma, np.zeros((2, 5, 5)))
         np.testing.assert_array_equal(tangent, np.zeros((2, 5, 5)))
         expected = np.array([0., 0., state[3]*scale[0], 0., 0.])
-        for drift in (GuidingCenterCollisionsDriftMuIto, GuidingCenterCollisionsDriftMuStratonovich):
+        for drift in (guiding_center_collisions_drift_mu_ito, guiding_center_collisions_drift_mu_stratonovich):
             np.testing.assert_allclose(drift(0., state, args), expected, rtol=1e-14, atol=1e-14)
             np.testing.assert_allclose(jax.vmap(lambda y: drift(0., y, args))(batch),
                                        np.stack([expected, expected]), rtol=1e-14, atol=1e-14)
@@ -731,11 +731,11 @@ def test_mu_collision_noise_is_finite_and_matches_the_diffusion_tensor(v, xi):
     """The eigenvectors were 0/0 at xi = 0, and jnp.select returned zero noise
     when rounding put |xi| just above 1."""
     enable_x64 = _enable_x64()
-    from essos.dynamics import GuidingCenterCollisionsDiffusionMu, GuidingCenterCollisionsDriftMuStratonovich
+    from essos.dynamics import guiding_center_collisions_diffusion_mu, guiding_center_collisions_drift_mu_stratonovich
     from essos.background_species import nu_D_ab, nu_par_ab
     with enable_x64():
         state, scale, args = _mu_collision_setup(v, xi)
-        sigma = GuidingCenterCollisionsDiffusionMu(0., state, args)[3:, 3:] * scale[:, None]
+        sigma = guiding_center_collisions_diffusion_mu(0., state, args)[3:, 3:] * scale[:, None]
         m, species = args[1].mass, args[3]
         speed = jnp.sqrt((state[3] * scale[0])**2 + 4 * state[4] * scale[1] / m)
         nus = [f(m, args[1].charge, 0, speed, state[:3], species) for f in (nu_par_ab, nu_D_ab)]
@@ -745,9 +745,9 @@ def test_mu_collision_noise_is_finite_and_matches_the_diffusion_tensor(v, xi):
         J = jnp.array([[0., 0., 1.], [m * vvec[0] / 2.0, 0., 0.]])  # d(vpar, mu)/dv
         D = J @ Dv @ J.T
         np.testing.assert_allclose(sigma @ sigma.T / 2, D, rtol=1e-9, atol=1e-12 * float(jnp.abs(D).max()))
-        assert jnp.all(jnp.isfinite(GuidingCenterCollisionsDriftMuStratonovich(0., state, args)))
+        assert jnp.all(jnp.isfinite(guiding_center_collisions_drift_mu_stratonovich(0., state, args)))
         # Milstein differentiates the noise; sqrt(mu) must not give an infinite slope at |xi| = 1
-        assert jnp.all(jnp.isfinite(jax.jvp(lambda y: GuidingCenterCollisionsDiffusionMu(0., y, args), (state,), (jnp.ones(5),))[1]))
+        assert jnp.all(jnp.isfinite(jax.jvp(lambda y: guiding_center_collisions_diffusion_mu(0., y, args), (state,), (jnp.ones(5),))[1]))
 
 
 @pytest.mark.parametrize("v,xi", [(1e5, 0.3), (1e6, 0.3), (1e5, 1e-3), (1e6, 0.9)])
@@ -755,23 +755,23 @@ def test_mu_collision_stratonovich_correction_matches_noise_derivative(v, xi):
     """Stratonovich minus Ito drift is -1/2 sigma_jk d_j sigma_ik; the hand-coded
     derivatives disagreed with the noise at generic xi."""
     enable_x64 = _enable_x64()
-    from essos.dynamics import (GuidingCenterCollisionsDiffusionMu, GuidingCenterCollisionsDriftMuIto,
-                                GuidingCenterCollisionsDriftMuStratonovich)
+    from essos.dynamics import (guiding_center_collisions_diffusion_mu, guiding_center_collisions_drift_mu_ito,
+                                guiding_center_collisions_drift_mu_stratonovich)
     with enable_x64():
         state, scale, args = _mu_collision_setup(v, xi)
         z = state[3:] * scale
 
         def sigma(z):
-            return GuidingCenterCollisionsDiffusionMu(0., jnp.concatenate([state[:3], z / scale]), args)[3:, 3:] * scale[:, None]
+            return guiding_center_collisions_diffusion_mu(0., jnp.concatenate([state[:3], z / scale]), args)[3:, 3:] * scale[:, None]
         steps = 1e-4 * jnp.array([v, args[1].mass * v**2 / 4.0])
         dsigma = jnp.stack([(sigma(z + e) - sigma(z - e)) / (2 * e.sum()) for e in jnp.diag(steps)], axis=-1)
         expected = -0.5 * jnp.einsum('jk,ikj->i', sigma(z), dsigma)
-        drift = (GuidingCenterCollisionsDriftMuStratonovich(0., state, args)
-                 - GuidingCenterCollisionsDriftMuIto(0., state, args))[3:] * scale
+        drift = (guiding_center_collisions_drift_mu_stratonovich(0., state, args)
+                 - guiding_center_collisions_drift_mu_ito(0., state, args))[3:] * scale
         np.testing.assert_allclose(drift, expected, rtol=1e-5, atol=1e-8 * float(jnp.abs(expected).max()))
 
 
-def _legacy_positive_charge_start(field, xyz, vpar, total_speed, mass, charge, phase):
+def _reference_positive_charge_start(field, xyz, vpar, total_speed, mass, charge, phase):
     """The pre-fix construction, correct for a positive charge and B not along z."""
     b = field.B_contravariant(xyz) / jnp.linalg.norm(field.B_contravariant(xyz))
     p2 = jnp.array([0.0, 0.0, 1.0])
@@ -805,11 +805,11 @@ def test_gc_to_fullorbit_recovers_the_guiding_center(charge_sign, direction, pha
     np.testing.assert_allclose(velocities @ b, vpar, rtol=1e-12)
     np.testing.assert_allclose(jnp.linalg.norm(velocities, axis=1), total_speed, rtol=1e-12)
     if charge_sign > 0 and abs(b[2]) < 0.9:
-        legacy = jnp.stack([
-            _legacy_positive_charge_start(field, x, v, total_speed, mass, charge, phase)
+        reference = jnp.stack([
+            _reference_positive_charge_start(field, x, v, total_speed, mass, charge, phase)
             for x, v in zip(centers, vpar)
         ])
-        np.testing.assert_allclose(positions, legacy, rtol=0, atol=1e-13)
+        np.testing.assert_allclose(positions, reference, rtol=0, atol=1e-13)
 
 
 def test_particles_honours_the_full_orbit_phase_argument():
@@ -996,13 +996,13 @@ def test_particle_batches_are_bypassed_under_jit():
 
 
 def test_custom_loss_grad_through_adaptive_guiding_center_matches_finite_difference():
-    # custom_loss jits its value and gradient, so Tracing.trace sees tracer
+    # CustomLoss jits its value and gradient, so Tracing.trace sees tracer
     # initial conditions and must not pull them back to the host.
-    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.coils import Coils, create_equally_spaced_curves
     from essos.fields import BiotSavart
-    from essos.losses import custom_loss
+    from essos.losses import CustomLoss
 
-    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.4, n_segments=24, nfp=2, stellsym=True)
+    curves = create_equally_spaced_curves(n_curves=2, order=1, R=1.0, r=0.4, n_segments=24, nfp=2, stellsym=True)
     coils = Coils(curves=curves, currents=jnp.array([1e6, 1e6]))
     R0 = jnp.linspace(0.95, 1.05, 2)
     particles = Particles(initial_xyz=jnp.array([R0, 0 * R0, 0 * R0]).T)
@@ -1013,7 +1013,7 @@ def test_custom_loss_grad_through_adaptive_guiding_center_matches_finite_differe
         xyz = tracing.trajectories[:, -1, :3]
         return jnp.sum(jnp.sqrt(xyz[:, 0]**2 + xyz[:, 1]**2)) + jnp.sum(xyz[:, 2])
 
-    loss = custom_loss(final_position, "field", particles=particles)
+    loss = CustomLoss(final_position, "field", particles=particles)
     loss.dependencies = {"field": BiotSavart(coils)}
     dofs = loss.starting_dofs
 
@@ -1240,26 +1240,26 @@ def test_exterior_arguments_are_validated():
 
 
 def test_guiding_center_mu_matches_guiding_center():
-    from essos.dynamics import GuidingCenterMu
+    from essos.dynamics import guiding_center_mu
     from essos.electric_field import ElectricFieldZero
 
     field, particles = MockField(), Particles(jnp.array([[1.0, 0.0, 0.0]]))
     y = jnp.array([1.0, 0.2, 0.1, 3e6])
     mu = (particles.energy - 0.5 * particles.mass * y[3]**2) / field.AbsB(y[:3])
     args = (field, particles, ElectricFieldZero())
-    assert jnp.allclose(GuidingCenterMu(0.0, jnp.append(y, mu), args)[:4], GuidingCenter(0.0, y, args))
-    assert GuidingCenterMu(0.0, jnp.append(y, mu), args)[4] == 0.0
+    assert jnp.allclose(guiding_center_mu(0.0, jnp.append(y, mu), args)[:4], guiding_center(0.0, y, args))
+    assert guiding_center_mu(0.0, jnp.append(y, mu), args)[4] == 0.0
 
 
 def test_full_orbit_collision_noise_is_parallel_plus_perpendicular():
     """Velocity noise amplitude sqrt(2 D_par) v v^T/v^2 + sqrt(2 D_perp) (I - v v^T/v^2)."""
-    from essos.dynamics import LorentzCollisionsDiffusion
+    from essos.dynamics import lorentz_collisions_diffusion
     from essos.background_species import nu_D_ab, nu_par_ab
     field = _UniformField((0., 0., 1.), magnitude=1.)
     particles = Particles([[1., 0., 0.]], [.5], field=field)
     species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e20]), jnp.array([1e3]))
     v = jnp.array([3e6, -1e6, 2e6])
-    block = LorentzCollisionsDiffusion(0., jnp.concatenate([jnp.ones(3), v]), (field, particles, species))[3:, 3:]
+    block = lorentz_collisions_diffusion(0., jnp.concatenate([jnp.ones(3), v]), (field, particles, species))[3:, 3:]
     m, q, speed = particles.mass, particles.charge, jnp.linalg.norm(v)
     nu_D = nu_D_ab(m, q, 0, speed, jnp.ones(3), species)
     nu_par = nu_par_ab(m, q, 0, speed, jnp.ones(3), species)
@@ -1276,10 +1276,10 @@ def test_collisional_guiding_center_v_perp_uses_speed_and_pitch():
 
 
 def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
-    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.coils import Coils, create_equally_spaced_curves
     from essos.constants import SPEED_OF_LIGHT
     from essos.fields import BiotSavart
-    coils = Coils(CreateEquallySpacedCurves(1, 1, 1.0, 0.4, 8, 1, False), [1e6])
+    coils = Coils(create_equally_spaced_curves(1, 1, 1.0, 0.4, 8, 1, False), [1e6])
     species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
     particles = Particles([[1.05, 0., 0.]], [.5])
     monkeypatch.setattr(Tracing, "trace", lambda self: jnp.zeros((1, 2, 5)))  # only the setup is tested
@@ -1310,13 +1310,13 @@ def test_loss_fraction_of_analytic_gyro_orbits():
 
 
 def test_tracings_with_the_same_shapes_share_one_compiled_solve():
-    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.coils import Coils, create_equally_spaced_curves
     from essos.fields import BiotSavart
     from essos.constants import ONE_EV
     from essos.dynamics import _compiled_solver
 
     def trace(currents, shift):
-        coils = Coils(curves=CreateEquallySpacedCurves(n_curves=2, order=2, R=1.0, r=0.4, nfp=2, stellsym=True), currents=currents)
+        coils = Coils(curves=create_equally_spaced_curves(n_curves=2, order=2, R=1.0, r=0.4, nfp=2, stellsym=True), currents=currents)
         particles = Particles(initial_xyz=jnp.array([[1.1 + shift, 0., 0.], [1.2 + shift, 0., 0.]]), energy=1e3 * ONE_EV)
         return Tracing(field=BiotSavart(coils), model='GuidingCenter', particles=particles, maxtime=1e-6, timestep=1e-8,
                        times_to_trace=10, progress=False).trajectories

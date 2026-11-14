@@ -42,7 +42,7 @@ class BaseConstraint:
     """A minimal mutable container holding `init` and `loss` callables for a constraint.
 
     This mirrors the simple tuple-like behavior used elsewhere but allows
-    attribute access and matches the `base_loss` style in `losses.py`.
+    attribute access and matches the `BaseLoss` style in `losses.py`.
     """
     def __init__(self, init: Callable, loss: Callable):
         self.init = init
@@ -104,7 +104,7 @@ class CompositeConstraint:
 
 
 class SelectiveConstraint:
-    """Wraps a constraint with selective named dependencies, similar to custom_loss.
+    """Wraps a constraint with selective named dependencies, similar to CustomLoss.
     
     This allows constraints to only depend on a subset of the available degrees of freedom
     by name, enabling combination of constraints with different argument requirements.

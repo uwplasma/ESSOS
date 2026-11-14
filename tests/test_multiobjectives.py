@@ -1,12 +1,12 @@
 import pytest
 from unittest.mock import MagicMock, patch
 import essos.objective_functions as objf
-from essos.losses import custom_loss
+from essos.losses import CustomLoss
 from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 from essos.coils import Coils,Curves
 from essos.fields import BiotSavart
 from essos.objective_functions import loss_coil_length, loss_coil_curvature
-from essos.surfaces import BdotN_over_B
+from essos.surfaces import bdotn_over_b
 
 # test_multiobjectiveoptimizer.py
 
@@ -39,7 +39,7 @@ def test_custom_loss_named_unraveler():
     def loss_fn(curve_dofs, current):
         return jnp.sum(curve_dofs**2) + jnp.sum(current)
 
-    loss = custom_loss(loss_fn, "curve_dofs", "current")
+    loss = CustomLoss(loss_fn, "curve_dofs", "current")
     loss.dependencies = {
         "curve_dofs": jnp.array([[1.0, 2.0], [3.0, 4.0]]),
         "current": jnp.array([5.0]),
@@ -70,7 +70,7 @@ def test_custom_loss_named_unraveler():
     assert jnp.array_equal(gradient_tuple["unused"], gradient["unused"])
 
 
-@pytest.mark.xfail(reason='test_build_available_inputs uses the old optimizer loss API (x, dofs_curves=, currents_scale=); BdotN_over_B now lives in essos.surfaces with signature (surface, field). Needs rewrite to new API.', strict=False)
+@pytest.mark.xfail(reason='test_build_available_inputs uses the old optimizer loss API (x, dofs_curves=, currents_scale=); bdotn_over_b now lives in essos.surfaces with signature (surface, field). Needs rewrite to new API.', strict=False)
 def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn):
     optimizer = MultiObjectiveOptimizer(
         loss_functions=[dummy_loss_fn],
@@ -118,7 +118,7 @@ def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn)
 
     max_length=loss_coil_length(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
     max_curvature=loss_coil_curvature(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
-    normB_axis=objf.loss_normB_axis(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
+    norm_b_axis=objf.loss_normB_axis(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
 
     optimizer.run()
 

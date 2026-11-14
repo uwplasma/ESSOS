@@ -14,8 +14,8 @@ import pytest
 
 from essos.background_species import JOULE_PER_EV, BackgroundSpecies, nu_D_ab, nu_par_ab, nu_s_ab
 from essos.constants import ELEMENTARY_CHARGE, PROTON_MASS, SPEED_OF_LIGHT
-from essos.dynamics import (GuidingCenterCollisionsDiffusionMu, GuidingCenterCollisionsDriftMuIto,
-                            GuidingCenterCollisionsDriftMuStratonovich)
+from essos.dynamics import (guiding_center_collisions_diffusion_mu, guiding_center_collisions_drift_mu_ito,
+                            guiding_center_collisions_drift_mu_stratonovich)
 
 B0 = 2.0
 M = PROTON_MASS
@@ -96,7 +96,7 @@ def _code(fn, z, species):
 
 def _code_sigma(z, species):
     state = jnp.concatenate([X0, z / _SCALE])
-    out = GuidingCenterCollisionsDiffusionMu(0.0, state, (FIELD, PARTICLE, EFIELD, species, 1.0))
+    out = guiding_center_collisions_diffusion_mu(0.0, state, (FIELD, PARTICLE, EFIELD, species, 1.0))
     return out[3:, 3:] * _SCALE[:, None]
 
 
@@ -119,7 +119,7 @@ def test_diffusion_matrix_matches_velocity_space_tensor(v, xi, T):
 def test_ito_drift_matches_divergence_of_diffusion_tensor(v, xi, T):
     species, z = _species(T), _z(v, xi)
     expected = _ito_reference(z, species)
-    np.testing.assert_allclose(_code(GuidingCenterCollisionsDriftMuIto, z, species), expected,
+    np.testing.assert_allclose(_code(guiding_center_collisions_drift_mu_ito, z, species), expected,
                                rtol=1e-8, atol=1e-10 * np.abs(expected).max())
 
 
@@ -129,7 +129,7 @@ def test_stratonovich_drift_is_ito_minus_noise_induced_drift(v, xi, T):
     sigma = _code_sigma(z, species)
     dsigma = jax.jacfwd(_code_sigma)(z, species)  # [i, k, j] = d sigma_ik / d z_j
     expected = _ito_reference(z, species) - 0.5 * jnp.einsum('jk,ikj->i', sigma, dsigma)
-    np.testing.assert_allclose(_code(GuidingCenterCollisionsDriftMuStratonovich, z, species), expected,
+    np.testing.assert_allclose(_code(guiding_center_collisions_drift_mu_stratonovich, z, species), expected,
                                rtol=1e-7, atol=1e-9 * np.abs(expected).max())
 
 
@@ -146,7 +146,7 @@ def test_maxwellian_at_background_temperature_has_zero_flux(v, xi):
         sigma = _code_sigma(z, species)
         return sigma @ sigma.T / 2 * f(z)
 
-    advective = _code(GuidingCenterCollisionsDriftMuIto, z, species) * f(z)
+    advective = _code(guiding_center_collisions_drift_mu_ito, z, species) * f(z)
     flux = advective - jnp.einsum('ijj->i', jax.jacfwd(Df)(z))
     np.testing.assert_allclose(flux, 0.0, atol=1e-8 * np.abs(advective).max())
 
@@ -155,7 +155,7 @@ def test_cold_background_speed_drift_is_slowing_down():
     # T_b -> 0: energy diffusion vanishes and pitch scattering conserves speed,
     # so the Ito drift of v = |v| reduces to -nu_s v.
     species, z = _species(1e-2), _z(2e6, 0.4)
-    A = _code(GuidingCenterCollisionsDriftMuIto, z, species)
+    A = _code(guiding_center_collisions_drift_mu_ito, z, species)
     sigma = _code_sigma(z, species)
 
     def speed(z):

@@ -133,10 +133,10 @@ if __name__ == "__main__":
 
 
 def test_combined_field_sums_correctly():
-    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.coils import Coils, create_equally_spaced_curves
     from essos.fields import CombinedField
 
-    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.3,
+    curves = create_equally_spaced_curves(n_curves=2, order=1, R=1.0, r=0.3,
                                        n_segments=20, nfp=2, stellsym=True)
     field = BiotSavart(Coils(curves=curves, currents=[1e5] * 2))
     points = jnp.array([0.5, 0.5, 0.5])
@@ -312,10 +312,10 @@ def test_fused_guiding_center_quantities_match_the_separate_methods():
     import jax
     import jax.numpy as jnp
     import numpy as np
-    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.coils import Coils, create_equally_spaced_curves
     from essos.fields import BiotSavart, MagneticField
 
-    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    curves = create_equally_spaced_curves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
     field = BiotSavart(Coils(curves=curves, currents=[1.1e6, 0.9e6]))
     rng = np.random.default_rng(4)
     points = jnp.asarray(rng.normal(scale=0.2, size=(6, 3)) + np.array([1.7, 0.1, 0.05]))
@@ -747,10 +747,10 @@ def test_external_field_params_are_differentiable_and_share_one_compile():
 def test_combined_field_fused_gc_quantities_match_generic_path():
     import jax
     import jax.numpy as jnp
-    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.coils import Coils, create_equally_spaced_curves
     from essos.fields import BiotSavart, CombinedField, ExternalField, MagneticField
 
-    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    curves = create_equally_spaced_curves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
     bs = BiotSavart(Coils(curves=curves, currents=[1.1e6, 0.9e6]))
     ext = ExternalField(lambda xyz: 0.01 * jnp.stack([-xyz[:, 1], xyz[:, 0], xyz[:, 2] ** 2], axis=-1))
     x = jnp.array([1.7, 0.1, 0.05])

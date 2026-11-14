@@ -5,11 +5,11 @@ from time import perf_counter as timer
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
 
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import Vmec
 from essos.fields import BiotSavart
-from essos.surfaces import BdotN
-from essos.losses import custom_loss
+from essos.surfaces import bdotn
+from essos.losses import CustomLoss
 
 output_dir = os.path.join(os.path.dirname(__file__), 'output')
 if not os.path.exists(output_dir):
@@ -30,15 +30,15 @@ STELLSYM = True
 LARGE_R = vmec.r_axis
 SMALL_R = vmec.r_axis/1.5
 
-curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
+curves = create_equally_spaced_curves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
 coils = Coils(curves=curves, currents=[COIL_CURRENT]*N_COILS)
 field = BiotSavart(coils)
 
 """ Creating the loss functions """
 def loss(field, surface):
-    return jnp.sum(jnp.abs(BdotN(surface, field)))
+    return jnp.sum(jnp.abs(bdotn(surface, field)))
 
-Loss = custom_loss(loss, "field", surface=vmec.surface)
+Loss = CustomLoss(loss, "field", surface=vmec.surface)
 Loss.dependencies = {"field": field}
 dofs = Loss.starting_dofs
 

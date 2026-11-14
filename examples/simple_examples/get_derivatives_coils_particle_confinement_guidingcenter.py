@@ -2,9 +2,9 @@
 import os
 from jax import vmap
 import jax.numpy as jnp
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart
-from essos.losses import custom_loss
+from essos.losses import CustomLoss
 
 # Optimization parameters
 order_Fourier_series_coils = 2
@@ -20,7 +20,7 @@ AXIS_B_TARGET = 5.7
 current_on_each_coil = 1.84e7
 major_radius_coils = 7.75
 minor_radius_coils = 4.45
-curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
+curves = create_equally_spaced_curves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
                                    R=major_radius_coils, r=minor_radius_coils,
                                    n_segments=number_coil_points,
@@ -35,15 +35,15 @@ def loss_length(field):
 def loss_curvature(field):
     return jnp.mean(jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET))
 
-def loss_normB_axis_average(field):
+def loss_norm_b_axis_average(field):
     R_axis=field.r_axis
     phi_array = jnp.linspace(0, 2 * jnp.pi, 15)
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
     return jnp.mean(jnp.maximum(0, B_axis - AXIS_B_TARGET))
 
-curvature_loss = custom_loss(loss_curvature, "field")
-length_loss = custom_loss(loss_length, "field")
-Baxis_average_loss = custom_loss(loss_normB_axis_average, "field")
+curvature_loss = CustomLoss(loss_curvature, "field")
+length_loss = CustomLoss(loss_length, "field")
+Baxis_average_loss = CustomLoss(loss_norm_b_axis_average, "field")
 total_loss = curvature_loss + length_loss + Baxis_average_loss
 total_loss.dependencies = {"field": field}
 

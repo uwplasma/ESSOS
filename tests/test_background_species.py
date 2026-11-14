@@ -86,7 +86,7 @@ def test_deflection_rate_matches_rutherford_pitch_decay(mass, charge):
 
 
 def test_deflection_rate_matches_maxwellian_flow_decay():
-    """NRL Lorentz flow rate, 4 sqrt(2pi)/3 n e^4 lnL / [(4pi eps0)^2 sqrt(m) T^1.5]."""
+    """NRL lorentz flow rate, 4 sqrt(2pi)/3 n e^4 lnL / [(4pi eps0)^2 sqrt(m) T^1.5]."""
     from scipy.special import roots_genlaguerre
     species = BackgroundSpecies(2, MASS.at[1].set(1e6), CHARGE,
                                 jnp.array([1e19, 1e19]), jnp.array([100., 1e-8]))

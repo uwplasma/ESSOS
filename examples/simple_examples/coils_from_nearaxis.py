@@ -3,7 +3,7 @@ number_of_processors_to_use = 6 # Parallelization, this should divide nfieldline
 import jax.numpy as jnp
 from jax import block_until_ready, vmap
 import matplotlib.pyplot as plt
-from essos.fields import BiotSavart_from_gamma, BiotSavart
+from essos.fields import BiotSavartFromGamma, BiotSavart
 from pyqsc_jax.near_axis import near_axis
 
 import plotly.graph_objects as go
@@ -76,7 +76,7 @@ phi0 = jnp.zeros(nfieldlines)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 if plot_coils_without_Fourier_fit:
     time0 = time()
-    field_coils_gamma = BiotSavart_from_gamma(coils_gamma, currents=current_on_each_coil*jnp.ones(len(coils_gamma)))
+    field_coils_gamma = BiotSavartFromGamma(coils_gamma, currents=current_on_each_coil*jnp.ones(len(coils_gamma)))
     tracing_coils_gamma = block_until_ready(Tracing(field=field_coils_gamma, model='FieldLineAdaptative', initial_conditions=initial_xyz,
                       maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
     print(f"ESSOS tracing coils_gamma took {time()-time0:.2f} seconds")

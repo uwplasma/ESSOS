@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax import vmap
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.dynamics import Particles, Tracing
 from essos.fields import BiotSavart, InterpolatedField, MagneticField
 
@@ -12,7 +12,7 @@ BOX = dict(R=(1.35, 2.05), Z=(-0.3, 0.3), nfp=2)
 
 @pytest.fixture(scope="module")
 def field():
-    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    curves = create_equally_spaced_curves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
     return BiotSavart(Coils(curves=curves, currents=[1.1e6, 0.9e6]))
 
 

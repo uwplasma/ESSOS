@@ -271,8 +271,8 @@ def test_coil_tracer_unflatten_preserves_physical_scales():
 
 
 def test_coils_indexing_addition_and_exclusion():
-    from essos.coils import CreateEquallySpacedCurves
-    coils = Coils(CreateEquallySpacedCurves(2, 2, 1.0, 0.3, 32, 2, True), jnp.array([1e5, 2e5]))
+    from essos.coils import create_equally_spaced_curves
+    coils = Coils(create_equally_spaced_curves(2, 2, 1.0, 0.3, 32, 2, True), jnp.array([1e5, 2e5]))
     one, part = coils[3], coils[1:5]
     np.testing.assert_allclose(one.gamma[0], coils.gamma[3], atol=1e-14)
     np.testing.assert_allclose(one.currents, coils.currents[3:4])
@@ -295,7 +295,7 @@ def test_discretized_coils_copy_and_json_round_trip(tmp_path):
 
 
 def test_zero_currents_give_finite_dofs():
-    from essos.coils import CreateEquallySpacedCurves
-    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    from essos.coils import create_equally_spaced_curves
+    curves = create_equally_spaced_curves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
     coils = Coils(curves=curves, currents=[0.0, 0.0])
     assert jnp.all(jnp.isfinite(coils.dofs)) and jnp.all(jnp.isfinite(coils.currents))

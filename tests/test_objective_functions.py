@@ -205,8 +205,8 @@ class TestObjectiveFunctions(unittest.TestCase):
         self.assertEqual(points.shape, (3, 2))
         self.assertEqual(B_nearaxis.shape, (2, 3))
         self.assertEqual(gradB_nearaxis.shape, (2, 3, 3))
-        self.assertTrue(jnp.isfinite(objf.loss_B_difference_coils_near_axis(self.field, self.field_nearaxis)))
-        self.assertTrue(jnp.isfinite(objf.loss_gradB_difference_coils_near_axis(self.field, self.field_nearaxis)))
+        self.assertTrue(jnp.isfinite(objf.loss_b_difference_coils_near_axis(self.field, self.field_nearaxis)))
+        self.assertTrue(jnp.isfinite(objf.loss_gradb_difference_coils_near_axis(self.field, self.field_nearaxis)))
         self.assertTrue(jnp.isfinite(objf.loss_iota_near_axis(self.field_nearaxis)))
         self.assertTrue(jnp.isfinite(objf.loss_r0_near_axis(self.field_nearaxis)))
 
@@ -217,13 +217,13 @@ class TestObjectiveFunctions(unittest.TestCase):
         self.assertTrue(jnp.isfinite(objf.loss_particle_alpha_drift(self.field, self.particles)))
         self.assertTrue(jnp.isfinite(objf.loss_particle_gammac(self.field, self.particles)))
         self.assertTrue(jnp.isfinite(objf.loss_particle_rcross_final(self.field, self.particles)))
-        self.assertTrue(jnp.isfinite(objf.loss_particle_Br(self.field, self.particles)))
+        self.assertTrue(jnp.isfinite(objf.loss_particle_br(self.field, self.particles)))
         self.assertTrue(jnp.isfinite(objf.loss_particle_iota(self.field, self.particles)))
 
     @patch("essos.objective_functions.BdotN_over_B", return_value=jnp.ones((2, 3), dtype=jnp.float64))
     def test_surface_losses(self, bdotn):
-        self.assertTrue(jnp.isfinite(objf.normB_axis(self.field)).all())
-        self.assertTrue(jnp.isfinite(objf.loss_normB_axis_average(self.field)))
+        self.assertTrue(jnp.isfinite(objf.norm_b_axis(self.field)).all())
+        self.assertTrue(jnp.isfinite(objf.loss_norm_b_axis_average(self.field)))
         self.assertTrue(jnp.isfinite(objf.loss_BdotN(self.field, self.surface)))
         self.assertTrue(jnp.isfinite(objf.loss_BdotN_constraint(self.field, self.surface)))
 
@@ -312,8 +312,8 @@ class TestObjectiveFunctions(unittest.TestCase):
         gammadash = jnp.ones((10, 3))
         gammadashdash = jnp.ones((10, 3))
         quadpoints = jnp.linspace(0, 1, 10)
-        self.assertTrue(jnp.isfinite(objf.B_regularized_singularity_term(rc_prime, rc_prime_prime, 1.0)).all())
-        self.assertTrue(jnp.isfinite(objf.B_regularized_pure(gamma, gammadash, gammadashdash, quadpoints, 1.0, 1.0)).all())
+        self.assertTrue(jnp.isfinite(objf.b_regularized_singularity_term(rc_prime, rc_prime_prime, 1.0)).all())
+        self.assertTrue(jnp.isfinite(objf.b_regularized_pure(gamma, gammadash, gammadashdash, quadpoints, 1.0, 1.0)).all())
         self.assertTrue(objf.regularization_circ(2.0) > 0)
         self.assertTrue(jnp.isfinite(objf.regularization_rect(2.0, 1.0)))
         self.assertTrue(jnp.isfinite(objf.rectangular_xsection_k(2.0, 1.0)))
@@ -359,10 +359,10 @@ def _two_distant_loops(n, radius=1.3, current=2.0e6, separation=1.0e5):
 
 
 def test_biot_savart_from_gamma_constructs_and_measures_length():
-    from essos.fields import BiotSavart_from_gamma
+    from essos.fields import BiotSavartFromGamma
 
     coils, radius, _ = _two_distant_loops(64)
-    field = BiotSavart_from_gamma(coils.gamma, coils.gamma_dash, coils.gamma_dashdash, coils.currents)
+    field = BiotSavartFromGamma(coils.gamma, coils.gamma_dash, coils.gamma_dashdash, coils.currents)
     np.testing.assert_allclose(field.coils_length, 2 * np.pi * radius, rtol=1e-12)
 
 

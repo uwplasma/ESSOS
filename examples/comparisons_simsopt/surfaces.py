@@ -4,12 +4,12 @@ import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 18})
 import jax.numpy as jnp
 from jax import block_until_ready
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import Vmec, BiotSavart
-from essos.surfaces import B_on_surface, BdotN_over_B, SurfaceRZFourier as SurfaceRZFourier_ESSOS, SquaredFlux as SquaredFlux_ESSOS
+from essos.surfaces import b_on_surface, bdotn_over_b, SurfaceRZFourier as SurfaceRZFourier_ESSOS, squared_flux as SquaredFlux_ESSOS
 from simsopt.field import BiotSavart as BiotSavart_simsopt
 from simsopt.geo import SurfaceRZFourier as SurfaceRZFourier_SIMSOPT
-from simsopt.objectives import SquaredFlux as SquaredFlux_SIMSOPT
+from simsopt.objectives import squared_flux as SquaredFlux_SIMSOPT
 
 output_dir = os.path.join(os.path.dirname(__file__), '../output')
 if not os.path.exists(output_dir):
@@ -36,7 +36,7 @@ current_on_each_coil = 1
 number_of_field_periods = vmec.nfp
 major_radius_coils = vmec.r_axis
 minor_radius_coils = vmec.r_axis/1.5
-curves_essos = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
+curves_essos = create_equally_spaced_curves(n_curves=number_coils_per_half_field_period,
                                    order=order_Fourier_series_coils,
                                    R=major_radius_coils, r=minor_radius_coils,
                                    n_segments=number_coil_points,
@@ -118,7 +118,7 @@ print(unit_normal_error)
 
 print('B on surface')
 start_time = time()
-B_on_surface_essos = block_until_ready(B_on_surface(surface_essos, field_essos))
+B_on_surface_essos = block_until_ready(b_on_surface(surface_essos, field_essos))
 t_B_on_surface_essos = time() - start_time
 
 start_time = time()

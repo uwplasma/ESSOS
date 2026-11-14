@@ -6,7 +6,7 @@ import optax
 import matplotlib.pyplot as plt
 from jax import jit
 from functools import partial
-from essos.coils import Coils, Curves, CreateEquallySpacedCurves
+from essos.coils import Coils, Curves, create_equally_spaced_curves
 from essos.fields import BiotSavart
 import numpy as np
 from pandas.plotting import parallel_coordinates
@@ -46,7 +46,7 @@ class MultiObjectiveOptimizer:
         nfp = self.vmec.nfp
         R = self.vmec.r_axis
         r = R / 1.5
-        curves = CreateEquallySpacedCurves(
+        curves = create_equally_spaced_curves(
             n_curves=self.num_coils,
             order=self.order_Fourier,
             R=R, r=r,

@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import CombinedField, BiotSavart
 
 
@@ -10,7 +10,7 @@ minor_radius_coils = 0.3
 order_Fourier_series_coils = 1
 number_coil_points = 50
 
-curves = CreateEquallySpacedCurves(
+curves = create_equally_spaced_curves(
     n_curves=number_coils_per_half_field_period,
     order=order_Fourier_series_coils,
     R=major_radius_coils, r=minor_radius_coils,

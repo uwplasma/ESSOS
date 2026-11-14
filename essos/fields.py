@@ -9,7 +9,7 @@ from scipy import ndimage
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
 from jax.custom_batching import custom_vmap
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B, SurfaceClassifier
+from essos.surfaces import SurfaceRZFourier, bdotn_over_b, SurfaceClassifier
 from essos.plot import fix_matplotlib_3d
 from essos.util import newton
 
@@ -219,7 +219,7 @@ def gamma_dashdash_from_gamma(gamma):
         d2_dtheta2_fft(gamma[..., 2]),
     ], axis=-1)
 
-class BiotSavart_from_gamma(MagneticField):
+class BiotSavartFromGamma(MagneticField):
     def __init__(self, gamma, gamma_dash=None, gamma_dashdash=None, currents=None):
         self.currents = currents
         self.gamma = gamma
@@ -677,15 +677,6 @@ class Vmec():
         x = x + (lax.stop_gradient(step) - step)
         s = x[0]**2 + x[1]**2
         return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), residual
-
-class near_axis:
-    def __init__(self, *args, **kwargs):
-        raise ImportError(
-            "The 'near_axis' class has been migrated to the standalone 'pyQSC_JAX' repository. "
-            "Please run 'pip install git+https://github.com/uwplasma/pyQSC_JAX.git' "
-            "and import it via 'from pyqsc_jax.near_axis import near_axis'."
-        )
-
 
 class ExternalField(MagneticField):
     """A Cartesian field from a batched source, traced one point at a time.
