@@ -1,12 +1,4 @@
-"""Array objectives for Cartesian GC and Lorentz trajectories.
-
-Classifier loss fraction and first-loss weights follow jax_9/jax_10 Tracing.
-The heat proxy follows jax_10; perpendicular energy is separately exposed in
-joules (jax_9's heat method) and with jax_10's original normalization. State
-reconstruction is adapted explicitly to collisionless SI states, not the
-normalized five-component Mu-collision states used by those branches. Native
-split GC states instead supply evolving physical mu [J/T] as component five.
-"""
+"""Array objectives for Cartesian GC and Lorentz trajectories: final minor radius and soft classifier loss fraction."""
 import jax
 import jax.numpy as jnp
 from jax import lax
@@ -38,69 +30,3 @@ def _loss_probabilities(trajectories, boundary, softness):
 def classifier_loss_fraction(trajectories, boundary, softness=10.):
     _, probability, _ = _loss_probabilities(trajectories, boundary, softness)
     return jnp.mean(jnp.max(probability, axis=1))
-
-
-def classifier_loss_location(trajectories, target_position, boundary, softness=10.):
-    xyz, _, weights = _loss_probabilities(trajectories, boundary, softness)
-    distance = jnp.linalg.norm(xyz-jnp.asarray(target_position)[None, None, :], axis=-1)
-    return jnp.sum(weights*distance)/(jnp.sum(weights)+1e-8)
-
-
-def classifier_line_loss(trajectories, line_point, line_direction, boundary,
-                         softness=30., location_softness=10.):
-    """jax_13 escape-line cost: distance of probability-weighted escape centroids.
-
-    This preserves the classic per-save centroid reduction, including its
-    dependence on save count. It is distinct from individual first-loss distances.
-    """
-    xyz, probability, _ = _loss_probabilities(trajectories, boundary, softness)
-    total = jnp.sum(probability, axis=0)
-    locations = jnp.sum(xyz*probability[..., None], axis=0)/(total[:, None]+1e-8)
-    direction = jnp.asarray(line_direction)
-    direction = direction/(jnp.linalg.norm(direction)+1e-8)
-    delta = locations-jnp.asarray(line_point)
-    perpendicular = delta-jnp.sum(delta*direction, axis=-1, keepdims=True)*direction
-    distance = jnp.sqrt(jnp.sum(perpendicular**2, axis=-1)+1e-24)
-    escape_probability = total/len(trajectories)
-    return jnp.sum(distance*escape_probability/(1+location_softness*escape_probability))
-
-
-def kinetic_components(trajectories, field, mass, birth_energy, model):
-    """Total/perpendicular energy in J and perpendicular speed in m/s."""
-    xyz = trajectories[..., :3]
-    if model in ("GuidingCenter", "GuidingCenterAdaptative") and trajectories.shape[-1] in (4, 5):
-        magnitude = jax.vmap(field.AbsB)(xyz.reshape((-1, 3))).reshape(xyz.shape[:2])
-        if trajectories.shape[-1] == 5:
-            perpendicular = jnp.maximum(trajectories[..., 4]*magnitude, 0.)
-        else:
-            initial_mu = (birth_energy-.5*mass*trajectories[:, 0, 3]**2)/magnitude[:, 0]
-            perpendicular = jnp.maximum(initial_mu[:, None]*magnitude, 0.)
-        total = .5*mass*trajectories[..., 3]**2+perpendicular
-    elif model in ("FullOrbit", "FullOrbitAdaptative") and trajectories.shape[-1] == 6:
-        magnetic = jax.vmap(field.B_contravariant)(xyz.reshape((-1, 3))).reshape(xyz.shape)
-        direction = magnetic/jnp.linalg.norm(magnetic, axis=-1, keepdims=True)
-        velocity = trajectories[..., 3:6]
-        parallel = jnp.sum(velocity*direction, axis=-1)
-        total = .5*mass*jnp.sum(velocity**2, axis=-1)
-        perpendicular = jnp.maximum(total-.5*mass*parallel**2, 0.)
-    else:
-        raise ValueError("kinetic objectives require Cartesian GC (4 or physical-mu 5) or Lorentz (6) SI states")
-    return total, perpendicular, jnp.sqrt(2*perpendicular/mass)
-
-
-def classifier_energy_cost(trajectories, field, mass, birth_energy, model, boundary,
-                           softness=10., kind="heat_jax10"):
-    if kind not in ("heat_jax10", "perpendicular_jax9", "perpendicular_jax10"):
-        raise ValueError("unknown classifier energy objective")
-    _, _, weights = _loss_probabilities(trajectories, boundary, softness)
-    valid = jnp.isfinite(trajectories).all(axis=-1)
-    safe = jnp.where(valid[..., None], trajectories, 0.)
-    total, perpendicular, speed_perp = kinetic_components(safe, field, mass, birth_energy, model)
-    if kind == "heat_jax10":
-        value = total*speed_perp/(birth_energy*jnp.sqrt(2*birth_energy/mass)+1e-12)
-    elif kind == "perpendicular_jax10":
-        value = perpendicular/(birth_energy+1e-12)
-    else:
-        value = perpendicular
-    weights = jnp.where(valid, weights, 0.)
-    return jnp.sum(weights*jnp.where(valid, value, 0.))/(jnp.sum(weights)+1e-8)

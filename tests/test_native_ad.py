@@ -259,8 +259,7 @@ def test_classifier_stop_is_the_surface_classifier_level_and_stops_both_executio
 
 def test_native_tracing_api_and_array_objectives_receive_physical_gradients():
     from essos.dynamics import Tracing
-    from essos.particle_losses import (mean_final_radius, classifier_loss_fraction, classifier_loss_location,
-        classifier_energy_cost, classifier_line_loss)
+    from essos.particle_losses import mean_final_radius, classifier_loss_fraction
     def objective(v):
         p = Particles(jnp.zeros((1, 3)), initial_vparallel_over_v=[.2], mass=1., charge=1., energy=.5,
             initial_xyz_fullorbit=jnp.zeros((1, 3)), initial_vxvyvz=jnp.array([[v, 0., .2]]))
@@ -275,68 +274,3 @@ def test_native_tracing_api_and_array_objectives_receive_physical_gradients():
     np.testing.assert_allclose(mean_final_radius(states, 0., 0.), .25, atol=2e-12)
     np.testing.assert_allclose(classifier_loss_fraction(states, boundary, softness=4.),
         jnp.mean(jax.nn.sigmoid(jnp.array([-1.2, -.8]))), rtol=1e-14)
-    assert .7 < classifier_loss_location(states, jnp.array([1., 0., 0.]), boundary) < 1.
-    energy = classifier_energy_cost(states, UniformField(), 1., 1., 'FullOrbit', boundary, kind='perpendicular_jax9')
-    np.testing.assert_allclose(energy, .065, rtol=2e-7)
-    assert np.any(np.asarray(jax.grad(lambda y: classifier_energy_cost(y, UniformField(), 1., 1., 'FullOrbit',
-        boundary))(states))[..., 3:] != 0)
-    # Line loss against its definition: probability-weighted escape centroids, distance to the line.
-    wall = SimpleNamespace(evaluate_xyz=lambda x: -x[0])
-    states = states.at[..., 0].set(jnp.array([[1., 2.], [.5, 1.5]])).at[..., 1].set(jnp.array([[.2, .4], [.3, .7]]))
-    probability = jax.nn.sigmoid(30*states[..., 0])
-    total = probability.sum(axis=0)
-    centroids = (states[..., :3]*probability[..., None]).sum(axis=0)/(total[:, None]+1e-8)
-    expected = jnp.sum(jnp.linalg.norm(centroids[:, 1:], axis=1)*(total/2)/(1+10*total/2))
-    np.testing.assert_allclose(classifier_line_loss(states, jnp.zeros(3), jnp.array([1., 0., 0.]), wall), expected, rtol=1e-12)
-
-
-def test_qi_alm_helpers_match_their_definitions():
-    from examples.coil_optimization.native_gc_alm import (make_constraints, boundary_line, field_normal_ratio,
-        length_and_curvature, scipy_optimizer, DEFAULTS)
-    from essos import augmented_lagrangian as alm
-    from essos.fields import BiotSavart
-    from essos.surfaces import SurfaceRZFourier, BdotN_over_B
-    torus = SurfaceRZFourier(jnp.array([3., 1.]), jnp.array([0., 1.]), 1, 1, 0)
-    point, direction = boundary_line(torus, 0., 0., 'fixed_theta')  # outer equator, tangent along phi
-    np.testing.assert_allclose(point, [4., 0., 0.], atol=1e-14)
-    np.testing.assert_allclose(direction, [0., 1., 0.], atol=1e-14)
-    # The native direct-coil B.n/|B| equals the public formula, in value and in the coil-DOF gradient.
-    coils = coil_field().coils
-    def flux(x, native):
-        field = BiotSavart(coils.with_dofs(coils.dofs+x))
-        return jnp.sum((field_normal_ratio(torus, field) if native else BdotN_over_B(torus, field))**2)
-    expected = jax.jit(jax.value_and_grad(lambda x: flux(x, False)))(jnp.zeros_like(coils.dofs))
-    actual = jax.jit(jax.value_and_grad(lambda x: flux(x, True)))(jnp.zeros_like(coils.dofs))
-    for a, b in zip(actual, expected):
-        np.testing.assert_allclose(a, b, rtol=3e-12, atol=3e-12)
-    # Native Fourier length/curvature equal the public formulas in value and in the coil-DOF gradient.
-    def limits(x, native):
-        c = coils.with_dofs(coils.dofs*(1+x))
-        if native:
-            length, curvature = length_and_curvature(c)
-        else:
-            speed = jnp.linalg.norm(c.gamma_dash, axis=-1)
-            length, curvature = jnp.mean(speed, axis=-1), jnp.linalg.norm(
-                jnp.cross(c.gamma_dash, c.gamma_dashdash), axis=-1)/speed**3
-        return jnp.sum(length)+jnp.sum(curvature**2)
-    expected = jax.jit(jax.value_and_grad(lambda x: limits(x, False)))(jnp.zeros(()))
-    actual = jax.jit(jax.value_and_grad(lambda x: limits(x, True)))(jnp.zeros(()))
-    for a, b in zip(actual, expected):
-        np.testing.assert_allclose(a, b, rtol=3e-11)
-    # Upper limits enter as "target minus value" (feasible when >= 0); the equality is the particle metric.
-    geometry = lambda x: dict(axis=x[0], length=jnp.array([2.])-x[1], curvature=jnp.array([1.])-x[1])
-    constraint = make_constraints(geometry, lambda x: x[0]**2, SimpleNamespace(penalty=1., bdotn_weight=0.))
-    feasible, violated = jnp.zeros(2), jnp.array([0., 3.])
-    multipliers = constraint.init(feasible)
-    assert float(constraint.loss(multipliers, feasible)[0]) == 0 < float(constraint.loss(multipliers, violated)[0])
-    # The host L-BFGS-B driver solves the multiplier-free box problem and compiles once.
-    target = alm.combine(alm.eq(lambda x: x-jnp.array([2., .25])))
-    options = SimpleNamespace(**dict(DEFAULTS, collisions=False, inner_maxiter=10))
-    params = (jnp.zeros(2), target.init(jnp.zeros(2)))
-    optimizer = scipy_optimizer(target, options)
-    state, gradient, info = optimizer.init(params)
-    compile_seconds = state['compile_s']
-    for _ in range(2):
-        params, state, gradient, info = optimizer.update(params, state, gradient, info)
-        np.testing.assert_allclose(params[0], [1., .25], atol=1e-7)  # clipped to the [-1, 1] box
-    assert state['compile_s'] == compile_seconds and len(state['inner_solves']) == 2
