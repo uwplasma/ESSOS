@@ -9,6 +9,8 @@ including any field-period factor. Boozer flux signs follow essos.boozer.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -112,6 +114,60 @@ class AnalyticalAlfvenMode(BoozerPerturbation):
         (iota, G, I), _ = field.profiles(s)
         alpha = (self.n - self.m*iota) * phi / (self.omega*(G+iota*I))
         return jnp.stack([alpha, phi])
+
+
+class FaxEigenmode(BoozerPerturbation):
+    """Eigenmode of the FAX global radial solver, as Boozer harmonics.
+
+    Phi = amplitude * Im sum_h a_h(s) exp(i (m_h theta - n_h zeta + omega t + phase)),
+    with a_h linearly interpolated from the FAX mode structure (zero outside the
+    FAX grid) and normalised to max |a_h| = 1, so ``amplitude`` [V] is the peak of
+    the dominant harmonic. alpha follows the per-harmonic ideal relation of
+    AnalyticalAlfvenMode. The harmonics (m, n) use cos(m theta - n zeta), n a
+    full-torus integer, as FAX does. Axis behaviour is s**(m/2) like the analytical mode.
+    """
+
+    s: jax.Array
+    profiles: jax.Array  # (surfaces, harmonics), complex
+    m: jax.Array
+    n: jax.Array
+    omega: jax.Array
+    amplitude: jax.Array
+    phase: jax.Array
+
+    def __init__(self, s, profiles, m, n, omega, amplitude, *, phase=0.):
+        profiles = jnp.asarray(profiles, complex)
+        self.s, self.m, self.n = jnp.asarray(s), jnp.asarray(m, int), jnp.asarray(n, int)
+        self.profiles = profiles/jnp.max(jnp.abs(profiles))
+        self.omega, self.amplitude, self.phase = map(jnp.asarray, (omega, amplitude, phase))
+        if self.s.ndim != 1 or self.profiles.shape != (self.s.size, self.m.size) or self.n.shape != self.m.shape:
+            raise ValueError("profiles must have shape (len(s), len(m)) with m and n of equal length")
+        if not (self.omega > 0 and jnp.all(self.m >= 0)):
+            raise ValueError("omega must be positive and m nonnegative")
+
+    @classmethod
+    def from_fax(cls, directory, amplitude, *, mode=0, phase=0.):
+        """Read ``global_eigenmodes.csv`` and ``global_mode_structures.csv`` of a FAX run."""
+        read = lambda name: np.atleast_1d(np.genfromtxt(Path(directory)/name, delimiter=",", names=True))
+        omega2 = read("global_eigenmodes.csv")["omega2_rad2_per_s2"][mode]
+        rows = read("global_mode_structures.csv")
+        rows = rows[rows["mode_index"] == mode]
+        count = int(rows["harmonic_index"].max()) + 1
+        first = rows[:count]
+        return cls(rows["s"][::count], (rows["amplitude_real"]+1j*rows["amplitude_imag"]).reshape(-1, count),
+                   first["m"], first["n"], np.sqrt(omega2), amplitude, phase=phase)
+
+    def potentials(self, field, xyz, t):
+        u, w, zeta = xyz
+        s = u*u + w*w
+        a = (jax.vmap(lambda c: jnp.interp(s, self.s, c.real) + 1j*jnp.interp(s, self.s, c.imag), in_axes=1)
+             (self.profiles))
+        # (u + i w)**m / s**(m/2) = exp(i m theta), without atan2 derivatives on the axis
+        angle = (u + 1j*w)**self.m / jnp.where(s > 0, s, 1.)**(self.m/2)
+        phi_h = self.amplitude * jnp.imag(a*angle*jnp.exp(1j*(self.omega*t - self.n*zeta + self.phase)))
+        (iota, G, I), _ = field.profiles(s)
+        alpha = jnp.sum((self.n - self.m*iota)*phi_h) / (self.omega*(G+iota*I))
+        return jnp.stack([alpha, jnp.sum(phi_h)])
 
 
 class AlfvenSpectrum(BoozerPerturbation):

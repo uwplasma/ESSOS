@@ -52,6 +52,15 @@ harmonic in VMEC angles, and ``MappedBoozerPerturbation`` with ``VmecBoozerMap``
 ``booz_xform_jax``, stellarator symmetry) evaluates the identical Boozer wave in VMEC, with the
 chain rule of the map. A new mode, including a computed one, only implements ``potentials``.
 
+``FaxEigenmode`` is such a mode. It reads the CSV files of a FAX global eigenmode
+(``global_eigenmodes.csv``: :math:`\omega^2`; ``global_mode_structures.csv``: amplitude of every
+:math:`(m,n)` harmonic on the FAX radial grid), interpolates each profile linearly in :math:`s` (zero
+outside the grid, where FAX imposes Dirichlet conditions) and sums
+:math:`\Phi=\hat\Phi\,\mathrm{Im}\sum_h a_h(s)e^{i(m_h\theta_B-n_h\zeta_B+\omega t+\varphi)}`
+with :math:`\max|a_h|=1`; :math:`\alpha` follows the relation above for each harmonic. FAX harmonics use
+the same :math:`m\theta-n\zeta` convention with :math:`n` a full-torus integer. The amplitude is not
+computed by FAX and the mode does not respond to the particles.
+
 The radially uniform harmonic of Paul et al. (``regularize_axis=False``) is singular on axis for
 :math:`m>0`. Tracing stops there at ``axis_stop_s`` (default :math:`10^{-8}`) and reports the stops
 (``axis_stop_times``; status 6 in ``Tracing``) apart from LCFS exits and failures;
@@ -69,6 +78,8 @@ showing it detects a missing inductive term; Liouville's theorem for the time-de
 phase-space density; the exact trajectory in a uniform inductive field; the work identity
 :math:`dH/dt=q\,\mathbf v\cdot\mathbf E` in a sheared nonorthogonal chart; coordinate
 covariance; gradients with respect to the amplitude; and the zero-amplitude limit.
+``tests/test_fax_eigenmode.py`` repeats :math:`E_\parallel=0`, the zero-amplitude limit, the work identity
+with conserved :math:`\mu`, and the reproduction of the stored FAX structure for ``FaxEigenmode``.
 
 Paul alpha-loss comparison
 --------------------------

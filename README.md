@@ -218,6 +218,12 @@ tracing = Tracing(field=field, particles=particles, model="GuidingCenterAdaptati
                   perturbation=wave, maxtime=2e-7, times_to_trace=9, progress=False)
 ```
 
+Computed modes use the same interface: `FaxEigenmode.from_fax(directory, amplitude)` reads the
+`global_eigenmodes.csv` and `global_mode_structures.csv` of a FAX run (radial structure of each
+`(m, n)` Boozer harmonic and the frequency) and applies the ideal relation for `alpha` harmonic by harmonic.
+Only the structure and frequency come from FAX; the amplitude is an input.
+[`fax_alfven_mode.py`](examples/particle_tracing/fax_alfven_mode.py) traces 3.5 MeV alphas through one.
+
 See [the equations, tests and the comparison with Paul et al. (2023)](docs/analytical_perturbations.rst);
 [`alfven_perturbation.py`](examples/particle_tracing/alfven_perturbation.py) is a short example.
 
