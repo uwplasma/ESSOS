@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from pathlib import Path
 from essos.coils import Coils, Curves
-from essos.fields import BiotSavart, BiotSavart_from_gamma, _biot_savart, Vmec, VMEC_WOUT_ARRAYS
+from essos.fields import BiotSavart, BiotSavart_from_gamma, _biot_savart, _gc_from_jacobian, Vmec, VMEC_WOUT_ARRAYS
 import jax
 import jax.numpy as jnp
 from jax import random, vmap
@@ -808,3 +808,36 @@ def test_combined_field_fused_gc_quantities_match_generic_path():
         assert jnp.allclose(a, b, rtol=1e-9, atol=1e-12)
     assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(combined.gc_quantities(x), generic))
     assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(ext.gc_quantities(x), MagneticField.gc_quantities(ext, x)))
+
+
+def _coil_field():
+    path = Path(__file__).resolve().parents[1] / "examples" / "input_files" / "ESSOS_biot_savart_LandremanPaulQA.json"
+    return BiotSavart(Coils.from_json(str(path)))
+
+
+def test_biot_savart_gradient_matches_autodiff_and_maxwell():
+    """dB/dx from the fused pass equals jacfwd(B); off the coils div B = tr(dB/dx) = 0 and curl B = 0 (Ampere)."""
+    field = _coil_field()
+    for point in (jnp.array([1.0, 0.2, 0.1]), jnp.array([1.2, -0.1, 0.05])):
+        B, J = field.B_and_dB_by_dX(point)
+        assert jnp.allclose(B, field.B(point), rtol=1e-12)
+        assert jnp.allclose(J, jax.jacfwd(field.B)(point), rtol=1e-12, atol=1e-12 * jnp.abs(J).max())
+        assert jnp.abs(jnp.trace(J)) < 1e-7 * jnp.abs(J).max()
+        curl = jnp.array([J[2, 1] - J[1, 2], J[0, 2] - J[2, 0], J[1, 0] - J[0, 1]])
+        assert jnp.abs(curl).max() < 1e-7 * jnp.abs(J).max()
+
+
+def test_fused_gc_quantities_gradient_matches_autodiff_path():
+    """A loss through gc_quantities has the same coil gradient as the jacfwd-of-B path it replaces."""
+    field = _coil_field()
+    points = jnp.array([[1.0, 0.2, 0.1], [0.8, -0.3, 0.2]])
+
+    def loss(dofs, fused):
+        f = _coil_field()
+        f.dofs = dofs
+        q = (f.gc_quantities if fused else
+             lambda p: _gc_from_jacobian(f.B(p), jax.jacfwd(f.B)(p)))
+        return sum(jnp.sum(jnp.concatenate([jnp.ravel(jnp.asarray(a)) for a in q(p)[2:6]])) for p in points)
+
+    g_new, g_old = jax.grad(loss)(field.dofs, True), jax.grad(loss)(field.dofs, False)
+    assert jnp.allclose(g_new, g_old, rtol=1e-8, atol=1e-8 * jnp.abs(g_old).max())
