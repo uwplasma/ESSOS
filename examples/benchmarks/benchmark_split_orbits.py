@@ -209,8 +209,8 @@ def main():
         peak_pending=int(counts[:,5].max()),max_accepted_collision_error=float(counts[:,6].max()),
         terminal_sha256=hashlib.sha256(terminal.tobytes()).hexdigest())
     if options.case in ('native_shared','native_independent'):
-        report.update(collision_updates_total=int(counts[:,9].sum()),accepted_orbit_steps_total=int(counts[:,10].sum()),
-            max_orbit_steps_per_collision=int(counts[:,11].max()))
+        report.update(collision_updates_total=int(counts[:,1].sum()),accepted_orbit_steps_total=int(counts[:,7].sum()),
+            max_orbit_steps_per_collision=int(counts[:,8].max()))
     if report['failed']: raise RuntimeError(f"solver failed: {report['failed']} particles")
     np.savez_compressed(options.output/'states.npz',states=states,terminal=terminal,status=status,counts=counts)
     (options.output/'comparison.json').write_text(json.dumps(report,indent=2)+'\n')
