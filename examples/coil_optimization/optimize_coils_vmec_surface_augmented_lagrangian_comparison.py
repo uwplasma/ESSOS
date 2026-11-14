@@ -4,10 +4,10 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.optimization import optimize_loss_function
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B
-from essos.losses import custom_loss, base_loss
+from essos.surfaces import SurfaceRZFourier, bdotn_over_b
+from essos.losses import CustomLoss, BaseLoss
 
 import essos.augmented_lagrangian as alm
 from functools import partial
@@ -44,7 +44,7 @@ BdotN_Target_tol=1.e-6
 
 EXPORT = False
 
-init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
+init_curves = create_equally_spaced_curves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
 init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
 init_field = BiotSavart(init_coils)
 init_surface=surface
@@ -52,12 +52,11 @@ init_surface=surface
 
 """ Creating the loss functions """
 def loss(field, surface):
-    return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+    return jnp.sum(jnp.abs(bdotn_over_b(surface, field)))
 
 def BdotN_constraint(field,surface,target_tol=1.e-6):
-    bdotn_over_b = BdotN_over_B(surface, field)
-    bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
-    return bdotn_over_b_loss
+    ratio = bdotn_over_b(surface, field)
+    return jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(ratio)-target_tol,0.0)))
 
 def loss_length_constraint(field):
     return jnp.maximum(0, field.coils.length - LENGTH_TARGET)
@@ -74,12 +73,12 @@ def loss_curvature(field):
 
 
 """ Defining custom losses """
-L_normal_field = custom_loss(loss, "field", surface=surface)
-L_normal_field_constraint = custom_loss(BdotN_constraint, "field", surface=surface)
-L_length_constraint = custom_loss(loss_length_constraint, "field")
-L_curvature_constraint = custom_loss(loss_curvature_contraint, "field")
-L_length = custom_loss(loss_length, "field")
-L_curvature = custom_loss(loss_curvature, "field")
+L_normal_field = CustomLoss(loss, "field", surface=surface)
+L_normal_field_constraint = CustomLoss(BdotN_constraint, "field", surface=surface)
+L_length_constraint = CustomLoss(loss_length_constraint, "field")
+L_curvature_constraint = CustomLoss(loss_curvature_contraint, "field")
+L_length = CustomLoss(loss_length, "field")
+L_curvature = CustomLoss(loss_curvature, "field")
 
 """ Defining total loss + setting dependencies """
 L_normal_field.dependencies = {"field": init_field}
@@ -134,7 +133,7 @@ C_Total_constraint.dependencies = {"field": init_field}
 
 
 #If loss=cost_function(x) is not prescribed, f(x)=0 is considered, uncomment second line to use B dot N as a loss and not a constraint
-ALM=alm.ALM_model_lbfgs(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
+ALM=alm.alm_model_lbfgs(constraints=C_Total_constraint,model_lagrangian=model_lagrangian,beta=beta,mu_max=mu_max,alpha=alpha,gamma=gamma,epsilon=epsilon,eta_tol=eta_tol,omega_tol=omega_tol)
 
 #Initializing lagrange multipliers
 lagrange_params=C_Total_constraint.init(init_field.dofs)
@@ -182,9 +181,9 @@ opt_coils = opt_field.coils
 
 
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")
-print("Initial B dot N:", jnp.max(BdotN_over_B(surface, init_field)))
-print("B dot N after optimization:", jnp.max(BdotN_over_B(surface, opt_field)))
-print("B dot N after optimization alm:", jnp.max(BdotN_over_B(surface, opt_field_alm)))
+print("Initial B dot N:", jnp.max(bdotn_over_b(surface, init_field)))
+print("B dot N after optimization:", jnp.max(bdotn_over_b(surface, opt_field)))
+print("B dot N after optimization alm:", jnp.max(bdotn_over_b(surface, opt_field_alm)))
 print("Initial curvature :", jnp.average(init_field.coils.curvature,axis=0))
 print("Curvature after optimization:",jnp.average(opt_field.coils.curvature,axis=0))
 print("Curvature after optimization alm:",jnp.average(opt_field_alm.coils.curvature,axis=0))

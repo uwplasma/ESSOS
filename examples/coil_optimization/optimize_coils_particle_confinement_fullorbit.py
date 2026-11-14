@@ -4,12 +4,12 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.dynamics import Particles, Tracing
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from jax import vmap, jit
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
 #  `scipy.optimize.minimize`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
-from essos.losses import custom_loss
+from essos.losses import CustomLoss
 from essos.fields import BiotSavart
 
 
@@ -40,7 +40,7 @@ COIL_CURRENT = 1.84e7  # Amperes (optimization does not depend on current magnit
 MAXIMUM_FUNCTION_EVALUATIONS =200
 
 # Initialize coils
-init_curves = CreateEquallySpacedCurves(n_curves=N_COILS,
+init_curves = create_equally_spaced_curves(n_curves=N_COILS,
                                    order=FOURIER_ORDER,
                                    R=LARGE_R, r=SMALL_R,
                                    n_segments=N_SEGMENTS,
@@ -66,14 +66,14 @@ def loss_particle_radial_drift(field, particles, timestep=1.e-8, tmax=1e-5, n_sa
     v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.n_save*tracing.tmax     
     return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
 
-def normB_axis(field, npoints=15):
+def norm_b_axis(field, npoints=15):
     R_axis=field.r_axis
     phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
     return B_axis
 
-def loss_normB_axis_average(field,npoints=15, target_B=BAXIS_TARGET):
-    B_axis = normB_axis(field, npoints)
+def loss_norm_b_axis_average(field,npoints=15, target_B=BAXIS_TARGET):
+    B_axis = norm_b_axis(field, npoints)
     return jnp.abs(jnp.average(B_axis)-target_B)
 
 def loss_length(field,length_target=LENGTH_TARGET):
@@ -89,10 +89,10 @@ particles = Particles(initial_xyz=initial_xyz)
 
 
 """ Defining custom losses """
-L_radial_drift= custom_loss(loss_particle_radial_drift, "field", particles=particles, timestep=TIMESTEP, tmax=MAXTIME_TRACING, n_save=NUM_STEPS, rtol=TRACE_TOLERANCE, model=MODEL) 
-L_B_axis= custom_loss(loss_normB_axis_average, "field")
-L_length = custom_loss(loss_length, "field")
-L_curvature = custom_loss(loss_curvature, "field")
+L_radial_drift= CustomLoss(loss_particle_radial_drift, "field", particles=particles, timestep=TIMESTEP, tmax=MAXTIME_TRACING, n_save=NUM_STEPS, rtol=TRACE_TOLERANCE, model=MODEL) 
+L_B_axis= CustomLoss(loss_norm_b_axis_average, "field")
+L_length = CustomLoss(loss_length, "field")
+L_curvature = CustomLoss(loss_curvature, "field")
 """ Defining total loss + setting dependencies """
 L_total = RADIAL_DRIFT_WEIGHT*L_radial_drift + L_B_axis + LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature
 

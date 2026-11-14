@@ -18,7 +18,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
 from essos.dynamics import Particles, Tracing
 from essos.fields import BiotSavart
@@ -33,21 +33,21 @@ def coil_optimization() -> None:
     """Fit coils to a VMEC boundary: normal field, length and curvature."""
     from scipy.optimize import least_squares
 
-    from essos.losses import custom_loss
-    from essos.surfaces import BdotN_over_B, SurfaceRZFourier
+    from essos.losses import CustomLoss
+    from essos.surfaces import bdotn_over_b, SurfaceRZFourier
 
     surface = SurfaceRZFourier.from_wout_file(
         str(INPUTS / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"),
         s=1, ntheta=30, nphi=30, range_torus="half period")
-    init_coils = Coils(curves=CreateEquallySpacedCurves(3, 3, 10.0, 5.6, n_segments=45,
+    init_coils = Coils(curves=create_equally_spaced_curves(3, 3, 10.0, 5.6, n_segments=45,
                                                         nfp=2, stellsym=True),
                        currents=[1.0] * 3)
     init_field = BiotSavart(init_coils)
 
-    L = (custom_loss(lambda field, surface: jnp.sum(jnp.abs(BdotN_over_B(surface, field))),
+    L = (CustomLoss(lambda field, surface: jnp.sum(jnp.abs(bdotn_over_b(surface, field))),
                      "field", surface=surface)
-         + custom_loss(lambda field: jnp.mean(jnp.maximum(0, field.coils.length - 32.0)), "field")
-         + custom_loss(lambda field: jnp.mean(jnp.maximum(0, field.coils.curvature - 0.1)), "field"))
+         + CustomLoss(lambda field: jnp.mean(jnp.maximum(0, field.coils.length - 32.0)), "field")
+         + CustomLoss(lambda field: jnp.mean(jnp.maximum(0, field.coils.curvature - 0.1)), "field"))
     L.dependencies = {"field": init_field}
 
     before = float(L(L.starting_dofs))

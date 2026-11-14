@@ -29,7 +29,7 @@ import equinox.internal as eqxi
 from essos.coils import Coils
 from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
-from essos.electric_field import Electric_field_flux, Electric_field_zero
+from essos.electric_field import ElectricFieldFlux, ElectricFieldZero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
 from essos.plot import fix_matplotlib_3d
 from essos.background_species import nu_s_ab,nu_D_ab,nu_par_ab, d_nu_par_ab,d_nu_D_ab
@@ -309,9 +309,9 @@ def _mu_collision_noise(vpar, mu, points, field, particles, species):
     m, q, B = particles.mass, particles.charge, field.AbsB(points)
     v = jnp.sqrt(vpar**2 + 2.*mu*B/m)
     xi = vpar/v
-    indeces_species = species.species_indeces
-    nu_D = jnp.sum(jax.vmap(nu_D_ab, in_axes=(None, None, 0, None, None, None))(m, q, indeces_species, v, points, species), axis=0)
-    nu_par = jnp.sum(jax.vmap(nu_par_ab, in_axes=(None, None, 0, None, None, None))(m, q, indeces_species, v, points, species), axis=0)
+    indices_species = species.species_indices
+    nu_D = jnp.sum(jax.vmap(nu_D_ab, in_axes=(None, None, 0, None, None, None))(m, q, indices_species, v, points, species), axis=0)
+    nu_par = jnp.sum(jax.vmap(nu_par_ab, in_axes=(None, None, 0, None, None, None))(m, q, indices_species, v, points, species), axis=0)
     def factor(_):
         # Velocity-space diffusion of (vpar/v, mu/(m v^2/2B)), divided by v^2
         Yvv = (nu_par*xi**2+nu_D*(1.-xi**2))/2.
@@ -333,7 +333,7 @@ def _mu_collision_noise(vpar, mu, points, field, particles, species):
                         lambda _: jnp.zeros((2, 2), dtype=v.dtype), factor, None)
 
 @partial(jit, static_argnums=(2))
-def GuidingCenterCollisionsDiffusionMu(t,
+def guiding_center_collisions_diffusion_mu(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, vpar,mu = initial_condition
@@ -357,7 +357,7 @@ def GuidingCenterCollisionsDiffusionMu(t,
 
 
 @partial(jit, static_argnums=(2))
-def GuidingCenterCollisionsDriftMuStratonovich(t,
+def guiding_center_collisions_drift_mu_stratonovich(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z,vpar,mu = initial_condition
@@ -377,12 +377,12 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
     Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
-    indeces_species=species.species_indeces
-    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_par_dv=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_D_dv=jnp.sum(jax.vmap(d_nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)      
+    indices_species=species.species_indices
+    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    dnu_par_dv=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    dnu_D_dv=jnp.sum(jax.vmap(d_nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)      
     Diffusion_par=p**2*nu_par/2.
     Diffusion_perp=p**2*nu_D/2.
     d_Diffusion_par_dp=p*nu_par+p**2*dnu_par_dv/(2.*m)
@@ -420,7 +420,7 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
 
 
 @partial(jit, static_argnums=(2))
-def GuidingCenterCollisionsDriftMuIto(t,
+def guiding_center_collisions_drift_mu_ito(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z,vpar,mu = initial_condition
@@ -437,12 +437,12 @@ def GuidingCenterCollisionsDriftMuIto(t,
     Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
-    indeces_species=species.species_indeces
-    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_par_dv=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_D_dv=jnp.sum(jax.vmap(d_nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)      
+    indices_species=species.species_indices
+    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    dnu_par_dv=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    dnu_D_dv=jnp.sum(jax.vmap(d_nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)      
     Diffusion_par=p**2*nu_par/2.
     Diffusion_perp=p**2*nu_D/2.
     d_Diffusion_par_dp=p*nu_par+p**2*dnu_par_dv/(2.*m)
@@ -465,7 +465,7 @@ def GuidingCenterCollisionsDriftMuIto(t,
     return jnp.append(dxdt,jnp.append(dvpardt,dmudt))
 
 @partial(jit, static_argnums=(2))
-def GuidingCenterCollisionsDiffusion(t,
+def guiding_center_collisions_diffusion(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, v,xi = initial_condition
@@ -476,9 +476,9 @@ def GuidingCenterCollisionsDiffusion(t,
     points = jnp.array([x, y, z])
     I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(field.B_contravariant(points),jnp.reshape(field.B_contravariant(points),(3,1))))/field.AbsB(points)**2
     p=m*v
-    indeces_species=species.species_indeces
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    indices_species=species.species_indices
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
     Diffusion_par=p**2/2.*nu_par
     Diffusion_perp=p**2/2.*nu_D 
     Diffusion_x=0.0#((Diffusion_par-Diffusion_perp)*(1.-xi**2)/2.+Diffusion_perp)/(m*omega_mod)**2
@@ -492,7 +492,7 @@ def GuidingCenterCollisionsDiffusion(t,
     return jnp.append(jnp.append(dxdt,Dxv,axis=0),jnp.append(Dvx,jnp.diag(jnp.append(dvdt,dxidt)),axis=0),axis=1)
 
 @partial(jit, static_argnums=(2))
-def GuidingCenterCollisionsDrift(t,
+def guiding_center_collisions_drift(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, v,xi = initial_condition
@@ -508,11 +508,11 @@ def GuidingCenterCollisionsDrift(t,
     Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)    
-    indeces_species=species.species_indeces
-    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    dnu_par=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    indices_species=species.species_indices
+    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    dnu_par=jnp.sum(jax.vmap(d_nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
     Diffusion_par=p**2/2.*nu_par
     Diffusion_perp=p**2/2.*nu_D 
     d_Diffusion_par_dp=p*nu_par+p**2/2.*dnu_par/m
@@ -555,7 +555,7 @@ def _guiding_center_velocity(field, electric_field, q, m, points, vpar, mu=None,
 
 
 @partial(jit, static_argnums=(2))
-def GuidingCenter(t,
+def guiding_center(t,
                   initial_condition,
                   args) -> jnp.ndarray:
     x, y, z, vpar = initial_condition
@@ -566,7 +566,7 @@ def GuidingCenter(t,
 
 
 @partial(jit, static_argnums=(2))
-def GuidingCenterMu(t, initial_condition, args) -> jnp.ndarray:
+def guiding_center_mu(t, initial_condition, args) -> jnp.ndarray:
     """Collisionless guiding center with state (x, y, z, v_par, mu); mu is constant."""
     field, particles, electric_field = args
     dxdt, dvdt = _guiding_center_velocity(field, electric_field, particles.charge, particles.mass,
@@ -578,7 +578,7 @@ def GuidingCenterMu(t, initial_condition, args) -> jnp.ndarray:
 
 
 @partial(jit, static_argnums=(2))
-def LorentzCollisionsDiffusion(t,
+def lorentz_collisions_diffusion(t,
             initial_condition,
             args) -> jnp.ndarray:
     x, y, z, vx, vy, vz = initial_condition
@@ -593,9 +593,9 @@ def LorentzCollisionsDiffusion(t,
     v=jnp.sqrt(vx**2+vy**2+vz**2)
     p=m*v
     P_v=jnp.outer(v_vector,v_vector)/v**2  # projector on the velocity direction
-    indeces_species=species.species_indeces
-    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
-    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    indices_species=species.species_indices
+    nu_D=jnp.sum(jax.vmap(nu_D_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
+    nu_par=jnp.sum(jax.vmap(nu_par_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
     Diffusion_par=p**2/2.*nu_par
     Diffusion_perp=p**2/2.*nu_D 
     Dpar=jnp.sqrt(2.*Diffusion_par)#*0.0000
@@ -608,7 +608,7 @@ def LorentzCollisionsDiffusion(t,
     return jnp.append(jnp.append(dxdt,Dxv,axis=0),jnp.append(Dvx,dvdt,axis=0),axis=1)
 
 @partial(jit, static_argnums=(2))
-def LorentzCollisionsDrift(t,
+def lorentz_collisions_drift(t,
             initial_condition,
             args) -> jnp.ndarray:
     x, y, z, vx, vy, vz = initial_condition
@@ -620,15 +620,15 @@ def LorentzCollisionsDrift(t,
     # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(points)
-    indeces_species=species.species_indeces
-    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indeces_species,v, points,species),axis=0)
+    indices_species=species.species_indices
+    nu_s=jnp.sum(jax.vmap(nu_s_ab,in_axes=(None,None,0,None,None,None))(m, q,indices_species,v, points,species),axis=0)
     dxdt = jnp.array([vx, vy, vz])
     # Noise-induced drift. The Fokker-Planck operator d_i(nu_s v_i f + D_ij d_j f),
     # D = sigma sigma^T / 2, has Ito drift -nu_s v + d_j D_ij; the Stratonovich
     # solver (SPaRK) needs that minus sigma_jk d_j sigma_ik / 2, i.e.
     # -nu_s v + sigma_ik d_j sigma_jk / 2.
     def sigma(velocity):
-        return LorentzCollisionsDiffusion(t, jnp.append(points, velocity), args)[3:, 3:]
+        return lorentz_collisions_diffusion(t, jnp.append(points, velocity), args)[3:, 3:]
     noise_drift = 0.5*jnp.einsum('ik,jkj->i', sigma(dxdt), jax.jacfwd(sigma)(dxdt))
     dvdt =  q / m * jnp.cross(dxdt, B_contravariant)-nu_s*dxdt+noise_drift
     return jnp.append(dxdt, dvdt)
@@ -641,7 +641,7 @@ def LorentzCollisionsDrift(t,
 
 
 @partial(jit, static_argnums=(2))
-def Lorentz(t,
+def lorentz(t,
             initial_condition,
             args) -> jnp.ndarray:
     x, y, z, vx, vy, vz = initial_condition
@@ -660,7 +660,7 @@ def Lorentz(t,
     # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
 
 @partial(jit, static_argnums=(2))
-def FieldLine(t,
+def field_line(t,
               initial_condition,
               field) -> jnp.ndarray:
     x, y, z = initial_condition
@@ -676,7 +676,7 @@ def FieldLine(t,
 
 
 @partial(jit, static_argnums=(2))
-def FieldLineArclength(t, initial_condition, field) -> jnp.ndarray:
+def field_line_arclength(t, initial_condition, field) -> jnp.ndarray:
     """Trace the same field line with physical arclength as the parameter."""
     del t
     B = field.B_contravariant(initial_condition)
@@ -684,7 +684,7 @@ def FieldLineArclength(t, initial_condition, field) -> jnp.ndarray:
 
 
 @partial(jit, static_argnums=(2))
-def FieldLineToroidal(t, initial_condition, field) -> jnp.ndarray:
+def field_line_toroidal(t, initial_condition, field) -> jnp.ndarray:
     """Trace a flux-coordinate field with toroidal angle as the parameter."""
     del t
     B = field.B_contravariant(initial_condition)
@@ -867,15 +867,15 @@ def _keep_energy(vpar, mu, E, B, m):
 
 # Drift, diffusion, solver and noise dimension of the stochastic models.
 _SDE_MODELS = {
-    'GuidingCenterCollisions': (GuidingCenterCollisionsDrift, GuidingCenterCollisionsDiffusion,
+    'GuidingCenterCollisions': (guiding_center_collisions_drift, guiding_center_collisions_diffusion,
                                 diffrax.StratonovichMilstein, 5),
-    'GuidingCenterCollisionsMuFixed': (GuidingCenterCollisionsDriftMuStratonovich, GuidingCenterCollisionsDiffusionMu,
+    'GuidingCenterCollisionsMuFixed': (guiding_center_collisions_drift_mu_stratonovich, guiding_center_collisions_diffusion_mu,
                                        diffrax.StratonovichMilstein, 5),
-    'GuidingCenterCollisionsMuIto': (GuidingCenterCollisionsDriftMuIto, GuidingCenterCollisionsDiffusionMu,
+    'GuidingCenterCollisionsMuIto': (guiding_center_collisions_drift_mu_ito, guiding_center_collisions_diffusion_mu,
                                      diffrax.ItoMilstein, 5),
-    'GuidingCenterCollisionsMuAdaptative': (GuidingCenterCollisionsDriftMuStratonovich,
-                                            GuidingCenterCollisionsDiffusionMu, diffrax.SPaRK, 5),
-    'FullOrbitCollisions': (LorentzCollisionsDrift, LorentzCollisionsDiffusion, diffrax.SPaRK, 6),
+    'GuidingCenterCollisionsMuAdaptative': (guiding_center_collisions_drift_mu_stratonovich,
+                                            guiding_center_collisions_diffusion_mu, diffrax.SPaRK, 5),
+    'FullOrbitCollisions': (lorentz_collisions_drift, lorentz_collisions_diffusion, diffrax.SPaRK, 6),
 }
 _ADAPTIVE_MODELS = ('GuidingCenterAdaptative', 'FullOrbitAdaptative', 'FullOrbitCollisions',
                     'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal')
@@ -1051,7 +1051,7 @@ class Tracing():
             raise ValueError("devices must contain at least one JAX device")
         
         if electric_field==None:
-            self.electric_field = Electric_field_zero()
+            self.electric_field = ElectricFieldZero()
         else:
             self.electric_field=electric_field
 
@@ -1165,7 +1165,7 @@ class Tracing():
         else:
             self.condition = condition
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
-            self.ODE_term = ODETerm(self._vector_field(GuidingCenter))
+            self.ODE_term = ODETerm(self._vector_field(guiding_center))
             self.args = (self.field, self.particles,self.electric_field)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
         elif model == 'GuidingCenterCollisions':
@@ -1175,7 +1175,6 @@ class Tracing():
             #tol=self.tmax / self.timesteps*0.5
             #print('tol: ', tol)
             #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)            
-            #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
             self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
             total_speed_temp=self.particles.total_speed*jnp.ones(self.particles.nparticles)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,total_speed_temp[:, None], self.particles.initial_vparallel_over_v[:, None]], axis=1)
@@ -1186,14 +1185,13 @@ class Tracing():
             #tol=self.tmax / self.timesteps*0.5   
             #print('tol: ', tol)
             #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)
-            #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))
             self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
             #x,y,z=self.particles.initial_xyz[]
             B_particle=jax.vmap(self.field.AbsB,in_axes=0)(self.particles.initial_xyz)
             mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*self.particles.mass)          
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,self.particles.initial_vparallel[:, None]/SPEED_OF_LIGHT,mu[:, None]],axis=1)        
         elif model == 'FullOrbit' or model == 'FullOrbit_Boris' or model == 'FullOrbitAdaptative':
-            self.ODE_term = ODETerm(Lorentz)
+            self.ODE_term = ODETerm(lorentz)
             self.args = (self.field, self.particles)
             if self.particles.initial_xyz_fullorbit is None:
                 raise ValueError("Initial full orbit positions require field input to Particles")
@@ -1212,9 +1210,9 @@ class Tracing():
                 raise ValueError("Field parameter is required for FullOrbit model")
         elif model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
             field_line_rhs = {
-                'FieldLineArclength': FieldLineArclength,
-                'FieldLineToroidal': FieldLineToroidal,
-            }.get(model, FieldLine)
+                'FieldLineArclength': field_line_arclength,
+                'FieldLineToroidal': field_line_toroidal,
+            }.get(model, field_line)
             self.ODE_term = ODETerm(field_line_rhs)
             self.args = self.field
         
@@ -1429,10 +1427,10 @@ class Tracing():
         if ext is not None:
             wall = self.wall if self.wall is not None else (lambda x: jnp.ones(()))
             depth = lambda y: self.field.boundary_distance(y[:3]) - self.reentry_depth
-            outside = (ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else
+            outside = (ODETerm(_with_failure_flag(guiding_center_mu)), self.solver if self.solver is not None else
                        diffrax.Dopri8(), _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
                                                      events=(lambda y: wall(y[:3]), depth)),
-                       (ext, self.particles, Electric_field_zero()),
+                       (ext, self.particles, ElectricFieldZero()),
                        Event((lambda t, y, args, **kwargs: wall(y[:3]), lambda t, y, args, **kwargs: depth(y), _failed_event),
                              root_finder=_EVENT_ROOT_FINDER))
 
@@ -1575,7 +1573,7 @@ class Tracing():
         self._trajectories = value
     
     def energy(self):
-        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
+        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for guiding_center and FullOrbit models"
         mass = self.particles.mass
 
         if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
@@ -1613,7 +1611,7 @@ class Tracing():
     
     
     def v_perp(self):
-        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
+        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for guiding_center and FullOrbit models"
         mass = self.particles.mass
 
         if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':

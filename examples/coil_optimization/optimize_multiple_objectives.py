@@ -3,15 +3,15 @@ import os
 import jax.numpy as jnp
 from essos.fields import BiotSavart
 from essos.fields import Vmec
-from essos.surfaces import BdotN_over_B
-from essos.objective_functions import loss_normB_axis_average, loss_coil_length, loss_coil_curvature, loss_bdotn
+from essos.surfaces import bdotn_over_b
+from essos.objective_functions import loss_norm_b_axis_average, loss_coil_length, loss_coil_curvature, loss_bdotn
 from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 
 vmec = Vmec(os.path.join(os.path.dirname(__file__), "..", "input_files", "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"), ntheta=32, nphi=32, range_torus='half period')
 
 # inputs
 manager = MultiObjectiveOptimizer(
-    loss_functions=(loss_bdotn, loss_coil_length, loss_coil_curvature, loss_normB_axis_average),
+    loss_functions=(loss_bdotn, loss_coil_length, loss_coil_curvature, loss_norm_b_axis_average),
     vmec=vmec,
     function_inputs={
         "max_coil_length": 42,
@@ -42,10 +42,10 @@ weights = [1, 1, 1, 1]  # Example weights
 best_coils = manager.rebuild_best_coils(weights=weights, plot=True)
 print("--------Optax refinement completed!")
 
-BdotN_over_B_initial = BdotN_over_B(vmec.surface, BiotSavart(manager.initial_coils))
-BdotN_over_B_optimized = BdotN_over_B(vmec.surface, BiotSavart(manager.best_coils))
-print(f"Maximum BdotN/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
-print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
+BdotN_over_B_initial = bdotn_over_b(vmec.surface, BiotSavart(manager.initial_coils))
+BdotN_over_B_optimized = bdotn_over_b(vmec.surface, BiotSavart(manager.best_coils))
+print(f"Maximum bdotn/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
+print(f"Maximum bdotn/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
 
 
 

@@ -181,9 +181,9 @@ def test_nonfinite_step_is_reported_as_failed_not_confined():
     assert np.isinf(out.energy_error[0])
     with pytest.raises(RuntimeError, match="trajectories fail"):
         out.loss_fractions()
-    legacy = dataclasses.replace(out, failed_times=None)
+    without_times = dataclasses.replace(out, failed_times=None)
     with pytest.raises(RuntimeError, match="trajectories fail"):
-        legacy.loss_fractions()
+        without_times.loss_fractions()
 
 
 @pytest.mark.parametrize("method", ["rk4", "dopri5"])

@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from jax import tree_util, jit, grad as jax_grad, value_and_grad as jax_value_and_grad
 from jax.flatten_util import ravel_pytree
         
-class base_loss:
+class BaseLoss:
     def __init__(self):
         self.losses = [self]
         self._dependencies = {}
@@ -33,11 +33,11 @@ class base_loss:
         return self._dependencies_buffer
 
     def __add__(self, other):
-        if not isinstance(other, base_loss):
-            raise TypeError("Addition is only defined between base_loss objects.")
+        if not isinstance(other, BaseLoss):
+            raise TypeError("Addition is only defined between BaseLoss objects.")
         
         losses_list = [*self.losses, *other.losses]  # Flatten the losses
-        out_loss = composite_loss(losses_list)
+        out_loss = CompositeLoss(losses_list)
         out_loss.dependencies = self.dependencies | other.dependencies
         return out_loss
 
@@ -45,13 +45,13 @@ class base_loss:
         return iter(self.losses)
 
     def __mul__(self, other):
-        raise NotImplementedError("Multiplication is only defined in subclasses of base_loss.")
+        raise NotImplementedError("Multiplication is only defined in subclasses of BaseLoss.")
 
     def __rmul__(self, other):
         return self.__mul__(other)
 
 
-class custom_loss(base_loss):
+class CustomLoss(BaseLoss):
     def __init__(self, fun, *args_names, **kwargs):
         """ A custom loss function that can take multiple arguments and compute gradients with respect to specified arguments.
         
@@ -65,7 +65,7 @@ class custom_loss(base_loss):
             **kwargs: Static (non-differentiable) keyword arguments to be passed to the loss function.
         
         Returns:
-            custom_loss: An instance of the custom_loss class.
+            CustomLoss: An instance of the CustomLoss class.
         """
         super().__init__()
         self.fun = fun
@@ -149,22 +149,22 @@ class custom_loss(base_loss):
     
     def __mul__(self, other):
         if not isinstance(other, (int, float)):
-            raise TypeError("Multiplication is only defined between base_loss and a scalar.")
+            raise TypeError("Multiplication is only defined between BaseLoss and a scalar.")
         
         new_fun = lambda *args, **kwargs: other * self.fun(*args, **kwargs)
-        out_loss = custom_loss(new_fun, *self.args_names, **self.kwargs)
+        out_loss = CustomLoss(new_fun, *self.args_names, **self.kwargs)
         return out_loss
 
 
-class composite_loss(base_loss):
+class CompositeLoss(BaseLoss):
     def __init__(self, losses: list):
         """ A composite loss function that combines multiple loss functions.
         
         Args:
             losses (list):
-                A list of loss functions to be combined. Each loss function should be an instance of base_loss or its subclasses.
+                A list of loss functions to be combined. Each loss function should be an instance of BaseLoss or its subclasses.
         Returns:
-            composite_loss: An instance of the composite_loss class.
+            CompositeLoss: An instance of the CompositeLoss class.
         """
         super().__init__()
         self.losses = losses

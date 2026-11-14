@@ -13,10 +13,10 @@ from virtual_casing_jax import VirtualCasingJAX
 from vmex.core.wout import read_wout
 from vmex.core.virtual_casing import surface_field_data_from_wout
 
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart
 from essos.surfaces import SurfaceRZFourier
-from essos.losses import custom_loss
+from essos.losses import CustomLoss
 from essos.objective_functions import loss_coil_separation, loss_coil_surface_distance
 
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -49,7 +49,7 @@ print(f"Virtual casing took {time() - t_start:.1f} s; plasma-current share of th
 
 """ Creating starting coils and surface (initial current fitted to the target) """
 surface = SurfaceRZFourier.from_wout_file(vmec_file, s=1, ntheta=NTHETA, nphi=NPHI, range_torus="half period")
-init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
+init_curves = create_equally_spaced_curves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
 B_unit = jax.vmap(BiotSavart(Coils(init_curves, [1.] * N_COILS)).B)(points)
 COIL_CURRENT = float(jnp.vdot(B_unit, B_target) / jnp.vdot(B_unit, B_unit))
 init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT] * N_COILS)
@@ -76,8 +76,8 @@ def report(label, field):
           f"lengths {jnp.round(field.coils.length[:N_COILS], 2)} m, max curvature {jnp.max(field.coils.curvature):.2f} 1/m")
 
 """ Defining total loss + setting dependencies """
-L_total = (FIELD_WEIGHT * custom_loss(loss_field, "field") + LENGTH_WEIGHT * custom_loss(loss_length, "field")
-           + CURVATURE_WEIGHT * custom_loss(loss_curvature, "field") + DISTANCE_WEIGHT * custom_loss(loss_distance, "field"))
+L_total = (FIELD_WEIGHT * CustomLoss(loss_field, "field") + LENGTH_WEIGHT * CustomLoss(loss_length, "field")
+           + CURVATURE_WEIGHT * CustomLoss(loss_curvature, "field") + DISTANCE_WEIGHT * CustomLoss(loss_distance, "field"))
 L_total.dependencies = {"field": init_field}
 
 """ Optimizing the total loss """

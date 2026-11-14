@@ -6,8 +6,8 @@ import jax.numpy as jnp
 from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
-from essos.fields import BiotSavart,BiotSavart_from_gamma
-from essos.surfaces import BdotN_over_B
+from essos.fields import BiotSavart,BiotSavartFromGamma
+from essos.surfaces import bdotn_over_b
 from essos.coils import Curves, Coils
 from essos.constants import mu_0
 from essos.coil_perturbation import perturb_curves, perturb_curves_systematic, perturb_curves_statistic
@@ -30,13 +30,13 @@ def near_axis_field_quantities(field_nearaxis):
 
 
 
-def loss_B_difference_coils_near_axis(field, field_nearaxis):
+def loss_b_difference_coils_near_axis(field, field_nearaxis):
     points, B_nearaxis, _ = near_axis_field_quantities(field_nearaxis)
     B_coils = vmap(field.B)(points.T)
     B_difference_loss = jnp.sum(jnp.abs(jnp.array(B_coils)-jnp.array(B_nearaxis)))
     return B_difference_loss
 
-def loss_gradB_difference_coils_near_axis(field, field_nearaxis):
+def loss_gradb_difference_coils_near_axis(field, field_nearaxis):
     points, _, gradB_nearaxis = near_axis_field_quantities(field_nearaxis)
     gradB_coils = vmap(field.dB_by_dX)(points.T)
     gradB_difference_loss = jnp.sum(jnp.abs(jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)))
@@ -84,7 +84,7 @@ def loss_particle_rcross_final(field, particles, **trace):
     _, _, dR, dZ = _orbit(field, particles, **trace)
     return jnp.linalg.norm(jnp.average(_r_cross(dR, dZ), axis=1))
 
-def loss_particle_Br(field, particles, **trace):
+def loss_particle_br(field, particles, **trace):
     xyz, fac_xy, dR, dZ = _orbit(field, particles, **trace)
     r_cross = _r_cross(dR, dZ)
     B = jax.vmap(jax.vmap(field.B_covariant))(xyz)
@@ -104,20 +104,20 @@ def loss_particle_iota(field, particles, target_iota=0.41, **trace):
 
 ###################  B ON SURAFCE LOSSES ##########################
 @partial(jit, static_argnames=['npoints'])
-def normB_axis(field, npoints=15):
+def norm_b_axis(field, npoints=15):
     R_axis=field.r_axis
     phi_array = jnp.linspace(0, 2 * jnp.pi, npoints)
     B_axis = vmap(lambda phi: field.AbsB(jnp.array([R_axis * jnp.cos(phi), R_axis * jnp.sin(phi), 0])))(phi_array)
     return B_axis
 
 @partial(jit, static_argnames=['npoints', 'target_B'])
-def loss_normB_axis_average(field,npoints=15, target_B=5.7):
-    B_axis = normB_axis(field, npoints)
+def loss_norm_b_axis_average(field,npoints=15, target_B=5.7):
+    B_axis = norm_b_axis(field, npoints)
     return jnp.abs(jnp.average(B_axis)-target_B)
 
 
 def loss_bdotn(field,surface):
-    return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+    return jnp.sum(jnp.abs(bdotn_over_b(surface, field)))
 
 def _sqrt_sum_positive(u):
     """sqrt(sum(max(u, 0))) with a zero (not NaN) gradient where the constraint is met."""
@@ -126,8 +126,8 @@ def _sqrt_sum_positive(u):
 
 @partial(jit, static_argnames=['target_tol'])
 def loss_bdotn_constraint(field,surface,target_tol=1.e-6):
-    bdotn_over_b = BdotN_over_B(surface, field)
-    return _sqrt_sum_positive(jnp.square(bdotn_over_b)-target_tol)
+    ratio = bdotn_over_b(surface, field)
+    return _sqrt_sum_positive(jnp.square(ratio)-target_tol)
 
 
 ###########################  B ON SURAFCE LOSSES FOR STOCHASTIC OPTIMIZATION ##########################
@@ -148,8 +148,8 @@ def perturbed_field_from_field(field, key, sampler):
 def loss_bdotn_stochastic(field, surface, sampler, keys):
     def perturbed_loss(key):
         perturbed_field = perturbed_field_from_field(field, key, sampler)
-        bdotn_over_b = BdotN_over_B(surface, perturbed_field)
-        return jnp.sum(jnp.abs(bdotn_over_b))
+        ratio = bdotn_over_b(surface, perturbed_field)
+        return jnp.sum(jnp.abs(ratio))
 
     return jnp.mean(jax.vmap(perturbed_loss)(keys))
 
@@ -158,7 +158,7 @@ def loss_bdotn_stochastic(field, surface, sampler, keys):
 def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6):
     def perturbed_square(key):
         perturbed_field = perturbed_field_from_field(field, key, sampler)
-        return jnp.square(BdotN_over_B(surface, perturbed_field))
+        return jnp.square(bdotn_over_b(surface, perturbed_field))
 
     expected_square = jnp.mean(jax.vmap(perturbed_square)(keys), axis=0)
     return _sqrt_sum_positive(expected_square - target_tol)
@@ -342,11 +342,11 @@ def loss_linkingnumber(coils, candidates=None, block_size=None):
 
 
 
-#  Lorentz force loss: accepts Coils object, keyword args, JAX-friendly
+#  lorentz force loss: accepts Coils object, keyword args, JAX-friendly
 @partial(jit, static_argnames=["p", "threshold", "block_size"])
 def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None, conductor_radius=None):
     """
-    Loss function penalizing Lorentz force on coils using Landreman-Hurwitz method.
+    Loss function penalizing lorentz force on coils using Landreman-Hurwitz method.
 
     Matches SIMSOPT's ``LpCurveForce``::
 
@@ -388,7 +388,7 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None, condu
         gamma_dash_others = coils.gamma_dash[other_idx]
         gamma_dashdash_others = coils.gamma_dashdash[other_idx]
         currents_others = coils.currents[other_idx]
-        biot_savart = BiotSavart_from_gamma(gamma_others, gamma_dash_others, gamma_dashdash_others, currents_others)
+        biot_savart = BiotSavartFromGamma(gamma_others, gamma_dash_others, gamma_dashdash_others, currents_others)
         n_points = gamma_i.shape[0]
         use_block_size = min(n_points, n_points if block_size is None else block_size)
         n_blocks = (n_points + use_block_size - 1) // use_block_size
@@ -405,7 +405,7 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None, condu
         block_B_mutual = jax.vmap(block_field)(gamma_i_blocks, valid_blocks).reshape(padded_points, 3)[:n_points]
         block_gammadash_norm = jnp.linalg.norm(gamma_dash_i, axis=1)
         block_tangent = gamma_dash_i / block_gammadash_norm[:, None]
-        block_B_self = B_regularized_pure(
+        block_B_self = b_regularized_pure(
             gamma_i, gamma_dash_i, gamma_dashdash_i,
             quadpoints, current_i, regularization
         )
@@ -423,7 +423,7 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None, condu
 
 
 
-def B_regularized_singularity_term(rc_prime, rc_prime_prime, regularization):
+def b_regularized_singularity_term(rc_prime, rc_prime_prime, regularization):
     """The term in the regularized Biot-Savart law in which the near-singularity
     has been integrated analytically.
 
@@ -439,7 +439,7 @@ def B_regularized_singularity_term(rc_prime, rc_prime_prime, regularization):
     return jnp.cross(rc_prime, rc_prime_prime) * (0.5 * (-2 + jnp.log(64 * norm_rc_prime * norm_rc_prime / regularization)) / (norm_rc_prime**3))[:, None]
 
 
-def B_regularized_pure(gamma, gammadash, gammadashdash, quadpoints, current, regularization):
+def b_regularized_pure(gamma, gammadash, gammadashdash, quadpoints, current, regularization):
     # The factors of 2π in the next few lines come from the fact that simsopt
     # uses a curve parameter that goes up to 1 rather than 2π.
     phi = quadpoints * 2 * jnp.pi
@@ -448,7 +448,7 @@ def B_regularized_pure(gamma, gammadash, gammadashdash, quadpoints, current, reg
     rc_prime_prime = gammadashdash / 4 / jnp.pi**2
     n_quad = phi.shape[0]
     dphi = 2 * jnp.pi / n_quad
-    analytic_term = B_regularized_singularity_term(rc_prime, rc_prime_prime, regularization)
+    analytic_term = b_regularized_singularity_term(rc_prime, rc_prime_prime, regularization)
     dr = rc[:, None] - rc[None, :]
     first_term = jnp.cross(rc_prime[None, :], dr) / ((jnp.sum(dr * dr, axis=2) + regularization) ** 1.5)[:, :, None]
     cos_fac = 2 - 2 * jnp.cos(phi[None, :] - phi[:, None])
@@ -481,12 +481,12 @@ def rectangular_xsection_delta(a, b):
 
 #def loss_bdotn_only_with_perturbation(x, vmec, dofs_curves, currents_scale, nfp,n_segments=60, stellsym=True, N_stells=10):
 #    """
-#    Compute the loss function for BdotN with a perturbation applied to the BdotN value.):
+#    Compute the loss function for bdotn with a perturbation applied to the bdotn value.):
 #    field=field_from_dofs(x,dofs_curves, currents_scale, nfp,n_segments, stellsym)
 #    
-#    bdotn_over_b = BdotN_over_B(vmec.surface, field)
+#    bdotn_over_b = bdotn_over_b(vmec.surface, field)
 #    
-#    # Apply perturbation to the BdotN value
+#    # Apply perturbation to the bdotn value
 #    bdotn_over_b += perturbation
 #    
 #    bdotn_over_b_loss = jnp.sum(jnp.abs(bdotn_over_b))

@@ -44,13 +44,13 @@ def test_shaped_surface_integrals_do_not_depend_on_the_grid(range_torus, close):
 @pytest.mark.parametrize("definition", ["local", "quadratic flux", "normalized"])
 def test_squared_flux_does_not_count_duplicated_end_points(definition):
     import equinox as eqx
-    from essos.surfaces import SquaredFlux
+    from essos.surfaces import squared_flux
 
     class Field(eqx.Module):  # stellarator-symmetric: toroidal plus vertical
         def B(self, x):
             return jnp.array([-x[1], x[0], 0.]) / (x[0]**2 + x[1]**2) + jnp.array([0., 0., .3])
 
-    flux = [SquaredFlux(SurfaceRZFourier(RC, ZS, nfp=3, mpol=1, ntor=2, ntheta=32, nphi=n, close=close,
+    flux = [squared_flux(SurfaceRZFourier(RC, ZS, nfp=3, mpol=1, ntor=2, ntheta=32, nphi=n, close=close,
                                          range_torus=r), Field(), definition)
             for r, n, close in [("full torus", 96, False), ("full torus", 97, True),
                                 ("half period", 48, False), ("half period", 49, True)]]

@@ -3,10 +3,10 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B
-from essos.losses import custom_loss
+from essos.surfaces import SurfaceRZFourier, bdotn_over_b
+from essos.losses import CustomLoss
 
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
 #  `scipy.optimize.minimize`, can be used as well and may even be preferable.
@@ -19,7 +19,7 @@ vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScal
 N_COILS = 3; FOURIER_ORDER = 3; LARGE_R = 10; SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 45; STELLSYM = True  # Curve parameters
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
-init_curves = CreateEquallySpacedCurves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
+init_curves = create_equally_spaced_curves(N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM)
 init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT]*N_COILS)
 init_field = BiotSavart(init_coils)
 surface = SurfaceRZFourier.from_wout_file(vmec_input, s=1, ntheta=30, nphi=30, range_torus='half period')
@@ -31,7 +31,7 @@ NORMAL_FIELD_WEIGHT = 1.
 
 """ Creating the loss functions """
 def loss(field, surface):
-    return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+    return jnp.sum(jnp.abs(bdotn_over_b(surface, field)))
 
 def loss_length(field):
     return jnp.mean(jnp.maximum(0, field.coils.length - LENGTH_TARGET))
@@ -40,9 +40,9 @@ def loss_curvature(field):
     return jnp.mean(jnp.maximum(0, field.coils.curvature - CURVATURE_TARGET))
 
 """ Defining custom losses """
-L_normal_field = custom_loss(loss, "field", surface=surface)
-L_length = custom_loss(loss_length, "field")
-L_curvature = custom_loss(loss_curvature, "field")
+L_normal_field = CustomLoss(loss, "field", surface=surface)
+L_length = CustomLoss(loss_length, "field")
+L_curvature = CustomLoss(loss_curvature, "field")
 
 """ Defining total loss + setting dependencies """
 L_total = NORMAL_FIELD_WEIGHT*L_normal_field + LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature

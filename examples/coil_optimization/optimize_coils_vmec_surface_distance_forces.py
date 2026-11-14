@@ -3,10 +3,10 @@ from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B
-from essos.losses import custom_loss
+from essos.surfaces import SurfaceRZFourier, bdotn_over_b
+from essos.losses import CustomLoss
 from essos.objective_functions import (
     loss_coil_separation,
     loss_coil_surface_distance,
@@ -25,7 +25,7 @@ vmec_input = os.path.join(input_filepath, "wout_LandremanPaul2021_QA_reactorScal
 N_COILS = 3; FOURIER_ORDER = 3; LARGE_R = 10; SMALL_R = 5.6; NFP = 2; N_SEGMENTS = 45; STELLSYM = True
 COIL_CURRENT = 1.
 
-init_curves = CreateEquallySpacedCurves(
+init_curves = create_equally_spaced_curves(
     N_COILS, FOURIER_ORDER, LARGE_R, SMALL_R, n_segments=N_SEGMENTS, nfp=NFP, stellsym=STELLSYM
 )
 init_coils = Coils(curves=init_curves, currents=[COIL_CURRENT] * N_COILS)
@@ -50,7 +50,7 @@ BLOCK_SIZE = None
 
 """ Creating the loss functions """
 def loss(field, surface):
-    return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+    return jnp.sum(jnp.abs(bdotn_over_b(surface, field)))
 
 
 def loss_surface_distance(field):
@@ -94,11 +94,11 @@ def print_loss_costs(label, field):
 
 
 """ Defining custom losses """
-L_normal_field = custom_loss(loss, "field", surface=surface)
-L_surface_distance = custom_loss(loss_surface_distance, "field")
-L_coil_distance = custom_loss(loss_coil_distance, "field")
-L_force = custom_loss(loss_force, "field")
-L_linking = custom_loss(loss_linking, "field")
+L_normal_field = CustomLoss(loss, "field", surface=surface)
+L_surface_distance = CustomLoss(loss_surface_distance, "field")
+L_coil_distance = CustomLoss(loss_coil_distance, "field")
+L_force = CustomLoss(loss_force, "field")
+L_linking = CustomLoss(loss_linking, "field")
 
 """ Defining total loss + setting dependencies """
 L_total = (

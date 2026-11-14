@@ -3,7 +3,7 @@ number_of_processors_to_use = 4 # Parallelization, this should divide nfieldline
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart
 from pyqsc_jax.near_axis import near_axis
 
@@ -13,7 +13,7 @@ from jax import vmap, jit
 #  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
 #  `scipy.optimize.minimize`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
-from essos.losses import custom_loss
+from essos.losses import CustomLoss
 
 
 """ Creating starting coils and surface """
@@ -35,7 +35,7 @@ current_on_each_coil = 17.e5*field_nearaxis_initial.B0/NFP/2.
 number_of_field_periods = NFP
 major_radius_coils = field_nearaxis_initial.R0[0]
 minor_radius_coils = major_radius_coils/2.0
-init_curves = CreateEquallySpacedCurves(n_curves=N_COILS,
+init_curves = create_equally_spaced_curves(n_curves=N_COILS,
                                    order=FOURIER_ORDER,
                                    R=major_radius_coils, r=minor_radius_coils,
                                    n_segments=N_SEGMENTS,
@@ -65,13 +65,13 @@ def near_axis_field_quantities(field_nearaxis):
     return points, B_nearaxis, gradB_nearaxis
 
 
-def loss_B_difference_coils_near_axis(field, field_nearaxis):
+def loss_b_difference_coils_near_axis(field, field_nearaxis):
     points, B_nearaxis, _ = near_axis_field_quantities(field_nearaxis)
     B_coils = vmap(field.B)(points.T)
     B_difference_loss = jnp.sum(jnp.abs(jnp.array(B_coils)-jnp.array(B_nearaxis)))
     return B_difference_loss
 
-def loss_gradB_difference_coils_near_axis(field, field_nearaxis):
+def loss_gradb_difference_coils_near_axis(field, field_nearaxis):
     points, _, gradB_nearaxis = near_axis_field_quantities(field_nearaxis)
     gradB_coils = vmap(field.dB_by_dX)(points.T)
     gradB_difference_loss = jnp.sum(jnp.abs(jnp.array(gradB_coils)-jnp.array(gradB_nearaxis)))
@@ -85,10 +85,10 @@ def loss_curvature(field,curvature_target=CURVATURE_TARGET):
 
 
 """ Defining custom losses """
-L_B_difference = custom_loss(loss_B_difference_coils_near_axis, "field", field_nearaxis=field_nearaxis_initial)
-L_gradB_difference = custom_loss(loss_gradB_difference_coils_near_axis, "field", field_nearaxis=field_nearaxis_initial)
-L_length = custom_loss(loss_length, "field")
-L_curvature = custom_loss(loss_curvature, "field")
+L_B_difference = CustomLoss(loss_b_difference_coils_near_axis, "field", field_nearaxis=field_nearaxis_initial)
+L_gradB_difference = CustomLoss(loss_gradb_difference_coils_near_axis, "field", field_nearaxis=field_nearaxis_initial)
+L_length = CustomLoss(loss_length, "field")
+L_curvature = CustomLoss(loss_curvature, "field")
 """ Defining total loss + setting dependencies """
 L_total = B_DIFFERENCE_WEIGHT*L_B_difference + GRADB_DIFFERENCE_WEIGHT*L_gradB_difference + LENGTH_WEIGHT*L_length + CURVATURE_WEIGHT*L_curvature
 
@@ -108,11 +108,11 @@ opt_field = L_total.dofs_to_pytree(res.x)["field"]
 opt_coils = opt_field.coils
 
 
-B_difference_initial = loss_B_difference_coils_near_axis(init_field, field_nearaxis_initial)
-gradB_difference_initial = loss_gradB_difference_coils_near_axis(init_field, field_nearaxis_initial)
+B_difference_initial = loss_b_difference_coils_near_axis(init_field, field_nearaxis_initial)
+gradB_difference_initial = loss_gradb_difference_coils_near_axis(init_field, field_nearaxis_initial)
 
-B_difference_optimized = loss_B_difference_coils_near_axis(opt_field, field_nearaxis_initial)
-gradB_difference_optimized = loss_gradB_difference_coils_near_axis(opt_field, field_nearaxis_initial)
+B_difference_optimized = loss_b_difference_coils_near_axis(opt_field, field_nearaxis_initial)
+gradB_difference_optimized = loss_gradb_difference_coils_near_axis(opt_field, field_nearaxis_initial)
 
 
 print(f'############################################')

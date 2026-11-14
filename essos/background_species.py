@@ -24,7 +24,7 @@ class BackgroundSpecies():
     """
     def __init__(self, number_species, mass_array, charge_array, n_array, T_array, radial_grid=None):
         self.number_species = number_species
-        self.species_indeces = jnp.arange(number_species)
+        self.species_indices = jnp.arange(number_species)
         self.temperature = T_array
         self.density = n_array
         self.radial_grid = None if radial_grid is None else jnp.asarray(radial_grid)

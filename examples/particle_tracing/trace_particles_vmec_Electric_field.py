@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from essos.fields import Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.dynamics import Tracing, Particles
-from essos.electric_field import Electric_field_flux
+from essos.electric_field import ElectricFieldFlux
 import numpy as np
 
 # Input parameters
@@ -27,7 +27,7 @@ vmec = Vmec(wout_file)
 
 #Load electric field
 Er_file = os.path.join(os.path.dirname(__file__), "..", "input_files", "Er.h5")
-Electric_field=Electric_field_flux(Er_filename=Er_file,vmec=vmec)
+Electric_field=ElectricFieldFlux(Er_filename=Er_file,vmec=vmec)
 
 # Initialize particles
 Z0 = jnp.zeros(nparticles)

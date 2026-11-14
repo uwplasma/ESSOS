@@ -702,16 +702,6 @@ class Coils:
         coils.dofs = dofs
         return coils
 
-    # TODO: remove x property. This is a placeholder for compatibility with the examples that need to be updated.
-    # x property and setter 
-    @property
-    def x(self):
-        return self.dofs
-
-    @x.setter
-    def x(self, new_dofs):
-        self.dofs = new_dofs
-
     # currents property
     @property
     def currents(self):
@@ -878,7 +868,7 @@ class Coils:
             "scale_fixed": float(self.curves.scale_fixed),
             # Save RAW unscaled currents
             "dofs_currents_raw": jnp.asarray(self._dofs_currents_raw).tolist(),
-            # Save current scale if computed (optional for backward compat)
+            # Save current scale if computed
             "currents_scale": float(self.currents_scale) if self._currents_scale is not None else None,
         }
         import json
@@ -933,51 +923,20 @@ class Coils:
     
     @classmethod
     def from_json(cls, filename: str):
-        """Load coils from JSON with proper scaling metadata.
-        
-        Supports both new format (with raw DOFs and scaling) and legacy format
-        (with scaled DOFs) for backward compatibility. The scaling metadata
-        includes ``scaling_type``, ``scaling_factor``, and ``scale_fixed``.
-        """
+        """Load coils written by :meth:`to_json`: raw DOFs and scaling metadata."""
         import json
         with open(filename, "r") as file:
             data = json.load(file)
-        
-        # Extract scaling metadata (with defaults for legacy files)
-        scaling_type = data.get("scaling_type", 2)
-        scaling_factor = data.get("scaling_factor", 0.0)
-        scale_fixed = data.get("scale_fixed", 1.0)
-        
-        # Check if using NEW format (raw DOFs) or LEGACY format (scaled DOFs)
-        if "dofs_curves_raw" in data:
-            # NEW FORMAT: Raw unscaled DOFs with full metadata
-            curves = Curves(
-                jnp.array(data["dofs_curves_raw"]),  # Raw _dofs
-                data["n_segments"],
-                data["nfp"],
-                data["stellsym"],
-                scaling_type,
-                scaling_factor,
-                scale_fixed
-            )
-            currents_raw = jnp.array(data["dofs_currents_raw"])
-        else:
-            # LEGACY FORMAT: Assume "dofs_curves" are raw DOFs (old behavior)
-            # This maintains backward compatibility with old JSON files
-            curves = Curves(
-                jnp.array(data["dofs_curves"]),  # Treat as raw for legacy
-                data["n_segments"],
-                data["nfp"],
-                data["stellsym"],
-                scaling_type,
-                scaling_factor,
-                scale_fixed
-            )
-            # Legacy files may have scaled or raw currents - treat as raw
-            currents_raw = jnp.array(data["dofs_currents"])
-        
-        # Create Coils object with raw currents
-        return cls(curves, currents_raw, currents_scale=data.get("currents_scale", None))
+        curves = Curves(
+            jnp.array(data["dofs_curves_raw"]),
+            data["n_segments"],
+            data["nfp"],
+            data["stellsym"],
+            data["scaling_type"],
+            data["scaling_factor"],
+            data["scale_fixed"],
+        )
+        return cls(curves, jnp.array(data["dofs_currents_raw"]), currents_scale=data.get("currents_scale", None))
     
     def _tree_flatten(self):
         children = (self.curves, self.dofs_currents)  # arrays / dynamic values
@@ -998,7 +957,7 @@ tree_util.register_pytree_node(Coils,
                                Coils._tree_unflatten)
 
 
-def CreateEquallySpacedCurves(n_curves:   int,
+def create_equally_spaced_curves(n_curves:   int,
                               order:      int,
                               R:          float,
                               r:          float,
@@ -1035,7 +994,7 @@ def CreateEquallySpacedCurves(n_curves:   int,
 
 
 @partial(jit, static_argnames=["flip"])
-def RotatedCurve(curve, phi, flip):
+def rotated_curve(curve, phi, flip):
     rotmat_T = jnp.array(
         [[ jnp.cos(phi), jnp.sin(phi), 0],
          [-jnp.sin(phi), jnp.cos(phi), 0],
@@ -1051,7 +1010,7 @@ def apply_symmetries_to_curves(base_curves, nfp, stellsym):
     for k in range(0, nfp):
         for flip in flip_list:
             for i in range(len(base_curves)):
-                rotcurve = RotatedCurve(base_curves[i].T, 2*jnp.pi*k/nfp, flip)
+                rotcurve = rotated_curve(base_curves[i].T, 2*jnp.pi*k/nfp, flip)
                 curves.append(rotcurve.T)
     return jnp.array(curves)
 
@@ -1065,7 +1024,7 @@ def apply_symmetries_to_gammas(base_gammas, nfp, stellsym):
                 if k == 0 and not flip:
                     gammas.append(base_gammas[i])
                 else:
-                    rotcurve = RotatedCurve(base_gammas[i], 2*jnp.pi*k/nfp, flip)
+                    rotcurve = rotated_curve(base_gammas[i], 2*jnp.pi*k/nfp, flip)
                     gammas.append(rotcurve)
     return jnp.array(gammas)    
 
@@ -1395,15 +1354,6 @@ class DiscretizedCoils:
         n_gamma_dofs = jnp.size(self.dofs_gamma)
         self.dofs_gamma = jnp.reshape(new_dofs[:n_gamma_dofs], self.dofs_gamma.shape)
         self.dofs_currents = new_dofs[n_gamma_dofs:]
-    
-    # x property and setter (for compatibility with simsopt)
-    @property
-    def x(self):
-        return self.dofs
-    
-    @x.setter
-    def x(self, new_dofs):
-        self.dofs = new_dofs
     
     # Compute derivatives using finite differences (circular)
     def _compute_gamma_dash(self):

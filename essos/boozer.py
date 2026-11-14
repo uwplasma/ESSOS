@@ -268,7 +268,7 @@ def guiding_center_rhs(field, y, mu, mass, charge):
 
 
 def _collision_rates(species, mass, charge, v, point):
-    idx = species.species_indeces
+    idx = species.species_indices
 
     def total(nu):
         return jnp.sum(jax.vmap(nu, in_axes=(None, None, 0, None, None, None))(
@@ -278,7 +278,7 @@ def _collision_rates(species, mass, charge, v, point):
 
 
 def collision_kick(species, mass, charge, v, pitch, point, dt, noise):
-    """One Ito Euler-Maruyama step of the Lorentz and energy-scattering operator.
+    """One Ito Euler-Maruyama step of the lorentz and energy-scattering operator.
 
     ``dv = (-nu_s v + v^-2 d(v^2 D)/dv) dt + sqrt(2 D dt) xi_1`` with
     ``D = v^2 nu_par / 2``, and ``dlambda = -lambda nu_D dt +

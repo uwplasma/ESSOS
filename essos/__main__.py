@@ -5,7 +5,7 @@ import sys
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart
 
 from essos.dynamics import Tracing
@@ -52,7 +52,7 @@ def main(cl_args=sys.argv[1:]):
     number_of_field_periods = nfp
     major_radius_coils = field.R0[0]
     minor_radius_coils = major_radius_coils/1.5
-    curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
+    curves = create_equally_spaced_curves(n_curves=number_coils_per_half_field_period,
                                     order=order_Fourier_series_coils,
                                     R=major_radius_coils, r=minor_radius_coils,
                                     n_segments=number_coil_points,
@@ -62,7 +62,7 @@ def main(cl_args=sys.argv[1:]):
     # Optimize coils
     print(f'Optimizing coils with {max_nfev} function evaluations.')
     time0 = time()
-    coils_optimized = optimize_loss_function(loss_coils_for_nearaxis, initial_dofs=coils_initial.x,
+    coils_optimized = optimize_loss_function(loss_coils_for_nearaxis, initial_dofs=coils_initial.dofs,
                                     coils=coils_initial, tol=tol,
                                     max_nfev=max_nfev, field_nearaxis=field,
                                     max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
