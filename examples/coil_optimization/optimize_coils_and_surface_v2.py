@@ -16,7 +16,7 @@ from essos.surfaces import ( SurfaceRZFourier, BdotN_over_B,
 from essos.losses import custom_loss
 from essos.objective_functions import ( loss_BdotN_mean_squared, loss_coil_curvature_from_field,
                                         loss_coil_length_max, loss_cross_sectional_area_mean,
-                                        loss_quasi_symmetry_two_term, loss_iota_approx,
+                                        loss_quasi_symmetry, loss_quasi_symmetry_two_term, loss_iota_approx,
                                         quasi_symmetry_residual_on_surface )
 
 from scipy.optimize import minimize
@@ -47,14 +47,15 @@ RESTART_FROM = False
 restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it00")
 SURFACE_MPOL = 1; SURFACE_NTOR = 1   # maximum boundary m and |n|
 VMEC_MPOL = SURFACE_MPOL + 2; VMEC_NTOR = SURFACE_NTOR + 2
-# Start mode 1 cold, then restart modes 2 through 5 from the preceding mode folder.
-# Set RESTART_FROM, restart_filepath, output_filepath, and boundary modes for each run.
-# Keep the same six weights; the defaults below follow the cold mode 1-to-5 ladder.
-# For a resolved mode-5 polish, restart from mode 5 with the same boundary/coil order;
-# override IOTA_MODES=12, ntheta=64, nphi=65, N_SEGMENTS=192, MAXITER=80 below.
+# Manual continuation: restart modes 2 through 5 from the preceding mode folder;
+# set RESTART_FROM, restart_filepath, output_filepath, and boundary modes each run.
+# Two-term QA was tested with QS_WEIGHT=2e5: 80 steps at mode 1, 40 each at modes 2–5,
+# then a same-mode-5 80-step polish and a fresh 240-step continuation (history reset).
+# Polish/continuation: IOTA_MODES=12, ntheta=64, nphi=65, N_SEGMENTS=192,
+# CURVATURE_SEGMENTS=192; set MAXITER=80, then 240. Budgets do not guarantee convergence.
 # Check final QA/iota with denser ESSOS quadrature and refined VMEX equilibria.
 IOTA_MODES = 6 if max(SURFACE_MPOL, SURFACE_NTOR) == 1 else max(8, max(SURFACE_MPOL, SURFACE_NTOR) + 5)
-# Shared QS/iota straight-angle cutoffs, independent of boundary modes.
+# Iota-fit cutoffs, also used by the optional two-term QS objective.
 
 # PATH TO THE VMEC INPUT FILE (wout file) FOR THE SURFACE ----------------------------
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
@@ -80,7 +81,7 @@ COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 # Six physical objectives: normal field, QS, iota, section area, length, curvature.
 CONSTRAINT_WEIGHT = 3e6  # Common weight for B.n/B, target iota, and section area.
-QS_WEIGHT = 2e5          # Vacuum two-term QA objective; requires a regular flux-surface fit.
+QS_WEIGHT = 2.2493766610787115e4  # Cold calibration; three-term tested only through mode 1.
 LENGTH_WEIGHT = 30.; LENGTH_TARGET = 50.
 CURVATURE_WEIGHT = 1500.; CURVATURE_TARGET = 2.
 CURVATURE_SEGMENTS = max(128, 16 * FOURIER_ORDER)  # Independent curvature quadrature.
@@ -148,8 +149,10 @@ CROSS_SECTIONAL_AREA_TARGET = float(jnp.mean(surface_reference.area_section_by_p
 L_normal_field = custom_loss( loss_BdotN_mean_squared, "field", "surface" )
 L_length_max = custom_loss( loss_coil_length_max , "field", max_coil_length=LENGTH_TARGET, squared=True )
 L_curvature = custom_loss( loss_coil_curvature_from_field , "field" , max_coil_curvature=CURVATURE_TARGET, n_segments=CURVATURE_SEGMENTS )
-L_quasi_symmetry = custom_loss(loss_quasi_symmetry_two_term, "field", "surface",
-                               lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES)
+L_quasi_symmetry = custom_loss(loss_quasi_symmetry, "field", "surface")
+# For two-term QA use QS_WEIGHT=2e5 and the continuation settings above.
+# L_quasi_symmetry = custom_loss(loss_quasi_symmetry_two_term, "field", "surface",
+#                                lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES)
 L_cross_sectional_area = custom_loss( loss_cross_sectional_area_mean, "surface", target_area=CROSS_SECTIONAL_AREA_TARGET )
 L_iota_approx = custom_loss( loss_iota_approx, "field", "surface", iota_target=IOTA_APPROX_TARGET, lambda_mpol=IOTA_MODES, lambda_ntor=IOTA_MODES )
 
@@ -260,7 +263,7 @@ print("Optimizer status:", getattr(res, 'message', 'loaded result'))
 print("\nLOSSES (initial, optimized; raw and weighted):")
 for name, weight, loss in (
     ("Normal field", CONSTRAINT_WEIGHT, L_normal_field),
-    ("Two-term QA", QS_WEIGHT, L_quasi_symmetry),
+    ("QS", QS_WEIGHT, L_quasi_symmetry),
     ("Iota", CONSTRAINT_WEIGHT, L_iota_approx),
     ("Section area", CONSTRAINT_WEIGHT, L_cross_sectional_area),
     ("Coil length", LENGTH_WEIGHT, L_length_max),
@@ -282,7 +285,7 @@ print("mean abs residual (optimized):",jnp.mean(jnp.abs(B_dot_n_over_B_opt)) )
 print("max abs residual (initial):",jnp.max(jnp.abs(B_dot_n_over_B_init)) )
 print("max abs residual (optimized):",jnp.max(jnp.abs(B_dot_n_over_B_opt)) )
 print("\n---------------------------------------------------------------------------")
-print("Three-term QS diagnostic (the optimized objective is two-term QA):")
+print("Three-term QS diagnostic:")
 QS_residual_xyz_init = quasi_symmetry_residual_on_surface(field_init, surface_init)
 QS_residual_xyz_opt = quasi_symmetry_residual_on_surface(field_opt, surface_opt)
 print("mean abs residual (initial):", jnp.mean(jnp.abs(QS_residual_xyz_init)))
@@ -299,7 +302,7 @@ print("Straight-angle fit RMS and minimum Jacobian:", fit["rms_residual"], fit["
 print("RMS B.n/B:", jnp.sqrt(jnp.mean(B_dot_n_over_B_opt**2)))
 if (not np.all(np.isfinite([fit["iota"], fit["rms_residual"], fit["minimum_angle_jacobian"]]))
         or float(fit["minimum_angle_jacobian"]) <= 0):
-    raise ValueError("Final straight-angle fit is invalid; refine or restart before interpreting QA")
+    raise ValueError("Final straight-angle fit is invalid; refine or restart before interpreting QS")
 
 print("\n---------------------------------------------------------------------------")
 print("Nonaxisymmetric coefficient amplitude:")
