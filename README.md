@@ -178,14 +178,14 @@ Install the transform extra with `pip install 'essos[booz]'`.
 import numpy as np
 from netCDF4 import Dataset
 from booz_xform_jax import Booz_xform
-from essos.boozer import BoozerField, trace_boozer
+from essos.boozer import BoozerField, psi0_from_vmec, trace_boozer
 from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
 
 booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout("wout.nc", flux=False)
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
-field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi))
+field = BoozerField.from_booz_xform(booz, psi0=psi0_from_vmec(phi_edge))
 
 n = 1000
 speed = np.sqrt(2 * 3.5e6 * ONE_EV / ALPHA_PARTICLE_MASS)
@@ -196,10 +196,31 @@ result = trace_boozer(field, s=np.full(n, 0.25), theta=np.random.uniform(0, 2*np
 print(result.lost.mean(), result.loss_fractions())
 ```
 
-`BoozerField.from_booz_xform` runs the transform on all surfaces in one jitted pass; a `booz.run()` beforehand (the NumPy loop over surfaces) is accepted and takes about twice as long for the 100-surface ARIES-CS `wout`.
+`BoozerField.from_booz_xform` runs the transform on all surfaces in one jitted pass (the full transform when `with_K=True`); a `booz.run()` beforehand (the NumPy loop over surfaces) is accepted and takes about twice as long for the 100-surface ARIES-CS `wout`.
 
-`psi0` is minus VMEC's boundary toroidal flux over `2 pi`. A particle
+`psi0_from_vmec` returns minus VMEC's boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
+
+### The `K` term
+
+In Boozer coordinates `B = G grad(zeta) + I grad(theta) + K grad(psi)` (Boozer 1981, White 2014). `K = B . dr/dpsi`
+vanishes in vacuum and is nonzero at finite beta, so the canonical form `P_zeta = m v_par G / B - psi_p` omits it
+(White and Zakharov 2003). `BoozerField.from_booz_xform(..., with_K=True)` computes `K` from the `R, Z, nu`
+harmonics and adds it to the guiding-centre equations (`essos.boozer.guiding_center_rhs`). It is off by default and
+a spectrum below `1e-3` of `G + iota I` is dropped.
+
+`K` costs 1.5 times the CPU wall time of a trace (1.2 on GPU). It moves a single orbit by `s` up to `4.6e-3` in
+80 microseconds in W7-X at 5% beta and `3.5e-4` in the 5% QH (SIMSOPT agreement `1.4e-4` and `2.8e-5`), but
+loss fractions of 1000 alphas of 3.5 MeV over 10 ms agree with and without `K` within the statistical error
+(differences of at most 0.004 +- 0.007, 4-5% beta QH, QA, NCSX, ARIES-CS, W7-X). Use it for single orbits at finite
+beta or large Shafranov shift; `examples/particle_tracing/trace_particles_boozer_with_K.py` compares loss fractions.
+
+`psi0 = -phi_edge / (2 pi)` because VMEC's `(s, theta, phi)` is left-handed; it reproduces the VMEC grad-B drift
+for either sign of `phi_edge`, whereas SIMSOPT's `+phi_edge / (2 pi)` traces the opposite charge.
+
+![Orbit with and without K, SIMSOPT, and K on a flux surface](docs/boozer_K.png)
+
+Left and centre: a 3.5 MeV alpha in a finite-beta QH, ESSOS with and without `K` against SIMSOPT `gc`. Right: `K` at `s = 0.5`.
 
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
 and its derivatives, together with the flux functions `G`, `I` and `iota`.

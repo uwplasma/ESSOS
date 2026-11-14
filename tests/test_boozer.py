@@ -20,12 +20,12 @@ V0 = float(np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / M))
 BOOKKEEPING_METHODS = ["rk4", "dopri5", "adaptive"]
 
 
-def tokamak(nfp=1):
-    """|B| = B0 (1 - EPS r cos theta), constant iota and G, I = 0 (axisymmetric)."""
+def tokamak(nfp=1, sign=1):
+    """|B| = B0 (1 - EPS r cos theta), constant iota and G = sign * G, I = 0 (axisymmetric)."""
     s = np.linspace(0.005, 0.995, 50)
     bmnc = np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s)])
     return BoozerField.from_booz(s, bmnc, [0, 1], [0, 0], np.full_like(s, IOTA),
-                                 np.full_like(s, G), np.zeros_like(s), PSI0, nfp, angle_grid=None)
+                                 np.full_like(s, sign * G), np.zeros_like(s), PSI0, nfp, angle_grid=None)
 
 
 def test_field_reproduces_the_spectrum_and_is_regular_on_the_axis():
@@ -111,18 +111,23 @@ def test_angle_table_orbit_conserves_analytic_energy_across_radial_knots():
     assert max(errors) < 1e-9, errors
 
 
-def test_vmec_flux_sign_sets_the_analytic_radial_drift():
-    """For B=B0(1-eps*r*cos theta), positive ions at theta=pi/2 drift outward."""
-    import equinox as eqx
+@pytest.mark.parametrize("sign", [1, -1])
+def test_vmec_flux_sign_sets_the_analytic_radial_drift(sign):
+    """B along sign * grad(phi) (phi_edge and G of that sign), |B| = B0 (1 - eps r cos theta).
 
-    field = eqx.tree_at(lambda f: f.psi0, tokamak(), psi0_from_vmec(2 * np.pi * PSI0))
+    The grad-B drift is v = m v_perp^2 B x grad|B| / (2 q B^3): positive ions at theta = pi/2
+    drift outward for sign = +1 and inward for the reversed field. VMEC's phi_edge flips with B,
+    so psi0 = -phi_edge / (2 pi) carries the opposite sign (checked against the VMEC drift of
+    the QH, QA and W7-X wouts to 2e-4 for either sign of phi_edge).
+    """
+    field = eqx.tree_at(lambda f: f.psi0, tokamak(sign=sign), psi0_from_vmec(sign * 2 * np.pi * PSI0))
     r = np.sqrt(0.3)
     y = jnp.array([0.0, r, 0.0, 0.0])
     mu = V0**2 / (2 * B0)
     dy = guiding_center_rhs(field, y, mu, M, Q)
     sdot = 2 * r * float(dy[1])
-    expected = EPS * r * M * V0**2 / (2 * Q * PSI0)
-    assert field.psi0 == pytest.approx(-PSI0)
+    expected = sign * EPS * r * M * V0**2 / (2 * Q * PSI0)
+    assert field.psi0 == pytest.approx(-sign * PSI0)
     assert sdot == pytest.approx(expected, rel=1e-12)
 
 
@@ -583,3 +588,126 @@ def test_adaptive_tolerance_is_validated():
         trace_boozer(tokamak(), [0.3], [0.0], [0.0], [0.2], speed=V0, mass=M, charge=Q,
                      tmax=1e-6, timestep=1e-8, method="adaptive", tolerance=0.0)
 
+
+
+def tokamak_with_K(k1=0.05 * G / PSI0, **kwargs):
+    """The tokamak above with K = k1 sqrt(s) sin(theta), so dK/dpsi != 0."""
+    s = np.linspace(0.005, 0.995, 50)
+    bmnc = np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s)])
+    k = (np.zeros((2, s.size)), np.stack([0 * s, k1 * np.sqrt(s)]))
+    return BoozerField.from_booz(s, bmnc, [0, 1], [0, 0], np.full_like(s, IOTA), np.full_like(s, G),
+                                 np.zeros_like(s), PSI0, 1, angle_grid=None, k=k, **kwargs)
+
+
+def test_zero_K_is_dropped_and_leaves_the_rhs_unchanged():
+    assert tokamak().K is None and tokamak_with_K(0.0).K is None
+    y, mu = jnp.array([0.3, 0.2, 0.1, 1e6]), V0**2 / (2 * B0)
+    np.testing.assert_array_equal(guiding_center_rhs(tokamak_with_K(0.0), y, mu, M, Q),
+                                  guiding_center_rhs(tokamak(), y, mu, M, Q))
+    assert not np.allclose(guiding_center_rhs(tokamak_with_K(), y, mu, M, Q), guiding_center_rhs(tokamak(), y, mu, M, Q))
+
+
+@pytest.mark.parametrize("method", ["rk4", "dopri5"])
+def test_K_orbits_conserve_energy_and_toroidal_canonical_momentum(method):
+    """Axisymmetry with K != 0 (and dK/dpsi != 0): P_zeta = m v_par G / B - q iota psi0 s is exact."""
+    n = 16
+    args = (jnp.full(n, 0.3), jnp.linspace(0, 2 * np.pi, n, endpoint=False), jnp.zeros(n), jnp.linspace(-0.95, 0.95, n))
+    kw = dict(speed=V0, mass=M, charge=Q, tmax=2e-4, timestep=2e-8, n_save=5, devices=jax.devices()[:1],
+              method=method, tolerance=1e-11)
+    out = trace_boozer(tokamak_with_K(), *args, **kw)
+    assert not out.lost.any() and np.all(out.energy_error < 1e-8)
+    s, th, ze, vpar, v = np.moveaxis(out.states, -1, 0)
+    p_zeta = M * vpar * G / (B0 * (1 - EPS * np.sqrt(s) * np.cos(th))) - Q * IOTA * PSI0 * s
+    np.testing.assert_allclose(p_zeta - p_zeta[:, :1], 0.0, atol=1e-7 * np.abs(p_zeta).max())
+    assert np.abs(out.states[..., 1] - trace_boozer(tokamak(), *args, **kw).states[..., 1]).max() > 1e-3
+
+
+def test_k_harmonics_of_shifted_circles_match_the_analytic_K():
+    """R = R0 + d s + a sqrt(s) cos(theta), Z = a sqrt(s) sin(theta), |B| = B0."""
+    import types
+
+    from essos.boozer import k_harmonics
+
+    s = np.linspace(0.005, 0.995, 50)
+    R0, a, d = 6.0, 1.0, 0.3
+    z = np.zeros((2, s.size))
+    booz = types.SimpleNamespace(
+        xm_b=[0, 1], xn_b=[0, 0], nfp=1, s_b=s, asym=False, iota=np.full_like(s, IOTA),
+        Boozer_G=np.full_like(s, G), Boozer_I=np.zeros_like(s), bmnc_b=np.stack([np.full_like(s, B0), 0 * s]),
+        rmnc_b=np.stack([R0 + d * s, a * np.sqrt(s)]), zmns_b=np.stack([0 * s, a * np.sqrt(s)]), numns_b=z)
+    kc, ks = k_harmonics(booz, PSI0)
+    # g_{s theta} = -d a sqrt(s) sin(theta) and g_{s zeta} = 0
+    np.testing.assert_allclose(ks[1], -IOTA * d * a * np.sqrt(s) * B0**2 / (G * PSI0), rtol=1e-6)
+    assert not kc.any() and not ks[0].any()
+
+
+def test_K_rotated_poloidal_origin_exercises_the_cosine_path():
+    """The shifted circle of the test above with theta -> theta + delta has cosine K harmonics."""
+    import types
+
+    from essos.boozer import k_harmonics
+
+    s = np.linspace(0.005, 0.995, 50)
+    R0, a, d, delta = 6.0, 1.0, 0.3, 0.7
+    r, z = np.sqrt(s), np.zeros_like(s)
+    booz = types.SimpleNamespace(
+        xm_b=[0, 1], xn_b=[0, 0], nfp=1, s_b=s, asym=True, iota=np.full_like(s, IOTA),
+        Boozer_G=np.full_like(s, G), Boozer_I=z, bmnc_b=np.stack([np.full_like(s, B0), z]),
+        rmnc_b=np.stack([R0 + d * s, a * r * np.cos(delta)]), rmns_b=np.stack([z, -a * r * np.sin(delta)]),
+        zmnc_b=np.stack([z, a * r * np.sin(delta)]), zmns_b=np.stack([z, a * r * np.cos(delta)]), numns_b=np.zeros((2, s.size)))
+    kc, ks = k_harmonics(booz, PSI0)
+    k = -IOTA * d * a * r * B0**2 / (G * PSI0)  # K = k sin(theta + delta)
+    np.testing.assert_allclose(kc[1], k * np.sin(delta), rtol=1e-6)
+    np.testing.assert_allclose(ks[1], k * np.cos(delta), rtol=1e-6)
+    field = BoozerField.from_booz(s, [B0 + 0 * s, 0 * s], [0, 1], [0, 0], np.full_like(s, IOTA), np.full_like(s, G),
+                                  z, PSI0, 1, angle_grid=None, k=(kc, ks))
+    np.testing.assert_allclose(field.K.modB_derivatives(0.6, 0.4, 0.0)[0], 0.6 * np.sin(0.4 + delta)
+                               * (-IOTA * d * a * B0**2 / (G * PSI0)), rtol=1e-5)
+
+
+# SIMSOPT 1.10 gc / gc_nok (BoozerRadialInterpolant, order 3, mpol = ntor = 8; InterpolatedBoozerField
+# 15 x 30 x 30; tol 1e-10) final s at 8e-5 s for 3.5 MeV alphas started at s = 0.3, theta = linspace(.3, 5, 6),
+# zeta = 0, pitch = linspace(-.8, .8, 6) in the bundled finite-beta QH wout. ESSOS traces the opposite
+# charge: SIMSOPT's psi0 is +phi_edge / (2 pi), the opposite sign of psi0_from_vmec.
+SIMSOPT_GC = [0.327336, 0.282700, 0.246333, 0.341531, 0.338090, 0.321825]
+SIMSOPT_GC_NOK = [0.327461, 0.282655, 0.246292, 0.341323, 0.337739, 0.321620]
+
+
+@pytest.mark.parametrize("with_K, reference", [(True, SIMSOPT_GC), (False, SIMSOPT_GC_NOK)])
+def test_orbits_match_simsopt_boozer_guiding_centre_at_finite_beta(with_K, reference):
+    pytest.importorskip("booz_xform_jax")
+    from pathlib import Path
+    from netCDF4 import Dataset
+    from booz_xform_jax import Booz_xform
+
+    wout = str(Path(__file__).parents[1] / "examples" / "input_files" / "wout_QH_simple_finite_scaled.nc")
+    booz = Booz_xform(verbose=0, mboz=8, nboz=8)
+    booz.read_wout(wout, flux=False)
+    booz.run()
+    with Dataset(wout) as d:
+        field = BoozerField.from_booz_xform(booz, psi0_from_vmec(d["phi"][-1]), with_K=with_K)
+    assert (field.K is not None) == with_K
+    mass = 6.69509884346e-27  # SIMSOPT's alpha mass, 0.75% above essos.constants
+    v = float(np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / mass))
+    out = trace_boozer(field, np.full(6, 0.3), np.linspace(0.3, 5, 6), np.zeros(6), np.linspace(-0.8, 0.8, 6),
+                       speed=v, mass=mass, charge=-Q, tmax=8e-5, timestep=4e-8, n_save=2,
+                       method="dopri8", tolerance=1e-11, devices=jax.devices()[:1])
+    # K moves the final s by up to 3.5e-4 here; SIMSOPT interpolation limits the agreement to ~3e-5.
+    np.testing.assert_allclose(out.states[:, -1, 0], reference, atol=5e-5)
+    assert np.abs(np.array(SIMSOPT_GC) - SIMSOPT_GC_NOK).max() > 3e-4
+
+
+def test_vacuum_K_is_negligible_at_high_boozer_resolution():
+    """In vacuum B = grad(G zeta + I theta), so K = 0; high-m noise must not be amplified near the axis."""
+    pytest.importorskip("booz_xform_jax")
+    from pathlib import Path
+    from netCDF4 import Dataset
+    from booz_xform_jax import Booz_xform
+
+    wout = str(Path(__file__).parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
+    booz = Booz_xform(verbose=0, mboz=32, nboz=32)
+    booz.read_wout(wout, flux=False)
+    booz.run()
+    with Dataset(wout) as d:
+        field = BoozerField.from_booz_xform(booz, psi0_from_vmec(d["phi"][-1]), angle_grid=None, with_K=True)
+    assert field.K is None  # vacuum K is ~4e-4 noise of G + iota I; keeping it only costs time
