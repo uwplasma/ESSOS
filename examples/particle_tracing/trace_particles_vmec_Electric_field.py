@@ -11,7 +11,7 @@ import numpy as np
 # Input parameters
 tmax = 1.e-4
 timestep = 1.e-8
-times_to_trace=1000
+n_save=1000
 nparticles_per_core=6
 nparticles = nparticles_per_core
 s = 0.6 # s-coordinate: flux surface label
@@ -27,7 +27,7 @@ vmec = Vmec(wout_file)
 
 #Load electric field
 Er_file = os.path.join(os.path.dirname(__file__), "..", "input_files", "Er.h5")
-electric_field = ElectricFieldFlux(Er_filename=Er_file,vmec=vmec)
+Electric_field=ElectricFieldFlux(Er_filename=Er_file,vmec=vmec)
 
 # Initialize particles
 Z0 = jnp.zeros(nparticles)
@@ -38,8 +38,8 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=vmec, electric_field=electric_field,model='GuidingCenterAdaptative', particles=particles, maxtime=tmax,
-                  timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol)
+tracing = Tracing(field=vmec, electric_field=Electric_field,model='GuidingCenterAdaptative', particles=particles, tmax=tmax,
+                  timestep=timestep,n_save=n_save, atol=atol,rtol=rtol)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
 trajectories = tracing.trajectories

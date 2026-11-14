@@ -16,8 +16,8 @@ tmax_fl = 2000
 nfieldlines = 5
 axis_shift=0.02
 R0 = jnp.linspace(1.2125346+axis_shift, 1.295-axis_shift, nfieldlines)
-trace_tolerance_array = [1e-5, 1e-7, 1e-9, 1e-11, 1e-13]
-trace_tolerance_ESSOS = 1e-9
+rtol_array = [1e-5, 1e-7, 1e-9, 1e-11, 1e-13]
+rtol_ESSOS = 1e-9
 mass=PROTON_MASS
 energy=5000*ONE_EV
 
@@ -46,11 +46,11 @@ avg_steps_SIMSOPT_array = []
 
 print(f'Output being saved to {output_dir}')
 print(f'SIMSOPT LandremanPaulQA json file location: {LandremanPaulQA_json_file}\n')
-for trace_tolerance_SIMSOPT in trace_tolerance_array:
-    print(f'Tracing SIMSOPT field lines with tolerance={trace_tolerance_SIMSOPT}')
+for rtol_SIMSOPT in rtol_array:
+    print(f'Tracing SIMSOPT field lines with tolerance={rtol_SIMSOPT}')
     t1 = time()
     trajectories_SIMSOPT, trajectories_SIMSOPT_phi_hits = block_until_ready(compute_fieldlines(
-        field_simsopt, R0, Z0, tmax=tmax_fl, tol=trace_tolerance_SIMSOPT, phis=phis_poincare))
+        field_simsopt, R0, Z0, tmax=tmax_fl, tol=rtol_SIMSOPT, phis=phis_poincare))
     runtime_SIMSOPT = time() - t1
     runtime_SIMSOPT_array.append(runtime_SIMSOPT)
     avg_steps_SIMSOPT = sum([len(l) for l in trajectories_SIMSOPT]) // nfieldlines
@@ -70,18 +70,18 @@ relative_energy_error_ESSOS_array = []
 # Creating a tracing object for compilation
 compile_tracing = Tracing(field=field_essos, model='FieldLine',
                           initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
-                          maxtime=tmax_fl, timestep=tmax_fl/100, times_to_trace=100,
-                          atol=trace_tolerance_array[0], rtol=trace_tolerance_array[0])
+                          tmax=tmax_fl, timestep=tmax_fl/100, n_save=100,
+                          atol=rtol_array[0], rtol=rtol_array[0])
 block_until_ready(compile_tracing.trajectories)
 
-for index, trace_tolerance_ESSOS in enumerate(trace_tolerance_array):
+for index, rtol_ESSOS in enumerate(rtol_array):
     num_steps_essos = int(avg_steps_SIMSOPT_array[index])
-    print(f'Tracing ESSOS field lines with tolerance={trace_tolerance_ESSOS}')
+    print(f'Tracing ESSOS field lines with tolerance={rtol_ESSOS}')
     start_time = time()
     tracing = Tracing(field=field_essos, model='FieldLine',
                       initial_conditions=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T,
-                      maxtime=tmax_fl, timestep=tmax_fl/num_steps_essos, times_to_trace=num_steps_essos,
-                      atol=trace_tolerance_ESSOS, rtol=trace_tolerance_ESSOS)
+                      tmax=tmax_fl, timestep=tmax_fl/num_steps_essos, n_save=num_steps_essos,
+                      atol=rtol_ESSOS, rtol=rtol_ESSOS)
     block_until_ready(tracing.trajectories)
     runtime_ESSOS = time() - start_time
     runtime_ESSOS_array.append(runtime_ESSOS)
@@ -97,8 +97,8 @@ for index, trace_tolerance_ESSOS in enumerate(trace_tolerance_array):
 print('Plotting the results to output directory...')
 
 # Plot time comparison in a bar chart
-quantities = [(fr"tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$", runtime_ESSOS_array[tolerance_idx], runtime_SIMSOPT_array[tolerance_idx]) 
-              for tolerance_idx in range(len(trace_tolerance_array))]
+quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", runtime_ESSOS_array[tolerance_idx], runtime_SIMSOPT_array[tolerance_idx]) 
+              for tolerance_idx in range(len(rtol_array))]
 
 labels = [q[0] for q in quantities]
 essos_vals = [q[1] for q in quantities]
@@ -136,7 +136,7 @@ def interpolate_SIMSOPT_to_ESSOS(trajectory_SIMSOPT, time_ESSOS):
 plt.figure(figsize=(9, 6))
 
 avg_relative_xyz_error_array = []
-for tolerance_idx in range(len(trace_tolerance_array)):
+for tolerance_idx in range(len(rtol_array)):
     this_trajectory_SIMSOPT = jnp.stack([interpolate_SIMSOPT_to_ESSOS(
                                             trajectories_SIMSOPT_array[tolerance_idx][particle_idx], times_essos_array[tolerance_idx]
                                         ) for particle_idx in range(nfieldlines)])
@@ -148,7 +148,7 @@ for tolerance_idx in range(len(trace_tolerance_array)):
     avg_relative_xyz_errors = jnp.mean(relative_xyz_errors, axis=0)
     avg_relative_xyz_error_array.append(jnp.mean(avg_relative_xyz_errors))
 
-    plt.plot(times_essos_array[tolerance_idx], avg_relative_xyz_errors, label=rf'tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$')
+    plt.plot(times_essos_array[tolerance_idx], avg_relative_xyz_errors, label=rf'tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$')
 
 plt.legend()
 plt.xlabel('Time (a.u.)')
@@ -157,8 +157,8 @@ plt.yscale('log')
 plt.ylabel(r'Relative $x,y,z$ Error')
 plt.savefig(os.path.join(output_dir, f'comparisons_fl_error_xyz.pdf'), dpi=150)
 
-quantities = [(fr"tol=$10^{{{int(jnp.log10(trace_tolerance_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx]) 
-              for tolerance_idx in range(len(trace_tolerance_array))]
+quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx]) 
+              for tolerance_idx in range(len(rtol_array))]
 
 labels = [q[0] for q in quantities]
 xyz_vals = [q[1] for q in quantities]

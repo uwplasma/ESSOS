@@ -68,7 +68,7 @@ def test_field_line_tracing_in_a_coil_field_is_differentiable():
 
     def end_z(x0):
         tracing = Tracing(field=field, model="FieldLine", initial_conditions=x0,
-                          maxtime=1e-2, timestep=1e-3, times_to_trace=3)
+                          tmax=1e-2, timestep=1e-3, n_save=3)
         return tracing.trajectories[0, -1, 2]
 
     x0 = jnp.array([[0.1, 0.0, Z]])

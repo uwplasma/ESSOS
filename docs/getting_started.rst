@@ -83,7 +83,7 @@ Tracing many VMEC orbits
 ------------------------
 
 ``Tracing`` converts each saved VMEC state to Cartesian one point at a time, so the memory of a trace grows slowly with
-``times_to_trace``. Peak memory for 500 guiding centres on one CPU device, with the old vectorized conversion for
+``n_save``. Peak memory for 500 guiding centres on one CPU device, with the old vectorized conversion for
 comparison:
 
 .. image:: _static/vmec_tracing_memory.png

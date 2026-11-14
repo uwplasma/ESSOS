@@ -39,7 +39,7 @@ def new_nearaxis_from_x_and_old_nearaxis(new_field_nearaxis_x, field_nearaxis):
                                     nphi=field_nearaxis.nphi, spsi=field_nearaxis.spsi, sG=field_nearaxis.sG, nfp=field_nearaxis.nfp)
     return new_field_nearaxis
 
-def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-4, maximum_function_evaluations=30, method='L-BFGS-B', **kwargs):
+def optimize_loss_function(func, initial_dofs, coils, tol=1e-4, max_nfev=30, method='L-BFGS-B', **kwargs):
     """Minimize a coil loss with ``scipy.optimize.least_squares``.
 
     Gradients are finite differences (``diff_step=1e-4``). ``method`` is only
@@ -51,8 +51,8 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
         initial_dofs: Starting vector: coil curve dofs, then currents, then
             optionally surface and near-axis dofs.
         coils: Initial ``Coils``; supplies the symmetry and scaling arguments.
-        tolerance_optimization: Used for both ``ftol`` and ``gtol``.
-        maximum_function_evaluations: ``max_nfev`` of the solver.
+        tol: Used for both ``ftol`` and ``gtol``.
+        max_nfev: Evaluation limit of the solver.
         **kwargs: Passed to ``func``. ``field_nearaxis`` and ``surface_all``
             select which extra objects are returned.
 
@@ -72,46 +72,46 @@ def optimize_loss_function(func, initial_dofs, coils, tolerance_optimization=1e-
     
     ## Without JAX gradients, using finite differences
     result = least_squares(loss_partial, x0=initial_dofs, verbose=2, diff_step=1e-4,
-                            ftol=tolerance_optimization, gtol=tolerance_optimization,
-                            xtol=1e-14, max_nfev=maximum_function_evaluations)
+                            ftol=tol, gtol=tol,
+                            xtol=1e-14, max_nfev=max_nfev)
     
     ## With JAX gradients
     ##jac_loss_partial = jit(grad(loss_partial))
     # result = least_squares(loss_partial, x0=initial_dofs, verbose=2, jac=jac_loss_partial,
-    #                        ftol=tolerance_optimization, gtol=tolerance_optimization,
-    #                        xtol=1e-14, max_nfev=maximum_function_evaluations)
+    #                        ftol=tol, gtol=tol,
+    #                        xtol=1e-14, max_nfev=max_nfev)
     ##result = minimize(loss_partial, x0=initial_dofs, jac=jac_loss_partial, method=method,
-    ##                  tol=tolerance_optimization, options={'maxiter': maximum_function_evaluations, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
+    ##                  tol=tol, options={'maxiter': max_nfev, 'disp': True, 'gtol': 1e-14, 'ftol': 1e-14})
     
     dofs_curves = jnp.reshape(result.x[:len_dofs_curves], (dofs_curves_shape))
     try:
-        if len(initial_dofs) == len(coils.x):
+        if len(initial_dofs) == len(coils.dofs):
             dofs_currents = result.x[len_dofs_curves:]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents*coils.currents_scale)
             return new_coils
-        elif 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['field_nearaxis'].x):
+        elif 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.dofs) + len(kwargs['field_nearaxis'].x):
             dofs_currents = result.x[len_dofs_curves:-len(kwargs['field_nearaxis'].x)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
             new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(result.x[-len(kwargs['field_nearaxis'].x):], kwargs['field_nearaxis'])
             return new_coils, new_field_nearaxis
-        elif 'surface_all' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['surface_all'].x):
+        elif 'surface_all' in kwargs and len(initial_dofs) == len(coils.dofs) + len(kwargs['surface_all'].dofs):
             surface_all = kwargs['surface_all']
-            dofs_currents = result.x[len_dofs_curves:-len(surface_all.x)]
+            dofs_currents = result.x[len_dofs_curves:-len(surface_all.dofs)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
             new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta,mpol=surface_all.mpol,ntor=surface_all.ntor)
-            new_surface.dofs = result.x[-len(surface_all.x):]
+            new_surface.dofs = result.x[-len(surface_all.dofs):]
             return new_coils, new_surface
-        elif 'surface_all' in kwargs and 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.x) + len(kwargs['surface_all'].x) + len(kwargs['field_nearaxis'].x):
+        elif 'surface_all' in kwargs and 'field_nearaxis' in kwargs and len(initial_dofs) == len(coils.dofs) + len(kwargs['surface_all'].dofs) + len(kwargs['field_nearaxis'].x):
             surface_all = kwargs['surface_all']
             field_nearaxis = kwargs['field_nearaxis']
-            dofs_currents = result.x[len_dofs_curves:-len(surface_all.x)-len(field_nearaxis.x)]
+            dofs_currents = result.x[len_dofs_curves:-len(surface_all.dofs)-len(field_nearaxis.x)]
             curves = Curves(dofs_curves, n_segments, nfp, stellsym)
             new_coils = Coils(curves=curves, currents=dofs_currents * coils.currents_scale)
             new_surface = SurfaceRZFourier(rc=surface_all.rc, zs=surface_all.zs, nfp=nfp, range_torus=surface_all.range_torus, nphi=surface_all.nphi, ntheta=surface_all.ntheta,mpol=surface_all.mpol,ntor=surface_all.ntor)
-            new_surface.dofs = result.x[-len(surface_all.x)-len(field_nearaxis.x):-len(field_nearaxis.x)]
+            new_surface.dofs = result.x[-len(surface_all.dofs)-len(field_nearaxis.x):-len(field_nearaxis.x)]
             new_field_nearaxis = new_nearaxis_from_x_and_old_nearaxis(result.x[-len(field_nearaxis.x):], field_nearaxis)
             return new_coils, new_surface, new_field_nearaxis
     except Exception as e:

@@ -11,7 +11,7 @@ import numpy as np
 # Input parameters
 tmax = 1.e-4
 timestep=1.e-8
-times_to_trace=1000
+n_save=1000
 nparticles_per_core=6
 nparticles = nparticles_per_core
 n_particles_to_plot = 4
@@ -47,8 +47,8 @@ species = BackgroundSpecies(number_species=number_species, mass_array=mass_array
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuFixed', particles=particles, maxtime=tmax,
-                  timestep=timestep, times_to_trace=times_to_trace, species=species,tag_gc=1.)
+tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuFixed', particles=particles, tmax=tmax,
+                  timestep=timestep, n_save=n_save, species=species,tag_gc=1.)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
 print(f"Particle 1 lost {tracing.lost_energies[0]} Joules while hitting (s, theta, phi)=({tracing.lost_positions[0,0]:.2f},{tracing.lost_positions[0,1]:.2f},{tracing.lost_positions[0,2]:.2f})")

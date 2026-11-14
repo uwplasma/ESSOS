@@ -123,8 +123,8 @@ def test_arclength_fieldline_has_unit_speed_without_changing_direction():
 
     tracing = Tracing(
         field=ScaledField(), model="FieldLineArclength",
-        initial_conditions=jnp.zeros((1, 3)), maxtime=2.0,
-        timestep=0.1, times_to_trace=11)
+        initial_conditions=jnp.zeros((1, 3)), tmax=2.0,
+        timestep=0.1, n_save=11)
     assert jnp.allclose(
         tracing.trajectories[0, -1], jnp.array([1.2, 1.6, 0.0]))
 
@@ -138,7 +138,7 @@ def test_tracing_is_differentiable_in_its_initial_conditions():
 
     def end_x(x0):
         tracing = Tracing(field=ScaledField(), model="FieldLineArclength", initial_conditions=x0,
-                          maxtime=2.0, timestep=0.1, times_to_trace=11)
+                          tmax=2.0, timestep=0.1, n_save=11)
         return tracing.trajectories[0, -1, 0]
 
     assert jnp.allclose(jax.grad(end_x)(jnp.zeros((1, 3))), jnp.array([[1.0, 0.0, 0.0]]))
@@ -157,8 +157,8 @@ def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
 
     tracing = Tracing(
         field=FluxField(), model="FieldLineToroidal",
-        initial_conditions=jnp.zeros((1, 3)), maxtime=2.0,
-        timestep=0.1, times_to_trace=11)
+        initial_conditions=jnp.zeros((1, 3)), tmax=2.0,
+        timestep=0.1, n_save=11)
     assert jnp.allclose(tracing.trajectories[0, -1], jnp.array([0.0, 1.0, 2.0]))
     assert jnp.allclose(tracing.toroidal_angles[0], tracing.trajectories[0, :, 2])
 
@@ -172,16 +172,16 @@ def test_trace_field_lines_selects_clear_physical_parameterizations(capsys):
             return points[:, 2]
 
     arclength = trace_field_lines(
-        MockField(), jnp.zeros((1, 3)), length=2.0, samples=11,
-        tolerance=1.0e-8, progress=False, label="Cartesian test")
+        MockField(), jnp.zeros((1, 3)), length=2.0, n_save=11,
+        rtol=1.0e-8, progress=False, label="Cartesian test")
     toroidal = trace_field_lines(
-        FluxField(), jnp.zeros((1, 3)), toroidal_turns=0.5, samples=11,
-        tolerance=1.0e-8, progress=False, label=None)
+        FluxField(), jnp.zeros((1, 3)), toroidal_turns=0.5, n_save=11,
+        rtol=1.0e-8, progress=False, label=None)
 
     assert arclength.model == "FieldLineArclength"
     assert toroidal.model == "FieldLineToroidal"
-    assert float(arclength.maxtime) == pytest.approx(2.0)
-    assert float(toroidal.maxtime) == pytest.approx(float(jnp.pi))
+    assert float(arclength.tmax) == pytest.approx(2.0)
+    assert float(toroidal.tmax) == pytest.approx(float(jnp.pi))
     assert "Tracing Cartesian test" in capsys.readouterr().out
 
 
@@ -195,7 +195,7 @@ def test_trace_field_lines_reports_stops_and_uses_batched_coordinates(capsys):
             return 0.2 - xyz[0]
 
     result = trace_field_lines(
-        BatchedField(), jnp.zeros((1, 3)), length=1.0, samples=11,
+        BatchedField(), jnp.zeros((1, 3)), length=1.0, n_save=11,
         stopping_criteria=LevelsetStoppingCriterion(PlaneClassifier()),
         progress=False, label="bounded test")
     assert result.boundary_hits.tolist() == [True]
@@ -209,11 +209,11 @@ def test_trace_field_lines_requires_one_extent(kwargs):
 
 
 @pytest.mark.parametrize("kwargs, message", (
-    ({"length": 1.0, "samples": 1}, "samples"),
+    ({"length": 1.0, "n_save": 1}, "n_save"),
     ({"length": 0.0}, "length"),
     ({"toroidal_turns": 0.0}, "toroidal_turns"),
 ))
-def test_trace_field_lines_validates_positive_extent_and_samples(kwargs, message):
+def test_trace_field_lines_validates_positive_extent_and_n_save(kwargs, message):
     with pytest.raises(ValueError, match=message):
         trace_field_lines(MockField(), jnp.zeros((1, 3)), progress=False, **kwargs)
 
@@ -316,7 +316,7 @@ def test_levelset_stopping_criterion_stops_and_fills_field_line():
     tracing = Tracing(
         field=MockField(), model="FieldLineAdaptative",
         initial_conditions=jnp.array([[1.0, 0.0, 0.0]]),
-        maxtime=1.0, timestep=0.01, times_to_trace=21,
+        tmax=1.0, timestep=0.01, n_save=21,
         stopping_criteria=criterion,
     )
 
@@ -402,7 +402,7 @@ def test_vmec_fieldline_uses_the_lcfs_event():
     tracing = Tracing(
         field=MockVmec(), model="FieldLineArclength",
         initial_conditions=jnp.array([[0.5, 0.0, 0.0]]),
-        maxtime=0.01, timestep=0.001, times_to_trace=3)
+        tmax=0.01, timestep=0.001, n_save=3)
     assert callable(tracing.condition)
 
 
@@ -433,7 +433,7 @@ def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature()
     particles = Particles(initial_xyz=xyz, initial_xyz_fullorbit=xyz, mass=PROTON_MASS, charge=ELEMENTARY_CHARGE,
                           initial_vxvyvz=vth * jax.random.normal(jax.random.key(0), (n, 3)))
     trace = Tracing(field=_UniformField((0., 0., 1.), magnitude=1e-6), particles=particles, species=species,
-                    model="FullOrbitCollisions", maxtime=2 / nu, timestep=1e-2 / nu, times_to_trace=6,
+                    model="FullOrbitCollisions", tmax=2 / nu, timestep=1e-2 / nu, n_save=6,
                     rtol=1e-4, atol=1e-4)
     energy = 0.5 * PROTON_MASS * jnp.sum(trace.trajectories[:, :, 3:]**2, axis=-1) / (1.5 * temperature)
     error = np.sqrt(2 / 3 / n)
@@ -445,7 +445,7 @@ def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch):
     monkeypatch.delenv("ESSOS_PROGRESS")  # default progress must not break the vmapped segment loop
     particles = _near_axis_particles()
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
-                      particles=particles, maxtime=2e-5, timestep=1e-9, times_to_trace=200,
+                      particles=particles, tmax=2e-5, timestep=1e-9, n_save=200,
                       atol=1e-9, rtol=1e-9)
     s = tracing.trajectories[:, :, 0]
     assert not tracing.axis_hits.any() and not tracing.boundary_hits.any()
@@ -461,7 +461,7 @@ def test_vmec_guiding_center_condition_sees_flux_coordinates():
         return y[0] < 5e-3
 
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
-                      particles=_near_axis_particles(), maxtime=2e-5, timestep=1e-9, times_to_trace=200,
+                      particles=_near_axis_particles(), tmax=2e-5, timestep=1e-9, n_save=200,
                       atol=1e-9, rtol=1e-9, condition=below)
     s = tracing.trajectories[:, :, 0]
     stopped = ~jnp.isfinite(s[:, -1])
@@ -475,7 +475,7 @@ def test_vmec_collisional_guiding_centers_cross_the_magnetic_axis(model):
                                 charge_array=jnp.array([-1.0, 1.0]), n_array=jnp.array([1e20, 1e20]),
                                 T_array=jnp.array([1e4, 1e4]))
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model=model, particles=_near_axis_particles(),
-                      maxtime=2e-5, timestep=1e-8, times_to_trace=100, species=species)
+                      tmax=2e-5, timestep=1e-8, n_save=100, species=species)
     s = tracing.trajectories[:, :, 0]
     assert not tracing.axis_hits.any()
     assert jnp.isfinite(tracing.trajectories).all()
@@ -488,7 +488,7 @@ def test_tracing_initialization(field, particles,electric_field):
     y = jnp.zeros(particles.nparticles)
     z = jnp.zeros(particles.nparticles)
     initial_conditions =jnp.array([x, y, z]).T
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, times_to_trace=200)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, n_save=200)
     assert tracing.field == field
     assert tracing.model == 'GuidingCenter'
     assert tracing.initial_conditions.shape == (particles.nparticles, 4)
@@ -499,7 +499,7 @@ def test_tracing_trace(field, particles,electric_field):
     y = jnp.zeros(particles.nparticles)
     z = jnp.zeros(particles.nparticles)
     initial_conditions =jnp.array([x, y, z]).T
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, times_to_trace=200)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenter', particles=particles, n_save=200)
     trajectories = tracing.trace()
     assert trajectories.shape == (particles.nparticles, 200, 4)
 
@@ -508,7 +508,7 @@ def test_tracing_trace_adaptative(field, particles,electric_field):
     y = jnp.zeros(particles.nparticles)
     z = jnp.zeros(particles.nparticles)
     initial_conditions =jnp.array([x, y, z]).T
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterAdaptative', particles=particles, times_to_trace=200)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterAdaptative', particles=particles, n_save=200)
     trajectories = tracing.trace()
     assert trajectories.shape == (particles.nparticles, 200, 4)
 
@@ -527,7 +527,7 @@ def test_tracing_trace_collisions_fixed(field, particles,electric_field):
     n_array=jnp.array([n0,n0])
     T_array=jnp.array([T0,T0])
     species = BackgroundSpecies(number_species=number_species, mass_array=mass_array, charge_array=charge_array, n_array=n_array, T_array=T_array)
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterCollisionsMuFixed', particles=particles, times_to_trace=200,maxtime=1.e-6,species=species)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterCollisionsMuFixed', particles=particles, n_save=200,tmax=1.e-6,species=species)
     trajectories = tracing.trace()
     assert species.mass.shape == (2,)
     assert species.charge.shape == (2,)
@@ -547,7 +547,7 @@ def test_tracing_trace_collisions_ito(field, particles,electric_field):
     n_array=jnp.array([n0,n0])
     T_array=jnp.array([T0,T0])
     species = BackgroundSpecies(number_species=number_species, mass_array=mass_array, charge_array=charge_array, n_array=n_array, T_array=T_array)
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterCollisionsMuIto', particles=particles, times_to_trace=200,maxtime=1.e-6,species=species)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterCollisionsMuIto', particles=particles, n_save=200,tmax=1.e-6,species=species)
     trajectories = tracing.trace()
     assert species.mass.shape == (2,)
     assert species.charge.shape == (2,)
@@ -567,7 +567,7 @@ def test_tracing_trace_collisions_adaptative(field, particles,electric_field):
     n_array=jnp.array([n0,n0])
     T_array=jnp.array([T0,T0])
     species = BackgroundSpecies(number_species=number_species, mass_array=mass_array, charge_array=charge_array, n_array=n_array, T_array=T_array)
-    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterCollisionsMuAdaptative', particles=particles, times_to_trace=200,maxtime=1.e-6,species=species)
+    tracing = Tracing(initial_conditions=initial_conditions, field=field,electric_field=electric_field, model='GuidingCenterCollisionsMuAdaptative', particles=particles, n_save=200,tmax=1.e-6,species=species)
     trajectories = tracing.trace()
     assert species.mass.shape == (2,)
     assert species.charge.shape == (2,)
@@ -585,7 +585,7 @@ def test_tracing_max_steps_is_configurable_and_bounded():
     from essos.dynamics import Tracing
 
     default = inspect.signature(Tracing).parameters["max_steps"].default
-    assert default == 1_000_000
+    assert default is None  # derived from tmax and timestep
 
     source = inspect.getsource(Tracing)
     assert "max_steps=10000000000" not in source
@@ -629,8 +629,8 @@ def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypat
     def below_ceiling(t, y, args, **kwargs):
         return ceiling - y[2]
     trace = Tracing(field=field, particles=particles, species=species,
-                    model="FullOrbitCollisions", maxtime=1e-5, timestep=1e-7,
-                    times_to_trace=3, rtol=1e-6, atol=1e-7,
+                    model="FullOrbitCollisions", tmax=1e-5, timestep=1e-7,
+                    n_save=3, rtol=1e-6, atol=1e-7,
                     stopping_criteria=below_ceiling if stop else None)
     assert trace.trajectories.shape == (1, 3, 6)
     assert jnp.all(jnp.isfinite(trace.trajectories))
@@ -644,7 +644,7 @@ def test_full_orbit_collisions_traces_with_solver_tolerances_and_stops(monkeypat
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
 def test_tracing_pytree_round_trip_and_jit():
-    """Unflatten re-ran __init__ with times as times_to_trace, passed both
+    """Unflatten re-ran __init__ with times as n_save, passed both
     condition and stopping_criteria, and dropped species and boundary."""
     field = _UniformField((0., 0., 1.), magnitude=1e-3)
     particles = Particles([[1., 0., 0.]], [.5], field=field)
@@ -653,10 +653,10 @@ def test_tracing_pytree_round_trip_and_jit():
     def below_ceiling(t, y, args, **kwargs):
         return 1.0 - y[2]
     trace = Tracing(field=field, particles=particles, species=species, model="FullOrbitCollisions",
-                    maxtime=1e-6, timestep=1e-7, times_to_trace=3, stopping_criteria=below_ceiling)
+                    tmax=1e-6, timestep=1e-7, n_save=3, stopping_criteria=below_ceiling)
     leaves, treedef = jax.tree_util.tree_flatten(trace)
     rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
-    assert rebuilt.species is species and rebuilt.times_to_trace == 3
+    assert rebuilt.species is species and rebuilt.n_save == 3
     assert rebuilt.stopping_criteria == trace.stopping_criteria and rebuilt.condition is trace.condition
     np.testing.assert_array_equal(rebuilt.times, trace.times)
     np.testing.assert_array_equal(rebuilt.trajectories, trace.trajectories)
@@ -879,7 +879,7 @@ class _UniformCartesianField:
         return jnp.linalg.norm(self.vector)
 
 
-def _boris(maxtime, timestep, times_to_trace=None, stopping_criteria=None):
+def _boris(tmax, timestep, n_save=None, stopping_criteria=None):
     from essos.dynamics import Particles, Tracing
 
     field = _UniformCartesianField((0.0, 0.0, 1.0), magnitude=1.0)
@@ -891,8 +891,8 @@ def _boris(maxtime, timestep, times_to_trace=None, stopping_criteria=None):
         initial_vxvyvz=jnp.asarray([[v_perp, 0.0, v_par]]),
     )
     tracing = Tracing(
-        field=field, particles=particles, model="FullOrbit_Boris", maxtime=maxtime,
-        timestep=timestep, times_to_trace=times_to_trace, stopping_criteria=stopping_criteria,
+        field=field, particles=particles, model="FullOrbit_Boris", tmax=tmax,
+        timestep=timestep, n_save=n_save, stopping_criteria=stopping_criteria,
     )
     period = 2 * np.pi * mass / (charge * 1.0)
     return tracing, v_par, v_perp, period
@@ -900,7 +900,7 @@ def _boris(maxtime, timestep, times_to_trace=None, stopping_criteria=None):
 
 def test_boris_integrates_the_whole_requested_time_span():
     period = 2 * np.pi * 1.6726e-27 / 1.602e-19
-    tracing, v_par, v_perp, _ = _boris(maxtime=200 * period, timestep=period / 50, times_to_trace=11)
+    tracing, v_par, v_perp, _ = _boris(tmax=200 * period, timestep=period / 50, n_save=11)
     trajectory = tracing.trajectories[0]
     assert trajectory.shape[0] == 11
     np.testing.assert_allclose(trajectory[-1, 2], v_par * 200 * period, rtol=1e-10)
@@ -919,7 +919,7 @@ def test_boris_honours_stopping_criteria_with_an_event_mask():
     def below_ceiling(t, y, args, **kwargs):
         return ceiling - y[2]
 
-    tracing, *_ = _boris(maxtime=100 * period, timestep=period / 40, times_to_trace=21,
+    tracing, *_ = _boris(tmax=100 * period, timestep=period / 40, n_save=21,
                          stopping_criteria=below_ceiling)
     trajectory = tracing.trajectories[0]
     assert bool(tracing.boundary_hits[0])
@@ -927,14 +927,14 @@ def test_boris_honours_stopping_criteria_with_an_event_mask():
     np.testing.assert_allclose(trajectory[-1], trajectory[-2], rtol=0, atol=0)
 
 
-def _edge_tracing(model, s0, times_to_trace, **kwargs):
+def _edge_tracing(model, s0, n_save, **kwargs):
     from pathlib import Path
     wout = Path(__file__).resolve().parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
     n = 16
     particles = Particles(initial_xyz=jnp.stack([jnp.full(n, s0), jnp.linspace(0, 6, n), jnp.zeros(n)], axis=1),
                           initial_vparallel_over_v=jnp.linspace(-0.9, 0.9, n))
-    return Tracing(field=Vmec(str(wout), ntheta=8, nphi=8), model=model, particles=particles, maxtime=1e-5,
-                   timestep=1e-8, times_to_trace=times_to_trace, **kwargs)
+    return Tracing(field=Vmec(str(wout), ntheta=8, nphi=8), model=model, particles=particles, tmax=1e-5,
+                   timestep=1e-8, n_save=n_save, **kwargs)
 
 
 def test_vmec_losses_are_counted_at_the_lcfs():
@@ -983,13 +983,13 @@ def test_particle_batches_report_completed_particles_and_match_one_batch(capsys,
 def test_particle_batch_size_is_validated(batch_size):
     with pytest.raises(ValueError, match="particle_batch_size"):
         Tracing(field=MockField(), model="FieldLineAdaptative", initial_conditions=jnp.array([[1.0, 0.0, 0.0]]),
-                maxtime=1.0, timestep=0.01, particle_batch_size=batch_size)
+                tmax=1.0, timestep=0.01, particle_batch_size=batch_size)
 
 
 def test_particle_batches_are_bypassed_under_jit():
     def final(y0, batch):
-        return Tracing(field=MockField(), model="FieldLineAdaptative", initial_conditions=y0, maxtime=1.0,
-                       timestep=0.01, times_to_trace=3, particle_batch_size=batch).trajectories
+        return Tracing(field=MockField(), model="FieldLineAdaptative", initial_conditions=y0, tmax=1.0,
+                       timestep=0.01, n_save=3, particle_batch_size=batch).trajectories
     y0 = jnp.array([[1.0, 0.0, 0.0], [1.1, 0.0, 0.1], [0.9, 0.1, 0.0]])
     np.testing.assert_allclose(jax.jit(final, static_argnums=1)(y0, 2), final(y0, None), rtol=1e-12)
     np.testing.assert_allclose(final(y0, 2), final(y0, None), rtol=1e-12)
@@ -1009,7 +1009,7 @@ def test_custom_loss_grad_through_adaptive_guiding_center_matches_finite_differe
 
     def final_position(field, particles):
         tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles,
-                          maxtime=1e-7, times_to_trace=4, atol=1e-10, rtol=1e-10)
+                          tmax=1e-7, n_save=4, atol=1e-10, rtol=1e-10)
         xyz = tracing.trajectories[:, -1, :3]
         return jnp.sum(jnp.sqrt(xyz[:, 0]**2 + xyz[:, 1]**2)) + jnp.sum(xyz[:, 2])
 
@@ -1037,12 +1037,12 @@ def test_vmec_guiding_centers_seeded_on_the_axis_leave_it():
                           initial_vparallel_over_v=jnp.array([0.9, -0.5]), mass=PROTON_MASS,
                           charge=ELEMENTARY_CHARGE, energy=5e3 * ELEMENTARY_CHARGE)
     tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
-                      maxtime=2e-5, timestep=1e-8, times_to_trace=5)
+                      tmax=2e-5, timestep=1e-8, n_save=5)
     s = tracing.trajectories[:, :, 0]
     assert jnp.all(jnp.isfinite(s)) and jnp.all(s[:, -1] > 1e-8)
 
 
-def _exterior_tracing(xyz, vpar_over_v, maxtime, model="GuidingCenterAdaptative", wall_gap=0.05, **kwargs):
+def _exterior_tracing(xyz, vpar_over_v, tmax, model="GuidingCenterAdaptative", wall_gap=0.05, **kwargs):
     """Alphas in the bundled reactor-scale QA; outside, its coils scaled to it (|B| agrees to 0.2% on the LCFS)."""
     from essos.coils import Coils, Curves
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
@@ -1052,7 +1052,7 @@ def _exterior_tracing(xyz, vpar_over_v, maxtime, model="GuidingCenterAdaptative"
     options = dict(timestep=1e-9, atol=1e-8, rtol=1e-8) if model == "GuidingCenterAdaptative" else dict(timestep=2e-8)
     options.update(dict(exterior_field=coils, wall=lambda x: vmec.boundary_distance(x) + wall_gap), **kwargs)
     particles = Particles(initial_xyz=jnp.asarray(xyz), initial_vparallel_over_v=jnp.asarray(vpar_over_v))
-    return Tracing(field=vmec, model=model, particles=particles, maxtime=maxtime, times_to_trace=40, **options)
+    return Tracing(field=vmec, model=model, particles=particles, tmax=tmax, n_save=40, **options)
 
 
 # Four orbits that cross the LCFS and strike a wall 5 cm outside it within 3 us.
@@ -1085,7 +1085,7 @@ def test_vmec_lcfs_crossings_are_exact():
 
 
 def test_vmec_orbits_continue_outside_and_strike_the_wall_exactly():
-    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6)
+    tracing = _exterior_tracing(*STRIKING, tmax=3e-6)
     struck = tracing.wall_hits
     assert struck.all()
     assert jnp.abs(jax.vmap(tracing.field.boundary_distance)(jnp.asarray(tracing.wall_positions)) + 0.05).max() < 1e-10
@@ -1100,7 +1100,7 @@ def test_vmec_orbits_continue_outside_and_strike_the_wall_exactly():
 
 def test_vmec_orbits_that_come_back_inside_return_to_flux_coordinates():
     xyz, vpar = [[0.9037, 1.2536, 3.6827]], [0.9639]
-    tracing = _exterior_tracing(xyz, vpar, maxtime=5e-6)
+    tracing = _exterior_tracing(xyz, vpar, tmax=5e-6)
     assert tracing.returns[0] == 1 and tracing.status[0] == 0
     region = np.asarray(tracing.region[0])
     changes = np.flatnonzero(np.diff(region))
@@ -1108,7 +1108,7 @@ def test_vmec_orbits_that_come_back_inside_return_to_flux_coordinates():
     # Inside again, the flux-coordinate trajectory resumes with its energy.
     later = region[changes[1] + 1:] == 0
     assert jnp.abs(tracing.energy()[0][changes[1] + 1:][later] / tracing.particles.energy - 1).max() < 1e-5
-    capped = _exterior_tracing(xyz, vpar, maxtime=5e-6, max_returns=0)
+    capped = _exterior_tracing(xyz, vpar, tmax=5e-6, max_returns=0)
     assert capped.status[0] == 5 and capped.returns[0] == 0
 
 
@@ -1117,7 +1117,7 @@ def test_vmec_collisional_orbits_continue_outside(model):
     species = BackgroundSpecies(number_species=2, mass_array=jnp.array([ELECTRON_MASS / PROTON_MASS, 1.0]),
                                 charge_array=jnp.array([-1.0, 1.0]), n_array=jnp.array([1e19, 1e19]),
                                 T_array=jnp.array([300.0, 300.0]))
-    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6, model=model, species=species)
+    tracing = _exterior_tracing(*STRIKING, tmax=3e-6, model=model, species=species)
     struck = tracing.wall_hits
     assert struck.any() and not tracing.failed.any()
     assert jnp.all(tracing.wall_times[struck] > tracing.lcfs_times[struck])
@@ -1130,7 +1130,7 @@ def test_vmec_non_finite_steps_are_reported():
         R2 = xyz[:, 0]**2 + xyz[:, 1]**2
         return jnp.where(xyz[:, 2:] > 0.0, jnp.nan, 60.0 * jnp.stack([-xyz[:, 1] / R2, xyz[:, 0] / R2, 0 * R2], 1))
 
-    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6, exterior_field=toroidal, wall=None)
+    tracing = _exterior_tracing(*STRIKING, tmax=3e-6, exterior_field=toroidal, wall=None)
     failed = tracing.failed
     assert failed.any() and jnp.all(tracing.status[failed] == 4)
     assert jnp.all(tracing.failure_times[failed] >= tracing.lcfs_times[failed])
@@ -1141,7 +1141,7 @@ def test_vmec_non_finite_steps_are_reported():
 
 
 def test_vmec_wall_already_crossed_at_the_exit_point_is_a_hit_at_the_exit_time():
-    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6, wall_gap=-1e-3)
+    tracing = _exterior_tracing(*STRIKING, tmax=3e-6, wall_gap=-1e-3)
     assert tracing.wall_hits.all() and jnp.allclose(tracing.wall_times, tracing.lcfs_times, rtol=1e-12)
 
 
@@ -1160,14 +1160,14 @@ def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and
     def objective(s, params, adjoint=None):
         xyz = jnp.stack([s, jnp.array([2.2941, 0.6628, 1.0]), jnp.array([5.0876, 3.5216, 1.0])], 1)
         particles = Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([-0.9872, 0.5453, 0.3]))
-        tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3e-6, timestep=1e-9,
-                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(_toroidal_source, params),
+        tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, tmax=3e-6, timestep=1e-9,
+                          n_save=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(_toroidal_source, params),
                           wall=0.05, max_returns=2, adjoint=adjoint)
         return 1e6 * (finite(tracing.wall_times) + finite(tracing.lcfs_times)) + finite(tracing.wall_positions[:, 2])
 
     s, params = jnp.array([0.9732, 0.9821, 0.5]), jnp.array([60.0, 0.5])
     ds, dparams = jnp.array([1.0, -0.5, 0.3]) * 1e-4, jnp.array([1.0, 0.05])
-    tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", maxtime=3e-6, timestep=1e-9, times_to_trace=4, atol=1e-8,
+    tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", tmax=3e-6, timestep=1e-9, n_save=4, atol=1e-8,
                       rtol=1e-8, exterior_field=ExternalField(_toroidal_source, params), wall=0.05, max_returns=2,
                       particles=Particles(initial_xyz=jnp.array([[0.9732, 2.2941, 5.0876], [0.9821, 0.6628, 3.5216], [0.5, 1.0, 1.0]]),
                                           initial_vparallel_over_v=jnp.array([-0.9872, 0.5453, 0.3])))
@@ -1198,8 +1198,8 @@ def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_rever
                                  **{**arrays, 'rmnc': arrays['rmnc'] * rows, 'zmns': arrays['zmns'] * rows})
         particles = Particles(initial_xyz=jnp.array([[0.9732, 2.2941, 5.0876], [0.5, 1.0, 1.0]]),
                               initial_vparallel_over_v=jnp.array([-0.9872, 0.3]))
-        tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles, maxtime=1e-6, timestep=1e-9,
-                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(_toroidal_source, jnp.array([60.0, 0.5])),
+        tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles, tmax=1e-6, timestep=1e-9,
+                          n_save=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(_toroidal_source, jnp.array([60.0, 0.5])),
                           wall=wall, max_returns=1)
         return jnp.sum(jnp.where(jnp.isfinite(tracing.trajectories_xyz), tracing.trajectories_xyz, 0.0))
 
@@ -1219,8 +1219,8 @@ def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
         xyz = jnp.stack([s, jnp.full_like(s, 0.3), jnp.full_like(s, 0.2)], 1)
         particles = Particles(initial_xyz=xyz, initial_vparallel_over_v=pitch, mass=PROTON_MASS, charge=ELEMENTARY_CHARGE,
                               energy=1e6 * ELEMENTARY_CHARGE)
-        return Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=1e-4, timestep=1e-9,
-                       times_to_trace=3, atol=1e-10, rtol=1e-10).lcfs_times
+        return Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, tmax=1e-4, timestep=1e-9,
+                       n_save=3, atol=1e-10, rtol=1e-10).lcfs_times
 
     objective = lambda s: jnp.sum(jnp.where(jnp.isfinite(t := crossing_times(s)), t, 0.0))
     s = jnp.full(8, 0.9)
@@ -1271,7 +1271,7 @@ def test_collisional_guiding_center_v_perp_uses_speed_and_pitch():
     species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
     particles = _near_axis_particles()
     trace = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterCollisions", particles=particles,
-                    maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
+                    tmax=1e-9, timestep=1e-10, n_save=2, species=species)
     np.testing.assert_allclose(trace.v_perp()[:, 0], particles.initial_vperpendicular, rtol=1e-10)
 
 
@@ -1284,10 +1284,102 @@ def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
     particles = Particles([[1.05, 0., 0.]], [.5])
     monkeypatch.setattr(Tracing, "trace", lambda self: jnp.zeros((1, 2, 5)))  # only the setup is tested
     trace = Tracing(field=coils, model="GuidingCenterCollisionsMuFixed", particles=particles,
-                    maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
+                    tmax=1e-9, timestep=1e-10, n_save=2, species=species)
     B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
     mu = particles.initial_vperpendicular[0]**2 / (2 * B * SPEED_OF_LIGHT**2)
     np.testing.assert_allclose(trace.initial_conditions[0, 4], mu, rtol=1e-6)
+
+
+@pytest.fixture(scope="module")
+def qa_coil_alphas():
+    from essos.coils import Coils
+    from essos.fields import BiotSavart
+    path = Path(__file__).resolve().parents[1] / "examples" / "input_files" / "ESSOS_biot_savart_LandremanPaulQA.json"
+    R0 = jnp.array([1.23, 1.27])
+    particles = Particles(initial_xyz=jnp.stack([R0, 0 * R0, 0 * R0], axis=1), initial_vparallel_over_v=jnp.array([0.3, -0.5]),
+                          energy=4000 * 1.602176634e-19)
+    return BiotSavart(Coils.from_json(str(path))), particles
+
+
+@pytest.mark.parametrize("model, options, bound", [
+    ("GuidingCenterAdaptative", {}, 1e-6),  # default tolerance
+    ("GuidingCenter", {}, 1e-6),  # default timestep
+])
+def test_default_tracing_conserves_energy(qa_coil_alphas, model, options, bound):
+    field, particles = qa_coil_alphas
+    tracing = Tracing(field=field, model=model, particles=particles, tmax=1e-4, n_save=20, **options)
+    assert float(jnp.max(jnp.abs(tracing.energy() / particles.energy - 1))) < bound
+
+
+def test_truncated_tracing_warns(qa_coil_alphas):
+    field, particles = qa_coil_alphas
+    with pytest.warns(RuntimeWarning, match="did not finish"):
+        Tracing(field=field, model="GuidingCenterAdaptative", particles=particles, tmax=1e-5, max_steps=20)
+
+
+@pytest.mark.parametrize("method, steps, order", [
+    ("rk4", (8e-7, 4e-7, 2e-7, 1e-7), 4), ("dopri5", (8e-7, 4e-7, 2e-7, 1e-7), 5), ("dopri8", (5e-6, 2.5e-6, 1.25e-6, 6.25e-7), 8)])
+def test_fixed_step_error_converges_at_the_scheme_order(method, steps, order):
+    """The global error of a fixed-step scheme of order p falls as h**p (Hairer, Norsett and Wanner 1993, II.3)."""
+    from essos.boozer import trace_boozer
+    from tests.test_boozer import tokamak, V0, M, Q
+    births = (jnp.full(4, .3), jnp.linspace(.5, 3, 4), jnp.zeros(4), jnp.linspace(-.6, .6, 4))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=4e-5, n_save=2, devices=jax.devices()[:1])
+    scale = np.array([1, 1, 1, V0])
+    final = lambda m, h: trace_boozer(tokamak(), *births, timestep=h, method=m, **kwargs).states[:, -1, :4]
+    reference = final("dopri8", 2e-7)  # error ~1e-15 at this step
+    errors = [np.max(np.abs(final(method, h) - reference) / scale) for h in steps]
+    assert np.polyfit(np.log(steps), np.log(errors), 1)[0] == pytest.approx(order, abs=0.6)
+
+
+def test_full_orbit_magnetic_moment_is_an_adiabatic_invariant(qa_coil_alphas):
+    """mu = m v_perp^2 / 2B oscillates at O(rho/L) with the gyrophase but its gyro-average is conserved
+    (Littlejohn 1983; Cary and Brizard 2009), and the energy is exact in a static field."""
+    field, particles = qa_coil_alphas
+    cold = Particles(initial_xyz=particles.initial_xyz, initial_vparallel_over_v=particles.initial_vparallel_over_v,
+                     energy=40 * 1.602176634e-19, field=field)
+    tracing = Tracing(field=field, model="FullOrbitAdaptative", particles=cold, tmax=2e-5, n_save=400)
+    y = tracing.trajectories
+    B = jax.vmap(jax.vmap(field.AbsB))(y[:, :, :3])
+    vpar = jnp.sum(y[:, :, 3:6] * jax.vmap(jax.vmap(field.B))(y[:, :, :3]), -1) / B
+    mu = np.asarray(cold.mass * (jnp.sum(y[:, :, 3:6]**2, -1) - vpar**2) / (2 * B))
+    windows = mu.reshape(2, 4, 100).mean(-1)  # ten gyro periods each
+    assert np.all(mu.max(1) / mu.min(1) - 1 > 5e-3)
+    assert np.all(np.abs(windows / windows[:, :1] - 1) < 1e-3)
+    assert float(jnp.max(jnp.abs(tracing.energy() / cold.energy - 1))) < 1e-6
+
+
+def test_default_timestep_is_a_transit_fraction_and_survives_grad(qa_coil_alphas):
+    field, particles = qa_coil_alphas
+    speed = float(particles.total_speed.max())
+    kwargs = dict(model="GuidingCenter", tmax=1e-7, n_save=2)
+    assert Tracing(field=field, particles=particles, **kwargs).timestep == pytest.approx(float(field.r_axis) / speed / 400)
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    near_axis = _near_axis_particles()
+    assert Tracing(field=vmec, particles=near_axis, **kwargs).timestep == pytest.approx(
+        vmec.r_axis / float(near_axis.total_speed.max()) / 100)
+
+    def end(x0, energy=particles.energy):
+        launched = Particles(initial_xyz=x0, initial_vparallel_over_v=particles.initial_vparallel_over_v, energy=energy)
+        tracing = Tracing(field=field, particles=launched, **kwargs)
+        assert tracing.timestep == pytest.approx(float(field.r_axis) / speed / 400)  # concrete R0 and speed under grad
+        return tracing.trajectories[0, -1, 0]
+
+    assert jnp.isfinite(jax.grad(end)(particles.initial_xyz)).all()
+    with pytest.raises(ValueError, match="explicit timestep"):
+        jax.grad(lambda energy: end(particles.initial_xyz, energy))(particles.energy)
+
+    seen = []  # an adaptive trace of a traced energy starts from tmax/100 and keeps a generous step budget
+
+    def adaptive_end(energy):
+        launched = Particles(initial_xyz=particles.initial_xyz, energy=energy,
+                             initial_vparallel_over_v=particles.initial_vparallel_over_v)
+        tracing = Tracing(field=field, particles=launched, **{**kwargs, "model": "GuidingCenterAdaptative"})
+        seen.append((tracing.timestep, tracing.max_steps))
+        return tracing.trajectories[0, -1, 0]
+
+    jax.grad(adaptive_end)(particles.energy)
+    assert seen[0] == (pytest.approx(1e-9), 1_000_000)
 
 
 def test_loss_fraction_of_analytic_gyro_orbits():
@@ -1318,8 +1410,8 @@ def test_tracings_with_the_same_shapes_share_one_compiled_solve():
     def trace(currents, shift):
         coils = Coils(curves=create_equally_spaced_curves(n_curves=2, order=2, R=1.0, r=0.4, nfp=2, stellsym=True), currents=currents)
         particles = Particles(initial_xyz=jnp.array([[1.1 + shift, 0., 0.], [1.2 + shift, 0., 0.]]), energy=1e3 * ONE_EV)
-        return Tracing(field=BiotSavart(coils), model='GuidingCenter', particles=particles, maxtime=1e-6, timestep=1e-8,
-                       times_to_trace=10, progress=False).trajectories
+        return Tracing(field=BiotSavart(coils), model='GuidingCenter', particles=particles, tmax=1e-6, timestep=1e-8,
+                       n_save=10, progress=False).trajectories
 
     _compiled_solver.cache_clear()
     first, second = trace([1e6, 2e6], 0.), trace([2e6, 1e6], 0.01)
@@ -1340,7 +1432,7 @@ def test_implicit_solver_guiding_center_trace():
     field = BiotSavart(coils)
     particles = Particles(initial_xyz=jnp.array([[1.23, 0, 0]]), mass=PROTON_MASS, energy=5000 * ONE_EV,
                           initial_vparallel_over_v=[0.8], field=field)
-    tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles, maxtime=1e-7,
-                      timestep=5e-8, times_to_trace=2, atol=1e-4, rtol=1e-4, solver=diffrax.Kvaerno5())
+    tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles, tmax=1e-7,
+                      timestep=5e-8, n_save=2, atol=1e-4, rtol=1e-4, solver=diffrax.Kvaerno5())
     assert tracing.trajectories.shape == (1, 2, 4)
     assert jnp.isfinite(tracing.trajectories).all()

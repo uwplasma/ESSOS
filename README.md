@@ -103,7 +103,7 @@ R0 = jnp.linspace(1.21, 1.40, 8)
 seeds = jnp.array([R0, jnp.zeros_like(R0), jnp.zeros_like(R0)]).T
 
 tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=seeds,
-                  maxtime=8000, times_to_trace=40000, atol=1e-8, rtol=1e-8)
+                  tmax=8000, n_save=40000, atol=1e-8, rtol=1e-8)
 tracing.poincare_plot(shifts=[0.0])
 ```
 
@@ -133,7 +133,7 @@ from essos.dynamics import Particles, Tracing
 particles = Particles(initial_xyz=seeds, mass=ALPHA_PARTICLE_MASS,
                       charge=ALPHA_PARTICLE_CHARGE, energy=4000 * ONE_EV)
 tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles,
-                  maxtime=1e-4, times_to_trace=800, atol=1e-7, rtol=1e-7)
+                  tmax=1e-4, n_save=800, atol=1e-7, rtol=1e-7)
 tracing.plot()
 print(tracing.loss_fractions)
 ```
@@ -156,7 +156,7 @@ with a wall 3 cm outside the LCFS.
 vmec = vmex.essos_vmec_field(wout)                     # or Vmec("wout_*.nc")
 outside = vmex.VmecExtender.from_wout(wout, external_field=coil_grid)
 tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
-                  maxtime=4e-5, exterior_field=outside, wall=0.03)  # gap [m] or a surface
+                  tmax=4e-5, exterior_field=outside, wall=0.03)  # gap [m] or a surface
 print(tracing.wall_hits.mean(), tracing.wall_positions[tracing.wall_hits])
 ```
 
@@ -170,7 +170,7 @@ Transform a VMEC equilibrium with [booz_xform_jax](https://github.com/uwplasma/b
 then trace guiding centres in an axis-regular chart with optional Monte Carlo
 collisions. `method="rk4"` (default), `"dopri5"` or `"dopri8"` take fixed
 steps; `"adaptive"` (Dopri5) and `"adaptive8"` (Dopri8) control each
-particle's step to `tolerance`. This tracer provides forward diagnostics.
+particle's step to `rtol` (with `atol=None` meaning `atol = rtol`). This tracer provides forward diagnostics.
 
 Install the transform extra with `pip install 'essos[booz]'`.
 
@@ -269,8 +269,9 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
 - **Stopping coil-field traces.** Pass `stopping_criteria=LevelsetStoppingCriterion(...)`
   to end Cartesian traces once they leave a prescribed distance from a surface,
   and read the per-line mask from `tracing.boundary_hits`.
-- **Step budget.** `max_steps` (default `1_000_000`) bounds every Diffrax solve,
-  so a trace that cannot finish returns instead of running unbounded.
+- **Step budget and defaults.** `max_steps` (default 16 times the steps of a fixed-step solve) bounds every
+  Diffrax solve and a `RuntimeWarning` reports orbits that did not finish. `timestep` defaults to 1/400 of the
+  transit time `R0 / v` (1/100 on a VMEC field), `rtol` to `1e-8` and `atol` to `rtol`.
 - **Progress bars** are off by default; pass `progress=True` when interactive.
   With `particle_batch_size=n` particles are traced `n` at a time and the bar
   counts completed particles (batches are bypassed under `jax.jit`/`grad`).
@@ -289,6 +290,22 @@ pip install git+https://github.com/uwplasma/pyQSC_JAX.git
 
 Everything else works without it; the near-axis entry points raise with this
 command if it is missing.
+
+## API changes: tracing and optimizer keywords
+
+These renames are breaking and have no aliases. Tracing options are keyword-only after `field`,
+`particles` and `initial_conditions`.
+
+| Old | New |
+| --- | --- |
+| `Tracing(maxtime=...)`, loss functions `maxtime` | `tmax` |
+| `Tracing(times_to_trace=...)`, loss functions `num_steps`, `trace_field_lines(samples=...)` | `n_save` |
+| `trace_boozer`, `trace_field_lines`, `connection_length` `tolerance`; loss functions `trace_tolerance` | `rtol`, plus `atol=None` meaning `atol = rtol` |
+| `optimize_loss_function(maximum_function_evaluations=...)`, `MultiObjectiveOptimizer` option of the same name | `max_nfev` |
+| `optimize_loss_function(tolerance_optimization=...)`, `MultiObjectiveOptimizer` option of the same name | `tol` |
+| `loss_BdotN`, `loss_BdotN_constraint` | `loss_bdotn`, `loss_bdotn_constraint` |
+
+`max_steps` was already the step-cap name and is unchanged; the loss functions now accept it too.
 
 ## Examples
 

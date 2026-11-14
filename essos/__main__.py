@@ -29,9 +29,9 @@ def main(cl_args=sys.argv[1:]):
     max_coil_curvature = 4
     order_Fourier_series_coils = 5
     number_coil_points = order_Fourier_series_coils*10
-    maximum_function_evaluations = 100
+    max_nfev = 100
     number_coils_per_half_field_period = 3
-    tolerance_optimization = 1e-8
+    tol = 1e-8
 
     # Initialize Near-Axis field
     rc=jnp.array([1, 0.045])
@@ -60,19 +60,19 @@ def main(cl_args=sys.argv[1:]):
     coils_initial = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_half_field_period)
 
     # Optimize coils
-    print(f'Optimizing coils with {maximum_function_evaluations} function evaluations.')
+    print(f'Optimizing coils with {max_nfev} function evaluations.')
     time0 = time()
-    coils_optimized = optimize_loss_function(loss_coils_for_nearaxis, initial_dofs=coils_initial.x,
-                                    coils=coils_initial, tolerance_optimization=tolerance_optimization,
-                                    maximum_function_evaluations=maximum_function_evaluations, field_nearaxis=field,
+    coils_optimized = optimize_loss_function(loss_coils_for_nearaxis, initial_dofs=coils_initial.dofs,
+                                    coils=coils_initial, tol=tol,
+                                    max_nfev=max_nfev, field_nearaxis=field,
                                     max_coil_length=max_coil_length, max_coil_curvature=max_coil_curvature,)
     print(f"Optimization took {time()-time0:.2f} seconds")
 
     # Trace fieldlines
     nfieldlines = 6
-    num_steps = 1000
+    n_save = 1000
     tmax = 150
-    trace_tolerance = 1e-7
+    rtol = 1e-7
 
     R0 = jnp.linspace(field.R0[0], 1.05*field.R0[0], nfieldlines)
     Z0 = jnp.zeros(nfieldlines)
@@ -81,9 +81,9 @@ def main(cl_args=sys.argv[1:]):
 
     time0 = time()
     tracing_initial = Tracing(field=BiotSavart(coils_initial), model='FieldLine', initial_conditions=initial_xyz,
-                    maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+                    tmax=tmax, n_save=n_save, rtol=rtol)
     tracing_optimized = Tracing(field=BiotSavart(coils_optimized), model='FieldLine', initial_conditions=initial_xyz,
-                    maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+                    tmax=tmax, n_save=n_save, rtol=rtol)
     print(f"Tracing took {time()-time0:.2f} seconds")
 
     # Plot coils, before and after optimization

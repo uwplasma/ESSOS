@@ -17,14 +17,14 @@ coils = Coils(curves=curves, currents=[current_on_each_coil]*number_coils_per_ha
 
 # Change the parameters of a given coil
 print("Coils before changing parameters:")
-print(coils.x)
+print(coils.dofs)
 
-coils.x = coils.x.at[0].set(1.0)
-coils.x = coils.x.at[1].set(0.4)
-coils.x = coils.x.at[2].set(0.3)
+coils.dofs = coils.dofs.at[0].set(1.0)
+coils.dofs = coils.dofs.at[1].set(0.4)
+coils.dofs = coils.dofs.at[2].set(0.3)
 
 print("Coils after changing parameters:")
-print(coils.x)
+print(coils.dofs)
 
 # Plot the result
 coils.plot()

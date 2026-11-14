@@ -12,8 +12,8 @@ tmax = 1000
 nfieldlines_per_core=3
 nfieldlines = nfieldlines_per_core
 R0 = jnp.linspace(1.21, 1.4, nfieldlines)
-trace_tolerance = 1e-8
-num_steps = 6000
+rtol = 1e-8
+n_save = 6000
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
@@ -28,7 +28,7 @@ initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 # Trace in ESSOS
 time0 = time()
 tracing = block_until_ready(Tracing(field=field, model='FieldLineAdaptative', initial_conditions=initial_xyz,
-                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
+                  tmax=tmax, n_save=n_save, rtol=rtol))
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 

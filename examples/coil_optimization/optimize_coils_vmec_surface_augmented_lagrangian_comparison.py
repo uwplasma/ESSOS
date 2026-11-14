@@ -16,7 +16,7 @@ from functools import partial
 from scipy.optimize import least_squares
 
 # Optimization parameters
-maximum_function_evaluations=100
+max_nfev=100
 
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_input = os.path.join(input_filepath, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc')
@@ -55,9 +55,8 @@ def loss(field, surface):
     return jnp.sum(jnp.abs(bdotn_over_b(surface, field)))
 
 def BdotN_constraint(field,surface,target_tol=1.e-6):
-    bdotn_over_b = bdotn_over_b(surface, field)
-    bdotn_over_b_loss = jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(bdotn_over_b)-target_tol,0.0)))
-    return bdotn_over_b_loss
+    ratio = bdotn_over_b(surface, field)
+    return jnp.sqrt(jnp.sum(jnp.maximum(jnp.square(ratio)-target_tol,0.0)))
 
 def loss_length_constraint(field):
     return jnp.maximum(0, field.coils.length - LENGTH_TARGET)
@@ -148,7 +147,7 @@ lag_state,grad,info=ALM.init(params)
 t_start = time()
 
 i=0
-while i<=maximum_function_evaluations and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
+while i<=max_nfev and (jnp.linalg.norm(grad[0])>omega_tol or alm.norm_constraints(info[2])>eta_tol):
     #One step of ALM optimization
     params, lag_state,grad,info = ALM.update(params,lag_state,grad,info)
     #if i % 5 == 0:
@@ -170,7 +169,7 @@ L_total.dependencies = {"field": init_field}
 
 """ Optimizing the total loss """
 t_start = time()
-res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=maximum_function_evaluations)
+res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=max_nfev)
 t_end = time()
 
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")

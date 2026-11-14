@@ -64,7 +64,7 @@ def test_pytree_grad_and_tracing(field):
     # births committed to one device while the orbits are split over several
     births = jax.device_put(jnp.array([[1.75, 0.0, 0.0], [1.8, 0.0, 0.0]]), jax.devices()[0])
     particles = Particles(initial_xyz=births, energy=3.5e6 * 1.602e-19 / 100)
-    runs = [Tracing(field=g, model="GuidingCenterAdaptative", particles=particles, maxtime=2e-6, times_to_trace=20,
+    runs = [Tracing(field=g, model="GuidingCenterAdaptative", particles=particles, tmax=2e-6, n_save=20,
                     atol=1e-9, rtol=1e-9, devices=jax.devices()[:2]) for g in (field, f)]
     np.testing.assert_allclose(runs[1].trajectories[..., :3], runs[0].trajectories[..., :3], atol=1e-4)
     assert jnp.abs(runs[1].energy() / particles.energy - 1).max() < 1e-6

@@ -50,7 +50,7 @@ print("Gradient:", grad_loss)
 t_start = timer()
 block_until_ready(Loss(dofs))
 t_end = timer()
-print(f"Loss took {t_end - t_start:.4f} seconds. Gradient would take {(t_end - t_start)*(coils.x.size +1):.4f} seconds")
+print(f"Loss took {t_end - t_start:.4f} seconds. Gradient would take {(t_end - t_start)*(coils.dofs.size +1):.4f} seconds")
 
 t_start = timer()
 block_until_ready(Loss.grad(dofs))

@@ -14,8 +14,8 @@ dt=1.e-8
 nparticles_per_core=2
 nparticles = nparticles_per_core
 R0 = jnp.linspace(1.23, 1.27, nparticles)
-trace_tolerance = 1e-7
-num_steps = 3000
+rtol = 1e-7
+n_save = 3000
 mass=PROTON_MASS
 energy=4000*ONE_EV
 
@@ -33,7 +33,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=f
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=field, model='FullOrbit_Boris', particles=particles,
-                  maxtime=tmax, times_to_trace=num_steps,timestep=dt, atol=trace_tolerance,rtol=trace_tolerance)
+                  tmax=tmax, n_save=n_save,timestep=dt, rtol=rtol)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 
