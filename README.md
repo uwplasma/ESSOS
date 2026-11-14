@@ -263,7 +263,7 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
   (`essos.dynamics.VMEC_STATUS`); `trajectories_xyz` and `region` hold the
   whole orbit. A non-finite step ends that orbit as `failed`, with its time.
   Loss fractions use the exact wall, or LCFS, times. Collisions are switched
-  off outside the LCFS. Supplying `condition` replaces these events; it is
+  off outside the LCFS. Supplying `stopping_criteria` replaces these events; it is
   evaluated on `(s, theta, phi, ...)`. See
   [`examples/particle_tracing/trace_particles_vmec_to_wall.py`](examples/particle_tracing/trace_particles_vmec_to_wall.py).
 - **Stopping coil-field traces.** Pass `stopping_criteria=LevelsetStoppingCriterion(...)`
@@ -303,7 +303,8 @@ These renames are breaking and have no aliases. Tracing options are keyword-only
 | `trace_boozer`, `trace_field_lines`, `connection_length` `tolerance`; loss functions `trace_tolerance` | `rtol`, plus `atol=None` meaning `atol = rtol` |
 | `optimize_loss_function(maximum_function_evaluations=...)`, `MultiObjectiveOptimizer` option of the same name | `max_nfev` |
 | `optimize_loss_function(tolerance_optimization=...)`, `MultiObjectiveOptimizer` option of the same name | `tol` |
-| `loss_bdotn`, `loss_bdotn_constraint` | `loss_bdotn`, `loss_bdotn_constraint` |
+| `loss_BdotN`, `loss_BdotN_constraint` | `loss_bdotn`, `loss_bdotn_constraint` |
+| `Tracing(condition=...)` | `stopping_criteria` (one callable or a list) |
 
 `max_steps` was already the step-cap name and is unchanged; the loss functions now accept it too.
 
