@@ -1,3 +1,10 @@
+"""Build coils from a near-axis expansion and trace field lines.
+
+Teaches how to turn a pyQSC-JAX near-axis solution into Fourier coils and plot the Poincare section.
+Needs pyqsc_jax.
+
+Runtime: a few minutes on a CPU (estimate; not run, needs pyqsc_jax).
+"""
 import os
 number_of_processors_to_use = 6 # Parallelization, this should divide nfieldlines
 import jax.numpy as jnp

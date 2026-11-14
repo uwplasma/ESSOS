@@ -1,3 +1,9 @@
+"""Perturb coils with Gaussian errors and trace particles in the result.
+
+Teaches the systematic and statistical samplers of essos.coil_perturbation and how particle orbits change.
+
+Runtime: about 20 seconds.
+"""
 
 import os
 number_of_processors_to_use = 8 # Parallelization, this should divide nparticles

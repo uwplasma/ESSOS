@@ -1,3 +1,10 @@
+"""Full-orbit integrators: accuracy against cost (ESSOS paper).
+
+Teaches how adaptive Runge-Kutta solvers (tolerance sweep) and the fixed-step Boris pusher (steps per gyration
+sweep) trade relative energy error against run time for the Lorentz-force model.
+
+Runtime: 30 minutes or more on a CPU (the tolerance and step sweeps are long).
+"""
 import os
 from time import time
 from jax import block_until_ready

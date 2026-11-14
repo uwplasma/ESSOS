@@ -1,3 +1,9 @@
+"""Guiding-centre tracing in VMEC with a radial electric field.
+
+Teaches how to add E x B drifts from a profile Er(s) (Electric_field_flux) to the VMEC guiding-centre model.
+
+Runtime: about 1-2 minutes on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp

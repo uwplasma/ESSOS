@@ -1,3 +1,10 @@
+"""Optimize coils to match a VMEC boundary surface.
+
+Teaches the basic coil optimization: minimize B.n / |B| on a plasma surface from a VMEC wout file with
+scipy least_squares, then compare the field before and after.
+
+Runtime: 1-2 minutes on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp

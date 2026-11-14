@@ -1,3 +1,9 @@
+"""ESSOS against SIMSOPT: coil geometry and Biot-Savart field.
+
+Teaches agreement and speed of coil curves, B and its derivatives. Needs simsopt.
+
+Runtime: a few minutes with simsopt installed (estimate; not run).
+"""
 import os
 from time import time
 import jax.numpy as jnp

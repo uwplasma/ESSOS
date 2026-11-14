@@ -1,3 +1,9 @@
+"""Derivatives of a particle-loss objective with respect to the coil degrees of freedom.
+
+Teaches how to take jax gradients of the guiding-centre loss (custom_loss).
+
+Runtime: about 20 seconds.
+"""
 
 import os
 from jax import vmap

@@ -1,3 +1,10 @@
+"""Optimize coils for alpha-particle confinement with guiding-centre tracing.
+
+Teaches how to differentiate a particle-loss objective through adaptive guiding-centre orbits and drive it
+with scipy least_squares; the optimized coils are compared with the initial ones by their loss fractions.
+
+Runtime: over 25 minutes on a loaded CPU; reduce NPARTICLES or MAXIMUM_FUNCTION_EVALUATIONS to test.
+"""
 
 import os
 from time import time

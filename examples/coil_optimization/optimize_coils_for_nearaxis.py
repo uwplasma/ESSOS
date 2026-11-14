@@ -1,3 +1,11 @@
+"""Optimize coils to reproduce a near-axis field.
+
+Teaches the coil-optimization loop against a pyQSC-JAX near-axis target: build equally spaced starting coils,
+minimize the field mismatch near the axis with scipy least_squares, and trace field lines in the result.
+Needs pyqsc_jax.
+
+Runtime: a few minutes on a CPU (estimate; not run, needs pyqsc_jax).
+"""
 import os
 number_of_processors_to_use = 4 # Parallelization, this should divide nfieldlines
 from time import time

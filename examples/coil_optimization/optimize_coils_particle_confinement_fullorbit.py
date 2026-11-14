@@ -1,3 +1,11 @@
+"""Optimize coils for alpha-particle confinement with full-orbit tracing.
+
+Teaches how to differentiate a particle-loss objective through the full Lorentz-force orbit and drive it
+with scipy least_squares. Slow, since every evaluation traces the orbits; see the guiding-centre version for
+the cheaper objective.
+
+Runtime: over 25 minutes on a loaded CPU; reduce NPARTICLES or MAXIMUM_FUNCTION_EVALUATIONS to test.
+"""
 
 import os
 from time import time

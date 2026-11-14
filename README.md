@@ -141,6 +141,12 @@ print(tracing.loss_fractions)
 More in [`examples/particle_tracing`](examples/particle_tracing), including
 full-orbit, collisional and electric-field variants.
 
+Two examples estimate alpha losses in a VMEC equilibrium.
+[`losses_fast_boozer.py`](examples/particle_tracing/losses_fast_boozer.py) is the quick one
+(Boozer guiding centres, fixed-step RK4, loss at `s = 1`; seconds, the method behind `vmex --trace`).
+[`losses_research_vmec.py`](examples/particle_tracing/losses_research_vmec.py) is the careful one
+(adaptive Dopri8 in VMEC coordinates, Monte Carlo collisions, energy error and the energy of each lost alpha).
+
 ## Tracing to the wall
 
 Inside the last closed flux surface (LCFS), guiding centres move in VMEC
@@ -292,11 +298,13 @@ command if it is missing.
 
 ## Examples
 
+Every example is a plain script: a docstring saying what it teaches and how long it takes, imports, a parameter block, the workflow, and the results. Edit the parameters and run it.
+
 | Folder | Contents |
 |---|---|
 | [`coil_optimization`](examples/coil_optimization) | VMEC and near-axis targets, augmented Lagrangian, stochastic, multi-objective, particle confinement, finite beta |
 | [`fieldline_tracing`](examples/fieldline_tracing) | Coil and VMEC field lines, Poincare sections, connection length |
-| [`particle_tracing`](examples/particle_tracing) | Guiding-centre and full-orbit tracing, classifiers, electric fields, Boozer vs VMEC |
+| [`particle_tracing`](examples/particle_tracing) | Fast and research-grade alpha losses, guiding-centre and full-orbit tracing, classifiers, electric fields, Boozer vs VMEC |
 | [`particle_tracing_collisions`](examples/particle_tracing_collisions) | Collisional tracing and velocity-distribution statistics |
 | [`comparisons_simsopt`](examples/comparisons_simsopt) | Side-by-side runs with SIMSOPT |
 | [`cross_code_benchmark`](examples/cross_code_benchmark) | Alpha losses against SIMSOPT, FIRM3D and SIMPLE |
