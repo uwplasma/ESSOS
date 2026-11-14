@@ -34,7 +34,7 @@ from essos.perturbations import AnalyticalAlfvenMode
 M, N, OMEGA, EDGE_ALPHA = 15, 7, 399000., 1e-3
 BACKGROUNDS = ("Boozer / Perfect QS", "VMEC / full equilibrium")
 PAPER = {BACKGROUNDS[0]: (.066, .162), BACKGROUNDS[1]: (.083, .194)}  # unperturbed, wave
-WOUT = Path(__file__).resolve().parents[1]/"input_files/wout_LandremanPaul2021_QA_lowres.nc"
+WOUT = Path(__file__).resolve().parents[1]/"input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
 PARTICLES, HISTORICAL, TMAX, SEED = 32, False, 1e-3, 42
 PLOT = None  # path of an image with the loss curves
 

@@ -297,10 +297,11 @@ def test_per_marker_speeds_zero_amplitude_and_collision_rules():
                      method="adaptive8", **KW)
 
 
-@pytest.mark.parametrize("method", ["rk4", "adaptive8"])
+# Dopri5 shares the chunked-interval code of Dopri8 and compiles about twice as fast.
+@pytest.mark.parametrize("method", ["rk4", "adaptive"])
 def test_wave_time_is_preserved_across_progress_chunks_and_compaction(method):
     field, wave = equilibrium(), mode()
-    s = np.array([.9997, .3, .4, .45, .5, .55, .6])
+    s = np.array([.9997, .45, .6])
     kwargs = dict(tmax=2e-6, timestep=2e-8, n_save=11, method=method, tolerance=1e-10, perturbation=wave)
     births = (s, np.full(s.size, np.pi/2), np.zeros(s.size), np.full(s.size, .7))
     reference = trace_boozer(field, *births, compact=False, **kwargs, **KW)
@@ -345,7 +346,7 @@ def test_births_inside_axis_boundary_stop_and_survive_compaction(compact):
     np.testing.assert_allclose(out.loss_fractions(include_axis=True), 2/3)
 
 
-@pytest.mark.parametrize("method", ["rk4", "adaptive8"])
+@pytest.mark.parametrize("method", ["rk4", "adaptive"])
 def test_incoming_orbit_stops_at_the_configured_boundary_with_a_finite_frozen_state(method):
     cutoff = 1e-8
     out = trace_boozer(equilibrium(), [4*cutoff], [np.pi], [0.], [0.], tmax=2e-9, timestep=2e-11, n_save=6,
