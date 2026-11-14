@@ -53,6 +53,14 @@ def test_adaptive_control_rejects_and_is_independent_of_saves(method):
         np.testing.assert_allclose(b.ys,jnp.stack((jnp.cos(b.ts),-jnp.sin(b.ts)),axis=1),atol=3e-8)
 
 
+@pytest.mark.parametrize('method',['dopri5','dopri8'])
+def test_forward_derivative_of_the_final_state(method):
+    # d y(t1)/d y0 of the harmonic oscillator is the rotation matrix; the solver is forward-mode only.
+    final=lambda y0:rk.solve_rk(oscillator,y0,t1=2.,dt0=.5,rtol=1e-11,atol=1e-11,method=method).y
+    jac=jax.jacfwd(final)(jnp.array([1.,.5]))
+    np.testing.assert_allclose(jac,[[np.cos(2.),np.sin(2.)],[-np.sin(2.),np.cos(2.)]],atol=1e-8)
+
+
 def test_fixed_clock_empty_duplicate_saves_and_zero_span():
     for method in ('dopri5','dopri8'):
         solve=lambda *a,**k:rk.solve_rk(*a,method=method,**k)

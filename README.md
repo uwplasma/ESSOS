@@ -388,10 +388,6 @@ failures and error metrics against a tighter reference. A matching Boozer
 transform can be supplied with `--field-cache`; otherwise the optional
 `essos[booz]` dependency computes it.
 
-`examples/benchmarks/benchmark_native_boozer_alpha.py` runs the 8192-alpha QA
-Boozer workload (3.52 MeV, 20 ms) with a native solver or the existing RK4
-tracer and saves traces, statistics and a diagnostic plot.
-
 ## Testing
 
 ```sh
