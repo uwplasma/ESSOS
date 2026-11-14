@@ -9,6 +9,7 @@ import jax.numpy as jnp
 from functools import partial
 import optax
 import optimistix
+from essos.frozen_dofs import FrozenDOFs
 
 class LagrangeMultiplier(NamedTuple):
     """A class containing constrain parameters for Augmented Lagrangian Method"""
@@ -49,7 +50,7 @@ class BaseConstraint:
         self.loss = loss
 
 
-class CompositeConstraint:
+class CompositeConstraint(FrozenDOFs):
     """Mutable composite constraint container.
 
     Exposes `init` and `loss` callables (same as `Constraint`) while
@@ -66,10 +67,16 @@ class CompositeConstraint:
         self._dependencies = {}
         self._starting_dofs = None
         self._dofs_to_pytree = None
+        self._init_frozen_dofs()
 
     def clear_cache(self):
         self._starting_dofs = None
         self._dofs_to_pytree = None
+        self._init_frozen_dofs()
+
+    @property
+    def _dependency_dof_names(self):
+        return tuple(self.arg_names)
 
     @property
     def dependencies(self):
@@ -93,7 +100,8 @@ class CompositeConstraint:
             if not self._dependencies:
                 raise RuntimeError("dependencies must be set on composite before accessing starting_dofs")
             vals = tuple(self._dependencies[name] for name in self.arg_names)
-            self._starting_dofs, self._dofs_to_pytree = jax.flatten_util.ravel_pytree(vals)
+            self._starting_dofs, unraveler = jax.flatten_util.ravel_pytree(vals)
+            self._dofs_to_pytree = lambda dofs: unraveler(self._project_dofs(dofs))
         return self._starting_dofs
 
     @property
@@ -103,7 +111,7 @@ class CompositeConstraint:
         return self._dofs_to_pytree
 
 
-class SelectiveConstraint:
+class SelectiveConstraint(FrozenDOFs):
     """Wraps a constraint with selective named dependencies, similar to custom_loss.
     
     This allows constraints to only depend on a subset of the available degrees of freedom
@@ -154,10 +162,16 @@ class SelectiveConstraint:
         self._dependencies = {}
         self._starting_dofs = None
         self._dofs_to_pytree = None
+        self._init_frozen_dofs()
 
     def clear_cache(self):
         self._starting_dofs = None
         self._dofs_to_pytree = None
+        self._init_frozen_dofs()
+
+    @property
+    def _dependency_dof_names(self):
+        return tuple(self.arg_names)
     
     @property
     def dependencies(self):
@@ -190,7 +204,8 @@ class SelectiveConstraint:
             if not self._dependencies:
                 raise RuntimeError("dependencies must be set before accessing starting_dofs")
             vals = tuple(self._dependencies[name] for name in self.arg_names)
-            self._starting_dofs, self._dofs_to_pytree = jax.flatten_util.ravel_pytree(vals)
+            self._starting_dofs, unraveler = jax.flatten_util.ravel_pytree(vals)
+            self._dofs_to_pytree = lambda dofs: unraveler(self._project_dofs(dofs))
         return self._starting_dofs
 
     @property
@@ -472,6 +487,10 @@ def combine(*args):
                         is_object_like = hasattr(first, 'B') or hasattr(first, 'coils') or hasattr(first, 'dofs') or isinstance(first, dict)
                         looks_flat = (hasattr(first, 'ndim') or hasattr(first, 'shape') or hasattr(first, 'aval'))
                         if a and (looks_flat and not is_object_like):
+                            if combined._frozen_dofs_mask is not None:
+                                all_pytrees = combined.dofs_to_pytree(a[0])
+                                pytrees = tuple(all_pytrees[idx] for idx in s._composite_index_map)
+                                return f(*pytrees, **merged_kw)
                             # Try per-selective unravel first; if it fails, fall back to composite unravel
                             try:
                                 pytrees = s.dofs_to_pytree(a[0])
@@ -500,6 +519,10 @@ def combine(*args):
                         is_object_like = hasattr(first, 'B') or hasattr(first, 'coils') or hasattr(first, 'dofs') or isinstance(first, dict)
                         looks_flat = (hasattr(first, 'ndim') or hasattr(first, 'shape') or hasattr(first, 'aval'))
                         if a and (looks_flat and not is_object_like):
+                            if combined._frozen_dofs_mask is not None:
+                                all_pytrees = combined.dofs_to_pytree(a[0])
+                                pytrees = tuple(all_pytrees[idx] for idx in s._composite_index_map)
+                                return f(p, *pytrees, **merged_kw)
                             try:
                                 pytrees = s.dofs_to_pytree(a[0])
                                 return f(p, *pytrees, **merged_kw)
@@ -853,9 +876,6 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
 
 
 ALM_model_jaxopt_lbfgsb = ALM_model_lbfgs  # former name
-
-
-
 
 
 

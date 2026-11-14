@@ -5,6 +5,7 @@ from essos.losses import custom_loss
 from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 from essos.coils import Coils,Curves
 from essos.fields import BiotSavart
+from essos.surfaces import SurfaceRZFourier
 from essos.objective_functions import loss_coil_length, loss_coil_curvature
 from essos.surfaces import BdotN_over_B
 
@@ -68,6 +69,71 @@ def test_custom_loss_named_unraveler():
     assert jnp.array_equal(gradient_tuple["curve_dofs"], gradient["curve_dofs"])
     assert jnp.array_equal(gradient_tuple["current"], gradient["current"])
     assert jnp.array_equal(gradient_tuple["unused"], gradient["unused"])
+
+
+def test_custom_loss_freeze_dofs_keeps_pytree_and_zeroes_gradient():
+    loss = custom_loss(lambda x: jnp.sum(x**2), "x")
+    loss.dependencies = {"x": jnp.array([1.0, 2.0, 3.0])}
+    loss.freeze_dofs(jnp.array([False, True, False]))
+
+    proposed = jnp.array([4.0, 5.0, 6.0])
+    assert loss(proposed) == 16.0 + 4.0 + 36.0
+    assert jnp.array_equal(loss.dofs_to_pytree(proposed)["x"], jnp.array([4.0, 2.0, 6.0]))
+    assert jnp.array_equal(loss.grad(proposed), jnp.array([8.0, 0.0, 12.0]))
+
+
+def test_composite_loss_freeze_dofs_keeps_dependency_pytree():
+    first = custom_loss(lambda x: jnp.sum(x**2), "x")
+    second = custom_loss(lambda y: jnp.sum(y**2), "y")
+    loss = first + second
+    loss.dependencies = {"x": jnp.array([1.0]), "y": jnp.array([2.0])}
+    loss.freeze_dofs(jnp.array([True, False]))
+
+    proposed = jnp.array([10.0, 3.0])
+    assert jnp.array_equal(loss.dofs_to_pytree(proposed)["x"], jnp.array([1.0]))
+    assert jnp.array_equal(loss.grad(proposed), jnp.array([0.0, 6.0]))
+
+
+def test_freeze_current_selects_one_base_coil_current():
+    curves = Curves(jnp.zeros((2, 3, 3)), n_segments=10, nfp=1, stellsym=False)
+    field = BiotSavart(Coils(curves, currents=jnp.array([1.0, 2.0])))
+    loss = custom_loss(lambda field: jnp.sum(field.coils.dofs_currents**2), "field")
+    loss.dependencies = {"field": field}
+    loss.freeze_current("field", coil=0)
+
+    proposed = loss.starting_dofs + 1.0
+    optimized = loss.dofs_to_pytree(proposed)["field"]
+    assert optimized.coils.dofs_currents[0] == field.coils.dofs_currents[0]
+    assert optimized.coils.dofs_currents[1] == field.coils.dofs_currents[1] + 1.0
+
+
+def test_freeze_coil_and_curve_dofs_select_geometry_leaves():
+    initial_dofs = jnp.arange(18.0).reshape(2, 3, 3)
+    field = BiotSavart(Coils(Curves(initial_dofs, n_segments=10, nfp=1, stellsym=False), currents=jnp.ones(2)))
+    loss = custom_loss(lambda field: jnp.sum(field.coils.dofs_curves**2), "field")
+    loss.dependencies = {"field": field}
+    loss.freeze_coil("field", coil=0)
+    loss.freeze_curve_dofs("field", coil=1, coordinates="z", modes=1)
+
+    optimized = loss.dofs_to_pytree(loss.starting_dofs + 1.0)["field"]
+    assert jnp.array_equal(optimized.coils.dofs_curves[0], field.coils.dofs_curves[0])
+    assert optimized.coils.dofs_curves[1, 2, 1] == field.coils.dofs_curves[1, 2, 1]
+    assert optimized.coils.dofs_curves[1, 0, 0] != field.coils.dofs_curves[1, 0, 0]
+
+
+def test_freeze_surface_modes_selects_rc_and_zs_coefficients():
+    surface = SurfaceRZFourier(
+        rc=jnp.array([10.0, 1.0]), zs=jnp.array([0.0, 2.0]),
+        nfp=1, mpol=1, ntor=0,
+    )
+    loss = custom_loss(lambda surface: jnp.sum(surface.rc**2) + jnp.sum(surface.zs**2), "surface")
+    loss.dependencies = {"surface": surface}
+    loss.freeze_surface_modes("surface", rc=[(1, 0)], zs=[(1, 0)])
+
+    proposed = loss.starting_dofs + 1.0
+    optimized = loss.dofs_to_pytree(proposed)["surface"]
+    assert optimized.rc[1] == surface.rc[1]
+    assert optimized.zs[1] == surface.zs[1]
 
 
 @pytest.mark.xfail(reason='test_build_available_inputs uses the old optimizer loss API (x, dofs_curves=, currents_scale=); BdotN_over_B now lives in essos.surfaces with signature (surface, field). Needs rewrite to new API.', strict=False)
