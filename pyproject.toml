@@ -49,6 +49,7 @@ dependencies = [
     "diffrax>=0.7.0",
     "optax",
     "optimistix>=0.0.11",
+    "lineax>=0.1.0",  # 0.0.8 raises TracerBoolConversionError in the Kvaerno5 Newton solve under jax 0.10
     "scipy",
     "jaxkd",
     "netcdf4",
@@ -56,7 +57,6 @@ dependencies = [
     "f90nml",
     # Used internally by SurfaceRZFourier.to_vtk() and Coils.to_vtk().
     "pyevtk",
-    "tomli; python_version < '3.11'",
 ]
 
 # pyQSC_JAX is not on PyPI, and PyPI rejects any distribution that names a

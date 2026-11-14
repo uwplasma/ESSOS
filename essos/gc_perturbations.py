@@ -15,26 +15,11 @@ import jax.numpy as jnp
 import numpy as np
 
 from essos.boozer import _evaluate, _spline
-from essos.perturbations import AnalyticalAlfvenMode, BoozerPerturbation
+from essos.perturbations import AnalyticalAlfvenMode, BoozerPerturbation, Perturbation
 
 
-class GuidingCenterPerturbation(eqx.Module):
-    """Return (alpha [m], Phi [V]) in the background's native coordinates."""
-
-    def potentials(self, field, point, t):
-        raise NotImplementedError
-
-    def axis_stop_threshold(self):
-        return None
-
-    def derivatives(self, field, point, t):
-        """Potentials and their Jacobian in (x1,x2,x3,t), shape (2,4)."""
-        def evaluate(z):
-            value = self.potentials(field, z[:3], z[3])
-            return value, value
-
-        derivative, value = jax.jacfwd(evaluate, has_aux=True)(jnp.append(point, t))
-        return value, derivative
+class GuidingCenterPerturbation(Perturbation):
+    """Potentials (alpha [m], Phi [V]) at the background's native point."""
 
 
 class AnalyticalVmecAlfvenMode(GuidingCenterPerturbation):
@@ -59,9 +44,7 @@ class AnalyticalVmecAlfvenMode(GuidingCenterPerturbation):
         s, theta, phi = point
         mode = self.mode
         harmonic = s**(mode.m/2)*jnp.sin(mode.m*theta-mode.n*phi+mode.omega*t+mode.phase)
-        envelope = (1. if mode.radial_width is None else
-                    jnp.exp(-((s-mode.radial_center)/mode.radial_width)**2))
-        potential = mode.amplitude*envelope*harmonic
+        potential = mode.amplitude*mode.envelope(s)*harmonic
         B = field.AbsB(point)
         Bcontra = field.B_contravariant(point)
         alpha = (mode.n*Bcontra[2]-mode.m*Bcontra[1])*potential/(mode.omega*B**2)
