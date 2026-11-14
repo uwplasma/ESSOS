@@ -62,6 +62,15 @@ class UniformInduction(BoozerPerturbation):
         return v, zeta
 
 
+class ParallelWave(BoozerPerturbation):
+    """Phi = A sin(omega t - n zeta) in a uniform field: a pure parallel electric field, no alpha."""
+
+    amplitude: float = 5e2
+
+    def potentials(self, field, xyz, t):
+        return jnp.stack([0.*t, self.amplitude*jnp.sin(OMEGA*t-N*xyz[2])])
+
+
 def modB(field, y):
     return field.modB(y[0]**2+y[1]**2, jnp.arctan2(y[1], y[0]), y[2])
 
@@ -172,6 +181,26 @@ def test_uniform_induction_has_the_exact_sign_and_normalization():
     np.testing.assert_allclose(dy[:2], 0., atol=1e-12)
     assert float(dy[2]) == pytest.approx(float(5./40.*POINT[3]), rel=1e-13)
     assert float(dy[3]) == pytest.approx(float(expected), rel=1e-13)
+
+
+def test_landau_resonance_gains_energy_by_the_work_of_the_parallel_field():
+    # Resonance omega - k_par v_par = 0 with k_par v_par = n zeta_dot = n B v_par / G (White, Theory of
+    # Toroidally Confined Plasmas); the wave Hamiltonian obeys d(KE + q Phi)/dt = q dPhi/dt at fixed position.
+    wave, field, v_res = ParallelWave(), equilibrium(uniform=True), OMEGA*40./(N*5.)
+    out = trace_boozer(field, [.3, .3], [.2, .2], [0., 0.], [v_res/SPEED, .5*v_res/SPEED], tmax=2e-5,
+                       timestep=1e-8, n_save=801, method="rk4", perturbation=wave, compact=False, **KW)
+    t, zeta, vpar, speed = out.times, out.states[:, :, 2], out.states[:, :, 3], out.states[:, :, 4]
+    # mu = v_perp^2 / (2 B) is carried unchanged while kinetic energy changes.
+    np.testing.assert_allclose(speed**2-vpar**2, (speed**2-vpar**2)[:, :1]*np.ones(t.size), rtol=1e-11)
+    phase = OMEGA*t-N*zeta
+    work = CHARGE*np.trapezoid(wave.amplitude*OMEGA*np.cos(phase), t, axis=1)
+    potential = CHARGE*wave.amplitude*np.sin(phase)
+    gain = .5*MASS*(vpar[:, -1]**2-vpar[:, 0]**2)+potential[:, -1]-potential[:, 0]
+    np.testing.assert_allclose(gain, work, atol=1e-4*abs(work).max())  # trapezoid quadrature
+    # Stationary phase for the resonant marker gives secular gain; the detuned one only oscillates.
+    dv = abs(vpar[:, -1]-vpar[:, 0])
+    assert dv[0] > 5e4 and dv[0] > 5*dv[1]
+    assert np.ptp(phase[0]) < .5
 
 
 @pytest.mark.parametrize("m", [0, 1, 3, 15, 30])

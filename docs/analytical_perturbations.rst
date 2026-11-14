@@ -78,14 +78,9 @@ Bhattacharjee (2023), Table 2 <https://arxiv.org/html/2306.12531v2#S6.T2>`_: vac
 :math:`m=15`, :math:`n=7`, 399000 rad/s, edge :math:`m\hat\alpha/a=10^{-3}`, 3.52 MeV, 1 ms,
 in a Boozer background without QS-breaking harmonics and in the full VMEC equilibrium
 (scaled to :math:`a=1.7` m, :math:`B_{00}=5.86` T), with the same markers weighted to uniform
-physical volume. It needs ``pip install -e '.[booz]'``:
-
-.. code-block:: bash
-
-   python examples/particle_tracing/paul_alfven_benchmark.py --particles 100 --historical --plot paul.png
-
-``--historical`` applies the sign and alpha-mass conventions of the 2023 SIMSOPT adapter. The
-table is this 100-marker run with the bundled ``wout_LandremanPaul2021_QA_lowres.nc`` (tens of
+physical volume. It needs ``pip install -e '.[booz]'``. Edit ``PARTICLES``, ``HISTORICAL`` and
+``PLOT`` at the top of the script; ``HISTORICAL`` applies the sign and alpha-mass conventions of
+the 2023 SIMSOPT adapter. The table is the run with ``PARTICLES = 100`` and ``HISTORICAL = True`` with the bundled ``wout_LandremanPaul2021_QA_lowres.nc`` (tens of
 minutes on one CPU core); the unperturbed curves of the two backgrounds coincide in the figure.
 Both waves lose 13 markers through the LCFS and eight at the inner stop.
 
