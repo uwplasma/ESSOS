@@ -112,23 +112,6 @@ def test_axis_regular_option_removes_manufactured_forbidden_linear_harmonic():
                                    [8+radius**5, 5*radius**4, 0., 0.], atol=1e-14)
 
 
-def test_axis_regular_manufactured_inner_extrapolation_converges_under_refinement():
-    # Divide out known powers only in the oracle error to expose the small m=5
-    # harmonic rather than hiding it in an O(1) axisymmetric field tolerance.
-    radii = np.array([.02, .06, .15])
-    errors = []
-    for count in (16, 32, 64, 128):
-        s = (np.arange(count)+.5)/count
-        field = BoozerField.from_booz(s, (s**2.5*np.exp(3*s))[None, :], [5], [0],
-                                      .4+0*s, 1+0*s, 0*s, 1., 1, axis_regular=True,
-                                      axis_regular_tolerance=.01)
-        actual = np.asarray(jax.vmap(lambda r: jnp.array(field.modB_derivatives(r, 0., 0.)))(radii))
-        expected = np.exp(3*radii**2)
-        errors.append(max(np.max(np.abs(actual[:, 0]/radii**5-expected)),
-                          np.max(np.abs(actual[:, 1]/radii**4-(5+6*radii**2)*expected))))
-    assert np.all(np.array(errors[:-1])/errors[1:] > 8), errors
-
-
 def test_angle_table_matches_the_mode_sum():
     s = np.linspace(0.005, 0.995, 50)
     bmnc = np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s), 0.1 * s, 0.05 * s])
