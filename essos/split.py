@@ -548,7 +548,9 @@ def trace_split(field, particles, species, *, model='GuidingCenter', tmax, times
         raise ValueError('times must be one-dimensional')
     if execution == 'independent':
         _validate_independent(field, particles, species, model=model, integrator=integrator, adaptive=adaptive, orbit_adaptive=orbit_adaptive, controller=controller, electric_field=electric_field, spatial_diffusion=spatial_diffusion, orbit=orbit, record_steps=record_steps, reuse_orbit_step=reuse_orbit_step, event=event, times=times, interpret=interpret)
-    field_view = _split_field_data(field) if execution == 'independent' and isinstance(field,(BiotSavart,Vmec,BoozerField)) else None
+    if execution == 'independent' and boozer:
+        raise ValueError('independent execution supports coil and VMEC fields; Boozer runs faster on the shared path')
+    field_view = _split_field_data(field) if execution == 'independent' and isinstance(field,(BiotSavart,Vmec)) else None
     moment_vmec_data=None
     if vmec and moment_control and execution=='shared':
         with jax.ensure_compile_time_eval():
@@ -725,10 +727,10 @@ def trace_split(field, particles, species, *, model='GuidingCenter', tmax, times
 
 # Independent GPU execution
 from jax.extend.core import Literal
-from .rk import (_select_one, _kernel_is_finite, _evaluate_inline, _bind_primitive,
-    _A8, _ERROR8, _DENSE8, _pack, _cross, _dot, _coil_geometry,
+from .rk import (kernel_tableau, save_loop, launch_kernel, check_work_bound, _select_one, _kernel_is_finite, _evaluate_inline, _bind_primitive,
+    _pack, _cross, _dot, _coil_geometry,
     _coil_field_values, _coil_rhs_values, _prepare_vmec_data, _vmec_chart,
-    _vmec_series, _vmec_rhs_values, _vmec_xyz_values, _padded_spline, _KernelField)
+    _vmec_series, _vmec_rhs_values, _vmec_xyz_values)
 from .constants import ALPHA_PARTICLE_MASS as M, ALPHA_PARTICLE_CHARGE as Q
 from jax._src import random as jax_random
 threefry = getattr(jax_random, "threefry2x32", None) or jax_random.prng
@@ -795,6 +797,14 @@ def _flatten(function, *examples):
     graph=type(graph)(graph.jaxpr.replace(eqns=kept,outvars=[v if isinstance(v,Literal) else aliases.get(v,v) for v in graph.jaxpr.outvars]),graph.consts)
     live,_=partial_eval.dce_jaxpr(graph.jaxpr,[True]*len(graph.jaxpr.outvars),instantiate=True)
     return type(graph)(live,graph.consts)
+
+def _horner(x, *coefficients):
+    """Horner's rule for ``lax.polynomial`` (JAX >= 0.12), lowest degree first; Pallas has no rule for it."""
+    result = coefficients[-1]
+    for coefficient in coefficients[-2::-1]:
+        result = result * x + coefficient
+    return result
+
 
 def _kernel_integer_power(value, exponent):
     """Use the same power-by-squaring order with literal-safe GPU operations."""
@@ -913,6 +923,13 @@ def _evaluate_kernel(graph, constants, *arguments, scalarize=False):
         elif name == 'pad' and vals[0].size == 1 and (len(p['padding_config']) == 1):
             low, _, _ = p['padding_config'][0]
             result = [jnp.where(jnp.arange(eq.outvars[0].aval.size) == low, vals[0].reshape(()), vals[1])]
+        elif name in ('custom_jvp_call', 'custom_vjp_call', 'closed_call', 'jit', 'pjit'):
+            # JAX 0.12 wraps erf's derivative in a custom_jvp call whose body
+            # carries a uint64 literal; interpret it so _bind_primitive sees it.
+            nested = p.get('call_jaxpr', p.get('fun_jaxpr', p.get('jaxpr')))
+            result = list(_evaluate_kernel(nested.jaxpr, nested.consts, *vals, scalarize=scalarize))
+        elif name == 'polynomial':
+            result = [_horner(*vals)]
         elif name == 'erf':
             result = [_kernel_erf().bind(vals[0])]
         elif name == 'integer_pow':
@@ -1035,17 +1052,11 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
         record=False, adjoint_checkpoint_steps=16, adjoint_orbit_checkpoint_steps=16,
         adjoint_max_accepted_steps=None, adjoint_max_orbit_steps=None, collision_indices=None):
     """Persistent particle loop; factory also supplies the optional predictor."""
-    from jax.experimental import pallas as pl
-    from jax.experimental.pallas import triton as plt
     if not interpret:_register_kernel_placement()
     times = jnp.asarray(times, jnp.float64)
-    nsave, stages, bank_size = (len(times), len(_ERROR8), 16)
-    matrix = np.zeros((bank_size, bank_size))
-    for i, row in enumerate(_A8, 1):
-        matrix[i, :len(row)] = row
-    dense = np.zeros((len(_DENSE8[0]), bank_size))
-    dense[:, :stages] = np.asarray(_DENSE8).T
-    inputs = tuple(arrays) + (jnp.asarray(matrix), jnp.asarray(dense), jnp.asarray(tuple(_ERROR8) + (0.0,) * (bank_size - stages)), jnp.asarray(times), jnp.asarray([0.0, dt0, dtmax, times[-1] if final_time is None else final_time, speed, 2 * tolerance, dt0 if orbit_dt0 is None else orbit_dt0], jnp.float64))
+    nsave = len(times)
+    matrix, error_weights, dense_weights, stages, bank_size, _ = kernel_tableau("dopri8")
+    inputs = tuple(arrays) + (matrix, dense_weights, error_weights, jnp.asarray(times), jnp.asarray([0.0, dt0, dtmax, times[-1] if final_time is None else final_time, speed, 2 * tolerance, dt0 if orbit_dt0 is None else orbit_dt0], jnp.float64))
     capacity = max_pending if adaptive else 1
     noise_size = 1 << (noise_dim - 1).bit_length()
 
@@ -1114,7 +1125,7 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
 
             def polynomial(y, endpoint, bank, fraction):
                 weights = jnp.zeros((bank_size,), y.dtype)
-                for power in range(dense.shape[0]):
+                for power in range(dense_weights.shape[0]):
                     weights = weights * fraction + dref[power, :]
                 result = y + expand(jnp.sum((weights * fraction)[:, None] * bank, axis=0))
                 return jnp.where(fraction == 0, y, jnp.where(fraction == 1, endpoint, result))
@@ -1193,12 +1204,10 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
                 return (t, y, guess, status, trials, rejected, fraction)
 
             def save(y, t, index):
-
-                def store(state):
-                    i = state[0]
+                def store(i):
                     ysout[i, :] = y
-                    return i + 1, tsref[jnp.minimum(i + 1, nsave - 1)]
-                return jax.lax.while_loop(lambda state: (state[0] < nsave) & (state[1] <= t), store, (index, tsref[jnp.minimum(index, nsave - 1)]))[0]
+                    return i + 1
+                return save_loop(lambda i: (i < nsave) & (tsref[jnp.minimum(i, nsave - 1)] <= t), store, index)
             valid_inputs = (first_h > 0) & finite(first_h) & (ceiling > 0) & ~jnp.isnan(ceiling) & (first_orbit_h > 0) & finite(first_orbit_h) & (birth_speed > 0) & finite(birth_speed) & (budget > 0) & finite(budget) & (final_t >= 0) & finite(final_t)
             previous = zero
             for i in range(nsave):
@@ -1319,7 +1328,7 @@ def _prepare_split_kernel(arrays, factory, times, *, adaptive, dt0, dtmax, speed
                 tape_refs['saved_count'][...],tape_refs['status'][...] = index,status.astype(jnp.int32)
 
         shapes = (jax.ShapeDtypeStruct((nsave, 8), jnp.float64), jax.ShapeDtypeStruct((8,), jnp.float64), jax.ShapeDtypeStruct((), jnp.float64), jax.ShapeDtypeStruct((16,), jnp.float64), jax.ShapeDtypeStruct((), jnp.int32), jax.ShapeDtypeStruct((capacity,), jnp.float64), jax.ShapeDtypeStruct((capacity, noise_size), jnp.float64))
-        outputs = pl.pallas_call(kernel, out_shape=shapes + (tape_bank_shapes if record else ()), grid=(), compiler_params=plt.CompilerParams(num_warps=warps), interpret=interpret)(initial, key, *inputs)
+        outputs = launch_kernel(kernel, shapes + (tape_bank_shapes if record else ()), (initial, key, *inputs), warps=warps, interpret=interpret)
         ys, y, t, stats, status = outputs[:5]
         if record:
             banks=outputs[len(shapes):]
@@ -1389,22 +1398,13 @@ def _coefficient_graph(species, full_orbit, mass=M, charge=Q):
 
 def _split_field_data(field):
     """Prepare field views before vmap/JIT, including cached coil properties."""
-    from .fields import BiotSavart, Vmec
-    coil, vmec = isinstance(field, BiotSavart), isinstance(field, Vmec)
-    if coil:
+    from .fields import BiotSavart
+    if isinstance(field, BiotSavart):
         arrays, nc, nq = _coil_geometry(field)
-    elif vmec:
-        with jax.ensure_compile_time_eval():
-            data = _prepare_vmec_data(field)
-        arrays = data.arrays
-    else:
-        if field.table is not None or field.sine_coef is not None:
-            raise ValueError("independent Boozer execution requires fixed cosine Fourier fields")
-        radial, b = _padded_spline(field.r_knots, field.b_coef)
-        flux, profiles = _padded_spline(field.s_knots, field.profile_coef)
-        arrays = (radial, b, flux, profiles, jnp.pad(field.xm, (0, b.shape[1]-len(field.xm))),
-                  jnp.pad(field.xn, (0, b.shape[1]-len(field.xn))))
-    return arrays, (nc, nq) if coil else data.tables if vmec else None
+        return arrays, (nc, nq)
+    with jax.ensure_compile_time_eval():
+        data = _prepare_vmec_data(field)
+    return data.arrays, data.tables
 
 
 class ClassifierStop:
@@ -1475,9 +1475,8 @@ class ClassifierStop:
 def _prepare_split_field(field, species, *, gc, collision_tolerance, speed_floor,
                          event=None, state_size=5, field_view=None,mass=M,charge=Q,spatial_diffusion=False):
     """Reuse the orbit PR's private field views, carrying physical mu per kick."""
-    from .fields import BiotSavart, Vmec
-    from .boozer import guiding_center_rhs
-    coil, vmec = isinstance(field, BiotSavart), isinstance(field, Vmec)
+    from .fields import BiotSavart
+    coil = isinstance(field, BiotSavart)
     if spatial_diffusion and (not gc or not coil):
         raise ValueError('the native coordinate adapter does not yet transform GC spatial diffusion')
     arrays, metadata = _split_field_data(field) if field_view is None else field_view
@@ -1530,7 +1529,7 @@ def _prepare_split_field(field, species, *, gc, collision_tolerance, speed_floor
                 pos = jnp.sqrt(sum(scalar(e, i)**2 for i in range(3)))
                 vel = jnp.abs(scalar(e, 3)) if gc else jnp.sqrt(sum(scalar(e, i)**2 for i in range(3, 6)))
                 return jnp.maximum(pos, vel/speed)/budget
-        elif vmec:
+        else:
             def rhs(y):
                 value = _vmec_rhs_values(frefs, orbit_state(y), metadata, mass, charge,0.,scalar(y,4))
                 return pack(tuple(scalar(value, i) for i in range(4))+(zero, scalar(value, 4), zero, zero))
@@ -1539,19 +1538,6 @@ def _prepare_split_field(field, species, *, gc, collision_tolerance, speed_floor
                 a = _vmec_xyz_values(frefs, orbit_state(y), metadata)
                 b = _vmec_xyz_values(frefs, orbit_state(y-e), metadata)
                 return jnp.maximum(jnp.sqrt(sum((u-v)**2 for u, v in zip(a, b))), jnp.abs(scalar(e, 3))/speed)/budget
-        else:
-            model = _KernelField(frefs, float(field.psi0))
-            def physical(y):
-                value = guiding_center_rhs(model, y, y[4]/mass, mass, charge)
-                return pack(tuple(value[i] for i in range(4))+(zero, zero, zero, zero))
-            graph = _flatten(physical, y0)
-            rhs = lambda y: _evaluate_kernel(graph.jaxpr, graph.consts, y)[0]
-            bg = _flatten(lambda y: model.modB_derivatives(jnp.sqrt(y[0]**2+y[1]**2),
-                          jnp.arctan2(y[1], y[0]), y[2])[0], y0)
-            magnitude = lambda y: _evaluate_kernel(bg.jaxpr, bg.consts, y)[0]
-            def norm(y, e, speed, budget):
-                return jnp.maximum(jnp.sqrt(scalar(e, 0)**2+scalar(e, 1)**2),
-                    jnp.maximum(jnp.abs(scalar(e, 2)), jnp.abs(scalar(e, 3))/speed))/budget
         table_levels = []
         start = event_start+len(event_arrays)
         for values, evaluate in tables:
@@ -1618,9 +1604,7 @@ def _solve_independent(rhs, collision, initial, args=None, *, field, species, gc
                        mass=M,charge=Q,spatial_diffusion=False,spatial_geometry=None,interpret=False,**options):
     from .fields import BiotSavart,Vmec
     for name in ('max_steps', 'max_orbit_steps', 'max_pending'):
-        value = options[name]
-        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value < 1:
-            raise ValueError(name+" must be a positive integer")
+        check_work_bound(name, options[name])
     nstate = initial.size
     screening=getattr(species,'screening_species',None)
     fast=field_view is not None and species.radial_grid is None and (screening is None or screening.radial_grid is None)
@@ -2270,6 +2254,8 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
         return value
     def device_scalar(value,dtype):
         while isinstance(value,np.ndarray) and not value.shape:value=value.item()
+        if np.dtype(dtype)==np.uint64 and not isinstance(value,jax.core.Tracer) and value>=2**63:
+            return np.asarray(value,dtype)  # host constant: _bind_primitive keeps its top bit out of Triton
         return jnp.asarray(value,dtype=dtype)
     def reduced(value,axes,combine):
         result=value
@@ -2466,6 +2452,7 @@ def scalar_graph(graph, constants, *arguments, calls=None, refs=(),memo=None,def
                 if name=='integer_pow':
                     return _kernel_integer_power(device_scalar(xs[0],equation.invars[0].aval.dtype),p['y'])
                 if name=='add_any':return xs[0]+xs[1]
+                if name=='polynomial':return _horner(*(device_scalar(x,v.aval.dtype) for x,v in zip(xs,equation.invars)))
                 if name=='le_to':return jnp.less_equal(*xs)|jnp.isnan(xs[1])
                 return _bind_primitive(equation.primitive,[device_scalar(x,v.aval.dtype) for x,v in zip(xs,equation.invars)],parameters)
             signature=None
@@ -2505,14 +2492,11 @@ def prepare_physics(field, field_view, build, initial, noise_dim,*,predictor_onl
     Only field evaluation has a private adapter. Every collision map, physical
     normalization and moment derivative is the same function as shared JAX.
     """
-    from .rk import _coil_field_values, _dot, _cross, _vmec_quantities, _vmec_series, _KernelField
+    from .rk import _coil_field_values, _dot, _cross, _vmec_quantities, _vmec_series
     from .dynamics import _gc_quantities
     from .fields import BiotSavart, Vmec
-    from .boozer import BoozerField
     calls=KernelCalls();coil=isinstance(field,BiotSavart);vmec=isinstance(field,Vmec)
-    boozer=isinstance(field,BoozerField)
     arrays,metadata=field_view if field_view is not None else ((),None)
-    nsource=len(arrays)
     extra=[]
 
     def flatten_values(values):
@@ -2536,23 +2520,19 @@ def prepare_physics(field, field_view, build, initial, noise_dim,*,predictor_onl
         curl=tuple(curl[i]/magnitude+correction[i]/magnitude**2 for i in range(3))
         curvature=tuple(-v/magnitude for v in _cross(B,curl))
         return (*B,*B,magnitude,*gradient,*curl,*curvature,jnp.asarray(1.,magnitude.dtype))
-    geometry=None if boozer else calls.add(geometric,fast_geometry if coil or vmec else ordinary(geometric),17)
+    geometry=calls.add(geometric,fast_geometry if coil or vmec else ordinary(geometric),17)
 
-    def absb(*point):return (field.modB(*point) if boozer else field.AbsB(jnp.asarray(point)),)
+    def absb(*point):return (field.AbsB(jnp.asarray(point)),)
     def fast_absb(refs,*point):
         if coil:
             B,_=_coil_field_values(refs,point,*metadata,False)
             return (jnp.sqrt(_dot(B,B)),)
         if vmec:return (_vmec_series(refs,point,metadata['bmnc'])[0],)
-        model=_KernelField(refs[:nsource],float(field.psi0))
-        graph=_flatten(lambda r,theta,z:model.modB_derivatives(r,theta,z)[0],jnp.sqrt(point[0]),point[1],point[2])
-        return _evaluate_kernel(graph.jaxpr,graph.consts,jnp.sqrt(point[0]),point[1],point[2])
-    magnitude=calls.add(absb,fast_absb if coil or vmec or boozer else ordinary(absb),1)
-    if not boozer:
-        vector=lambda *point:tuple(field.B_contravariant(jnp.asarray(point)))
-        fast_vector=(lambda refs,*point:_coil_field_values(refs,point,*metadata,False)[0]) if coil else (
-            lambda refs,*point:_vmec_quantities(refs,point,metadata)[1]) if vmec else ordinary(vector)
-        magnetic_vector=calls.add(vector,fast_vector,3)
+    magnitude=calls.add(absb,fast_absb if coil or vmec else ordinary(absb),1)
+    vector=lambda *point:tuple(field.B_contravariant(jnp.asarray(point)))
+    fast_vector=(lambda refs,*point:_coil_field_values(refs,point,*metadata,False)[0]) if coil else (
+        lambda refs,*point:_vmec_quantities(refs,point,metadata)[1]) if vmec else ordinary(vector)
+    magnetic_vector=calls.add(vector,fast_vector,3)
 
     class View:
         def gc_quantities(self,point):
@@ -2570,29 +2550,6 @@ def prepare_physics(field, field_view, build, initial, noise_dim,*,predictor_onl
             return R*jnp.cos(z),R*jnp.sin(z),Z
         position=calls.add(xyz,fast_xyz,3,kernel_jvp=lambda refs,p,d:_vmec_position_tangent(refs,p,d,metadata))
         view.to_xyz=lambda point:jnp.asarray(position(*point))
-    if boozer:
-        def modb(r,theta,z):return tuple(field.modB_derivatives(r,theta,z))
-        def profiles(s):return flatten_values(field.profiles(s))
-        def boozer_fast(fn):
-            def evaluate(refs,*args):
-                model=_KernelField(refs[:nsource],float(field.psi0))
-                graph=_flatten(lambda *x:fn(model,*x),*args)
-                return _evaluate_kernel(graph.jaxpr,graph.consts,*args)
-            return evaluate
-        mod=calls.add(modb,boozer_fast(lambda model,*x:tuple(model.modB_derivatives(*x))),4)
-        prof=calls.add(profiles,boozer_fast(lambda model,s:flatten_values(model.profiles(s))),6)
-        view.modB_derivatives=lambda *point:mod(*point)
-        view.modB=lambda *point:magnitude(*point)[0]
-        view.profiles=lambda s:(prof(s)[:3],prof(s)[3:])
-        view.psi0=field.psi0
-        if spatial_geometry is not None:
-            xyz=lambda *q:tuple(spatial_geometry(jnp.asarray(q)))
-            if hasattr(spatial_geometry,'_kernel_view'):
-                data,evaluate=spatial_geometry._kernel_view();start=nsource+len(extra);extra.extend(data)
-                fast_xyz=lambda refs,*q:evaluate(refs[start:start+len(data)],*q)
-            else:fast_xyz=ordinary(xyz)
-            position=calls.add(xyz,fast_xyz,3)
-            view.to_xyz=lambda point:jnp.asarray(position(*point))
     nfield=len(arrays)+len(extra)
     arrays=tuple(arrays)+tuple(extra)
     rhs,kick,norm,level,limit=build(view)

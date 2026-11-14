@@ -154,7 +154,8 @@ def test_guiding_center_map_has_lorentz_and_speed_generator_moments():
     for h in (.02, .01):
         mean = expectation(kick(h, xi), h, 2)
         # E[dv] = A h + O(h^2): the 2 D_par/v drift enters as a perpendicular kick, v -> sqrt(v1^2 + 4 D_par h).
-        np.testing.assert_allclose(mean[0]-v-drift*h, 0., atol=2e-2*abs(drift)*h)
+        speed_error = mean[0]-v-drift*h
+        np.testing.assert_allclose(speed_error, 0., atol=2e-2*abs(drift)*h)
         np.testing.assert_allclose(mean[1]-xi, -nu*xi*h, rtol=1e-11)               # Lorentz: E[dxi] = -nu xi h
         # E[dxi^2] -> nu(1-3xi^2) h is the l=2 Legendre eigenvalue, 3 nu; errors are O(h^2).
         residual.append([mean[3]-xi**2-nu*(1-3*xi**2)*h, mean[2]-v**2-(2*v*drift+2*c.parallel)*h])
@@ -630,13 +631,12 @@ def test_independent_kernel_matches_shared_execution_in_coil_fields(model, adapt
     assert_equivalent(*run_pair(coil_field(), bath(), model, **options))
 
 
-def test_independent_kernel_matches_shared_execution_in_vmec_and_boozer_fields():
+def test_independent_kernel_matches_shared_execution_in_vmec_fields():
     from essos.fields import Vmec
     vmec = Vmec(str(VMEC_FILE), ntheta=3, nphi=3)
     assert_equivalent(*run_pair(vmec, bath(), adaptive=False, orbit_adaptive=False, spatial_diffusion=False))
-    # Adaptive Boozer with the moment predictor and nonlinear Cartesian spatial kicks.
-    assert_equivalent(*run_pair(tokamak(), bath(), adaptive=True, orbit_adaptive=True, spatial_diffusion=True,
-        spatial_geometry=boozer_geometry()))
+    with pytest.raises(ValueError, match='Boozer'):
+        run_pair(tokamak(), bath(), adaptive=False, orbit_adaptive=False, spatial_diffusion=False)
 
 
 def test_independent_kernel_handles_radial_profiles_events_and_failures():
