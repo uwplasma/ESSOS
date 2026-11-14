@@ -105,6 +105,29 @@ def _cartesian_gc_quantities(field, points):
     return _gc_from_jacobian(value, jacobian)
 
 
+def _biot_savart(points, gamma, gamma_dash, currents, chunk=8):
+    """Biot-Savart field at one point, summed ``chunk`` coils at a time with ``lax.scan``.
+
+    Only chunk x quadrature points are live at once (also in reverse mode, via ``checkpoint``),
+    so temporaries do not grow with the number of coils. The last chunk is filled with zero-current copies.
+    """
+    pad = -gamma.shape[0] % chunk
+    fill = lambda a, v=None: jnp.concatenate([a, jnp.repeat(a[-1:] if v is None else v, pad, axis=0)])
+    xs = [fill(a).reshape(-1, chunk, *a.shape[1:]) for a in (gamma, gamma_dash)]
+    xs.append(fill(currents, jnp.zeros(1, currents.dtype)).reshape(-1, chunk))
+    x = jnp.asarray(points)
+
+    @jax.checkpoint
+    def step(B, c):
+        g, gd, i = c
+        dif = (x - g).T
+        dB = jnp.cross(gd.T, dif, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif, axis=0)**3
+        return B + jnp.einsum("i,bai->b", i, dB, optimize="greedy"), None
+
+    B0 = jnp.zeros(3, jnp.result_type(x, gamma, currents))
+    return 1e-7 * lax.scan(step, B0, xs)[0] / gamma.shape[1]
+
+
 class BiotSavart(MagneticField):
     def __init__(self, coils):
         self.coils = coils
@@ -137,10 +160,7 @@ class BiotSavart(MagneticField):
 
     @jit
     def B(self, points):
-        dif_R = (jnp.array(points) - self.coils.gamma).T
-        dB = jnp.cross(self.coils.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif_R, axis=0)**3
-        dB_sum = jnp.einsum("i,bai", self.coils.currents*1e-7, dB, optimize="greedy")
-        return jnp.mean(dB_sum, axis=0)
+        return _biot_savart(points, self.coils.gamma, self.coils.gamma_dash, self.coils.currents)
 
     @jit
     def b_cyl(self, R, phi, Z):
@@ -274,10 +294,7 @@ class BiotSavart_from_gamma(MagneticField):
     
     @partial(jit, static_argnames=['self'])
     def B(self, points):
-        dif_R = (jnp.array(points) - self.gamma).T
-        dB = jnp.cross(self.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif_R, axis=0)**3
-        dB_sum = jnp.einsum("i,bai", self.currents*1e-7, dB, optimize="greedy")
-        return jnp.mean(dB_sum, axis=0)
+        return _biot_savart(points, self.gamma, self.gamma_dash, self.currents)
     
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):

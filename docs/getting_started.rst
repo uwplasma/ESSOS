@@ -79,6 +79,20 @@ The JAX-native ``loss_coil_separation`` and ``loss_coil_surface_distance``
 functions in ``essos.objective_functions`` provide blockwise, differentiable
 coil-clearance penalties; ``block_size`` bounds their temporary memory.
 
+Biot-Savart memory
+------------------
+
+``BiotSavart.B`` sums the filament field over coils eight at a time with
+``lax.scan`` (with ``jax.checkpoint``, so reverse mode keeps no per-coil
+residuals). The temporaries of the field, its Jacobian and its gradient with
+respect to the coil dofs therefore grow far more slowly with the number of
+coils than the dense sum over all coils at once, at unchanged accuracy
+(relative difference 1e-15). ``docs/biot_savart_scaling.py`` regenerates the
+figure.
+
+.. image:: _static/biot_savart_scaling.png
+   :alt: Peak memory and warm time of the Biot-Savart Jacobian versus the number of coils
+
 Tracing many VMEC orbits
 ------------------------
 

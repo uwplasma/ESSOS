@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from pathlib import Path
 from essos.coils import Coils, Curves
-from essos.fields import BiotSavart, Vmec, VMEC_WOUT_ARRAYS
+from essos.fields import BiotSavart, BiotSavart_from_gamma, _biot_savart, Vmec, VMEC_WOUT_ARRAYS
 import jax
 import jax.numpy as jnp
 from jax import random, vmap
@@ -19,6 +19,18 @@ class MockCoils:
         self.gamma_dash = random.uniform(random.PRNGKey(0), (3, 3, 3))
         self.gamma_dashdash = random.uniform(random.PRNGKey(0), (3, 3, 3))
         self.dofs_curves = random.uniform(random.PRNGKey(0), (3, 3, 3))
+
+def test_biot_savart_scan_matches_direct_sum():
+    coils = MockCoils()  # 3 coils, so the last scan chunk is padded
+    point = jnp.array([0.3, -0.2, 0.5])
+    dif = point - coils.gamma
+    direct = 1e-7 * jnp.mean(jnp.einsum("i,iqk->qk", coils.currents, jnp.cross(coils.gamma_dash, dif)
+                                        / jnp.linalg.norm(dif, axis=-1, keepdims=True)**3), axis=0)
+    for chunk in (2, 3, 8):  # padded, exact and mostly padded chunks
+        B = _biot_savart(point, coils.gamma, coils.gamma_dash, coils.currents, chunk=chunk)
+        assert jnp.allclose(B, direct, rtol=1e-12)
+    field = BiotSavart_from_gamma(coils.gamma, coils.gamma_dash, currents=coils.currents)
+    assert jnp.allclose(field.B(point), direct, rtol=1e-12)
 
 def test_biot_savart_initialization():
     coils = MockCoils()
@@ -440,6 +452,41 @@ def test_biot_savart_circular_loop_current_and_radius_sensitivities():
         current_tangent, expected_current, rtol=2e-11, atol=current_atol)
     assert jnp.allclose(
         radius_tangent, expected_radius, rtol=2e-11, atol=radius_atol)
+
+
+def test_biot_savart_circular_loop_off_axis_quadrature_converges():
+    """The periodic trapezoid rule converges geometrically to the converged sum."""
+    point = jnp.array([0.7, 0.3, 0.4])
+    B = lambda n: BiotSavart(_circular_loop(n_segments=n)).B(point)
+    errors = [jnp.linalg.norm(B(n) - B(256)) for n in (8, 16, 32)]
+    assert errors[0] > 50 * errors[1] and errors[1] > 1e3 * errors[2]
+
+
+def test_biot_savart_is_divergence_and_curl_free_away_from_the_coil():
+    """Maxwell in vacuum: div B = 0 and curl B = 0 off the filament."""
+    field = BiotSavart(_circular_loop(n_segments=128))
+    for point in (jnp.array([0.7, 0.3, 0.4]), jnp.array([1.9, -0.5, 0.2])):
+        jac = jax.jacfwd(field.B)(point)
+        scale = jnp.max(jnp.abs(jac))
+        assert abs(jnp.trace(jac)) < 1e-11 * scale
+        assert jnp.max(jnp.abs(jac - jac.T)) < 1e-11 * scale
+
+
+def test_biot_savart_ampere_law_on_a_loop_linking_one_coil():
+    """The circulation of B is mu0 I around the filament and 0 around nothing."""
+    radius, current = 1.3, 2.5e5
+    field = BiotSavart(_circular_loop(radius, current, n_segments=128))
+    t = jnp.linspace(0.0, 2.0 * jnp.pi, 256, endpoint=False)
+
+    def circulation(center):
+        # circle of radius 0.5 in the xz plane, counterclockwise about -y, the sense of the current at x = R
+        pos = center + 0.5 * jnp.stack((jnp.cos(t), 0.0 * t, jnp.sin(t)), axis=1)
+        tangent = 0.5 * jnp.stack((-jnp.sin(t), 0.0 * t, jnp.cos(t)), axis=1)
+        return jnp.sum(vmap(field.B)(pos) * tangent) * (t[1] - t[0])
+
+    mu0_current = 4.0e-7 * jnp.pi * current
+    assert jnp.isclose(circulation(jnp.array([radius, 0.0, 0.0])), -mu0_current, rtol=1e-9)
+    assert abs(circulation(jnp.zeros(3))) < 1e-9 * mu0_current
 
 
 def _asymmetric_vmec_arrays(phase=0.0, ntor=0):
