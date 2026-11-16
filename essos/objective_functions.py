@@ -241,6 +241,46 @@ def loss_quasi_symmetry(field, surface):
     return _surface_mean(surface, residual**2)
 
 
+def loss_quasi_symmetry_two_term(field, surface, helicity_m=1, helicity_n=0, *,
+                                lambda_mpol=None, lambda_ntor=None):
+    r"""Vacuum two-term QS loss for helicity ``(M, N) = (m, n*nfp)``.
+
+    Reconstruct signed grad(psi) from the fitted straight-field-line angle.
+    The helicity integers are static targets, not differentiation variables.
+    ``field.B(xyz)`` and ``field.dAbsB_by_dX(xyz)`` must return Cartesian B
+    and the Cartesian gradient of its magnitude. A flux-coordinate ``Vmec``
+    field needs a Cartesian adapter before using this loss.
+    This assumes a vacuum field with zero enclosed toroidal current (I=0),
+    a regular flux surface, nonzero B^phi, and a positive fitted angle Jacobian.
+    The fit does not enforce
+    these conditions: accompany the loss with B.n and inspect its diagnostics.
+    Use independent lambda cutoffs when the boundary basis is too small.
+    """
+    if helicity_m == 0 and helicity_n == 0:
+        raise ValueError('The quasisymmetry helicity cannot be (0, 0)')
+    fit = iota_approx_on_surface(surface, field, lambda_mpol=lambda_mpol,
+                                 lambda_ntor=lambda_ntor, return_diagnostics=True)
+    at = 1 + fit['lambda_theta']
+    ap = fit['lambda_phi'] - fit['iota']
+    et, ep = surface.gammadash_theta, surface.gammadash_phi
+    gtt, gpp = jnp.sum(et*et, axis=-1), jnp.sum(ep*ep, axis=-1)
+    gtp = jnp.sum(et*ep, axis=-1)
+    det = gtt*gpp - gtp**2
+    grad_alpha = ((gpp*at - gtp*ap)[..., None]*et
+                  + (gtt*ap - gtp*at)[..., None]*ep) / det[..., None]
+    b = B_on_surface(surface, field)
+    bn = jnp.sum(b*surface.unitnormal, axis=-1)
+    tangent_b = b - bn[..., None]*surface.unitnormal
+    grad_psi = jnp.cross(grad_alpha, tangent_b) / jnp.sum(grad_alpha**2, axis=-1)[..., None]
+    G = _surface_mean(surface, jnp.sum(b*ep, axis=-1))
+    grad_b = jax.vmap(field.dAbsB_by_dX)(surface.gamma.reshape(-1, 3)).reshape(b.shape)
+    M, N = helicity_m, helicity_n*surface.nfp
+    residual = ((N - M*fit['iota'])*jnp.sum(jnp.cross(b, grad_b)*grad_psi, axis=-1)
+                - M*G*jnp.sum(b*grad_b, axis=-1)) / jnp.linalg.norm(b, axis=-1)**3
+    weight = jnp.linalg.norm(jnp.cross(et, ep), axis=-1) / jnp.linalg.norm(grad_psi, axis=-1)
+    return _surface_mean(surface, weight*residual**2) / _surface_mean(surface, weight)
+
+
 def loss_iota_approx(field, surface, iota_target, *, lambda_mpol=None, lambda_ntor=None):
     """
     Penalize the distance between the surface rotational transform and a target.
