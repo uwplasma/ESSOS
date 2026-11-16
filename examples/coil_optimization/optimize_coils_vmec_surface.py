@@ -30,8 +30,9 @@ CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.1
 NORMAL_FIELD_WEIGHT = 1.
 
 """ Creating the loss functions """
-def loss(field, surface):
-    return jnp.sum(jnp.abs(BdotN_over_B(surface, field)))
+def loss(field, surface):  # one residual per surface point, so least squares gets a Jacobian row for each
+    normal_field = BdotN_over_B(surface, field)
+    return normal_field / jnp.sqrt(normal_field.size)
 
 def loss_length(field):
     return jnp.mean(jnp.maximum(0, field.coils.length - LENGTH_TARGET))
@@ -50,7 +51,7 @@ L_total.dependencies = {"field": init_field}
 
 """ Optimizing the total loss """
 t_start = time()
-res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=200)
+res = least_squares(L_total.residuals, L_total.starting_dofs, L_total.jacobian, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=200)
 t_end = time()
 
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")
