@@ -1181,6 +1181,28 @@ def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and
     np.testing.assert_allclose(grad_s @ ds + grad_p @ dparams, forward, rtol=1e-5)
 
 
+def test_vmec_non_finite_exterior_field_has_a_finite_masked_gradient_in_both_modes():
+    """Orbits stopped by a non-finite exterior field contribute exactly zero to the gradient, as in forward mode."""
+    import diffrax
+    from essos.fields import ExternalField
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    above = lambda xyz, params: _toroidal_source(xyz, params) * jnp.where(xyz[:, 2:] > 0.0, jnp.nan, 1.0)
+
+    def objective(params, adjoint=None):
+        particles = Particles(initial_xyz=jnp.asarray(STRIKING[0]), initial_vparallel_over_v=jnp.asarray(STRIKING[1]))
+        tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3e-6, timestep=1e-9,
+                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(above, params), wall=0.05,
+                          adjoint=adjoint)
+        assert tracing.failed.any() and not tracing.failed.all()
+        return 1e6 * jnp.sum(jnp.where(jnp.isfinite(tracing.wall_times), tracing.wall_times, 0.0))
+
+    params = jnp.array([60.0, 0.5])
+    reverse = jax.grad(objective)(params)
+    forward = jax.jvp(lambda p: objective(p, diffrax.ForwardMode()), (params,), (jnp.array([0.0, 1.0]),))[1]
+    assert jnp.isfinite(reverse).all()
+    np.testing.assert_allclose(reverse[1], forward, rtol=1e-5)
+
+
 def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_reverse_mode():
     """Saves of orbits that are not in a segment must not put NaN partials into the VMEC coefficient gradients."""
     import diffrax
