@@ -2,7 +2,7 @@ import os
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from essos.fields import BiotSavart
+from essos.fields import BiotSavart, InterpolatedField
 from essos.coils import Coils
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, ONE_EV
 from essos.dynamics import Tracing, Particles
@@ -17,11 +17,20 @@ R0 = jnp.linspace(1.23, 1.27, nparticles)
 atol = 1e-7
 rtol = 1e-7
 energy=4000*ONE_EV
+grid = 32  # interpolation nodes in R and Z, and per field period in phi; None traces Biot-Savart directly
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
 coils = Coils.from_json(json_file)
 field = BiotSavart(coils)
+if grid is not None:
+    # For long traces, tabulate the coil field once and trace in the spline (several times faster per particle).
+    # The trace is repeated on a 1.5x finer grid below; the gap between the two bounds the interpolation error.
+    box = dict(R=(0.8, 1.5), Z=(-0.35, 0.35), nfp=coils.nfp, stellsym=True)
+    time0 = time()
+    fine = InterpolatedField(field, nr=3 * grid // 2, nz=3 * grid // 2, nphi=3 * grid // 2, **box)
+    field = InterpolatedField(field, nr=grid, nz=grid, nphi=grid, **box)
+    print(f"Interpolation tables took {time()-time0:.2f} seconds", flush=True)
 
 # Initialize particles
 Z0 = jnp.zeros(nparticles)
@@ -35,6 +44,11 @@ tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=partic
                   maxtime=tmax, timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
+if grid is not None:
+    check = Tracing(field=fine, model='GuidingCenterAdaptative', particles=particles,
+                    maxtime=tmax, timestep=timestep, times_to_trace=times_to_trace, atol=atol, rtol=rtol)
+    gap = jnp.max(jnp.linalg.norm(check.trajectories[:, -1, :3] - trajectories[:, -1, :3], axis=-1))
+    print(f"Largest end-point difference between the {grid} and {3 * grid // 2} grids: {gap:.1e} m")
 
 # Plot trajectories, velocity parallel to the magnetic field, and energy error
 fig = plt.figure(figsize=(9, 8))
