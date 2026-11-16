@@ -47,12 +47,11 @@ RESTART_FROM = False
 restart_filepath = os.path.join(os.path.dirname(__file__), "output_coils_surface_opt/test_QA_iota0p4_it00")
 SURFACE_MPOL = 1; SURFACE_NTOR = 1   # maximum boundary m and |n|
 VMEC_MPOL = SURFACE_MPOL + 2; VMEC_NTOR = SURFACE_NTOR + 2
-# Manual continuation: restart modes 2 through 5 from the preceding mode folder;
-# set RESTART_FROM, restart_filepath, output_filepath, and boundary modes each run.
-# Two-term QA was tested with QS_WEIGHT=2e5: 80 steps at mode 1, 40 each at modes 2–5,
-# then a same-mode-5 80-step polish and a fresh 240-step continuation (history reset).
-# Polish/continuation: IOTA_MODES=12, ntheta=64, nphi=65, N_SEGMENTS=192,
-# CURVATURE_SEGMENTS=192; set MAXITER=80, then 240. Budgets do not guarantee convergence.
+# Start mode 1 cold, then restart modes 2 through 7 from each preceding mode folder.
+# Set RESTART_FROM, restart_filepath, output_filepath, and boundary modes each run.
+# Both QS objectives reached FTOL=1e-3 at every stage with the settings below.
+# Two-term QA uses QS_WEIGHT=2e5. Keep separate output folders for each objective.
+# FTOL measures relative objective change, not QS error or gradient convergence.
 # Check final QA/iota with denser ESSOS quadrature and refined VMEX equilibria.
 IOTA_MODES = 6 if max(SURFACE_MPOL, SURFACE_NTOR) == 1 else max(8, max(SURFACE_MPOL, SURFACE_NTOR) + 5)
 # Iota-fit cutoffs, also used by the optional two-term QS objective.
@@ -81,7 +80,7 @@ COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
 
 # Six physical objectives: normal field, QS, iota, section area, length, curvature.
 CONSTRAINT_WEIGHT = 3e6  # Common weight for B.n/B, target iota, and section area.
-QS_WEIGHT = 2.2493766610787115e4  # Cold-gradient calibration; mode-ladder comparison ongoing.
+QS_WEIGHT = 2.2493766610787115e4  # Calibrated against the two-term cold gradient.
 LENGTH_WEIGHT = 30.; LENGTH_TARGET = 50.
 CURVATURE_WEIGHT = 1500.; CURVATURE_TARGET = 2.
 CURVATURE_SEGMENTS = max(128, 16 * FOURIER_ORDER)  # Independent curvature quadrature.
@@ -92,7 +91,8 @@ SCALE_FIELD = 2.18
 SCALE_SURFACE = 1.
 
 # Numerical method parameters --------------------------------------------------------
-MAXITER = 80 if max(SURFACE_MPOL, SURFACE_NTOR) == 1 else 40
+MAXITER = 1000
+FTOL = 1e-3
 
 
 # ====================================================================================
@@ -218,7 +218,7 @@ else:
     res = minimize(scaled_value_and_grad, x_initial,
                    jac=True, method="L-BFGS-B", bounds=bounds,
                    callback=lambda intermediate_result: print(f"Cost: {intermediate_result.fun:.6e}"),
-                   options={'maxiter': MAXITER, 'maxcor': 50, 'maxls': 30, 'ftol': 1e-12, 'gtol': 1e-8})
+                   options={'maxiter': MAXITER, 'maxfun': 100000, 'maxcor': 50, 'maxls': 30, 'ftol': FTOL, 'gtol': 1e-8})
     res.x = np.asarray(res.x * x_scale_optimization)
     jnp.save(os.path.join(output_filepath, "res_x.npy"), res.x)  # Retain the checkpoint on failure.
     print("Optimizer stop:", res.status, res.message)
@@ -398,7 +398,7 @@ print("Base-coil currents (optimized):", opt_coils.dofs_currents_raw)
 # The input parameters are grouped as in the INPUT DATA section and written as "NAME = value" lines,
 # so the file can later be read back to set up a run.
 RUN_PARAMETERS = {
-    "Run control":          ["EXPORT", "RUN_VMEX", "VMEC_MPOL", "VMEC_NTOR", "LOAD_RESULT", "MAXITER"],
+    "Run control":          ["EXPORT", "RUN_VMEX", "VMEC_MPOL", "VMEC_NTOR", "LOAD_RESULT", "MAXITER", "FTOL"],
     "Continuation":         ["RESTART_FROM", "restart_filepath", "SURFACE_MPOL", "SURFACE_NTOR"],
     "Initial surface":      ["ntheta", "nphi"],
     "Coils":                ["N_COILS", "FOURIER_ORDER", "LARGE_R", "SMALL_R", "NFP", "N_SEGMENTS",
