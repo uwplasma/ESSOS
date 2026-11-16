@@ -88,6 +88,9 @@ optimized = L.dofs_to_pytree(result.x)["field"].coils
 
 More in [`examples/coil_optimization`](examples/coil_optimization).
 
+The same fit, and a trace in the result, run from a TOML file with
+`essos run.toml`; `python -m essos` with no argument prints the keys.
+
 ## Field-line tracing
 
 ![Poincare section of a coil field](docs/readme_fieldlines.png)
