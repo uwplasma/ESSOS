@@ -828,13 +828,18 @@ class _EventSteps(PIDController):
     events: tuple = eqx.field(default=(), static=True)
     floor: float = eqx.field(default=1e-10, static=True)
 
+    # The state also holds the next step, so a solve stopped at its step budget resumes where it left off.
+    def init(self, terms, t0, t1, y0, dt0, *rest):
+        tnext, state = super().init(terms, t0, t1, y0, dt0, *rest)
+        return tnext, (*state, tnext - t0)
+
     def adapt_step_size(self, t0, t1, y0, y1, *rest):
-        keep, next_t0, next_t1, jump, state, result = super().adapt_step_size(t0, t1, y0, y1, *rest)
+        keep, next_t0, next_t1, jump, state, result = super().adapt_step_size(t0, t1, y0, y1, *rest[:-1], rest[-1][:3])
         for g in self.events:
             a, b = lax.stop_gradient(g(y0)), lax.stop_gradient(g(y1))
             coarse = (a * b > 0) & (jnp.minimum(jnp.abs(a), jnp.abs(b)) > self.floor) & (jnp.abs(b - a) > 0.5 * jnp.minimum(jnp.abs(a), jnp.abs(b)))
             keep, next_t0, next_t1 = keep & ~coarse, jnp.where(coarse, t0, next_t0), jnp.where(coarse, t0 + (t1 - t0) / 2, next_t1)
-        return keep, next_t0, next_t1, jump, state, result
+        return keep, next_t0, next_t1, jump, (*state, next_t1 - next_t0), result
 
 
 def _failed_event(t, y, args, **kwargs):
@@ -978,12 +983,13 @@ class _Static:
 
 
 @lru_cache(maxsize=16)
-def _compiled_solver(static, place):
-    """``jit(vmap(trajectory))`` of every Tracing that has the static part ``static`` and these devices."""
+def _compiled_solver(static, place, rounds=False):
+    """``jit(vmap(trajectory))`` (or of ``_advance`` with ``rounds``) of every Tracing that has the static part
+    ``static`` and these devices."""
     def solve(y0, keys, arrays):
         tracing = object.__new__(Tracing)
         tracing.__dict__.update(_unwrap(eqx.combine(arrays, static.tree)))
-        return vmap(tracing._trajectory_function())(y0, keys)
+        return vmap(tracing._advance if rounds else tracing._trajectory_function())(y0, keys)
     if isinstance(place, NamedSharding):
         every = NamedSharding(place.mesh, PartitionSpec())
         return jit(solve, in_shardings=(place, place, every), out_shardings=place)
@@ -1000,7 +1006,7 @@ def _unwrap(tree):
                               is_leaf=lambda x: isinstance(x, _ParticlesNode))
 
 
-def _batch_solver(tracing, place):
+def _batch_solver(tracing, place, rounds=False):
     """``solve(y0, keys)`` of ``tracing``, compiled once for all Tracings that differ only in array values.
 
     Arrays (fields' coefficients, particles, tolerances held as arrays) are arguments of the compiled function;
@@ -1009,7 +1015,7 @@ def _batch_solver(tracing, place):
     and a ``Vmec`` mutated in place keeps the compilation made with its earlier values: build a new one instead.
     """
     arrays, static = eqx.partition(_wrap(dict(vars(tracing))), lambda x: isinstance(x, (jax.Array, np.ndarray)))
-    solver = _compiled_solver(_Static(static), place)
+    solver = _compiled_solver(_Static(static), place, rounds)
     if isinstance(place, NamedSharding):  # replicated over the devices that share the particles
         arrays = tree_util.tree_map(lambda x: _place_on_devices(x, NamedSharding(place.mesh, PartitionSpec())), arrays)
     return lambda y0, keys: solver(y0, keys, arrays)
@@ -1021,7 +1027,7 @@ class Tracing():
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
                  solver=None, stopping_criteria=None, progress=True, devices=None,
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
-                 particle_batch_size=None, adjoint=None):
+                 particle_batch_size=None, adjoint=None, step_budget=None):
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")
@@ -1102,6 +1108,14 @@ class Tracing():
                 or particle_batch_size <= 0):
             raise ValueError("particle_batch_size must be a positive integer or None")
         self.particle_batch_size = None if particle_batch_size is None else int(particle_batch_size)
+        # With step_budget, particles advance at most that many steps per round, finished ones (at maxtime or a
+        # stopping criterion) leave the batch, and the rest continue. A vmapped solve otherwise runs every particle to
+        # the step count of the slowest. Not under a JAX transformation, VMEC's default events or FullOrbit_Boris.
+        if step_budget is not None and (model in ('FullOrbit_Boris', 'GuidingCenterCollisionsMuAdaptative')
+                                        or self._vmec_default or int(step_budget) <= 0):
+            raise ValueError("step_budget must be a positive integer, and not for FullOrbit_Boris, "
+                             "GuidingCenterCollisionsMuAdaptative or VMEC guiding centers without a condition")
+        self.step_budget = None if step_budget is None else int(step_budget)
         # Diffrax's meter is an unordered callback, which the vmapped while loop of
         # the VMEC segment path rejects; that path reports progress by batches only.
         self.progress_meter = (TqdmProgressMeter() if self.progress and self.particle_batch_size is None
@@ -1299,6 +1313,8 @@ class Tracing():
         y0, keys = self.initial_conditions, self.particles.random_keys if self.particles else None
         n = len(y0)
         traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys, self.args, self.exterior_field)))
+        if self.step_budget is not None and not traced:
+            return self._trace_rounds(y0, keys)
         batch = n if self.particle_batch_size is None or traced else min(self.particle_batch_size, n)
         # Sharding pays off for plain traces. A differentiated trace stays on one device: XLA 0.6 aborts compiling
         # a gradient through a while loop sharded over several CPU devices.
@@ -1331,6 +1347,48 @@ class Tracing():
                 bar.update(done)
         return tree_util.tree_map(lambda *x: jnp.asarray(np.concatenate(x)), *results)
 
+    def _trace_rounds(self, y0, keys):
+        """Trace in rounds of at most step_budget steps, each with the particles not yet finished, on one device.
+
+        A round's batch is padded to a power of two, so at most log2(n) + 1 batch sizes compile.
+        """
+        n, times = len(y0), np.asarray(self.times)
+        terms, solver, controller = self._terms(None if keys is None else keys[0])
+        start = controller.init(terms, 0.0, self.maxtime, y0[0], self.timestep, self.args, solver.func,
+                                solver.error_order(terms))[1]
+        state = (np.array(y0), np.zeros(n), tree_util.tree_map(lambda x: np.repeat(np.asarray(x)[None], n, 0), start))
+        solve, ys, masks = _batch_solver(self, self.devices[0], rounds=True), None, None
+        active = np.arange(n)
+        for _ in range(-(-self.max_steps // self.step_budget)):  # max_steps still bounds every orbit
+            if not active.size:
+                break
+            index = np.append(active, np.full((1 << (active.size - 1).bit_length()) - active.size, active[-1]))
+            out, new, done, mask = tree_util.tree_map(np.asarray, solve(
+                tree_util.tree_map(lambda x: x[index], state), None if keys is None else keys[index]))
+            m, t0 = active.size, state[1][active]
+            if ys is None:
+                ys, masks = np.empty((n,) + out.shape[1:]), tree_util.tree_map(lambda x: np.zeros((n,), bool), mask)
+            ys[active] = np.where((times[None, :] >= t0[:, None])[..., None], out[:m], ys[active])
+            for x, y in zip(tree_util.tree_leaves(state), tree_util.tree_leaves(new)):
+                x[active] = y[:m]
+            for x, y in zip(tree_util.tree_leaves(masks), tree_util.tree_leaves(mask)):
+                x[active] = y[:m]
+            active = active[~done[:m]]
+        ys = jnp.asarray(ys)
+        if self._axis_regular:
+            ys = vmap(vmap(_from_axis_regular))(ys)
+        masks = tree_util.tree_map(jnp.asarray, masks)
+        return ys if self.stopping_criteria is None else (ys, masks)
+
+    def _advance(self, state, key):
+        """One round of _trace_rounds for one particle: (saves, state, finished, event mask)."""
+        y0, t0, controller_state = state
+        terms, solver, controller = self._terms(key)
+        solution = self._solve(terms, solver, controller, t0, y0, self.args, Event(self.condition), resume=True,
+                               controller_state=controller_state)
+        return (solution.ys[0], (solution.ys[1][-1], solution.ts[1][-1], solution.controller_state),
+                solution.result != diffrax.RESULTS.max_steps_reached, solution.event_mask)
+
     def _terms(self, key, flag=False, events=()):
         """Diffrax terms, solver and step-size controller of self.model (with _with_failure_flag if ``flag``)."""
         flagged = (lambda f, drift=True: _with_failure_flag(f, drift)) if flag else (lambda f, drift=True: f)
@@ -1358,15 +1416,20 @@ class Tracing():
                                      dtmin=dt0 if model == 'FullOrbitCollisions' else None, events=events)
         return terms, solver, controller
 
-    def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False):
-        """diffeqsolve from t0 to maxtime, saving at self.times (clipped to t0) and at the end."""
+    def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False, resume=False, controller_state=None):
+        """diffeqsolve from t0 to maxtime, saving at self.times (clipped to t0) and at the end.
+
+        With ``resume`` it takes at most step_budget steps from ``controller_state`` (None for a fixed step; from
+        _EventSteps its last entry is the next step) and returns the controller state, so a later solve continues."""
         import warnings
         warnings.simplefilter("ignore", category=FutureWarning)  # see https://github.com/patrick-kidger/diffrax/issues/445
-        return diffeqsolve(terms, solver, t0=t0, t1=self.maxtime, dt0=self.timestep, y0=y0, args=args,
+        return diffeqsolve(terms, solver, t0=t0, t1=self.maxtime, y0=y0, args=args, controller_state=controller_state,
+                           dt0=self.timestep if controller_state is None else controller_state[-1],
                            saveat=SaveAt(subs=[diffrax.SubSaveAt(ts=jnp.clip(self.times, t0, self.maxtime)),
-                                               diffrax.SubSaveAt(t1=True)]),
-                           stepsize_controller=controller, event=event, throw=throw, max_steps=self.max_steps,
-                           progress_meter=self.progress_meter, adjoint=self.adjoint)
+                                               diffrax.SubSaveAt(t1=True)], controller_state=resume),
+                           stepsize_controller=controller, event=event, throw=throw,
+                           max_steps=self.step_budget if resume else self.max_steps,
+                           progress_meter=NoProgressMeter() if resume else self.progress_meter, adjoint=self.adjoint)
 
     # -- VMEC guiding centers: exact LCFS crossing, failures, exterior continuation --
 

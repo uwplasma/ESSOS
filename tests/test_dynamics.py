@@ -327,6 +327,22 @@ def test_levelset_stopping_criterion_stops_and_fills_field_line():
     assert jnp.allclose(tracing.trajectories[0, -1], tracing.trajectories[0, -2])
 
 
+@pytest.mark.parametrize("model", ["FieldLineAdaptative", "FieldLine"])
+def test_step_budget_rounds_match_one_solve(model):
+    """Rounds of two steps, each without the lines already stopped, give the orbits and stops of one solve."""
+    class PlaneClassifier:
+        def evaluate_xyz(self, xyz):
+            return 1.5 - xyz[0]
+
+    def trace(budget):
+        return Tracing(field=MockField(), model=model, initial_conditions=jnp.array([[1.0, 0, 0], [0.0, 0, 0],
+                       [-3.0, 0, 0], [1.4, 0, 0], [-1.0, 0, 0]]), maxtime=2.0, timestep=0.05, times_to_trace=21,
+                       stopping_criteria=LevelsetStoppingCriterion(PlaneClassifier()), step_budget=budget)
+    whole, rounds = trace(None), trace(2)
+    assert whole.boundary_hits.tolist() == rounds.boundary_hits.tolist() == [True, True, False, True, False]
+    np.testing.assert_allclose(rounds.trajectories, whole.trajectories, rtol=1e-12, atol=1e-12)
+
+
 def test_poincare_plot_unwraps_toroidal_crossings_and_accepts_line_colors():
     phase = jnp.linspace(0.0, 4.0 * jnp.pi, 101)
     first = jnp.stack((jnp.cos(phase), jnp.sin(phase), 0.1 * jnp.sin(phase)), axis=1)
