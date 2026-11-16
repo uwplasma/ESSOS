@@ -240,6 +240,28 @@ def test_vmec_mode_tolerance_keeps_the_field():
     assert jnp.array_equal(jax.vmap(rebuilt.AbsB)(points), jax.vmap(truncated.AbsB)(points))
 
 
+def test_vmec_flux_coordinates_gradient_in_the_surface_is_finite_in_reverse_mode():
+    """Reverse mode used to give NaN at points where the Newton inversion converges exactly: its iterations were differentiated."""
+    from essos.fields import Vmec
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    xyz = jnp.array([[10.547857968497258, -4.418389073898554, 0.15706857515147074],
+                     [11.444576424285373, 0.0011546032999600522, 1.9023593019105387]])
+
+    def flux(scale):
+        rows = jnp.ones(vmec.ns).at[-1].set(scale)[:, None]
+        field = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, ntheta=8, nphi=8,
+                                 **{**arrays, 'rmnc': arrays['rmnc'] * rows, 'zmns': arrays['zmns'] * rows})
+        return jax.vmap(lambda x: field.flux_coordinates(x)[0])(xyz)
+
+    reverse, forward = jax.jacrev(flux)(1.0), jax.jacfwd(flux)(1.0)
+    finite_difference = (flux(1.0 + 1e-6) - flux(1.0 - 1e-6)) / 2e-6
+    assert jnp.isfinite(reverse).all()
+    np.testing.assert_allclose(reverse, forward, atol=1e-8)
+    np.testing.assert_allclose(reverse, finite_difference, rtol=1e-4, atol=1e-6)
+
+
 def test_vmec_flux_coordinates_invert_to_xyz_and_boundary_distance_is_signed():
     from essos.fields import Vmec
 
