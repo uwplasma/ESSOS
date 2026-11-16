@@ -26,6 +26,33 @@ To run the one of the examples, use the following command:
 
 More examples are in the `examples` folder.
 
+CPU, GPU and multi-device defaults
+----------------------------------
+
+ESSOS requests one JAX CPU device per core it may use, shards particles over all devices of the default backend, and enables float64 when a submodule such as ``essos.fields`` is imported. Compiled traces are cached in ``~/.cache/essos/xla``.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Setting
+     - Default
+     - Change it when
+   * - ``devices=``
+     - all JAX devices
+     - Sharing a node, or some devices are busy
+   * - ``ESSOS_CPU_DEVICES``
+     - one per usable core (affinity, ``SLURM_CPUS_PER_TASK``)
+     - Sharing a node; ``1`` gives a single device
+   * - ``JAX_PLATFORMS=cpu``
+     - GPU when a CUDA ``jaxlib`` is installed
+     - The GPU is busy, or a small trace runs faster on CPU
+   * - ``XLA_PYTHON_CLIENT_PREALLOCATE=false``
+     - JAX preallocates most GPU memory
+     - Several processes share one GPU
+   * - ``ESSOS_XLA_CACHE``
+     - ``~/.cache/essos/xla``
+     - The filesystem is slow or small; empty disables it
+
 Optimization geometry
 ---------------------
 
@@ -51,3 +78,13 @@ Existing SIMSOPT coil files can be loaded directly:
 The JAX-native ``loss_coil_separation`` and ``loss_coil_surface_distance``
 functions in ``essos.objective_functions`` provide blockwise, differentiable
 coil-clearance penalties; ``block_size`` bounds their temporary memory.
+
+Tracing many VMEC orbits
+------------------------
+
+``Tracing`` converts each saved VMEC state to Cartesian one point at a time, so the memory of a trace grows slowly with
+``times_to_trace``. Peak memory for 500 guiding centres on one CPU device, with the old vectorized conversion for
+comparison:
+
+.. image:: _static/vmec_tracing_memory.png
+   :alt: Peak resident memory against saved points per orbit, before and after.
