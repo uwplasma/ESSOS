@@ -605,7 +605,7 @@ def test_tracing_max_steps_is_configurable_and_bounded():
 
     source = inspect.getsource(Tracing)
     assert "max_steps=10000000000" not in source
-    assert source.count("max_steps=self.max_steps") == 1  # every solve goes through Tracing._solve
+    assert inspect.getsource(Tracing._solve).count("self.max_steps") == 1  # every solve goes through Tracing._solve
 
 
 
