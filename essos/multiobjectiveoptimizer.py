@@ -31,8 +31,8 @@ class MultiObjectiveOptimizer:
 
         self.study = None
 
-        self.order_Fourier = self.opt_config.get("order_Fourier", 6)
-        self.num_points = self.order_Fourier * 10
+        self.fourier_order = self.opt_config.get("fourier_order", 6)
+        self.num_points = self.fourier_order * 10
         self.num_coils = self.opt_config.get("num_coils", 4)
         self.max_nfev = self.opt_config.get("max_nfev", 300)
         self.n_trials = self.opt_config.get("n_trials", 1)
@@ -48,7 +48,7 @@ class MultiObjectiveOptimizer:
         r = R / 1.5
         curves = create_equally_spaced_curves(
             n_curves=self.num_coils,
-            order=self.order_Fourier,
+            order=self.fourier_order,
             R=R, r=r,
             n_segments=self.num_points,
             nfp=nfp, stellsym=True

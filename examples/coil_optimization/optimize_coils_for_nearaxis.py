@@ -136,9 +136,9 @@ initial_xyz_initial   = jnp.array([R0_initial*jnp.cos(phi0),   R0_initial*jnp.si
 initial_xyz_optimized = jnp.array([R0_optimized*jnp.cos(phi0), R0_optimized*jnp.sin(phi0), Z0]).T
 
 time0 = time()
-tracing_initial = Tracing(field=init_field, model='FieldLineAdaptative', initial_conditions=initial_xyz_initial,
+tracing_initial = Tracing(field=init_field, model='FieldLineAdaptive', initial_conditions=initial_xyz_initial,
                   tmax=tmax, n_save=n_save, rtol=rtol)
-tracing_optimized = Tracing(field=opt_field, model='FieldLineAdaptative', initial_conditions=initial_xyz_optimized,
+tracing_optimized = Tracing(field=opt_field, model='FieldLineAdaptive', initial_conditions=initial_xyz_optimized,
                   tmax=tmax, n_save=n_save, rtol=rtol)
 print(f"Tracing took {time()-time0:.2f} seconds")
 

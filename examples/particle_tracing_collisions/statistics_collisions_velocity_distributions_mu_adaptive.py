@@ -72,7 +72,7 @@ pitch_sigma=jnp.sqrt(2.**2/12)
 
 
 time0 = time()
-tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuAdaptative', particles=particles,
+tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuAdaptive', particles=particles,
                   tmax=tmax, timestep=dt,n_save=n_save,species=species,tag_gc=0.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories

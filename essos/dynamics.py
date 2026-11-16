@@ -715,11 +715,11 @@ def _fill_stopped_trajectories(trajectories, criteria, args):
 _VMEC_GUIDING_CENTER_MODELS = frozenset(
     {
         "GuidingCenter",
-        "GuidingCenterAdaptative",
+        "GuidingCenterAdaptive",
         "GuidingCenterCollisions",
         "GuidingCenterCollisionsMuIto",
         "GuidingCenterCollisionsMuFixed",
-        "GuidingCenterCollisionsMuAdaptative",
+        "GuidingCenterCollisionsMuAdaptive",
     }
 )
 
@@ -728,7 +728,7 @@ _GUIDING_CENTER_COLLISION_MODELS = frozenset(
         "GuidingCenterCollisions",
         "GuidingCenterCollisionsMuIto",
         "GuidingCenterCollisionsMuFixed",
-        "GuidingCenterCollisionsMuAdaptative",
+        "GuidingCenterCollisionsMuAdaptive",
     }
 )
 
@@ -873,12 +873,12 @@ _SDE_MODELS = {
                                        diffrax.StratonovichMilstein, 5),
     'GuidingCenterCollisionsMuIto': (guiding_center_collisions_drift_mu_ito, guiding_center_collisions_diffusion_mu,
                                      diffrax.ItoMilstein, 5),
-    'GuidingCenterCollisionsMuAdaptative': (guiding_center_collisions_drift_mu_stratonovich,
+    'GuidingCenterCollisionsMuAdaptive': (guiding_center_collisions_drift_mu_stratonovich,
                                             guiding_center_collisions_diffusion_mu, diffrax.SPaRK, 5),
     'FullOrbitCollisions': (lorentz_collisions_drift, lorentz_collisions_diffusion, diffrax.SPaRK, 6),
 }
-_ADAPTIVE_MODELS = ('GuidingCenterAdaptative', 'FullOrbitAdaptative', 'FullOrbitCollisions',
-                    'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal')
+_ADAPTIVE_MODELS = ('GuidingCenterAdaptive', 'FullOrbitAdaptive', 'FullOrbitCollisions',
+                    'FieldLineAdaptive', 'FieldLineArcLength', 'FieldLineToroidal')
 
 
 class LevelsetStoppingCriterion:
@@ -1030,13 +1030,12 @@ def _batch_solver(tracing, place):
 class Tracing():
     def __init__(self, field=None, particles=None, initial_conditions=None, *, trajectories_input=None,
                  electric_field=None, model=None, tmax: float = 1e-7, timestep: float | None = None,
-                 n_save=None, rtol=1.e-8, atol=None, condition=None, species=None, tag_gc=1., boundary=None,
+                 n_save=None, rtol=1.e-8, atol=None, species=None, tag_gc=1., boundary=None,
                  rejected_steps=None, solver=None, stopping_criteria=None, progress=True, devices=None,
                  max_steps=None, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None, adjoint=None):
 
-        if condition is not None and stopping_criteria is not None:
-            raise ValueError("Pass condition or stopping_criteria, not both")
+        event = None
         if stopping_criteria is not None:
             if callable(stopping_criteria):
                 stopping_criteria = (stopping_criteria,)
@@ -1044,7 +1043,7 @@ class Tracing():
                 stopping_criteria = tuple(stopping_criteria)
             if not stopping_criteria or not all(callable(item) for item in stopping_criteria):
                 raise ValueError("stopping_criteria must contain callable criteria")
-            condition = stopping_criteria[0] if len(stopping_criteria) == 1 else stopping_criteria
+            event = stopping_criteria[0] if len(stopping_criteria) == 1 else stopping_criteria
         self.stopping_criteria = stopping_criteria
         self.devices = tuple(jax.devices() if devices is None else devices)
         if not self.devices:
@@ -1076,7 +1075,7 @@ class Tracing():
             if particles is None:
                 timestep = tmax / 100
             elif any(isinstance(x, jax.core.Tracer) for x in scales):
-                if model not in ('GuidingCenterAdaptative', 'FullOrbitAdaptative'):
+                if model not in ('GuidingCenterAdaptive', 'FullOrbitAdaptive'):
                     raise ValueError("timestep=None needs the axis radius and particle speed as concrete values; "
                                      "they are traced here, so pass an explicit timestep")
                 timestep = tmax / 100  # only the first trial step of an adaptive solve, which cannot size max_steps
@@ -1097,9 +1096,9 @@ class Tracing():
         # Without a user condition, VMEC guiding centers stop at the exact LCFS
         # crossing, report non-finite steps, and continue outside in
         # exterior_field up to the wall when one is given; see _vmec_orbit.
-        self._vmec_default = self._axis_regular and condition is None
+        self._vmec_default = self._axis_regular and event is None
         if (exterior_field is not None or wall is not None) and not self._vmec_default:
-            raise ValueError("exterior_field and wall need a VMEC field, a guiding-center model and no condition")
+            raise ValueError("exterior_field and wall need a VMEC field, a guiding-center model and no stopping_criteria")
         if wall is not None and exterior_field is None:
             raise ValueError("a wall needs an exterior_field to trace the orbits outside the LCFS")
         if isinstance(exterior_field, Coils):
@@ -1143,11 +1142,11 @@ class Tracing():
         # attribute, so it is resolved at trace time and does not affect
         # differentiability of the traced trajectories.
         self.solver = solver
-        if condition is None:
-            self.condition = _never
+        if event is None:
+            self.event = _never
             if isinstance(field, Vmec):
-                if model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
-                    self.condition = _vmec_edge
+                if model in ('FieldLine', 'FieldLineAdaptive', 'FieldLineArcLength', 'FieldLineToroidal'):
+                    self.event = _vmec_edge
             elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
                 if model in _GUIDING_CENTER_COLLISION_MODELS:
                     def condition_BioSavart(t, y, args, **kwargs):
@@ -1157,15 +1156,15 @@ class Tracing():
                     def condition_BioSavart(t, y, args, **kwargs):                      
                         xx, yy, zz, _ = y
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
-                self.condition = condition_BioSavart                
+                self.event = condition_BioSavart                
         elif self._axis_regular:
-            self.condition = tree_util.tree_map(
+            self.event = tree_util.tree_map(
                 lambda c: lambda t, y, args, **kwargs: c(t, _from_axis_regular(y), args, **kwargs),
-                condition)
+                event)
         else:
-            self.condition = condition
-        if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
-            self.ODE_term = ODETerm(self._vector_field(guiding_center))
+            self.event = event
+        if model == 'GuidingCenter' or model=='GuidingCenterAdaptive':
+            self.ode_term = ODETerm(self._vector_field(guiding_center))
             self.args = (self.field, self.particles,self.electric_field)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
         elif model == 'GuidingCenterCollisions':
@@ -1178,7 +1177,7 @@ class Tracing():
             self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
             total_speed_temp=self.particles.total_speed*jnp.ones(self.particles.nparticles)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,total_speed_temp[:, None], self.particles.initial_vparallel_over_v[:, None]], axis=1)
-        elif model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative':
+        elif model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptive':
             # Brownian motion
             #t0=0.0
             #t1=self.tmax
@@ -1190,8 +1189,8 @@ class Tracing():
             B_particle=jax.vmap(self.field.AbsB,in_axes=0)(self.particles.initial_xyz)
             mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*self.particles.mass)          
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,self.particles.initial_vparallel[:, None]/SPEED_OF_LIGHT,mu[:, None]],axis=1)        
-        elif model == 'FullOrbit' or model == 'FullOrbit_Boris' or model == 'FullOrbitAdaptative':
-            self.ODE_term = ODETerm(lorentz)
+        elif model == 'FullOrbit' or model == 'FullOrbitBoris' or model == 'FullOrbitAdaptive':
+            self.ode_term = ODETerm(lorentz)
             self.args = (self.field, self.particles)
             if self.particles.initial_xyz_fullorbit is None:
                 raise ValueError("Initial full orbit positions require field input to Particles")
@@ -1208,12 +1207,12 @@ class Tracing():
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz_fullorbit, self.particles.initial_vxvyvz], axis=1)
             if field is None:
                 raise ValueError("Field parameter is required for FullOrbit model")
-        elif model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
+        elif model in ('FieldLine', 'FieldLineAdaptive', 'FieldLineArcLength', 'FieldLineToroidal'):
             field_line_rhs = {
-                'FieldLineArclength': field_line_arclength,
+                'FieldLineArcLength': field_line_arclength,
                 'FieldLineToroidal': field_line_toroidal,
             }.get(model, field_line)
-            self.ODE_term = ODETerm(field_line_rhs)
+            self.ode_term = ODETerm(field_line_rhs)
             self.args = self.field
         
         if self.n_save is None:
@@ -1274,7 +1273,7 @@ class Tracing():
                 return self._vmec_orbit(initial_condition, particle_key)
             if self._axis_regular:
                 initial_condition = _to_axis_regular(initial_condition)
-            if self.model == 'FullOrbit_Boris':
+            if self.model == 'FullOrbitBoris':
                 # Integrate the whole [0, tmax] span: an inner scan of
                 # Boris pushes between consecutive save times, with dt
                 # adjusted (<= timestep) so the saves land on self.times.
@@ -1316,7 +1315,7 @@ class Tracing():
                     event_mask = hits[0] if n_criteria == 1 else tuple(hits[i] for i in range(n_criteria))
                     return trajectory, event_mask
                 return trajectory
-            solution = self._solve(*self._terms(particle_key), 0.0, initial_condition, self.args, Event(self.condition),
+            solution = self._solve(*self._terms(particle_key), 0.0, initial_condition, self.args, Event(self.event),
                                    throw=self.model in ('GuidingCenter', 'FullOrbit', 'FieldLine'))
             trajectory = solution.ys[0]
             if self._axis_regular:
@@ -1377,10 +1376,10 @@ class Tracing():
                               ControlTerm(flagged(self._vector_field(diffusion), drift=False), bm))
             solver = solver()
         else:
-            terms = ODETerm(flagged(self.ODE_term.vector_field))
+            terms = ODETerm(flagged(self.ode_term.vector_field))
             solver = self.solver if self.solver is not None else diffrax.Dopri8()
         controller = diffrax.ConstantStepSize()
-        if model == 'GuidingCenterCollisionsMuAdaptative':
+        if model == 'GuidingCenterCollisionsMuAdaptive':
             controller = ClipStepSizeController(
                 controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,
                                          dtmin=dt0, dtmax=1.e-4, force_dtmin=True),
@@ -1498,7 +1497,7 @@ class Tracing():
         """Model state on the LCFS -> (x, y, z, v_par, mu) and energy, keeping E and mu."""
         point, m, c = y[:3], self.particles.mass, SPEED_OF_LIGHT
         B = self.field.AbsB(point)
-        if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
+        if self.model in ('GuidingCenter', 'GuidingCenterAdaptive'):
             vpar, E = y[3], self.particles.energy
             mu = (E - 0.5 * m * vpar**2) / B
         elif self.model == 'GuidingCenterCollisions':
@@ -1518,7 +1517,7 @@ class Tracing():
         E = 0.5 * m * y[3]**2 + y[4] * self.exterior_field.AbsB(y[:3])
         point = self.field.flux_coordinates(y[:3])[0]
         vpar, mu = _keep_energy(y[3], y[4], E, self.field.AbsB(point), m)
-        if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
+        if self.model in ('GuidingCenter', 'GuidingCenterAdaptive'):
             return jnp.append(point, vpar)
         if self.model == 'GuidingCenterCollisions':
             v = jnp.sqrt(2 * E / m)
@@ -1573,10 +1572,10 @@ class Tracing():
         self._trajectories = value
     
     def energy(self):
-        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for guiding_center and FullOrbit models"
+        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbitBoris' in self.model, "Energy calculation is only available for guiding_center and FullOrbit models"
         mass = self.particles.mass
 
-        if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
+        if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptive':
             initial_xyz = self.trajectories[:, 0, :3]  # t = 0, on the trajectories' devices
             initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
@@ -1587,7 +1586,7 @@ class Tracing():
                 AbsB = vmap(self.field.AbsB)(xyz)                
                 return 0.5 * mass * jnp.square(vpar) + mu * AbsB
             energy = vmap(compute_energy)(self.trajectories, mu_array)
-        elif self.model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsMuAdaptative':
+        elif self.model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsMuAdaptive':
             def compute_energy(trajectory):
                 xyz = trajectory[:, :3]                
                 vpar = trajectory[:, 3]*SPEED_OF_LIGHT
@@ -1600,7 +1599,7 @@ class Tracing():
                 return 0.5 * mass * trajectory[:, 3]**2
             energy = vmap(compute_energy)(self.trajectories)
 
-        else:  # the full-orbit models: FullOrbit, FullOrbit_Boris, FullOrbitAdaptative, FullOrbitCollisions
+        else:  # the full-orbit models: FullOrbit, FullOrbitBoris, FullOrbitAdaptive, FullOrbitCollisions
             def compute_energy(trajectory):
                 vxvyvz = trajectory[:, 3:]
                 v_squared = jnp.sum(jnp.square(vxvyvz), axis=1)
@@ -1611,10 +1610,10 @@ class Tracing():
     
     
     def v_perp(self):
-        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for guiding_center and FullOrbit models"
+        assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbitBoris' in self.model, "Energy calculation is only available for guiding_center and FullOrbit models"
         mass = self.particles.mass
 
-        if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptative':
+        if self.model == 'GuidingCenter' or self.model == 'GuidingCenterAdaptive':
             initial_xyz = self.trajectories[:, 0, :3]  # t = 0, on the trajectories' devices
             initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
@@ -1625,7 +1624,7 @@ class Tracing():
                 return jnp.sqrt(mu * AbsB/mass*2.)
             v_perp = vmap(compute_vperp)(self.trajectories, mu_array)
 
-        elif  self.model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsMuAdaptative':
+        elif  self.model == 'GuidingCenterCollisionsMuIto' or self.model == 'GuidingCenterCollisionsMuFixed' or self.model == 'GuidingCenterCollisionsMuAdaptive':
             def compute_vperp(trajectory):
                 xyz = trajectory[:, :3]
                 mu = trajectory[:, 4]*self.particles.mass*SPEED_OF_LIGHT**2
@@ -1637,7 +1636,7 @@ class Tracing():
                 return trajectory[:, 3]*jnp.sqrt(jnp.maximum(1-trajectory[:, 4]**2, 0.))
             v_perp = vmap(compute_vperp)(self.trajectories)
 
-        else:  # the full-orbit models: FullOrbit, FullOrbit_Boris, FullOrbitAdaptative, FullOrbitCollisions
+        else:  # the full-orbit models: FullOrbit, FullOrbitBoris, FullOrbitAdaptive, FullOrbitCollisions
             def compute_vperp(trajectory):
                 xyz = trajectory[:, :3]
                 vxvyvz = trajectory[:, 3:]
@@ -1861,7 +1860,7 @@ def trace_field_lines(
 
     extent = (2.0 * jnp.pi * float(toroidal_turns)
               if toroidal_turns is not None else float(length))
-    model = "FieldLineToroidal" if toroidal_turns is not None else "FieldLineArclength"
+    model = "FieldLineToroidal" if toroidal_turns is not None else "FieldLineArcLength"
     if label is not None:
         print(f"Tracing {label} (the first call compiles ESSOS)...", flush=True)
     started = perf_counter()

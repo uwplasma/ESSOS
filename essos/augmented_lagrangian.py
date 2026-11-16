@@ -573,22 +573,22 @@ def penalty_average(tree):
     return jnp.average(penalty[0])
 
 
-def apply_mu_tolerance_per_constraint(constraint_dict, grad_dict, constraint_info, constraint_info_prev=None, model_lagrangian='Standard', model_mu='Mu_Adaptative_1', beta=2.0, mu_max=1.e4, alpha=0.99, gamma=1.e-2, epsilon=1.e-8, eta_tol=1.e-4, omega_tol=1.e-6, decrease_tol=0.75):
+def apply_mu_tolerance_per_constraint(constraint_dict, grad_dict, constraint_info, constraint_info_prev=None, model_lagrangian='Standard', model_mu='MuAdaptive1', beta=2.0, mu_max=1.e4, alpha=0.99, gamma=1.e-2, epsilon=1.e-8, eta_tol=1.e-4, omega_tol=1.e-6, decrease_tol=0.75):
     """Apply Mu update rule for vectorized constraints.
     
     Supports three strategies:
-    - Mu_Tolerance: All elements updated together based on norm, uses average penalty
-    - Mu_Adaptative_1: Element-wise updates using eta parameter
-    - Mu_Adaptative_2: Element-wise updates using decrease tolerance criterion
+    - MuTolerance: All elements updated together based on norm, uses average penalty
+    - MuAdaptive1: Element-wise updates using eta parameter
+    - MuAdaptive2: Element-wise updates using decrease tolerance criterion
     
     Args:
         constraint_dict: dict with 'lambda' and optionally 'slack' keys containing LagrangeMultiplier objects
         grad_dict: dict with gradients matching the constraint_dict structure
         constraint_info: current constraint violation information (array or scalar)
-        constraint_info_prev: previous constraint violation info (needed for Mu_Adaptative_2)
+        constraint_info_prev: previous constraint violation info (needed for MuAdaptive2)
         model_lagrangian: 'Standard' or 'Squared' lagrangian formulation
-        model_mu: 'Mu_Tolerance' (global norm, avg penalty), 'Mu_Adaptative_1' (element-wise eta), or 'Mu_Adaptative_2' (element-wise decrease)
-        decrease_tol: tolerance for decrease criterion in Mu_Adaptative_2 (default 0.75 = 25% decrease)
+        model_mu: 'MuTolerance' (global norm, avg penalty), 'MuAdaptive1' (element-wise eta), or 'MuAdaptive2' (element-wise decrease)
+        decrease_tol: tolerance for decrease criterion in MuAdaptive2 (default 0.75 = 25% decrease)
     """
     pred = lambda x: isinstance(x, LagrangeMultiplier)
     
@@ -605,7 +605,7 @@ def apply_mu_tolerance_per_constraint(constraint_dict, grad_dict, constraint_inf
     constraint_abs = jnp.abs(constraint_info)
     
 
-    # Element-wise strategies (Mu_Adaptative_1 or Mu_Adaptative_2)
+    # Element-wise strategies (MuAdaptive1 or MuAdaptive2)
     # Compute updated eta and omega (element-wise)
     eta_updated = jnp.maximum(eta_val / jnp.power(penalty_val, 0.1), eta_tol)
     omega_updated = jnp.maximum(omega_val / penalty_val, omega_tol)
@@ -614,11 +614,11 @@ def apply_mu_tolerance_per_constraint(constraint_dict, grad_dict, constraint_inf
     omega_updated_false = jnp.maximum(1.0 / penalty_val, omega_tol)
     
     # Determine if constraints are satisfied based on model_mu strategy
-    if model_mu == 'Mu_Adaptative_1':
+    if model_mu == 'MuAdaptive1':
         # Strategy 1: Use eta parameter - constraint satisfied if abs(constraint) < eta
         is_satisfied = constraint_abs < eta_val
     
-    elif model_mu == 'Mu_Adaptative_2':
+    elif model_mu == 'MuAdaptive2':
         # Strategy 2: Use decrease tolerance - constraint satisfied if abs(constraint) <= decrease_tol * abs(constraint_prev)
         if constraint_info_prev is None:
             # If no previous constraint, fall back to eta-based check
@@ -628,7 +628,7 @@ def apply_mu_tolerance_per_constraint(constraint_dict, grad_dict, constraint_inf
             # Check if constraint decreased by specified tolerance factor
             is_satisfied = constraint_abs <= decrease_tol * constraint_abs_prev
     else:
-        # Default to Mu_Adaptative_1
+        # Default to MuAdaptive1
         is_satisfied = constraint_abs < eta_val
     
     if model_lagrangian == 'Standard':
@@ -662,7 +662,7 @@ def apply_mu_tolerance_per_constraint(constraint_dict, grad_dict, constraint_inf
 
 
 def apply_mu_tolerance_all_constraints(constraint_dicts_map, grad_dicts_map=None, constraint_infos_map=None, model_lagrangian='Standard', beta=2.0, mu_max=1.e4, alpha=0.99, gamma=1.e-2, epsilon=1.e-8, eta_tol=1.e-4, omega_tol=1.e-6):
-    """Apply Mu_Tolerance across all constraints (JAX-compatible, no Python loops or dict indexing).
+    """Apply MuTolerance across all constraints (JAX-compatible, no Python loops or dict indexing).
 
     This mirrors the per-constraint updater but computes a single global
     decision using all constraint infos, then applies the same update to
@@ -762,7 +762,7 @@ class ALM(NamedTuple):
 def alm_model_lbfgs(constraints: BaseConstraint,#List of constraints
     loss= lambda x: 0.,                    #function which represents the loss   (Callable, default 0.)
     model_lagrangian='Standard',
-    model_mu='Mu_Tolerance',
+    model_mu='MuTolerance',
     beta=2.0,
     mu_max=1.e4,
     alpha=0.99,
@@ -820,8 +820,8 @@ def alm_model_lbfgs(constraints: BaseConstraint,#List of constraints
         main_params = to_x(sol.value)
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
         
-        # Choose cross-constraint Mu_Tolerance updater or per-constraint updater
-        if model_mu == 'Mu_Tolerance':
+        # Choose cross-constraint MuTolerance updater or per-constraint updater
+        if model_mu == 'MuTolerance':
             lag_updates = apply_mu_tolerance_all_constraints(
                 lagrange_params, grad_dicts_map=grad[1], constraint_infos_map=info[2],
                 model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max,

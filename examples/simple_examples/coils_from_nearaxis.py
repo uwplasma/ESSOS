@@ -77,12 +77,12 @@ initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 if plot_coils_without_Fourier_fit:
     time0 = time()
     field_coils_gamma = BiotSavartFromGamma(coils_gamma, currents=current_on_each_coil*jnp.ones(len(coils_gamma)))
-    tracing_coils_gamma = block_until_ready(Tracing(field=field_coils_gamma, model='FieldLineAdaptative', initial_conditions=initial_xyz,
+    tracing_coils_gamma = block_until_ready(Tracing(field=field_coils_gamma, model='FieldLineAdaptive', initial_conditions=initial_xyz,
                       tmax=tmax, n_save=n_save, rtol=rtol))
     print(f"ESSOS tracing coils_gamma took {time()-time0:.2f} seconds")
     trajectories_coils_gamma = tracing_coils_gamma.trajectories
 time0 = time()
-tracing_coils_DOFS = block_until_ready(Tracing(field=field_coils_DOFS, model='FieldLineAdaptative', initial_conditions=initial_xyz,
+tracing_coils_DOFS = block_until_ready(Tracing(field=field_coils_DOFS, model='FieldLineAdaptive', initial_conditions=initial_xyz,
                     tmax=tmax, n_save=n_save, rtol=rtol))
 print(f"ESSOS tracing coils_DOFS took {time()-time0:.2f} seconds")
 trajectories_coils_DOFS = tracing_coils_DOFS.trajectories

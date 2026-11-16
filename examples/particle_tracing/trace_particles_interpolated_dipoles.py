@@ -90,9 +90,9 @@ particles = Particles(initial_xyz=jnp.stack([R0, 0 * R0, 0 * R0], 1), mass=ALPHA
 traces = {}
 for name, f in (("direct", field), ("interpolated", interp)):
     time0 = time()
-    traces[name] = tracing = Tracing(field=f, model='GuidingCenterAdaptative', particles=particles, tmax=tmax,
+    traces[name] = tracing = Tracing(field=f, model='GuidingCenterAdaptive', particles=particles, tmax=tmax,
                                      n_save=200, atol=1e-8, rtol=1e-8,
-                                     condition=lambda t, y, args, **kwargs: classifier.evaluate_xyz(y[:3]))
+                                     stopping_criteria=lambda t, y, args, **kwargs: classifier.evaluate_xyz(y[:3]))
     tracing.trajectories.block_until_ready()
     tracing.lost_times = tracing.loss_fraction(classifier)[2]
     print(f"GC tracing of {nparticles} particles, {name}: {time() - time0:.2f} s, "

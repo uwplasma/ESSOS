@@ -61,7 +61,7 @@ boozer, time_boozer = run_time(lambda: trace_boozer(
 # Trace in VMEC coordinates (adaptive guiding centre)
 particles = Particles(initial_xyz=jnp.array([s, theta, phi]).T, initial_vparallel_over_v=pitch,
                       mass=ALPHA_PARTICLE_MASS, charge=ALPHA_PARTICLE_CHARGE, energy=FUSION_ALPHA_PARTICLE_ENERGY)
-tracing, time_vmec = run_time(lambda: Tracing(field=vmec, model='GuidingCenterAdaptative', particles=particles,
+tracing, time_vmec = run_time(lambda: Tracing(field=vmec, model='GuidingCenterAdaptive', particles=particles,
     tmax=tmax, timestep=1e-8, n_save=n_save, atol=1e-7, rtol=1e-7))
 
 # Loss fractions with binomial errors, and wall times without compilation

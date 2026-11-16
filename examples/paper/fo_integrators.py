@@ -64,7 +64,7 @@ tracing_times = []
 for n_points_in_gyration in [10, 20, 50, 75, 100, 150, 200]:
     dt = 1/(n_points_in_gyration*cyclotron_frequency)
     time0 = time()
-    tracing = Tracing(field=field, model='FullOrbit_Boris', particles=particles,
+    tracing = Tracing(field=field, model='FullOrbitBoris', particles=particles,
                       tmax=tmax, timestep=dt)
     block_until_ready(tracing.trajectories)
     tracing_times += [time() - time0]

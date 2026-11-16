@@ -76,7 +76,7 @@ def field_line_tracing() -> None:
     zeros = jnp.zeros_like(R0)
     seeds = jnp.array([R0, zeros, zeros]).T
 
-    tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=seeds,
+    tracing = Tracing(field=field, model="FieldLineAdaptive", initial_conditions=seeds,
                       tmax=8000, n_save=40000, atol=1e-8, rtol=1e-8)
 
     fig, ax = plt.subplots(figsize=(4.4, 4.4))
@@ -97,7 +97,7 @@ def particle_tracing() -> None:
                           mass=ALPHA_PARTICLE_MASS, charge=ALPHA_PARTICLE_CHARGE,
                           energy=4000 * ONE_EV)
 
-    tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles,
+    tracing = Tracing(field=field, model="GuidingCenterAdaptive", particles=particles,
                       tmax=1e-4, n_save=800, atol=1e-7, rtol=1e-7)
 
     fig = plt.figure(figsize=(5.0, 4.0))
@@ -144,7 +144,7 @@ def wall_tracing() -> None:
     particles = Particles(initial_xyz=seeds, mass=PROTON_MASS, charge=ELEMENTARY_CHARGE,
                           energy=WALL_ENERGY_EV * ONE_EV,
                           initial_vparallel_over_v=jax.random.uniform(kv, (n,), minval=-1, maxval=1))
-    tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
+    tracing = Tracing(field=vmec, model="GuidingCenterAdaptive", particles=particles,
                       tmax=4e-5, timestep=1e-9, n_save=2000, atol=1e-8, rtol=1e-8,
                       exterior_field=outside, wall=gap)
 

@@ -27,7 +27,7 @@ initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 
 # Trace in ESSOS
 time0 = time()
-tracing = block_until_ready(Tracing(field=field, model='FieldLineAdaptative', initial_conditions=initial_xyz,
+tracing = block_until_ready(Tracing(field=field, model='FieldLineAdaptive', initial_conditions=initial_xyz,
                   tmax=tmax, n_save=n_save, rtol=rtol))
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories

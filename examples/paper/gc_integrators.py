@@ -51,7 +51,7 @@ for (method, solver_class), marker in zip(solvers, markers):
     tolerances = [1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16]
     for rtol in tolerances:
         time0 = time()
-        tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
+        tracing = Tracing(field=field, model='GuidingCenterAdaptive', particles=particles,
                           tmax=tmax, timestep=1e-7,
                           rtol=rtol,
                           solver=solver_class())

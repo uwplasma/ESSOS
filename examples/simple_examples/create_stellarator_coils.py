@@ -6,10 +6,10 @@ number_of_field_periods = 2
 number_coils_per_half_field_period = 4
 major_radius_coils = 1.0
 minor_radius_coils = 0.3
-order_Fourier_series_coils = 1
+fourier_order = 1
 number_coil_points = 50
 curves = create_equally_spaced_curves(n_curves=number_coils_per_half_field_period,
-                                   order=order_Fourier_series_coils,
+                                   order=fourier_order,
                                    R=major_radius_coils, r=minor_radius_coils,
                                    n_segments=number_coil_points,
                                    nfp=number_of_field_periods, stellsym=True)

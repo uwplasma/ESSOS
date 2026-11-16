@@ -102,7 +102,7 @@ field = BiotSavart(Coils.from_json("coils.json"))
 R0 = jnp.linspace(1.21, 1.40, 8)
 seeds = jnp.array([R0, jnp.zeros_like(R0), jnp.zeros_like(R0)]).T
 
-tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=seeds,
+tracing = Tracing(field=field, model="FieldLineAdaptive", initial_conditions=seeds,
                   tmax=8000, n_save=40000, atol=1e-8, rtol=1e-8)
 tracing.poincare_plot(shifts=[0.0])
 ```
@@ -132,7 +132,7 @@ from essos.dynamics import Particles, Tracing
 
 particles = Particles(initial_xyz=seeds, mass=ALPHA_PARTICLE_MASS,
                       charge=ALPHA_PARTICLE_CHARGE, energy=4000 * ONE_EV)
-tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles,
+tracing = Tracing(field=field, model="GuidingCenterAdaptive", particles=particles,
                   tmax=1e-4, n_save=800, atol=1e-7, rtol=1e-7)
 tracing.plot()
 print(tracing.loss_fractions)
@@ -155,7 +155,7 @@ with a wall 3 cm outside the LCFS.
 ```python
 vmec = vmex.essos_vmec_field(wout)                     # or Vmec("wout_*.nc")
 outside = vmex.VmecExtender.from_wout(wout, external_field=coil_grid)
-tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
+tracing = Tracing(field=vmec, model="GuidingCenterAdaptive", particles=particles,
                   tmax=4e-5, exterior_field=outside, wall=0.03)  # gap [m] or a surface
 print(tracing.wall_hits.mean(), tracing.wall_positions[tracing.wall_hits])
 ```
@@ -263,12 +263,12 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
   (`essos.dynamics.VMEC_STATUS`); `trajectories_xyz` and `region` hold the
   whole orbit. A non-finite step ends that orbit as `failed`, with its time.
   Loss fractions use the exact wall, or LCFS, times. Collisions are switched
-  off outside the LCFS. Supplying `condition` replaces these events; it is
+  off outside the LCFS. Supplying `stopping_criteria` replaces these events; it is
   evaluated on `(s, theta, phi, ...)`. See
   [`examples/particle_tracing/trace_particles_vmec_to_wall.py`](examples/particle_tracing/trace_particles_vmec_to_wall.py).
-- **Stopping coil-field traces.** Pass `stopping_criteria=LevelsetStoppingCriterion(...)`
-  to end Cartesian traces once they leave a prescribed distance from a surface,
-  and read the per-line mask from `tracing.boundary_hits`.
+- **Stopping coil-field traces.** Pass `stopping_criteria` (a level-set callable or
+  `LevelsetStoppingCriterion(...)`, positive inside) to end a trace at the
+  boundary and read the per-line mask from `tracing.boundary_hits`.
 - **Step budget and defaults.** `max_steps` (default 16 times the steps of a fixed-step solve) bounds every
   Diffrax solve and a `RuntimeWarning` reports orbits that did not finish. `timestep` defaults to 1/400 of the
   transit time `R0 / v` (1/100 on a VMEC field), `rtol` to `1e-8` and `atol` to `rtol`.

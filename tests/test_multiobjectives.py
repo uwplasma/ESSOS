@@ -80,7 +80,7 @@ def test_weighted_loss_then_jitted_loss_keeps_static_currents_scale():
     optimizer = MultiObjectiveOptimizer(
         loss_functions=[loss_coil_length_sum],
         vmec=mock_vmec(),
-        opt_config={"order_Fourier": 2, "num_coils": 2},
+        opt_config={"fourier_order": 2, "num_coils": 2},
     )
     x = optimizer.initial_coils.dofs
     weighted = optimizer.weighted_loss(x, [1.0])

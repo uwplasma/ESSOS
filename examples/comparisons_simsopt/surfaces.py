@@ -17,7 +17,7 @@ if not os.path.exists(output_dir):
 
 # Optimization parameters
 max_coil_length = 42
-order_Fourier_series_coils = 4
+fourier_order = 4
 number_coil_points = 50
 function_evaluations_array = [30]*1
 diff_step_array = [1e-2]*1
@@ -37,7 +37,7 @@ number_of_field_periods = vmec.nfp
 major_radius_coils = vmec.r_axis
 minor_radius_coils = vmec.r_axis/1.5
 curves_essos = create_equally_spaced_curves(n_curves=number_coils_per_half_field_period,
-                                   order=order_Fourier_series_coils,
+                                   order=fourier_order,
                                    R=major_radius_coils, r=minor_radius_coils,
                                    n_segments=number_coil_points,
                                    nfp=number_of_field_periods, stellsym=True)

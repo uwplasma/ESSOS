@@ -19,7 +19,7 @@ NPARTICLES = 10
 MAXTIME_TRACING = 1e-4
 NUMBER_COILS_PER_HALF_FIELD_PERIOD = 3
 NUMBER_OF_FIELD_PERIODS = 2
-MODEL = 'FullOrbit_Boris'
+MODEL = 'FullOrbitBoris'
 TIMESTEP=1.e-14
 TRACE_TOLERANCE=1e-8
 NUM_STEPS=1000
@@ -54,7 +54,7 @@ CURVATURE_WEIGHT = 1.; CURVATURE_TARGET = 0.4
 BAXIS_WEIGHT = 1.; BAXIS_TARGET = 5.7
 RADIAL_DRIFT_WEIGHT = 1.
 
-def loss_particle_radial_drift(field, particles, timestep=1.e-8, tmax=1e-5, n_save=300, rtol=1e-5, model='GuidingCenterAdaptative',boundary=None):
+def loss_particle_radial_drift(field, particles, timestep=1.e-8, tmax=1e-5, n_save=300, rtol=1e-5, model='GuidingCenterAdaptive',boundary=None):
     particles.to_full_orbit(field)
     tracing = Tracing(field=field, model=model, particles=particles, tmax=tmax,
                       timestep=timestep,n_save=n_save, rtol=rtol,boundary=boundary)

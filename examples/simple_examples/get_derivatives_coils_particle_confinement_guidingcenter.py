@@ -7,7 +7,7 @@ from essos.fields import BiotSavart
 from essos.losses import CustomLoss
 
 # Optimization parameters
-order_Fourier_series_coils = 2
+fourier_order = 2
 number_coil_points = 80
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
@@ -21,7 +21,7 @@ current_on_each_coil = 1.84e7
 major_radius_coils = 7.75
 minor_radius_coils = 4.45
 curves = create_equally_spaced_curves(n_curves=number_coils_per_half_field_period,
-                                   order=order_Fourier_series_coils,
+                                   order=fourier_order,
                                    R=major_radius_coils, r=minor_radius_coils,
                                    n_segments=number_coil_points,
                                    nfp=number_of_field_periods, stellsym=True)

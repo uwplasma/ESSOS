@@ -63,7 +63,7 @@ particles = Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=jax.rand
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=vmec, model='GuidingCenterAdaptative', particles=particles, tmax=tmax, timestep=timestep,
+tracing = Tracing(field=vmec, model='GuidingCenterAdaptive', particles=particles, tmax=tmax, timestep=timestep,
                   n_save=n_save, atol=atol, rtol=rtol, exterior_field=outside, wall=wall)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 crossed = np.isfinite(tracing.lcfs_times)

@@ -32,7 +32,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=mass, energy=energy, field=f
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='FullOrbit_Boris', particles=particles,
+tracing = Tracing(field=field, model='FullOrbitBoris', particles=particles,
                   tmax=tmax, n_save=n_save,timestep=dt, rtol=rtol)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories

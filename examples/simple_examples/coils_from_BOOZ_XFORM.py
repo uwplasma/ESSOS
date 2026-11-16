@@ -21,7 +21,7 @@ tmax = 1100
 nfieldlines_per_core=1
 rtol = 1e-9
 n_save = 22000
-order_Fourier_coils = 4
+fourier_order = 4
 current_on_each_coil = 2e8
 refine_nphi_for_surface_plot = 4
 radial_extension_of_the_surface = 0.0
@@ -114,7 +114,7 @@ for i in range(ncoils):
     coils_gamma[i, :, 2] = Z[:, i]
     
 time0 = time()
-dofs, gamma_uni = fit_dofs_from_coils(coils_gamma[:ncoils], order=order_Fourier_coils, n_segments=ntheta, assume_uniform=True)
+dofs, gamma_uni = fit_dofs_from_coils(coils_gamma[:ncoils], order=fourier_order, n_segments=ntheta, assume_uniform=True)
 curves = Curves(dofs=dofs, n_segments=ntheta, nfp=b.nfp, stellsym=True)
 coils = Coils(curves=curves, currents=[-current_on_each_coil]*(ncoils))
 field_coils_DOFS = BiotSavart(coils)
@@ -183,7 +183,7 @@ if plot_fieldlines_constant_phi:
         coils_gamma_phi[i, :, 2] = Z_phi[:, i]
         
     time0 = time()
-    dofs_phi, gamma_uni_phi = fit_dofs_from_coils(coils_gamma_phi[:ncoils], order=order_Fourier_coils, n_segments=ntheta, assume_uniform=True)
+    dofs_phi, gamma_uni_phi = fit_dofs_from_coils(coils_gamma_phi[:ncoils], order=fourier_order, n_segments=ntheta, assume_uniform=True)
     curves_phi = Curves(dofs=dofs_phi, n_segments=ntheta, nfp=b.nfp, stellsym=True)
     coils_phi = Coils(curves=curves_phi, currents=[-current_on_each_coil]*(ncoils))
     field_coils_phi = BiotSavart(coils_phi)
@@ -195,13 +195,13 @@ phi0 = jnp.zeros(nfieldlines)
 initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 
 time0 = time()
-tracing_coils_DOFS = block_until_ready(Tracing(field=field_coils_DOFS, model='FieldLineAdaptative', initial_conditions=initial_xyz,
+tracing_coils_DOFS = block_until_ready(Tracing(field=field_coils_DOFS, model='FieldLineAdaptive', initial_conditions=initial_xyz,
                     tmax=tmax, n_save=n_save, rtol=rtol))
 print(f"ESSOS tracing coils_DOFS took {time()-time0:.2f} seconds")
 trajectories_coils_DOFS = tracing_coils_DOFS.trajectories
 if plot_fieldlines_constant_phi:
     time0 = time()
-    tracing_coils_phi = block_until_ready(Tracing(field=field_coils_phi, model='FieldLineAdaptative', initial_conditions=initial_xyz,
+    tracing_coils_phi = block_until_ready(Tracing(field=field_coils_phi, model='FieldLineAdaptive', initial_conditions=initial_xyz,
                     tmax=tmax, n_save=n_save, rtol=rtol))
     print(f"ESSOS tracing coils_phi took {time()-time0:.2f} seconds")
     trajectories_coils_phi = tracing_coils_phi.trajectories

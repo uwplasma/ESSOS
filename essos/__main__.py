@@ -27,8 +27,8 @@ def main(cl_args=sys.argv[1:]):
     # Optimization parameters
     max_coil_length = 5.0
     max_coil_curvature = 4
-    order_Fourier_series_coils = 5
-    number_coil_points = order_Fourier_series_coils*10
+    fourier_order = 5
+    number_coil_points = fourier_order*10
     max_nfev = 100
     number_coils_per_half_field_period = 3
     tol = 1e-8
@@ -53,7 +53,7 @@ def main(cl_args=sys.argv[1:]):
     major_radius_coils = field.R0[0]
     minor_radius_coils = major_radius_coils/1.5
     curves = create_equally_spaced_curves(n_curves=number_coils_per_half_field_period,
-                                    order=order_Fourier_series_coils,
+                                    order=fourier_order,
                                     R=major_radius_coils, r=minor_radius_coils,
                                     n_segments=number_coil_points,
                                     nfp=number_of_field_periods, stellsym=True)

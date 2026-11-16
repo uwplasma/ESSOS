@@ -23,7 +23,7 @@ manager = MultiObjectiveOptimizer(
         "tol": 1e-5,
         "optimizer_choices": ["adam", "amsgrad", "sgd"],
         "num_coils": 4,
-        "order_Fourier": 6,
+        "fourier_order": 6,
     }
 )
 

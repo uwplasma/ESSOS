@@ -98,7 +98,7 @@ eta=1./penalty**0.1
 sq_grad=0.0   #Initial square gradient parameter value for Mu adaptative
 model_lagrangian='Standard'  #Use standard augmented lagragian suitable for bounded optimizers
 #Since we are using L-BFGS, model_mu will be updated with tolerances so we do not need to difinte the model
-model_mu='Tolerance'
+model_mu='MuTolerance'
 
 
 beta=2.                                     #penalty update parameter

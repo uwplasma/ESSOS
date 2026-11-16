@@ -35,7 +35,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,
                       charge=ALPHA_PARTICLE_CHARGE, energy=energy, field=vmec)
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=vmec, model='GuidingCenterAdaptative', particles=particles, tmax=tmax,
+tracing = Tracing(field=vmec, model='GuidingCenterAdaptive', particles=particles, tmax=tmax,
                   timestep=timestep,n_save=n_save, atol=atol,rtol=rtol,boundary=boundary)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")
