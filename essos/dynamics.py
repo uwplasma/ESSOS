@@ -1350,7 +1350,7 @@ class Tracing():
     def _trace_rounds(self, y0, keys):
         """Trace in rounds of at most step_budget steps, each with the particles not yet finished, on one device.
 
-        A round's batch is padded to a power of two, so at most log2(n) + 1 batch sizes compile.
+        A round's batch is padded to 3 significant bits (as in trace_boozer), so few batch sizes compile.
         """
         n, times = len(y0), np.asarray(self.times)
         terms, solver, controller = self._terms(None if keys is None else keys[0])
@@ -1362,7 +1362,8 @@ class Tracing():
         for _ in range(-(-self.max_steps // self.step_budget)):  # max_steps still bounds every orbit
             if not active.size:
                 break
-            index = np.append(active, np.full((1 << (active.size - 1).bit_length()) - active.size, active[-1]))
+            step = 1 << max(active.size.bit_length() - 3, 0)
+            index = np.append(active, np.full(-active.size % step, active[-1]))
             out, new, done, mask = tree_util.tree_map(np.asarray, solve(
                 tree_util.tree_map(lambda x: x[index], state), None if keys is None else keys[index]))
             m, t0 = active.size, state[1][active]
