@@ -319,9 +319,6 @@ def test_independent_gpu_loop_on_cpu(method):
 
 
 def test_rhs_preparation_and_gpu_helpers_preserve_values(monkeypatch):
-    # Some supported JAX releases omit this deprecated facade export (CI).
-    from jax.interpreters import partial_eval as facade
-    monkeypatch.delattr(facade,'partial_eval_jaxpr_nounits',raising=False)
     from essos.rk import _select_one, _kernel_is_finite, _bind_primitive
     for dtype in (jnp.float32,jnp.float64):
         values=jnp.array([1.,np.inf,np.nan,-np.inf,-0.],dtype=dtype)
