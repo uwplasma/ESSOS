@@ -292,3 +292,10 @@ def test_discretized_coils_copy_and_json_round_trip(tmp_path):
     coils.to_json(str(tmp_path / "c.json"))
     loaded = DiscretizedCoils.from_json(str(tmp_path / "c.json"))
     np.testing.assert_allclose(loaded.gamma, coils.gamma, atol=1e-12)
+
+
+def test_zero_currents_give_finite_dofs():
+    from essos.coils import CreateEquallySpacedCurves
+    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    coils = Coils(curves=curves, currents=[0.0, 0.0])
+    assert jnp.all(jnp.isfinite(coils.dofs)) and jnp.all(jnp.isfinite(coils.currents))
