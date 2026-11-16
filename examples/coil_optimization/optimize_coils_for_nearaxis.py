@@ -10,9 +10,8 @@ from pyqsc_jax.near_axis import near_axis
 from essos.dynamics import Tracing
 from essos.optimization import optimize_loss_function
 from jax import vmap, jit
-#  In this exmple, `scipy.optimize.least_squares` is used, but any other optimizer, e.g. from 
-#  `scipy.optimize.minimize`, can be used as well and may even be preferable.
-from scipy.optimize import least_squares
+#  In this exmple, L-BFGS-B (`scipy.optimize.minimize`) takes the value and gradient of the scalar loss from one call.
+from scipy.optimize import minimize
 from essos.losses import custom_loss
 
 
@@ -97,7 +96,7 @@ L_total.dependencies = {"field": init_field, "field_nearaxis": field_nearaxis_in
 
 """ Optimizing the total loss """
 t_start = time()
-res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=200)
+res = minimize(L_total.value_and_grad, L_total.starting_dofs, jac=True, method="L-BFGS-B", options=dict(maxiter=200, disp=True))
 t_end = time()
 
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")

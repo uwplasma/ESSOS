@@ -19,7 +19,7 @@ pip install essos
 - **Automatic differentiation.** `jax.grad` works through coil geometry,
   Biot-Savart fields and adaptive tracing.
 - **Coil optimization.** Fit coils to a plasma boundary under length, curvature,
-  separation, coil-surface-distance and force constraints, with `least_squares`,
+  separation, coil-surface-distance and force constraints, with L-BFGS-B,
   an augmented Lagrangian, multi-objective (Pareto) search, or stochastic
   optimization over Gaussian coil perturbations. Coils can also target a
   near-axis field, particle confinement, or a finite-beta boundary (VMEX, or
@@ -59,7 +59,8 @@ pip install essos
 ## Coil optimization
 
 Fit coils to a VMEC boundary, trading normal-field error against coil length and
-curvature. Losses compose with `+`, and `L.grad` is the exact gradient.
+curvature. Losses compose with `+`; `L.grad` is the exact gradient and
+`L.value_and_grad` returns both from one pass.
 
 ![Coils fitted to a QA boundary](docs/readme_coil_optimization.png)
 
@@ -68,7 +69,7 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 from essos.losses import custom_loss
 from essos.surfaces import BdotN_over_B, SurfaceRZFourier
-from scipy.optimize import least_squares
+from scipy.optimize import minimize
 
 surface = SurfaceRZFourier.from_wout_file("wout.nc", s=1, ntheta=30, nphi=30,
                                           range_torus="half period")
@@ -82,7 +83,7 @@ L = (custom_loss(lambda field, surface: abs(BdotN_over_B(surface, field)).sum(),
      + custom_loss(lambda field: (field.coils.curvature - 0.1).clip(0).mean(), "field"))
 L.dependencies = {"field": BiotSavart(coils)}
 
-result = least_squares(L, L.starting_dofs, L.grad, max_nfev=400)
+result = minimize(L.value_and_grad, L.starting_dofs, jac=True, method="L-BFGS-B")
 optimized = L.dofs_to_pytree(result.x)["field"].coils
 ```
 

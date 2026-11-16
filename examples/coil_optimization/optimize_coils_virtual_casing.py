@@ -8,7 +8,7 @@ from time import time
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from scipy.optimize import least_squares
+from scipy.optimize import minimize
 from virtual_casing_jax import VirtualCasingJAX
 from vmex.core.wout import read_wout
 from vmex.core.virtual_casing import surface_field_data_from_wout
@@ -83,7 +83,7 @@ L_total.dependencies = {"field": init_field}
 """ Optimizing the total loss """
 report("Initial coils", init_field)
 t_start = time()
-res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-10, gtol=1e-10, xtol=1e-14, max_nfev=500)
+res = minimize(L_total.value_and_grad, L_total.starting_dofs, jac=True, method="L-BFGS-B", options=dict(maxiter=500, disp=True))
 print(f"\nOptimization took {time() - t_start:.2f} seconds")
 opt_field = L_total.dofs_to_pytree(res.x)["field"]
 opt_coils = opt_field.coils

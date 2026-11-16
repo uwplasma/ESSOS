@@ -1,6 +1,6 @@
 from functools import partial
 import jax.numpy as jnp
-from jax import tree_util, jit, jacfwd, grad as jax_grad, value_and_grad as jax_value_and_grad
+from jax import tree_util, jit, grad as jax_grad, value_and_grad as jax_value_and_grad
 from jax.flatten_util import ravel_pytree
         
 class base_loss:
@@ -194,14 +194,12 @@ class composite_loss(base_loss):
             self._starting_dofs, self._dofs_to_pytree = ravel_pytree(self.dependencies)
         return self._dofs_to_pytree
     
-    def _values(self, dofs):
-        dependencies = self.dofs_to_pytree(dofs)
-        return [loss.call_pytree(tuple(dependencies[arg] for arg in loss.args_names)) for loss in self.losses]
-
     @partial(jit, static_argnames=['self'])
     def __call__(self, dofs: jnp.ndarray) -> float:
-        """The sum of the losses; a loss that returns an array r adds sum(r**2)."""
-        return sum(v if jnp.ndim(v) == 0 else jnp.sum(jnp.square(v)) for v in self._values(dofs))
+        dependencies = self.dofs_to_pytree(dofs)
+        each_loss = [loss.call_pytree(tuple(dependencies[arg] for arg in loss.args_names))\
+                      for loss in self.losses]
+        return sum(each_loss)
 
     @partial(jit, static_argnames=['self'])
     def grad(self, dofs: jnp.ndarray) -> jnp.ndarray:
@@ -211,14 +209,3 @@ class composite_loss(base_loss):
     def value_and_grad(self, dofs: jnp.ndarray):
         """Value and gradient from one forward and one reverse pass, for ``minimize(..., jac=True)``."""
         return jax_value_and_grad(self.__call__)(dofs)
-
-    @partial(jit, static_argnames=['self'])
-    def residuals(self, dofs: jnp.ndarray) -> jnp.ndarray:
-        """The losses' values, arrays flattened, in one vector, for ``least_squares(L.residuals, x0, L.jacobian)``,
-        which minimizes half their sum of squares."""
-        return jnp.concatenate([jnp.ravel(v) for v in self._values(dofs)])
-
-    @partial(jit, static_argnames=['self'])
-    def jacobian(self, dofs: jnp.ndarray) -> jnp.ndarray:
-        """d residuals / d dofs, in forward mode: the residuals usually outnumber the dofs."""
-        return jacfwd(self.residuals)(dofs)
