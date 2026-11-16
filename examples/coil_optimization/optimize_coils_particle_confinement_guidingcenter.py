@@ -1,6 +1,5 @@
 
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -15,7 +14,7 @@ from essos.fields import BiotSavart
 
 # Particle optimization parameters
 # Optimization parameters
-NPARTICLES = number_of_processors_to_use*10
+NPARTICLES = 10
 MAXTIME_TRACING = 1e-4
 NUMBER_COILS_PER_HALF_FIELD_PERIOD = 3
 NUMBER_OF_FIELD_PERIODS = 2
@@ -24,7 +23,7 @@ TIMESTEP=1.e-14
 TRACE_TOLERANCE=1e-8
 NUM_STEPS=1000
 
-NPARTICLES_PLOT = number_of_processors_to_use*10
+NPARTICLES_PLOT = 10
 MAXTIME_TRACING_PLOT = 1e-4
 
 

@@ -1,5 +1,4 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 from jax import vmap
 from time import time
 import jax.numpy as jnp
@@ -13,7 +12,7 @@ from essos.dynamics import Tracing, Particles
 tmax = 1e-4
 dt=1.e-8
 nparticles_per_core=2
-nparticles = number_of_processors_to_use*nparticles_per_core
+nparticles = nparticles_per_core
 R0 = jnp.linspace(1.23, 1.27, nparticles)
 trace_tolerance = 1e-7
 num_steps = 3000
