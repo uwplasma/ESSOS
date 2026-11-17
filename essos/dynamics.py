@@ -1610,7 +1610,7 @@ class Tracing():
         stop = run & ~back & ~paused
         o.update(t=t_end, returns=o["returns"] + back, inside=o["inside"] | back, active=o["active"] & ~stop,
                  status=jnp.select([failed, struck, returned & ~back, stop], [4, 3, 5, 2], o["status"]),
-                 x=jnp.where(run & ~behind, end, o["x"]), y=jnp.where(back, self._vmec_from_exterior(end), o["y"]))
+                 x=jnp.where(run & ~behind, end, o["x"]), y=jnp.where(back, self._vmec_from_exterior(jnp.where(back, end, 0.5)), o["y"]))
         if budget:
             o["c_in"] = tree_util.tree_map(lambda a, b: jnp.where(back, a, b), o["c0_in"], o["c_in"])
         return o
