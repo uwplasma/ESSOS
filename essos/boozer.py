@@ -507,7 +507,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     synchronizations and extra compiled batch sizes.
     Fixed explicit methods are ``"dopri8"`` (default), ``"dopri5"`` and
     ``"rk4"``. For an energy error near 1e-6 the lower orders are cheaper: 3.5 MeV alphas over 1 ms
-    reach it with ``"dopri5"`` at 0.4x the CPU time of ``"dopri8"`` (QA at the default step: 5.7e-7 against
+    reach it with ``"dopri5"`` at 0.4-0.5x the CPU time of ``"dopri8"`` (QA at the default step: 5.7e-7 against
     3.6e-7; ARIES-CS at half of it: 8.8e-7 against 1.8e-7), and ``"rk4"`` at half the default step is
     between the two. Refine timestep and modes to check loss labels and bounce phase.
     ``"adaptive"`` (Dopri5) and ``"adaptive8"`` (Dopri8) control each particle's step so the embedded error
