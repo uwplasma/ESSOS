@@ -412,3 +412,18 @@ def test_bdotn_constraint_gradient_is_zero_not_nan_when_satisfied(monkeypatch):
     g = jax.grad(lambda b: of.loss_BdotN_constraint(b, None, target_tol=1e-6))(jnp.array([1e-2, 2e-4]))
     assert jnp.isfinite(g).all() and g[0] > 0
 
+
+
+def test_coil_pair_losses_use_the_base_coils_and_match_all_pairs():
+    from essos.coils import Coils, Curves
+    rng = np.random.default_rng(1)
+    dofs = jnp.zeros((2, 3, 5)).at[:, 0, 0].set([1.0, 1.1]).at[:, 0, 2].set(0.3).at[:, 2, 1].set(0.3)
+    dofs = dofs.at[:, 1, 0].set([0.2, 0.6]) + 0.02 * rng.standard_normal((2, 3, 5))
+    sym = Coils(curves=Curves(dofs, 24, 3, True), currents=jnp.array([1e6, 1.2e6]))
+    as_all = lambda x: Coils(curves=Curves(Curves(x, 24, 3, True).curves, 24, 1, False), currents=sym.currents)
+    as_sym = lambda x: Coils(curves=Curves(x, 24, 3, True), currents=sym.dofs_currents * sym.currents_scale)
+    for loss in (lambda c: objf.loss_lorentz_force_coils(c, p=2, threshold=1e4, conductor_radius=0.05),
+                 lambda c: objf.loss_coil_separation(c, 1.0),
+                 lambda c: objf.loss_linkingnumber(c)):
+        np.testing.assert_allclose(loss(as_sym(dofs)), loss(as_all(dofs)), rtol=1e-10)
+        np.testing.assert_allclose(jax.grad(lambda x: loss(as_sym(x)))(dofs), jax.grad(lambda x: loss(as_all(x)))(dofs), rtol=1e-8, atol=1e-12)
