@@ -346,10 +346,10 @@ interfaces. The generic `essos.rk.solve_rk` also accepts an arbitrary array RHS.
 
 For Boozer, use `trace_boozer(..., integrator="essos_dopri8")`. Boozer runs on
 the portable path only (`native_execution="cuda"` raises): a fused kernel was
-slower than the vmapped one. The same holds for `trace_split(...,
-execution="independent")`, which supports coil and VMEC fields. GPU arrays are
-private solver views of the original field data; the public field classes are
-unchanged.
+slower than the vmapped one. If the installed JAX cannot lower the fused kernel,
+`prepare_solver(..., execution="cuda")` warns and uses the portable path. GPU
+arrays are private solver views of the original field data; the public field
+classes are unchanged.
 
 ### Forward comparison
 
@@ -411,38 +411,10 @@ result = trace_split(field, particles, species, tmax=tmax, timestep=dt)  # check
 
 The interval and tolerance controls are local; refine `timestep` and `collision_dtmax` to check
 the splitting error. VMEC fields use their own geometry, Boozer fields need
-`spatial_geometry=BoozerGeometry.from_booz_xform(booz)`. `execution="independent"` runs one
-persistent GPU kernel per particle (float64, Dopri8, coil or VMEC fields); `interpret=True` runs it
-on CPU. `tests/test_native_split.py` checks Spitzer slowing down, the Lorentz eigenvalues,
+`spatial_geometry=BoozerGeometry.from_booz_xform(booz)`. `tests/test_native_split.py` checks Spitzer slowing down, the Lorentz eigenvalues,
 Ito/Stratonovich consistency and the absent-bath and lost-particle limits;
 `examples/particle_tracing_collisions/native_split_slowing_down.py` prints the Spitzer comparison.
-
-## Accepted-map native reverse AD
-
-`solve_rk(..., adjoint="accepted")` and `trace_split(..., adjoint="accepted")` give gradients of the
-accepted-step map: the forward solve keeps accepted intervals, Wiener increments, rejection decisions
-and event fractions, and reverse differentiates the stages, dense saves and collision maps
-([essos/native_ad.py](essos/native_ad.py)). First-hit times and the adaptive mesh are not differentiated,
-so a finite difference that reruns adaptation measures a different map.
-
-```python
-def objective(dofs):
-    out = trace_split(field(dofs), particles, species, tmax=tmax, timestep=dt, adjoint="accepted",
-                      adjoint_max_accepted_steps=4096, adjoint_max_orbit_steps=4096)
-    return loss(out.ys)
-gradient = jax.grad(objective)(dofs)
-```
-
-Collisionless orbits use `Tracing(..., native_adjoint="accepted")`. The tape capacities
-`adjoint_max_accepted_steps` and `adjoint_max_orbit_steps` raise during reverse when exceeded;
-`adjoint_checkpoint_steps` (default 16) trades replay workspace against stored checkpoints and does not
-change the gradient. Direct coil fields can use the persistent GPU reverse kernel with
-`execution="independent"`; VMEC and Boozer fields use checkpointed JAX. `tests/test_native_ad.py` checks
-gradients against forward mode and finite differences through the frozen schedule, the adjoint identity,
-checkpoint independence and the persistent kernel against shared reverse.
-`examples/coil_optimization/optimize_coils_native_ad.py` minimizes the final minor radius of alpha
-guiding centers over the coil dofs. `examples/benchmarks/benchmark_native.py` times the orbit, split, AD
-and collision suites (`--help`).
+`examples/benchmarks/benchmark_native.py` times the orbit and collision suites (`--help`).
 
 ## Testing
 

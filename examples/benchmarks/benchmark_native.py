@@ -2,12 +2,7 @@
 
 Suites (``--suite``)
     orbit       Collisionless native orbits: ``essos.rk.prepare_solver`` (coils, VMEC) or
-                ``essos.rk.trace_boozer_orbits`` (Boozer), shared JAX or independent CUDA.
-    split       ``essos.split.trace_split`` (orbit plus Milstein collisions), shared versus
-                independent execution.
-    ad          Accepted-map reverse AD through ``trace_split``: value-and-gradient time
-                against forward time, and gradient agreement between the native and the
-                shared reverse pass.
+                ``essos.rk.trace_boozer_orbits`` (Boozer), shared JAX or the fused CUDA kernel.
     collisions  Collision maps and Brownian driver against independent NumPy/SciPy
                 finite-volume Fokker-Planck references. ``--study thermal`` relaxes a
                 monoenergetic beam in a fixed Maxwellian proton bath; ``--study passage``
@@ -27,7 +22,7 @@ persistent GPU kernel and ``both`` times each in turn. The default is ``cuda`` o
 
 CPU smoke test::
 
-    python -m examples.benchmarks.benchmark_native --suite split --field coils -N 4 \\
+    python -m examples.benchmarks.benchmark_native --suite orbit --field coils -N 4 \\
         --execution jax --stepping fixed --steps 7 --horizon 2e-8 --repeats 1
 """
 import argparse
@@ -51,16 +46,15 @@ from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as 
                              EPSILON_0, HBAR, ONE_EV, PROTON_MASS)
 from essos.dynamics import Particles, _to_axis_regular
 from essos.fields import BiotSavart, Vmec
-from essos.native_ad import gpu_jit_options
 from essos.rk import RKStatus, prepare_solver, trace_boozer_orbits
-from essos.split import (BoozerGeometry, CollisionCoefficients, collision_coefficients,
-                         guiding_center_collision_step, particle_collision_step, solve_split, trace_split)
+from essos.split import (CollisionCoefficients, collision_coefficients, guiding_center_collision_step,
+                         particle_collision_step, solve_split)
 
 ROOT = Path(__file__).resolve().parents[2]
 COILS = ROOT / 'examples/input_files/ESSOS_biot_savart_LandremanPaulQA.json'
 WOUT = ROOT / 'examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc'
-EXECUTIONS = {'jax': 'jax', 'shared': 'jax', 'cuda': 'cuda', 'independent': 'cuda'}
 BATH_DENSITY, BATH_TEMPERATURE_EV = 1e20, 1000.
+EXECUTIONS = {'jax': 'jax', 'shared': 'jax', 'cuda': 'cuda', 'independent': 'cuda'}
 GPU_FORWARD = ({'compiler_options': {'xla_gpu_enable_command_buffer': 'FUSION,WHILE,CONDITIONAL',
                                      'xla_gpu_graph_min_graph_size': 1}}
                if jax.default_backend() == 'gpu' else {})
@@ -110,7 +104,7 @@ def report_row(name, particles, timing, status, **extra):
 # --------------------------------------------------------------------------- fields and births
 
 def boozer_field(options):
-    """Boozer field and spatial geometry from the wout file (needs ``essos[booz]``)."""
+    """Boozer field from the wout file (needs ``essos[booz]``)."""
     from booz_xform_jax import Booz_xform
     from netCDF4 import Dataset
     transform = Booz_xform(verbose=0, mboz=options.boozer_modes, nboz=options.boozer_modes)
@@ -120,45 +114,40 @@ def boozer_field(options):
         psi = psi0_from_vmec(data['phi'][-1])
     field = BoozerField.from_booz(transform.s_b, transform.bmnc_b, transform.xm_b, transform.xn_b, transform.iota,
                                   transform.Boozer_G, transform.Boozer_I, psi, transform.nfp, mode_tolerance=1e-4)
-    return field, BoozerGeometry.from_booz_xform(transform)
+    return field
 
 
 class Case:
-    """Field, birth points and pitches shared by the orbit, split and AD suites.
+    """Field, birth points and pitches for the orbit suite.
 
     Coil births lie on the outboard midplane; VMEC and Boozer births are at s=0.3 with random
-    angles. ``coils`` is kept so the AD suite can differentiate with respect to its DOFs.
+    angles.
     """
 
     def __init__(self, options):
-        self.options, self.coils, self.geometry = options, None, None
+        self.options = options
         n = options.particles
         rng = np.random.default_rng(options.seed)
         self.speed = float(np.sqrt(2 * options.energy_ev * ONE_EV / M))
         if options.field == 'coils':
-            self.coils = Coils.from_json(str(COILS))
-            self.field = BiotSavart(self.coils)
+            self.field = BiotSavart(Coils.from_json(str(COILS)))
             self.points = jnp.column_stack((jnp.linspace(1.23, 1.27, n), jnp.zeros((n, 2))))
             self.pitch = jnp.linspace(.35, .65, n)
             return
         if options.field == 'vmec':
             self.field = Vmec(str(options.wout), ntheta=8, nphi=8)
         else:
-            self.field, self.geometry = boozer_field(options)
+            self.field = boozer_field(options)
         self.points = jnp.asarray(np.column_stack((np.full(n, .3), rng.uniform(0, 2 * np.pi, n),
                                                    rng.uniform(0, 2 * np.pi / self.field.nfp, n))))
         self.pitch = jnp.asarray(rng.uniform(-.7, .7, n))
 
-    def particles(self, source=None, shift=jnp.zeros(3)):
-        """Births for ``trace_split``; ``shift`` offsets (radius, pitch, log energy) for AD."""
+    def particles(self):
+        """Coil-field births for the collisionless solvers."""
         options = self.options
-        source = self.field if source is None else source
-        birth = Particles(self.points.at[:, 0].add(shift[0]), mass=M, charge=Q,
-                          energy=options.energy_ev * ONE_EV * jnp.exp(shift[2]),
-                          initial_vparallel_over_v=self.pitch + shift[1],
-                          field=source if options.model == 'lorentz' else None, phase_angle_full_orbit=jnp.pi)
-        birth.random_keys = jax.random.split(jax.random.key(options.seed), options.particles)
-        return birth
+        return Particles(self.points, mass=M, charge=Q, energy=options.energy_ev * ONE_EV,
+                         initial_vparallel_over_v=self.pitch,
+                         field=self.field if options.model == 'lorentz' else None, phase_angle_full_orbit=jnp.pi)
 
     def orbit_state(self):
         """Initial states and magnetic moments (Boozer only) for the collisionless solvers."""
@@ -178,12 +167,6 @@ class Case:
                 self.speed**2 * (1 - self.pitch**2) / (2 * modb))
 
 
-def bath():
-    """Singly charged proton bath used by the split and AD suites."""
-    return BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([BATH_DENSITY]),
-                             jnp.array([BATH_TEMPERATURE_EV]))
-
-
 def schedule(options):
     """Save times and the orbit initial step; the fixed step divides the horizon evenly."""
     times = np.linspace(0., options.horizon, options.saves)
@@ -191,7 +174,7 @@ def schedule(options):
     return times, adaptive, options.horizon / 4 if adaptive else options.horizon / options.steps
 
 
-# --------------------------------------------------------------------------- orbit and split suites
+# --------------------------------------------------------------------------- orbit suite
 
 def orbit_suite(options, case, execution):
     """Collisionless native orbit timing for one execution."""
@@ -216,70 +199,6 @@ def orbit_suite(options, case, execution):
     row = report_row(f'orbit/{execution}', options.particles, timing, status,
                      accepted=int(np.sum(counts[:, 1])), rejected=int(np.sum(counts[:, 2])))
     return [row], {row['name']: np.asarray(states)}
-
-
-def split_run(options, case, execution, source=None, shift=jnp.zeros(3), **adjoint):
-    """``trace_split`` with the benchmark's controls; extra keywords select the adjoint."""
-    times, adaptive, dt = schedule(options)
-    gc = options.model == 'gc'
-    source = case.field if source is None else source
-    return trace_split(
-        source, case.particles(source, shift), bath(), model='GuidingCenter' if gc else 'FullOrbit',
-        tmax=options.horizon, timestep=dt, collision_dtmax=options.horizon / 2 if adaptive else dt,
-        times=times, orbit_dt0=dt, adaptive=adaptive, orbit_adaptive=adaptive, rtol=options.rtol,
-        atol=options.atol, collision_tolerance=1e-3, moment_tolerance=.005, spatial_geometry=case.geometry,
-        spatial_diffusion=gc, execution='independent' if execution == 'cuda' else 'shared',
-        max_steps=options.max_steps, max_orbit_steps=options.max_orbit_steps, **adjoint)
-
-
-def split_suite(options, case, execution):
-    """Orbit plus collisions timing for one execution."""
-    out, timing = measure(lambda: split_run(options, case, execution), repeats=options.repeats, **GPU_FORWARD)
-    row = report_row(f'split/{execution}', options.particles, timing, out.status,
-                     collision_updates=int(np.sum(out.stats.accepted)),
-                     accepted_orbit_steps=int(np.sum(out.stats.accepted_orbit_steps)))
-    return [row], {row['name']: np.asarray(out.ys)}
-
-
-# --------------------------------------------------------------------------- AD suite
-
-def ad_suite(options, case, execution):
-    """Reverse AD with respect to (coil DOFs,) radius, pitch and log-energy births.
-
-    The native pass uses ``execution`` with ``reverse_execution='auto'``; the shared pass
-    forces ordinary JAX forward and reverse. The scalar objective is the same smooth
-    function in every chart: mean squared position plus mean squared final parallel speed.
-    """
-    dofs = jnp.asarray(case.coils.dofs) if case.coils is not None else jnp.empty(0)
-    p0 = jnp.concatenate((dofs, jnp.zeros(3)))
-    adjoint = dict(adjoint_max_accepted_steps=options.capacity, adjoint_max_orbit_steps=options.capacity,
-                   adjoint_checkpoint_steps=options.segment, adjoint_orbit_checkpoint_steps=options.segment)
-    rows, gradients = [], {}
-    for name in dict.fromkeys((execution, 'jax')):
-        reverse = 'shared' if name == 'jax' else 'auto'
-
-        def run(p, **kwargs):
-            source = case.field if case.coils is None else BiotSavart(case.coils.with_dofs(p[:-3]))
-            return split_run(options, case, name, source, p[-3:], reverse_execution=reverse, **kwargs)
-
-        def objective(p):
-            out = run(p, adjoint='accepted', **adjoint)
-            return (jnp.mean(jnp.sum(out.ys[..., :3]**2, axis=-1)) + jnp.mean(out.y[..., 3]**2) / case.speed**2)
-
-        forward, timing = measure(run, p0, repeats=options.repeats, **gpu_jit_options())
-        (value, gradient), ad = measure(jax.value_and_grad(objective), p0, repeats=options.repeats,
-                                        **gpu_jit_options())
-        gradients[name] = np.asarray(gradient)
-        rows.append(report_row(f'ad/{name}', options.particles, ad, forward.status, value=float(value),
-                               gradient_norm=float(np.linalg.norm(gradient)), forward_warm_s=timing['warm_s'],
-                               ad_over_forward=ad['warm_s'] / timing['warm_s']))
-    if len(gradients) == 2:
-        native, shared = gradients[execution], gradients['jax']
-        rows[0]['gradient_relative_difference_to_shared'] = float(
-            np.linalg.norm(native - shared) / np.linalg.norm(shared))
-        print(f"native versus shared gradient: relative difference "
-              f"{rows[0]['gradient_relative_difference_to_shared']:.3g}", flush=True)
-    return rows, {f'gradient_{k}': v for k, v in gradients.items()}
 
 
 # --------------------------------------------------------------------------- collision references
@@ -527,7 +446,7 @@ def passage_row(options, law, out):
 
 def parse(argv):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--suite', choices=('orbit', 'split', 'ad', 'collisions'), required=True)
+    parser.add_argument('--suite', choices=('orbit', 'collisions'), required=True)
     parser.add_argument('--field', choices=('coils', 'vmec', 'boozer'), default='coils')
     parser.add_argument('--model', choices=('gc', 'lorentz'), default='gc', help='Lorentz needs coil fields')
     parser.add_argument('-N', '--particles', type=int, default=64)
@@ -543,11 +462,8 @@ def parse(argv):
     parser.add_argument('--atol', type=float, default=1e-9)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--max-steps', type=int, default=4096)
-    parser.add_argument('--max-orbit-steps', type=int, default=256)
     parser.add_argument('--wout', type=Path, default=WOUT)
     parser.add_argument('--boozer-modes', type=int, default=16, help='mboz = nboz of the Boozer transform')
-    parser.add_argument('--capacity', type=int, default=4096, help='AD tape capacity, accepted steps')
-    parser.add_argument('--segment', type=int, default=16, help='AD checkpoint segment length')
     parser.add_argument('--study', choices=('thermal', 'passage'), default='thermal')
     parser.add_argument('--law', choices=('constant', 'impact'), default='constant')
     parser.add_argument('--collision-tolerance', type=float, default=1e-3)
@@ -582,9 +498,8 @@ def main(argv=None):
         rows, states = collisions_suite(options)
     else:
         case = Case(options)
-        suite = dict(orbit=orbit_suite, split=split_suite, ad=ad_suite)[options.suite]
         for execution in options.executions:
-            new_rows, new_states = suite(options, case, execution)
+            new_rows, new_states = orbit_suite(options, case, execution)
             rows, states = rows + new_rows, states | new_states
     if options.out is not None:
         options.out.mkdir(parents=True, exist_ok=True)

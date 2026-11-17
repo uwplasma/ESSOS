@@ -2,11 +2,12 @@
 
 Fixed/adaptive integration, physical error budgets, standard dense output and
 events share one implementation. Independent GPU particle loops retain the
-same formulas. Diffrax is used only by the existing-Tracing result adapter;
-native numerical integration supports an optional accepted-step reverse rule.
+same formulas. Diffrax is used only by the existing-Tracing result adapter.
 """
 from dataclasses import dataclass
 from enum import IntEnum
+import functools
+import warnings
 from functools import partial
 from typing import Callable, NamedTuple
 import jax
@@ -344,9 +345,7 @@ def _first_hit(hits):
 def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                rtol=1e-9, atol=1e-9, event=None, root_find=True,
                max_steps=1_000_000, dtmin=0., dtmax=np.inf, record_steps=False, method="dopri5",
-               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, stage_execution="unrolled",
-               adjoint="none", adjoint_checkpoint_steps=16, adjoint_max_accepted_steps=None,
-               adjoint_parameter_accumulation="segment", _recorder=None):
+               error_norm=None, controller="i", pcoeff=.4, icoeff=.3, stage_execution="unrolled"):
     """Integrate an array state forward in time with bounded adaptive retries.
 
     ``ts`` is an ordered save grid, independent of the integration steps.
@@ -374,11 +373,8 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
 
     By default memory holds only the save grid and current step. Opt into an
     infinity-padded accepted-time history with ``record_steps=True``; its first
-    ``stats.accepted + 1`` entries are valid. This is diagnostic data for future
-    accepted-step inspection. ``adjoint="accepted"`` separately enables the
-    checkpointed reverse rule in ``essos.native_ad``. Its accepted times, event
-    fractions and controller decisions are frozen; stages and dense output
-    retain their physical derivatives.
+    ``stats.accepted + 1`` entries are valid. This is diagnostic data for
+    accepted-step inspection.
 
     Concrete invalid inputs raise ValueError. Invalid dynamic values under JIT
     return INVALID_INPUT. Non-finite states, derivatives or event values are
@@ -387,14 +383,6 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     ``method`` selects ``"dopri5"`` or ``"dopri8"``. The convenience entry points
     ``solve_rk45`` and ``solve_dopri8`` fix this choice.
     """
-    if adjoint not in ('none','accepted'):
-        raise ValueError("adjoint must be 'none' or 'accepted'")
-    if adjoint == 'accepted':
-        options=locals().copy()
-        from .native_ad import solve_accepted
-        for name in ('rhs','y0','args','adjoint','_recorder'):
-            options.pop(name)
-        return solve_accepted(rhs,y0,args,**options)
     if stage_execution not in ("loop", "unrolled"):
         raise ValueError("stage_execution must be 'loop' or 'unrolled'")
     trial_step = _trial_step if stage_execution == "loop" else _trial_unrolled
@@ -493,9 +481,6 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                               (ts[jnp.minimum(s["index"], len(ts) - 1)] == t0), body, s)
 
     state = save_initial(state)
-    initial_saves = state["index"]
-    if _recorder is not None:
-        state = _recorder.initialize(state)
 
     def advance(s):
         t, y = s["t"], s["y"]
@@ -596,8 +581,6 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
                 return dict(s, ys=s["ys"].at[i].set(value), saved_ts=s["saved_ts"].at[i].set(ts[i]), index=i + 1)
             updated = lax.while_loop(lambda s: accept & (s["index"] < len(ts)) &
                                      (ts[jnp.minimum(s["index"], len(ts) - 1)] <= stop_t), save, updated)
-        if _recorder is not None:
-            updated = _recorder.record(s, updated, t, y, h, fraction, accept)
         return updated
 
     state = lax.while_loop(lambda s: (s["t"] < t1) & (s["status"] == RKStatus.SUCCESS) &
@@ -606,7 +589,7 @@ def solve_rk(rhs, y0, args=None, *, t0=0., t1, dt0, ts=(), adaptive=True,
     solution = RKSolution(state["saved_ts"], state["ys"], state["t"], state["y"], status,
                       tree_util.tree_unflatten(structure, state["hits"]),
                       RKStats(state["steps"], state["accepted"], state["rejected"]), state["history"], state["h"])
-    return solution if _recorder is None else _recorder.finish(state, solution, initial_saves)
+    return solution
 
 
 def solve_rk45(rhs, y0, args=None, **kwargs):
@@ -648,66 +631,6 @@ def _kernel_is_finite(value):
     mask = jnp.asarray(exponent, dtype=unsigned)
     return jax.lax.bitwise_and(bits, mask) != mask
 
-
-def _bind_primitive(primitive, values, parameters):
-    """Bind an equation using either supported JAX get_bind_params ABI.
-
-    Older JAX returns (subfunctions, keyword_parameters); newer JAX returns
-    only keyword_parameters. Keep legacy subfunctions for opaque AD/call
-    primitives rather than discarding them while adapting ordinary equations.
-    This Python dispatch runs during graph preparation, not each RK stage.
-    """
-    if primitive.name in ("and", "or", "xor"):
-        values = _signed_wide_words(values)
-        if values[0] is not None:
-            result = _bind_primitive(primitive, values[1], parameters)
-            return jax.lax.bitcast_convert_type(result, jnp.uint64)
-        values = values[1]
-    binding = primitive.get_bind_params(parameters)
-    if isinstance(binding, tuple):
-        subfunctions, binding = binding
-        return primitive.bind(*subfunctions, *values, **binding)
-    return primitive.bind(*values, **binding)
-
-
-def _signed_wide_words(values):
-    """Return (True, int64 views) when a uint64 literal has its top bit set.
-
-    Pallas Triton builds integer constants as signed values, and since JAX 0.12
-    a literal such as 0xFFFFFFFFF8000000 raises ``std::bad_cast`` (it is the
-    mantissa mask inside the erf expansion). Bitwise operations act on the
-    same bits in either signedness, so run them on int64 views. Otherwise
-    return (None, values).
-    """
-    wide = [v for v in values if getattr(v, 'dtype', None) == jnp.uint64 and not isinstance(v, jax.core.Tracer)
-            and np.any(np.asarray(v) >> np.uint64(63))]
-    if not wide:
-        return None, values
-    return True, [(np.asarray(v).view(np.int64) if not isinstance(v, jax.core.Tracer) else
-                   jax.lax.bitcast_convert_type(v, jnp.int64)) if getattr(v, 'dtype', None) == jnp.uint64 else v
-                  for v in values]
-
-
-def _evaluate_inline(graph, constants, *arguments):
-    """Expose jit boundaries without entering custom AD/control-flow calls."""
-    from jax.extend.core import Literal
-    environment = dict(zip(graph.constvars, constants))
-    environment.update(zip(graph.invars, arguments))
-
-    def read(var):
-        return var.val if isinstance(var, Literal) else environment[var]
-
-    for equation in graph.eqns:
-        values = [read(var) for var in equation.invars]
-        if equation.primitive.name in ("jit", "pjit"):
-            nested = equation.params["jaxpr"]
-            result = _evaluate_inline(nested.jaxpr, nested.consts, *values)
-        else:
-            result = _bind_primitive(equation.primitive, values, equation.params)
-            if not equation.primitive.multiple_results:
-                result = [result]
-        environment.update(zip(equation.outvars, result))
-    return [read(var) for var in graph.outvars]
 
 # Private Biot-Savart GPU view
 
@@ -1021,7 +944,7 @@ def _prepare_vmec_gpu(field,mass,charge,energy,speed,times,dt0,rtol,atol,max_ste
 
 # Independent GPU particle loops
 
-# Shared persistent-kernel setup (used by the orbit and split solvers)
+# Persistent-kernel setup
 
 def require_cuda(interpret):
     """Reject non-CUDA backends unless the Pallas interpreter is requested."""
@@ -1080,6 +1003,23 @@ def save_loop(condition, write, index):
         index = write(carry[0])
         return index, condition(index)
     return jax.lax.while_loop(lambda c: c[1], advance, (index, condition(index)))[0]
+
+
+@functools.lru_cache(maxsize=None)
+def _kernel_lowers():
+    """True if this JAX can lower the Pallas idioms the fused kernels use (checked once)."""
+    def kernel(x, out):
+        def write(i):
+            out[i] = x[i]
+            return i + 1
+        save_loop(lambda i: i < 2, write, 0)
+        out[3] = _kernel_is_finite(x[2]).astype(x.dtype)
+    try:
+        jax.jit(lambda x: launch_kernel(kernel, jax.ShapeDtypeStruct((4,), x.dtype), (x,), warps=1,
+                                        interpret=False)).lower(jnp.ones(4))
+    except Exception:
+        return False
+    return True
 
 
 def launch_kernel(kernel, shapes, arguments, *, warps, interpret):
@@ -1301,6 +1241,11 @@ def prepare_solver(field, *, mass, charge, energy, times, dt0, model="gc", metho
     if vmec and model!='gc':
         raise ValueError("VMEC native integration supports guiding centers")
     size=5 if vmec else 4 if model=='gc' else 6
+    if execution=='cuda' and not interpret:
+        require_cuda(interpret)
+        if not _kernel_lowers():
+            warnings.warn("This JAX version cannot lower the fused Pallas kernel; using the portable path.")
+            execution='jax'
     if execution=='cuda':
         if controller!='i':
             raise ValueError("CUDA execution supports the I controller")
@@ -1383,10 +1328,7 @@ def _solve_tracing(trace, terms, controller, t0, y0, args, event, throw, exterio
         root_find=event.root_finder is not None, max_steps=trace.max_steps,
         method="dopri8" if trace.integrator == "essos_dopri8" else "dopri5",
         error_norm=_trace_error_norm(trace, exterior=exterior, flag=flag),
-        controller=trace.native_controller, pcoeff=trace.native_pcoeff, icoeff=trace.native_icoeff,
-        adjoint=trace.native_adjoint, adjoint_checkpoint_steps=trace.native_adjoint_checkpoint_steps,
-        adjoint_max_accepted_steps=trace.native_adjoint_max_accepted_steps,
-        adjoint_parameter_accumulation=trace.native_adjoint_parameter_accumulation)
+        controller=trace.native_controller, pcoeff=trace.native_pcoeff, icoeff=trace.native_icoeff)
     ys = solution.ys
     if throw:
         import equinox as eqx

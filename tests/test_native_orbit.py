@@ -1,6 +1,5 @@
 """Small forward contracts; GPU algebra is exercised on CPU via Pallas interpretation."""
 from pathlib import Path
-from types import SimpleNamespace
 import diffrax
 import jax
 import jax.numpy as jnp
@@ -334,36 +333,17 @@ def test_independent_gpu_loop_on_cpu(method):
 
 
 def test_rhs_preparation_and_gpu_helpers_preserve_values(monkeypatch):
-    from essos.rk import _select_one, _kernel_is_finite, _bind_primitive
+    from essos.rk import _select_one, _kernel_is_finite
     for dtype in (jnp.float32,jnp.float64):
         values=jnp.array([1.,np.inf,np.nan,-np.inf,-0.],dtype=dtype)
         np.testing.assert_array_equal(_kernel_is_finite(values),jnp.isfinite(values))
         assert np.signbit(_select_one(values,4,0).reshape(()))
-    class Primitive:
-        name='fake'
-        def get_bind_params(self,p): return ([],p)
-        def bind(self,*args,**kwargs): return args[0]+kwargs['offset']
-    assert _bind_primitive(Primitive(),[2.],dict(offset=3.))==5.
-    # JAX 0.6 calls this boundary "pjit"; current releases call it "jit".
-    nested=jax.make_jaxpr(lambda x:x*jnp.array([2.,3.]))(jnp.ones(2))
-    for name in ('jit','pjit'):
-        graph=SimpleNamespace(constvars=(),invars=('x',),outvars=('y',),eqns=(
-            SimpleNamespace(primitive=SimpleNamespace(name=name),params={'jaxpr':nested},
-                            invars=('x',),outvars=('y',)),))
-        inline=lambda x:rk._evaluate_inline(graph,(),x)[0].sum()
-        np.testing.assert_allclose(jax.jit(inline)(jnp.ones(2)),5.,atol=0)
-        np.testing.assert_array_equal(jax.grad(inline)(jnp.ones(2)),[2.,3.])
     def value(p):
         rhs=lambda t,y,args:jnp.sin(p)*y+t
         prepared=rk._prepare_rhs(rhs,jnp.asarray(0.),jnp.ones(2),None)
         return prepared(.2,jnp.array([2.,3.]),None).sum()
     np.testing.assert_allclose(jax.grad(value)(.3),5*np.cos(.3),atol=2e-14)
     with pytest.raises(TypeError): _kernel_is_finite(jnp.array([1],dtype=jnp.int32))
-    wide=np.uint64(0xFFFFFFFFF8000000)
-    for name,op in (('and',jnp.bitwise_and),('or',jnp.bitwise_or),('xor',jnp.bitwise_xor)):
-        bits=jnp.asarray(0x123456789ABCDEF0,jnp.uint64)
-        primitive={'and':jax.lax.and_p,'or':jax.lax.or_p,'xor':jax.lax.xor_p}[name]
-        np.testing.assert_array_equal(_bind_primitive(primitive,[bits,np.asarray(wide)],{}),op(bits,wide))
 
 
 def test_fixed_field_adapter_solvers_on_cpu():
@@ -380,3 +360,15 @@ def test_fixed_field_adapter_solvers_on_cpu():
         gpu=jax.jit(prepare_solver(field,execution='cuda',interpret=True,**args))(y)
         assert gpu.status==0
         np.testing.assert_allclose(gpu.y,reference.y,atol=3e-13)
+
+
+def test_unsupported_pallas_lowering_falls_back_to_portable_path(monkeypatch):
+    from essos.rk import prepare_solver
+    monkeypatch.setattr(rk,'require_cuda',lambda interpret:None)
+    monkeypatch.setattr(rk,'_kernel_lowers',lambda:False)
+    args=dict(mass=1.,charge=1.,energy=.5,times=np.array([0.,.001]),dt0=.001,max_steps=8)
+    y=jnp.array([1.,.03,.01,.3])
+    with pytest.warns(UserWarning,match='portable'):
+        fallback=jax.jit(prepare_solver(coil_field(),execution='cuda',**args))(y)
+    reference=jax.jit(prepare_solver(coil_field(),**args))(y)
+    np.testing.assert_array_equal(fallback.y,reference.y)
