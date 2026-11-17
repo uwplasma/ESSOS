@@ -1090,8 +1090,12 @@ class Tracing():
         # finish ran until the process was killed rather than returning.
         self.max_steps = max_steps
         # Reverse mode (jax.grad) by default; diffrax.ForwardMode() for jax.jvp and jax.jacfwd, which
-        # diffrax's checkpointed adjoint cannot do.
-        self.adjoint = diffrax.RecursiveCheckpointAdjoint() if adjoint is None else adjoint
+        # diffrax's checkpointed adjoint cannot do. A call outside every JAX transformation cannot be differentiated
+        # and runs diffrax's bounded loop (DirectAdjoint), whose steps cost less on a CPU.
+        if adjoint is None:
+            eager = getattr(jax._src.core, "trace_state_clean", lambda: False)()
+            adjoint = diffrax.DirectAdjoint() if eager else diffrax.RecursiveCheckpointAdjoint()
+        self.adjoint = adjoint
         # ESSOS_PROGRESS=0 turns every default progress bar off (the test suite does).
         self.progress = bool(progress) and os.environ.get("ESSOS_PROGRESS", "1") != "0"
         # With particle_batch_size, particles are traced in batches of that
