@@ -1442,9 +1442,9 @@ def test_loss_fraction_counts_particles_stopped_at_the_boundary(boundary):
             return 1.5 - xyz[0]
 
     tracing = Tracing(
-        field=MockField(), model="FieldLineAdaptative",
+        field=MockField(), model="FieldLineAdaptive",
         initial_conditions=jnp.array([[x0, 0.0, 0.0] for x0 in (0.0, 0.2, 0.4, 0.67, 0.93)]),
-        maxtime=1.0, timestep=0.01, times_to_trace=11,
+        tmax=1.0, timestep=0.01, n_save=11,
         stopping_criteria=LevelsetStoppingCriterion(Plane()))
     fractions, lost, times = tracing.loss_fraction(Plane() if boundary else None, r_max=1.5)
     assert tracing.boundary_hits.tolist() == [False, False, False, True, True]
