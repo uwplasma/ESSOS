@@ -299,7 +299,7 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
 
     The interpolation is cubic Hermite with centred-difference slopes (linear
     in the first interval): it keeps the grid values and its s derivative is
-    continuous. With linear
+    continuous (C2 across the last grid point, see below). With linear
     interpolation grad|B| jumps at every grid point, and a guiding center
     whose radial drift changes sign there chatters across it while the
     adaptive step shrinks to nothing; under vmap the whole batch then runs to
@@ -328,9 +328,11 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
     powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
     h = jnp.stack([(1 + 2 * t) * (1 - t)**2, t * (1 - t)**2, t * t * (3 - 2 * t), t * t * (t - 1)])
-    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue linearly with the end slope,
-    # so value and s derivative stay continuous up to the LCFS instead of freezing there.
-    beyond = jnp.maximum(u - 1.0, 0.0) * slope[i + 1]
+    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue with a parabola that has the end
+    # value, slope and curvature of the cubic, so the interpolant stays C2 up to the LCFS (a kink in the second
+    # derivative gives the adaptive integrator an uncontrolled tangent error) instead of freezing there.
+    over = jnp.maximum(u - 1.0, 0.0)
+    beyond = over * slope[i + 1] + 0.5 * over**2 * (6 * (scaled[i] - scaled[i + 1]) + 2 * slope[i] + 4 * slope[i + 1])
     return (powers @ (k == np.arange(-1, 4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
                                                           + h[2] * scaled[i + 1] + h[3] * slope[i + 1] + beyond)
 

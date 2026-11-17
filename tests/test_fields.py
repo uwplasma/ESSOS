@@ -201,6 +201,18 @@ def test_vmec_radial_interpolation_keeps_grid_values_and_m0_modes():
     assert jnp.allclose(d(node - 1e-9), d(node + 1e-9), rtol=1e-6, atol=1e-9)
 
 
+def test_vmec_radial_interpolation_is_c2_across_the_last_half_grid_point_and_beyond():
+    """A kink in the second derivative at the end of the half grid gives the adaptive integrator an uncontrolled tangent error."""
+    from essos.fields import Vmec, _radial_interp
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    d2 = jax.jacfwd(jax.jacfwd(lambda s: _radial_interp(s, vmec.s_half_grid, vmec.bmnc, vmec.xm_nyq, half_grid=True)))
+    node = vmec.s_half_grid[-1]
+    scale = jnp.abs(d2(node - 1e-9)).max()
+    assert jnp.abs(d2(node - 1e-9) - d2(node + 1e-9)).max() < 1e-5 * scale
+    assert jnp.isfinite(d2(1.0)).all()
+
+
 def test_vmec_analytic_derivatives_match_automatic_differentiation():
     from essos.fields import Vmec
 
