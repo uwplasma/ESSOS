@@ -273,8 +273,9 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
   so a trace that cannot finish returns instead of running unbounded.
   With `step_budget=k` particles advance at most `k` steps per round and the
   ones that finished or were lost leave the batch, instead of every particle
-  running to the step count of the slowest; this pays when many are lost
-  early (1.9x less CPU for 64 edge-born alphas, 48 lost).
+  running to the step count of the slowest; this pays for large batches with
+  many early losses on few threads (1.9x less CPU for 64 edge-born alphas on
+  one thread, 1.6x for 256 in a VMEC field) and costs time on small batches.
 - **Progress bars** are off by default; pass `progress=True` when interactive.
   With `particle_batch_size=n` particles are traced `n` at a time and the bar
   counts completed particles (batches are bypassed under `jax.jit`/`grad`).
