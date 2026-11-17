@@ -1443,12 +1443,12 @@ class Tracing():
     def _solve(self, terms, solver, controller, t0, y0, args, event, throw=False, resume=False, controller_state=None):
         """diffeqsolve from t0 to maxtime, saving at self.times (clipped to t0) and at the end.
 
-        With ``resume`` it takes at most step_budget steps from ``controller_state`` (None for a fixed step; from
-        _EventSteps its last entry is the next step) and returns the controller state, so a later solve continues."""
+        With ``resume`` it takes at most step_budget steps from ``controller_state`` (from _EventSteps its last entry
+        is the next step; a fixed step restarts with timestep) and returns the controller state."""
         import warnings
         warnings.simplefilter("ignore", category=FutureWarning)  # see https://github.com/patrick-kidger/diffrax/issues/445
         return diffeqsolve(terms, solver, t0=t0, t1=self.maxtime, y0=y0, args=args, controller_state=controller_state,
-                           dt0=self.timestep if controller_state is None else controller_state[-1],
+                           dt0=controller_state[-1] if resume and isinstance(controller, _EventSteps) else self.timestep,
                            saveat=SaveAt(subs=[diffrax.SubSaveAt(ts=jnp.clip(self.times, t0, self.maxtime)),
                                                diffrax.SubSaveAt(t1=True)], controller_state=resume),
                            stepsize_controller=controller, event=event, throw=throw,
