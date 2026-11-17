@@ -901,6 +901,8 @@ class SurfaceClassifier():
     Takes in a toroidal surface and constructs an interpolant of the signed distance function
     :math:`f:R^3\to R` that is positive inside the volume contained by the surface,
     (approximately) zero on the surface, and negative outisde the volume contained by the surface.
+    The table covers one field period of a surface with ``nfp``, and half of it when the
+    surface is stellarator symmetric (no ``rs``/``zc`` coefficients, or all zero).
     """
 
     def __init__(self, surface, h=0.05, padding=0.1):
@@ -923,8 +925,12 @@ class SurfaceClassifier():
         self.zrange = (zmin, zmax)
         self.rrange = (rmin, rmax)
 
+        self.period = 2 * np.pi / int(getattr(surface, "nfp", 1))
+        self.stellsym = hasattr(surface, "rc") and not any(
+            np.any(np.asarray(getattr(surface, name))) for name in ("rs", "zc") if getattr(surface, name, None) is not None)
+        span = self.period / (1 + self.stellsym)  # the rest of the torus maps onto [0, span] by symmetry
         nr = int((self.rrange[1]-self.rrange[0])/h)
-        nphi = int(2*jnp.pi/h)
+        nphi = int(np.ceil(span * (int(2 * np.pi / h) - 1) / (2 * np.pi) - 1e-9)) + 1  # the full-torus spacing 2 pi / (int(2 pi / h) - 1)
         nz = int((self.zrange[1]-self.zrange[0])/h)
 
         gammas_flat = surface.gamma.reshape((-1, 3))
@@ -963,28 +969,21 @@ class SurfaceClassifier():
         #self.dist = RegularGridInterpolator((self.r_list,self.phi_list, self.z_list),
         #            vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(self.r_list,self.phi_list, self.z_list),fill_value=-1.)        
         self.dist = RegularGridInterpolator((jnp.linspace(rmin,rmax,nr),
-                    jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),
+                    jnp.linspace(0., span, nphi), jnp.linspace(zmin, zmax, nz)),
                     vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(jnp.linspace(rmin,rmax,nr),
-                    jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),fill_value=-1.)
-        #self.dist.interpolate_batch(fbatch)    
+                    jnp.linspace(0., span, nphi), jnp.linspace(zmin, zmax, nz)),fill_value=-1.)
 
     @partial(jit, static_argnames=['self'])
     def evaluate_xyz(self, xyz):
-        rphiz = jnp.zeros_like(xyz)
-        rphiz=rphiz.at[0].set(jnp.linalg.norm(xyz[:2]))
-        rphiz=rphiz.at[1].set(jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2*jnp.pi))
-        rphiz=rphiz.at[2].set(xyz.at[2].get())
-        # initialize to -1 since the regular grid interpolant will just keep
-        # that value when evaluated outside of bounds
-        d=self.dist(rphiz)[0][0]
-        return d
+        return self.evaluate_rphiz(jnp.array([jnp.linalg.norm(xyz[:2]), jnp.arctan2(xyz[1], xyz[0]), xyz[2]]))
 
     @partial(jit, static_argnames=['self'])
     def evaluate_rphiz(self, rphiz):
+        phi = jnp.mod(rphiz[1], self.period)
+        flip = self.stellsym & (phi > self.period / 2)  # (R, phi, Z) -> (R, -phi, -Z)
         # initialize to -1 since the regular grid interpolant will just keep
         # that value when evaluated outside of bounds
-        d=self.dist(rphiz)[0][0]
-        return d
+        return self.dist(jnp.array([rphiz[0], jnp.where(flip, self.period - phi, phi), jnp.where(flip, -rphiz[2], rphiz[2])]))[0][0]
     
 
 @partial(jit, static_argnames=['surface'])
