@@ -1110,11 +1110,11 @@ class Tracing():
         self.particle_batch_size = None if particle_batch_size is None else int(particle_batch_size)
         # With step_budget, particles advance at most that many steps per round, finished ones (at maxtime or a
         # stopping criterion) leave the batch, and the rest continue. A vmapped solve otherwise runs every particle to
-        # the step count of the slowest. Not under a JAX transformation, VMEC's default events or FullOrbit_Boris.
+        # the step count of the slowest. Not under a JAX transformation, FullOrbit_Boris or the clipped controller.
         if step_budget is not None and (model in ('FullOrbit_Boris', 'GuidingCenterCollisionsMuAdaptative')
-                                        or self._vmec_default or int(step_budget) <= 0):
-            raise ValueError("step_budget must be a positive integer, and not for FullOrbit_Boris, "
-                             "GuidingCenterCollisionsMuAdaptative or VMEC guiding centers without a condition")
+                                        or int(step_budget) <= 0):
+            raise ValueError("step_budget must be a positive integer, and not for FullOrbit_Boris or "
+                             "GuidingCenterCollisionsMuAdaptative")
         self.step_budget = None if step_budget is None else int(step_budget)
         # Diffrax's meter is an unordered callback, which the vmapped while loop of
         # the VMEC segment path rejects; that path reports progress by batches only.
@@ -1314,7 +1314,7 @@ class Tracing():
         n = len(y0)
         traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys, self.args, self.exterior_field)))
         if self.step_budget is not None and not traced:
-            return self._trace_rounds(y0, keys)
+            return self._trace_vmec_rounds(y0, keys) if self._vmec_default else self._trace_rounds(y0, keys)
         batch = n if self.particle_batch_size is None or traced else min(self.particle_batch_size, n)
         # Sharding pays off for plain traces. A differentiated trace stays on one device: XLA 0.6 aborts compiling
         # a gradient through a while loop sharded over several CPU devices.
@@ -1381,8 +1381,26 @@ class Tracing():
         masks = tree_util.tree_map(jnp.asarray, masks)
         return ys if self.stopping_criteria is None else (ys, masks)
 
+    def _trace_vmec_rounds(self, y0, keys):
+        """_trace_rounds for VMEC guiding centers: each round is one _vmec_pass of the orbits still active."""
+        o = tree_util.tree_map(np.array, jit(vmap(self._vmec_start))(y0, keys))
+        solve, active = _batch_solver(self, self.devices[0], rounds=True), np.arange(len(y0))
+        for _ in range((self.max_returns + 1) * 2 * -(-self.max_steps // self.step_budget)):
+            if not active.size:
+                break
+            step = 1 << max(active.size.bit_length() - 3, 0)
+            index = np.append(active, np.full(-active.size % step, active[-1]))
+            new = solve(tree_util.tree_map(lambda x: x[index], o), None if keys is None else keys[index])
+            for x, y in zip(tree_util.tree_leaves(o), tree_util.tree_leaves(new)):
+                x[active] = np.asarray(y)[:active.size]
+            active = active[o["active"][active]]
+        o["status"][active], o["active"][active] = 4, False  # out of steps: failed, as without a budget
+        return vmap(self._vmec_finish)(tree_util.tree_map(jnp.asarray, o))
+
     def _advance(self, state, key):
         """One round of _trace_rounds for one particle: (saves, state, finished, event mask)."""
+        if self._vmec_default:
+            return self._vmec_pass(state, key)
         y0, t0, controller_state = state
         terms, solver, controller = self._terms(key)
         solution = self._solve(terms, solver, controller, t0, y0, self.args, Event(self.condition), resume=True,
@@ -1452,30 +1470,71 @@ class Tracing():
         does not toggle the segment. The derivative is that of the orbit's own sequence of segments: where a small
         change adds or removes a crossing or a re-entry, the result jumps (it is finite, not smoothed).
         """
-        T, times, ext = self.maxtime, self.times, self.exterior_field
+        o = self._vmec_start(y0, key)
+        # Every pass ends an inside and an outside segment, so max_returns + 1 passes finish every orbit. A bounded scan
+        # (not a while loop) differentiates in reverse mode; the cond, taken once no orbit of the batch is active, skips
+        # the remaining passes, so the forward cost is that of the loop.
+        o = lax.scan(lambda o, _: (lax.cond(eqxi.unvmap_any(o["active"]), lambda o: self._vmec_pass(o, key),
+                                            lambda o: o, o), None),
+                     o, None, length=self.max_returns * (self.exterior_field is not None) + 1)[0]
+        return self._vmec_finish(o)
+
+    def _vmec_segments(self, key):
+        """Terms, solver, controller, args and event of the inside and (with exterior_field) outside segments."""
         lcfs = lambda y: 1.0 - y[0]**2 - y[1]**2
         inside = (*self._terms(key, flag=True, events=(lcfs,)), self.args,
-                  Event((lambda t, y, args, **kwargs: lcfs(y), _failed_event),
-                        root_finder=_EVENT_ROOT_FINDER))
-        if ext is not None:
-            wall = self.wall if self.wall is not None else (lambda x: jnp.ones(()))
-            depth = lambda y: self.field.boundary_distance(y[:3]) - self.reentry_depth
-            outside = (ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else
-                       diffrax.Dopri8(), _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
-                                                     events=(lambda y: wall(y[:3]), depth)),
-                       (ext, self.particles, Electric_field_zero()),
-                       Event((lambda t, y, args, **kwargs: wall(y[:3]), lambda t, y, args, **kwargs: depth(y), _failed_event),
-                             root_finder=_EVENT_ROOT_FINDER))
+                  Event((lambda t, y, args, **kwargs: lcfs(y), _failed_event), root_finder=_EVENT_ROOT_FINDER))
+        if self.exterior_field is None:
+            return inside, None
+        wall = self.wall if self.wall is not None else (lambda x: jnp.ones(()))
+        depth = lambda y: self.field.boundary_distance(y[:3]) - self.reentry_depth
+        outside = (ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else
+                   diffrax.Dopri8(), _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
+                                                 events=(lambda y: wall(y[:3]), depth)),
+                   (self.exterior_field, self.particles, Electric_field_zero()),
+                   Event((lambda t, y, args, **kwargs: wall(y[:3]), lambda t, y, args, **kwargs: depth(y), _failed_event),
+                         root_finder=_EVENT_ROOT_FINDER))
+        return inside, outside
 
-        def segment(o, run, spec, y, code, to_flux=lambda y: y):
+    def _vmec_start(self, y0, key):
+        """The state of one orbit before its first segment (with step_budget, also the controllers' first states)."""
+        nt, d = len(self.times), y0.shape[0]
+        o = dict(t=jnp.zeros(()), y=y0, x=self._vmec_to_exterior(y0)[0], inside=jnp.array(True), active=jnp.array(True),
+                 status=jnp.zeros((), jnp.int8), returns=jnp.zeros((), int), lcfs_time=jnp.full((), jnp.inf),
+                 lcfs_state=jnp.full(d, jnp.nan), lcfs_energy=jnp.full((), jnp.nan), traj=jnp.full((nt, d), jnp.inf),
+                 xyz=jnp.full((nt, 3), jnp.nan), region=jnp.full(nt, -1, dtype=jnp.int8))
+        if self.step_budget is not None:
+            for name, spec, y in zip(("in", "out"), self._vmec_segments(key), (_to_axis_regular(y0), o["x"])):
+                if spec is not None:
+                    terms, solver, controller = spec[:3]
+                    o["c_" + name] = o["c0_" + name] = controller.init(
+                        terms, 0.0, self.maxtime, jnp.append(y, 0.0), self.timestep, spec[3], solver.func,
+                        solver.error_order(terms))[1]
+        return o
+
+    def _vmec_finish(self, o):
+        if self.exterior_field is not None:  # energy at the end outside, the strike for a wall hit
+            o["x_energy"] = 0.5 * self.particles.mass * o["x"][3]**2 + o["x"][4] * self.exterior_field.AbsB(o["x"][:3])
+        return o
+
+    def _vmec_pass(self, o, key):
+        """One inside and one outside segment of an orbit. With step_budget a segment stops after that many steps and
+        the orbit pauses in its region (the next pass continues it); otherwise a segment that runs out of steps fails."""
+        T, times, ext, budget = self.maxtime, self.times, self.exterior_field, self.step_budget is not None
+        inside, outside = self._vmec_segments(key)
+        wall = self.wall if self.wall is not None else (lambda x: jnp.ones(()))
+
+        def segment(o, run, spec, y, code, name, to_flux=lambda y: y):
             """Solve one segment of the orbits in ``run`` and record its saves."""
             # A lane that does not run starts just before maxtime, not at it: diffrax 0.7.0 differentiates an event root
             # find over a zero-length step with a non-finite Jacobian, which its linear solver rejects in reverse mode.
-            solution = self._solve(*spec[:3], jnp.where(run, o["t"], T * (1 - 1e-9)), jnp.append(y, 0.0), *spec[3:])
+            solution = self._solve(*spec[:3], jnp.where(run, o["t"], T * (1 - 1e-9)), jnp.append(y, 0.0), *spec[3:],
+                                   resume=budget, controller_state=o["c_" + name] if budget else None)
             saves, end = vmap(to_flux)(solution.ys[0][:, :-1]), to_flux(solution.ys[1][-1, :-1])
-            failed = run & (solution.event_mask[-1] | ~((solution.result == diffrax.RESULTS.successful)
-                            | (solution.result == diffrax.RESULTS.event_occurred)
-                            | (solution.result == diffrax.RESULTS.nonlinear_max_steps_reached)))
+            paused = run & (solution.result == diffrax.RESULTS.max_steps_reached) if budget else jnp.array(False)
+            failed = run & ~paused & (solution.event_mask[-1] | ~((solution.result == diffrax.RESULTS.successful)
+                                      | (solution.result == diffrax.RESULTS.event_occurred)
+                                      | (solution.result == diffrax.RESULTS.nonlinear_max_steps_reached)))
             t_end = jnp.where(run, solution.ts[1][-1], o["t"])
             window = run & (times >= o["t"]) & (times <= t_end) & jnp.isfinite(saves).all(1)
             # to_xyz of the unused (inf) saves would put NaN partials into the coefficient gradients; not vmap: one save at a time
@@ -1483,48 +1542,48 @@ class Tracing():
             o = dict(o, xyz=jnp.where(window[:, None], xyz, o["xyz"]), region=jnp.where(window, code, o["region"]))
             if code == 0:
                 o["traj"] = jnp.where(window[:, None], saves, o["traj"])
-            return o, t_end, end, [run & ~failed & hit for hit in solution.event_mask[:-1]], failed
+            if budget:
+                o["c_" + name] = tree_util.tree_map(lambda a, b: jnp.where(run, a, b), solution.controller_state,
+                                                    o["c_" + name])
+                # A paused orbit resumes from its last save. Under vmap, once any orbit of the batch has an event,
+                # diffrax root-finds on every orbit, and an orbit stopped by max_steps can end inside a rejected step.
+                last = jnp.max(jnp.where(window, jnp.arange(len(times)), -1))
+                saved = paused & (last >= 0)
+                t_end = jnp.where(saved, times[jnp.maximum(last, 0)], t_end)
+                end = jnp.where(saved, saves[jnp.maximum(last, 0)], end)
+            return o, t_end, end, [run & ~failed & hit for hit in solution.event_mask[:-1]], failed, paused
 
-        def step(o):
-            # Inside; an orbit that starts outside the LCFS crosses at once.
-            run = o["active"] & o["inside"]
-            out = o["y"][0] >= 1.0
-            o, t_end, end, (crossed,), failed = segment(o, run & ~out, inside, _to_axis_regular(o["y"]), 0,
-                                                       _from_axis_regular)
-            crossed, end = crossed | (run & out), jnp.where(out, o["y"], end)
-            x, E = self._vmec_to_exterior(end)
-            first = crossed & jnp.isinf(o["lcfs_time"])
-            o.update(t=t_end, lcfs_time=jnp.where(first, t_end, o["lcfs_time"]),
-                     lcfs_state=jnp.where(first, end, o["lcfs_state"]), lcfs_energy=jnp.where(first, E, o["lcfs_energy"]),
-                     status=jnp.select([failed, run & ~crossed, crossed & (ext is None)], [4, 0, 1], o["status"]),
-                     active=o["active"] & ~(failed | (run & ~crossed) | (crossed & (ext is None))),
-                     inside=o["inside"] & ~crossed, x=jnp.where(crossed, x, o["x"]))
-            if ext is None:
-                return o
-            # Outside, to the wall, maxtime, or back inside.
-            run = o["active"] & ~o["inside"]
-            behind = run & (wall(o["x"][:3]) <= 0)  # the wall is already crossed at the exit point: a hit at the exit time
-            o, t_end, end, (struck, returned), failed = segment(o, run & ~behind, outside, o["x"], 1)
-            struck = struck | behind
-            returned &= ~struck
-            back = returned & (o["returns"] < self.max_returns)
-            o.update(t=t_end, returns=o["returns"] + back, inside=o["inside"] | back, active=o["active"] & ~(run & ~back),
-                     status=jnp.select([failed, struck, returned & ~back, run & ~back], [4, 3, 5, 2], o["status"]),
-                     x=jnp.where(run & ~behind, end, o["x"]), y=jnp.where(back, self._vmec_from_exterior(end), o["y"]))
+        # Inside; an orbit that starts outside the LCFS crosses at once.
+        run = o["active"] & o["inside"]
+        out = o["y"][0] >= 1.0
+        o, t_end, end, (crossed,), failed, paused = segment(o, run & ~out, inside, _to_axis_regular(o["y"]), 0, "in",
+                                                            _from_axis_regular)
+        crossed, end = crossed | (run & out), jnp.where(out, o["y"], end)
+        x, E = self._vmec_to_exterior(end)
+        first = crossed & jnp.isinf(o["lcfs_time"])
+        done = run & ~crossed & ~paused  # at maxtime
+        o.update(t=t_end, lcfs_time=jnp.where(first, t_end, o["lcfs_time"]),
+                 lcfs_state=jnp.where(first, end, o["lcfs_state"]), lcfs_energy=jnp.where(first, E, o["lcfs_energy"]),
+                 status=jnp.select([failed, done, crossed & (ext is None)], [4, 0, 1], o["status"]),
+                 active=o["active"] & ~(failed | done | (crossed & (ext is None))),
+                 inside=o["inside"] & ~crossed, x=jnp.where(crossed, x, o["x"]), y=jnp.where(paused, end, o["y"]))
+        if ext is None:
             return o
-
-        nt, d = len(times), y0.shape[0]
-        o = dict(t=jnp.zeros(()), y=y0, x=self._vmec_to_exterior(y0)[0], inside=jnp.array(True), active=jnp.array(True),
-                 status=jnp.zeros((), jnp.int8), returns=jnp.zeros((), int), lcfs_time=jnp.full((), jnp.inf),
-                 lcfs_state=jnp.full(d, jnp.nan), lcfs_energy=jnp.full((), jnp.nan), traj=jnp.full((nt, d), jnp.inf),
-                 xyz=jnp.full((nt, 3), jnp.nan), region=jnp.full(nt, -1, dtype=jnp.int8))
-        # Every pass ends an inside and an outside segment, so max_returns + 1 passes finish every orbit. A bounded scan
-        # (not a while loop) differentiates in reverse mode; the cond, taken once no orbit of the batch is active, skips
-        # the remaining passes, so the forward cost is that of the loop.
-        o = lax.scan(lambda o, _: (lax.cond(eqxi.unvmap_any(o["active"]), step, lambda o: o, o), None), o, None,
-                     length=self.max_returns * (ext is not None) + 1)[0]
-        if ext is not None:  # energy at the end outside, the strike for a wall hit
-            o["x_energy"] = 0.5 * self.particles.mass * o["x"][3]**2 + o["x"][4] * ext.AbsB(o["x"][:3])
+        if budget:  # a new segment starts with the controller's first state, as without a budget
+            o["c_out"] = tree_util.tree_map(lambda a, b: jnp.where(crossed, a, b), o["c0_out"], o["c_out"])
+        # Outside, to the wall, maxtime, or back inside.
+        run = o["active"] & ~o["inside"]
+        behind = run & (wall(o["x"][:3]) <= 0)  # the wall is already crossed at the exit point: a hit at the exit time
+        o, t_end, end, (struck, returned), failed, paused = segment(o, run & ~behind, outside, o["x"], 1, "out")
+        struck = struck | behind
+        returned &= ~struck
+        back = returned & (o["returns"] < self.max_returns)
+        stop = run & ~back & ~paused
+        o.update(t=t_end, returns=o["returns"] + back, inside=o["inside"] | back, active=o["active"] & ~stop,
+                 status=jnp.select([failed, struck, returned & ~back, stop], [4, 3, 5, 2], o["status"]),
+                 x=jnp.where(run & ~behind, end, o["x"]), y=jnp.where(back, self._vmec_from_exterior(end), o["y"]))
+        if budget:
+            o["c_in"] = tree_util.tree_map(lambda a, b: jnp.where(back, a, b), o["c0_in"], o["c_in"])
         return o
 
     def _vmec_to_exterior(self, y):

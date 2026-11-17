@@ -1076,6 +1076,24 @@ STRIKING = ([[0.9732, 2.2941, 5.0876], [0.9821, 0.6628, 3.5216], [0.9554, 0.7221
             [-0.9872, 0.5453, 0.747, -0.8145])
 
 
+@pytest.mark.parametrize("exterior", [False, True])
+def test_vmec_step_budget_matches_one_solve(exterior):
+    """Rounds of 16 steps give the LCFS crossings, wall strikes and orbits of one solve (a pause passes the state
+    through the axis-regular chart, so to about 1e-9)."""
+    if exterior:
+        trace = lambda budget: _exterior_tracing(*STRIKING, maxtime=3e-6, step_budget=budget)
+    else:
+        trace = lambda budget: _edge_tracing("GuidingCenterAdaptative", 0.975, 50, atol=1e-9, rtol=1e-9,
+                                             step_budget=budget)
+    whole, rounds = trace(None), trace(16)
+    assert np.array_equal(rounds.status, whole.status) and np.array_equal(rounds.returns, whole.returns)
+    for name in ("lcfs_times", "wall_times", "lost_times"):
+        np.testing.assert_allclose(getattr(rounds, name), getattr(whole, name), rtol=1e-7)
+    both = jnp.isfinite(whole.trajectories)
+    assert jnp.array_equal(both, jnp.isfinite(rounds.trajectories))
+    np.testing.assert_allclose(rounds.trajectories[both], whole.trajectories[both], rtol=1e-7, atol=1e-9)
+
+
 def test_wall_given_as_a_gap_or_a_surface():
     from essos.surfaces import SurfaceRZFourier
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
