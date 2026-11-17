@@ -1,5 +1,6 @@
 import os
 from time import time
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from essos.fields import BiotSavart, InterpolatedField
@@ -17,7 +18,9 @@ R0 = jnp.linspace(1.23, 1.27, nparticles)
 atol = 1e-7
 rtol = 1e-7
 energy=4000*ONE_EV
-grid = 32  # interpolation nodes in R and Z, and per field period in phi; None traces Biot-Savart directly
+# Interpolation nodes in R and Z, and per field period in phi; None traces Biot-Savart directly. On a GPU the
+# direct field was faster (A4000: 3.2 s against 5.7 s for 32 alphas, plus 18 s to build the table).
+grid = 32 if jax.default_backend() == "cpu" else None
 
 # Load coils and field
 json_file = os.path.join(os.path.dirname(__file__), '..', 'input_files', 'ESSOS_biot_savart_LandremanPaulQA.json')
