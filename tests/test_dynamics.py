@@ -1181,6 +1181,27 @@ def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and
     np.testing.assert_allclose(grad_s @ ds + grad_p @ dparams, forward, rtol=1e-5)
 
 
+def test_vmec_launch_derivative_of_the_exit_time_is_dual_in_both_modes_for_an_orbit_crossing_the_last_radial_node():
+    """The orbit starts inside the last half-grid node of the radial interpolation and crosses it on its way out: with a
+    second derivative that jumps there, the forward and reverse programs take different steps and disagree at 1e-8."""
+    import diffrax
+    from essos.constants import ELEMENTARY_CHARGE, ONE_EV, PROTON_MASS
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    assert 0.97 < 0.9786 < float(vmec.s_half_grid[-1]) < 0.99
+
+    def exit_time(eps, adjoint=None):
+        particles = Particles(initial_xyz=jnp.array([[0.9786 + 1e-3 * eps, 2.3925, 5.5137]]), initial_vparallel_over_v=jnp.array([0.1781]),
+                              mass=PROTON_MASS, charge=ELEMENTARY_CHARGE, energy=1e6 * ONE_EV)
+        return Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3.3e-6, timestep=1e-9, times_to_trace=2,
+                       atol=1e-12, rtol=1e-12, adjoint=adjoint).lcfs_times[0]
+
+    forward = jax.jvp(lambda eps: exit_time(eps, diffrax.ForwardMode()), (0.0,), (1.0,))[1]
+    reverse = jax.grad(exit_time)(0.0)
+    central = lambda h: (exit_time(h) - exit_time(-h)) / (2 * h)
+    np.testing.assert_allclose(forward, (4 * central(0.5) - central(1.0)) / 3, rtol=1e-6)
+    np.testing.assert_allclose(reverse, forward, rtol=3e-9)
+
+
 def test_vmec_non_finite_exterior_field_has_a_finite_masked_gradient_in_both_modes():
     """Orbits stopped by a non-finite exterior field contribute exactly zero to the gradient, as in forward mode."""
     import diffrax
@@ -1248,7 +1269,7 @@ def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
     s = jnp.full(8, 0.9)
     times, gradient = crossing_times(s), jax.grad(objective)(s)
     assert jnp.isinf(times[0]) and jnp.isfinite(times[1:]).all() and jnp.isfinite(gradient).all()
-    np.testing.assert_allclose(times[2:4], 2.320923e-5, rtol=1e-5)
+    np.testing.assert_allclose(times[2:4], 2.327536e-5, rtol=1e-5)
     h = jnp.zeros(8).at[-1].set(1e-6)
     np.testing.assert_allclose(gradient[-1], (objective(s + h) - objective(s - h)) / 2e-6, rtol=1e-4)
 
