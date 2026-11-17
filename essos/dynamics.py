@@ -834,7 +834,7 @@ class _EventSteps(PIDController):
         return tnext, (*state, tnext - t0)
 
     def adapt_step_size(self, t0, t1, y0, y1, *rest):
-        keep, next_t0, next_t1, jump, state, result = super().adapt_step_size(t0, t1, y0, y1, *rest[:-1], rest[-1][:3])
+        keep, next_t0, next_t1, jump, state, result = super().adapt_step_size(t0, t1, y0, y1, *rest[:-1], rest[-1][:-1])
         for g in self.events:
             a, b = lax.stop_gradient(g(y0)), lax.stop_gradient(g(y1))
             coarse = (a * b > 0) & (jnp.minimum(jnp.abs(a), jnp.abs(b)) > self.floor) & (jnp.abs(b - a) > 0.5 * jnp.minimum(jnp.abs(a), jnp.abs(b)))
