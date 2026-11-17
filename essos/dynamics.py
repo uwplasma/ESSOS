@@ -1112,7 +1112,8 @@ class Tracing():
         self.particle_batch_size = None if particle_batch_size is None else int(particle_batch_size)
         # With step_budget, particles advance at most that many steps per round, finished ones (at maxtime or a
         # stopping criterion) leave the batch, and the rest continue. A vmapped solve otherwise runs every particle to
-        # the step count of the slowest. Not under a JAX transformation, FullOrbit_Boris or the clipped controller.
+        # the step count of the slowest. CPU only; not under a JAX transformation, FullOrbit_Boris or the clipped
+        # controller.
         if step_budget is not None and (model in ('FullOrbit_Boris', 'GuidingCenterCollisionsMuAdaptative')
                                         or int(step_budget) <= 0):
             raise ValueError("step_budget must be a positive integer, and not for FullOrbit_Boris or "
@@ -1315,7 +1316,8 @@ class Tracing():
         y0, keys = self.initial_conditions, self.particles.random_keys if self.particles else None
         n = len(y0)
         traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys, self.args, self.exterior_field)))
-        if self.step_budget is not None and not traced:
+        # Rounds only pay on a CPU: on a GPU (A4000) the per-round cost made them 3-4x slower than one solve.
+        if self.step_budget is not None and not traced and self.devices[0].platform == "cpu":
             return self._trace_vmec_rounds(y0, keys) if self._vmec_default else self._trace_rounds(y0, keys)
         batch = n if self.particle_batch_size is None or traced else min(self.particle_batch_size, n)
         # Sharding pays off for plain traces. A differentiated trace stays on one device: XLA 0.6 aborts compiling
