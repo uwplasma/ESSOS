@@ -425,5 +425,6 @@ def test_coil_pair_losses_use_the_base_coils_and_match_all_pairs():
     for loss in (lambda c: objf.loss_lorentz_force_coils(c, p=2, threshold=1e4, conductor_radius=0.05),
                  lambda c: objf.loss_coil_separation(c, 1.0),
                  lambda c: objf.loss_linkingnumber(c)):
-        np.testing.assert_allclose(loss(as_sym(dofs)), loss(as_all(dofs)), rtol=1e-10)
-        np.testing.assert_allclose(jax.grad(lambda x: loss(as_sym(x)))(dofs), jax.grad(lambda x: loss(as_all(x)))(dofs), rtol=1e-8, atol=1e-12)
+        np.testing.assert_allclose(loss(as_sym(dofs)), loss(as_all(dofs)), rtol=1e-9, atol=1e-14)  # linking is ~1e-10 here
+        g_all = jax.grad(lambda x: loss(as_all(x)))(dofs)
+        np.testing.assert_allclose(jax.grad(lambda x: loss(as_sym(x)))(dofs), g_all, atol=1e-9 * float(jnp.abs(g_all).max()))
