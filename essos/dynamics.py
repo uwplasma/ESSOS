@@ -1018,6 +1018,8 @@ def _batch_solver(tracing, place, rounds=False):
     solver = _compiled_solver(_Static(static), place, rounds)
     if isinstance(place, NamedSharding):  # replicated over the devices that share the particles
         arrays = tree_util.tree_map(lambda x: _place_on_devices(x, NamedSharding(place.mesh, PartitionSpec())), arrays)
+    elif rounds:  # copied to the device once, not in every round
+        arrays = tree_util.tree_map(lambda x: _place_on_devices(x, place), arrays)
     return lambda y0, keys: solver(y0, keys, arrays)
 
 
@@ -1395,7 +1397,10 @@ class Tracing():
                 x[active] = np.asarray(y)[:active.size]
             active = active[o["active"][active]]
         o["status"][active], o["active"][active] = 4, False  # out of steps: failed, as without a budget
-        return vmap(self._vmec_finish)(tree_util.tree_map(jnp.asarray, o))
+        o = tree_util.tree_map(jnp.asarray, o)
+        inside = o["region"] == 0
+        xyz = jit(vmap(lambda p: lax.map(self.field.to_xyz, p)))(jnp.where(inside[..., None], o["xyz"], 0.5))
+        return vmap(self._vmec_finish)(dict(o, xyz=jnp.where(inside[..., None], xyz, o["xyz"])))
 
     def _advance(self, state, key):
         """One round of _trace_rounds for one particle: (saves, state, finished, event mask)."""
@@ -1537,8 +1542,10 @@ class Tracing():
                                       | (solution.result == diffrax.RESULTS.nonlinear_max_steps_reached)))
             t_end = jnp.where(run, solution.ts[1][-1], o["t"])
             window = run & (times >= o["t"]) & (times <= t_end) & jnp.isfinite(saves).all(1)
-            # to_xyz of the unused (inf) saves would put NaN partials into the coefficient gradients; not vmap: one save at a time
-            xyz = lax.map(self.field.to_xyz, jnp.where(window[:, None], saves[:, :3], 0.5)) if code == 0 else saves[:, :3]
+            # to_xyz of the unused (inf) saves would put NaN partials into the coefficient gradients; not vmap: one save at a
+            # time. With a budget the inside saves are mapped once at the end (_trace_vmec_rounds), not in every round.
+            xyz = (lax.map(self.field.to_xyz, jnp.where(window[:, None], saves[:, :3], 0.5)) if code == 0 and not budget
+                   else saves[:, :3])
             o = dict(o, xyz=jnp.where(window[:, None], xyz, o["xyz"]), region=jnp.where(window, code, o["region"]))
             if code == 0:
                 o["traj"] = jnp.where(window[:, None], saves, o["traj"])
