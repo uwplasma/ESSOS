@@ -23,9 +23,11 @@ def _points(n=100, seed=0):
 
 
 def test_nodes_symmetry_and_save_load(field, tmp_path):
-    full = InterpolatedField(field, nr=8, nz=8, nphi=12, **BOX)
+    full = InterpolatedField(field, nr=8, nz=8, nphi=12, stellsym=False, **BOX)
     half = InterpolatedField(field, nr=8, nz=8, nphi=12, stellsym=True, **BOX)
+    auto = InterpolatedField(field, nr=8, nz=8, nphi=12, **BOX)  # symmetric source and box: half a period
     np.testing.assert_allclose(half.table, full.table, atol=1e-12)
+    np.testing.assert_allclose(auto.table, full.table, atol=1e-12)
     grid = np.meshgrid(np.arange(12) * np.pi / 12, np.linspace(-0.3, 0.3, 8), np.linspace(1.35, 2.05, 8), indexing="ij")
     phi, z, r = (a.ravel() for a in grid)
     nodes = jnp.array(np.c_[r * np.cos(phi), r * np.sin(phi), z])
@@ -35,6 +37,13 @@ def test_nodes_symmetry_and_save_load(field, tmp_path):
         np.testing.assert_allclose(InterpolatedField.load(tmp_path / name).coefficients, full.coefficients, atol=1e-12)
     with pytest.raises(ValueError):
         InterpolatedField(field, R=(1.4, 2.0), Z=(-0.2, 0.3), nphi=12, stellsym=True)
+
+
+def test_stellarator_symmetry_is_detected(field):
+    from essos.fields import _stellarator_symmetric
+    batched = vmap(field.B)
+    assert _stellarator_symmetric(batched, BOX["R"], BOX["Z"], 2)
+    assert not _stellarator_symmetric(lambda xyz: batched(xyz) + jnp.array([0.01, 0., 0.]), BOX["R"], BOX["Z"], 2)
 
 
 def test_convergence_div_curl_and_fused_quantities(field):
