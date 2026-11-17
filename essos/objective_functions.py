@@ -179,12 +179,16 @@ def loss_coil_curvature(coils, max_coil_curvature=0):
     pointwise_curvature_loss = jnp.square(jnp.maximum(coils.curvature-max_coil_curvature, 0))
     return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
 
+def _n_base(coils):
+    """Number of base coils: the others are their images under the nfp rotations and the stellarator flip."""
+    return max(1, len(coils.gamma) // (getattr(coils, "nfp", 1) * (1 + getattr(coils, "stellsym", False))))
+
 def _symmetry_pairs(coils):
     """Pairs (i, j != i) with i a base coil, and the factor that turns their sum into the sum over all pairs i < j.
 
     The coils are the images of the base coils under the nfp rotations and the stellarator flip, which act
     freely on the coils and preserve distances, so every pair term of a base coil repeats 2 nfp times."""
-    n, n_base = len(coils), max(1, len(coils) // (coils.nfp * (1 + coils.stellsym)))
+    n, n_base = len(coils.gamma), _n_base(coils)
     i, j = np.repeat(np.arange(n_base), n), np.tile(np.arange(n), n_base)
     keep = i != j
     return (i[keep], j[keep]), 0.5 * n / n_base
@@ -384,7 +388,7 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None, condu
     if conductor_radius is None:
         raise ValueError("loss_lorentz_force_coils needs conductor_radius (the coil cross-section radius in m)")
     n_coils = coils.gamma.shape[0]
-    n_base = max(1, n_coils // (coils.nfp * (1 + coils.stellsym)))  # every other coil carries a copy of a base coil's force
+    n_base = _n_base(coils)  # every other coil carries a copy of a base coil's force
     indices = jnp.arange(n_base)
     other_indices = jnp.array([
         [j for j in range(n_coils) if j != i]
