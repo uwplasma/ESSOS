@@ -198,6 +198,8 @@ print(result.lost.mean(), result.loss_fractions())
 
 `BoozerField.from_booz_xform` runs the transform on all surfaces in one jitted pass; a `booz.run()` beforehand (the NumPy loop over surfaces) is accepted and takes about twice as long for the 100-surface ARIES-CS `wout`.
 
+`BoozerField.from_arrays(s, bmnc, xm, xn, iota, G, I, psi0, nfp)` builds the same field from in-memory half-mesh tables (optional `bmns`), with differentiable radial splines and no angle table. It can sit inside `jax.grad`, so gradients flow from a Boozer-coordinate quantity back through `booz_xform_jax` to the VMEC arrays; see [`boozer_gradient_from_vmec_arrays.py`](examples/particle_tracing/boozer_gradient_from_vmec_arrays.py). Without the table, `|B|` is the direct mode sum, so pass only the modes you need.
+
 `psi0` is minus VMEC's boundary toroidal flux over `2 pi`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 
