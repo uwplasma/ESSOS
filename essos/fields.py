@@ -129,7 +129,7 @@ def _biot_savart(points, gamma, gamma_dash, currents, chunk=8, gradient=False):
         g, gd, i = c
         r = x - g
         r2 = jnp.sum(r**2, axis=-1, keepdims=True)
-        w = i[:, None, None] * r2**-1.5
+        w = i[:, None, None] / jnp.sqrt(r2)**3
         cross = w * jnp.cross(gd, r)
         terms = [cross]
         if gradient:  # S = sum w dl gives the (dl x e_j)/r^3 part, the rest is -3 (dl x r) r^T / r^2
