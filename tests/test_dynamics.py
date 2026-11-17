@@ -1079,7 +1079,7 @@ STRIKING = ([[0.9732, 2.2941, 5.0876], [0.9821, 0.6628, 3.5216], [0.9554, 0.7221
 @pytest.mark.parametrize("exterior", [False, True])
 def test_vmec_step_budget_matches_one_solve(exterior):
     """Rounds of 16 steps give the LCFS crossings, wall strikes and orbits of one solve (a pause passes the state
-    through the axis-regular chart, so to about 1e-9)."""
+    through the axis-regular chart and restarts from a save, so to about 1e-6)."""
     if exterior:
         trace = lambda budget: _exterior_tracing(*STRIKING, maxtime=3e-6, step_budget=budget)
     else:
@@ -1091,7 +1091,7 @@ def test_vmec_step_budget_matches_one_solve(exterior):
         np.testing.assert_allclose(getattr(rounds, name), getattr(whole, name), rtol=1e-7)
     both = jnp.isfinite(whole.trajectories)
     assert jnp.array_equal(both, jnp.isfinite(rounds.trajectories))
-    np.testing.assert_allclose(rounds.trajectories[both], whole.trajectories[both], rtol=1e-7, atol=1e-9)
+    np.testing.assert_allclose(rounds.trajectories[both], whole.trajectories[both], rtol=1e-5, atol=1e-6)
 
 
 def test_wall_given_as_a_gap_or_a_surface():
