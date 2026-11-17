@@ -189,6 +189,8 @@ def _symmetry_pairs(coils):
     The coils are the images of the base coils under the nfp rotations and the stellarator flip, which act
     freely on the coils and preserve distances, so every pair term of a base coil repeats 2 nfp times."""
     n, n_base = len(coils.gamma), _n_base(coils)
+    if 2 * n_base >= n:  # nfp (1 + stellsym) <= 2: (base, any) would be as many pairs as i < j, or more
+        return jnp.triu_indices(n, k=1), 1.0
     i, j = np.repeat(np.arange(n_base), n), np.tile(np.arange(n), n_base)
     keep = i != j
     return (i[keep], j[keep]), 0.5 * n / n_base
