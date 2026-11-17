@@ -960,11 +960,13 @@ def _vmec_radial(refs, s, metadata):
     def basis(value):
         t = jnp.minimum(value, 1.)
         return ((1+2*t)*(1-t)**2, t*(1-t)**2, t*t*(3-2*t),
-                t*t*(t-1), jnp.maximum(value-1., 0.))
+                t*t*(t-1), jnp.maximum(value-1., 0.), .5*jnp.maximum(value-1., 0.)**2)
 
     h, dh = jax.jvp(basis, (u,), (jnp.ones_like(u),))
-    interpolated = h[0]*a+h[1]*da+h[2]*b+h[3]*db+h[4]*db
-    derivative = (dh[0]*a+dh[1]*da+dh[2]*b+dh[3]*db+dh[4]*db)/ds
+    # Past the last grid point: the parabola of Vmec._radial_interp (end value, slope and curvature of the cubic).
+    curvature = 6*(a-b)+2*da+4*db
+    interpolated = h[0]*a+h[1]*da+h[2]*b+h[3]*db+h[4]*db+h[5]*curvature
+    derivative = (dh[0]*a+dh[1]*da+dh[2]*b+dh[3]*db+dh[4]*db+dh[5]*curvature)/ds
 
     def power(value):
         q = jnp.sqrt(jnp.maximum(value, jnp.finfo(value.dtype).tiny))
