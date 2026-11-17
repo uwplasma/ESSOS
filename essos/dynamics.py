@@ -692,7 +692,7 @@ def field_line_toroidal(t, initial_condition, field) -> jnp.ndarray:
 
 
 def _fill_stopped_trajectories(trajectories, criteria, args):
-    """Hold each trajectory at its last point inside all level sets."""
+    """Hold each trajectory at its last point inside all level sets, and flag the held times."""
 
     def fill_trajectory(trajectory):
         def remains_inside(state):
@@ -703,11 +703,11 @@ def _fill_stopped_trajectories(trajectories, criteria, args):
             previous, active = carry
             active = active & remains_inside(current)
             state = jnp.where(active, current, previous)
-            return (state, active), state
+            return (state, active), (state, ~active)
 
         initial_active = remains_inside(trajectory[0])
-        _, tail = lax.scan(fill_state, (trajectory[0], initial_active), trajectory[1:])
-        return jnp.vstack((trajectory[0], tail))
+        _, (tail, stopped) = lax.scan(fill_state, (trajectory[0], initial_active), trajectory[1:])
+        return jnp.vstack((trajectory[0], tail)), jnp.concatenate((~initial_active[None], stopped))
 
     return vmap(fill_trajectory)(trajectories)
 
@@ -1232,11 +1232,12 @@ class Tracing():
             event_leaves = tree_util.tree_leaves(self.event_mask)
             self.boundary_hits = jnp.any(jnp.stack(event_leaves), axis=0)
             self.axis_hits = jnp.zeros_like(self.boundary_hits)
-            self._trajectories = _fill_stopped_trajectories(
+            self._trajectories, self._stopped = _fill_stopped_trajectories(
                 trajectories, self.stopping_criteria, self.args
             )
         else:
             self._trajectories = trace_result
+            self._stopped = None
             self.event_mask = None
             self.axis_hits = jnp.zeros(len(self._trajectories), dtype=bool)
             self.boundary_hits = jnp.zeros(len(self._trajectories), dtype=bool)
@@ -1679,8 +1680,9 @@ class Tracing():
         """Cumulative loss fraction, number lost and first-loss time (-1 if kept).
 
         A particle is lost at the first saved time with ``boundary`` signed
-        distance < 0, or with ``s >= r_max`` when ``boundary`` is None. Collision
-        models also return the energy and position of each lost particle.
+        distance < 0, or with ``s >= r_max`` when ``boundary`` is None, or has a
+        non-finite state, or when a stopping criterion has stopped it (its state is then held inside the
+        boundary). Collision models also return the energy and position of each lost particle.
         """
         xyz = self.trajectories[:, :, :3]
         n, nt = xyz.shape[0], len(self.times)
@@ -1688,6 +1690,9 @@ class Tracing():
             lost_mask = xyz[:, :, 0] >= r_max
         else:
             lost_mask = vmap(boundary.evaluate_xyz)(xyz.reshape(-1, 3)).reshape(n, nt) < 0
+        lost_mask = lost_mask | ~jnp.isfinite(xyz).all(axis=2)
+        if getattr(self, "_stopped", None) is not None:
+            lost_mask = lost_mask | self._stopped
         lost = lost_mask.any(axis=1)
         index = jnp.where(lost, jnp.argmax(lost_mask, axis=1), -1)
         lost_times = jnp.where(lost, self.times[index], -1)

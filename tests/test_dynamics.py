@@ -1432,3 +1432,22 @@ def test_implicit_solver_guiding_center_trace():
                       timestep=5e-8, n_save=2, atol=1e-4, rtol=1e-4, solver=diffrax.Kvaerno5())
     assert tracing.trajectories.shape == (1, 2, 4)
     assert jnp.isfinite(tracing.trajectories).all()
+
+
+@pytest.mark.parametrize("boundary", [True, False])
+def test_loss_fraction_counts_particles_stopped_at_the_boundary(boundary):
+    # Unit-speed lines along x from x0 reach the wall x = 1.5 at t = 1.5 - x0: two of five before t = 1.
+    class Plane:
+        def evaluate_xyz(self, xyz):
+            return 1.5 - xyz[0]
+
+    tracing = Tracing(
+        field=MockField(), model="FieldLineAdaptative",
+        initial_conditions=jnp.array([[x0, 0.0, 0.0] for x0 in (0.0, 0.2, 0.4, 0.67, 0.93)]),
+        maxtime=1.0, timestep=0.01, times_to_trace=11,
+        stopping_criteria=LevelsetStoppingCriterion(Plane()))
+    fractions, lost, times = tracing.loss_fraction(Plane() if boundary else None, r_max=1.5)
+    assert tracing.boundary_hits.tolist() == [False, False, False, True, True]
+    assert float(fractions[-1]) == pytest.approx(0.4) and float(lost) == pytest.approx(2.0)
+    assert float(fractions[-1]) == pytest.approx(float(jnp.mean(tracing.boundary_hits)))
+    assert times.tolist() == pytest.approx([-1, -1, -1, 0.9, 0.6])
