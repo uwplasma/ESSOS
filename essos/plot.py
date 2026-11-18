@@ -1,6 +1,10 @@
 import numpy as np
 
 def fix_matplotlib_3d(ax):
+    """Give a 3D matplotlib axes equal scale on x, y and z.
+
+    All three limits are reset to the same range, centred on the current limits.
+    """
     x_limits = ax.get_xlim3d()
     y_limits = ax.get_ylim3d()
     z_limits = ax.get_zlim3d()

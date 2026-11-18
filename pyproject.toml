@@ -49,6 +49,7 @@ dependencies = [
     "diffrax>=0.7.0",
     "optax",
     "optimistix>=0.0.11",
+    "lineax>=0.1.0",  # 0.0.8 raises TracerBoolConversionError in the Kvaerno5 Newton solve under jax 0.10
     "scipy",
     "jaxkd",
     "netcdf4",
@@ -78,3 +79,6 @@ multiobjective = ["optuna", "pandas", "plotly"]
 # Examples that build VMEX equilibria, mgrid fields or free-boundary
 # (virtual-casing) fields. 0.11.3 is the first VMEX with MgridField(order=...).
 vmex = ["vmex[freeb]>=0.11.3"]
+
+[tool.pytest.ini_options]
+markers = ["gpu: small jitted checks run on the GPU runner (pytest -m gpu)"]
