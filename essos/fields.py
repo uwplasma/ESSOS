@@ -310,10 +310,9 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     is given. Interpolating the modes themselves leaves the m > 0 terms
     finite on the axis, where |B| then depends on theta.
 
-    The interpolation is cubic Hermite with centred-difference slopes (linear
-    in the first interval): it keeps the grid values and its s derivative is
-    continuous (C2 across the last grid point, see below). With linear
-    interpolation grad|B| jumps at every grid point, and a guiding center
+    The interpolation is a cubic spline (linear in the first interval, a
+    parabola in the last): it keeps the grid values and is C2 up to the LCFS
+    (see below). With linear interpolation grad|B| jumps at every grid point, and a guiding center
     whose radial drift changes sign there chatters across it while the
     adaptive step shrinks to nothing; under vmap the whole batch then runs to
     max_steps.
@@ -330,10 +329,13 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
             scaled = scaled.at[0].set(jnp.where(m > 0, 2 * scaled[1] - scaled[2], scaled[0]))
             if axis_m1 is not None:
                 scaled = scaled.at[0].set(jnp.where(m == 1, axis_m1, scaled[0]))
-        # Slopes per grid interval. Hermite interpolation is C1 for any nodal slopes; the first interval
-        # keeps the linear form that the axis rows above are extrapolated with.
-        slope = jnp.gradient(scaled, axis=0)
-        slope = slope.at[:2].set(scaled[1] - scaled[0])
+        # Nodal slopes (per grid interval) of the C2 cubic spline: the first interval keeps the linear form that the
+        # axis rows above are extrapolated with, the last one is a parabola.
+        n, step = len(grid), jnp.diff(scaled, axis=0)
+        interior = np.r_[0, 0, np.ones(n - 3), 1.0]
+        slope = lax.linalg.tridiagonal_solve(
+            interior, np.r_[1, 1, 4 * np.ones(n - 3), 1], np.r_[interior[:-1], 0],
+            jnp.concatenate([step[:1], step[:1], 3 * (scaled[3:] - scaled[1:-2]), 2 * step[-1:]]))
     ds = grid[1] - grid[0]
     i = jnp.clip(jnp.floor((s - grid[0]) / ds).astype(int), 0, len(grid) - 2)
     u = (s - grid[i]) / ds
