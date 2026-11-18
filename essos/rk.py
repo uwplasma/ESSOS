@@ -926,7 +926,7 @@ def _pad_vmec(value, shape):
 
 def _prepare_vmec_data(field):
     """Prepare the same regularized radial values/slopes for a concrete field."""
-    from .fields import VMEC_WOUT_PARTNERS
+    from .fields import VMEC_WOUT_PARTNERS, _vmec_radial_slopes
     grids = tuple(np.asarray(x) for x in (field.s_full_grid, field.s_half_grid))
     widths = tuple(1 << (len(x)-1).bit_length() for x in (field.xm_nyq, field.xm))
     radial_width = 1 << (field.ns-1).bit_length()
@@ -970,8 +970,7 @@ def _prepare_vmec_data(field):
                     axis = field._bsubs_axis_m1(partner != name)
                     if axis is not None:
                         scaled[0] = np.where(m == 1, np.asarray(axis), scaled[0])
-            slope = np.gradient(scaled, axis=0)
-            slope[:2] = scaled[1]-scaled[0]
+            slope = np.asarray(_vmec_radial_slopes(jnp.asarray(scaled)))
             index = len(arrays)
             arrays.extend((_pad_vmec(scaled, (radial_width, width)),
                            _pad_vmec(slope, (radial_width, width))))
@@ -1003,16 +1002,12 @@ def _vmec_radial(refs, s, metadata):
     a, b = refs[values][i, :], refs[values][i+1, :]
     da, db = refs[slopes][i, :], refs[slopes][i+1, :]
 
-    def basis(value):
-        t = jnp.minimum(value, 1.)
-        return ((1+2*t)*(1-t)**2, t*(1-t)**2, t*t*(3-2*t),
-                t*t*(t-1), jnp.maximum(value-1., 0.), .5*jnp.maximum(value-1., 0.)**2)
+    from .fields import _vmec_radial_segment
 
-    h, dh = jax.jvp(basis, (u,), (jnp.ones_like(u),))
-    # Past the last grid point: the parabola of Vmec._radial_interp (end value, slope and curvature of the cubic).
-    curvature = 6*(a-b)+2*da+4*db
-    interpolated = h[0]*a+h[1]*da+h[2]*b+h[3]*db+h[4]*db+h[5]*curvature
-    derivative = (dh[0]*a+dh[1]*da+dh[2]*b+dh[3]*db+dh[4]*db+dh[5]*curvature)/ds
+    interpolated, derivative = jax.jvp(
+        lambda v: _vmec_radial_segment(v, a, b, da, db), (u,), (jnp.ones_like(u),),
+    )
+    derivative = derivative / ds
 
     def power(value):
         q = jnp.sqrt(jnp.maximum(value, jnp.finfo(value.dtype).tiny))
