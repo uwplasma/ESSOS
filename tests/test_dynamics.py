@@ -163,6 +163,72 @@ def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
     assert jnp.allclose(tracing.toroidal_angles[0], tracing.trajectories[0, :, 2])
 
 
+@pytest.mark.parametrize("atol", [1e-8, 0])
+def test_periodic_fieldline_accuracy_is_independent_of_angle_origin(atol):
+    class PeriodicField(MockField):
+        def B_contravariant(self, point):
+            return jnp.array([0., 1. / (1. + .3*jnp.cos(point[1])), 1.])
+
+    offsets = 2*jnp.pi*jnp.array([0., 10000.])
+    seeds = jnp.tile(jnp.array([.5, .2, .3]), (2, 1)).at[:, 1:].add(offsets[:, None])
+    tracing = Tracing(field=PeriodicField(), model="FieldLineToroidal", initial_conditions=seeds,
+                      maxtime=20*jnp.pi, timestep=.1, times_to_trace=65,
+                      rtol=1e-7, atol=atol, progress=False)
+    theta = tracing.trajectories[:, :, 1] - offsets[:, None]
+    # Exact first integral: theta + epsilon*sin(theta) - phi is constant.
+    residual = theta + .3*jnp.sin(theta) - (.2 + .3*jnp.sin(.2)) - tracing.times[None, :]
+    assert float(jnp.max(jnp.abs(residual))) < 3e-6
+    np.testing.assert_allclose(theta[0], theta[1], rtol=0, atol=3e-6)
+
+
+def _tolerance_controller(model, axis_regular, flag=False, atol=1e-8, size=4):
+    import diffrax
+
+    tracing = Tracing.__new__(Tracing)
+    tracing.model, tracing._axis_regular, tracing.field = model, axis_regular, None
+    tracing.initial_conditions = jnp.ones((1, size))
+    tracing.rtol, tracing.atol = 1e-7, atol
+    tracing.timestep, tracing.solver = .1, None
+    tracing.ODE_term = diffrax.ODETerm(lambda t, y, args: jnp.ones_like(y))
+    return tracing, tracing._terms(None, flag=flag)
+
+
+@pytest.mark.parametrize("flag", [False, True])
+@pytest.mark.parametrize("angle_name", ["phi", "Theta"])
+@pytest.mark.parametrize("atol", [1e-8, 0])
+@pytest.mark.parametrize("size", [4, 5])
+def test_vmec_controller_error_budget_is_independent_of_phi_and_theta_winding(flag, angle_name, atol, size):
+    tracing, (terms, solver, controller) = _tolerance_controller("GuidingCenterAdaptative", True, flag, atol, size)
+    angle = 2 if angle_name == "phi" else size
+    y = jnp.array([.5, .3, .2, .7] + ([.9] if size == 5 else []) + [.4] + ([0.] if flag else []))
+    error = jnp.zeros_like(y).at[angle].set(1e-5)
+
+    def adapt(state):
+        _, controller_state = controller.init(terms, 0., .1, state, .1, None, solver.func, 9.)
+        return controller.adapt_step_size(0., .1, state, state, None, error, 9., controller_state)
+
+    original = adapt(y)
+    shifted = adapt(y.at[angle].add(2000*jnp.pi))
+    assert not bool(original[0]) and not bool(shifted[0])
+    assert jnp.isfinite(original[2]) and jnp.isfinite(shifted[2])
+    np.testing.assert_allclose(original[2], shifted[2], rtol=1e-13, atol=0)
+    # Theta is before the optional failure flag; v_parallel keeps relative control.
+    assert float(controller.rtol[3]) == tracing.rtol
+    np.testing.assert_allclose(controller.atol[angle], tracing.atol + tracing.rtol)
+
+
+def test_angular_tolerance_change_preserves_cartesian_and_fixed_step_paths(monkeypatch):
+    import diffrax
+
+    tracing, (_, _, controller) = _tolerance_controller("FullOrbitAdaptative", False)
+    assert controller.rtol is tracing.rtol and controller.atol is tracing.atol
+    tracing.model, tracing._axis_regular = "GuidingCenter", True
+    def unexpected(*args):
+        raise AssertionError("fixed-step paths must not construct adaptive tolerances")
+    monkeypatch.setattr(tracing, "_adaptive_tolerances", unexpected)
+    assert isinstance(tracing._terms(None)[2], diffrax.ConstantStepSize)
+
+
 def test_trace_field_lines_selects_clear_physical_parameterizations(capsys):
     class FluxField(MockField):
         def B_contravariant(self, points):
@@ -700,6 +766,32 @@ def _enable_x64():
         from jax.experimental import enable_x64
     return enable_x64
 
+
+@pytest.mark.parametrize("xi", [0., .3, 1., -1.])
+def test_zero_density_mu_collisions_have_zero_noise_and_collisionless_drift(xi):
+    from essos.dynamics import (GuidingCenterCollisionsDiffusionMu,
+                                GuidingCenterCollisionsDriftMuIto,
+                                GuidingCenterCollisionsDriftMuStratonovich)
+    with _enable_x64()():
+        state, scale, args = _mu_collision_setup(1e5, xi)
+        absent = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]),
+                                   jnp.array([0.]), jnp.array([1e3]))
+        args = (*args[:3], absent, args[4])
+        noise = lambda y: GuidingCenterCollisionsDiffusionMu(0., y, args)
+        sigma, tangent = jax.jvp(noise, (state,), (jnp.ones(5),))
+        np.testing.assert_array_equal(sigma, np.zeros((5, 5)))
+        np.testing.assert_array_equal(tangent, np.zeros((5, 5)))
+        batch = jnp.stack([state, state])
+        sigma, tangent = jax.jvp(jax.vmap(noise), (batch,), (jnp.ones_like(batch),))
+        np.testing.assert_array_equal(sigma, np.zeros((2, 5, 5)))
+        np.testing.assert_array_equal(tangent, np.zeros((2, 5, 5)))
+        expected = np.array([0., 0., state[3]*scale[0], 0., 0.])
+        for drift in (GuidingCenterCollisionsDriftMuIto, GuidingCenterCollisionsDriftMuStratonovich):
+            np.testing.assert_allclose(drift(0., state, args), expected, rtol=1e-14, atol=1e-14)
+            np.testing.assert_allclose(jax.vmap(lambda y: drift(0., y, args))(batch),
+                                       np.stack([expected, expected]), rtol=1e-14, atol=1e-14)
+
+
 @pytest.mark.parametrize("v,xi", [(1e5, 0.0), (1e6, 0.0), (1e5, 0.3), (1e5, 1.0), (1e6, -1.0)])
 def test_mu_collision_noise_is_finite_and_matches_the_diffusion_tensor(v, xi):
     """The eigenvectors were 0/0 at xi = 0, and jnp.select returned zero noise
@@ -1109,6 +1201,143 @@ def test_vmec_non_finite_steps_are_reported():
     assert failed.any() and jnp.all(tracing.status[failed] == 4)
     assert jnp.all(tracing.failure_times[failed] >= tracing.lcfs_times[failed])
     assert jnp.isinf(tracing.failure_times[~failed]).all()
+    # a failed orbit is neither lost nor confined: the aggregates say so instead of counting it
+    assert tracing.total_particles_unresolved == failed.sum() and jnp.isnan(tracing.lost_times[failed]).all()
+    assert jnp.isnan(tracing.loss_fractions).all() and jnp.isnan(tracing.total_particles_lost)
+
+
+def test_vmec_wall_already_crossed_at_the_exit_point_is_a_hit_at_the_exit_time():
+    tracing = _exterior_tracing(*STRIKING, maxtime=3e-6, wall_gap=-1e-3)
+    assert tracing.wall_hits.all() and jnp.allclose(tracing.wall_times, tracing.lcfs_times, rtol=1e-12)
+
+
+def _toroidal_source(xyz, params):
+    R2 = xyz[:, 0]**2 + xyz[:, 1]**2
+    return jnp.stack([-params[0] * xyz[:, 1] / R2, params[0] * xyz[:, 0] / R2, params[1] + 0 * R2], 1)
+
+
+def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and_field_parameters():
+    """A strike, an orbit that re-enters twice and one that never leaves: jax.jvp, jax.grad and jit agree with finite differences."""
+    import diffrax
+    from essos.fields import ExternalField
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    finite = lambda x: jnp.sum(jnp.where(jnp.isfinite(x), x, 0.0))
+
+    def objective(s, params, adjoint=None):
+        xyz = jnp.stack([s, jnp.array([2.2941, 0.6628, 1.0]), jnp.array([5.0876, 3.5216, 1.0])], 1)
+        particles = Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([-0.9872, 0.5453, 0.3]))
+        tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3e-6, timestep=1e-9,
+                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(_toroidal_source, params),
+                          wall=0.05, max_returns=2, adjoint=adjoint)
+        return 1e6 * (finite(tracing.wall_times) + finite(tracing.lcfs_times)) + finite(tracing.wall_positions[:, 2])
+
+    s, params = jnp.array([0.9732, 0.9821, 0.5]), jnp.array([60.0, 0.5])
+    ds, dparams = jnp.array([1.0, -0.5, 0.3]) * 1e-4, jnp.array([1.0, 0.05])
+    tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", maxtime=3e-6, timestep=1e-9, times_to_trace=4, atol=1e-8,
+                      rtol=1e-8, exterior_field=ExternalField(_toroidal_source, params), wall=0.05, max_returns=2,
+                      particles=Particles(initial_xyz=jnp.array([[0.9732, 2.2941, 5.0876], [0.9821, 0.6628, 3.5216], [0.5, 1.0, 1.0]]),
+                                          initial_vparallel_over_v=jnp.array([-0.9872, 0.5453, 0.3])))
+    assert list(tracing.status) == [5, 3, 0] and list(tracing.returns) == [2, 0, 0]
+    h = 0.1
+    finite_difference = (objective(s + h * ds, params + h * dparams) - objective(s - h * ds, params - h * dparams)) / (2 * h)
+    forward = jax.jvp(lambda s, p: objective(s, p, diffrax.ForwardMode()), (s, params), (ds, dparams))[1]
+    np.testing.assert_allclose(forward, finite_difference, rtol=1e-3)
+    grad_s, grad_p = jax.jit(jax.grad(objective, (0, 1)))(s, params)
+    assert jnp.isfinite(grad_s).all() and jnp.isfinite(grad_p).all() and grad_s[2] == 0.0
+    np.testing.assert_allclose(grad_s @ ds + grad_p @ dparams, forward, rtol=1e-5)
+
+
+def test_vmec_launch_derivative_of_the_exit_time_is_dual_in_both_modes_for_an_orbit_crossing_radial_nodes():
+    """The orbit starts inside the last two half-grid nodes of the radial interpolation and crosses them on its way out: with
+    a second derivative that jumps there, the forward and reverse programs take different steps and disagree at 1e-8."""
+    import diffrax
+    from essos.constants import ELEMENTARY_CHARGE, ONE_EV, PROTON_MASS
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    assert 0.97 < 0.9786 < float(vmec.s_half_grid[-1]) < 0.99
+
+    def exit_time(eps, adjoint=None):
+        particles = Particles(initial_xyz=jnp.array([[0.9786 + 1e-3 * eps, 2.3925, 5.5137]]), initial_vparallel_over_v=jnp.array([0.1781]),
+                              mass=PROTON_MASS, charge=ELEMENTARY_CHARGE, energy=1e6 * ONE_EV)
+        return Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3.3e-6, timestep=1e-9, times_to_trace=2,
+                       atol=1e-8, rtol=1e-8, adjoint=adjoint).lcfs_times[0]
+
+    forward = jax.jvp(lambda eps: exit_time(eps, diffrax.ForwardMode()), (0.0,), (1.0,))[1]
+    reverse = jax.grad(exit_time)(0.0)
+    central = lambda h: (exit_time(h) - exit_time(-h)) / (2 * h)
+    np.testing.assert_allclose(forward, (4 * central(0.5) - central(1.0)) / 3, rtol=1e-6)
+    np.testing.assert_allclose(reverse, forward, rtol=1e-9)
+
+
+def test_vmec_non_finite_exterior_field_has_a_finite_masked_gradient_in_both_modes():
+    """Orbits stopped by a non-finite exterior field contribute exactly zero to the gradient, as in forward mode."""
+    import diffrax
+    from essos.fields import ExternalField
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    above = lambda xyz, params: _toroidal_source(xyz, params) * jnp.where(xyz[:, 2:] > 0.0, jnp.nan, 1.0)
+
+    def objective(params, adjoint=None):
+        particles = Particles(initial_xyz=jnp.asarray(STRIKING[0]), initial_vparallel_over_v=jnp.asarray(STRIKING[1]))
+        tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3e-6, timestep=1e-9,
+                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(above, params), wall=0.05,
+                          adjoint=adjoint)
+        assert tracing.failed.any() and not tracing.failed.all()
+        return 1e6 * jnp.sum(jnp.where(jnp.isfinite(tracing.wall_times), tracing.wall_times, 0.0))
+
+    params = jnp.array([60.0, 0.5])
+    reverse = jax.grad(objective)(params)
+    forward = jax.jvp(lambda p: objective(p, diffrax.ForwardMode()), (params,), (jnp.array([0.0, 1.0]),))[1]
+    assert jnp.isfinite(reverse).all()
+    np.testing.assert_allclose(reverse[1], forward, rtol=1e-5)
+
+
+def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_reverse_mode():
+    """Saves of orbits that are not in a segment must not put NaN partials into the VMEC coefficient gradients."""
+    import diffrax
+    from essos.dynamics import _wall_function
+    from essos.fields import ExternalField, VMEC_WOUT_ARRAYS
+    if tuple(map(int, diffrax.__version__.split(".")[:3])) < (0, 7, 1):
+        pytest.skip("diffrax 0.7.0 (the last for Python 3.10) cannot differentiate its checkpointed loop through traced field coefficients")
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    wall = _wall_function(vmec, 0.05)  # a wall is built from concrete fields
+
+    def objective(scale):
+        rows = jnp.ones(vmec.ns).at[-1].set(scale)[:, None]
+        field = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, ntheta=8, nphi=8,
+                                 **{**arrays, 'rmnc': arrays['rmnc'] * rows, 'zmns': arrays['zmns'] * rows})
+        particles = Particles(initial_xyz=jnp.array([[0.9732, 2.2941, 5.0876], [0.5, 1.0, 1.0]]),
+                              initial_vparallel_over_v=jnp.array([-0.9872, 0.3]))
+        tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles, maxtime=1e-6, timestep=1e-9,
+                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(_toroidal_source, jnp.array([60.0, 0.5])),
+                          wall=wall, max_returns=1)
+        return jnp.sum(jnp.where(jnp.isfinite(tracing.trajectories_xyz), tracing.trajectories_xyz, 0.0))
+
+    assert jnp.isfinite(jax.grad(objective)(1.0))
+
+
+def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
+    """Trapped protons whose radial excursion just reaches the LCFS (pitch 0.0755940631) cross, graze or stay inside.
+
+    Every pitch from -1e-6 up crosses, at the time the orbit reaches the surface whatever the margin (a shallow excursion
+    through the LCFS inside one step is not skipped); the gradients are finite."""
+    from essos.constants import ELEMENTARY_CHARGE
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    pitch = jnp.concatenate([jnp.zeros(1), 0.0755940631 + jnp.array([-1e-6, 1e-12, 1e-9, 1e-7, 1e-5, 1e-3, 0.2])])
+
+    def crossing_times(s):
+        xyz = jnp.stack([s, jnp.full_like(s, 0.3), jnp.full_like(s, 0.2)], 1)
+        particles = Particles(initial_xyz=xyz, initial_vparallel_over_v=pitch, mass=PROTON_MASS, charge=ELEMENTARY_CHARGE,
+                              energy=1e6 * ELEMENTARY_CHARGE)
+        return Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=1e-4, timestep=1e-9,
+                       times_to_trace=3, atol=1e-10, rtol=1e-10).lcfs_times
+
+    objective = lambda s: jnp.sum(jnp.where(jnp.isfinite(t := crossing_times(s)), t, 0.0))
+    s = jnp.full(8, 0.9)
+    times, gradient = crossing_times(s), jax.grad(objective)(s)
+    assert jnp.isinf(times[0]) and jnp.isfinite(times[1:]).all() and jnp.isfinite(gradient).all()
+    np.testing.assert_allclose(times[2:4], 2.306765e-5, rtol=1e-5)
+    h = jnp.zeros(8).at[-1].set(1e-6)
+    np.testing.assert_allclose(gradient[-1], (objective(s + h) - objective(s - h)) / 2e-6, rtol=1e-4)
 
 
 def test_exterior_arguments_are_validated():
@@ -1168,3 +1397,86 @@ def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
     B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
     mu = particles.initial_vperpendicular[0]**2 / (2 * B * SPEED_OF_LIGHT**2)
     np.testing.assert_allclose(trace.initial_conditions[0, 4], mu, rtol=1e-6)
+
+
+def test_loss_fraction_of_analytic_gyro_orbits():
+    """Gyro-orbits of radius rho about guiding centres at distance d are lost
+    iff d + rho > R, at the first sample where the orbit crosses R."""
+    class Sphere:
+        evaluate_xyz = staticmethod(lambda xyz: 1.0 - jnp.linalg.norm(xyz))
+    rho, d = 0.1, jnp.array([0.0, 0.5, 0.85, 1.5])
+    times = jnp.linspace(0.0, 2.0 * jnp.pi, 65)
+    xyz = d[:, None, None] * jnp.array([1.0, 0.0, 0.0]) + rho * jnp.stack(
+        (jnp.cos(times), jnp.sin(times), 0.0 * times), axis=-1)
+    tracing = Tracing.__new__(Tracing)
+    tracing.times, tracing.trajectories, tracing.model = times, xyz, "Lorentz"
+
+    fractions, n_lost, lost_times = tracing.loss_fraction(Sphere())
+    # d=0.85 only reaches 0.95 < 1 and stays confined; d=1.5 starts outside
+    assert n_lost == 1 and fractions[0] == 0.25 and fractions[-1] == 0.25
+    assert jnp.array_equal(lost_times, jnp.array([-1.0, -1.0, -1.0, 0.0]))
+    assert tracing.loss_fraction(r_max=0.9)[1] == 2  # x >= 0.9 also by d=0.85
+
+
+def test_tracings_with_the_same_shapes_share_one_compiled_solve():
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart
+    from essos.constants import ONE_EV
+    from essos.dynamics import _compiled_solver
+
+    def trace(currents, shift):
+        coils = Coils(curves=CreateEquallySpacedCurves(n_curves=2, order=2, R=1.0, r=0.4, nfp=2, stellsym=True), currents=currents)
+        particles = Particles(initial_xyz=jnp.array([[1.1 + shift, 0., 0.], [1.2 + shift, 0., 0.]]), energy=1e3 * ONE_EV)
+        return Tracing(field=BiotSavart(coils), model='GuidingCenter', particles=particles, maxtime=1e-6, timestep=1e-8,
+                       times_to_trace=10, progress=False).trajectories
+
+    _compiled_solver.cache_clear()
+    first, second = trace([1e6, 2e6], 0.), trace([2e6, 1e6], 0.01)
+    info = _compiled_solver.cache_info()
+    assert (info.misses, info.hits) == (1, 1)
+    _compiled_solver.cache_clear()
+    np.testing.assert_array_equal(second, trace([2e6, 1e6], 0.01))  # a fresh compilation gives the same orbits
+    assert not np.allclose(first, second)
+
+
+def test_vmec_tracings_share_one_compiled_solve():
+    from essos.dynamics import _compiled_solver
+    from essos.fields import VMEC_WOUT_ARRAYS
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    scaled = Vmec.from_arrays(vmec.nfp, vmec.ns, *(getattr(vmec, n) * (1.1 if n == 'bmnc' else 1) for n in VMEC_WOUT_ARRAYS),
+                              ntheta=8, nphi=8)  # same shapes, 10% stronger |B|
+    compiles = []
+    jax.monitoring.register_event_duration_secs_listener(
+        lambda event, duration, **kw: compiles.append(event) if event.endswith('backend_compile_duration') else None)
+
+    def trace(field):
+        return Tracing(field=field, model="GuidingCenterAdaptative", particles=_near_axis_particles(), maxtime=1e-7,
+                       timestep=1e-9, times_to_trace=5, progress=False).trajectories
+
+    _compiled_solver.cache_clear()
+    first = trace(vmec)
+    n = len(compiles)
+    again = trace(vmec)
+    assert len(compiles) == n  # no compilation after the first
+    other = trace(scaled)
+    info = _compiled_solver.cache_info()
+    assert (info.misses, info.hits) == (1, 2)
+    np.testing.assert_array_equal(first, again)
+    assert not np.allclose(first, other)
+
+
+def test_implicit_solver_guiding_center_trace():
+    """Kvaerno5 (implicit) guiding-centre trace in a coil field; lineax 0.0.8 failed to trace its Newton solve."""
+    import diffrax
+    from essos.coils import Coils
+    from essos.constants import ONE_EV
+    from essos.fields import BiotSavart
+    coils = Coils.from_json(str(Path(__file__).parent.parent / "examples" / "input_files" / "ESSOS_biot_savart_LandremanPaulQA.json"))
+    field = BiotSavart(coils)
+    particles = Particles(initial_xyz=jnp.array([[1.23, 0, 0]]), mass=PROTON_MASS, energy=5000 * ONE_EV,
+                          initial_vparallel_over_v=[0.8], field=field)
+    tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles, maxtime=1e-7,
+                      timestep=5e-8, times_to_trace=2, atol=1e-4, rtol=1e-4, solver=diffrax.Kvaerno5())
+    assert tracing.trajectories.shape == (1, 2, 4)
+    assert jnp.isfinite(tracing.trajectories).all()
