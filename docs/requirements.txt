@@ -1,0 +1,9 @@
+jax
+jaxlib
+diffrax
+scipy
+netcdf4
+matplotlib
+sphinx
+sphinx-autoapi
+piccolo_theme
