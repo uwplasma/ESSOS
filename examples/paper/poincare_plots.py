@@ -1,6 +1,5 @@
 import os
 from functools import partial
-number_of_processors_to_use = 1 # Parallelization, this should divide ntheta*nphi
 from time import time
 from jax import jit, grad, block_until_ready
 import jax.numpy as jnp
@@ -20,8 +19,8 @@ tmax_fl = 50000
 tmax_gc = 1e-3
 tmax_fo = 1e-3
 
-nparticles = number_of_processors_to_use*1
-nfieldlines = number_of_processors_to_use*8
+nparticles = 1
+nfieldlines = 8
 s = 0.25 # s-coordinate: flux surface label
 trace_tolerance = 1e-15
 dt_fo = 1e-9
