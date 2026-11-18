@@ -182,9 +182,9 @@ class QfmSurface:
         printlog: bool = True,
         **kwargs
     ):
-        
+
         method_up = method.upper()
-        
+
         if method_up == "SLSQP":
             return self.minimize_slsqp(
                 x0=x0,

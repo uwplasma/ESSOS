@@ -9,7 +9,7 @@ from time import time
 
 from essos.surfaces import BdotN_over_B, toroidal_flux
 from essos.surfaces import SurfaceRZFourier
-from essos.qfm import QfmSurface 
+from essos.qfm import QfmSurface
 from essos.fields import Vmec, BiotSavart
 
 # Load initial guess surface
@@ -61,7 +61,7 @@ BdotN_over_B_initial = BdotN_over_B(surf, BiotSavart(coils))
 qfm = QfmSurface(field=field, surface=surf, label=label, targetlabel=targetlabel)
 
 print("Degrees of Freedom:", qfm.surface.x.shape[0])
-start_time = time() 
+start_time = time()
 print('start')
 
 

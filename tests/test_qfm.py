@@ -28,13 +28,13 @@ class MockSurface:
     def change_resolution(self, ntheta, nphi):
         self.ntheta = ntheta
         self.nphi = nphi
-        self.gamma = jnp.ones((ntheta, nphi, 3))  
-        self.unitnormal = jnp.ones((ntheta, nphi, 3)) 
+        self.gamma = jnp.ones((ntheta, nphi, 3))
+        self.unitnormal = jnp.ones((ntheta, nphi, 3))
 
 
 class MockField:
     def A(self, point):
-        return jnp.array([1.0, 0.0, 0.0]) 
+        return jnp.array([1.0, 0.0, 0.0])
 
     def B(self, point):
         return jnp.array([0.0, 1.0, 0.0])
@@ -50,12 +50,12 @@ def mock_data():
 def test_qfm_surface_initialization(mock_data):
     surface, field = mock_data
     qfm = QfmSurface(field, surface, label="area")
-    
+
     assert qfm.label == "area"
     assert qfm.targetlabel == surface.area
     assert qfm.surface == surface
     assert isinstance(qfm.surface_optimize, SurfaceRZFourier)
-    assert qfm.toroidal_flux_idx == 0  
+    assert qfm.toroidal_flux_idx == 0
 
 
 def test_minimize_lbfgs(mock_data):
