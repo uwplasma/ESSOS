@@ -395,9 +395,10 @@ def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, 
     compacted = trace_boozer(field, *args, **kwargs, **(
         {"progress": lambda d, t: callbacks[1].append((d, t))} if with_progress else {}))
     assert callbacks[0] == callbacks[1]
-    for name in ("times", "states", "loss_times", "thermalized_times", "failed_times"):
+    for name in ("times", "loss_times", "thermalized_times", "failed_times"):
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
-    # The energy error is rounded in a batch of another size: equal to an ulp.
+    # States and energy error are rounded in a batch of another size: equal to an ulp.
+    np.testing.assert_allclose(compacted.states, whole.states, rtol=1e-15, atol=0)
     np.testing.assert_allclose(compacted.energy_error, whole.energy_error, rtol=0, atol=1e-15)
 
 
@@ -516,6 +517,26 @@ def _bundled_wout_field():
     return BoozerField.from_booz(s, v["bmnc"][1:, keep].T, v["xm_nyq"][keep], v["xn_nyq"][keep],
                                  v["iotas"][1:], v["bvco"][1:], v["buco"][1:],
                                  psi0_from_vmec(v["phi"][-1]), int(v["nfp"]))
+
+
+def test_unrun_booz_xform_takes_the_batched_pass_and_matches_the_host_run():
+    """``from_booz_xform`` on a transform that has only read the wout equals the host ``run()`` field."""
+    pytest.importorskip("booz_xform_jax")
+    from pathlib import Path
+    from booz_xform_jax import Booz_xform
+
+    wout = Path(__file__).parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+    fields = []
+    for run in (lambda booz: booz.run(), lambda booz: None):
+        booz = Booz_xform(verbose=0, mboz=8, nboz=8)
+        booz.read_wout(str(wout), flux=False)
+        run(booz)
+        fields.append(BoozerField.from_booz_xform(booz, PSI0, angle_grid=None))
+    host, batched = fields
+    assert batched.xm.shape == host.xm.shape and np.array_equal(batched.xn, host.xn)
+    for point in ((0.3, 0.7, 0.2), (0.9, 2.0, 1.1)):
+        np.testing.assert_allclose(batched.modB_derivatives(*point), host.modB_derivatives(*point), rtol=1e-9, atol=1e-10)
+    np.testing.assert_allclose(batched.profiles(0.5)[0], host.profiles(0.5)[0], rtol=1e-12)
 
 
 @pytest.mark.parametrize("compact", [True, False])
