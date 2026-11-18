@@ -516,6 +516,21 @@ def test_soft_loss_fraction_gradient_is_nonzero_where_loss_fraction_is_flat():
     assert jnp.all(exact_gradient == 0.0)
     assert jnp.all(soft_gradient[1:] > 0.0)
 
+def test_soft_loss_per_particle_keeps_a_gradient_for_stopped_orbits():
+    # A stopped orbit counts as lost in the mean (a constant) but keeps its peak, so its score can still be lowered.
+    def stopped_orbit(peaks):
+        tracing = radial_tracing(peaks)
+        tracing.boundary_hits = jnp.array([True, False])
+        return tracing
+
+    peaks = jnp.array([0.98, 0.6])
+    mean_gradient = jax.grad(lambda p: stopped_orbit(p).soft_loss_fraction(r_max=0.95))(peaks)
+    scores = stopped_orbit(peaks).soft_loss_fraction(r_max=0.95, per_particle=True)
+    gradient = jax.grad(lambda p: stopped_orbit(p).soft_loss_fraction(r_max=0.95, per_particle=True)[0])(peaks)
+    assert mean_gradient[0] == 0.0 and gradient[0] > 0.0
+    assert scores[0] > 0.5 > scores[1]
+
+
 @pytest.mark.parametrize("width", [0.0, -0.02, float("nan"), float("inf")])
 def test_soft_loss_rejects_invalid_width(width):
     with pytest.raises(ValueError, match="width"):
