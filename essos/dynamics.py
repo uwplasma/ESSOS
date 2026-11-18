@@ -584,7 +584,23 @@ def _axis_regular(vector_field):
     the position has no noise, so Ito and Stratonovich forms need no extra
     drift.
     """
-    def wrapped(t, y, args):
+    return _AxisRegular(vector_field)
+
+
+class _AxisRegular:
+    """The vector field of ``_axis_regular``; two of the same vector field are equal, so Tracing's compilation is shared."""
+
+    def __init__(self, vector_field):
+        self.vector_field = vector_field
+
+    def __eq__(self, other):
+        return isinstance(other, _AxisRegular) and self.vector_field == other.vector_field
+
+    def __hash__(self):
+        return hash(self.vector_field)
+
+    def __call__(self, t, y, args):
+        vector_field = self.vector_field
         u, w = y[0], y[1]
         s = u**2 + w**2
         half = jnp.where(s > 0, 0.5 / jnp.where(s > 0, s, 1.0), 0.0)
@@ -592,7 +608,6 @@ def _axis_regular(vector_field):
         jacobian = jnp.array([[u * half, -(1 - c) * w], [w * half, (1 - c) * u]])
         f = vector_field(t, _from_axis_regular(y), args)
         return jnp.concatenate([jnp.tensordot(jacobian, f[:2], axes=1), f[2:], c * f[1:2]])
-    return wrapped
 
 
 # Outcome of each VMEC guiding center, ``Tracing.status``.
@@ -610,6 +625,23 @@ VMEC_STATUS = {
 _EVENT_ROOT_FINDER = optx.Newton(rtol=1e-8, atol=1e-11)
 _VMEC_HOST_RESULTS = ("status", "returns", "region", "failed", "wall_hits", "failure_times", "lcfs_times", "lcfs_states",
                       "lcfs_energies", "lcfs_positions", "wall_times", "wall_positions", "wall_energies")
+
+
+@eqx.filter_custom_vjp
+def _reverse_finite(vjp_arg, fn):
+    return fn(*vjp_arg)
+
+
+@_reverse_finite.def_fwd
+def _reverse_finite_fwd(perturbed, vjp_arg, fn):
+    return eqx.filter_vjp(lambda a: fn(*a), vjp_arg)
+
+
+@_reverse_finite.def_bwd
+def _reverse_finite_bwd(vjp, grad, perturbed, vjp_arg, fn):
+    # Where the result is non-finite its cotangent is masked to zero, but zero times a NaN partial is NaN: drop
+    # non-finite cotangents so that a failed orbit contributes exactly zero.
+    return tree_util.tree_map(lambda g: jnp.where(jnp.isfinite(g), g, 0.0), vjp(grad)[0])
 
 
 def _with_failure_flag(vector_field, drift=True):
@@ -1141,6 +1173,26 @@ class Tracing():
                 bar.update(done)
         return tree_util.tree_map(lambda *x: jnp.asarray(np.concatenate(x)), *results)
 
+    def _adaptive_tolerances(self, flag=False):
+        """Use a fixed one-radian scale for periodic angles, independent of winding."""
+        if self._axis_regular:
+            size = self.initial_conditions.shape[-1] + 1 + int(flag)
+            angles = (2, size - 1 - int(flag))  # phi and Theta, before any failure flag
+        elif self.model == 'FieldLineToroidal' or (isinstance(self.field, Vmec)
+                and self.model in ('FieldLineAdaptative', 'FieldLineArclength')):
+            size, angles = self.initial_conditions.shape[-1] + int(flag), (1, 2)
+        else:
+            return self.rtol, self.atol
+        rtol = jnp.broadcast_to(jnp.asarray(self.rtol, dtype=float), (size,))
+        atol = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float), (size,))
+        indices = jnp.asarray(angles)
+        # atol + rtol * (1 rad) also supports purely relative user tolerances.
+        atol = atol.at[indices].add(rtol[indices])
+        if flag:
+            # The failure flag is identically zero on valid steps: avoid 0/0 for atol=0.
+            atol = atol.at[-1].set(jnp.where(atol[-1] == 0, rtol[-1], atol[-1]))
+        return rtol.at[indices].set(0), atol
+
     def _terms(self, key, flag=False, events=()):
         """Diffrax terms, solver and step-size controller of self.model (with _with_failure_flag if ``flag``)."""
         flagged = (lambda f, drift=True: _with_failure_flag(f, drift)) if flag else (lambda f, drift=True: f)
@@ -1159,12 +1211,14 @@ class Tracing():
             solver = self.solver if self.solver is not None else diffrax.Dopri8()
         controller = diffrax.ConstantStepSize()
         if model == 'GuidingCenterCollisionsMuAdaptative':
+            rtol, atol = self._adaptive_tolerances(flag)
             controller = ClipStepSizeController(
-                controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=self.rtol, atol=self.atol,
+                controller=PIDController(pcoeff=0.1, icoeff=0.3, dcoeff=0.0, rtol=rtol, atol=atol,
                                          dtmin=dt0, dtmax=1.e-4, force_dtmin=True),
                 step_ts=self.times, store_rejected_steps=self.rejected_steps)
         elif model in _ADAPTIVE_MODELS:
-            controller = _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
+            rtol, atol = self._adaptive_tolerances(flag)
+            controller = _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=rtol, atol=atol,
                                      dtmin=dt0 if model == 'FullOrbitCollisions' else None, events=events)
         return terms, solver, controller
 
@@ -1206,7 +1260,7 @@ class Tracing():
         if ext is not None:
             wall = self.wall if self.wall is not None else (lambda x: jnp.ones(()))
             depth = lambda y: self.field.boundary_distance(y[:3]) - self.reentry_depth
-            outside = (ODETerm(_with_failure_flag(GuidingCenterMu)), self.solver if self.solver is not None else
+            outside = (ODETerm(_with_failure_flag(lambda t, y, args: self._masked(GuidingCenterMu, t, y, args))), self.solver if self.solver is not None else
                        diffrax.Dopri8(), _EventSteps(pcoeff=0.4, icoeff=0.3, dcoeff=0, rtol=self.rtol, atol=self.atol,
                                                      events=(lambda y: wall(y[:3]), depth)),
                        (ext, self.particles, Electric_field_zero()),
@@ -1217,9 +1271,12 @@ class Tracing():
             """Solve one segment of the orbits in ``run`` and record its saves."""
             # A lane that does not run starts just before maxtime, not at it: diffrax 0.7.0 differentiates an event root
             # find over a zero-length step with a non-finite Jacobian, which its linear solver rejects in reverse mode.
+            # A non-finite start fails at once; it is replaced by a finite one so that no NaN enters the derivative.
+            ok = jnp.isfinite(y).all()
+            run, bad, y = run & ok, run & ~ok, jnp.where(ok, y, 0.5)
             solution = self._solve(*spec[:3], jnp.where(run, o["t"], T * (1 - 1e-9)), jnp.append(y, 0.0), *spec[3:])
             saves, end = vmap(to_flux)(solution.ys[0][:, :-1]), to_flux(solution.ys[1][-1, :-1])
-            failed = run & (solution.event_mask[-1] | ~((solution.result == diffrax.RESULTS.successful)
+            failed = bad | run & (solution.event_mask[-1] | ~((solution.result == diffrax.RESULTS.successful)
                             | (solution.result == diffrax.RESULTS.event_occurred)
                             | (solution.result == diffrax.RESULTS.nonlinear_max_steps_reached)))
             t_end = jnp.where(run, solution.ts[1][-1], o["t"])
@@ -1256,7 +1313,7 @@ class Tracing():
             back = returned & (o["returns"] < self.max_returns)
             o.update(t=t_end, returns=o["returns"] + back, inside=o["inside"] | back, active=o["active"] & ~(run & ~back),
                      status=jnp.select([failed, struck, returned & ~back, run & ~back], [4, 3, 5, 2], o["status"]),
-                     x=jnp.where(run & ~behind, end, o["x"]), y=jnp.where(back, self._vmec_from_exterior(end), o["y"]))
+                     x=jnp.where(run & ~behind, end, o["x"]), y=jnp.where(back, self._vmec_from_exterior(jnp.where(back, end, 0.5)), o["y"]))
             return o
 
         nt, d = len(times), y0.shape[0]
@@ -1273,6 +1330,10 @@ class Tracing():
             o["x_energy"] = 0.5 * self.particles.mass * o["x"][3]**2 + o["x"][4] * ext.AbsB(o["x"][:3])
         return o
 
+    def _masked(self, fn, *args):
+        """fn(*args); in reverse mode the cotangent of a non-finite result is zero, not NaN (see _reverse_finite)."""
+        return fn(*args) if isinstance(self.adjoint, diffrax.ForwardMode) else _reverse_finite(args, fn)
+
     def _vmec_to_exterior(self, y):
         """Model state on the LCFS -> (x, y, z, v_par, mu) and energy, keeping E and mu."""
         point, m, c = y[:3], self.particles.mass, SPEED_OF_LIGHT
@@ -1288,13 +1349,14 @@ class Tracing():
             E = 0.5 * m * vpar**2 + mu * B
         x = self.field.to_xyz(point)
         if self.exterior_field is not None:
-            vpar, mu = _keep_energy(vpar, mu, E, self.exterior_field.AbsB(x), m)
+            B = self._masked(lambda e, x: e.AbsB(x), self.exterior_field, x)
+            vpar, mu = self._masked(_keep_energy, vpar, mu, E, B, m)
         return jnp.concatenate([x, jnp.array([vpar, mu])]), E
 
     def _vmec_from_exterior(self, y):
         """(x, y, z, v_par, mu) just inside the LCFS -> model state in flux coordinates."""
         m, c = self.particles.mass, SPEED_OF_LIGHT
-        E = 0.5 * m * y[3]**2 + y[4] * self.exterior_field.AbsB(y[:3])
+        E = 0.5 * m * y[3]**2 + y[4] * self._masked(lambda e, x: e.AbsB(x), self.exterior_field, y[:3])
         point = self.field.flux_coordinates(y[:3])[0]
         vpar, mu = _keep_energy(y[3], y[4], E, self.field.AbsB(point), m)
         if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
@@ -1620,7 +1682,8 @@ def trace_field_lines(
         toroidal_turns: Number of full toroidal turns to follow.
         length: Physical arclength to follow for a Cartesian field.
         samples: Number of saved points along each line.
-        tolerance: Relative and absolute adaptive-integration tolerance.
+        tolerance: Relative and absolute adaptive-integration tolerance. Flux-coordinate
+            angles use a fixed one-radian reference scale, independent of winding.
         stopping_criteria: Optional event callable or sequence of callables.
         progress: Show Diffrax's terminal progress bar.
         label: Text printed before compilation and after completion; set to
