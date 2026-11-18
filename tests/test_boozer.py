@@ -395,9 +395,10 @@ def test_survivor_compaction_preserves_outputs(edge_births, n_save, collisions, 
     compacted = trace_boozer(field, *args, **kwargs, **(
         {"progress": lambda d, t: callbacks[1].append((d, t))} if with_progress else {}))
     assert callbacks[0] == callbacks[1]
-    for name in ("times", "states", "loss_times", "thermalized_times", "failed_times"):
+    for name in ("times", "loss_times", "thermalized_times", "failed_times"):
         np.testing.assert_array_equal(getattr(compacted, name), getattr(whole, name))
-    # The energy error is rounded in a batch of another size: equal to an ulp.
+    # States and energy error are rounded in a batch of another size: equal to an ulp.
+    np.testing.assert_allclose(compacted.states, whole.states, rtol=1e-15, atol=0)
     np.testing.assert_allclose(compacted.energy_error, whole.energy_error, rtol=0, atol=1e-15)
 
 
