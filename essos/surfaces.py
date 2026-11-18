@@ -20,31 +20,39 @@ def _cacheable(*values):
 
 @jit
 def toroidal_flux(surface, field, idx=0) -> jnp.ndarray:
-    curve = surface.gamma[idx]    
-    dl = jnp.roll(curve, -1, axis=0) - curve
-    A_vals = vmap(field.A)(curve)
-    Adl = jnp.sum(A_vals * dl, axis=1) 
-    tf = jnp.sum(Adl)
-    #curve = surface.gamma[idx]    
-    #dl = surface.gammadash_theta[idx]
-    #A_vals = vmap(field.A)(curve)
-    #Adl = jnp.sum(A_vals * dl, axis=1)/surface.ntheta 
-    #tf = jnp.sum(Adl)    
-    return tf
+    """Signed magnetic flux through the poloidal loop at toroidal grid index idx.
+
+    Integrate ``A . dx`` using the analytic theta tangent and periodic
+    quadrature. For ``R = R0 + a cos(theta), Z = b sin(theta)`` the loop
+    normal points in the negative toroidal direction: positive B_phi gives
+    negative flux. The vector potential must be single-valued on the loop.
+    """
+    count = surface.ntheta - int(surface.close)
+    if count < 2:
+        raise ValueError('Toroidal flux requires at least two distinct theta points')
+    curve = surface.gamma[idx, :count]
+    tangent = surface.gammadash_theta[idx, :count]
+    return 2 * jnp.pi * jnp.mean(jnp.sum(vmap(field.A)(curve) * tangent, axis=-1))
+
 
 @jit
 def poloidal_flux(surface, field, idx=0) -> jnp.ndarray:
-    curve = surface.gamma[:,idx,:]    
-    dl = jnp.roll(curve, -1, axis=0) - curve
-    A_vals = vmap(field.A)(curve)
-    Adl = jnp.sum(A_vals * dl, axis=1) 
-    tf = jnp.sum(Adl)
-    #curve = surface.gamma[:,idx,:]    
-    #dl = surface.gammadash_phi[:,idx,:]
-    #A_vals = vmap(field.A)(curve)
-    #Adl = jnp.sum(A_vals * dl, axis=1)/surface.nphi 
-    #tf = jnp.sum(Adl)    
-    return tf
+    """Signed flux through the full toroidal loop at poloidal grid index idx.
+
+    Integrate ``A . dx`` in increasing phi with periodic quadrature. A half
+    period surface is an open arc and cannot define this flux; use a surface
+    with ``range_torus='full torus'``. The vector potential must be
+    single-valued on the full loop.
+    """
+    if surface.range_torus != 'full torus':
+        raise ValueError("Poloidal flux requires range_torus='full torus'")
+    count = surface.nphi - int(surface.close)
+    if count < 2:
+        raise ValueError('Poloidal flux requires at least two distinct phi points')
+    curve = surface.gamma[:count, idx]
+    tangent = surface.gammadash_phi[:count, idx]
+    return 2 * jnp.pi * jnp.mean(jnp.sum(vmap(field.A)(curve) * tangent, axis=-1))
+
 
 @jit
 def B_on_surface(surface, field):
