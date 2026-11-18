@@ -310,3 +310,10 @@ def test_curve_derivatives_are_the_spectral_derivatives_of_gamma():
     np.testing.assert_allclose(curves.gamma_dashdash, second, atol=1e-9)
     grad = jax.grad(lambda d: jnp.sum(curves.with_dofs(d).gamma_dash ** 2))(curves.dofs)
     assert np.all(np.isfinite(grad))
+
+
+def test_zero_currents_give_finite_dofs():
+    from essos.coils import CreateEquallySpacedCurves
+    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    coils = Coils(curves=curves, currents=[0.0, 0.0])
+    assert jnp.all(jnp.isfinite(coils.dofs)) and jnp.all(jnp.isfinite(coils.currents))
