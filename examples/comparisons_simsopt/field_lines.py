@@ -97,7 +97,7 @@ for index, rtol_ESSOS in enumerate(rtol_array):
 print('Plotting the results to output directory...')
 
 # Plot time comparison in a bar chart
-quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", runtime_ESSOS_array[tolerance_idx], runtime_SIMSOPT_array[tolerance_idx]) 
+quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", runtime_ESSOS_array[tolerance_idx], runtime_SIMSOPT_array[tolerance_idx])
               for tolerance_idx in range(len(rtol_array))]
 
 labels = [q[0] for q in quantities]
@@ -157,7 +157,7 @@ plt.yscale('log')
 plt.ylabel(r'Relative $x,y,z$ Error')
 plt.savefig(os.path.join(output_dir, f'comparisons_fl_error_xyz.pdf'), dpi=150)
 
-quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx]) 
+quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx])
               for tolerance_idx in range(len(rtol_array))]
 
 labels = [q[0] for q in quantities]

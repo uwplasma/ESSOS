@@ -63,7 +63,7 @@ def loss_particle_radial_drift(field, particles, timestep=1.e-8, tmax=1e-5, n_sa
     Z_axis=field.z_axis
     #Ideally here one would differentiate in time through diffrax !TODO
     r_cross=jnp.sqrt(jnp.square(jnp.sqrt(jnp.square(xyz[:,0])+jnp.square(xyz[:,1]))-R_axis+1.e-12)+jnp.square(xyz[:,2]-Z_axis+1.e-12))
-    v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.n_save*tracing.tmax     
+    v_r_cross=jnp.diff(r_cross,axis=1)#/tracing.n_save*tracing.tmax
     return (jnp.sum(jnp.square(jnp.average(v_r_cross,axis=1))))
 
 def normB_axis(field, npoints=15):
@@ -89,7 +89,7 @@ particles = Particles(initial_xyz=initial_xyz)
 
 
 """ Defining custom losses """
-L_radial_drift= custom_loss(loss_particle_radial_drift, "field", particles=particles, timestep=TIMESTEP, tmax=MAXTIME_TRACING, n_save=NUM_STEPS, rtol=TRACE_TOLERANCE, model=MODEL) 
+L_radial_drift= custom_loss(loss_particle_radial_drift, "field", particles=particles, timestep=TIMESTEP, tmax=MAXTIME_TRACING, n_save=NUM_STEPS, rtol=TRACE_TOLERANCE, model=MODEL)
 L_B_axis= custom_loss(loss_normB_axis_average, "field")
 L_length = custom_loss(loss_length, "field")
 L_curvature = custom_loss(loss_curvature, "field")
