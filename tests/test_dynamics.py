@@ -163,6 +163,72 @@ def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
     assert jnp.allclose(tracing.toroidal_angles[0], tracing.trajectories[0, :, 2])
 
 
+@pytest.mark.parametrize("atol", [1e-8, 0])
+def test_periodic_fieldline_accuracy_is_independent_of_angle_origin(atol):
+    class PeriodicField(MockField):
+        def B_contravariant(self, point):
+            return jnp.array([0., 1. / (1. + .3*jnp.cos(point[1])), 1.])
+
+    offsets = 2*jnp.pi*jnp.array([0., 10000.])
+    seeds = jnp.tile(jnp.array([.5, .2, .3]), (2, 1)).at[:, 1:].add(offsets[:, None])
+    tracing = Tracing(field=PeriodicField(), model="FieldLineToroidal", initial_conditions=seeds,
+                      maxtime=20*jnp.pi, timestep=.1, times_to_trace=65,
+                      rtol=1e-7, atol=atol, progress=False)
+    theta = tracing.trajectories[:, :, 1] - offsets[:, None]
+    # Exact first integral: theta + epsilon*sin(theta) - phi is constant.
+    residual = theta + .3*jnp.sin(theta) - (.2 + .3*jnp.sin(.2)) - tracing.times[None, :]
+    assert float(jnp.max(jnp.abs(residual))) < 3e-6
+    np.testing.assert_allclose(theta[0], theta[1], rtol=0, atol=3e-6)
+
+
+def _tolerance_controller(model, axis_regular, flag=False, atol=1e-8, size=4):
+    import diffrax
+
+    tracing = Tracing.__new__(Tracing)
+    tracing.model, tracing._axis_regular, tracing.field = model, axis_regular, None
+    tracing.initial_conditions = jnp.ones((1, size))
+    tracing.rtol, tracing.atol = 1e-7, atol
+    tracing.timestep, tracing.solver = .1, None
+    tracing.ODE_term = diffrax.ODETerm(lambda t, y, args: jnp.ones_like(y))
+    return tracing, tracing._terms(None, flag=flag)
+
+
+@pytest.mark.parametrize("flag", [False, True])
+@pytest.mark.parametrize("angle_name", ["phi", "Theta"])
+@pytest.mark.parametrize("atol", [1e-8, 0])
+@pytest.mark.parametrize("size", [4, 5])
+def test_vmec_controller_error_budget_is_independent_of_phi_and_theta_winding(flag, angle_name, atol, size):
+    tracing, (terms, solver, controller) = _tolerance_controller("GuidingCenterAdaptative", True, flag, atol, size)
+    angle = 2 if angle_name == "phi" else size
+    y = jnp.array([.5, .3, .2, .7] + ([.9] if size == 5 else []) + [.4] + ([0.] if flag else []))
+    error = jnp.zeros_like(y).at[angle].set(1e-5)
+
+    def adapt(state):
+        _, controller_state = controller.init(terms, 0., .1, state, .1, None, solver.func, 9.)
+        return controller.adapt_step_size(0., .1, state, state, None, error, 9., controller_state)
+
+    original = adapt(y)
+    shifted = adapt(y.at[angle].add(2000*jnp.pi))
+    assert not bool(original[0]) and not bool(shifted[0])
+    assert jnp.isfinite(original[2]) and jnp.isfinite(shifted[2])
+    np.testing.assert_allclose(original[2], shifted[2], rtol=1e-13, atol=0)
+    # Theta is before the optional failure flag; v_parallel keeps relative control.
+    assert float(controller.rtol[3]) == tracing.rtol
+    np.testing.assert_allclose(controller.atol[angle], tracing.atol + tracing.rtol)
+
+
+def test_angular_tolerance_change_preserves_cartesian_and_fixed_step_paths(monkeypatch):
+    import diffrax
+
+    tracing, (_, _, controller) = _tolerance_controller("FullOrbitAdaptative", False)
+    assert controller.rtol is tracing.rtol and controller.atol is tracing.atol
+    tracing.model, tracing._axis_regular = "GuidingCenter", True
+    def unexpected(*args):
+        raise AssertionError("fixed-step paths must not construct adaptive tolerances")
+    monkeypatch.setattr(tracing, "_adaptive_tolerances", unexpected)
+    assert isinstance(tracing._terms(None)[2], diffrax.ConstantStepSize)
+
+
 def test_trace_field_lines_selects_clear_physical_parameterizations(capsys):
     class FluxField(MockField):
         def B_contravariant(self, points):
@@ -1195,6 +1261,49 @@ def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and
     np.testing.assert_allclose(grad_s @ ds + grad_p @ dparams, forward, rtol=1e-5)
 
 
+def test_vmec_launch_derivative_of_the_exit_time_is_dual_in_both_modes_for_an_orbit_crossing_radial_nodes():
+    """The orbit starts inside the last two half-grid nodes of the radial interpolation and crosses them on its way out: with
+    a second derivative that jumps there, the forward and reverse programs take different steps and disagree at 1e-8."""
+    import diffrax
+    from essos.constants import ELEMENTARY_CHARGE, ONE_EV, PROTON_MASS
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    assert 0.97 < 0.9786 < float(vmec.s_half_grid[-1]) < 0.99
+
+    def exit_time(eps, adjoint=None):
+        particles = Particles(initial_xyz=jnp.array([[0.9786 + 1e-3 * eps, 2.3925, 5.5137]]), initial_vparallel_over_v=jnp.array([0.1781]),
+                              mass=PROTON_MASS, charge=ELEMENTARY_CHARGE, energy=1e6 * ONE_EV)
+        return Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3.3e-6, timestep=1e-9, times_to_trace=2,
+                       atol=1e-8, rtol=1e-8, adjoint=adjoint).lcfs_times[0]
+
+    forward = jax.jvp(lambda eps: exit_time(eps, diffrax.ForwardMode()), (0.0,), (1.0,))[1]
+    reverse = jax.grad(exit_time)(0.0)
+    central = lambda h: (exit_time(h) - exit_time(-h)) / (2 * h)
+    np.testing.assert_allclose(forward, (4 * central(0.5) - central(1.0)) / 3, rtol=1e-6)
+    np.testing.assert_allclose(reverse, forward, rtol=1e-9)
+
+
+def test_vmec_non_finite_exterior_field_has_a_finite_masked_gradient_in_both_modes():
+    """Orbits stopped by a non-finite exterior field contribute exactly zero to the gradient, as in forward mode."""
+    import diffrax
+    from essos.fields import ExternalField
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    above = lambda xyz, params: _toroidal_source(xyz, params) * jnp.where(xyz[:, 2:] > 0.0, jnp.nan, 1.0)
+
+    def objective(params, adjoint=None):
+        particles = Particles(initial_xyz=jnp.asarray(STRIKING[0]), initial_vparallel_over_v=jnp.asarray(STRIKING[1]))
+        tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3e-6, timestep=1e-9,
+                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(above, params), wall=0.05,
+                          adjoint=adjoint)
+        assert tracing.failed.any() and not tracing.failed.all()
+        return 1e6 * jnp.sum(jnp.where(jnp.isfinite(tracing.wall_times), tracing.wall_times, 0.0))
+
+    params = jnp.array([60.0, 0.5])
+    reverse = jax.grad(objective)(params)
+    forward = jax.jvp(lambda p: objective(p, diffrax.ForwardMode()), (params,), (jnp.array([0.0, 1.0]),))[1]
+    assert jnp.isfinite(reverse).all()
+    np.testing.assert_allclose(reverse[1], forward, rtol=1e-5)
+
+
 def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_reverse_mode():
     """Saves of orbits that are not in a segment must not put NaN partials into the VMEC coefficient gradients."""
     import diffrax
@@ -1240,7 +1349,7 @@ def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
     s = jnp.full(8, 0.9)
     times, gradient = crossing_times(s), jax.grad(objective)(s)
     assert jnp.isinf(times[0]) and jnp.isfinite(times[1:]).all() and jnp.isfinite(gradient).all()
-    np.testing.assert_allclose(times[2:4], 2.320923e-5, rtol=1e-5)
+    np.testing.assert_allclose(times[2:4], 2.306765e-5, rtol=1e-5)
     h = jnp.zeros(8).at[-1].set(1e-6)
     np.testing.assert_allclose(gradient[-1], (objective(s + h) - objective(s - h)) / 2e-6, rtol=1e-4)
 
@@ -1342,6 +1451,33 @@ def test_tracings_with_the_same_shapes_share_one_compiled_solve():
     _compiled_solver.cache_clear()
     np.testing.assert_array_equal(second, trace([2e6, 1e6], 0.01))  # a fresh compilation gives the same orbits
     assert not np.allclose(first, second)
+
+
+def test_vmec_tracings_share_one_compiled_solve():
+    from essos.dynamics import _compiled_solver
+    from essos.fields import VMEC_WOUT_ARRAYS
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    scaled = Vmec.from_arrays(vmec.nfp, vmec.ns, *(getattr(vmec, n) * (1.1 if n == 'bmnc' else 1) for n in VMEC_WOUT_ARRAYS),
+                              ntheta=8, nphi=8)  # same shapes, 10% stronger |B|
+    compiles = []
+    jax.monitoring.register_event_duration_secs_listener(
+        lambda event, duration, **kw: compiles.append(event) if event.endswith('backend_compile_duration') else None)
+
+    def trace(field):
+        return Tracing(field=field, model="GuidingCenterAdaptative", particles=_near_axis_particles(), maxtime=1e-7,
+                       timestep=1e-9, times_to_trace=5, progress=False).trajectories
+
+    _compiled_solver.cache_clear()
+    first = trace(vmec)
+    n = len(compiles)
+    again = trace(vmec)
+    assert len(compiles) == n  # no compilation after the first
+    other = trace(scaled)
+    info = _compiled_solver.cache_info()
+    assert (info.misses, info.hits) == (1, 2)
+    np.testing.assert_array_equal(first, again)
+    assert not np.allclose(first, other)
 
 
 def test_implicit_solver_guiding_center_trace():
