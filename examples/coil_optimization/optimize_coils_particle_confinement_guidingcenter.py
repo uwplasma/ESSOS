@@ -93,7 +93,7 @@ particles = Particles(initial_xyz=initial_xyz)
 
 
 """ Defining custom losses """
-L_radial_drift= CustomLoss(loss_particle_radial_drift, "field", particles=particles, timestep=TIMESTEP, tmax=MAXTIME_TRACING, n_save=NUM_STEPS, rtol=TRACE_TOLERANCE, model=MODEL) 
+L_radial_drift= CustomLoss(loss_particle_radial_drift, "field", particles=particles, timestep=TIMESTEP, tmax=MAXTIME_TRACING, n_save=NUM_STEPS, rtol=TRACE_TOLERANCE, model=MODEL)
 L_B_axis= CustomLoss(loss_norm_b_axis_average, "field")
 L_length = CustomLoss(loss_length, "field")
 L_curvature = CustomLoss(loss_curvature, "field")

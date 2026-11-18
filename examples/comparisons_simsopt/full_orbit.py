@@ -146,7 +146,7 @@ else:
 
 # Plot time comparison in a bar chart
 
-quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", runtime_ESSOS_array[tolerance_idx], runtime_SIMSOPT_array[tolerance_idx]) 
+quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", runtime_ESSOS_array[tolerance_idx], runtime_SIMSOPT_array[tolerance_idx])
               for tolerance_idx in range(len(rtol_array))]
 
 labels = [q[0] for q in quantities]
@@ -229,7 +229,7 @@ else:
     xyz_error_fig.savefig(os.path.join(output_dir, f'comparisons_fo_boris_error_xyz.pdf'), dpi=150)
     v_error_fig.savefig(os.path.join(output_dir, f'comparisons_fo_boris_error_v.pdf'), dpi=150)
 
-quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx], avg_relative_v_error_array[tolerance_idx]) 
+quantities = [(fr"tol=$10^{{{int(jnp.log10(rtol_array[tolerance_idx])-1e-3)}}}$", avg_relative_xyz_error_array[tolerance_idx], avg_relative_v_error_array[tolerance_idx])
               for tolerance_idx in range(len(rtol_array))]
 
 labels = [q[0] for q in quantities]
