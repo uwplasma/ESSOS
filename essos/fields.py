@@ -188,6 +188,19 @@ class BiotSavart(MagneticField):
         return jnp.mean(dB_sum, axis=0)
 
     @jit
+    def A(self, points):
+        """Cartesian filament vector potential [T m] at a point [m].
+
+        Uses the same periodic coil quadrature and currents as :meth:`B`,
+        so ``curl(A) = B`` and shape/current derivatives remain traceable.
+        """
+        distance = jnp.linalg.norm(jnp.asarray(points) - self.coils.gamma, axis=-1)
+        tangent_over_distance = self.coils.gamma_dash / distance[..., None]
+        potential = jnp.einsum('i,ijk->jk', self.coils.currents * 1e-7,
+                               tangent_over_distance)
+        return jnp.mean(potential, axis=0)
+
+    @jit
     def b_cyl(self, R, phi, Z):
         """Return ``(B_R, B_phi, B_Z)`` on broadcast cylindrical arrays.
 
@@ -339,10 +352,9 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     is given. Interpolating the modes themselves leaves the m > 0 terms
     finite on the axis, where |B| then depends on theta.
 
-    The interpolation is cubic Hermite with centred-difference slopes (linear
-    in the first interval): it keeps the grid values and its s derivative is
-    continuous. With linear
-    interpolation grad|B| jumps at every grid point, and a guiding center
+    The interpolation is a cubic spline (linear in the first interval, a
+    parabola in the last): it keeps the grid values and is C2 up to the LCFS
+    (see below). With linear interpolation grad|B| jumps at every grid point, and a guiding center
     whose radial drift changes sign there chatters across it while the
     adaptive step shrinks to nothing; under vmap the whole batch then runs to
     max_steps.
@@ -359,10 +371,13 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
             scaled = scaled.at[0].set(jnp.where(m > 0, 2 * scaled[1] - scaled[2], scaled[0]))
             if axis_m1 is not None:
                 scaled = scaled.at[0].set(jnp.where(m == 1, axis_m1, scaled[0]))
-        # Slopes per grid interval. Hermite interpolation is C1 for any nodal slopes; the first interval
-        # keeps the linear form that the axis rows above are extrapolated with.
-        slope = jnp.gradient(scaled, axis=0)
-        slope = slope.at[:2].set(scaled[1] - scaled[0])
+        # Nodal slopes (per grid interval) of the C2 cubic spline: the first interval keeps the linear form that the
+        # axis rows above are extrapolated with, the last one is a parabola.
+        n, step = len(grid), jnp.diff(scaled, axis=0)
+        interior = np.r_[0, 0, np.ones(n - 3), 1.0]
+        slope = lax.linalg.tridiagonal_solve(
+            interior, np.r_[1, 1, 4 * np.ones(n - 3), 1], np.r_[interior[:-1], 0],
+            jnp.concatenate([step[:1], step[:1], 3 * (scaled[3:] - scaled[1:-2]), 2 * step[-1:]]))
     ds = grid[1] - grid[0]
     i = jnp.clip(jnp.floor((s - grid[0]) / ds).astype(int), 0, len(grid) - 2)
     u = (s - grid[i]) / ds
@@ -370,9 +385,11 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
     powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
     h = jnp.stack([(1 + 2 * t) * (1 - t)**2, t * (1 - t)**2, t * t * (3 - 2 * t), t * t * (t - 1)])
-    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue linearly with the end slope,
-    # so value and s derivative stay continuous up to the LCFS instead of freezing there.
-    beyond = jnp.maximum(u - 1.0, 0.0) * slope[i + 1]
+    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue with a parabola that has the end
+    # value, slope and curvature of the cubic, so the interpolant stays C2 up to the LCFS (a kink in the second
+    # derivative gives the adaptive integrator an uncontrolled tangent error) instead of freezing there.
+    over = jnp.maximum(u - 1.0, 0.0)
+    beyond = over * slope[i + 1] + 0.5 * over**2 * (6 * (scaled[i] - scaled[i + 1]) + 2 * slope[i] + 4 * slope[i + 1])
     return (powers @ (k == np.arange(-1, 4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
                                                           + h[2] * scaled[i + 1] + h[3] * slope[i + 1] + beyond)
 
@@ -592,6 +609,9 @@ class Vmec(ToroidalField):
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier.from_vmec(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
         self.Aminor_p = Aminor_p
+        # The pytree children; the mode numbers stay static, as _radial_interp reads them as concrete values.
+        self._arrays = tuple(k for k, v in vars(self).items() if isinstance(v, jax.Array)
+                             and k not in ('xm', 'xn', 'xm_nyq', 'xn_nyq'))
         #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
 
     def _drop_small_modes(self, tolerance):
@@ -855,6 +875,45 @@ class near_axis:
             "Please run 'pip install git+https://github.com/uwplasma/pyQSC_JAX.git' "
             "and import it via 'from pyqsc_jax.near_axis import near_axis'."
         )
+
+
+class _VmecStatic:
+    """Non-array state of a ``Vmec`` (mode counts, nfp, ...): equal when those are. The file handle and the
+    boundary surface ride along but do not take part in the comparison."""
+    __slots__ = ("items", "extra", "key")
+
+    def __init__(self, items, extra):
+        self.items, self.extra = items, extra
+        self.key = tuple((k, tuple(np.asarray(v).tolist()) if isinstance(v, jax.Array) else v) for k, v in items)
+
+    def __eq__(self, other):
+        return isinstance(other, _VmecStatic) and self.key == other.key
+
+    def __hash__(self):
+        return hash(self.key)
+
+
+_VMEC_UNCOMPARED = ("nc", "wout_filename", "_surface")
+
+
+def _vmec_flatten(vmec):
+    d = vars(vmec)
+    names = d["_arrays"]
+    items = tuple((k, v) for k, v in d.items() if k not in names and k not in _VMEC_UNCOMPARED)
+    extra = tuple((k, d[k]) for k in _VMEC_UNCOMPARED if k in d)
+    return tuple(d[k] for k in names), (names, _VmecStatic(items, extra))
+
+
+def _vmec_unflatten(aux, children):
+    names, static = aux
+    vmec = object.__new__(Vmec)
+    vmec.__dict__.update(static.items, **dict(static.extra), **dict(zip(names, children)))
+    return vmec
+
+
+# A pytree, so that Tracing's shared compilation takes the coefficient tables as arguments and is reused by every
+# Vmec with the same shapes and mode counts.
+tree_util.register_pytree_node(Vmec, _vmec_flatten, _vmec_unflatten)
 
 
 class ExternalField(MagneticField):
