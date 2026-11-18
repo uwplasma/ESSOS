@@ -5,8 +5,10 @@ from jax import vmap
 from essos.coils import Curves
 import jax.numpy as jnp
 import numpy as np
+from scipy import ndimage
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
+from jax.custom_batching import custom_vmap
 from essos.surfaces import SurfaceRZFourier, BdotN_over_B, SurfaceClassifier
 from essos.plot import fix_matplotlib_3d
 from essos.util import newton
@@ -97,6 +99,12 @@ def _gc_from_jacobian(field, jacobian):
     return field, field, magnitude, grad_magnitude, curl_unit, curvature, 1.0
 
 
+def _cartesian_gc_quantities(field, points):
+    """``gc_quantities`` of a Cartesian field (sqrtg = 1) from one forward-mode Jacobian of ``field.B``."""
+    jacobian, value = jacfwd(lambda x: (field.B(x),) * 2, has_aux=True)(jnp.asarray(points))
+    return _gc_from_jacobian(value, jacobian)
+
+
 class BiotSavart(MagneticField):
     def __init__(self, coils):
         self.coils = coils
@@ -125,8 +133,7 @@ class BiotSavart(MagneticField):
         grad|B| = (dB/dX)^T b, curl b = curl B/|B| + B x grad|B|/|B|^2 and
         kappa = -B x curl b / |B| follow algebraically.
         """
-        jacobian, field = jacfwd(lambda x: (self.B(x), self.B(x)), has_aux=True)(jnp.asarray(points))
-        return _gc_from_jacobian(field, jacobian)
+        return _cartesian_gc_quantities(self, points)
 
     @jit
     def B(self, points):
@@ -134,6 +141,19 @@ class BiotSavart(MagneticField):
         dB = jnp.cross(self.coils.gamma_dash.T, dif_R, axisa=0, axisb=0, axisc=0) / jnp.linalg.norm(dif_R, axis=0)**3
         dB_sum = jnp.einsum("i,bai", self.coils.currents*1e-7, dB, optimize="greedy")
         return jnp.mean(dB_sum, axis=0)
+
+    @jit
+    def A(self, points):
+        """Cartesian filament vector potential [T m] at a point [m].
+
+        Uses the same periodic coil quadrature and currents as :meth:`B`,
+        so ``curl(A) = B`` and shape/current derivatives remain traceable.
+        """
+        distance = jnp.linalg.norm(jnp.asarray(points) - self.coils.gamma, axis=-1)
+        tangent_over_distance = self.coils.gamma_dash / distance[..., None]
+        potential = jnp.einsum('i,ijk->jk', self.coils.currents * 1e-7,
+                               tangent_over_distance)
+        return jnp.mean(potential, axis=0)
 
     @jit
     def b_cyl(self, R, phi, Z):
@@ -290,10 +310,9 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     is given. Interpolating the modes themselves leaves the m > 0 terms
     finite on the axis, where |B| then depends on theta.
 
-    The interpolation is cubic Hermite with centred-difference slopes (linear
-    in the first interval): it keeps the grid values and its s derivative is
-    continuous. With linear
-    interpolation grad|B| jumps at every grid point, and a guiding center
+    The interpolation is a cubic spline (linear in the first interval, a
+    parabola in the last): it keeps the grid values and is C2 up to the LCFS
+    (see below). With linear interpolation grad|B| jumps at every grid point, and a guiding center
     whose radial drift changes sign there chatters across it while the
     adaptive step shrinks to nothing; under vmap the whole batch then runs to
     max_steps.
@@ -310,10 +329,13 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
             scaled = scaled.at[0].set(jnp.where(m > 0, 2 * scaled[1] - scaled[2], scaled[0]))
             if axis_m1 is not None:
                 scaled = scaled.at[0].set(jnp.where(m == 1, axis_m1, scaled[0]))
-        # Slopes per grid interval. Hermite interpolation is C1 for any nodal slopes; the first interval
-        # keeps the linear form that the axis rows above are extrapolated with.
-        slope = jnp.gradient(scaled, axis=0)
-        slope = slope.at[:2].set(scaled[1] - scaled[0])
+        # Nodal slopes (per grid interval) of the C2 cubic spline: the first interval keeps the linear form that the
+        # axis rows above are extrapolated with, the last one is a parabola.
+        n, step = len(grid), jnp.diff(scaled, axis=0)
+        interior = np.r_[0, 0, np.ones(n - 3), 1.0]
+        slope = lax.linalg.tridiagonal_solve(
+            interior, np.r_[1, 1, 4 * np.ones(n - 3), 1], np.r_[interior[:-1], 0],
+            jnp.concatenate([step[:1], step[:1], 3 * (scaled[3:] - scaled[1:-2]), 2 * step[-1:]]))
     ds = grid[1] - grid[0]
     i = jnp.clip(jnp.floor((s - grid[0]) / ds).astype(int), 0, len(grid) - 2)
     u = (s - grid[i]) / ds
@@ -321,9 +343,11 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
     powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
     h = jnp.stack([(1 + 2 * t) * (1 - t)**2, t * (1 - t)**2, t * t * (3 - 2 * t), t * t * (t - 1)])
-    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue linearly with the end slope,
-    # so value and s derivative stay continuous up to the LCFS instead of freezing there.
-    beyond = jnp.maximum(u - 1.0, 0.0) * slope[i + 1]
+    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue with a parabola that has the end
+    # value, slope and curvature of the cubic, so the interpolant stays C2 up to the LCFS (a kink in the second
+    # derivative gives the adaptive integrator an uncontrolled tangent error) instead of freezing there.
+    over = jnp.maximum(u - 1.0, 0.0)
+    beyond = over * slope[i + 1] + 0.5 * over**2 * (6 * (scaled[i] - scaled[i + 1]) + 2 * slope[i] + 4 * slope[i + 1])
     return (powers @ (k == np.arange(-1, 4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
                                                           + h[2] * scaled[i + 1] + h[3] * slope[i + 1] + beyond)
 
@@ -437,6 +461,9 @@ class Vmec():
         self.range_torus = range_torus
         self._surface = SurfaceRZFourier.from_vmec(self, ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus)
         self.Aminor_p = Aminor_p
+        # The pytree children; the mode numbers stay static, as _radial_interp reads them as concrete values.
+        self._arrays = tuple(k for k, v in vars(self).items() if isinstance(v, jax.Array)
+                             and k not in ('xm', 'xn', 'xm_nyq', 'xn_nyq'))
         #self._classifier=SurfaceClassifier(self._surface,p=1,h=0.05)
 
     def _drop_small_modes(self, tolerance):
@@ -645,24 +672,31 @@ class Vmec():
         phi = jnp.mod(jnp.arctan2(xyz[1], xyz[0]), 2 * jnp.pi)
         target = jnp.array([R, Z])
 
-        def rz(x):
+        def rz(x, phi):
             p = self.to_xyz(jnp.array([x[0]**2 + x[1]**2, jnp.arctan2(x[1], x[0]), phi]))
             return jnp.array([jnp.hypot(p[0], p[1]), p[2]])
 
+        # The iterations run on constants. Differentiating them gives NaN once a step is exactly zero (the norm of
+        # the step); the converged point is differentiated by one more Newton step instead, whose value is exactly 0.
+        phi0, target0 = lax.stop_gradient((phi, target))
         rho, theta = [a.ravel() for a in jnp.meshgrid(jnp.linspace(0.08, 1.0, 12),
                                                      jnp.linspace(0, 2 * jnp.pi, 32, endpoint=False))]
         seeds = jnp.stack([rho * jnp.cos(theta), rho * jnp.sin(theta)], 1)
-        x = seeds[jnp.argmin(jnp.sum((vmap(rz)(seeds) - target)**2, 1))]
+        x = seeds[jnp.argmin(jnp.sum((vmap(lambda x: rz(x, phi0))(seeds) - target0)**2, 1))]
 
         def newton(x, _):
-            dx = jnp.linalg.solve(jacfwd(rz)(x), rz(x) - target)
+            dx = jnp.linalg.solve(jacfwd(rz)(x, phi0), rz(x, phi0) - target0)
             x = x - dx * jnp.minimum(1.0, 0.1 / (jnp.linalg.norm(dx) + 1e-300))
             # Stay in s <= 1: beyond it the extrapolated map can fold back over the plasma.
             return x / jnp.maximum(1.0, jnp.linalg.norm(x)), None
 
         x, _ = lax.scan(newton, x, None, length=40)
+        x = lax.stop_gradient(x)  # reverse mode through the iterations is NaN once a step is exactly 0
+        step = jnp.linalg.solve(jacfwd(rz)(x, phi), rz(x, phi) - target)
+        residual = jnp.linalg.norm(rz(x, phi0) - target0)
+        x = x + (lax.stop_gradient(step) - step)
         s = x[0]**2 + x[1]**2
-        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), jnp.linalg.norm(rz(x) - target)
+        return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), residual
 
 class near_axis:
     def __init__(self, *args, **kwargs):
@@ -673,7 +707,45 @@ class near_axis:
         )
 
 
-@tree_util.register_static
+class _VmecStatic:
+    """Non-array state of a ``Vmec`` (mode counts, nfp, ...): equal when those are. The file handle and the
+    boundary surface ride along but do not take part in the comparison."""
+    __slots__ = ("items", "extra", "key")
+
+    def __init__(self, items, extra):
+        self.items, self.extra = items, extra
+        self.key = tuple((k, tuple(np.asarray(v).tolist()) if isinstance(v, jax.Array) else v) for k, v in items)
+
+    def __eq__(self, other):
+        return isinstance(other, _VmecStatic) and self.key == other.key
+
+    def __hash__(self):
+        return hash(self.key)
+
+
+_VMEC_UNCOMPARED = ("nc", "wout_filename", "_surface")
+
+
+def _vmec_flatten(vmec):
+    d = vars(vmec)
+    names = d["_arrays"]
+    items = tuple((k, v) for k, v in d.items() if k not in names and k not in _VMEC_UNCOMPARED)
+    extra = tuple((k, d[k]) for k in _VMEC_UNCOMPARED if k in d)
+    return tuple(d[k] for k in names), (names, _VmecStatic(items, extra))
+
+
+def _vmec_unflatten(aux, children):
+    names, static = aux
+    vmec = object.__new__(Vmec)
+    vmec.__dict__.update(static.items, **dict(static.extra), **dict(zip(names, children)))
+    return vmec
+
+
+# A pytree, so that Tracing's shared compilation takes the coefficient tables as arguments and is reused by every
+# Vmec with the same shapes and mode counts.
+tree_util.register_pytree_node(Vmec, _vmec_flatten, _vmec_unflatten)
+
+
 class ExternalField(MagneticField):
     """A Cartesian field from a batched source, traced one point at a time.
 
@@ -682,10 +754,17 @@ class ExternalField(MagneticField):
     VMEX ``VmecExtender``), or is a callable ``xyz (n, 3) -> B (n, 3)``, in
     metres and tesla, traceable by JAX. The derivatives come from automatic
     differentiation (:class:`MagneticField`).
+
+    With ``params`` (any pytree of numbers) the source is called with it as an
+    extra last argument, ``source(xyz, params)`` or ``source.b_cyl(R, phi, Z, params)``.
+    ``params`` are pytree children, so ``jax.grad`` differentiates with respect to
+    them and instances with same-shaped params and the same source share one
+    compilation. Without ``params`` the source is static metadata.
     """
 
-    def __init__(self, source):
+    def __init__(self, source, params=None):
         self.source = source
+        self.params = params
 
     @jit
     def sqrtg(self, points):
@@ -697,11 +776,22 @@ class ExternalField(MagneticField):
 
     @jit
     def B(self, points):
+        extra = () if self.params is None else (self.params,)
         if hasattr(self.source, "b_cyl"):
             R, phi = jnp.hypot(points[0], points[1]), jnp.arctan2(points[1], points[0])
-            BR, Bphi, BZ = (jnp.ravel(b)[0] for b in self.source.b_cyl(R[None], phi[None], points[2][None]))
+            BR, Bphi, BZ = (jnp.ravel(b)[0] for b in self.source.b_cyl(R[None], phi[None], points[2][None], *extra))
             return jnp.array([BR * jnp.cos(phi) - Bphi * jnp.sin(phi), BR * jnp.sin(phi) + Bphi * jnp.cos(phi), BZ])
-        return getattr(self.source, "B", self.source)(points[None])[0]
+        return getattr(self.source, "B", self.source)(points[None], *extra)[0]
+
+    @jit
+    def gc_quantities(self, points):
+        """Guiding-center quantities from one forward-mode Jacobian of the source (Cartesian, sqrtg = 1)."""
+        return _cartesian_gc_quantities(self, points)
+
+
+tree_util.register_pytree_node(ExternalField,
+                               lambda f: ((f.params,), f.source),
+                               lambda source, children: ExternalField(source, children[0]))
 
 
 class CombinedField(MagneticField):
@@ -725,6 +815,17 @@ class CombinedField(MagneticField):
     @jit
     def B_contravariant(self, points):
         return sum(field.B_contravariant(points) for field in self.fields)
+
+    @jit
+    def gc_quantities(self, points):
+        """Fused guiding-centre quantities when every member provides them, else the generic path.
+
+        Fused members are Cartesian (sqrtg = 1), so B and dB/dX of the sum come
+        from one forward-mode pass and the quantities follow algebraically.
+        """
+        if any(type(f).gc_quantities is MagneticField.gc_quantities for f in self.fields):
+            return MagneticField.gc_quantities(self, points)
+        return _cartesian_gc_quantities(self, points)
 
     @jit
     def sqrtg(self, points):
@@ -1332,6 +1433,21 @@ def _bspline_weights(u, n, periodic):
     return (i - 1) % n if periodic else i, jnp.stack((w, dw))
 
 
+def _inside(surface, nfp, nphi, z, r):
+    """Boolean (nphi, nz, nr) mask of the table nodes inside the toroidal ``surface`` (nearest cross-section, even-odd rule)."""
+    g = np.asarray(surface.gamma)
+    RR, ZZ, planes = np.hypot(g[..., 0], g[..., 1]), g[..., 2], np.mod(np.arctan2(g[:, 0, 1], g[:, 0, 0]), 2 * np.pi)
+    zq, rq = np.meshgrid(z, r, indexing="ij")
+    out = np.zeros((nphi,) + zq.shape, bool)
+    for k, phi in enumerate(np.arange(nphi) * 2 * np.pi / (nfp * nphi)):
+        d = np.abs(np.mod(planes - phi + np.pi, 2 * np.pi) - np.pi)
+        pr, pz = RR[d.argmin()], ZZ[d.argmin()]
+        qr, qz, nr_, nz_ = rq[..., None], zq[..., None], np.roll(pr, -1), np.roll(pz, -1)
+        cross = ((pz > qz) != (nz_ > qz)) & (qr < (nr_ - pr) * (qz - pz) / np.where(nz_ == pz, 1, nz_ - pz) + pr)
+        out[k] = cross.sum(-1) % 2 == 1
+    return out
+
+
 class InterpolatedField(MagneticField):
     """Any Cartesian field tabulated on a cylindrical grid and evaluated by tricubic B-splines.
 
@@ -1344,14 +1460,28 @@ class InterpolatedField(MagneticField):
     are interpolated by a C2 tricubic spline (periodic in phi, not-a-knot in R
     and Z) that is exact at the nodes, so B converges as h^4 and dB/dX as h^3.
     ``B``, ``dB_by_dX`` and the fused ``gc_quantities`` come from one 4x4x4
-    stencil; points outside the R, Z box are extrapolated from the edge cells.
+    stencil. Points outside the R, Z box return NaN (no extrapolation).
+
+    A source that jumps across a surface (e.g. the exterior field of a
+    free-boundary equilibrium, which differs inside the plasma) cannot be
+    splined across the jump. Pass ``exclude=surface`` (anything with ``gamma``,
+    e.g. the LCFS): nodes inside it are not evaluated, are filled with the
+    nearest outside value, and every cell whose spline support lies within
+    ``guard`` cells of the excluded region is not read from the table: B and its
+    Jacobian there come from the source itself (exact, at the cost of a direct
+    evaluation, so the shell between the surface and a wall is always right).
+    Beyond that margin the error is the interpolation error of the exterior
+    field plus the ringing of the fill, which decays by about a factor 4 per
+    cell.
     """
 
     def __init__(self, field=None, R=(1.0, 2.0), Z=(-0.5, 0.5), nr=32, nz=32, nphi=32, nfp=1,
-                 stellsym=False, chunk_size=None, table=None):
+                 stellsym=False, chunk_size=None, table=None, exclude=None, guard=3):
         (self.rmin, self.rmax), (self.zmin, self.zmax), self.nfp = map(float, R), map(float, Z), int(nfp)
         if field is not None and not isinstance(field, MagneticField):
             field = ExternalField(field)  # a batched source, e.g. a VMEX VmecExtender or MgridField
+        dims = (nphi, nz, nr) if table is None else table.shape[:3]
+        inside = None if exclude is None else _inside(exclude, nfp, dims[0], np.linspace(*Z, dims[1]), np.linspace(*R, dims[2]))
         if table is None:
             if stellsym and (nphi % 2 or not np.isclose(self.zmin, -self.zmax)):
                 raise ValueError("stellsym needs an even nphi and Z = (-zmax, zmax)")
@@ -1359,17 +1489,32 @@ class InterpolatedField(MagneticField):
             phi, z, r = np.meshgrid(np.arange(nph) * 2 * np.pi / (nfp * nphi), np.linspace(*Z, nz),
                                     np.linspace(*R, nr), indexing="ij")
             xyz = jnp.stack((r * np.cos(phi), r * np.sin(phi), z), -1).reshape(-1, 3)
-            if chunk_size is None:  # bound points x source size (e.g. coil segments, dipoles) to ~2^24
-                chunk_size = max(1, 2**24 // max(1, sum(np.size(x) for x in tree_util.tree_leaves(field))))
-            B = lax.map(field.B, xyz, batch_size=min(chunk_size, len(xyz))).reshape(phi.shape + (3,))
+            keep = np.arange(len(xyz)) if exclude is None else np.flatnonzero(~inside[:nph].ravel())
+            source = field.source if isinstance(field, ExternalField) and field.params is None and not hasattr(field.source, "b_cyl") else None
+            batched = getattr(source, "B", source) if source is not None else vmap(field.B)  # one batched call is far cheaper than a vmap of single-point calls
+            if chunk_size is None and source is not None:
+                chunk_size = 256  # a batched source bounds its own temporaries; 64 to 256 points per call are equally fast
+            elif chunk_size is None:  # as many points per batch as fit in ~64 MiB of the source's compiled temporaries
+                temp = jit(batched).lower(xyz[:8]).compile().memory_analysis().temp_size_in_bytes
+                chunk_size = max(1, 8 * 2**26 // max(1, temp))
+            pts, size = xyz[keep], min(chunk_size, len(keep))
+            pad = jnp.concatenate((pts, jnp.broadcast_to(pts[:1], (-len(pts) % size, 3))))
+            B = jnp.zeros((len(xyz), 3)).at[keep].set(lax.map(batched, pad.reshape(-1, size, 3)).reshape(-1, 3)[:len(pts)]).reshape(phi.shape + (3,))
             c, s = jnp.cos(phi), jnp.sin(phi)
             table = jnp.stack((c * B[..., 0] + s * B[..., 1], c * B[..., 1] - s * B[..., 0], B[..., 2]), -1)
             if stellsym:  # B_R(R, -phi, -Z) = -B_R(R, phi, Z); B_phi, B_Z even
                 table = jnp.concatenate((table, table[1:nphi // 2, ::-1][::-1] * jnp.array([-1., 1., 1.])))
+        self.valid = jnp.ones((dims[0], dims[1] - 1, dims[2] - 1))  # float: a pytree leaf grad can pass through
+        if exclude is not None:
+            table = jnp.where(~inside[..., None], table, table[tuple(ndimage.distance_transform_edt(inside, return_distances=False, return_indices=True))])
+            bad = ndimage.binary_dilation(inside, np.ones((3, 3, 3)), iterations=guard)
+            self.valid = 1. - jnp.asarray(bad[:, :-1, :-1] | bad[:, 1:, :-1] | bad[:, :-1, 1:] | bad[:, 1:, 1:])
+        self.field = field if exclude is not None and field is not None else None  # direct evaluation inside the guard band
         self.table = jnp.asarray(table)  # (nphi, nz, nr, 3) node values of (B_R, B_phi, B_Z), mgrid layout
         nphi, nz, nr, _ = self.table.shape
-        self.coefficients = jnp.einsum("pi,zj,rk,ijkc->pzrc", _bspline_prefilter(nphi, True),
-                                       _bspline_prefilter(nz, False), _bspline_prefilter(nr, False), self.table)
+        c = jnp.einsum("pi,ijkc->pjkc", _bspline_prefilter(nphi, True), self.table)  # one axis at a time: no large intermediate
+        c = jnp.einsum("zj,pjkc->pzkc", _bspline_prefilter(nz, False), c)
+        self.coefficients = jnp.einsum("rk,pzkc->pzrc", _bspline_prefilter(nr, False), c)
 
     @classmethod
     def around(cls, field, surface, margin=0.05, n=48, **kwargs):
@@ -1418,6 +1563,10 @@ class InterpolatedField(MagneticField):
         iz, wz = _bspline_weights((z - self.zmin) / hz, nz2 - 2, False)
         ir, wr = _bspline_weights((R - self.rmin) / hr, nr2 - 2, False)
         C = self.coefficients[ip[:, None, None], iz[None, :, None], ir[None, None, :]]  # (4, 4, 4, 3)
+        eps = 1e-9 * (self.rmax - self.rmin)  # the box faces belong to the box
+        ok = (R >= self.rmin - eps) & (R <= self.rmax + eps) & (z >= self.zmin - eps) & (z <= self.zmax + eps)
+        good = self.valid[ip[1], iz[0], ir[0]] > 0
+        inbox, ok = ok, ok & good
         Cr = jnp.einsum("abrc,nr->nabc", C, wr)
         Cz = jnp.einsum("nabc,mb->nmac", Cr, wz)
         V = jnp.einsum("nmac,la->lmnc", Cz, wp)  # V[l, m, n] = d^l/dphi d^m/dZ d^n/dR of (B_R, B_phi, B_Z)
@@ -1427,7 +1576,23 @@ class InterpolatedField(MagneticField):
         drot = jnp.array([[-s, -c, 0.], [c, -s, 0.], [0., 0., 0.]])
         dB_dcyl = jnp.stack((rot @ dR, rot @ dphi + drot @ b, rot @ dZ), -1)  # d B_xyz / d(R, phi, Z)
         dcyl_dx = jnp.array([[c, s, 0.], [-s / R, c / R, 0.], [0., 0., 1.]])
-        return rot @ b, dB_dcyl @ dcyl_dx
+        nan = jnp.where(ok, 1., jnp.nan)  # outside the box (or the guard band without a source): NaN, never an extrapolation
+        B, J = nan * (rot @ b), nan * (dB_dcyl @ dcyl_dx)
+        if self.field is not None:  # the guard band inside the box is evaluated directly from the source
+            field, miss = self.field, inbox & ~good
+
+            @custom_vmap
+            def direct(p, need):  # one cond per point, so only the points that need the source evaluate it
+                return lax.cond(need, lambda p: (field.B(p), jacfwd(field.B)(p)), lambda p: (jnp.full(3, jnp.nan), jnp.full((3, 3), jnp.nan)), p)
+
+            @direct.def_vmap
+            def _(size, batched, p, need):  # a vmap of the source would run all points through it at once: map instead
+                p, need = (jnp.broadcast_to(a, (size,) + jnp.shape(a)[int(bt):]) if not bt else a for a, bt in zip((p, need), batched))
+                return lax.map(lambda a: direct.fun(*a), (p, need)), (True, True)
+
+            Bd, Jd = direct(points, miss)
+            B, J = jnp.where(miss, Bd, B), jnp.where(miss, Jd, J)
+        return B, J
 
     @jit
     def B(self, points):
@@ -1442,13 +1607,13 @@ class InterpolatedField(MagneticField):
         return _gc_from_jacobian(*self.B_and_dB_by_dX(points))
 
     def _tree_flatten(self):
-        return (self.table, self.coefficients), (self.rmin, self.rmax, self.zmin, self.zmax, self.nfp)
+        return (self.table, self.coefficients, self.valid), (self.rmin, self.rmax, self.zmin, self.zmax, self.nfp, self.field)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         obj = object.__new__(cls)
-        obj.table, obj.coefficients = children
-        obj.rmin, obj.rmax, obj.zmin, obj.zmax, obj.nfp = aux_data
+        obj.table, obj.coefficients, obj.valid = children
+        obj.rmin, obj.rmax, obj.zmin, obj.zmax, obj.nfp, obj.field = aux_data
         return obj
 
 
