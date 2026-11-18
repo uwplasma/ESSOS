@@ -1325,7 +1325,10 @@ def test_mu_collision_models_accept_coils_as_the_field(monkeypatch):
     coils = Coils(CreateEquallySpacedCurves(1, 1, 1.0, 0.4, 8, 1, False), [1e6])
     species = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([1e18]), jnp.array([1e3]))
     particles = Particles([[1.05, 0., 0.]], [.5])
-    monkeypatch.setattr(Tracing, "trace", lambda self: jnp.zeros((1, 2, 5)))  # only the setup is tested
+    monkeypatch.setattr(Tracing, "_trace", lambda self: (
+        jnp.zeros((1, 2, 5)), jnp.array([False]), self.times[-1:],
+        jnp.zeros((1, 5)), jnp.array([False]),
+    ))  # only the setup is tested
     trace = Tracing(field=coils, model="GuidingCenterCollisionsMuFixed", particles=particles,
                     maxtime=1e-9, timestep=1e-10, times_to_trace=2, species=species)
     B = BiotSavart(coils).AbsB(particles.initial_xyz[0])
@@ -1406,3 +1409,62 @@ def test_loss_fraction_counts_particles_stopped_at_the_boundary(boundary):
     assert float(fractions[-1]) == pytest.approx(0.4) and float(lost) == pytest.approx(2.0)
     assert float(fractions[-1]) == pytest.approx(float(jnp.mean(tracing.boundary_hits)))
     assert times.tolist() == pytest.approx([-1, -1, -1, 0.9, 0.6])
+
+
+def test_loss_fraction_distinguishes_wall_stop_failure_and_completed_trace():
+    class Plane:
+        def evaluate_xyz(self, xyz):
+            return 1.5 - xyz[0]
+
+    class FailingField(MockField):
+        def B_contravariant(self, point):
+            speed = jnp.where((point[2] > 0.5) & (point[0] > 0.25), jnp.nan, 1.0)
+            return jnp.array([speed, 0., 0.])
+
+    plane = Plane()
+    criteria = (
+        LevelsetStoppingCriterion(plane),
+        lambda t, y, args, **kwargs: (y[1] > 0.5) & (t >= 0.2),
+    )
+
+    @jax.jit
+    def trace(starts):
+        tracing = Tracing(
+            field=FailingField(), model="FieldLineAdaptative", initial_conditions=starts,
+            maxtime=1., timestep=0.01, times_to_trace=11, stopping_criteria=criteria,
+            max_steps=80,
+        )
+        return (*tracing.loss_fraction(plane), tracing.stopped, tracing.failed,
+                tracing.total_particles_unresolved)
+
+    fractions, count, times, stopped, failed, unresolved = trace(jnp.array([
+        [0.93, 0., 0.],  # physical wall
+        [0.93, 1., 0.],  # user stop before reaching the same wall
+        [0., 0., 1.],    # non-finite integration
+        [0., 0., 0.],    # completed without crossing
+    ]))
+    assert stopped.tolist() == [True, True, False, False]
+    assert failed.tolist() == [False, False, True, False]
+    assert int(unresolved) == 1
+    np.testing.assert_allclose(times, [0.6, -1., np.nan, -1.], equal_nan=True)
+    assert np.isnan(fractions).all() and np.isnan(count)
+
+
+def test_loss_fraction_of_boris_wall_uses_event_state():
+    period = 2 * np.pi * 1.6726e-27 / 1.602e-19
+    ceiling = 0.5 * 2.0e5 * 100 * period
+
+    class Plane:
+        def evaluate_xyz(self, xyz):
+            return ceiling - xyz[2]
+
+    plane = Plane()
+    tracing, *_ = _boris(
+        maxtime=100 * period, timestep=period / 40, times_to_trace=21,
+        stopping_criteria=LevelsetStoppingCriterion(plane),
+    )
+    assert float(tracing.trajectories[0, -1, 2]) < ceiling
+    assert bool(tracing.stopped[0]) and not bool(tracing.failed[0])
+    fractions, count, times = tracing.loss_fraction(plane)
+    assert float(fractions[-1]) == float(count) == 1.
+    assert float(times[0]) > 0.
