@@ -21,9 +21,9 @@ Usage:
     python benchmark_iteration_sweep.py <surf_file> <mag_file>
 
 Example:
-    python benchmark_iteration_sweep.py \
-        /Users/joshuabourassa/essos_new/essos/input.muse \
-        /Users/joshuabourassa/simsopt/tests/test_files/zot80.focus
+    python examples/benchmark_iteration_sweep.py \
+        examples/input_files/input.muse \
+        examples/input_files/zot80.focus
 """
 from __future__ import annotations
 

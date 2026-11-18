@@ -2,7 +2,6 @@ from jax import grad, lax, vmap, jit
 import jax.numpy as jnp
 from functools import partial
 from scipy.interpolate import  splrep, PPoly
-import pandas as pd
 import os
 import numpy as np
 import tempfile
