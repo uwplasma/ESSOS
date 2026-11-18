@@ -1,6 +1,6 @@
 from functools import partial
 import jax.numpy as jnp
-from jax import tree_util, jit, grad as jax_grad, value_and_grad as jax_value_and_grad
+from jax import tree_util, jit, ensure_compile_time_eval, grad as jax_grad, value_and_grad as jax_value_and_grad
 from jax.flatten_util import ravel_pytree
         
 class base_loss:
@@ -79,9 +79,13 @@ class custom_loss(base_loss):
 
     def _ensure_unravelers(self):
         if self._starting_dofs is None or self._dofs_to_args is None or self._dofs_to_pytree is None:
-            self._starting_dofs, tuple_unraveler = ravel_pytree(
-                tuple(self.dependencies[arg] for arg in self.args_names)
-            )
+            # Dependencies are constants of this loss. If the first call is
+            # jitted, build the cached vector eagerly rather than retaining a
+            # tracer that would escape the compiled function.
+            with ensure_compile_time_eval():
+                self._starting_dofs, tuple_unraveler = ravel_pytree(
+                    tuple(self.dependencies[arg] for arg in self.args_names)
+                )
             self._dofs_to_args = tuple_unraveler
 
             def _named_unraveler(dofs):
@@ -186,13 +190,15 @@ class composite_loss(base_loss):
     @property
     def starting_dofs(self):
         if self._starting_dofs is None:
-            self._starting_dofs, self._dofs_to_pytree = ravel_pytree(self.dependencies)
+            with ensure_compile_time_eval():
+                self._starting_dofs, self._dofs_to_pytree = ravel_pytree(self.dependencies)
         return self._starting_dofs
     
     @property
     def dofs_to_pytree(self):
         if self._dofs_to_pytree is None:
-            self._starting_dofs, self._dofs_to_pytree = ravel_pytree(self.dependencies)
+            with ensure_compile_time_eval():
+                self._starting_dofs, self._dofs_to_pytree = ravel_pytree(self.dependencies)
         return self._dofs_to_pytree
     
     @partial(jit, static_argnames=['self'])
