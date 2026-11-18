@@ -391,6 +391,9 @@ def test_levelset_stopping_criterion_stops_and_fills_field_line():
     assert jnp.isfinite(tracing.trajectories).all()
     assert jnp.max(tracing.trajectories[0, :, 0]) <= 1.7 + 1e-8
     assert jnp.allclose(tracing.trajectories[0, -1], tracing.trajectories[0, -2])
+    raw_trajectories, event_mask = tracing.trace()
+    assert raw_trajectories.shape == tracing.trajectories.shape
+    np.testing.assert_array_equal(event_mask, tracing.event_mask)
 
 
 def test_poincare_plot_unwraps_toroidal_crossings_and_accepts_line_colors():
@@ -1501,9 +1504,9 @@ def test_loss_fraction_distinguishes_wall_stop_failure_and_completed_trace():
             max_steps=80,
         )
         return (*tracing.loss_fraction(plane), tracing.stopped, tracing.failed,
-                tracing.total_particles_unresolved)
+                tracing.total_particles_unresolved, tracing.failure_times)
 
-    fractions, count, times, stopped, failed, unresolved = trace(jnp.array([
+    fractions, count, times, stopped, failed, unresolved, failure_times = trace(jnp.array([
         [0.93, 0., 0.],  # physical wall
         [0.93, 1., 0.],  # user stop before reaching the same wall
         [0., 0., 1.],    # non-finite integration
@@ -1512,6 +1515,8 @@ def test_loss_fraction_distinguishes_wall_stop_failure_and_completed_trace():
     assert stopped.tolist() == [True, True, False, False]
     assert failed.tolist() == [False, False, True, False]
     assert int(unresolved) == 1
+    assert 0. < failure_times[2] < 1.
+    assert np.isinf(np.asarray(failure_times)[[0, 1, 3]]).all()
     np.testing.assert_allclose(times, [0.6, -1., np.nan, -1.], equal_nan=True)
     assert np.isnan(fractions).all() and np.isnan(count)
 

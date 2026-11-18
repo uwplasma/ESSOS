@@ -1329,6 +1329,7 @@ class Tracing():
         return compute_trajectory
 
     def trace(self):
+        """Return trajectories, together with the event mask for explicit stopping criteria."""
         result = self._trace()
         if self._vmec_default:
             return result
@@ -1723,7 +1724,9 @@ class Tracing():
         or after the event. A stop before this surface has no observed loss (-1);
         inspect ``stopped`` and ``event_mask`` to distinguish a stop from a full trace.
         Failed orbits without a confirmed loss have NaN loss times and make the
-        aggregate loss fraction and number lost NaN. Collision models also return
+        aggregate loss fraction and number lost NaN. These outputs describe returned
+        traces. Fixed-step GuidingCenter, FullOrbit and FieldLine still raise on
+        Diffrax solver exceptions. Collision models also return
         the energy and position of each lost particle.
         """
         xyz = self.trajectories[:, :, :3]
