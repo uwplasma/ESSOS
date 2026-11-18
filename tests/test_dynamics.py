@@ -163,6 +163,72 @@ def test_toroidal_fieldline_uses_third_coordinate_as_parameter():
     assert jnp.allclose(tracing.toroidal_angles[0], tracing.trajectories[0, :, 2])
 
 
+@pytest.mark.parametrize("atol", [1e-8, 0])
+def test_periodic_fieldline_accuracy_is_independent_of_angle_origin(atol):
+    class PeriodicField(MockField):
+        def B_contravariant(self, point):
+            return jnp.array([0., 1. / (1. + .3*jnp.cos(point[1])), 1.])
+
+    offsets = 2*jnp.pi*jnp.array([0., 10000.])
+    seeds = jnp.tile(jnp.array([.5, .2, .3]), (2, 1)).at[:, 1:].add(offsets[:, None])
+    tracing = Tracing(field=PeriodicField(), model="FieldLineToroidal", initial_conditions=seeds,
+                      maxtime=20*jnp.pi, timestep=.1, times_to_trace=65,
+                      rtol=1e-7, atol=atol, progress=False)
+    theta = tracing.trajectories[:, :, 1] - offsets[:, None]
+    # Exact first integral: theta + epsilon*sin(theta) - phi is constant.
+    residual = theta + .3*jnp.sin(theta) - (.2 + .3*jnp.sin(.2)) - tracing.times[None, :]
+    assert float(jnp.max(jnp.abs(residual))) < 3e-6
+    np.testing.assert_allclose(theta[0], theta[1], rtol=0, atol=3e-6)
+
+
+def _tolerance_controller(model, axis_regular, flag=False, atol=1e-8, size=4):
+    import diffrax
+
+    tracing = Tracing.__new__(Tracing)
+    tracing.model, tracing._axis_regular, tracing.field = model, axis_regular, None
+    tracing.initial_conditions = jnp.ones((1, size))
+    tracing.rtol, tracing.atol = 1e-7, atol
+    tracing.timestep, tracing.solver = .1, None
+    tracing.ODE_term = diffrax.ODETerm(lambda t, y, args: jnp.ones_like(y))
+    return tracing, tracing._terms(None, flag=flag)
+
+
+@pytest.mark.parametrize("flag", [False, True])
+@pytest.mark.parametrize("angle_name", ["phi", "Theta"])
+@pytest.mark.parametrize("atol", [1e-8, 0])
+@pytest.mark.parametrize("size", [4, 5])
+def test_vmec_controller_error_budget_is_independent_of_phi_and_theta_winding(flag, angle_name, atol, size):
+    tracing, (terms, solver, controller) = _tolerance_controller("GuidingCenterAdaptative", True, flag, atol, size)
+    angle = 2 if angle_name == "phi" else size
+    y = jnp.array([.5, .3, .2, .7] + ([.9] if size == 5 else []) + [.4] + ([0.] if flag else []))
+    error = jnp.zeros_like(y).at[angle].set(1e-5)
+
+    def adapt(state):
+        _, controller_state = controller.init(terms, 0., .1, state, .1, None, solver.func, 9.)
+        return controller.adapt_step_size(0., .1, state, state, None, error, 9., controller_state)
+
+    original = adapt(y)
+    shifted = adapt(y.at[angle].add(2000*jnp.pi))
+    assert not bool(original[0]) and not bool(shifted[0])
+    assert jnp.isfinite(original[2]) and jnp.isfinite(shifted[2])
+    np.testing.assert_allclose(original[2], shifted[2], rtol=1e-13, atol=0)
+    # Theta is before the optional failure flag; v_parallel keeps relative control.
+    assert float(controller.rtol[3]) == tracing.rtol
+    np.testing.assert_allclose(controller.atol[angle], tracing.atol + tracing.rtol)
+
+
+def test_angular_tolerance_change_preserves_cartesian_and_fixed_step_paths(monkeypatch):
+    import diffrax
+
+    tracing, (_, _, controller) = _tolerance_controller("FullOrbitAdaptative", False)
+    assert controller.rtol is tracing.rtol and controller.atol is tracing.atol
+    tracing.model, tracing._axis_regular = "GuidingCenter", True
+    def unexpected(*args):
+        raise AssertionError("fixed-step paths must not construct adaptive tolerances")
+    monkeypatch.setattr(tracing, "_adaptive_tolerances", unexpected)
+    assert isinstance(tracing._terms(None)[2], diffrax.ConstantStepSize)
+
+
 def test_trace_field_lines_selects_clear_physical_parameterizations(capsys):
     class FluxField(MockField):
         def B_contravariant(self, points):
