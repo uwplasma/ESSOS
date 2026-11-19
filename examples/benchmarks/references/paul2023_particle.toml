@@ -1,6 +1,0 @@
-[historical_particle]
-source = "https://github.com/hiddenSymmetries/simsopt/blob/70182c529d9aa70275d15ecaba636419a4b0ffae/src/simsopt/util/constants.py"
-mass_kg = 6.69509884346e-27
-mass_definition = "2*PROTON_MASS + 2*NEUTRON_MASS; not the measured bound-alpha mass"
-energy_MeV = 3.52
-scope = "Documented historical library constants; exact published runtime remains unconfirmed"
