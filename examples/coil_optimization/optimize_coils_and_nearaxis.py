@@ -14,11 +14,11 @@ from scipy.optimize import least_squares
 from essos.losses import custom_loss
 
 
-import essos
-essos.configure_jax()
 """ Creating starting coils and surface """
 N_COILS = 3; FOURIER_ORDER = 6; LARGE_R = 10; SMALL_R = 5.6; NFP = 3; N_SEGMENTS = 60; STELLSYM = True  # Curve parameters
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
+import essos
+essos.configure_jax()
 tolerance_optimization = 1e-8
 maximum_function_evaluations = 200
 

@@ -12,8 +12,6 @@ from scipy.optimize import least_squares
 from essos.losses import custom_loss
 from essos.fields import BiotSavart
 
-import essos
-essos.configure_jax()
 # Particle optimization parameters
 # Optimization parameters
 NPARTICLES = 10
@@ -41,6 +39,8 @@ STELLSYM = True  # Curve parameters
 COIL_CURRENT = 1.84e7  # Amperes (optimization does not depend on current magnitude)
 MAXIMUM_FUNCTION_EVALUATIONS =200
 
+import essos
+essos.configure_jax()
 # Initialize coils
 init_curves = CreateEquallySpacedCurves(n_curves=N_COILS,
                                    order=FOURIER_ORDER,
