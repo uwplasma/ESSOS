@@ -320,6 +320,17 @@ class TestObjectiveFunctions(unittest.TestCase):
         self.assertTrue(jnp.isfinite(objf.rectangular_xsection_delta(2.0, 1.0)))
 
 
+def test_composite_loss_value_and_grad():
+    from essos.losses import custom_loss
+    loss = (custom_loss(lambda a, b: jnp.sum(a**2 * b), "a", "b") + custom_loss(lambda a: jnp.sum(jnp.sin(a)), "a"))
+    loss.dependencies = {"a": jnp.array([0.3, -1.2]), "b": jnp.array([2.0, 0.5])}
+    dofs = loss.starting_dofs
+    value, grad = loss.value_and_grad(dofs)
+    a, b = dofs[:2], dofs[2:]
+    assert jnp.isclose(value, loss(dofs)) and jnp.isclose(value, jnp.sum(a**2 * b) + jnp.sum(jnp.sin(a)))
+    assert jnp.allclose(grad, jnp.concatenate([2 * a * b + jnp.cos(a), a**2])) and jnp.allclose(grad, loss.grad(dofs))
+
+
 if __name__ == "__main__":
     unittest.main()
 
