@@ -1158,7 +1158,7 @@ class Tracing():
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.                      
                 else:
                     def condition_BioSavart(t, y, args, **kwargs):                      
-                        xx, yy, zz, _ = y
+                        xx, yy, zz = y[:3]
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
                 self.condition = condition_BioSavart                
         elif self._axis_regular:
@@ -1167,10 +1167,18 @@ class Tracing():
                 condition)
         else:
             self.condition = condition
+        # An electric field changes the kinetic energy, so mu (J/T) is carried in the state, which
+        # conserves m v_par^2 / 2 + mu |B| + q Phi; without one the state stays (x, v_par) at fixed energy.
+        self._mu_state = model in ('GuidingCenter', 'GuidingCenterAdaptative') and not isinstance(
+            self.electric_field, Electric_field_zero)
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
-            self.ODE_term = ODETerm(self._vector_field(GuidingCenter))
+            self.ODE_term = ODETerm(self._vector_field(GuidingCenterMu if self._mu_state else GuidingCenter))
             self.args = (self.field, self.particles,self.electric_field)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
+            if self._mu_state:
+                B = vmap(self.field.AbsB)(self.particles.initial_xyz)
+                mu = (self.particles.energy - 0.5 * self.particles.mass * self.particles.initial_vparallel**2) / B
+                self.initial_conditions = jnp.concatenate([self.initial_conditions, mu[:, None]], axis=1)
         elif model == 'GuidingCenterCollisions':
             # Brownian motion
             #t0=0.0
@@ -1530,7 +1538,8 @@ class Tracing():
         B = self.field.AbsB(point)
         if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
             vpar, E = y[3], self.particles.energy
-            mu = (E - 0.5 * m * vpar**2) / B
+            mu = y[4] if self._mu_state else (E - 0.5 * m * vpar**2) / B
+            E = 0.5 * m * vpar**2 + mu * B if self._mu_state else E
         elif self.model == 'GuidingCenterCollisions':
             vpar, E = y[3] * y[4], 0.5 * m * y[3]**2
             mu = 0.5 * m * y[3]**2 * (1 - y[4]**2) / B
@@ -1550,7 +1559,7 @@ class Tracing():
         point = self.field.flux_coordinates(y[:3])[0]
         vpar, mu = _keep_energy(y[3], y[4], E, self.field.AbsB(point), m)
         if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
-            return jnp.append(point, vpar)
+            return jnp.concatenate([point, jnp.array([vpar, mu][:1 + self._mu_state])])
         if self.model == 'GuidingCenterCollisions':
             v = jnp.sqrt(2 * E / m)
             return jnp.concatenate([point, jnp.array([v, vpar / v])])
@@ -1612,6 +1621,7 @@ class Tracing():
             initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
+            mu_array = self.trajectories[:, 0, 4] if self._mu_state else mu_array
             def compute_energy(trajectory, mu):
                 xyz = trajectory[:, :3]
                 vpar = trajectory[:, 3]
@@ -1650,6 +1660,7 @@ class Tracing():
             initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
+            mu_array = self.trajectories[:, 0, 4] if self._mu_state else mu_array
             def compute_vperp(trajectory, mu):
                 xyz = trajectory[:, :3]
                 AbsB = vmap(self.field.AbsB)(xyz)                

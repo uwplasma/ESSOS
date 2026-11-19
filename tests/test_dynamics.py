@@ -107,10 +107,6 @@ class MockField:
 
     def to_xyz(self, points):
         return points
-    
-class MockElectricField:
-    def E_covariant(self, points):
-        return jnp.array([0.0, 0.0, 0.0])
 
 
 def test_arclength_fieldline_has_unit_speed_without_changing_direction():
@@ -305,7 +301,8 @@ def field():
 
 @pytest.fixture
 def electric_field():
-    return MockElectricField()
+    from essos.electric_field import Electric_field_zero
+    return Electric_field_zero()
 
 def test_particles_initialization(particles):
     assert particles.nparticles == 10
@@ -492,6 +489,14 @@ class _LinearPotential:
         return jnp.array([-self.PHI0, 0.0, 0.0])
 
 
+class _QuadraticPotential:
+    """Electrostatic potential Phi(x) = PHI0 |x|^2 / (1 m^2), PHI0 = 100 V; E = -grad Phi = -2 PHI0 x in V/m."""
+    PHI0 = 100.0
+
+    def E_covariant(self, points):
+        return -2 * self.PHI0 * points
+
+
 def _alphas_at_s03(n=4):
     xyz = jnp.array([[0.3] * n, jnp.linspace(0, 2 * jnp.pi, n, endpoint=False), jnp.zeros(n)]).T
     return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.linspace(-0.8, 0.8, n))
@@ -501,16 +506,37 @@ def _alphas_at_s03(n=4):
 def test_guiding_center_conserves_kinetic_plus_potential_energy(model, tol):
     """With mu fixed, dx/dt = v_par b + B x F / (q B.B*), dv_par/dt = -B* . F |B| / (m B.B*), F = mu grad|B|
     + m v_par^2 kappa + q grad Phi conserve W = m v_par^2 / 2 + mu |B| + q Phi exactly (B.kappa = 0,
-    curl b = tau b + b x kappa). Holding the kinetic energy fixed instead drifts W by q dPhi (4.4e-4 here).
-    3.5 MeV alphas, QA reactor field, 2e-5 s; Dopri8 at a fixed 1e-8 s step or at rtol = atol = 1e-10."""
+    curl b = tau b + b x kappa). Holding the kinetic energy fixed instead drifts W by q dPhi.
+    5 keV protons in the QA coil field (Biot-Savart, exact derivatives), 1e-5 s; Dopri8 at a fixed 1e-8 s
+    step or at rtol = atol = 1e-10. Analytic result: W constant; tolerance 1e-8 relative (plan step E4)."""
+    from essos.coils import Coils
+    from essos.constants import ELEMENTARY_CHARGE, ONE_EV
+    from essos.fields import BiotSavart
+    field = BiotSavart(Coils.from_json(str(Path(WOUT_QA).parent / "ESSOS_biot_savart_LandremanPaulQA.json")))
+    xyz = jnp.array([[1.23, 0.0, 0.0], [1.2, 0.05, 0.02], [1.25, -0.05, 0.0], [1.22, 0.0, -0.03]])
+    particles = Particles(initial_xyz=xyz, mass=PROTON_MASS, charge=ELEMENTARY_CHARGE, energy=5000 * ONE_EV,
+                          initial_vparallel_over_v=jnp.linspace(-0.8, 0.8, 4), field=field)
+    tracing = Tracing(field=field, electric_field=_QuadraticPotential(), model=model, particles=particles,
+                      maxtime=1e-5, timestep=1e-8, times_to_trace=11, rtol=tol, atol=tol)
+    q_phi = particles.charge * _QuadraticPotential.PHI0 * np.sum(np.asarray(tracing.trajectories[:, :, :3])**2, axis=-1)
+    total = np.asarray(tracing.energy()) + q_phi
+    assert np.max(np.abs(q_phi - q_phi[:, :1])) > 1e-2 * particles.energy  # the kinetic energy does change
+    assert np.max(np.abs(total / total[:, :1] - 1)) < 1e-8
+
+
+def test_vmec_guiding_center_energy_with_electric_potential():
+    """In the QA reactor VMEC field, 3.5 MeV alphas, Phi(s) = 100 kV s, 2e-5 s, rtol = atol = 1e-10: W drifts by
+    4.4e-4 when the kinetic energy is held fixed. With mu carried, W holds to the field's own floor: at Phi = 0
+    the mu-conserving model already changes m v_par^2 / 2 + mu |B| by up to 7.1e-6 here (measured; spline field)."""
     particles = _alphas_at_s03()
-    tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), electric_field=_LinearPotential(), model=model,
-                      particles=particles, maxtime=2e-5, timestep=1e-8, times_to_trace=11, rtol=tol, atol=tol)
+    tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), electric_field=_LinearPotential(),
+                      model="GuidingCenterAdaptative", particles=particles, maxtime=2e-5, timestep=1e-8,
+                      times_to_trace=11, rtol=1e-10, atol=1e-10)
     s = np.asarray(tracing.trajectories[:, :, 0])
     total = np.asarray(tracing.energy()) + particles.charge * _LinearPotential.PHI0 * s
     assert (tracing.status == 0).all()
     assert particles.charge * _LinearPotential.PHI0 * np.max(np.abs(s - s[:, :1])) > 1e-3 * particles.energy
-    assert np.max(np.abs(total / total[:, :1] - 1)) < 1e-8
+    assert np.max(np.abs(total / total[:, :1] - 1)) < 1e-5
 
 
 # (s, theta, phi, v_par [m/s]) at 1e-6 s of the two alphas of test_guiding_center_without_electric_field_is_unchanged
@@ -522,8 +548,8 @@ def test_guiding_center_without_electric_field_is_unchanged():
     """Regression: with no electric field the traced state is (x, v_par), as before, and the values match those of
     ac3168b (fixed 1e-8 s Dopri8 step, 1e-6 s) to 1e-11 relative, i.e. to rounding."""
     from essos.electric_field import Electric_field_zero
-    kwargs = dict(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenter", particles=_alphas_at_s03(2),
-                  maxtime=1e-6, timestep=1e-8, times_to_trace=2)
+    kwargs = {"field": Vmec(WOUT_QA, ntheta=8, nphi=8), "model": "GuidingCenter", "particles": _alphas_at_s03(2),
+              "maxtime": 1e-6, "timestep": 1e-8, "times_to_trace": 2}
     default = Tracing(**kwargs).trajectories
     zero = Tracing(electric_field=Electric_field_zero(), **kwargs).trajectories
     assert default.shape == (2, 2, 4)
