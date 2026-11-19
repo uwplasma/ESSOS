@@ -524,10 +524,40 @@ def test_guiding_center_conserves_kinetic_plus_potential_energy(model, tol):
     assert np.max(np.abs(total / total[:, :1] - 1)) < 1e-8
 
 
+def test_zero_valued_user_electric_field_gives_mu_state():
+    """Any electric-field object but Electric_field_zero selects the state (x, v_par, mu); at E = 0 the positions agree
+    with those of Electric_field_zero to rounding (QA coil field, W exact; fixed 1e-8 s Dopri8 step, 1e-6 s)."""
+    from essos.coils import Coils
+    from essos.constants import ELEMENTARY_CHARGE, ONE_EV
+    from essos.fields import BiotSavart
+    field = BiotSavart(Coils.from_json(str(Path(WOUT_QA).parent / "ESSOS_biot_savart_LandremanPaulQA.json")))
+    particles = Particles(initial_xyz=jnp.array([[1.23, 0.0, 0.0], [1.2, 0.05, 0.02]]), mass=PROTON_MASS,
+                          charge=ELEMENTARY_CHARGE, energy=5000 * ONE_EV, initial_vparallel_over_v=jnp.array([-0.5, 0.5]), field=field)
+    kwargs = {"field": field, "model": "GuidingCenter", "particles": particles, "maxtime": 1e-6, "timestep": 1e-8,
+              "times_to_trace": 3}
+    zero = Tracing(**kwargs).trajectories
+    user = Tracing(electric_field=type("ZeroField", (), {"E_covariant": lambda self, x: 0 * x})(), **kwargs).trajectories
+    assert zero.shape == (2, 3, 4) and user.shape == (2, 3, 5)
+    np.testing.assert_allclose(user[:, :, :4], zero, rtol=1e-12, atol=1e-12)
+
+
+def test_electric_field_flux_reads_er_and_maps_to_s():
+    """E_s = Er a / (2 rho) at s = rho^2 (chain rule, Er = -dPhi/dr, r = a rho), zero on the axis; the bundled Er.h5."""
+    pytest.importorskip("h5py")
+    from essos.electric_field import Electric_field_flux
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    efield = Electric_field_flux(str(Path(WOUT_QA).parent / "Er.h5"), vmec)
+    rho, Er = np.asarray(efield.rho), np.asarray(efield.Er)
+    E_s = [float(efield.E_covariant(jnp.array([r**2, 0.3, 0.1]))[0]) for r in rho[[0, 10, 40]]]
+    np.testing.assert_allclose(E_s, [0.0, *(Er[[10, 40]] * vmec.Aminor_p / (2 * rho[[10, 40]]))], rtol=1e-12)
+
+
 def test_vmec_guiding_center_energy_with_electric_potential():
-    """In the QA reactor VMEC field, 3.5 MeV alphas, Phi(s) = 100 kV s, 2e-5 s, rtol = atol = 1e-10: W drifts by
-    4.4e-4 when the kinetic energy is held fixed. With mu carried, W holds to the field's own floor: at Phi = 0
-    the mu-conserving model already changes m v_par^2 / 2 + mu |B| by up to 7.1e-6 here (measured; spline field)."""
+    """Regression. In the QA reactor VMEC field, 3.5 MeV alphas, Phi(s) = 100 kV s, 2e-5 s, rtol = atol = 1e-10, W
+    drifts by 4.4e-4 when the kinetic energy is held fixed; with mu carried, by 6.6e-6. The rest is not the potential:
+    Vmec takes |B| from bmnc but B_cov and B^contra from the bsub/bsup tables, and |B|^2 differs from B_cov.B^contra by
+    3e-5 to 3e-4, so W does not match the equations (7.1e-6 at Phi = 0, at any tolerance or step). The 1e-8 gate of
+    plan step E4 in a VMEC field waits on a consistent |B|."""
     particles = _alphas_at_s03()
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), electric_field=_LinearPotential(),
                       model="GuidingCenterAdaptative", particles=particles, maxtime=2e-5, timestep=1e-8,

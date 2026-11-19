@@ -557,6 +557,10 @@ def _guiding_center_velocity(field, electric_field, q, m, points, vpar, mu=None,
 def GuidingCenter(t,
                   initial_condition,
                   args) -> jnp.ndarray:
+    """Collisionless guiding center with state (x, y, z, v_par) at the fixed kinetic energy ``particles.energy``.
+
+    Only valid without an electric field; ``Tracing`` uses ``GuidingCenterMu`` whenever one is given.
+    """
     x, y, z, vpar = initial_condition
     field, particles,electric_field = args
     dxdt, dvdt = _guiding_center_velocity(field, electric_field, particles.charge, particles.mass,
@@ -566,7 +570,10 @@ def GuidingCenter(t,
 
 @partial(jit, static_argnums=(2))
 def GuidingCenterMu(t, initial_condition, args) -> jnp.ndarray:
-    """Collisionless guiding center with state (x, y, z, v_par, mu); mu is constant."""
+    """Collisionless guiding center with state (x, y, z, v_par, mu), mu in J/T and constant.
+
+    Conserves m v_par^2 / 2 + mu |B| + q Phi, so the kinetic energy changes in an electric potential Phi.
+    """
     field, particles, electric_field = args
     dxdt, dvdt = _guiding_center_velocity(field, electric_field, particles.charge, particles.mass,
                                           initial_condition[:3], initial_condition[3], mu=initial_condition[4])
@@ -1048,6 +1055,15 @@ def _batch_solver(tracing, place):
 
 
 class Tracing():
+    """Trace particles or field lines in ``field`` with ``model``; the states at ``times`` are ``trajectories``.
+
+    State layout of the collisionless guiding-center models ``GuidingCenter`` and ``GuidingCenterAdaptative``:
+    without an electric field (``electric_field=None`` or ``Electric_field_zero()``) each state is
+    (x, y, z, v_par) at the fixed kinetic energy ``particles.energy``. With any other electric-field object, also
+    one whose field is zero, each state is (x, y, z, v_par, mu), with mu in J/T, constant, so that
+    m v_par^2 / 2 + mu |B| + q Phi is conserved. Positions are (s, theta, phi) for a ``Vmec`` field, else Cartesian
+    in m; v_par is in m/s.
+    """
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
@@ -1613,6 +1629,7 @@ class Tracing():
         self._trajectories = value
     
     def energy(self):
+        """Kinetic energy in J at each saved time, per particle; it does not include the potential energy q Phi."""
         assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
         mass = self.particles.mass
 
