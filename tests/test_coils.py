@@ -299,3 +299,22 @@ def test_zero_currents_give_finite_dofs():
     curves = create_equally_spaced_curves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
     coils = Coils(curves=curves, currents=[0.0, 0.0])
     assert jnp.all(jnp.isfinite(coils.dofs)) and jnp.all(jnp.isfinite(coils.currents))
+
+
+def test_pointwise_curvature_gradient_matches_finite_differences():
+    """Curvature at every fixed point of every coil is differentiable: AD (forward and
+    reverse) must match central differences. Only a maximum over points is a kink."""
+    from essos.coils import CreateEquallySpacedCurves
+    curves = CreateEquallySpacedCurves(2, 3, 1.0, 0.3, n_segments=24, nfp=2, stellsym=True)
+    coils = Coils(curves, np.ones(2))
+    x0 = np.asarray(curves.dofs).ravel()
+    x0 = jnp.asarray(x0 + 0.02 * np.random.default_rng(1).standard_normal(x0.size))
+    currents = jnp.asarray(coils.dofs_currents)
+    kappa = lambda x: coils.with_dofs(jnp.concatenate((x, currents))).curvature[:2]
+    d = jnp.asarray(np.random.default_rng(2).standard_normal(x0.size))
+    d = d / jnp.linalg.norm(d)
+    jvp = jax.jvp(kappa, (x0,), (d,))[1]
+    h = 1e-6
+    fd = (kappa(x0 + h * d) - kappa(x0 - h * d)) / (2 * h)
+    np.testing.assert_allclose(jvp, fd, rtol=1e-6, atol=1e-6 * float(jnp.abs(fd).max()))
+    np.testing.assert_allclose(jax.jacfwd(kappa)(x0), jax.jacrev(kappa)(x0), rtol=1e-9, atol=1e-9)
