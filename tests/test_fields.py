@@ -743,6 +743,44 @@ def test_combined_vmec_fields_sum_covariant_and_contravariant_components():
     np.testing.assert_allclose(combined.kappa(point), vmec.kappa(point), rtol=2e-2, atol=2e-3)
 
 
+def test_combined_field_curvature_is_that_of_the_sum_of_its_parts():
+    """B_i and B^i are linear in the field, so those of a sum are the sums over its parts, and |B|^2 = B_i B^i.
+
+    The reference forms the curvature of the summed components from the identity
+    kappa_i = (b x curl b)_i with a minus sign = b^j (d_j b_i - d_i b_j), b_i = B_i/|B|, b^j = B^j/|B|
+    (b . grad b = grad(b^2)/2 - b x curl b and b^2 = 1). It calls neither CombinedField nor curl b. The second
+    part has the geometry of the first and every Nyquist mode of its B tables reweighted, so the sum is not
+    proportional to either part. Both sides are one exact expression evaluated in a different order (here
+    forward mode only, in the method partly reverse mode) over sums of 128 Nyquist modes in double precision;
+    they agree to 1.6e-13 at worst on these points, so 1e-12 relative is rounding with a factor 6 to spare. A
+    wrong |B| shows at 3e-3 (the wout's bmnc against sqrt(B_i B^i)), a Cartesian B_i at 8e-1.
+    """
+    from essos.fields import CombinedField
+
+    vmec = Vmec(WOUT_FILE)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    weight = 1 + 0.5 * np.cos(np.asarray(vmec.xm_nyq) + 0.3 * np.asarray(vmec.xn_nyq))
+    for name in ("bsubsmns", "bsubumnc", "bsubvmnc", "bsupumnc", "bsupvmnc"):
+        arrays[name] = arrays[name] * weight
+    parts = (vmec, Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **arrays))
+    combined = CombinedField(*parts)
+
+    def b(x, components):
+        B_cov = sum(f.B_covariant(x) for f in parts)
+        B_con = sum(f.B_contravariant(x) for f in parts)
+        return (B_cov, B_con)[components] / jnp.sqrt(B_cov @ B_con)
+
+    def reference(x):
+        db_cov = jax.jacfwd(b)(x, 0)  # [i, j] = d_j b_i
+        return (db_cov - db_cov.T) @ b(x, 1)
+
+    compiled = jax.jit(lambda field, x: field.kappa(x))
+    for x in jnp.array([[0.5, 0.3, 0.2], [0.2, 1.0, 0.4], [0.8, 2.5, 1.1]]):
+        kappa = reference(x)
+        np.testing.assert_allclose(combined.kappa(x), kappa, rtol=1e-12, atol=1e-12 * jnp.linalg.norm(kappa))
+        np.testing.assert_allclose(compiled(combined, x), kappa, rtol=1e-12, atol=1e-12 * jnp.linalg.norm(kappa))
+
+
 def test_half_grid_interpolation_keeps_its_slope_up_to_the_lcfs():
     """Issue #111: the half grid ends at s = 1 - ds/2; beyond it the scaled table must not freeze."""
     from essos.fields import _radial_interp
