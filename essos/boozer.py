@@ -20,7 +20,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
-from essos import require_x64
+from essos import _require_x64
 from essos.background_species import nu_D_ab, nu_par_ab, d_nu_par_ab, nu_s_ab, JOULE_PER_EV
 
 
@@ -85,7 +85,7 @@ class BoozerField(eqx.Module):
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
         every evaluation.
         """
-        require_x64("BoozerField")
+        _require_x64("BoozerField")
         s = np.asarray(s, float)
         bmnc = np.asarray(bmnc, float)
         xm = np.asarray(xm, int)
@@ -513,6 +513,8 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.
     """
+    if species is not None:  # collisionless traces also run in float32
+        _require_x64("trace_boozer with species")
     if method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
         raise ValueError("method must be 'rk4', 'dopri5', 'dopri8', 'adaptive' or 'adaptive8'")
     if not (np.isfinite(tolerance) and tolerance > 0):

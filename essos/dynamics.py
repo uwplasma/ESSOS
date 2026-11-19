@@ -17,7 +17,7 @@ import optimistix as optx
 import equinox as eqx
 import equinox.internal as eqxi
 from essos.coils import Coils
-from essos import require_x64
+from essos import _require_x64
 from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
@@ -64,6 +64,7 @@ class Particles():
     def __init__(self, initial_xyz=None, initial_vparallel_over_v=None, charge=ALPHA_PARTICLE_CHARGE,
                  mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY, min_vparallel_over_v=-1,
                  max_vparallel_over_v=1, field=None, initial_vxvyvz=None, initial_xyz_fullorbit=None, phase_angle_full_orbit = 0):
+        _require_x64("Particles")
         self.charge = charge
         self.mass = mass
         self.energy = energy
@@ -1046,7 +1047,7 @@ class Tracing():
                  solver=None, stopping_criteria=None, progress=True, devices=None,
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None, adjoint=None):
-        require_x64("Tracing")
+        _require_x64("Tracing")
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")

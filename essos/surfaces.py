@@ -1,15 +1,18 @@
-from functools import partial
+from functools import lru_cache, partial
 import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.scipy.interpolate import RegularGridInterpolator
 from jax import tree_util, jit, vmap, devices, device_put
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from essos import _require_x64
 from essos.plot import fix_matplotlib_3d
 import jaxkd
 
-mesh = Mesh(devices(), ("dev",))
-sharding = NamedSharding(mesh, PartitionSpec("dev"))
+@lru_cache(maxsize=1)
+def _sharding():
+    """One sharding over every device, built at first use so that importing starts no JAX backend."""
+    return NamedSharding(Mesh(devices(), ("dev",)), PartitionSpec("dev"))
 
 
 def _cacheable(*values):
@@ -62,8 +65,8 @@ def B_on_surface(surface, field):
     gamma_reshaped = gamma.reshape(nphi * ntheta, 3)
     # Spread the points over the devices when they divide evenly (sharding the
     # surface pytree itself failed whenever its leaves did not).
-    if len(gamma_reshaped) % sharding.num_devices == 0:
-        gamma_reshaped = jax.lax.with_sharding_constraint(gamma_reshaped, sharding)
+    if len(gamma_reshaped) % _sharding().num_devices == 0:
+        gamma_reshaped = jax.lax.with_sharding_constraint(gamma_reshaped, _sharding())
 
     # Map field.B over all positions
     B_on_surface = vmap(field.B)(gamma_reshaped)
@@ -190,7 +193,7 @@ class SurfaceRZFourier:
         Note:
             Dofs contain scaled ``rc, zs``, followed by any active ``rs, zc`` arrays.
         """
-
+        _require_x64("SurfaceRZFourier")
         assert isinstance(nfp, int) and nfp > 0, "nfp must be a positive integer."
         assert isinstance(mpol, int) and mpol >= 0, "mpol must be a non-negative integer."
         assert isinstance(ntor, int) and ntor >= 0, "ntor must be a non-negative integer."

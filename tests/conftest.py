@@ -3,9 +3,11 @@ import os
 os.environ["ESSOS_PROGRESS"] = "0"  # default progress bars off in tests
 
 import jax
-
-jax.config.update("jax_enable_x64", True)  # importing essos leaves it to the caller
 import pytest
+
+import essos
+
+essos.configure_jax()  # float64 and one CPU device per core, as importing essos did before
 
 
 @pytest.fixture(autouse=True, scope="module")
