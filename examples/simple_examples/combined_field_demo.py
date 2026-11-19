@@ -3,6 +3,8 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import CombinedField, BiotSavart
 
 
+import essos
+essos.configure_jax()
 number_of_field_periods = 2
 number_coils_per_half_field_period = 4
 major_radius_coils = 1.0

@@ -1,5 +1,7 @@
 from essos.coils import Coils, CreateEquallySpacedCurves
 
+import essos
+essos.configure_jax()
 # Initialize coils
 current_on_each_coil = 1e5
 number_of_field_periods = 2

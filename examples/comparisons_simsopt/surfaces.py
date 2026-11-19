@@ -11,6 +11,8 @@ from simsopt.field import BiotSavart as BiotSavart_simsopt
 from simsopt.geo import SurfaceRZFourier as SurfaceRZFourier_SIMSOPT
 from simsopt.objectives import SquaredFlux as SquaredFlux_SIMSOPT
 
+import essos
+essos.configure_jax()
 output_dir = os.path.join(os.path.dirname(__file__), '../output')
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)

@@ -1,5 +1,7 @@
 import os
 import jax
+import essos
+essos.configure_jax()
 print(jax.devices())
 from time import time
 from jax import block_until_ready

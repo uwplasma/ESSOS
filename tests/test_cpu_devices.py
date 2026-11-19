@@ -9,6 +9,7 @@ import os
 os.sched_getaffinity = lambda _pid: {0, 1, 2}
 os.cpu_count = lambda: 64
 import essos, jax
+essos.configure_jax()
 print(jax.config.jax_num_cpu_devices)
 """
 

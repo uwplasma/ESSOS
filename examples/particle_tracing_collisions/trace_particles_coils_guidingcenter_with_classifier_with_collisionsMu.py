@@ -10,6 +10,8 @@ from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_A
 from essos.dynamics import Tracing, Particles
 from essos.background_species import BackgroundSpecies
 
+import essos
+essos.configure_jax()
 # Input parameters
 tmax = 1e-4
 timestep=1.e-8

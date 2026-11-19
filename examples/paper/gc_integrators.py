@@ -4,6 +4,8 @@ from time import time
 from jax import block_until_ready
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import essos
+essos.configure_jax()
 plt.rcParams.update({'font.size': 18})
 from essos.fields import BiotSavart
 from essos.coils import Coils

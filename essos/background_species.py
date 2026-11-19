@@ -1,10 +1,8 @@
 from functools import partial
 import jax.numpy as jnp
 import jax
-from jax import config
-# to use higher precision
-config.update("jax_enable_x64", True)
 from jax import jit
+from essos import _require_x64
 from essos.constants import ELEMENTARY_CHARGE, EPSILON_0, PROTON_MASS, SPEED_OF_LIGHT
 
 
@@ -67,6 +65,7 @@ def dlog_coulomb_dv(ma, ea, species_b, v, points, species):
 @partial(jit, static_argnames=['species'])
 def nu_D_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
     """Decay rate of the l=1 pitch moment; the angular operator is nu_D L/2."""
+    _require_x64("nu_D_ab")
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     prefactor = gamma_ab(ma,ea, species_b, v,points,species) * nb 
@@ -106,6 +105,7 @@ def d_nu_par_ab(ma: float, ea: float,species_b: int,v:float, points,species: Bac
 @partial(jit, static_argnames=['species'])
 def nu_s_ab(ma: float, ea: float,species_b: int,v:float, points,species: BackgroundSpecies) -> float:
     """Slowing-down collision frequency."""
+    _require_x64("nu_s_ab")
     nb = species.get_density(species_b,points)
     vtb = species.get_v_thermal(species_b,points)
     mb = species.mass[species_b]   

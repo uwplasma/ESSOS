@@ -7,6 +7,8 @@ from essos.fields import BiotSavart
 from essos.coils import Coils
 from essos.dynamics import Tracing
 
+import essos
+essos.configure_jax()
 # Input parameters
 tmax = 1000
 nfieldlines_per_core=3
