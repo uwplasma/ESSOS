@@ -186,6 +186,7 @@ def _tolerance_controller(model, axis_regular, flag=False, atol=1e-8, size=4):
 
     tracing = Tracing.__new__(Tracing)
     tracing.model, tracing._axis_regular, tracing.field = model, axis_regular, None
+    tracing.integrator = "diffrax"
     tracing.initial_conditions = jnp.ones((1, size))
     tracing.rtol, tracing.atol = 1e-7, atol
     tracing.timestep, tracing.solver = .1, None
