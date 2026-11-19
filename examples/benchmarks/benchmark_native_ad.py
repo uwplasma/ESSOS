@@ -207,7 +207,7 @@ def main():
         kernel_audit=o.kernel_audit,cold_compile=o.cold_compile,
         forward=forward,value_and_gradient=ad,total_over_forward=ad['warm_ms']/forward['warm_ms'],
         value=float(value),gradient_norm=float(jnp.linalg.norm(gradient)),
-        collision_updates=np.asarray(out.stats.collision_updates).tolist(),
+        collision_updates=np.asarray(out.stats.accepted).tolist(),
         accepted_orbit_steps=np.asarray(out.stats.accepted_orbit_steps).tolist())
     if o.check_gradient:
         recorded,tapes=jax.jit(lambda p:run(p,record=True))(p)
