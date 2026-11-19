@@ -204,6 +204,18 @@ is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
 and its derivatives, together with the flux functions `G`, `I` and `iota`.
 
+## Boundary optimization against alpha losses
+
+`Tracing.soft_loss_fraction(per_particle=True)` is differentiable through the tracer, and
+`Vmec.from_arrays` takes live VMEC tables, so the loss of fusion alphas can be differentiated down to the
+boundary of a [VMEX](https://github.com/uwplasma/vmex) equilibrium.
+[`optimize_alpha_loss_boundary.py`](examples/particle_tracing/optimize_alpha_loss_boundary.py) shapes a
+two-period boundary at fixed aspect ratio 6 with an iota floor, first for quasisymmetry and then with the soft loss of
+192 fixed alphas added (mode ladder 2, 3). On 1000 independent alphas born at s = 0.5, the loss within
+6e-5 s falls from 10.0% to 1.6% and within 1e-3 s from 23.7% to 3.5%. A matched run without the soft-loss term
+(same weights and floors) ends at 5.7% and 7.3%. The soft loss of a stopped orbit has no gradient in the mean, so the
+example uses the per-particle scores. The example needs `pip install vmex` and takes 1 h 40 min on 16 CPU cores.
+
 ## Comparison with other codes
 
 256 collisionless 3.5 MeV alphas per equilibrium, started at `s = 0.5` with

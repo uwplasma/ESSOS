@@ -103,6 +103,22 @@ def loss_particle_iota(field, particles, target_iota=0.41, **trace):
     return jnp.sum(jnp.maximum(target_iota - B_theta / B_phi, 0.0))
 
 
+def inside_lcfs(t, y, args, **kwargs):
+    """Stopping criterion on a VMEC flux-coordinate state: positive while s < 1."""
+    return 1.0 - y[0]
+
+def loss_soft_lost_fraction(field, particles, r_max=0.99, width=0.02, timestep=1.e-8, maxtime=1e-5, num_steps=300,
+                            trace_tolerance=1e-5, model='GuidingCenterAdaptative', boundary=None):
+    """Differentiable flux-peak crossing score for VMEC guiding centres.
+
+    Orbits stop on the LCFS through a stopping criterion on s, which keeps the
+    trace differentiable. Report ``Tracing.loss_fraction`` for hard losses.
+    """
+    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime, timestep=timestep,
+                      times_to_trace=num_steps, atol=trace_tolerance, rtol=trace_tolerance, boundary=boundary,
+                      stopping_criteria=inside_lcfs)
+    return tracing.soft_loss_fraction(r_max=r_max, width=width)
+
 ###################  B ON SURAFCE LOSSES ##########################
 @partial(jit, static_argnames=['npoints'])
 def normB_axis(field, npoints=15):
