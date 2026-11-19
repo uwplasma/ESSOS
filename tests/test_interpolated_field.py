@@ -129,7 +129,38 @@ def test_a_table_of_a_field_that_jumps_across_a_surface_is_exact_outside_a_guard
     assert float(jnp.abs(got - ref)[d < 2 * h].max()) < 1e-12 * scale  # exact in the guard band
     assert float(jnp.abs(got - ref)[d > 5 * h].max()) < 1e-3 * scale  # table beyond it
     np.testing.assert_allclose(vmap(f.dB_by_dX)(xyz[d < 2 * h]), vmap(jax.jacfwd(smooth))(xyz[d < 2 * h]), atol=1e-12)
+    near = xyz[d < 2 * h]  # reverse mode through the guard band: the masked table branch must not leak NaN
+    np.testing.assert_allclose(jax.grad(lambda p: vmap(f.B)(p).sum())(near), jax.grad(lambda p: vmap(smooth)(p).sum())(near), atol=1e-12)
     naive = InterpolatedField(Jumping(), R=(R0 - a - 0.2, R0 + a + 0.2), Z=(-a - 0.2, a + 0.2), nr=32, nz=32, nphi=48, nfp=1)
     assert float(jnp.abs(vmap(naive.B)(xyz) - ref)[d < 2 * h].max()) > 0.3 * scale  # a spline across the jump is wrong by O(1)
     assert jnp.isnan(f.B(jnp.array([R0 + a + 0.3, 0.0, 0.0]))).all()  # outside the box stays NaN
     assert jnp.abs(f.B(jnp.array([R0, 0.0, 0.0]))).max() == 0  # inside the surface: the source itself
+
+
+def test_the_guard_band_evaluates_the_source_only_for_the_points_that_need_it():
+    a, R0, calls, counting = 0.25, 1.7, [], [False]
+    th = np.linspace(0, 2 * np.pi, 24, endpoint=False)
+    rho = (R0 + a * np.cos(th))[None] * np.ones((24, 1))
+    torus = type("Torus", (), {"gamma": np.stack((rho * np.cos(th)[:, None], rho * np.sin(th)[:, None], a * np.sin(th)[None] * np.ones((24, 1))), -1)})()
+
+    class Jumping(MagneticField):
+        def B(self, x):
+            if counting[0]:
+                jax.debug.callback(lambda v: calls.append(np.size(v) // 3), x)
+            return jnp.where(jnp.hypot(jnp.hypot(x[0], x[1]) - R0, x[2]) < a, 0.0, jnp.array([x[0], x[1] * x[2], x[0] - x[2]]))
+
+    f = InterpolatedField(Jumping(), R=(R0 - a - 0.4, R0 + a + 0.4), Z=(-a - 0.4, a + 0.4), nr=24, nz=24, nphi=24, nfp=1, exclude=torus, guard=3, chunk_size=64)
+    counting[0] = True
+    ph = np.linspace(0, 2 * np.pi, 104, endpoint=False)
+    r = np.where(np.arange(104) < 40, a + 0.01, a + 0.3)  # 40 points in the guard band, 64 beyond it
+    xyz = jnp.array(np.c_[(R0 + r) * np.cos(ph), (R0 + r) * np.sin(ph), 0 * r])
+    got = vmap(f.B)(xyz).block_until_ready()
+    jax.effects_barrier()
+    assert sum(calls) == 64  # two batches of 32, not 104 points
+    np.testing.assert_allclose(got[:40], vmap(Jumping().B)(xyz[:40]), atol=1e-12)
+    assert jnp.isfinite(got).all()
+    calls.clear()
+    vmap(f.B)(xyz[40:]).block_until_ready()
+    jax.effects_barrier()
+    assert sum(calls) == 0
+    np.testing.assert_allclose(jax.jacfwd(lambda x: vmap(f.B)(x)[:, 0].sum())(xyz[:40]), np.tile([1.0, 0, 0], (40, 1)), atol=1e-12)  # forward mode through the gather
