@@ -1013,19 +1013,30 @@ class InterpolatedField(MagneticField):
         drot = jnp.array([[-s, -c, 0.], [c, -s, 0.], [0., 0., 0.]])
         dB_dcyl = jnp.stack((rot @ dR, rot @ dphi + drot @ b, rot @ dZ), -1)  # d B_xyz / d(R, phi, Z)
         dcyl_dx = jnp.array([[c, s, 0.], [-s / R, c / R, 0.], [0., 0., 1.]])
-        nan = jnp.where(ok, 1., jnp.nan)  # outside the box (or the guard band without a source): NaN, never an extrapolation
-        B, J = nan * (rot @ b), nan * (dB_dcyl @ dcyl_dx)
+        # outside the box (or the guard band without a source): NaN, never an extrapolation; a where, not a NaN
+        # factor, so the masked branch passes a zero cotangent in reverse mode instead of 0 * NaN
+        B, J = jnp.where(ok, rot @ b, jnp.nan), jnp.where(ok, dB_dcyl @ dcyl_dx, jnp.nan)
         if self.field is not None:  # the guard band inside the box is evaluated directly from the source
             field, miss = self.field, inbox & ~good
 
+            def one(p):
+                J, B = jacfwd(lambda q: (field.B(q),) * 2, has_aux=True)(p)  # the value and its Jacobian from one evaluation
+                return B, J
+
             @custom_vmap
-            def direct(p, need):  # one cond per point, so only the points that need the source evaluate it
-                return lax.cond(need, lambda p: (field.B(p), jacfwd(field.B)(p)), lambda p: (jnp.full(3, jnp.nan), jnp.full((3, 3), jnp.nan)), p)
+            def direct(p, need):
+                return lax.cond(need, one, lambda p: (jnp.full(3, jnp.nan), jnp.full((3, 3), jnp.nan)), p)
 
             @direct.def_vmap
-            def _(size, batched, p, need):  # a vmap of the source would run all points through it at once: map instead
+            def _(size, batched, p, need):  # gather the points that need the source, evaluate them in batches of 32, skip empty batches
                 p, need = (jnp.broadcast_to(a, (size,) + jnp.shape(a)[int(bt):]) if not bt else a for a, bt in zip((p, need), batched))
-                return lax.map(lambda a: direct.fun(*a), (p, need)), (True, True)
+                count, pad = need.sum(), -size % 32
+                idx = jnp.concatenate((jnp.nonzero(need, size=size, fill_value=0)[0], jnp.zeros(pad, int)))
+                empty = lambda i: (jnp.full((32, 3), jnp.nan), jnp.full((32, 3, 3), jnp.nan))
+                Bs, Js = lax.map(lambda a: lax.cond(a[1] * 32 < count, lambda i: vmap(one)(p[i]), empty, a[0]), (idx.reshape(-1, 32), jnp.arange(len(idx) // 32)))
+                at = jnp.where(jnp.arange(len(idx)) < count, idx, size)  # padding is dropped
+                return (jnp.full((size, 3), jnp.nan).at[at].set(Bs.reshape(-1, 3), mode="drop"),
+                        jnp.full((size, 3, 3), jnp.nan).at[at].set(Js.reshape(-1, 3, 3), mode="drop")), (True, True)
 
             Bd, Jd = direct(points, miss)
             B, J = jnp.where(miss, Bd, B), jnp.where(miss, Jd, J)
