@@ -129,6 +129,8 @@ def test_a_table_of_a_field_that_jumps_across_a_surface_is_exact_outside_a_guard
     assert float(jnp.abs(got - ref)[d < 2 * h].max()) < 1e-12 * scale  # exact in the guard band
     assert float(jnp.abs(got - ref)[d > 5 * h].max()) < 1e-3 * scale  # table beyond it
     np.testing.assert_allclose(vmap(f.dB_by_dX)(xyz[d < 2 * h]), vmap(jax.jacfwd(smooth))(xyz[d < 2 * h]), atol=1e-12)
+    near = xyz[d < 2 * h]  # reverse mode through the guard band: the masked table branch must not leak NaN
+    np.testing.assert_allclose(jax.grad(lambda p: vmap(f.B)(p).sum())(near), jax.grad(lambda p: vmap(smooth)(p).sum())(near), atol=1e-12)
     naive = InterpolatedField(Jumping(), R=(R0 - a - 0.2, R0 + a + 0.2), Z=(-a - 0.2, a + 0.2), nr=32, nz=32, nphi=48, nfp=1)
     assert float(jnp.abs(vmap(naive.B)(xyz) - ref)[d < 2 * h].max()) > 0.3 * scale  # a spline across the jump is wrong by O(1)
     assert jnp.isnan(f.B(jnp.array([R0 + a + 0.3, 0.0, 0.0]))).all()  # outside the box stays NaN
