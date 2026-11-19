@@ -393,6 +393,22 @@ def test_levelset_stopping_criterion_stops_and_fills_field_line():
     assert jnp.allclose(tracing.trajectories[0, -1], tracing.trajectories[0, -2])
 
 
+@pytest.mark.parametrize("model", ["FieldLineAdaptative", "FieldLine"])
+def test_step_budget_rounds_match_one_solve(model):
+    """Rounds of two steps, each without the lines already stopped, give the orbits and stops of one solve."""
+    class PlaneClassifier:
+        def evaluate_xyz(self, xyz):
+            return 1.5 - xyz[0]
+
+    def trace(budget):
+        return Tracing(field=MockField(), model=model, initial_conditions=jnp.array([[1.0, 0, 0], [0.0, 0, 0],
+                       [-3.0, 0, 0], [1.4, 0, 0], [-1.0, 0, 0]]), maxtime=2.0, timestep=0.05, times_to_trace=21,
+                       stopping_criteria=LevelsetStoppingCriterion(PlaneClassifier()), step_budget=budget)
+    whole, rounds = trace(None), trace(2)
+    assert whole.boundary_hits.tolist() == rounds.boundary_hits.tolist() == [True, True, False, True, False]
+    np.testing.assert_allclose(rounds.trajectories, whole.trajectories, rtol=1e-12, atol=1e-12)
+
+
 def test_poincare_plot_unwraps_toroidal_crossings_and_accepts_line_colors():
     phase = jnp.linspace(0.0, 4.0 * jnp.pi, 101)
     first = jnp.stack((jnp.cos(phase), jnp.sin(phase), 0.1 * jnp.sin(phase)), axis=1)
@@ -655,7 +671,7 @@ def test_tracing_max_steps_is_configurable_and_bounded():
 
     source = inspect.getsource(Tracing)
     assert "max_steps=10000000000" not in source
-    assert source.count("max_steps=self.max_steps") == 1  # every solve goes through Tracing._solve
+    assert inspect.getsource(Tracing._solve).count("self.max_steps") == 1  # every solve goes through Tracing._solve
 
 
 
@@ -1124,6 +1140,24 @@ def _exterior_tracing(xyz, vpar_over_v, maxtime, model="GuidingCenterAdaptative"
 # Four orbits that cross the LCFS and strike a wall 5 cm outside it within 3 us.
 STRIKING = ([[0.9732, 2.2941, 5.0876], [0.9821, 0.6628, 3.5216], [0.9554, 0.7221, 0.494], [0.9535, 2.7819, 2.1633]],
             [-0.9872, 0.5453, 0.747, -0.8145])
+
+
+@pytest.mark.parametrize("exterior", [False, True])
+def test_vmec_step_budget_matches_one_solve(exterior):
+    """Rounds of 16 steps give the LCFS crossings, wall strikes and orbits of one solve (a pause passes the state
+    through the axis-regular chart and restarts from a save, so to about 1e-6)."""
+    if exterior:
+        trace = lambda budget: _exterior_tracing(*STRIKING, maxtime=3e-6, step_budget=budget)
+    else:
+        trace = lambda budget: _edge_tracing("GuidingCenterAdaptative", 0.975, 50, atol=1e-9, rtol=1e-9,
+                                             step_budget=budget)
+    whole, rounds = trace(None), trace(16)
+    assert np.array_equal(rounds.status, whole.status) and np.array_equal(rounds.returns, whole.returns)
+    for name in ("lcfs_times", "wall_times", "lost_times"):
+        np.testing.assert_allclose(getattr(rounds, name), getattr(whole, name), rtol=1e-7)
+    both = jnp.isfinite(whole.trajectories)
+    assert jnp.array_equal(both, jnp.isfinite(rounds.trajectories))
+    np.testing.assert_allclose(rounds.trajectories[both], whole.trajectories[both], rtol=1e-5, atol=1e-6)
 
 
 def test_wall_given_as_a_gap_or_a_surface():
