@@ -302,6 +302,13 @@ command if it is missing.
 | [`cross_code_benchmark`](examples/cross_code_benchmark) | Alpha losses against SIMSOPT, FIRM3D and SIMPLE |
 | [`simple_examples`](examples/simple_examples) | Coils from near-axis or BOOZ_XFORM, perturbed coils, combined fields, MGRID |
 | [`paper`](examples/paper) | Integrator, gradient and Poincare figures |
+| [`winding_surface_opt.py`](examples/winding_surface_opt.py) | Winding-surface optimization with a singular-value proxy of the dipole-to-plasma operator |
+| [`comparisons_regcoil_quadcoil`](examples/comparisons_regcoil_quadcoil) | Regularized current-potential solve against REGCOIL and QUADCOIL |
+
+`essos.current_potential` solves the REGCOIL problem (minimize `f_B + lambda f_K` for the single-valued
+current potential on a winding surface). On the QA reactor-scale case it agrees with QUADCOIL to 1e-6 in
+`f_B` and 1e-8 in `f_K`, and with REGCOIL to 6e-3 in `f_B` and 8e-5 in `f_K` at 32 x 32 points per field
+period (7e-4 and 6e-6 at 48 x 48).
 
 ## Testing
 
