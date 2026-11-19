@@ -1,0 +1,21 @@
+# python -m essos optimize_coils_and_trace_alphas.toml: fit two coils per half period to the boundary of the
+# reactor-scale QA equilibrium, scale their currents to its on-axis |B|, then trace two 3.5 MeV alphas
+# for 10 microseconds. Under a minute on a laptop CPU.
+[field]
+wout = "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+
+[optimize]
+n_coils = 2
+order = 2
+n_segments = 24
+max_nfev = 10
+output = "coils.json"
+
+[trace]
+model = "GuidingCenterAdaptative"
+initial_conditions = [[12.3, 0.0, 0.0], [12.7, 0.0, 0.0]]   # axis R = 12.28 m, LCFS R = 13.17 m at phi = 0
+energy_eV = 3.52e6
+vpar_over_v = [0.5, -0.5]
+maxtime = 1e-5
+times_to_trace = 20
+output = "trace.npz"

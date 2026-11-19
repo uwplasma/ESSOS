@@ -15,7 +15,7 @@ The file has a ``[field]`` table and an ``[optimize]`` and/or a ``[trace]`` tabl
     max_length = 32.0
     max_curvature = 0.1
     max_nfev = 200
-    output = "coils.json"
+    output = "coils.json"       # currents scaled so that the mean |B| on the axis of `wout` is the wout's
 
     [trace]
     model = "GuidingCenterAdaptative"   # any Tracing model; FieldLine* models trace field lines
@@ -25,10 +25,14 @@ The file has a ``[field]`` table and an ``[optimize]`` and/or a ``[trace]`` tabl
     times_to_trace = 100
     output = "trace.npz"
 
-Every other key of ``[trace]`` is passed to ``Tracing``.
+Every other key of ``[trace]`` is passed to ``Tracing``. Relative ``wout`` and ``coils`` paths are read from
+the folder of the TOML file, outputs are written to the current folder. ``examples/input_files/
+optimize_coils_and_trace_alphas.toml`` is a case that runs in under a minute.
 """
 import sys
+from pathlib import Path
 import numpy as np
+import jax
 import jax.numpy as jnp
 from scipy.optimize import minimize
 try:
@@ -56,6 +60,14 @@ def optimize(wout, n_coils=3, order=3, major_radius=10.0, minor_radius=5.6, n_se
     result = minimize(loss, loss.starting_dofs, jac=loss.grad, method="L-BFGS-B", options={"maxfun": max_nfev})
     print(f"Optimized {result.nfev} evaluations: loss {float(loss(loss.starting_dofs)):.4g} -> {result.fun:.4g}", flush=True)
     coils = loss.dofs_to_pytree(result.x)["field"].coils
+    # The loss does not depend on the current scale: fix it by the toroidal mean of |B| on the wout axis (s = 0),
+    # as the confinement examples do with a penalty. The wout's b0 = rbtor0 / R(phi = 0) omits the poloidal field.
+    vmec, phi = Vmec(wout), jnp.linspace(0, 2 * jnp.pi / surface.nfp, 16, endpoint=False)
+    axis = jnp.stack([0 * phi, 0 * phi, phi], axis=1)
+    B_axis = jnp.mean(jax.vmap(vmec.AbsB)(axis))
+    scale = B_axis / jnp.mean(jax.vmap(BiotSavart(coils).AbsB)(jax.vmap(vmec.to_xyz)(axis)))
+    coils = Coils(curves=coils.curves, currents=coils.dofs_currents_raw * scale)
+    print(f"Currents scaled to a mean on-axis |B| of {float(B_axis):.4g} T", flush=True)
     coils.to_json(output)
     print(f"Coils saved to {output}", flush=True)
     return coils
@@ -85,7 +97,8 @@ def main(cl_args=None):
         return 2
     with open(cl_args[0], "rb") as f:
         parameters = tomllib.load(f)
-    source = parameters.get("field", {})
+    folder = Path(cl_args[0]).parent
+    source = {key: str(folder / path) for key, path in parameters.get("field", {}).items()}
     field = Vmec(source["wout"]) if "wout" in source else BiotSavart(Coils.from_json(source["coils"]))
     if "optimize" in parameters:
         field = BiotSavart(optimize(source["wout"], **parameters["optimize"]))
