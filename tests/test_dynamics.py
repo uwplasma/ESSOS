@@ -464,6 +464,23 @@ def test_surface_classifier_signed_distance_for_circular_torus():
         SurfaceClassifier(surface, h=0.1, padding=0.0)
 
 
+def test_surface_classifier_tabulates_half_a_period_of_a_symmetric_surface():
+    import types
+    surface = SurfaceRZFourier.from_wout_file(str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
+                                                  / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"), ntheta=32, nphi=64)
+    half = SurfaceClassifier(surface, h=0.2)
+    full = SurfaceClassifier(types.SimpleNamespace(gamma=surface.gamma, unitnormal=surface.unitnormal), h=0.2)
+    assert (half.stellsym, half.period, full.stellsym, full.period) == (True, np.pi, False, 2 * np.pi)
+    assert half.dist.values.shape[1] * 3 < full.dist.values.shape[1]
+    rng = np.random.default_rng(0)
+    r, phi, z = rng.uniform(8.5, 12.5, 2000), rng.uniform(0, 2 * np.pi, 2000), rng.uniform(-2.3, 2.3, 2000)
+    xyz = jnp.array(np.c_[r * np.cos(phi), r * np.sin(phi), z])
+    a, b = jax.vmap(half.evaluate_xyz)(xyz), jax.vmap(full.evaluate_xyz)(xyz)
+    np.testing.assert_array_equal(jnp.sign(a)[jnp.abs(b) > 0.4], jnp.sign(b)[jnp.abs(b) > 0.4])
+    assert float(jnp.median(jnp.abs(a - b))) < 0.01  # both interpolate the same distance on grids of equal spacing
+    np.testing.assert_allclose(jax.vmap(half.evaluate_xyz)(xyz * jnp.array([1., -1., -1.])), a, atol=1e-12)
+
+
 def test_vmec_fieldline_uses_the_lcfs_event():
     tracing = Tracing(
         field=MockVmec(), model="FieldLineArclength",
