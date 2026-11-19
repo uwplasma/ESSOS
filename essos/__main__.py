@@ -58,6 +58,8 @@ def optimize(wout, n_coils=3, order=3, major_radius=10.0, minor_radius=5.6, n_se
             + custom_loss(lambda field: jnp.mean(jnp.maximum(0, field.coils.curvature - max_curvature)), "field"))
     loss.dependencies = {"field": BiotSavart(Coils(curves=curves, currents=[1.0] * n_coils))}
     result = minimize(loss, loss.starting_dofs, jac=loss.grad, method="L-BFGS-B", options={"maxfun": max_nfev})
+    if not (np.isfinite(result.fun) and np.all(np.isfinite(result.x))):
+        raise RuntimeError(f"coil optimization failed after {result.nfev} evaluations: loss {result.fun}, {result.message}")
     print(f"Optimized {result.nfev} evaluations: loss {float(loss(loss.starting_dofs)):.4g} -> {result.fun:.4g}", flush=True)
     coils = loss.dofs_to_pytree(result.x)["field"].coils
     # The loss does not depend on the current scale: fix it by the toroidal mean of |B| on the wout axis (s = 0),
@@ -87,6 +89,12 @@ def trace(field, model, initial_conditions, energy_eV=3.52e6, vpar_over_v=None, 
         print(f"Lost {100 * float(tracing.loss_fractions[-1]):.2f}% of {len(tracing.trajectories)}", flush=True)
     np.savez(output, **{k: np.asarray(v) for k, v in results.items()})
     print(f"Trajectories saved to {output}", flush=True)
+    # A lost orbit may end in non-finite states; any other non-finite orbit is a failed integration.
+    failed = getattr(tracing, "failed", ~np.isfinite(np.asarray(tracing.trajectories)).all(axis=(1, 2))
+                     & (np.asarray(getattr(tracing, "lost_times", -1)) < 0))
+    if np.any(failed):
+        raise RuntimeError(f"{int(np.sum(failed))} of {len(failed)} trajectories failed (non-finite state, not lost): "
+                           f"particles {np.flatnonzero(failed).tolist()}")
     return tracing
 
 
@@ -97,13 +105,21 @@ def main(cl_args=None):
         return 2
     with open(cl_args[0], "rb") as f:
         parameters = tomllib.load(f)
+    if "optimize" in parameters and "wout" not in parameters.get("field", {}):
+        print("essos: [optimize] needs [field] wout = <VMEC wout file>: the coils are fitted to its boundary",
+              file=sys.stderr)
+        return 1
     folder = Path(cl_args[0]).parent
     source = {key: str(folder / path) for key, path in parameters.get("field", {}).items()}
     field = Vmec(source["wout"]) if "wout" in source else BiotSavart(Coils.from_json(source["coils"]))
-    if "optimize" in parameters:
-        field = BiotSavart(optimize(source["wout"], **parameters["optimize"]))
-    if "trace" in parameters:
-        trace(field, **parameters["trace"])
+    try:
+        if "optimize" in parameters:
+            field = BiotSavart(optimize(source["wout"], **parameters["optimize"]))
+        if "trace" in parameters:
+            trace(field, **parameters["trace"])
+    except RuntimeError as error:
+        print(f"essos: {error}", file=sys.stderr)
+        return 1
     return 0
 
 

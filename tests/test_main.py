@@ -1,3 +1,5 @@
+"""The command line ``python -m essos case.toml``: coils fitted to a wout carry its on-axis |B|, guiding-centre energy
+is an exact invariant of a static field, and a failed fit or trace is an error."""
 from pathlib import Path
 
 import numpy as np
@@ -57,3 +59,38 @@ def test_example_case_traces_alphas_in_the_field_of_the_wout(tmp_path, monkeypat
     mu = (E0 - 0.5 * m * vpar[:, :1] ** 2) / AbsB[:, :1]
     assert np.max(np.abs((0.5 * m * vpar**2 + mu * AbsB) / E0 - 1)) < 1e-5  # rtol 1e-7 per step
 
+
+def test_optimize_without_a_wout_names_the_missing_key(tmp_path, capsys):
+    run = tmp_path / "run.toml"
+    run.write_text(f'[field]\ncoils = "{INPUTS / "ESSOS_biot_savart_LandremanPaulQA.json"}"\n\n[optimize]\nmax_nfev = 3\n')
+    assert main([str(run)]) == 1
+    assert "[field] wout" in capsys.readouterr().err
+
+
+def test_a_failed_trace_or_fit_is_an_error(tmp_path, monkeypatch, capsys):
+    """A failed solve is never a small objective: non-finite states or losses give exit code 1."""
+    import types
+
+    import essos.__main__ as cli
+
+    run = tmp_path / "run.toml"
+    run.write_text(f"""
+[field]
+coils = "{INPUTS / 'ESSOS_biot_savart_LandremanPaulQA.json'}"
+
+[trace]
+model = "GuidingCenterAdaptative"
+initial_conditions = [[1.2, 0.0, 0.0], [1.25, 0.0, 0.0]]
+output = "{tmp_path / 'trace.npz'}"
+""")
+    trajectories = np.ones((2, 3, 4))
+    trajectories[1, 1:] = np.inf
+    monkeypatch.setattr(cli, "Tracing", lambda **kwargs: types.SimpleNamespace(times=np.arange(3), trajectories=trajectories))
+    assert main([str(run)]) == 1
+    assert "1 of 2 trajectories" in capsys.readouterr().err
+
+    run.write_text(f'[field]\nwout = "{INPUTS / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"}"\n\n[optimize]\nn_coils = 2\norder = 1\n'
+                   f'output = "{tmp_path / "coils.json"}"\n')
+    monkeypatch.setattr(cli, "minimize", lambda f, x0, **kwargs: types.SimpleNamespace(x=x0, fun=np.nan, nfev=1, message="ABNORMAL"))
+    assert main([str(run)]) == 1
+    assert "coil optimization failed" in capsys.readouterr().err
