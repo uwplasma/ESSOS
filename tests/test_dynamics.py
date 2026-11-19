@@ -484,6 +484,53 @@ def _near_axis_particles():
     return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([0.9, 0.9, 0.9, -0.9, 0.9]))
 
 
+class _LinearPotential:
+    """Electrostatic potential Phi(s) = PHI0 s, PHI0 = 100 kV; E_covariant = -grad Phi = (-PHI0, 0, 0) in V."""
+    PHI0 = 1e5
+
+    def E_covariant(self, points):
+        return jnp.array([-self.PHI0, 0.0, 0.0])
+
+
+def _alphas_at_s03(n=4):
+    xyz = jnp.array([[0.3] * n, jnp.linspace(0, 2 * jnp.pi, n, endpoint=False), jnp.zeros(n)]).T
+    return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.linspace(-0.8, 0.8, n))
+
+
+@pytest.mark.parametrize("model, tol", [("GuidingCenter", None), ("GuidingCenterAdaptative", 1e-10)])
+def test_guiding_center_conserves_kinetic_plus_potential_energy(model, tol):
+    """With mu fixed, dx/dt = v_par b + B x F / (q B.B*), dv_par/dt = -B* . F |B| / (m B.B*), F = mu grad|B|
+    + m v_par^2 kappa + q grad Phi conserve W = m v_par^2 / 2 + mu |B| + q Phi exactly (B.kappa = 0,
+    curl b = tau b + b x kappa). Holding the kinetic energy fixed instead drifts W by q dPhi (4.4e-4 here).
+    3.5 MeV alphas, QA reactor field, 2e-5 s; Dopri8 at a fixed 1e-8 s step or at rtol = atol = 1e-10."""
+    particles = _alphas_at_s03()
+    tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), electric_field=_LinearPotential(), model=model,
+                      particles=particles, maxtime=2e-5, timestep=1e-8, times_to_trace=11, rtol=tol, atol=tol)
+    s = np.asarray(tracing.trajectories[:, :, 0])
+    total = np.asarray(tracing.energy()) + particles.charge * _LinearPotential.PHI0 * s
+    assert (tracing.status == 0).all()
+    assert particles.charge * _LinearPotential.PHI0 * np.max(np.abs(s - s[:, :1])) > 1e-3 * particles.energy
+    assert np.max(np.abs(total / total[:, :1] - 1)) < 1e-8
+
+
+# (s, theta, phi, v_par [m/s]) at 1e-6 s of the two alphas of test_guiding_center_without_electric_field_is_unchanged
+REFERENCE_AC3168B = np.array([[2.9676676366178395e-01, 5.9174635236016728e+00, -8.3959444991885968e-01, -1.0411758638556167e+07],
+                              [2.9537957345444688e-01, 3.4461755641930285e+00, 9.0888654548937942e-01, 1.0438725475527925e+07]])
+
+
+def test_guiding_center_without_electric_field_is_unchanged():
+    """Regression: with no electric field the traced state is (x, v_par), as before, and the values match those of
+    ac3168b (fixed 1e-8 s Dopri8 step, 1e-6 s) to 1e-11 relative, i.e. to rounding."""
+    from essos.electric_field import Electric_field_zero
+    kwargs = dict(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenter", particles=_alphas_at_s03(2),
+                  maxtime=1e-6, timestep=1e-8, times_to_trace=2)
+    default = Tracing(**kwargs).trajectories
+    zero = Tracing(electric_field=Electric_field_zero(), **kwargs).trajectories
+    assert default.shape == (2, 2, 4)
+    np.testing.assert_array_equal(default, zero)
+    np.testing.assert_allclose(default[:, -1], REFERENCE_AC3168B, rtol=1e-11)
+
+
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
 def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature():
     """Without the noise-induced drift sigma_ik d_j sigma_jk / 2 a thermal
