@@ -270,11 +270,14 @@ class Curves:
     # _compute_gamma_dash method
     @jit
     def _compute_gamma_dash(self):
-        def create_data(order: int) -> jnp.ndarray:
-            return jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order - 1], 2*jnp.pi * order * jnp.cos(2 * jnp.pi * order * self.quadpoints)) \
-                 + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order], -2 * jnp.pi * order * jnp.sin(2 * jnp.pi * order * self.quadpoints))
-        gamma_dash_n = vmap(create_data)(jnp.arange(1, self.order+1))
-        return jnp.sum(gamma_dash_n, axis=0)
+        # One contraction over the orders.  The per-order einsum under vmap that this replaces made XLA's GPU
+        # backend emit an illegal memory access in reverse mode for 40 curves (5 base coils, nfp 4, stellsym),
+        # at every segment count; 24 and 32 curves and the CPU were fine.
+        order = jnp.arange(1, self.order + 1)
+        angle = 2 * jnp.pi * order[:, None] * self.quadpoints[None, :]
+        weight = 2 * jnp.pi * order[:, None]
+        return (jnp.einsum("cxo,op->cpx", self.curves[:, :, 1::2], weight * jnp.cos(angle))
+                - jnp.einsum("cxo,op->cpx", self.curves[:, :, 2::2], weight * jnp.sin(angle)))
 
     # gamma_dash property
     @property
@@ -286,11 +289,12 @@ class Curves:
     # _compute_gamma_dashdash method
     @jit
     def _compute_gamma_dashdash(self):
-        def create_data(order: int) -> jnp.ndarray:
-            return jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order - 1], -4*jnp.pi**2 * order**2 * jnp.sin(2 * jnp.pi * order * self.quadpoints)) \
-                 + jnp.einsum("ij,k->ikj", self.curves[:, :, 2 * order], -4*jnp.pi**2 * order**2 * jnp.cos(2 * jnp.pi * order * self.quadpoints))
-        gamma_dashdash_n = vmap(create_data)(jnp.arange(1, self.order+1))
-        return jnp.sum(gamma_dashdash_n, axis=0)
+        # As _compute_gamma_dash: one contraction over the orders.
+        order = jnp.arange(1, self.order + 1)
+        angle = 2 * jnp.pi * order[:, None] * self.quadpoints[None, :]
+        weight = -(2 * jnp.pi * order[:, None]) ** 2
+        return (jnp.einsum("cxo,op->cpx", self.curves[:, :, 1::2], weight * jnp.sin(angle))
+                + jnp.einsum("cxo,op->cpx", self.curves[:, :, 2::2], weight * jnp.cos(angle)))
 
     # gamma_dashdash property
     @property

@@ -294,6 +294,24 @@ def test_discretized_coils_copy_and_json_round_trip(tmp_path):
     np.testing.assert_allclose(loaded.gamma, coils.gamma, atol=1e-12)
 
 
+def test_curve_derivatives_are_the_spectral_derivatives_of_gamma():
+    """gamma_dash and gamma_dashdash are d/dt and d^2/dt^2 of gamma (t in [0, 1)), for the 40 curves of 5 base coils
+    at nfp 4 with stellarator symmetry (a size whose earlier per-order form crashed XLA's GPU reverse pass)."""
+    rng = np.random.default_rng(1)
+    dofs = 0.1 * rng.standard_normal((5, 3, 2 * 6 + 1))
+    dofs[:, 0, 0] += 1.0
+    curves = Curves(jnp.asarray(dofs), n_segments=64, nfp=4, stellsym=True)
+    gamma = np.asarray(curves.gamma)
+    k = 2j * np.pi * np.fft.fftfreq(gamma.shape[1], 1.0 / gamma.shape[1])[None, :, None]
+    first = np.real(np.fft.ifft(k * np.fft.fft(gamma, axis=1), axis=1))
+    second = np.real(np.fft.ifft(k**2 * np.fft.fft(gamma, axis=1), axis=1))
+    assert gamma.shape[0] == 40
+    np.testing.assert_allclose(curves.gamma_dash, first, atol=1e-10)
+    np.testing.assert_allclose(curves.gamma_dashdash, second, atol=1e-9)
+    grad = jax.grad(lambda d: jnp.sum(curves.with_dofs(d).gamma_dash ** 2))(curves.dofs)
+    assert np.all(np.isfinite(grad))
+
+
 def test_zero_currents_give_finite_dofs():
     from essos.coils import CreateEquallySpacedCurves
     curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
