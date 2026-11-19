@@ -1,10 +1,9 @@
-"""Split orbit/collision solver: physics, numerics and execution-equivalence contracts.
+"""Split orbit/collision solver: physics and numerics contracts.
 
 Collision maps are checked against the Coulomb Fokker-Planck generator (Lorentz
 pitch-angle moments, Maxwellian stationarity, Einstein relation), the Brownian
 bridge against its conditional law, and the Lie splitting against its exact
-first-order weak/strong errors. The persistent GPU kernel is checked on CPU through
-the Pallas interpreter against shared JAX execution. CPU-only CI.
+first-order weak/strong errors. CPU-only CI.
 """
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +17,7 @@ from essos.background_species import BackgroundSpecies, nu_D_ab, nu_par_ab, nu_s
 from essos.constants import PROTON_MASS as M, ELEMENTARY_CHARGE as Q, EPSILON_0, HBAR, ONE_EV
 from essos.dynamics import Particles
 from essos.electric_field import Electric_field_zero
-from tests.test_native_orbit import UniformField, coil_field, tokamak
+from tests.test_native_orbit import UniformField, tokamak
 
 VMEC_FILE = Path(__file__).resolve().parents[1]/'examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc'
 
@@ -154,7 +153,8 @@ def test_guiding_center_map_has_lorentz_and_speed_generator_moments():
     for h in (.02, .01):
         mean = expectation(kick(h, xi), h, 2)
         # E[dv] = A h + O(h^2): the 2 D_par/v drift enters as a perpendicular kick, v -> sqrt(v1^2 + 4 D_par h).
-        np.testing.assert_allclose(mean[0]-v-drift*h, 0., atol=2e-2*abs(drift)*h)
+        speed_error = mean[0]-v-drift*h
+        np.testing.assert_allclose(speed_error, 0., atol=2e-2*abs(drift)*h)
         np.testing.assert_allclose(mean[1]-xi, -nu*xi*h, rtol=1e-11)               # Lorentz: E[dxi] = -nu xi h
         # E[dxi^2] -> nu(1-3xi^2) h is the l=2 Legendre eigenvalue, 3 nu; errors are O(h^2).
         residual.append([mean[3]-xi**2-nu*(1-3*xi**2)*h, mean[2]-v**2-(2*v*drift+2*c.parallel)*h])
@@ -390,10 +390,8 @@ def test_cartesian_gc_and_full_orbit_trace_with_the_actual_maps():
     assert s.trace_split(field, birth, bath(), tmax=1e-10, timestep=5e-11, n_save=3, orbit=False,
                          collision_controller='conservative').status[0] == 0
     for change in (dict(integrator='bad'), dict(model='bad'), dict(collision_controller='paper'), dict(collision_tolerance=0.),
-                   dict(n_save=1), dict(execution='bad'), dict(spatial_diffusion=True, model='FullOrbit'),
+                   dict(n_save=1), dict(spatial_diffusion=True, model='FullOrbit'),
                    dict(speed_floor=-1.), dict(times=jnp.zeros((1, 1)))):
-        with pytest.raises(ValueError): s.trace_split(field, birth, bath(), tmax=1e-10, timestep=1e-10, **change)
-    for change in (dict(step_limit=lambda t, y, a: 1., execution='independent'),):
         with pytest.raises(ValueError): s.trace_split(field, birth, bath(), tmax=1e-10, timestep=1e-10, **change)
     with pytest.raises(ValueError): s.trace_split(field, birth, None, tmax=1e-10, timestep=1e-10)
     with pytest.raises(ValueError): s.trace_split(field, birth, SimpleNamespace(number_species=0), tmax=1e-10, timestep=1e-10)
@@ -454,7 +452,7 @@ def test_vmec_and_boozer_spatial_kicks_equal_the_cartesian_formula():
         if field is not vmec:
             with pytest.raises(ValueError, match='spatial_geometry'):
                 s.trace_split(field, birth, bath(), tmax=1e-11, timestep=1e-11)
-        for change in (dict(model='FullOrbit'), dict(execution='independent')):
+        for change in (dict(model='FullOrbit'),):
             with pytest.raises(ValueError): s.trace_split(field, birth, bath(), tmax=1e-11, timestep=1e-11, **change)
         assert out.stats.accepted[0] > 0
         output = s.trace_split(field, birth, bath(), tmax=1e-11, timestep=1e-11, n_save=2, spatial_geometry=embedding,
@@ -600,101 +598,3 @@ class _Mirror:
     def dAbsB_by_dX(self, p): return self.gc_quantities(p)[3]
     def curl_b(self, p): return self.gc_quantities(p)[4]
     def kappa(self, p): return self.gc_quantities(p)[5]
-
-
-# Independent GPU kernel, interpreted on CPU, against shared JAX execution
-
-def run_pair(field, background, model='GuidingCenter', **kwargs):
-    options = dict(model=model, tmax=2e-8, timestep=1e-8, n_save=3, max_steps=64, max_orbit_steps=64) | kwargs
-    if hasattr(field, 'coils'):
-        birth = Particles(jnp.array([[1., .03, .01], [1., .02, .0]]), mass=M, charge=Q, energy=4000*ONE_EV,
-                          initial_vparallel_over_v=jnp.array([.5, .3]), field=field, phase_angle_full_orbit=0.)
-    else:
-        birth = Particles(jnp.array([[.3, .2, .1]]), mass=M, charge=Q, energy=4000*ONE_EV, initial_vparallel_over_v=jnp.array([.4]))
-    shared = s.trace_split(field, birth, background, **options)
-    independent = s.trace_split(field, birth, background, execution='independent', interpret=True, **options)
-    return shared, independent
-
-
-def assert_equivalent(shared, independent):
-    assert np.all(shared.status == independent.status) and np.all(shared.status == 0)
-    np.testing.assert_allclose(independent.ys, shared.ys, rtol=1e-11, atol=1e-14)
-    np.testing.assert_allclose(independent.y, shared.y, rtol=1e-11, atol=1e-14)
-    for name in ('steps', 'accepted', 'rejected', 'orbit_steps', 'accepted_orbit_steps'):
-        np.testing.assert_array_equal(getattr(independent.stats, name), getattr(shared.stats, name))
-
-
-@pytest.mark.parametrize('model,adaptive', [('GuidingCenter', False), ('GuidingCenter', True), ('FullOrbit', True)])
-def test_independent_kernel_matches_shared_execution_in_coil_fields(model, adaptive):
-    options = dict(adaptive=adaptive, orbit_adaptive=adaptive, spatial_diffusion=model == 'GuidingCenter')
-    assert_equivalent(*run_pair(coil_field(), bath(), model, **options))
-
-
-def test_independent_kernel_matches_shared_execution_in_vmec_and_boozer_fields():
-    from essos.fields import Vmec
-    vmec = Vmec(str(VMEC_FILE), ntheta=3, nphi=3)
-    assert_equivalent(*run_pair(vmec, bath(), adaptive=False, orbit_adaptive=False, spatial_diffusion=False))
-    # Adaptive Boozer with the moment predictor and nonlinear Cartesian spatial kicks.
-    assert_equivalent(*run_pair(tokamak(), bath(), adaptive=True, orbit_adaptive=True, spatial_diffusion=True,
-        spatial_geometry=boozer_geometry()))
-
-
-def test_independent_kernel_handles_radial_profiles_events_and_failures():
-    varying = BackgroundSpecies(1, jnp.array([1.]), jnp.array([1.]), jnp.array([[.5e20, 1.5e20]]), jnp.array([[800., 1200.]]),
-        radial_grid=jnp.array([.0, 2.]), coulomb_log_model='impact')
-    field = coil_field()
-    assert_equivalent(*run_pair(field, varying, adaptive=True, orbit_adaptive=True, spatial_diffusion=False))
-    # A stopping surface ends the kernel run exactly like the shared solver.
-    shared, independent = run_pair(field, bath(), adaptive=False, orbit_adaptive=False, tmax=1e-6, timestep=1e-7, n_save=3,
-                                   event=lambda t, y, a: .03-y[2], max_steps=200, max_orbit_steps=200)
-    np.testing.assert_array_equal(shared.status, independent.status)
-    np.testing.assert_allclose(independent.t, shared.t, rtol=1e-9)
-    # A tiny step budget reports MAX_STEPS rather than a wrong answer.
-    shared, independent = run_pair(field, bath(), adaptive=False, orbit_adaptive=False, max_steps=1)
-    assert np.all(independent.status == shared.status) and np.all(independent.status == s.SplitStatus.MAX_STEPS)
-
-
-def test_scalar_lowering_reproduces_plain_jax_results():
-    """The kernel's jaxpr interpreters (scalar-only, no small arrays) match direct evaluation."""
-    x = jnp.array([.2, -.3, .4, .5, 0., 0., 0., 0.])
-    functions = (lambda x: x[1:2], lambda x: jax.lax.dynamic_slice(x, (x[0].astype(int),), (1,)),
-        lambda x: jnp.sin(x)+jnp.cos(x), jax.lax.erf, lambda x: jnp.array([jnp.sum(x), jnp.max(x), jnp.min(x)]),
-        lambda x: jnp.stack([x]), lambda x: x[jnp.array([2])], lambda x: (jnp.any(x > 0), jnp.all(x < 1)),
-        tuple, lambda x: tuple(jnp.split(x, len(x))), lambda x: x**-2+x**3+x**6)
-    for function in functions:
-        graph = s._flatten(function, x)
-        actual = jax.jit(lambda x: s._evaluate_kernel(graph.jaxpr, graph.consts, x))(x)
-        for a, b in zip(actual, jax.tree.leaves(function(x))):
-            np.testing.assert_allclose(a, b, atol=2e-15, rtol=1e-14)
-    for function in (lambda y: 1-jnp.sum(y[:3]**2), lambda y: jnp.dot(y[:3], y[:3])-.1, lambda y: jnp.max(y[:3])-jnp.min(y[:3]),
-                     lambda y: y[jnp.array([1])][0], lambda y: sum(y[:3])):
-        graph = s._flatten(function, x)
-        np.testing.assert_allclose(s._evaluate_surface(graph.jaxpr, graph.consts, x), function(x), atol=2e-15)
-
-    def scanned(point, reverse):
-        carry, ys = jax.lax.scan(lambda a, b: (a+point[0]*b, a), point[1], point[2:5], reverse=reverse)
-        return jnp.r_[carry, ys]
-    interpolation = lambda point: jnp.interp(point[0], jnp.array([-1., 0., 1.]), point[1:4])
-    loop = lambda p: jax.lax.while_loop(lambda c: c[0] < 3+p[0], lambda c: (c[0]+1, c[1]+p[1:3]), (jnp.asarray(0), jnp.ones(2)))[1]
-    for fn in (lambda p: scanned(p, False), lambda p: scanned(p, True), interpolation, jax.jacfwd(interpolation), loop):
-        flat = lambda p: tuple(jnp.ravel(fn(p)))
-        graph = s._flatten(flat, x)
-        actual = jax.jit(lambda p: jnp.asarray(s.scalar_graph(graph.jaxpr, graph.consts, p)))(x)
-        np.testing.assert_allclose(actual, jnp.asarray(flat(x)), rtol=3e-13, atol=3e-14)
-
-
-def test_independent_execution_validates_its_capabilities():
-    field = coil_field()
-    birth = Particles(jnp.array([[1., .03, .01]]), mass=M, charge=Q, energy=4000*ONE_EV, initial_vparallel_over_v=jnp.array([.5]))
-    base = dict(tmax=1e-8, timestep=1e-8, n_save=2)
-    with pytest.raises(ValueError, match='GPU'):                  # no silent fallback on CPU
-        s.trace_split(field, birth, bath(), execution='independent', **base)
-    pinned = dict(execution='independent', interpret=True, **base)
-    for change in (dict(integrator='essos_rk45'), dict(controller='pi'), dict(orbit_adaptive=False), dict(reuse_orbit_step=False),
-                   dict(electric_field=object()), dict(record_steps=True), dict(times=jnp.array([])),
-                   dict(event=lambda t, y, a: True), dict(event=lambda t, y, a: jnp.ones(2)), dict(event=lambda t, y, a: 1.-t),
-                   dict(max_steps=0), dict(max_orbit_steps=False), dict(max_pending=0)):
-        with pytest.raises(ValueError): s.trace_split(field, birth, bath(), **(pinned | change))
-    old = birth.random_keys; birth.random_keys = jax.random.key(0, impl='rbg')[None]
-    with pytest.raises(ValueError): s.trace_split(field, birth, bath(), **pinned)
-    birth.random_keys = old
