@@ -1,0 +1,107 @@
+{
+  "reference": "https://arxiv.org/abs/2205.11280",
+  "exact_paper_reproduction": false,
+  "description": "ORBIT-style conservation checks on an analytic axisymmetric fixture",
+  "method": "adaptive8",
+  "platform": "cpu",
+  "trajectories": 18,
+  "particles_per_wave_case": 2,
+  "simulated_time_s": 4e-05,
+  "tolerances": [
+    1e-06,
+    1e-10
+  ],
+  "time_limit_s": 120,
+  "wave_cases": [
+    {
+      "relative_phase_rad": 0.0,
+      "max_local_invariant_residual": 1.1307965909208213e-16,
+      "max_liouville_residual": 4.164974411553334e-16,
+      "missing_induction_invariant_residual": 0.0027668111687867533,
+      "missing_induction_liouville_residual": 2.966965316978514e-05,
+      "traces": [
+        {
+          "tolerance": 1e-06,
+          "max_invariant_error": 2.2463727344620044e-10,
+          "max_relative_energy_exchange": 0.014004273509993056
+        },
+        {
+          "tolerance": 1e-10,
+          "max_invariant_error": 1.1880054192895783e-10,
+          "max_relative_energy_exchange": 0.014004273510141956
+        }
+      ]
+    },
+    {
+      "relative_phase_rad": 1.5707963267948966,
+      "max_local_invariant_residual": 1.673610837488043e-16,
+      "max_liouville_residual": 9.544023900421639e-16,
+      "missing_induction_invariant_residual": 0.00255997301305586,
+      "missing_induction_liouville_residual": 3.145964440004823e-05,
+      "traces": [
+        {
+          "tolerance": 1e-06,
+          "max_invariant_error": 2.5236997777707767e-10,
+          "max_relative_energy_exchange": 0.009477125904500656
+        },
+        {
+          "tolerance": 1e-10,
+          "max_invariant_error": 3.125318213637519e-11,
+          "max_relative_energy_exchange": 0.00947712590568446
+        }
+      ]
+    },
+    {
+      "relative_phase_rad": 3.141592653589793,
+      "max_local_invariant_residual": 5.883697419656225e-17,
+      "max_liouville_residual": 4.283235919770378e-16,
+      "missing_induction_invariant_residual": 0.0026965170316695214,
+      "missing_induction_liouville_residual": 3.240990289144592e-05,
+      "traces": [
+        {
+          "tolerance": 1e-06,
+          "max_invariant_error": 2.4269469275655413e-10,
+          "max_relative_energy_exchange": 0.008155614823214844
+        },
+        {
+          "tolerance": 1e-10,
+          "max_invariant_error": 9.975877028651202e-11,
+          "max_relative_energy_exchange": 0.008155614823331787
+        }
+      ]
+    },
+    {
+      "relative_phase_rad": 4.71238898038469,
+      "max_local_invariant_residual": 1.610227243455888e-16,
+      "max_liouville_residual": 9.961730066639321e-16,
+      "missing_induction_invariant_residual": 0.0025736513073272385,
+      "missing_induction_liouville_residual": 2.3798764486757964e-05,
+      "traces": [
+        {
+          "tolerance": 1e-06,
+          "max_invariant_error": 2.2673957976348239e-10,
+          "max_relative_energy_exchange": 0.012471303018490351
+        },
+        {
+          "tolerance": 1e-10,
+          "max_invariant_error": 6.019224527206296e-11,
+          "max_relative_energy_exchange": 0.012471303017081221
+        }
+      ]
+    }
+  ],
+  "uniform_induction": [
+    {
+      "tolerance": 1e-06,
+      "max_velocity_error_over_birth_speed": 2.150569404308856e-15,
+      "max_zeta_error_rad": 5.684341886080802e-14
+    },
+    {
+      "tolerance": 1e-10,
+      "max_velocity_error_over_birth_speed": 2.150569404308856e-15,
+      "max_zeta_error_rad": 5.684341886080802e-14
+    }
+  ],
+  "passed": true,
+  "elapsed_seconds_before_plot": 27.08597719499994
+}
