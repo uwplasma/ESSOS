@@ -690,23 +690,35 @@ def FieldLineToroidal(t, initial_condition, field) -> jnp.ndarray:
     return B / B[2]
 
 
-def _fill_stopped_trajectories(trajectories, criteria, args):
-    """Hold each trajectory at its last point inside all level sets."""
+def _criterion_inside(criterion, time, state, args):
+    value = jnp.asarray(criterion(time, state, args))
+    if value.dtype == jnp.bool_:
+        return ~value
+    return jnp.isfinite(value) & (value > 0.0)
 
+
+def _fill_stopped_trajectories(trajectories, times, criteria, args):
+    """Hold each trajectory at its last valid point inside the stopping surfaces."""
     def fill_trajectory(trajectory):
-        def remains_inside(state):
-            values = [criterion(0.0, state, args) for criterion in criteria]
-            return jnp.all(jnp.stack(values) > 0.0) & jnp.isfinite(state).all()
+        def remains_inside(time, state):
+            return jnp.isfinite(state).all() & jnp.all(jnp.stack([
+                _criterion_inside(criterion, time, state, args) for criterion in criteria
+            ]))
 
-        def fill_state(carry, current):
+        def fill_state(carry, sample):
             previous, active = carry
-            active = active & remains_inside(current)
+            time, current = sample
+            active = active & remains_inside(time, current)
             state = jnp.where(active, current, previous)
-            return (state, active), state
+            return (state, active), (state, ~active)
 
-        initial_active = remains_inside(trajectory[0])
-        _, tail = lax.scan(fill_state, (trajectory[0], initial_active), trajectory[1:])
-        return jnp.vstack((trajectory[0], tail))
+        initial_active = remains_inside(times[0], trajectory[0])
+        _, (tail, clipped) = lax.scan(fill_state, (trajectory[0], initial_active), (times[1:], trajectory[1:]))
+        clipped = jnp.concatenate((~initial_active[None], clipped))
+        index = jnp.argmax(clipped)
+        # Retain the first clipped sample for testing a caller's loss surface.
+        first_clip = jnp.where(clipped.any(), index, len(times))
+        return jnp.vstack((trajectory[0], tail)), first_clip, trajectory[index]
 
     return vmap(fill_trajectory)(trajectories)
 
@@ -1229,22 +1241,23 @@ class Tracing():
             
         if self._vmec_default:
             return self._set_vmec_outputs(self.trace())
-        trace_result = self.trace()
+        trajectories, events, end_time, end_state, self.failed = self._trace()
+        any_event = jnp.any(jnp.stack(tree_util.tree_leaves(events)), axis=0)
+        self._event_times = jnp.where(any_event & ~self.failed, end_time, jnp.inf)
+        self._event_states = end_state
+        self.stopped = jnp.isfinite(self._event_times)
+        self.failure_times = jnp.where(self.failed, end_time, jnp.inf)
+        self.total_particles_unresolved = jnp.sum(self.failed)
+        self.axis_hits = jnp.zeros_like(self.failed)
+        self.event_mask = events if self.stopping_criteria is not None else None
+        # For explicit stopping criteria this legacy flag summarizes the event mask.
+        self.boundary_hits = self.stopped if self.stopping_criteria is not None else jnp.zeros_like(self.failed)
+        self._trajectories = trajectories
         if self.stopping_criteria is not None:
-            trajectories, self.event_mask = trace_result
-            event_leaves = tree_util.tree_leaves(self.event_mask)
-            self.boundary_hits = jnp.any(jnp.stack(event_leaves), axis=0)
-            self.axis_hits = jnp.zeros_like(self.boundary_hits)
-            self._trajectories = _fill_stopped_trajectories(
-                trajectories, self.stopping_criteria, self.args
+            self._trajectories, self._first_clip, self._clipped_state = _fill_stopped_trajectories(
+                trajectories, self.times, self.stopping_criteria, self.args
             )
-        else:
-            self._trajectories = trace_result
-            self.event_mask = None
-            self.axis_hits = jnp.zeros(len(self._trajectories), dtype=bool)
-            self.boundary_hits = jnp.zeros(len(self._trajectories), dtype=bool)
-        self.total_particles_unresolved = jnp.sum(self.axis_hits)
-        
+
         trajectory_points = self.trajectories[:, :, :3]
         if hasattr(self.field, "toroidal_angle_batch"):
             self.toroidal_angles = self.field.toroidal_angle_batch(
@@ -1294,40 +1307,51 @@ class Tracing():
                     x = x + v * dt
                     return jnp.concatenate((x, v)), None
 
-                def save_interval(carry, _):
-                    state, alive, hits = carry
+                def save_interval(carry, time):
+                    state, alive, hits, end_time, end_state, failed = carry
                     advanced, _ = lax.scan(push, state, None, length=per_save)
-                    if criteria is None:
-                        return (advanced, alive, hits), advanced
-                    # A particle leaving any level set (value <= 0) is held at
-                    # its last saved point inside, as the adaptive paths do.
-                    outside = jnp.stack([c(0.0, advanced, self.args) <= 0.0 for c in criteria])
-                    outside = outside | ~jnp.isfinite(advanced).all()
-                    stopped = alive & jnp.any(outside)
-                    hits = hits | (alive & outside)
+                    bad = ~jnp.isfinite(advanced).all()
+                    outside = (jnp.stack([~_criterion_inside(c, time, advanced, self.args) for c in criteria])
+                               if criteria is not None else hits)
+                    stopped = alive & (bad | jnp.any(outside))
+                    hits = hits | (alive & ~bad & outside)
+                    end_time = jnp.where(alive, time, end_time)
+                    end_state = jnp.where(alive, advanced, end_state)
                     state = jnp.where(alive & ~stopped, advanced, state)
-                    return (state, alive & ~stopped, hits), state
+                    saved = state if criteria is not None else jnp.where(alive, advanced, end_state)
+                    return (state, alive & ~stopped, hits, end_time, end_state, failed | (alive & bad)), saved
 
-                n_criteria = 0 if criteria is None else len(criteria)
-                carry = (initial_condition, jnp.asarray(True), jnp.zeros((n_criteria,), bool))
-                (_, _, hits), trajectory = lax.scan(save_interval, carry, None, length=n_saves)
+                n_criteria = 1 if criteria is None else len(criteria)
+                carry = (initial_condition, jnp.isfinite(initial_condition).all(),
+                         jnp.zeros((n_criteria,), bool), self.times[0], initial_condition,
+                         ~jnp.isfinite(initial_condition).all())
+                (_, _, hits, end_time, end_state, failed), trajectory = lax.scan(save_interval, carry, self.times[1:])
                 trajectory = jnp.vstack([initial_condition, trajectory])
-                if criteria is not None:
-                    event_mask = hits[0] if n_criteria == 1 else tuple(hits[i] for i in range(n_criteria))
-                    return trajectory, event_mask
-                return trajectory
+                event_mask = hits[0] if n_criteria == 1 else tuple(hits[i] for i in range(n_criteria))
+                return trajectory, event_mask, end_time, end_state, failed
             solution = self._solve(*self._terms(particle_key), 0.0, initial_condition, self.args, Event(self.condition),
                                    throw=self.model in ('GuidingCenter', 'FullOrbit', 'FieldLine'))
-            trajectory = solution.ys[0]
+            trajectory, end_state = solution.ys[0], solution.ys[1][0]
             if self._axis_regular:
                 trajectory = vmap(_from_axis_regular)(trajectory)
-            if self.stopping_criteria is not None:
-                return trajectory, solution.event_mask
-            return trajectory
+                end_state = _from_axis_regular(end_state)
+            failed = ~jnp.isfinite(end_state).all() | ~(
+                (solution.result == diffrax.RESULTS.successful)
+                | (solution.result == diffrax.RESULTS.event_occurred)
+            )
+            return trajectory, solution.event_mask, solution.ts[1][0], end_state, failed
 
         return compute_trajectory
 
     def trace(self):
+        """Return trajectories, together with the event mask for explicit stopping criteria."""
+        result = self._trace()
+        if self._vmec_default:
+            return result
+        trajectories, events, *_ = result
+        return (trajectories, events) if self.stopping_criteria is not None else trajectories
+
+    def _trace(self):
         y0, keys = self.initial_conditions, self.particles.random_keys if self.particles else None
         n = len(y0)
         traced = any(isinstance(x, jax.core.Tracer) for x in tree_util.tree_leaves((y0, keys, self.args, self.exterior_field)))
@@ -1708,24 +1732,59 @@ class Tracing():
             
     @partial(jit, static_argnums=(0, 1, 2))
     def loss_fraction(self, boundary=None, r_max=1.0):
-        """Cumulative loss fraction, number lost and first-loss time (-1 if kept).
+        """Cumulative physical loss fraction, number lost and first saved loss time.
 
-        A particle is lost at the first saved time with ``boundary`` signed
-        distance < 0, or with ``s >= r_max`` when ``boundary`` is None. Collision
-        models also return the energy and position of each lost particle.
+        Tests the requested boundary (negative signed distance or s >= r_max).
+        An event endpoint on the requested surface counts at the first save time at
+        or after the event. A stop before this surface has no observed loss (-1);
+        inspect ``stopped`` and ``event_mask`` to distinguish a stop from a full trace.
+        Failed orbits without a confirmed loss have NaN loss times and make the
+        aggregate loss fraction and number lost NaN. These outputs describe returned
+        traces. Fixed-step GuidingCenter, FullOrbit and FieldLine still raise on
+        Diffrax solver exceptions. Collision models also return
+        the energy and position of each lost particle.
         """
         xyz = self.trajectories[:, :, :3]
         n, nt = xyz.shape[0], len(self.times)
+        finite = jnp.isfinite(self.trajectories).all(axis=2)
         if boundary is None:
-            lost_mask = xyz[:, :, 0] >= r_max
+            lost_mask = finite & (xyz[:, :, 0] >= r_max)
         else:
-            lost_mask = vmap(boundary.evaluate_xyz)(xyz.reshape(-1, 3)).reshape(n, nt) < 0
+            distances = vmap(boundary.evaluate_xyz)(jnp.where(finite[..., None], xyz, 0).reshape(-1, 3))
+            distances = distances.reshape(n, nt)
+            lost_mask = finite & jnp.isfinite(distances) & (distances < 0)
+
+        def at_surface(points, valid):
+            points = jnp.where(valid[:, None], points[:, :3], 0)
+            if boundary is None:
+                return valid & (points[:, 0] >= r_max)
+            distances = vmap(boundary.evaluate_xyz)(points)
+            return valid & jnp.isfinite(distances) & (distances <= 0)
+
+        sample_indices = jnp.arange(nt)
+        first_clip = getattr(self, "_first_clip", None)
+        if first_clip is not None:
+            finite_clip = jnp.isfinite(self._clipped_state).all(axis=1)
+            clip_crossed = at_surface(self._clipped_state, finite_clip)
+            lost_mask |= clip_crossed[:, None] & (sample_indices == first_clip[:, None])
+
+        event_times = getattr(self, "_event_times", None)
+        if event_times is not None:
+            event_crossed = at_surface(self._event_states, jnp.isfinite(event_times))
+            save = jnp.searchsorted(self.times, event_times)
+            lost_mask |= event_crossed[:, None] & (sample_indices == save[:, None])
+
         lost = lost_mask.any(axis=1)
         index = jnp.where(lost, jnp.argmax(lost_mask, axis=1), -1)
-        lost_times = jnp.where(lost, self.times[index], -1)
+        failed = getattr(self, "failed", None)
+        if failed is None:
+            failed = ~finite.all(axis=1)
+        unresolved = failed & ~lost
+        lost_times = jnp.where(lost, self.times[index], jnp.where(unresolved, jnp.nan, -1))
         counts = jnp.bincount(jnp.where(lost, index, nt), length=nt + 1)[:-1]
         fractions = jnp.cumsum(counts) / n
-        out = fractions, fractions[-1] * n, lost_times
+        out = (jnp.where(unresolved.any(), jnp.nan, fractions),
+               jnp.where(unresolved.any(), jnp.nan, jnp.sum(lost)), lost_times)
         if self.model not in _GUIDING_CENTER_COLLISION_MODELS:
             return out
         rows, safe = jnp.arange(n), jnp.clip(index, 0, nt - 1)
