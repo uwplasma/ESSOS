@@ -1013,8 +1013,9 @@ class InterpolatedField(MagneticField):
         drot = jnp.array([[-s, -c, 0.], [c, -s, 0.], [0., 0., 0.]])
         dB_dcyl = jnp.stack((rot @ dR, rot @ dphi + drot @ b, rot @ dZ), -1)  # d B_xyz / d(R, phi, Z)
         dcyl_dx = jnp.array([[c, s, 0.], [-s / R, c / R, 0.], [0., 0., 1.]])
-        nan = jnp.where(ok, 1., jnp.nan)  # outside the box (or the guard band without a source): NaN, never an extrapolation
-        B, J = nan * (rot @ b), nan * (dB_dcyl @ dcyl_dx)
+        # outside the box (or the guard band without a source): NaN, never an extrapolation; a where, not a NaN
+        # factor, so the masked branch passes a zero cotangent in reverse mode instead of 0 * NaN
+        B, J = jnp.where(ok, rot @ b, jnp.nan), jnp.where(ok, dB_dcyl @ dcyl_dx, jnp.nan)
         if self.field is not None:  # the guard band inside the box is evaluated directly from the source
             field, miss = self.field, inbox & ~good
 
