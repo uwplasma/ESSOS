@@ -3,6 +3,8 @@ import os
 os.environ["ESSOS_PROGRESS"] = "0"  # default progress bars off in tests
 
 import jax
+
+jax.config.update("jax_enable_x64", True)  # importing essos leaves it to the caller
 import pytest
 
 

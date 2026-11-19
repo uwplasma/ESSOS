@@ -1,9 +1,6 @@
 from functools import partial
 import jax.numpy as jnp
 import jax
-from jax import config
-# to use higher precision
-config.update("jax_enable_x64", True)
 from jax import jit
 from essos.constants import ELEMENTARY_CHARGE, EPSILON_0, PROTON_MASS, SPEED_OF_LIGHT
 

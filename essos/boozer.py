@@ -20,9 +20,9 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
+from essos import require_x64
 from essos.background_species import nu_D_ab, nu_par_ab, d_nu_par_ab, nu_s_ab, JOULE_PER_EV
 
-jax.config.update("jax_enable_x64", True)
 
 
 def psi0_from_vmec(phi_edge):
@@ -85,6 +85,7 @@ class BoozerField(eqx.Module):
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
         every evaluation.
         """
+        require_x64("BoozerField")
         s = np.asarray(s, float)
         bmnc = np.asarray(bmnc, float)
         xm = np.asarray(xm, int)

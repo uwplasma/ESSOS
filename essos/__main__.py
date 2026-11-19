@@ -5,6 +5,7 @@ import sys
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from essos import configure_jax
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 
@@ -17,6 +18,7 @@ def main(cl_args=sys.argv[1:]):
     """
     Run the main ESSOS code from the command line.
     """
+    configure_jax()
     # if len(cl_args) == 0:
     #     print("Using standard input parameters.")
     #     output = 0

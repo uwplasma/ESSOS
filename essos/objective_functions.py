@@ -1,7 +1,6 @@
 import jax
 
 # from build.lib.essos import coils
-jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import jit, vmap
 from functools import partial

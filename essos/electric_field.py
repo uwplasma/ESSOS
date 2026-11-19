@@ -1,5 +1,3 @@
-import jax
-jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
