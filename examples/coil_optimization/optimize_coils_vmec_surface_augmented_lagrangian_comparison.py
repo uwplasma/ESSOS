@@ -15,6 +15,8 @@ from functools import partial
 #  `scipy.optimize.minimize`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
 
+import essos
+essos.configure_jax()
 # Optimization parameters
 maximum_function_evaluations=100
 

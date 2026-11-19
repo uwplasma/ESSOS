@@ -19,6 +19,8 @@ from essos.dynamics import Tracing, Particles
 # the LCFS continues in Cartesian coordinates until it strikes the wall or
 # comes back inside. Requires VMEX (pip install vmex); a few minutes on a laptop.
 
+import essos
+essos.configure_jax()
 # Input parameters
 tmax = 4e-5
 timestep = 1.e-9

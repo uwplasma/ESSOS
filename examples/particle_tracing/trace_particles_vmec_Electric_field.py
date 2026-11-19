@@ -8,6 +8,8 @@ from essos.dynamics import Tracing, Particles
 from essos.electric_field import Electric_field_flux
 import numpy as np
 
+import essos
+essos.configure_jax()
 # Input parameters
 tmax = 1.e-4
 timestep = 1.e-8

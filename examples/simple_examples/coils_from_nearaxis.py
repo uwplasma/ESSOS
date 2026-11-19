@@ -11,6 +11,8 @@ from essos.dynamics import Tracing
 from essos.coils import fit_dofs_from_coils, Curves, Coils
 from time import time
 
+import essos
+essos.configure_jax()
 # Initialize Near-Axis field
 rc = jnp.array([1,  0.045])
 zs = jnp.array([0, -0.045])

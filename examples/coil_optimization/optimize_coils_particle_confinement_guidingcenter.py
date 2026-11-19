@@ -12,6 +12,8 @@ from scipy.optimize import least_squares
 from essos.losses import custom_loss
 from essos.fields import BiotSavart
 
+import essos
+essos.configure_jax()
 # Particle optimization parameters
 # Optimization parameters
 NPARTICLES = 10

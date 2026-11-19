@@ -19,6 +19,8 @@ from essos.dynamics import Particles, Tracing
 from essos.fields import BiotSavart, CombinedField, InterpolatedField, MagneticField
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 
+import essos
+essos.configure_jax()
 args = sys.argv[1:] + ["4000", "32", "48", "2e-5"][len(sys.argv) - 1:]
 ndipoles, nparticles, grid, tmax, energy = int(args[0]), int(args[1]), int(args[2]), float(args[3]), 5000 * ONE_EV
 input_dir = os.path.join(os.path.dirname(__file__), '..', 'input_files')

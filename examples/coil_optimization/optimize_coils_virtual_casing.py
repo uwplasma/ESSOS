@@ -19,6 +19,8 @@ from essos.surfaces import SurfaceRZFourier
 from essos.losses import custom_loss
 from essos.objective_functions import loss_coil_separation, loss_coil_surface_distance
 
+import essos
+essos.configure_jax()
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_file = os.path.join(input_filepath, "wout_QH_simple_finite_scaled.nc")  # QH, beta = 5%, B = 5.7 T
 

@@ -11,6 +11,8 @@ from essos.fields import BiotSavart
 from essos.mgrid import MGrid
 
 
+import essos
+essos.configure_jax()
 coil_file = Path(__file__).resolve().parents[1] / "input_files" / "ESSOS_biot_savart_LandremanPaulQA.json"
 mgrid_file = Path("mgrid_landreman_paul_qa.nc")
 plot_file = Path("mgrid_field_comparison.png")

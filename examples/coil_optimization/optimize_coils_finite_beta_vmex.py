@@ -18,6 +18,8 @@ from essos.fields import BiotSavart
 from essos.objective_functions import loss_coil_separation, loss_coil_surface_distance
 from essos.surfaces import surfacerzfourier_from_boundary
 
+import essos
+essos.configure_jax()
 NPHI, NTHETA, VC_DIGITS = 24, 24, 4
 MAXITER = 120
 NORMAL_FIELD_WEIGHT, PRESSURE_BALANCE_WEIGHT = 2.0e4, 5.0e3

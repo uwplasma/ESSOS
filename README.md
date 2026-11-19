@@ -70,6 +70,9 @@ from essos.fields import BiotSavart
 from essos.losses import custom_loss
 from essos.surfaces import BdotN_over_B, SurfaceRZFourier
 from scipy.optimize import least_squares
+import essos
+
+essos.configure_jax()
 
 surface = SurfaceRZFourier.from_wout_file("wout.nc", s=1, ntheta=30, nphi=30,
                                           range_torus="half period")
@@ -98,6 +101,9 @@ import jax.numpy as jnp
 from essos.coils import Coils
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart
+import essos
+
+essos.configure_jax()
 
 field = BiotSavart(Coils.from_json("coils.json"))
 R0 = jnp.linspace(1.21, 1.40, 8)
@@ -181,6 +187,9 @@ from netCDF4 import Dataset
 from booz_xform_jax import Booz_xform
 from essos.boozer import BoozerField, trace_boozer
 from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
+import essos
+
+essos.configure_jax()
 
 booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout("wout.nc", flux=False)

@@ -10,6 +10,8 @@ from essos.background_species import BackgroundSpecies,gamma_ab
 import numpy as np
 import jax 
 
+import essos
+essos.configure_jax()
 # Input parameters
 light_speed=SPEED_OF_LIGHT
 tmax = 1.e-4

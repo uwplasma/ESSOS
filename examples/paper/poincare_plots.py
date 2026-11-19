@@ -4,6 +4,8 @@ from time import time
 from jax import jit, grad, block_until_ready
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import essos
+essos.configure_jax()
 plt.rcParams.update({'font.size': 18})
 from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV, ELEMENTARY_CHARGE

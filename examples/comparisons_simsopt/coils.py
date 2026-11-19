@@ -2,6 +2,8 @@ import os
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import essos
+essos.configure_jax()
 plt.rcParams.update({'font.size': 18})
 from jax import block_until_ready
 from essos.fields import BiotSavart as BiotSavart_essos
