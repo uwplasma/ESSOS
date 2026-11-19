@@ -141,6 +141,18 @@ print(tracing.loss_fractions)
 More in [`examples/particle_tracing`](examples/particle_tracing), including
 full-orbit, collisional and electric-field variants.
 
+## Cartesian collision coefficients
+
+`essos.collisions.maxwellian_cartesian_coefficients` returns Maxwellian
+test-particle Ito drift, diffusion and symmetric noise. Use SI units, eV
+temperatures and positive pair Coulomb logs (values or differentiable functions
+of speed squared). See its docstring for shapes, units and conventions.
+
+For returned `coeff`, use `dV = coeff.ito_drift*dt + coeff.noise@dW`, where
+`coeff.noise @ coeff.noise.T == 2*coeff.diffusion`, with a general-noise Ito
+integrator. Add the Lorentz force separately. The prescribed bath excludes
+field-particle response and the guiding-center coordinate transformation.
+
 ## Tracing to the wall
 
 Inside the last closed flux surface (LCFS), guiding centres move in VMEC
