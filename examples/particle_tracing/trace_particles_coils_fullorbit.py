@@ -1,3 +1,9 @@
+"""Full-orbit particle tracing in a coil field.
+
+Teaches the Lorentz-force model of Tracing with Particles and BiotSavart, and the orbit plots.
+
+Runtime: under 1 minute on a CPU.
+"""
 import os
 from jax import vmap
 from time import time

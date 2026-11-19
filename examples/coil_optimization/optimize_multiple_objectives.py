@@ -1,3 +1,10 @@
+"""Multi-objective coil optimization with Optuna and an Optax refinement.
+
+Teaches MultiObjectiveOptimizer: explore the trade-off between B.n, coil length, curvature and the axis field,
+pick a Pareto trial, and refine it with Optax. Needs optuna.
+
+Runtime: several minutes on a CPU (estimate; not run, needs optuna).
+"""
 
 import os
 import jax.numpy as jnp

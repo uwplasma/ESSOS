@@ -1,34 +1,35 @@
 """Matched alpha-loss benchmark of ESSOS against SIMSOPT, FIRM3D, SIMPLE and DESC.
 
-    python benchmark.py alphas --simple PATH/simple.x [--firm3d-python PATH] \
-        [--desc-python PATH] [--desc-particles 32] [--codes ESSOS,DESC] \
-        [--w7x PATH/wout_w7x_standardConfig.nc] [--particles 256] [--tmax 1e-2] [--cores 8]
-    python benchmark.py figure
+Set the parameters below, then run ``python benchmark.py``: ``TASK = "alphas"`` runs the codes and
+``TASK = "figure"`` draws the plots from the recorded results. The paths of the other codes
+(``SIMPLE_X``, ``FIRM3D_PYTHON``, ``DESC_PYTHON``, ``W7X_WOUT``) are optional; codes without a path are skipped.
+Needs booz_xform (and SIMSOPT for its row); FIRM3D, SIMPLE and DESC are optional.
+Runtime: minutes for ESSOS alone, much longer with every code (not measured with all codes).
 
 ``alphas`` traces the same 3.5 MeV alpha guiding centres (one half-grid surface
 near ``s = 0.5``, uniform Boozer angles and pitch, ``s = 1`` loss,
 collisionless) in the Landreman-Paul QA reactor-scale ``wout``, the ARIES-CS
-``n3are`` ``wout`` and, with ``--w7x``, the W7-X standard configuration
+``n3are`` ``wout`` and, with ``W7X_WOUT``, the W7-X standard configuration
 (``equilibria/wout_w7x_standardConfig.nc`` of github.com/landreman/sfincs)
 scaled to the minor radius and volume-averaged ``|B|`` of the QA, with
 
 * ESSOS ``trace_boozer`` (defaults: Dopri8, ``dt = R0 / (2 nfp v)``),
 * SIMSOPT ``trace_particles_boozer`` (``gc_noK``, RK45, ``tol = 1e-9``),
 * FIRM3D ``trace_particles_boozer`` (same settings; run with
-  ``--firm3d-python``, a Python with ``firm3d`` installed, since FIRM3D and
+  ``FIRM3D_PYTHON``, a Python with ``firm3d`` installed, since FIRM3D and
   SIMSOPT ship overlapping compiled modules),
 * SIMPLE ``simple.x`` (its default symplectic integrator; starts are mapped
   from Boozer to VMEC angles),
 * DESC ``trace_particles`` (vacuum guiding centre in the flux frame, Tsit5,
   ``tol = 1e-7``) on ``VMECIO.load(wout, L=24, M=8, N=8)``; run with
-  ``--desc-python`` (a DESC with the half-mesh lambda fix of DESC PR 2352) on
-  the first ``--desc-particles`` particles only, as it is slow on CPU.
+  ``DESC_PYTHON`` (a DESC with the half-mesh lambda fix of DESC PR 2352) on
+  the first ``DESC_PARTICLES`` particles only, as it is slow on CPU.
 
 The three Boozer codes use the same ``booz_xform`` resolution.  Each code runs
-on ``--cores`` CPU cores (JAX devices, OpenMP threads, or forked processes);
+on ``CORES`` CPU cores (JAX devices, OpenMP threads, or forked processes);
 compilation and field set-up are excluded.  The energy error is
 ``max |E/E0 - 1|`` over the horizon (SIMSOPT and FIRM3D: first 32 particles,
-traced again with their paths kept; SIMPLE not reported).  ``--codes`` reruns
+traced again with their paths kept; SIMPLE not reported).  ``CODES`` reruns
 only the listed codes and keeps the others' records.
 
 Results go to ``cross_code_benchmark.json``; ``figure`` draws
@@ -36,15 +37,14 @@ Results go to ``cross_code_benchmark.json``; ``figure`` draws
 the fate agreement taken over the particles on which SIMPLE and FIRM3D agree.
 """
 
-import argparse
 import json
 import os
 import platform
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -53,6 +53,20 @@ INPUTS = HERE.parent / "input_files"
 RECORD = HERE / "cross_code_benchmark.json"
 WOUT = INPUTS / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
 EQUILIBRIA = {"QA": WOUT, "ARIES-CS": INPUTS / "wout_n3are_R7.75B5.7.nc"}
+# Parameters
+TASK = "alphas"         # "alphas": run the codes; "figure": plot the recorded results
+PARTICLES = 256
+TMAX = 1e-2             # horizon [s]
+CORES = 8               # CPU cores (JAX devices, OpenMP threads or processes) per code
+CODES = None            # e.g. "ESSOS,DESC" reruns only those codes; None runs all that are available
+SIMPLE_X = None         # path to SIMPLE's simple.x
+FIRM3D_PYTHON = None    # Python interpreter with firm3d installed
+DESC_PYTHON = None      # Python interpreter with DESC installed
+DESC_PARTICLES = 32
+W7X_WOUT = None         # wout_w7x_standardConfig.nc (github.com/landreman/sfincs)
+args = SimpleNamespace(particles=PARTICLES, tmax=TMAX, cores=CORES, codes=CODES, simple=SIMPLE_X,
+                       firm3d_python=FIRM3D_PYTHON, desc_python=DESC_PYTHON, desc_particles=DESC_PARTICLES,
+                       w7x=W7X_WOUT)
 MBOOZ = 32
 NINTERP = 24
 N_TIMES = 200
@@ -257,7 +271,7 @@ def run_simple(simple_x, births, theta_v, phi_v, tmax, cores, consts):
             "symplectic (SIMPLE defaults)")
 
 
-def alphas(args):
+def alphas():
     global WOUT
     os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={args.cores}"
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -290,7 +304,7 @@ def alphas(args):
         if args.firm3d_python and "FIRM3D" in codes:
             np.savez(tmp / "in.npz", births=births, speed=speed, tmax=args.tmax, consts=consts,
                      cores=args.cores, wout=str(WOUT))
-            subprocess.run([args.firm3d_python, __file__, "_firm3d", str(tmp)], check=True)
+            subprocess.run([args.firm3d_python, __file__], check=True, env={**os.environ, "ESSOS_BENCHMARK_WORKER": f"firm3d:{tmp}"})
             out = np.load(tmp / "out.npz")
             results["FIRM3D"] = (out["t_loss"], float(out["run"]), float(out["energy"]),
                                  f"RK45, tol = {TOL:g} (gc_noK)")
@@ -302,7 +316,7 @@ def alphas(args):
             k = slice(0, args.desc_particles)
             np.savez(tmp / "in.npz", births=births[k], theta_v=theta_v[k], phi_v=phi_v[k],
                      speed=speed, tmax=args.tmax, consts=consts, wout=str(WOUT))
-            subprocess.run([args.desc_python, __file__, "_desc", str(tmp)], check=True)
+            subprocess.run([args.desc_python, __file__], check=True, env={**os.environ, "ESSOS_BENCHMARK_WORKER": f"desc:{tmp}"})
             out = np.load(tmp / "out.npz")
             results["DESC"] = (out["t_loss"], float(out["run"]), float(out["energy"]),
                                f"Tsit5, tol = 1e-7, L = 24, M = N = 8, first {args.desc_particles}")
@@ -426,25 +440,12 @@ def _firm3d_worker(tmp):
     np.savez(Path(tmp) / "out.npz", t_loss=t_loss, run=run, energy=energy)
 
 
-def main():
-    if len(sys.argv) == 3 and sys.argv[1] in ("_firm3d", "_desc"):
-        return {"_firm3d": _firm3d_worker, "_desc": _desc_worker}[sys.argv[1]](sys.argv[2])
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = ap.add_subparsers(dest="command", required=True)
-    a = sub.add_parser("alphas")
-    a.add_argument("--simple", help="path to SIMPLE's simple.x")
-    a.add_argument("--firm3d-python", help="Python interpreter with firm3d installed")
-    a.add_argument("--desc-python", help="Python interpreter with DESC installed")
-    a.add_argument("--desc-particles", type=int, default=32)
-    a.add_argument("--codes", help="comma-separated subset of codes to rerun")
-    a.add_argument("--w7x", help="wout_w7x_standardConfig.nc (github.com/landreman/sfincs)")
-    a.add_argument("--particles", type=int, default=256)
-    a.add_argument("--tmax", type=float, default=1e-2)
-    a.add_argument("--cores", type=int, default=8)
-    sub.add_parser("figure")
-    args = ap.parse_args()
-    alphas(args) if args.command == "alphas" else figure()
-
-
-if __name__ == "__main__":
-    main()
+# Run: a worker re-entry of this file inside another code's Python, or the task chosen above
+worker = os.environ.get("ESSOS_BENCHMARK_WORKER")
+if worker:
+    kind, tmp_dir = worker.split(":", 1)
+    {"firm3d": _firm3d_worker, "desc": _desc_worker}[kind](tmp_dir)
+elif TASK == "alphas":
+    alphas()
+else:
+    figure()

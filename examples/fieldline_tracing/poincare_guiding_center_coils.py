@@ -1,3 +1,10 @@
+"""Poincare section from guiding-centre orbits in a coil field.
+
+Teaches how to trace guiding centres in a Biot-Savart field and record their crossings of a toroidal
+plane.
+
+Runtime: about 1 minute on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp

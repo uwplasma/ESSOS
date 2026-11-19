@@ -1,3 +1,10 @@
+"""Compare penalty-weighted least squares with augmented-Lagrangian optimizers on the same coil problem.
+
+Teaches how to impose coil-length and curvature constraints as constraints rather than as weighted penalties
+(essos.augmented_lagrangian) and how the optimizers differ in the final B.n error and constraints.
+
+Runtime: about 5-8 minutes on a CPU.
+"""
 import os
 from time import time
 import jax

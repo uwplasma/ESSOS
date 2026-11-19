@@ -1,3 +1,11 @@
+"""Optimize coils and the near-axis shape together.
+
+Teaches how to start from a near-axis (pyQSC-JAX) field, fit coils to it, and let a least-squares
+optimizer vary the coils and the axis shape; field lines are traced to check quasisymmetric confinement.
+Needs pyqsc_jax.
+
+Runtime: a few minutes on a CPU (estimate; not run, needs pyqsc_jax).
+"""
 import os
 from time import time
 import jax.numpy as jnp
