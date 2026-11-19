@@ -1,7 +1,5 @@
 from jax import grad, lax, vmap, jit
 import jax.numpy as jnp
-from functools import partial
-from scipy.interpolate import  splrep, PPoly
 
 # @jit
 def newton(f, x0):
@@ -47,20 +45,3 @@ def roots(x, y, shift=0):
         return lax.custom_root(interpolated_array_at_point, x[idx], newton, lambda g, y: y / g(1.0))
     roots_array = vmap(find_root)(sign_changes)
     return roots_array
-
-def roots_scipy(x,y, shift = 0):         
-    """
-    Finds roots using scipy.interpolate
-
-    Args:
-      x (array-like): 1D array of independent values, must be strictly increasing (e.g., Time).
-      y (array-like): 1D array of dependent values (e.g., X, Y, Z, B, or V).
-      shift (float, optional): Value to shift y to find roots at a non-zero value. Default is 0.
-
-    Returns:
-      array-like: Array of root values.
-    """
-    interp = splrep(x, (y - shift), k=3)
-    roots = PPoly.from_spline(interp)
-    x_values = roots.roots(extrapolate=False)
-    return x_values

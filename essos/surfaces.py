@@ -3,7 +3,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.scipy.interpolate import RegularGridInterpolator
-from jax import tree_util, jit, vmap, devices, device_put
+from jax import tree_util, jit, vmap, devices
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from essos.plot import fix_matplotlib_3d
 import jaxkd
@@ -124,23 +124,6 @@ def SquaredFlux(surface, field, definition='local'):
         return _squared_flux_normalized(surface, field)
     else:
         raise ValueError(f"Unknown definition: {definition}")
-
-def nested_lists_to_array(ll):
-    """
-    Convert a ragged list of lists to a 2D jnp array.  Any entries
-    that are None are replaced by 0. This routine is useful for
-    parsing fortran namelists that include 2D arrays using f90nml.
-
-    Args:
-        ll: A list of lists to convert.
-    """
-    mdim = len(ll)
-    ndim = max(len(x) for x in ll)
-    arr = jnp.zeros((mdim, ndim))
-    for jm, l in enumerate(ll):
-        arr = arr.at[jm, :len(l)].set(jnp.array([x if x is not None else 0 for x in l]))
-    return arr
-
 
 def surfacerzfourier_from_boundary(rbc, zbs, nfp, ntheta=30, nphi=30,
                                    close=False, range_torus="full torus", *, rbs=None, zbc=None, _cls=None):
@@ -951,7 +934,6 @@ class SurfaceClassifier():
             distance = jnp.sum(
                 (xyz - gammas_flat[nearest]) * normals_flat[nearest], axis=1)
             return distance * sign_of_interior
-            #return signed_distance_from_surface_extras(xyz, surface) ####memory bounded
 
         #rule = sopp.UniformInterpolationRule(p) 
         #self.dist = RegularGridInterpolator((jnp.linspace(rmin,rmax,nr),
@@ -987,14 +969,6 @@ class SurfaceClassifier():
         d=self.dist(rphiz)[0][0]
         return d
 
-    @partial(jit, static_argnames=['self'])
-    def evaluate_rphiz(self, rphiz):
-        # initialize to -1 since the regular grid interpolant will just keep
-        # that value when evaluated outside of bounds
-        d=self.dist(rphiz)[0][0]
-        return d
-    
-
 @partial(jit, static_argnames=['surface'])
 def signed_distance_from_surface_jax(xyz, surface):
     """
@@ -1017,32 +991,3 @@ def signed_distance_from_surface_jax(xyz, surface):
     sign_of_interiorpoint = jnp.sign(jnp.sum((a_point_in_the_surface-gammas[0, :])*n[0, :]))
     signed_dists = mindist * sign_of_interiorpoint
     return signed_dists
-
-#@partial(jit, static_argnames=['surface'])
-def signed_distance_from_surface_extras(xyz, surface):
-    """
-    Compute the signed distances from points ``xyz`` to a surface.  The sign is
-    positive for points inside the volume surrounded by the surface.
-    """
-    gammas = surface.gamma.reshape((-1, 3))
-    mins, _ = jaxkd.extras.query_neighbors_pairwise(gammas, xyz, k=1)    
-    n = surface.unitnormal.reshape((-1, 3))
-    nmins = n[mins]
-    gammamins = gammas[mins]
-    # Now that we have found the closest node, we approximate the surface with
-    # a plane through that node with the appropriate normal and then compute
-    # the distance from the point to that plane
-    # https://stackoverflow.com/questions/55189333/how-to-get-distance-from-point-to-plane-in-3d
-    mindist = jnp.sum((xyz-gammamins) * nmins, axis=1)
-    a_point_in_the_surface = jnp.mean(surface.gamma[0, :, :], axis=0)
-    sign_of_interiorpoint = jnp.sign(jnp.sum((a_point_in_the_surface-gammas[0, :])*n[0, :]))
-    signed_dists = mindist * sign_of_interiorpoint
-    return signed_dists
-
-
-
-def plot_scalar_on_flux_surface(surface, scalar_map):
-    '''
-        surface: the surface object in which to plot the scalar_map
-        scalar_map: a scalar_map as function of theta and phi
-    ''' 

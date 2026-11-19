@@ -1,7 +1,7 @@
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-from jax import jit, vmap
+from jax import jit
 from jaxtyping import Array, Float  # https://github.com/google/jaxtyping
 from essos.coils import Curves, Coils, DiscretizedCoils, fit_dofs_from_coils
 from functools import partial
@@ -168,10 +168,8 @@ class GaussianSampler():
     @partial(jit, static_argnames=['self'])
     def draw_sample(self, key=0):
 
-        n = len(self.points)
         z = jax.random.normal(key=key,shape=(len(self.points)*(self.n_derivs+1), 3))
         L=self.get_covariance_matrix()
-        curve_and_derivs = jnp.matmul(L,z)
         if self.n_derivs ==0:            
             return jnp.reshape(jnp.matmul(L,z),(1,len(self.points),3))
         elif self.n_derivs ==1:            

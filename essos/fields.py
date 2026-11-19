@@ -1,7 +1,6 @@
 import os
 import jax
 jax.config.update("jax_enable_x64", True)
-from jax import vmap
 from essos.coils import Curves
 import jax.numpy as jnp
 import numpy as np
@@ -9,9 +8,7 @@ from scipy import ndimage
 from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
 from jax.custom_batching import custom_vmap
-from essos.surfaces import SurfaceRZFourier, BdotN_over_B, SurfaceClassifier
-from essos.plot import fix_matplotlib_3d
-from essos.util import newton
+from essos.surfaces import SurfaceRZFourier
 
 class MagneticField():
     def __init__(self):

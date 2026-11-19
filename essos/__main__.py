@@ -1,7 +1,5 @@
 """Main command line interface to ESSOS."""
 import sys
-# try: import tomllib
-# except ModuleNotFoundError: import pip._vendor.tomli as tomllib
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -17,13 +15,6 @@ def main(cl_args=sys.argv[1:]):
     """
     Run the main ESSOS code from the command line.
     """
-    # if len(cl_args) == 0:
-    #     print("Using standard input parameters.")
-    #     output = 0
-    # else:
-    #     parameters = tomllib.load(open(cl_args[0], "rb"))
-    #     output = 0
-        
     # Optimization parameters
     max_coil_length = 5.0
     max_coil_curvature = 4
