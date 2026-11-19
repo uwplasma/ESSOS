@@ -73,7 +73,7 @@ jobs:
     - name: Install ESSOS and test tools
       run: |
         uv venv
-        uv pip install ".[booz]" pytest pytest-cov pytest-xdist ${{ matrix.jax && format('jax=={0} jaxlib=={0}', matrix.jax) || '' }}
+        uv pip install ".[booz,ash]" pytest pytest-cov pytest-xdist ${{ matrix.jax && format('jax=={0} jaxlib=={0}', matrix.jax) || '' }}
         if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
         echo "JAX_VERSION=$(uv run --no-sync python -c 'import jax; print(jax.__version__)')" >> $GITHUB_ENV
     - name: Cache JAX compilations
