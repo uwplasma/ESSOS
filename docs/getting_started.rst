@@ -29,7 +29,7 @@ More examples are in the `examples` folder.
 CPU, GPU and multi-device defaults
 ----------------------------------
 
-Importing ESSOS changes no JAX setting. Call ``essos.configure_jax()`` first, before any JAX computation: it enables float64, requests one JAX CPU device per core the process may use, and caches compiled traces in ``~/.cache/essos/xla``. ``Curves``, ``Vmec``, ``BoozerField.from_booz`` and ``Tracing`` raise an error that names ``jax.config.update("jax_enable_x64", True)`` when float64 is off. Particles are sharded over all devices of the default backend.
+Importing ESSOS changes no JAX setting. Call ``essos.configure_jax()`` first, before any JAX computation: it enables float64, requests one JAX CPU device per core the process may use, and caches compiled traces in ``~/.cache/essos/xla``. ``Curves``, ``BiotSavart_from_gamma``, ``Vmec``, ``SurfaceRZFourier``, ``BoozerField.from_booz``, ``Particles``, ``Tracing``, the collision frequencies and ``trace_boozer`` with ``species`` raise an error that names ``jax.config.update("jax_enable_x64", True)`` when float64 is off. Collisionless ``trace_boozer`` also runs in float32. ``essos.configure_jax()`` raises when a device count it was asked for cannot be set because JAX has already started. Particles are sharded over all devices of the default backend.
 
 .. list-table::
    :header-rows: 1
