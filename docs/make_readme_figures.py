@@ -77,7 +77,7 @@ def field_line_tracing() -> None:
     seeds = jnp.array([R0, zeros, zeros]).T
 
     tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=seeds,
-                      maxtime=8000, times_to_trace=40000, atol=1e-8, rtol=1e-8)
+                      tmax=8000, n_save=40000, atol=1e-8, rtol=1e-8)
 
     fig, ax = plt.subplots(figsize=(4.4, 4.4))
     tracing.poincare_plot(ax=ax, show=False, shifts=[0.0])
@@ -98,7 +98,7 @@ def particle_tracing() -> None:
                           energy=4000 * ONE_EV)
 
     tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles,
-                      maxtime=1e-4, times_to_trace=800, atol=1e-7, rtol=1e-7)
+                      tmax=1e-4, n_save=800, atol=1e-7, rtol=1e-7)
 
     fig = plt.figure(figsize=(5.0, 4.0))
     ax = fig.add_subplot(projection="3d")
@@ -145,7 +145,7 @@ def wall_tracing() -> None:
                           energy=WALL_ENERGY_EV * ONE_EV,
                           initial_vparallel_over_v=jax.random.uniform(kv, (n,), minval=-1, maxval=1))
     tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
-                      maxtime=4e-5, timestep=1e-9, times_to_trace=2000, atol=1e-8, rtol=1e-8,
+                      tmax=4e-5, timestep=1e-9, n_save=2000, atol=1e-8, rtol=1e-8,
                       exterior_field=outside, wall=gap)
 
     crossed = np.isfinite(np.asarray(tracing.lcfs_times))

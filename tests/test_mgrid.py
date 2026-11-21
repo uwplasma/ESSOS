@@ -186,8 +186,8 @@ def test_mgrid_can_be_traced_directly():
     mgrid.add_field_cylindrical(0 * ones, 0 * ones, ones)
     particles = Particles(initial_xyz=jnp.array([[1.0, 0.0, 0.0]]), initial_vparallel_over_v=jnp.array([0.5]),
                           mass=PROTON_MASS, charge=ELEMENTARY_CHARGE, energy=1e3 * ELEMENTARY_CHARGE)
-    tracing = Tracing(field=mgrid, model="GuidingCenter", particles=particles, maxtime=1e-7, timestep=1e-9,
-                      times_to_trace=3, progress=False)
+    tracing = Tracing(field=mgrid, model="GuidingCenter", particles=particles, tmax=1e-7, timestep=1e-9,
+                      n_save=3, progress=False)
     v = jnp.sqrt(2 * 1e3 * ELEMENTARY_CHARGE / PROTON_MASS)
     np.testing.assert_allclose(tracing.trajectories[0, -1, 2], 0.5 * v * 1e-7, rtol=1e-6)
 

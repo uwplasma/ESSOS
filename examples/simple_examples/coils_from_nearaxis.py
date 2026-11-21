@@ -23,8 +23,8 @@ ntheta = 41
 ncoils = 4
 tmax = 800
 nfieldlines_per_core=1
-trace_tolerance = 1e-8
-num_steps = 22000
+rtol = 1e-8
+n_save = 22000
 order = 4
 current_on_each_coil = 2e8
 Poincare_plot_phi = jnp.array([0])
@@ -78,12 +78,12 @@ if plot_coils_without_Fourier_fit:
     time0 = time()
     field_coils_gamma = BiotSavart_from_gamma(coils_gamma, currents=current_on_each_coil*jnp.ones(len(coils_gamma)))
     tracing_coils_gamma = block_until_ready(Tracing(field=field_coils_gamma, model='FieldLineAdaptative', initial_conditions=initial_xyz,
-                      maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
+                      tmax=tmax, n_save=n_save, rtol=rtol))
     print(f"ESSOS tracing coils_gamma took {time()-time0:.2f} seconds")
     trajectories_coils_gamma = tracing_coils_gamma.trajectories
 time0 = time()
 tracing_coils_DOFS = block_until_ready(Tracing(field=field_coils_DOFS, model='FieldLineAdaptative', initial_conditions=initial_xyz,
-                    maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
+                    tmax=tmax, n_save=n_save, rtol=rtol))
 print(f"ESSOS tracing coils_DOFS took {time()-time0:.2f} seconds")
 trajectories_coils_DOFS = tracing_coils_DOFS.trajectories
 

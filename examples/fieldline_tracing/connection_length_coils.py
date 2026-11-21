@@ -34,7 +34,7 @@ print(f"Connection lengths of {nseeds} lines took {time() - time0:.1f} s; "
 
 # Poincare section of the closed vacuum surfaces for context
 poincare = trace_field_lines(field, jnp.stack([jnp.linspace(1.22, 1.42, 10), jnp.zeros(10), jnp.zeros(10)], 1),
-                             length=1000.0, samples=100000, progress=False, label=None)
+                             length=1000.0, n_save=100000, progress=False, label=None)
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.8), gridspec_kw={"width_ratios": [1, 1.3]})
 plt.sca(ax1)
 poincare.poincare_plot(ax=ax1, show=False, shifts=[0.0], color="0.65", s=0.2)

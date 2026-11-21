@@ -384,7 +384,7 @@ def _start(field, y0, mu0):
 
 @partial(jax.jit, static_argnames=("count", "species", "method"))
 def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-             carry, keys, first_interval, count, method="rk4", tolerance=1e-8):
+             carry, keys, first_interval, count, method="rk4", rtol=1e-8, atol=1e-8):
     def one(carry, key):
         def finish(carry, y1, h):
             """Accept ``y1`` after a step of ``h``: energy, collisions, loss and failure."""
@@ -442,7 +442,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
                 carry, attempts = state
                 y, t, h = carry[0], carry[2], carry[9]
                 h_try = jnp.minimum(h, t_end - t)
-                scale = tolerance * jnp.array([1.0, 1.0, 1.0, jnp.sqrt(2 * carry[8])])
+                scale = jnp.array([atol, atol, atol, rtol * jnp.sqrt(2 * carry[8])])
                 y1, norm = _embedded_step(rhs_of(carry), y, h_try, scale, method)
                 ok = jnp.isfinite(norm) & (norm <= 1.0)
                 safe = jnp.where(jnp.isfinite(norm) & (norm > 0), norm, jnp.where(ok, 0.0, 1e10))
@@ -486,7 +486,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep=None,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=True, compact=True, method="dopri8", tolerance=1e-8):
+                 progress=True, compact=True, method="dopri8", rtol=1e-8, atol=None):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The default ``timestep`` is ``R0 / (2 nfp speed)``, with ``R0 = |G| / |B|`` on the
@@ -509,13 +509,14 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     ``"rk4"``; ``"dopri8"`` matches RK4 in cost and energy error at 3x its
     step and is far more accurate at smaller steps. Refine timestep and modes to check loss labels and bounce phase.
     ``"adaptive"`` (Dopri5) and ``"adaptive8"`` (Dopri8) control each particle's step so the embedded error
-    stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
-    speed for ``v_par``); ``timestep`` is then only the first trial step.
+    stays below ``atol`` in ``sqrt(s)``, ``theta`` and ``zeta`` and ``rtol`` times the speed for ``v_par``
+    (``atol=None`` means ``atol = rtol``); ``timestep`` is then only the first trial step.
     """
     if method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
         raise ValueError("method must be 'rk4', 'dopri5', 'dopri8', 'adaptive' or 'adaptive8'")
-    if not (np.isfinite(tolerance) and tolerance > 0):
-        raise ValueError("tolerance must be positive and finite")
+    atol = rtol if atol is None else atol
+    if not (np.isfinite(rtol) and rtol > 0 and np.isfinite(atol) and atol > 0):
+        raise ValueError("rtol and atol must be positive and finite")
     inputs = tuple(np.atleast_1d(np.asarray(a, float)) for a in (s, theta, zeta, pitch))
     n = inputs[0].size
     if n < 1 or any(a.ndim != 1 or a.size != n or not np.isfinite(a).all() for a in inputs):
@@ -571,7 +572,7 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     for start in range(0, n_int, chunk):
         count = min(chunk, n_int - start)
         carry, part = _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
-                               carry, keys, start, count, method, tolerance)
+                               carry, keys, start, count, method, rtol, atol)
         states[selected, start + 1:start + count + 1] = np.asarray(part)[:selected.size]
         if progress is not None:
             progress(start + count, n_int)

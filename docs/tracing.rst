@@ -27,7 +27,7 @@ Defaults
   ``v`` the largest particle speed. For adaptive models it only sets the first trial step. These values must be concrete:
   under ``jax.grad`` with traced coil degrees of freedom or energies a fixed-step model raises an error asking for an
   explicit ``timestep``.
-* ``max_steps=None`` is 16 times the steps of a fixed-step solve over ``maxtime``, enough for adaptive tolerances
+* ``max_steps=None`` is 16 times the steps of a fixed-step solve over ``tmax``, enough for adaptive tolerances
   down to about 1e-12 (1e6 when the timestep could not be derived, as in an adaptive trace under ``jax.grad`` of the coil dofs).
 * An orbit that ends non-finite or reaches ``max_steps`` raises a ``RuntimeWarning``; raise ``max_steps`` or lower the
   tolerance.

@@ -57,7 +57,7 @@ def loss_curvature_constraint(field, max_coil_curvature):
 
 
 # Optimization parameters
-maximum_function_evaluations = 10
+max_nfev = 10
 
 MAX_COIL_LENGTH = 40.0
 MAX_COIL_CURVATURE = 0.5
@@ -139,11 +139,11 @@ lagrange_params = C_total_constraint.init(field_initial.dofs)
 params = field_initial.dofs, lagrange_params
 lag_state, grad, info = ALM.init(params)
 
-print(f"Optimizing coils with {maximum_function_evaluations} function evaluations using stochastic ALM.")
+print(f"Optimizing coils with {max_nfev} function evaluations using stochastic ALM.")
 time0 = time()
 
 i = 0
-while i <= maximum_function_evaluations and (jnp.linalg.norm(grad[0]) > omega_tol or alm.norm_constraints(info[2]) > eta_tol):
+while i <= max_nfev and (jnp.linalg.norm(grad[0]) > omega_tol or alm.norm_constraints(info[2]) > eta_tol):
     params, lag_state, grad, info = ALM.update(params, lag_state, grad, info)
     print(f"i: {i}, loss f: {info[0]:g}, loss L: {info[1]:g}, " f"infeasibility: {alm.total_infeasibility(info[2]):g}")
     i += 1

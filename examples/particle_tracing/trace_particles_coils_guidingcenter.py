@@ -10,7 +10,7 @@ from essos.dynamics import Tracing, Particles
 # Input parameters
 tmax = 1.e-4
 timestep=1.e-8
-times_to_trace=1000
+n_save=1000
 nparticles_per_core=2
 nparticles = nparticles_per_core
 R0 = jnp.linspace(1.23, 1.27, nparticles)
@@ -32,7 +32,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,charge=A
 # Trace in ESSOS
 time0 = time()
 tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
-                  maxtime=tmax, timestep=timestep,times_to_trace=times_to_trace, atol=atol,rtol=rtol)
+                  tmax=tmax, timestep=timestep,n_save=n_save, atol=atol,rtol=rtol)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 

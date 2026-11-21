@@ -22,7 +22,7 @@ from essos.dynamics import Tracing, Particles
 # Input parameters
 tmax = 4e-5
 timestep = 1.e-9
-times_to_trace = 2000
+n_save = 2000
 nparticles_per_core = 8
 nparticles = number_of_processors_to_use*nparticles_per_core
 energy = 3e3*ONE_EV
@@ -63,8 +63,8 @@ particles = Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=jax.rand
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=vmec, model='GuidingCenterAdaptative', particles=particles, maxtime=tmax, timestep=timestep,
-                  times_to_trace=times_to_trace, atol=atol, rtol=rtol, exterior_field=outside, wall=wall)
+tracing = Tracing(field=vmec, model='GuidingCenterAdaptative', particles=particles, tmax=tmax, timestep=timestep,
+                  n_save=n_save, atol=atol, rtol=rtol, exterior_field=outside, wall=wall)
 print(f"ESSOS tracing of {nparticles} particles during {tmax}s took {time()-time0:.2f} seconds")
 crossed = np.isfinite(tracing.lcfs_times)
 print(f"Stayed inside the LCFS:        {np.mean(~crossed)*100:.1f}%")

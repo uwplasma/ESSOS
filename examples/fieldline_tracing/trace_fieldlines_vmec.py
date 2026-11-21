@@ -11,8 +11,8 @@ tmax = 1500
 nfieldlines_per_core=6
 nfieldlines = nfieldlines_per_core
 R0 = jnp.linspace(0.05, 0.6, nfieldlines)
-trace_tolerance = 1e-10
-num_steps = 10000
+rtol = 1e-10
+n_save = 10000
 
 # Load coils and field
 wout_file = os.path.join(os.path.dirname(__file__), '..', 'input_files',"wout_QH_simple_scaled.nc")
@@ -26,7 +26,7 @@ initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 # Trace in ESSOS
 time0 = time()
 tracing = block_until_ready(Tracing(field=vmec, model='FieldLineAdaptative', initial_conditions=initial_xyz,
-                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
+                  tmax=tmax, n_save=n_save, rtol=rtol))
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories
 

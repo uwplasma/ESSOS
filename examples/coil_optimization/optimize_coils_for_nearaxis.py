@@ -19,8 +19,8 @@ from essos.losses import custom_loss
 """ Creating starting coils and surface """
 N_COILS = 3; FOURIER_ORDER = 6; LARGE_R = 10; SMALL_R = 5.6; NFP = 3; N_SEGMENTS = 60; STELLSYM = True  # Curve parameters
 COIL_CURRENT = 1.  # Amperes (optimization does not depend on current magnitude)
-tolerance_optimization = 1e-8
-maximum_function_evaluations =200
+tol = 1e-8
+max_nfev =200
 
 
 
@@ -124,9 +124,9 @@ print(f'Loss of gradB difference for optimized near-axis: {gradB_difference_opti
 
 # Trace fieldlines
 nfieldlines = 6
-num_steps = 1000
+n_save = 1000
 tmax = 1.e-6
-trace_tolerance = 1e-7
+rtol = 1e-7
 
 R0_initial   = jnp.linspace(field_nearaxis_initial.R0[0],   1.05*field_nearaxis_initial.R0[0],   nfieldlines)
 R0_optimized = jnp.linspace(field_nearaxis_initial.R0[0], 1.05*field_nearaxis_initial.R0[0], nfieldlines)
@@ -137,9 +137,9 @@ initial_xyz_optimized = jnp.array([R0_optimized*jnp.cos(phi0), R0_optimized*jnp.
 
 time0 = time()
 tracing_initial = Tracing(field=init_field, model='FieldLineAdaptative', initial_conditions=initial_xyz_initial,
-                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance)
+                  tmax=tmax, n_save=n_save, rtol=rtol)
 tracing_optimized = Tracing(field=opt_field, model='FieldLineAdaptative', initial_conditions=initial_xyz_optimized,
-                  maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance)
+                  tmax=tmax, n_save=n_save, rtol=rtol)
 print(f"Tracing took {time()-time0:.2f} seconds")
 
 # Plot coils, before and after optimization

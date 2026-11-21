@@ -86,8 +86,8 @@ class DummyTracing:
         self.trajectories = xyz
         self.field = kwargs.get("field", DummyField())
         self.loss_fractions = jnp.array([0.1, 0.2, 1.0])
-        self.times_to_trace = 4
-        self.maxtime = 1e-5
+        self.n_save = 4
+        self.tmax = 1e-5
 
 
 @jax.tree_util.register_pytree_node_class
@@ -224,8 +224,8 @@ class TestObjectiveFunctions(unittest.TestCase):
     def test_surface_losses(self, bdotn):
         self.assertTrue(jnp.isfinite(objf.normB_axis(self.field)).all())
         self.assertTrue(jnp.isfinite(objf.loss_normB_axis_average(self.field)))
-        self.assertTrue(jnp.isfinite(objf.loss_BdotN(self.field, self.surface)))
-        self.assertTrue(jnp.isfinite(objf.loss_BdotN_constraint(self.field, self.surface)))
+        self.assertTrue(jnp.isfinite(objf.loss_bdotn(self.field, self.surface)))
+        self.assertTrue(jnp.isfinite(objf.loss_bdotn_constraint(self.field, self.surface)))
 
     def test_copy_coils_from_field(self):
         copied = objf.copy_coils_from_field(self.field)
@@ -407,8 +407,8 @@ def test_particle_iota_uses_the_poloidal_angle_gradient(monkeypatch):
 def test_bdotn_constraint_gradient_is_zero_not_nan_when_satisfied(monkeypatch):
     import essos.objective_functions as of
     monkeypatch.setattr(of, "BdotN_over_B", lambda surface, field: field)
-    g = jax.grad(lambda b: of.loss_BdotN_constraint(b, None, target_tol=1e-6))(jnp.array([1e-4, 2e-4]))
+    g = jax.grad(lambda b: of.loss_bdotn_constraint(b, None, target_tol=1e-6))(jnp.array([1e-4, 2e-4]))
     np.testing.assert_array_equal(g, 0.)
-    g = jax.grad(lambda b: of.loss_BdotN_constraint(b, None, target_tol=1e-6))(jnp.array([1e-2, 2e-4]))
+    g = jax.grad(lambda b: of.loss_bdotn_constraint(b, None, target_tol=1e-6))(jnp.array([1e-2, 2e-4]))
     assert jnp.isfinite(g).all() and g[0] > 0
 

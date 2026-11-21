@@ -19,8 +19,8 @@ ntheta = 41
 ncoils = 6
 tmax = 1100
 nfieldlines_per_core=1
-trace_tolerance = 1e-9
-num_steps = 22000
+rtol = 1e-9
+n_save = 22000
 order_Fourier_coils = 4
 current_on_each_coil = 2e8
 refine_nphi_for_surface_plot = 4
@@ -196,13 +196,13 @@ initial_xyz=jnp.array([R0*jnp.cos(phi0), R0*jnp.sin(phi0), Z0]).T
 
 time0 = time()
 tracing_coils_DOFS = block_until_ready(Tracing(field=field_coils_DOFS, model='FieldLineAdaptative', initial_conditions=initial_xyz,
-                    maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
+                    tmax=tmax, n_save=n_save, rtol=rtol))
 print(f"ESSOS tracing coils_DOFS took {time()-time0:.2f} seconds")
 trajectories_coils_DOFS = tracing_coils_DOFS.trajectories
 if plot_fieldlines_constant_phi:
     time0 = time()
     tracing_coils_phi = block_until_ready(Tracing(field=field_coils_phi, model='FieldLineAdaptative', initial_conditions=initial_xyz,
-                    maxtime=tmax, times_to_trace=num_steps, atol=trace_tolerance,rtol=trace_tolerance))
+                    tmax=tmax, n_save=n_save, rtol=rtol))
     print(f"ESSOS tracing coils_phi took {time()-time0:.2f} seconds")
     trajectories_coils_phi = tracing_coils_phi.trajectories
 
