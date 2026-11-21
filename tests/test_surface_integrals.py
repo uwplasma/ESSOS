@@ -109,9 +109,9 @@ def test_circular_torus_squared_flux_definitions_and_boundary_flux():
     np.testing.assert_allclose(SquaredFlux(s, field, "normalized"), 0.25, rtol=1e-12)
     with pytest.raises(ValueError, match="Unknown definition"):
         SquaredFlux(s, field, "bogus")
-    polygon = lambda r: 0.5 * n * r ** 2 * np.sin(2 * np.pi / n)  # area of the inscribed n-gon
+    disc = lambda r: np.pi * r ** 2  # the periodic tangent quadrature integrates the circle exactly
     # the toroidal circle at theta index 0 has radius R + a; the poloidal circle has radius a (field is axial)
-    np.testing.assert_allclose(abs(poloidal_flux(s, field, 0)), B0 * polygon(R + a), rtol=1e-12)
+    np.testing.assert_allclose(abs(poloidal_flux(s, field, 0)), B0 * disc(R + a), rtol=1e-12)
     np.testing.assert_allclose(toroidal_flux(s, field, 0), 0.0, atol=1e-12)  # B has no component through a phi = const disc
 
 
