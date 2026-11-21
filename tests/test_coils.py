@@ -304,8 +304,8 @@ def test_zero_currents_give_finite_dofs():
 def test_pointwise_curvature_gradient_matches_finite_differences():
     """Curvature at every fixed point of every coil is differentiable: AD (forward and
     reverse) must match central differences. Only a maximum over points is a kink."""
-    from essos.coils import CreateEquallySpacedCurves
-    curves = CreateEquallySpacedCurves(2, 3, 1.0, 0.3, n_segments=24, nfp=2, stellsym=True)
+    from essos.coils import create_equally_spaced_curves
+    curves = create_equally_spaced_curves(2, 3, 1.0, 0.3, n_segments=24, nfp=2, stellsym=True)
     coils = Coils(curves, np.ones(2))
     x0 = np.asarray(curves.dofs).ravel()
     x0 = jnp.asarray(x0 + 0.02 * np.random.default_rng(1).standard_normal(x0.size))
