@@ -172,7 +172,7 @@ def test_periodic_fieldline_accuracy_is_independent_of_angle_origin(atol):
     offsets = 2*jnp.pi*jnp.array([0., 10000.])
     seeds = jnp.tile(jnp.array([.5, .2, .3]), (2, 1)).at[:, 1:].add(offsets[:, None])
     tracing = Tracing(field=PeriodicField(), model="FieldLineToroidal", initial_conditions=seeds,
-                      maxtime=20*jnp.pi, timestep=.1, times_to_trace=65,
+                      tmax=20*jnp.pi, timestep=.1, n_save=65,
                       rtol=1e-7, atol=atol, progress=False)
     theta = tracing.trajectories[:, :, 1] - offsets[:, None]
     # Exact first integral: theta + epsilon*sin(theta) - phi is constant.
@@ -1258,7 +1258,7 @@ def test_vmec_launch_derivative_of_the_exit_time_is_dual_in_both_modes_for_an_or
     def exit_time(eps, adjoint=None):
         particles = Particles(initial_xyz=jnp.array([[0.9786 + 1e-3 * eps, 2.3925, 5.5137]]), initial_vparallel_over_v=jnp.array([0.1781]),
                               mass=PROTON_MASS, charge=ELEMENTARY_CHARGE, energy=1e6 * ONE_EV)
-        return Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3.3e-6, timestep=1e-9, times_to_trace=2,
+        return Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, tmax=3.3e-6, timestep=1e-9, n_save=2,
                        atol=1e-8, rtol=1e-8, adjoint=adjoint).lcfs_times[0]
 
     forward = jax.jvp(lambda eps: exit_time(eps, diffrax.ForwardMode()), (0.0,), (1.0,))[1]
@@ -1277,8 +1277,8 @@ def test_vmec_non_finite_exterior_field_has_a_finite_masked_gradient_in_both_mod
 
     def objective(params, adjoint=None):
         particles = Particles(initial_xyz=jnp.asarray(STRIKING[0]), initial_vparallel_over_v=jnp.asarray(STRIKING[1]))
-        tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, maxtime=3e-6, timestep=1e-9,
-                          times_to_trace=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(above, params), wall=0.05,
+        tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles, tmax=3e-6, timestep=1e-9,
+                          n_save=4, atol=1e-8, rtol=1e-8, exterior_field=ExternalField(above, params), wall=0.05,
                           adjoint=adjoint)
         assert tracing.failed.any() and not tracing.failed.all()
         return 1e6 * jnp.sum(jnp.where(jnp.isfinite(tracing.wall_times), tracing.wall_times, 0.0))
@@ -1543,8 +1543,8 @@ def test_vmec_tracings_share_one_compiled_solve():
         lambda event, duration, **kw: compiles.append(event) if event.endswith('backend_compile_duration') else None)
 
     def trace(field):
-        return Tracing(field=field, model="GuidingCenterAdaptative", particles=_near_axis_particles(), maxtime=1e-7,
-                       timestep=1e-9, times_to_trace=5, progress=False).trajectories
+        return Tracing(field=field, model="GuidingCenterAdaptative", particles=_near_axis_particles(), tmax=1e-7,
+                       timestep=1e-9, n_save=5, progress=False).trajectories
 
     _compiled_solver.cache_clear()
     first = trace(vmec)
