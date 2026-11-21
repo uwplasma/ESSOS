@@ -99,6 +99,27 @@ def test_vmec_from_arrays_matches_wout_file():
     assert jnp.array_equal(vmap(rebuilt.AbsB)(points), vmap(vmec.AbsB)(points))
     assert jnp.array_equal(rebuilt.surface.gamma, vmec.surface.gamma)
 
+def test_vmec_fused_guiding_center_quantities_match_the_individual_methods():
+    vmec = Vmec(WOUT_FILE)
+    for point in ([0.3, 0.4, 0.5], [0.7, 1.2, 0.2], [0.97, 3.0, 1.1]):
+        point = jnp.array(point)
+        fused = vmec.gc_quantities(point)
+        separate = (vmec.B_covariant(point), vmec.B_contravariant(point), vmec.AbsB(point),
+                    vmec.dAbsB_by_dX(point), vmec.curl_b(point), vmec.kappa(point), vmec.sqrtg(point))
+        for a, b in zip(fused, separate):
+            np.testing.assert_allclose(a, b, rtol=1e-12, atol=1e-14 * float(jnp.max(jnp.abs(b))))
+
+
+def test_vmec_with_numpy_mode_numbers_has_a_comparable_tree_structure():
+    vmec = Vmec(WOUT_FILE)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    copy = {name: np.array(v) if name.startswith(("xm", "xn")) else v for name, v in arrays.items()}
+    again = {name: np.array(v) if name.startswith(("xm", "xn")) else v for name, v in arrays.items()}
+    first = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **copy)
+    second = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **again)
+    assert jax.tree_util.tree_structure(first) == jax.tree_util.tree_structure(second)
+
+
 def test_vmec_from_an_in_memory_wout_matches_the_file():
     from types import SimpleNamespace
     vmec = Vmec(WOUT_FILE)
