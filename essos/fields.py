@@ -296,6 +296,56 @@ class BiotSavart_from_gamma(MagneticField):
     def to_xyz(self, points):
         return points
 
+def _radial_prep(grid, table, xm, covariant_s=False, half_grid=False, axis_m1=None):
+    """Spline nodes of :func:`_radial_interp`: the scaled table and its slopes, stacked as (2, n, modes).
+
+    Computed once per table (a tridiagonal solve), not per evaluation point.
+    """
+    m = np.asarray(xm).astype(int)
+    k = np.minimum(m, 2 + m % 2)  # 2 p
+    if covariant_s:
+        k = np.where(m > 0, np.maximum(k - 2, -1), 0)
+    with jax.ensure_compile_time_eval():  # folded at trace time for a concrete table
+        if half_grid:
+            table = table[1:]
+        scaled = table / jnp.where(grid > 0, grid, 1.0)[:, None]**(k / 2)
+        if not half_grid:
+            scaled = scaled.at[0].set(jnp.where(m > 0, 2 * scaled[1] - scaled[2], scaled[0]))
+            if axis_m1 is not None:
+                scaled = scaled.at[0].set(jnp.where(m == 1, axis_m1, scaled[0]))
+        # Nodal slopes (per grid interval) of the C2 cubic spline: the first interval keeps the linear form that the
+        # axis rows above are extrapolated with, the last one is a parabola.
+        n, step = len(grid), jnp.diff(scaled, axis=0)
+        interior = np.r_[0, 0, np.ones(n - 3), 1.0]
+        slope = lax.linalg.tridiagonal_solve(
+            interior, np.r_[1, 1, 4 * np.ones(n - 3), 1], np.r_[interior[:-1], 0],
+            jnp.concatenate([step[:1], step[:1], 3 * (scaled[3:] - scaled[1:-2]), 2 * step[-1:]]))
+    return jnp.stack([scaled, slope])
+
+
+def _radial_eval(s, grid, nodes, xm, covariant_s=False):
+    """Value at ``s`` of every mode from the spline nodes of :func:`_radial_prep`."""
+    scaled, slope = nodes
+    m = np.asarray(xm).astype(int)
+    k = np.minimum(m, 2 + m % 2)  # 2 p
+    if covariant_s:
+        k = np.where(m > 0, np.maximum(k - 2, -1), 0)
+    ds = grid[1] - grid[0]
+    i = jnp.clip(jnp.floor((s - grid[0]) / ds).astype(int), 0, len(grid) - 2)
+    u = (s - grid[i]) / ds
+    t = jnp.minimum(u, 1.0)
+    q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
+    powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
+    h = jnp.stack([(1 + 2 * t) * (1 - t)**2, t * (1 - t)**2, t * t * (3 - 2 * t), t * t * (t - 1)])
+    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue with a parabola that has the end
+    # value, slope and curvature of the cubic, so the interpolant stays C2 up to the LCFS (a kink in the second
+    # derivative gives the adaptive integrator an uncontrolled tangent error) instead of freezing there.
+    over = jnp.maximum(u - 1.0, 0.0)
+    beyond = over * slope[i + 1] + 0.5 * over**2 * (6 * (scaled[i] - scaled[i + 1]) + 2 * slope[i] + 4 * slope[i + 1])
+    return (powers @ (k == np.arange(-1, 4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
+                                                          + h[2] * scaled[i + 1] + h[3] * slope[i + 1] + beyond)
+
+
 def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_m1=None):
     """Interpolate every Fourier mode of a wout table at ``s``.
 
@@ -317,39 +367,9 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     adaptive step shrinks to nothing; under vmap the whole batch then runs to
     max_steps.
     """
-    m = np.asarray(xm).astype(int)
-    k = np.minimum(m, 2 + m % 2)  # 2 p
-    if covariant_s:
-        k = np.where(m > 0, np.maximum(k - 2, -1), 0)
-    with jax.ensure_compile_time_eval():  # folded at trace time for a concrete table
-        if half_grid:
-            table = table[1:]
-        scaled = table / jnp.where(grid > 0, grid, 1.0)[:, None]**(k / 2)
-        if not half_grid:
-            scaled = scaled.at[0].set(jnp.where(m > 0, 2 * scaled[1] - scaled[2], scaled[0]))
-            if axis_m1 is not None:
-                scaled = scaled.at[0].set(jnp.where(m == 1, axis_m1, scaled[0]))
-        # Nodal slopes (per grid interval) of the C2 cubic spline: the first interval keeps the linear form that the
-        # axis rows above are extrapolated with, the last one is a parabola.
-        n, step = len(grid), jnp.diff(scaled, axis=0)
-        interior = np.r_[0, 0, np.ones(n - 3), 1.0]
-        slope = lax.linalg.tridiagonal_solve(
-            interior, np.r_[1, 1, 4 * np.ones(n - 3), 1], np.r_[interior[:-1], 0],
-            jnp.concatenate([step[:1], step[:1], 3 * (scaled[3:] - scaled[1:-2]), 2 * step[-1:]]))
-    ds = grid[1] - grid[0]
-    i = jnp.clip(jnp.floor((s - grid[0]) / ds).astype(int), 0, len(grid) - 2)
-    u = (s - grid[i]) / ds
-    t = jnp.minimum(u, 1.0)
-    q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
-    powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
-    h = jnp.stack([(1 + 2 * t) * (1 - t)**2, t * (1 - t)**2, t * t * (3 - 2 * t), t * t * (t - 1)])
-    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue with a parabola that has the end
-    # value, slope and curvature of the cubic, so the interpolant stays C2 up to the LCFS (a kink in the second
-    # derivative gives the adaptive integrator an uncontrolled tangent error) instead of freezing there.
-    over = jnp.maximum(u - 1.0, 0.0)
-    beyond = over * slope[i + 1] + 0.5 * over**2 * (6 * (scaled[i] - scaled[i + 1]) + 2 * slope[i] + 4 * slope[i + 1])
-    return (powers @ (k == np.arange(-1, 4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
-                                                          + h[2] * scaled[i + 1] + h[3] * slope[i + 1] + beyond)
+    nodes = _radial_prep(grid, table, xm, covariant_s, half_grid, axis_m1)
+    return _radial_eval(s, grid, nodes, xm, covariant_s)
+
 
 VMEC_WOUT_ARRAYS = ('bmnc', 'xm', 'xn', 'rmnc', 'zmns', 'bsubsmns', 'bsubumnc', 'bsubvmnc',
                     'bsupumnc', 'bsupvmnc', 'gmnc', 'xm_nyq', 'xn_nyq', 'Aminor_p')
@@ -453,6 +473,14 @@ class Vmec():
         self.s_full_grid = jnp.linspace(0, 1, self.ns)
         self.ds = self.s_full_grid[1] - self.s_full_grid[0]
         self.s_half_grid = self.s_full_grid[1:] - 0.5 * self.ds
+        # Radial spline nodes of every Nyquist table, once per field instead of at every evaluation point.
+        for name, (half_grid, options, is_cos) in self._NYQUIST.items():
+            grid = self.s_half_grid if half_grid else self.s_full_grid
+            for partner in (name, VMEC_WOUT_PARTNERS[name]):
+                table = getattr(self, partner)
+                if table is not None:
+                    extra = dict(options, axis_m1=self._bsubs_axis_m1(partner != name)) if name == 'bsubsmns' else options
+                    setattr(self, '_nodes_' + partner, _radial_prep(grid, table, self.xm_nyq, half_grid=half_grid, **extra))
         self.r_axis = self.rmnc[0, 0]
         self.z_axis = self.zmns[0, 0] if self.zmnc is None else self.zmnc[0, 0]
         with jax.ensure_compile_time_eval():
@@ -532,9 +560,12 @@ class Vmec():
                 radial_options = options
                 if name == 'bsubsmns':
                     radial_options = dict(options, axis_m1=self._bsubs_axis_m1(partner != name))
-                f, df = jax.jvp(lambda s: _radial_interp(s, grid, table, xm,
-                                                        half_grid=half_grid, **radial_options),
-                               (s,), (jnp.ones_like(s),))
+                nodes = getattr(self, '_nodes_' + partner, None)
+                if nodes is None:
+                    interp = lambda s: _radial_interp(s, grid, table, xm, half_grid=half_grid, **radial_options)
+                else:
+                    interp = lambda s: _radial_eval(s, grid, nodes, xm, covariant_s=options.get('covariant_s', False))
+                f, df = jax.jvp(interp, (s,), (jnp.ones_like(s),))
                 if cosine:
                     value = (f @ cos, jnp.array([df @ cos, -(xm * f) @ sin, (xn * f) @ sin]))
                 else:
@@ -607,6 +638,25 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def kappa(self, points):
         return -jnp.cross(self.B_contravariant(points),self.curl_b(points))*self.sqrtg(points)/self.AbsB(points)
+
+    @partial(jit, static_argnames=['self'])
+    def gc_quantities(self, points):
+        """Guiding-center quantities from one Nyquist series: B_cov, B_contra, |B|, grad|B|, curl b, kappa, sqrt(g).
+
+        Equal to calling the individual methods, which each repeat the series.
+        """
+        series = self._nyquist_series(points)
+        names = ('bsubsmns', 'bsubumnc', 'bsubvmnc')
+        B_cov = jnp.array([series[n][0] for n in names])
+        grad_cov = jnp.stack([series[n][1] for n in names])
+        absB, dabsB, sqrtg = series['bmnc'][0], series['bmnc'][1], series['gmnc'][0]
+        B_sup_theta, B_sup_phi = series['bsupumnc'][0], series['bsupvmnc'][0]
+        B_contra = jnp.array([0 * B_sup_theta, B_sup_theta, B_sup_phi])
+        curl_B = jnp.array([grad_cov[2][1] - grad_cov[1][2], grad_cov[0][2] - grad_cov[2][0],
+                            grad_cov[1][0] - grad_cov[0][1]]) / sqrtg
+        curl_b = curl_B / absB + jnp.cross(B_cov, dabsB) / absB**2 / sqrtg
+        kappa = -jnp.cross(B_contra, curl_b) * sqrtg / absB
+        return B_cov, B_contra, absB, dabsB, curl_b, kappa, sqrtg
 
     @partial(jit, static_argnames=['self'])
     def to_xyz(self, points):
@@ -714,7 +764,7 @@ class _VmecStatic:
 
     def __init__(self, items, extra):
         self.items, self.extra = items, extra
-        self.key = tuple((k, tuple(np.asarray(v).tolist()) if isinstance(v, jax.Array) else v) for k, v in items)
+        self.key = tuple((k, tuple(np.asarray(v).tolist()) if isinstance(v, (jax.Array, np.ndarray)) else v) for k, v in items)
 
     def __eq__(self, other):
         return isinstance(other, _VmecStatic) and self.key == other.key
