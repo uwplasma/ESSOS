@@ -14,7 +14,7 @@ import pytest
 
 from essos.background_species import JOULE_PER_EV, BackgroundSpecies, nu_D_ab, nu_par_ab, nu_s_ab
 from essos.constants import ELEMENTARY_CHARGE, PROTON_MASS, SPEED_OF_LIGHT
-from essos.dynamics import (GuidingCenterCollisionsDiffusionMu, GuidingCenterCollisionsDriftMuIto,
+from essos.dynamics import (LorentzCollisionsDiffusion, LorentzCollisionsDrift, GuidingCenterCollisionsDiffusionMu, GuidingCenterCollisionsDriftMuIto,
                             GuidingCenterCollisionsDriftMuStratonovich)
 
 B0 = 2.0
@@ -164,3 +164,31 @@ def test_cold_background_speed_drift_is_slowing_down():
     ito_v = jax.grad(speed)(z) @ A + 0.5 * jnp.sum(jax.hessian(speed)(z) * (sigma @ sigma.T))
     nu_s = _rates(z, species)[0]
     np.testing.assert_allclose(ito_v, -nu_s * speed(z), rtol=1e-6)
+
+
+@pytest.mark.parametrize("T", [100.0, 2000.0])
+def test_full_orbit_drift_is_lorentz_force_plus_stratonovich_collision_drift(T):
+    """Full-orbit SDE in velocity space: dv = (q/m) v x B dt - nu_s v dt + Stratonovich noise drift, with
+    Ito drift -nu_s v + d_j D_ij and D = (v^2/2)(nu_par vhat vhat + nu_D (1 - vhat vhat))."""
+    species = _species(T)
+    v = jnp.array([4e5, -7e5, 1.2e6])
+    args = (FIELD, PARTICLE, species)
+    state = jnp.concatenate([X0, v])
+    out = LorentzCollisionsDrift(0.0, state, args)
+    np.testing.assert_allclose(out[:3], v)
+
+    def rates(vv):
+        s = jnp.linalg.norm(vv)
+        return [f(M, Q, 0, s, X0, species) for f in (nu_s_ab, nu_D_ab, nu_par_ab)]
+
+    def D(vv):
+        nu_s, nu_D, nu_par = rates(vv)
+        P = jnp.outer(vv, vv) / (vv @ vv)
+        return (vv @ vv) / 2 * (nu_par * P + nu_D * (jnp.eye(3) - P))
+
+    sigma = lambda vv: LorentzCollisionsDiffusion(0.0, jnp.concatenate([X0, vv]), args)[3:, 3:]
+    np.testing.assert_allclose(sigma(v) @ sigma(v).T / 2, D(v), rtol=1e-9)
+    ito = -rates(v)[0] * v + jnp.einsum("ijj->i", jax.jacfwd(D)(v))
+    strat = ito - 0.5 * jnp.einsum("jk,ikj->i", sigma(v), jax.jacfwd(sigma)(v))
+    lorentz = Q / M * jnp.cross(v, jnp.array([0.0, 0.0, B0]))
+    np.testing.assert_allclose(out[3:] - lorentz, strat, rtol=1e-7, atol=1e-9 * np.abs(strat).max())

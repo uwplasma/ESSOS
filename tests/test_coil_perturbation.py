@@ -148,3 +148,61 @@ def test_zero_systematic_perturbation_keeps_discretized_coils_and_default_key():
                              jnp.array([1e5]), nfp=2, stellsym=True)
     sampler = GaussianSampler(jnp.linspace(0, 1, 32, endpoint=False), sigma=0., length_scale=0.2)
     np.testing.assert_allclose(perturb_curves(coils, sampler).gamma, coils.gamma, atol=1e-12)
+
+
+def test_gaussian_process_has_the_requested_standard_deviation_and_periodic_smoothness():
+    """The periodic squared-exponential kernel has Var X(s) = sigma^2 sum_i exp(-i^2 / 2 l^2) = sigma^2 for small
+    l (Rasmussen & Williams, ch. 4); neighbouring points are strongly correlated, distant ones are not."""
+    from essos.coil_perturbation import _draw_curve_perturbation
+    n, sigma = 48, 0.02
+    sampler = GaussianSampler(jnp.linspace(0, 1, n, endpoint=False), sigma=sigma, length_scale=0.1)
+    draws = np.asarray(_draw_curve_perturbation(sampler, jax.random.PRNGKey(3), 64))  # (64, n, 3)
+    np.testing.assert_allclose(draws.std(), sigma, rtol=0.1)
+    corr = lambda lag: np.mean(draws * np.roll(draws, lag, axis=1)) / draws.var()
+    assert corr(1) > 0.9 > 0.5 > abs(corr(n // 2))  # exp(-(1/48)^2 / 2 / 0.1^2) ~ 0.98 vs ~ e^-12.5
+    # the sample object exposes the process and its derivatives, and refuses derivatives that were not drawn
+    sample = PerturbationSample(sampler, key=jax.random.PRNGKey(0))
+    assert sample.get_sample(0).shape == (n, 3)
+    with np.testing.assert_raises(ValueError):
+        sample.get_sample(1)
+    resampled = sample._sample
+    sample.resample()
+    np.testing.assert_allclose(sample._sample, resampled)  # same key, same draw
+
+
+def test_coil_perturbations_keep_currents_and_symmetry_or_break_it_by_type():
+    from essos.coils import Coils, CreateEquallySpacedCurves, DiscretizedCoils
+    from essos.coil_perturbation import perturb_curves
+    n, sigma = 32, 0.01
+    sampler = GaussianSampler(jnp.linspace(0, 1, n, endpoint=False), sigma=sigma, length_scale=0.3)
+    coils = Coils(CreateEquallySpacedCurves(2, 3, 3.0, 0.5, n, 2, True), jnp.array([1e5, 2e5]))
+    key = jax.random.PRNGKey(7)
+
+    # systematic: only the base coils are perturbed, so the expanded set keeps its nfp / stellarator symmetry
+    sys_coils = perturb_curves(coils, sampler, key, "systematic")
+    np.testing.assert_allclose(sys_coils.currents, coils.currents)
+    base = sys_coils.gamma[:2]
+    expected = Coils(Curves(sys_coils.curves._dofs, n, 2, True), sys_coils.dofs_currents_raw).gamma
+    np.testing.assert_allclose(sys_coils.gamma, expected, atol=1e-12)
+    shift = np.asarray(sys_coils.gamma - coils.gamma)
+    assert 0 < np.abs(shift[:2]).max() < 6 * sigma and np.abs(base - coils.gamma[:2]).max() > 0
+    # rotation by pi about z maps coil 4 (k = 1, no flip) onto the base-coil perturbation
+    rot = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
+    np.testing.assert_allclose(shift[4:6] @ rot.T, shift[:2], atol=1e-10)
+
+    # statistical: every expanded coil gets its own draw and the symmetry structure is dropped
+    stat = perturb_curves(coils, sampler, key, "statistical")
+    assert stat.nfp == 1 and stat.stellsym is False and len(stat) == len(coils)
+    np.testing.assert_allclose(stat.currents, coils.currents)
+    d = np.asarray(stat.gamma - coils.gamma)
+    assert np.abs(d[4:6] @ rot.T - d[:2]).max() > sigma
+    dc = DiscretizedCoils(coils.gamma[:2], jnp.array([1e5, 2e5]), nfp=1, stellsym=False)
+    dstat = perturb_curves(dc, sampler, key, "statistical")
+    assert dstat.gamma.shape == dc.gamma.shape and np.abs(np.asarray(dstat.gamma - dc.gamma)).max() > 0
+    curves_stat = perturb_curves(coils.curves, sampler, key, "statistical")
+    assert curves_stat.gamma.shape == coils.curves.gamma.shape
+
+    with np.testing.assert_raises(ValueError):
+        perturb_curves(coils, sampler, key, "bogus")
+    with np.testing.assert_raises(TypeError):
+        perturb_curves(jnp.zeros((2, n, 3)), sampler, key, "systematic")

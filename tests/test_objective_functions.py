@@ -412,3 +412,45 @@ def test_bdotn_constraint_gradient_is_zero_not_nan_when_satisfied(monkeypatch):
     g = jax.grad(lambda b: of.loss_BdotN_constraint(b, None, target_tol=1e-6))(jnp.array([1e-2, 2e-4]))
     assert jnp.isfinite(g).all() and g[0] > 0
 
+
+
+def test_loss_algebra_values_gradients_and_errors():
+    """custom_loss / composite_loss: sums, scalar multiples and gradients against the hand derivatives."""
+    from essos.losses import base_loss, composite_loss, custom_loss
+    deps = {"x": jnp.asarray(2.0), "y": jnp.array([1.0, 3.0])}
+    a = custom_loss(lambda x, y, k: k * x ** 2 + jnp.sum(y ** 2), "x", "y", k=3.0)
+    b = custom_loss(lambda y: jnp.sum(y), "y")
+    a.dependencies = deps
+    b.dependencies = deps
+    d0 = jnp.array([2.0, 1.0, 3.0])  # ravel order of the dict: x, then y
+    np.testing.assert_allclose(a.starting_dofs, d0)
+    np.testing.assert_allclose(a(d0), 3 * 4 + 10)
+    np.testing.assert_allclose(a.grad(d0), [12.0, 2.0, 6.0])  # (2 k x, 2 y)
+    value, grad = a.value_and_grad(d0)
+    np.testing.assert_allclose([value, *grad], [22.0, 12.0, 2.0, 6.0])
+    np.testing.assert_allclose(a.call_pytree({"x": 1.0, "y": jnp.zeros(2)}), 3.0)
+    np.testing.assert_allclose(a.call_pytree((1.0, jnp.zeros(2))), 3.0)
+    g = a.grad_pytree((jnp.asarray(2.0), jnp.array([1.0, 3.0])))
+    np.testing.assert_allclose(g["x"], 12.0)
+    np.testing.assert_allclose(a.dofs_to_pytree(d0)["y"], [1.0, 3.0])
+    assert jax.tree_util.tree_leaves(a.dependencies_buffer)[0] == 0.0  # zeros_like buffer
+
+    total = 2.0 * a + b  # __rmul__ then __add__
+    assert isinstance(total, composite_loss) and list(total) == total.losses
+    np.testing.assert_allclose(total.starting_dofs, d0)
+    np.testing.assert_allclose(total(d0), 2 * 22.0 + 4.0)
+    np.testing.assert_allclose(total.grad(d0), [24.0, 4.0 + 1.0, 12.0 + 1.0])
+    np.testing.assert_allclose(total.dofs_to_pytree(d0)["x"], 2.0)
+    total.dependencies = {"x": jnp.asarray(1.0), "y": jnp.array([0.0, 0.0])}  # clears the caches
+    np.testing.assert_allclose(total.starting_dofs, [1.0, 0.0, 0.0])
+
+    with pytest.raises(TypeError):
+        a + 1.0
+    with pytest.raises(TypeError):
+        a * jnp.ones(2)
+    with pytest.raises(NotImplementedError):
+        base_loss() * 2.0
+    with pytest.raises(AssertionError):
+        a.dependencies = [1.0]
+    with pytest.raises(AssertionError):
+        total.dependencies = 3

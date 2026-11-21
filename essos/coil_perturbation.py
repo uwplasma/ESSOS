@@ -199,7 +199,7 @@ class PerturbationSample():
         """
         assert isinstance(deriv, int)
         if deriv >= len(self._sample):
-            raise ValueError("""The sample on has {len(self._sample)-1} derivatives.
+            raise ValueError(f"""The sample on has {len(self._sample)-1} derivatives.
         Adjust the `n_derivs` parameter of the sampler to access higher derivatives.""")
         return self._sample[deriv]
 
