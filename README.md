@@ -34,7 +34,7 @@ pip install essos
   (RK4, Dopri5, Dopri8) or adaptive Dormand-Prince stepping and optional collisions.
 - **Field-line tracing.** Adaptive, arclength and toroidal-angle models, with
   Poincare sections.
-- **Fields.** Biot-Savart from coils, VMEC equilibria (stellarator-symmetric or
+- **Fields.** Biot-Savart from coils, point dipoles (permanent magnets), VMEC equilibria (stellarator-symmetric or
   not, analytic derivatives, optional `mode_tolerance` truncation) and near-axis
   expansions. Fields combine as vectors (`coils + other`, `2.0 * field`), and
   `field.compare(other, points)` measures two fields at the same physical

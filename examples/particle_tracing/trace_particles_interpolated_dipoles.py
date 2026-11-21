@@ -12,11 +12,11 @@ from time import time
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import tree_util, vmap
+from jax import vmap
 from essos.coils import Coils
 from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
 from essos.dynamics import Particles, Tracing
-from essos.fields import BiotSavart, CombinedField, InterpolatedField, MagneticField
+from essos.fields import BiotSavart, CombinedField, InterpolatedField, PointDipoleField
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 
 args = sys.argv[1:] + ["4000", "32", "48", "2e-5"][len(sys.argv) - 1:]
@@ -26,28 +26,6 @@ coils = Coils.from_json(os.path.join(input_dir, 'ESSOS_biot_savart_LandremanPaul
 wout = SurfaceRZFourier.from_wout_file(os.path.join(input_dir, 'wout_LandremanPaul2021_QA_reactorScale_lowres.nc'))
 boundary = SurfaceRZFourier(wout.rc / wout.rc[0], wout.zs / wout.rc[0], wout.nfp, wout.mpol, wout.ntor, ntheta=64, nphi=64)
 classifier = SurfaceClassifier(boundary, h=0.03)
-
-
-@tree_util.register_pytree_node_class
-class Dipoles(MagneticField):
-    """Point dipoles: B = 1e-7 sum (3 r (m.r)/r^5 - m/r^3)."""
-    def __init__(self, positions, moments):
-        self.positions, self.moments = positions, moments
-
-    def B(self, point):
-        r = point - self.positions
-        d = jnp.linalg.norm(r, axis=1, keepdims=True)
-        return 1e-7 * jnp.sum(3 * r * jnp.sum(self.moments * r, 1, keepdims=True) / d**5 - self.moments / d**3, 0)
-
-    def sqrtg(self, point):
-        return 1.
-
-    def tree_flatten(self):
-        return (self.positions, self.moments), None
-
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        return cls(*children)
 
 
 # Magnets 0.15 m outside the plasma boundary, along its normal, copied to all 2*nfp symmetric images.
@@ -65,7 +43,7 @@ pos, mom = np.r_[pos, pos * [1, -1, -1]], np.r_[mom, mom * [-1, 1, 1]]
 angles = 2 * np.pi * np.arange(nfp) / nfp
 rotations = [np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]]) for a in angles]
 pos, mom = (np.concatenate([x @ r.T for r in rotations]) for x in (pos, mom))
-field = CombinedField(BiotSavart(coils), Dipoles(jnp.array(pos), jnp.array(mom)))
+field = CombinedField(BiotSavart(coils), PointDipoleField(jnp.array(pos), jnp.array(mom)))
 
 time0 = time()
 interp = InterpolatedField(field, R=(0.58, 1.33), Z=(-0.42, 0.42), nr=grid, nz=grid, nphi=2 * grid, nfp=nfp,
