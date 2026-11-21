@@ -504,7 +504,6 @@ class ToroidalField(MagneticField):
         s = x[0]**2 + x[1]**2
         return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), residual
 
-@tree_util.register_static
 class Vmec(ToroidalField):
     """VMEC equilibrium, including asymmetric Fourier partners, from a wout file, an
     in-memory wout object with the wout variable names (e.g. a VMEX ``WoutData``;
@@ -771,7 +770,7 @@ class _VmecStatic:
 
     def __init__(self, items, extra):
         self.items, self.extra = items, extra
-        self.key = tuple((k, tuple(np.asarray(v).tolist()) if isinstance(v, jax.Array) else v) for k, v in items)
+        self.key = tuple((k, (np.shape(v), np.asarray(v).tobytes()) if isinstance(v, (jax.Array, np.ndarray)) else v) for k, v in items)
 
     def __eq__(self, other):
         return isinstance(other, _VmecStatic) and self.key == other.key
