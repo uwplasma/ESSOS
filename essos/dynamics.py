@@ -1,4 +1,5 @@
 from pyexpat import model
+import copy
 import os
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -22,11 +23,10 @@ from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController, Event, T
 from diffrax import ControlTerm,UnsafeBrownianPath,MultiTerm,ItoMilstein,ClipStepSizeController #For collisions we need this to solve stochastic differential equation
 import diffrax
 import equinox as eqx
-import optimistix as optx
-import equinox as eqx
 import equinox.internal as eqxi
+import optimistix as optx
 from essos.coils import Coils
-from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
+from essos.fields import BiotSavart, ExternalField, MagneticField, is_toroidal
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ELEMENTARY_CHARGE,SPEED_OF_LIGHT
@@ -1075,6 +1075,15 @@ class Tracing():
         else:
             self.electric_field=electric_field
 
+        if model is not None and model.startswith('FullOrbit') and is_toroidal(field):
+            # Full orbits move in Cartesian space: trace them in the Cartesian view of the field, from the
+            # Cartesian position of each guiding center given in (s, theta, phi), up to the boundary s = 1.
+            toroidal, particles = field, copy.copy(particles)
+            particles.initial_xyz = vmap(field.to_xyz)(particles.initial_xyz)
+            field = field.cartesian()
+            particles.to_full_orbit(field)
+            if condition is None and stopping_criteria is None:
+                condition = lambda t, y, args, **kwargs: 1.0 - toroidal.flux_coordinates(y[:3])[0][0]
         if isinstance(field, Coils):
             self.field = BiotSavart(field)
         else:
@@ -1097,7 +1106,7 @@ class Tracing():
         self.tag_gc=tag_gc
         # VMEC guiding centers are traced in a chart that is regular on the
         # magnetic axis; see _axis_regular.
-        self._axis_regular = isinstance(field, Vmec) and model in _VMEC_GUIDING_CENTER_MODELS
+        self._axis_regular = is_toroidal(field) and model in _VMEC_GUIDING_CENTER_MODELS
         # Without a user condition, VMEC guiding centers stop at the exact LCFS
         # crossing, report non-finite steps, and continue outside in
         # exterior_field up to the wall when one is given; see _vmec_orbit.
@@ -1148,7 +1157,7 @@ class Tracing():
         self.solver = solver
         if condition is None:
             self.condition = _never
-            if isinstance(field, Vmec):
+            if is_toroidal(field):
                 if model in ('FieldLine', 'FieldLineAdaptative', 'FieldLineArclength', 'FieldLineToroidal'):
                     self.condition = _vmec_edge
             elif (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) and isinstance(boundary,SurfaceClassifier):
@@ -1262,7 +1271,7 @@ class Tracing():
         
         use_boundary = (isinstance(field, Coils) or isinstance(self.field, BiotSavart)) \
             and isinstance(boundary, SurfaceClassifier)
-        if isinstance(field, Vmec) or use_boundary:
+        if is_toroidal(field) or use_boundary:
             result = self.loss_fraction(boundary if use_boundary else None)
             self.loss_fractions, self.total_particles_lost, self.lost_times = result[:3]
             if len(result) > 3:
@@ -1368,7 +1377,7 @@ class Tracing():
         if self._axis_regular:
             size = self.initial_conditions.shape[-1] + 1 + int(flag)
             angles = (2, size - 1 - int(flag))  # phi and Theta, before any failure flag
-        elif self.model == 'FieldLineToroidal' or (isinstance(self.field, Vmec)
+        elif self.model == 'FieldLineToroidal' or (is_toroidal(self.field)
                 and self.model in ('FieldLineAdaptative', 'FieldLineArclength')):
             size, angles = self.initial_conditions.shape[-1] + int(flag), (1, 2)
         else:
