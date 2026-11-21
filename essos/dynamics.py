@@ -1379,7 +1379,7 @@ class Tracing():
         if self._axis_regular:
             size = self.initial_conditions.shape[-1] + 1 + int(flag)
             angles = (2, size - 1 - int(flag))  # phi and Theta, before any failure flag
-        elif self.model == 'FieldLineToroidal' or (isinstance(self.field, Vmec)
+        elif self.model == 'FieldLineToroidal' or (is_toroidal(self.field)
                 and self.model in ('FieldLineAdaptative', 'FieldLineArclength')):
             size, angles = self.initial_conditions.shape[-1] + int(flag), (1, 2)
         else:
