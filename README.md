@@ -64,22 +64,22 @@ curvature. Losses compose with `+`, and `L.grad` is the exact gradient.
 ![Coils fitted to a QA boundary](docs/readme_coil_optimization.png)
 
 ```python
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart
-from essos.losses import custom_loss
-from essos.surfaces import BdotN_over_B, SurfaceRZFourier
+from essos.losses import CustomLoss
+from essos.surfaces import bdotn_over_b, SurfaceRZFourier
 from scipy.optimize import least_squares
 
 surface = SurfaceRZFourier.from_wout_file("wout.nc", s=1, ntheta=30, nphi=30,
                                           range_torus="half period")
-coils = Coils(curves=CreateEquallySpacedCurves(3, 3, 10.0, 5.6, n_segments=45,
+coils = Coils(curves=create_equally_spaced_curves(3, 3, 10.0, 5.6, n_segments=45,
                                                nfp=2, stellsym=True),
               currents=[1.0] * 3)
 
-L = (custom_loss(lambda field, surface: abs(BdotN_over_B(surface, field)).sum(),
+L = (CustomLoss(lambda field, surface: abs(bdotn_over_b(surface, field)).sum(),
                  "field", surface=surface)
-     + custom_loss(lambda field: (field.coils.length - 32.0).clip(0).mean(), "field")
-     + custom_loss(lambda field: (field.coils.curvature - 0.1).clip(0).mean(), "field"))
+     + CustomLoss(lambda field: (field.coils.length - 32.0).clip(0).mean(), "field")
+     + CustomLoss(lambda field: (field.coils.curvature - 0.1).clip(0).mean(), "field"))
 L.dependencies = {"field": BiotSavart(coils)}
 
 result = least_squares(L, L.starting_dofs, L.grad, max_nfev=400)
@@ -102,7 +102,7 @@ field = BiotSavart(Coils.from_json("coils.json"))
 R0 = jnp.linspace(1.21, 1.40, 8)
 seeds = jnp.array([R0, jnp.zeros_like(R0), jnp.zeros_like(R0)]).T
 
-tracing = Tracing(field=field, model="FieldLineAdaptative", initial_conditions=seeds,
+tracing = Tracing(field=field, model="FieldLineAdaptive", initial_conditions=seeds,
                   tmax=8000, n_save=40000, atol=1e-8, rtol=1e-8)
 tracing.poincare_plot(shifts=[0.0])
 ```
@@ -132,7 +132,7 @@ from essos.dynamics import Particles, Tracing
 
 particles = Particles(initial_xyz=seeds, mass=ALPHA_PARTICLE_MASS,
                       charge=ALPHA_PARTICLE_CHARGE, energy=4000 * ONE_EV)
-tracing = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles,
+tracing = Tracing(field=field, model="GuidingCenterAdaptive", particles=particles,
                   tmax=1e-4, n_save=800, atol=1e-7, rtol=1e-7)
 tracing.plot()
 print(tracing.loss_fractions)
@@ -155,7 +155,7 @@ with a wall 3 cm outside the LCFS.
 ```python
 vmec = vmex.essos_vmec_field(wout)                     # or Vmec("wout_*.nc")
 outside = vmex.VmecExtender.from_wout(wout, external_field=coil_grid)
-tracing = Tracing(field=vmec, model="GuidingCenterAdaptative", particles=particles,
+tracing = Tracing(field=vmec, model="GuidingCenterAdaptive", particles=particles,
                   tmax=4e-5, exterior_field=outside, wall=0.03)  # gap [m] or a surface
 print(tracing.wall_hits.mean(), tracing.wall_positions[tracing.wall_hits])
 ```
@@ -266,17 +266,17 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
   off outside the LCFS. Supplying `stopping_criteria` replaces these events; it is
   evaluated on `(s, theta, phi, ...)`. See
   [`examples/particle_tracing/trace_particles_vmec_to_wall.py`](examples/particle_tracing/trace_particles_vmec_to_wall.py).
-- **Stopping coil-field traces.** Pass `stopping_criteria=LevelsetStoppingCriterion(...)`
-  to end Cartesian traces once they leave a prescribed distance from a surface,
-  and read the per-line mask from `tracing.boundary_hits`.
+- **Stopping coil-field traces.** Pass `stopping_criteria` (a level-set callable or
+  `LevelsetStoppingCriterion(...)`, positive inside) to end a trace at the
+  boundary and read the per-line mask from `tracing.boundary_hits`.
 - **Step budget and defaults.** `max_steps` (default 16 times the steps of a fixed-step solve) bounds every
   Diffrax solve and a `RuntimeWarning` reports orbits that did not finish. `timestep` defaults to 1/400 of the
   transit time `R0 / v` (1/100 on a VMEC field), `rtol` to `1e-8` and `atol` to `rtol`.
 - **Progress bars** are off by default; pass `progress=True` when interactive.
   With `particle_batch_size=n` particles are traced `n` at a time and the bar
   counts completed particles (batches are bypassed under `jax.jit`/`grad`).
-- **Model choice.** `FieldLineArclength` traces a fixed physical length so
-  rescaling `B` does not change the run; `FieldLineToroidal` sets coverage
+- **Model choice.** `field_line_arclength` traces a fixed physical length so
+  rescaling `B` does not change the run; `field_line_toroidal` sets coverage
   directly in toroidal angle for flux-coordinate fields.
 
 ## Optional: near-axis fields
@@ -304,7 +304,6 @@ These renames are breaking and have no aliases. Tracing options are keyword-only
 | `optimize_loss_function(maximum_function_evaluations=...)`, `MultiObjectiveOptimizer` option of the same name | `max_nfev` |
 | `optimize_loss_function(tolerance_optimization=...)`, `MultiObjectiveOptimizer` option of the same name | `tol` |
 | `loss_BdotN`, `loss_BdotN_constraint` | `loss_bdotn`, `loss_bdotn_constraint` |
-| `Tracing(condition=...)` | `stopping_criteria` (one callable or a list) |
 
 `max_steps` was already the step-cap name and is unchanged; the loss functions now accept it too.
 
@@ -326,6 +325,29 @@ These renames are breaking and have no aliases. Tracing options are keyword-only
 ```sh
 pytest
 ```
+
+## API changes: names
+
+The PEP 8 renames below are breaking; update calls as shown.
+
+| Old | New |
+| --- | --- |
+| `Electric_field_flux` | `ElectricFieldFlux` |
+| `Electric_field_zero` | `ElectricFieldZero` |
+| `BackgroundSpecies.species_indeces` | `BackgroundSpecies.species_indices` |
+| `ALM_model_lbfgs` | `alm_model_lbfgs` |
+| `ALM_model_jaxopt_lbfgsb` (alias) | `alm_model_lbfgs` |
+| `CreateEquallySpacedCurves`, `RotatedCurve` | `create_equally_spaced_curves`, `rotated_curve` |
+| `BdotN`, `BdotN_over_B`, `B_on_surface`, `SquaredFlux` | `bdotn`, `bdotn_over_b`, `b_on_surface`, `squared_flux` |
+| `loss_B_difference_coils_near_axis`, `loss_gradB_difference_coils_near_axis`, `loss_particle_Br` | `loss_b_difference_coils_near_axis`, `loss_gradb_difference_coils_near_axis`, `loss_particle_br` |
+| `normB_axis`, `loss_normB_axis_average` | `norm_b_axis`, `loss_norm_b_axis_average` |
+| `B_regularized_singularity_term`, `B_regularized_pure` | `b_regularized_singularity_term`, `b_regularized_pure` |
+| `GuidingCenter*`, `LorentzCollisions*`, `Lorentz`, `FieldLine*` vector-field functions in `essos.dynamics` | snake_case (`guiding_center`, `lorentz`, `field_line_arclength`, ...); the `model=` strings are unchanged |
+| `BiotSavart_from_gamma` | `BiotSavartFromGamma` |
+| `base_loss`, `custom_loss`, `composite_loss` | `BaseLoss`, `CustomLoss`, `CompositeLoss` |
+| `essos.fields.near_axis` (stub that raised `ImportError`) | removed; use `pyqsc_jax.near_axis` |
+| `x` property of coils and surfaces | removed; use `dofs` |
+| `Coils.from_json` for files with `dofs_curves` / `dofs_currents` | files written by `Coils.to_json` only (keys `dofs_curves_raw`, `dofs_currents_raw`) |
 
 ## License
 

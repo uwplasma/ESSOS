@@ -11,10 +11,10 @@ from essos.coil_perturbation import (
     perturb_curves_statistic,
     perturb_curves_systematic,
 )
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart, Vmec
-from essos.losses import custom_loss
-from essos.surfaces import BdotN_over_B
+from essos.losses import CustomLoss
+from essos.surfaces import bdotn_over_b
 
 
 """ Creating stochastic field losses """
@@ -34,15 +34,15 @@ def perturbed_field_from_field(field, key, sampler):
 def loss_bdotn_stochastic(field, surface, sampler, keys):
     def perturbed_loss(key):
         perturbed_field = perturbed_field_from_field(field, key, sampler)
-        bdotn_over_b = BdotN_over_B(surface, perturbed_field)
-        return jnp.sum(jnp.abs(bdotn_over_b))
+        ratio = bdotn_over_b(surface, perturbed_field)
+        return jnp.sum(jnp.abs(ratio))
     return jnp.mean(jax.vmap(perturbed_loss)(keys))
 
 
 def constraint_bdotn_stochastic(field, surface, sampler, keys, target_tol=1.0e-6):
     def perturbed_square(key):
         perturbed_field = perturbed_field_from_field(field, key, sampler)
-        return jnp.square(BdotN_over_B(surface, perturbed_field))
+        return jnp.square(bdotn_over_b(surface, perturbed_field))
     expected_square = jnp.mean(jax.vmap(perturbed_square)(keys), axis=0)
     return jnp.sqrt(jnp.sum(jnp.maximum(expected_square - target_tol, 0.0)))
 
@@ -79,7 +79,7 @@ COIL_CURRENT = 1.0
 number_of_field_periods = vmec.nfp
 major_radius_coils = vmec.r_axis
 minor_radius_coils = vmec.r_axis / 1.5
-curves = CreateEquallySpacedCurves(n_curves=N_COILS,order=FOURIER_ORDER, R=major_radius_coils,
+curves = create_equally_spaced_curves(n_curves=N_COILS,order=FOURIER_ORDER, R=major_radius_coils,
                                    r=minor_radius_coils,n_segments=N_SEGMENTS,  nfp=number_of_field_periods,stellsym=True)
 coils_initial = Coils(curves=curves,currents=[COIL_CURRENT] * N_COILS)
 field_initial = BiotSavart(coils_initial)
@@ -93,10 +93,10 @@ sampler = GaussianSampler(coils_initial.curves.quadpoints, sigma=SIGMA, length_s
 stochastic_keys = jnp.arange(N_samples)
 
 """ Defining custom losses """
-L_normal_field = custom_loss(loss_bdotn_stochastic, "field", surface=surface, sampler=sampler, keys=stochastic_keys)
-L_normal_field_constraint = custom_loss(constraint_bdotn_stochastic, "field", surface=surface, sampler=sampler, keys=stochastic_keys, target_tol=BDOTN_TARGET_TOL)
-L_length_constraint = custom_loss(loss_length_constraint, "field", max_coil_length=MAX_COIL_LENGTH)
-L_curvature_constraint = custom_loss(loss_curvature_constraint, "field", max_coil_curvature=MAX_COIL_CURVATURE)
+L_normal_field = CustomLoss(loss_bdotn_stochastic, "field", surface=surface, sampler=sampler, keys=stochastic_keys)
+L_normal_field_constraint = CustomLoss(constraint_bdotn_stochastic, "field", surface=surface, sampler=sampler, keys=stochastic_keys, target_tol=BDOTN_TARGET_TOL)
+L_length_constraint = CustomLoss(loss_length_constraint, "field", max_coil_length=MAX_COIL_LENGTH)
+L_curvature_constraint = CustomLoss(loss_curvature_constraint, "field", max_coil_curvature=MAX_COIL_CURVATURE)
 
 """ Defining total loss + setting dependencies """
 L_normal_field.dependencies = {"field": field_initial}
@@ -132,7 +132,7 @@ C_length_constraint.dependencies = {"field": field_initial}
 C_curvature_constraint.dependencies = {"field": field_initial}
 C_total_constraint.dependencies = {"field": field_initial}
 
-ALM = alm.ALM_model_lbfgs(constraints=C_total_constraint, model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max, alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol)
+ALM = alm.alm_model_lbfgs(constraints=C_total_constraint, model_lagrangian=model_lagrangian, beta=beta, mu_max=mu_max, alpha=alpha, gamma=gamma, epsilon=epsilon, eta_tol=eta_tol, omega_tol=omega_tol)
 
 """ Optimizing with alm """
 lagrange_params = C_total_constraint.init(field_initial.dofs)
@@ -153,8 +153,8 @@ coils_optimized = field_optimized.coils
 
 print(f"Stochastic optimization with ALM took {time() - time0:.2f} seconds")
 
-BdotN_over_B_initial = BdotN_over_B(surface, field_initial)
-BdotN_over_B_optimized = BdotN_over_B(surface, field_optimized)
+BdotN_over_B_initial = bdotn_over_b(surface, field_initial)
+BdotN_over_B_optimized = bdotn_over_b(surface, field_optimized)
 curvature = jnp.mean(field_optimized.coils.curvature, axis=1)
 length = jnp.max(jnp.ravel(field_optimized.coils.length))
 stochastic_loss_initial = L_normal_field(L_normal_field.starting_dofs)
@@ -162,12 +162,12 @@ stochastic_loss_final = L_normal_field(params[0])
 
 print("Mean curvature:", curvature)
 print("Length:", length)
-print(f"Stochastic |BdotN/B| loss before optimization: {stochastic_loss_initial:.2e}")
-print(f"Stochastic |BdotN/B| loss after optimization: {stochastic_loss_final:.2e}")
-print(f"Maximum BdotN/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
-print(f"Maximum BdotN/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
-print(f"Average BdotN/B before optimization: {jnp.average(jnp.abs(BdotN_over_B_initial)):.2e}")
-print(f"Average BdotN/B after optimization: {jnp.average(jnp.abs(BdotN_over_B_optimized)):.2e}")
+print(f"Stochastic |bdotn/B| loss before optimization: {stochastic_loss_initial:.2e}")
+print(f"Stochastic |bdotn/B| loss after optimization: {stochastic_loss_final:.2e}")
+print(f"Maximum bdotn/B before optimization: {jnp.max(BdotN_over_B_initial):.2e}")
+print(f"Maximum bdotn/B after optimization: {jnp.max(BdotN_over_B_optimized):.2e}")
+print(f"Average bdotn/B before optimization: {jnp.average(jnp.abs(BdotN_over_B_initial)):.2e}")
+print(f"Average bdotn/B after optimization: {jnp.average(jnp.abs(BdotN_over_B_optimized)):.2e}")
 
 fig = plt.figure(figsize=(8, 4))
 ax1 = fig.add_subplot(121, projection="3d")

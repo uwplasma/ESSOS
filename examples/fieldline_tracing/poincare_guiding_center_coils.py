@@ -36,7 +36,7 @@ particles = Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=jnp.ones
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
+tracing = Tracing(field=field, model='GuidingCenterAdaptive', particles=particles,
                   tmax=tmax, n_save=n_save, rtol=rtol)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 

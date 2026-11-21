@@ -1,13 +1,10 @@
 import pytest
 import numpy as np
 from unittest.mock import MagicMock, patch
-import essos.objective_functions as objf
-from essos.losses import custom_loss
+from essos.losses import CustomLoss
 from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 from essos.coils import Coils,Curves
 from essos.fields import BiotSavart
-from essos.objective_functions import loss_coil_length, loss_coil_curvature
-from essos.surfaces import BdotN_over_B
 
 # test_multiobjectiveoptimizer.py
 
@@ -40,7 +37,7 @@ def test_custom_loss_named_unraveler():
     def loss_fn(curve_dofs, current):
         return jnp.sum(curve_dofs**2) + jnp.sum(current)
 
-    loss = custom_loss(loss_fn, "curve_dofs", "current")
+    loss = CustomLoss(loss_fn, "curve_dofs", "current")
     loss.dependencies = {
         "curve_dofs": jnp.array([[1.0, 2.0], [3.0, 4.0]]),
         "current": jnp.array([5.0]),
@@ -71,59 +68,6 @@ def test_custom_loss_named_unraveler():
     assert jnp.array_equal(gradient_tuple["unused"], gradient["unused"])
 
 
-@pytest.mark.xfail(reason='test_build_available_inputs uses the old optimizer loss API (x, dofs_curves=, currents_scale=); BdotN_over_B now lives in essos.surfaces with signature (surface, field). Needs rewrite to new API.', strict=False)
-def test_build_available_inputs( vmec=mock_vmec(),  dummy_loss_fn=dummy_loss_fn):
-    optimizer = MultiObjectiveOptimizer(
-        loss_functions=[dummy_loss_fn],
-        vmec=vmec,
-        coils_init=None,
-        function_inputs={"extra": 42},
-        opt_config={"order_Fourier": 2, "num_coils": 2}
-    )
-    x = jnp.arange(32, dtype=float)
-
-    result = optimizer._build_available_inputs(x)
-
-
-    expected_keys = {
-        "field", "coils", "vmec", "surface", "x", "dofs_curves", "currents_scale", "nfp", "extra"
-    }
-    assert expected_keys.issubset(result.keys())
-    assert isinstance(result["x"], jnp.ndarray)
-    assert result["vmec"] is vmec
-    assert result["surface"] is vmec.surface
-    assert result["currents_scale"] == 1.0
-    assert result["nfp"] == 2
-    assert result["extra"] == 42
-    assert result["dofs_curves"].shape == (2, 3,5)
-
-    weights=jnp.array([1.0])
-    loss_result=optimizer._call_loss_fn(dummy_loss_fn,result)
-    assert loss_result.shape == ()
-    assert loss_result == 496
-    loss_weight_result=optimizer.weighted_loss( x, weights)
-    assert loss_weight_result.shape == ()
-    assert loss_weight_result == 496
-
-    optimized_coils=optimizer.optimize_with_optax(weights, method="adam", lr=1e-2)
-    assert optimized_coils.currents_scale==0.01999998979999997872
-
-    dofs_curves=optimized_coils.dofs_curves
-    currents_scale=optimized_coils.currents_scale
-    nfp=optimized_coils.nfp
-    n_segments=optimized_coils.n_segments
-    stellsym=optimized_coils.stellsym
-    x=optimized_coils.x
-    bdotn_b=objf.loss_bdotn_over_b(x,vmec=vmec,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
-    #assert bdotn_b==0.0000000000000037761977058799732810080238
-
-    max_length=loss_coil_length(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
-    max_curvature=loss_coil_curvature(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
-    normB_axis=objf.loss_normB_axis(x,dofs_curves=dofs_curves, currents_scale=currents_scale, nfp=nfp, n_segments=n_segments, stellsym=stellsym)
-
-    optimizer.run()
-
-
 def test_weighted_loss_then_jitted_loss_keeps_static_currents_scale():
     # Regression: coils rebuilt inside the jitted weighted_loss used to recompute
     # currents_scale as a tracer, which then leaked into later jitted losses.
@@ -137,9 +81,9 @@ def test_weighted_loss_then_jitted_loss_keeps_static_currents_scale():
     optimizer = MultiObjectiveOptimizer(
         loss_functions=[loss_coil_length_sum],
         vmec=mock_vmec(),
-        opt_config={"order_Fourier": 2, "num_coils": 2},
+        opt_config={"fourier_order": 2, "num_coils": 2},
     )
-    x = optimizer.initial_coils.x
+    x = optimizer.initial_coils.dofs
     weighted = optimizer.weighted_loss(x, [1.0])
     jax.grad(lambda y: optimizer.weighted_loss(y, [1.0]))(x)
     direct = optimizer._call_loss_fn(loss_coil_length_sum, optimizer._build_available_inputs(x))
@@ -155,7 +99,7 @@ def test_plots_without_plotly_raise_clear_error(monkeypatch):
 
 
 def test_scaling_an_initialized_custom_loss_preserves_dependencies():
-    loss = custom_loss(lambda x: jnp.sum(x*x), 'x')
+    loss = CustomLoss(lambda x: jnp.sum(x*x), 'x')
     loss.dependencies = {'x': jnp.array([2., 3.])}
     scaled = 3*loss
     np.testing.assert_allclose(scaled(scaled.starting_dofs), 39.)
@@ -163,7 +107,7 @@ def test_scaling_an_initialized_custom_loss_preserves_dependencies():
 
 
 def test_first_jitted_call_does_not_cache_traced_starting_dofs():
-    loss = custom_loss(lambda x, y: jnp.sum(x*x)+jnp.sum(y), 'x', 'y')
+    loss = CustomLoss(lambda x, y: jnp.sum(x*x)+jnp.sum(y), 'x', 'y')
     loss.dependencies = {'x': jnp.array([2., 3.]), 'y': jnp.array([4.])}
     np.testing.assert_allclose(loss(jnp.array([2., 3., 4.])), 17.)
     np.testing.assert_allclose(loss.starting_dofs + 0., jnp.array([2., 3., 4.]))
@@ -173,8 +117,8 @@ def test_first_jitted_call_does_not_cache_traced_starting_dofs():
 def test_composite_first_jit_access_preserves_dofs_and_dependency_gradients(first_access):
     import jax
 
-    quadratic = custom_loss(lambda x, y: jnp.sum(x*x) + jnp.sum(y), 'x', 'y')
-    coupling = custom_loss(lambda x: x[0]*x[1], 'x')
+    quadratic = CustomLoss(lambda x, y: jnp.sum(x*x) + jnp.sum(y), 'x', 'y')
+    coupling = CustomLoss(lambda x: x[0]*x[1], 'x')
     total = quadratic + coupling
     total.dependencies = {'x': jnp.array([2., 3.]), 'y': jnp.array([4.]),
                           'unused': jnp.array([99.])}

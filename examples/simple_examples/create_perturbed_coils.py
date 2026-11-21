@@ -7,12 +7,12 @@ print(jax.devices())
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from essos.coils import Coils, CreateEquallySpacedCurves,Curves
+from essos.coils import Coils, create_equally_spaced_curves,Curves
 from functools import partial
 from essos.coil_perturbation import GaussianSampler, perturb_curves
 
 # Coils parameters
-order_Fourier_series_coils = 4
+fourier_order = 4
 number_coil_points = 80
 number_coils_per_half_field_period = 3
 number_of_field_periods = 2
@@ -21,8 +21,8 @@ number_of_field_periods = 2
 current_on_each_coil = 1.84e7
 major_radius_coils = 7.75
 minor_radius_coils = 4.45
-curves = CreateEquallySpacedCurves(n_curves=number_coils_per_half_field_period,
-                                   order=order_Fourier_series_coils,
+curves = create_equally_spaced_curves(n_curves=number_coils_per_half_field_period,
+                                   order=fourier_order,
                                    R=major_radius_coils, r=minor_radius_coils,
                                    n_segments=number_coil_points,
                                    nfp=number_of_field_periods, stellsym=True)

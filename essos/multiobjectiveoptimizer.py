@@ -6,7 +6,7 @@ import optax
 import matplotlib.pyplot as plt
 from jax import jit
 from functools import partial
-from essos.coils import Coils, Curves, CreateEquallySpacedCurves
+from essos.coils import Coils, Curves, create_equally_spaced_curves
 from essos.fields import BiotSavart
 import numpy as np
 from pandas.plotting import parallel_coordinates
@@ -31,8 +31,8 @@ class MultiObjectiveOptimizer:
 
         self.study = None
 
-        self.order_Fourier = self.opt_config.get("order_Fourier", 6)
-        self.num_points = self.order_Fourier * 10
+        self.fourier_order = self.opt_config.get("fourier_order", 6)
+        self.num_points = self.fourier_order * 10
         self.num_coils = self.opt_config.get("num_coils", 4)
         self.max_nfev = self.opt_config.get("max_nfev", 300)
         self.n_trials = self.opt_config.get("n_trials", 1)
@@ -46,9 +46,9 @@ class MultiObjectiveOptimizer:
         nfp = self.vmec.nfp
         R = self.vmec.r_axis
         r = R / 1.5
-        curves = CreateEquallySpacedCurves(
+        curves = create_equally_spaced_curves(
             n_curves=self.num_coils,
-            order=self.order_Fourier,
+            order=self.fourier_order,
             R=R, r=r,
             n_segments=self.num_points,
             nfp=nfp, stellsym=True
@@ -111,7 +111,7 @@ class MultiObjectiveOptimizer:
         loss_fn = lambda x: self.weighted_loss(x, weights)
         grad_fn = jax.grad(loss_fn)
 
-        x = self.initial_coils.x
+        x = self.initial_coils.dofs
         opt = getattr(optax, method)(lr)
         state = opt.init(x)
 
@@ -152,7 +152,7 @@ class MultiObjectiveOptimizer:
     def optimize_with_optax(self, weights, method="adam", lr=1e-2):
         loss_fn = lambda x: self.weighted_loss(x, weights)
         grad_fn = jax.grad(loss_fn)
-        x = self.initial_coils.x
+        x = self.initial_coils.dofs
         optimizer = getattr(optax, method)(lr)
         state = optimizer.init(x)
 

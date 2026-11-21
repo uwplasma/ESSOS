@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from netCDF4 import Dataset
 
 import essos.mgrid as mgrid_module
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.fields import BiotSavart
 from essos.mgrid import MGrid, coils_to_mgrid
 
@@ -54,7 +54,7 @@ def test_mgrid_write_read_roundtrip(tmp_path):
 def test_coils_to_mgrid_writes_expected_shape_and_finite_values(tmp_path, monkeypatch):
     # Keep JIT compilation independent of the cache populated by earlier tests.
     jax.clear_caches()
-    coils = CreateEquallySpacedCurves(1, order=1, R=1.0, r=0.2, n_segments=32, nfp=1, stellsym=False)
+    coils = create_equally_spaced_curves(1, order=1, R=1.0, r=0.2, n_segments=32, nfp=1, stellsym=False)
     coil_set = Coils(coils, jnp.asarray([2.0]))
     monkeypatch.setattr(mgrid_module, "_BIOT_SAVART_PAIR_BUDGET", 32 * 31)
     filename = tmp_path / "mgrid.coils.nc"

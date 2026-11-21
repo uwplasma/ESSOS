@@ -31,7 +31,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,charge=A
 
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
+tracing = Tracing(field=field, model='GuidingCenterAdaptive', particles=particles,
                   tmax=tmax, timestep=timestep,n_save=n_save, atol=atol,rtol=rtol)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories

@@ -10,7 +10,7 @@ from essos.surfaces import SurfaceClassifier
 from essos.coils import Coils
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY,ONE_EV
 from essos.dynamics import Tracing, Particles
-from essos.objective_functions import normB_axis
+from essos.objective_functions import norm_b_axis
 
 # Input parameters
 tmax = 1.e-4
@@ -32,12 +32,12 @@ field = BiotSavart(coils)
 # field = BiotSavart(coils)
 
 #renormalize coisl to have B_target=5.7 on axis
-B_axis_old=normB_axis(field,npoints=200)
+B_axis_old=norm_b_axis(field,npoints=200)
 #print(jnp.average(B_axis_old))
 B_target=5.7
 coils.dofs_currents=coils.dofs_currents*B_target/jnp.average(B_axis_old)
 field=BiotSavart(coils)
-#B_axis_new=normB_axis(field,npoints=200)
+#B_axis_new=norm_b_axis(field,npoints=200)
 #print(jnp.average(B_axis_new))
 # Load coils and field
 wout_file = os.path.join(os.path.dirname(__file__), '..', 'input_files','wout_QH_simple_scaled.nc')
@@ -56,7 +56,7 @@ particles = Particles(initial_xyz=initial_xyz, mass=ALPHA_PARTICLE_MASS,charge=A
 print(f"Initialization performed")
 # Trace in ESSOS
 time0 = time()
-tracing = Tracing(field=field, model='GuidingCenterAdaptative', particles=particles,
+tracing = Tracing(field=field, model='GuidingCenterAdaptive', particles=particles,
                   tmax=tmax, timestep=timestep,n_save=n_save, atol=atol,rtol=rtol,boundary=boundary)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}%")

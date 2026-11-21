@@ -13,7 +13,7 @@ fixed-step defaults; orange is the old setting and blue the current one.
 Adaptive or fixed
 -----------------
 
-* Use the adaptive models (``GuidingCenterAdaptative``, ``FullOrbitAdaptative``) unless a fixed step is required. Their
+* Use the adaptive models (``GuidingCenterAdaptive``, ``FullOrbitAdaptive``) unless a fixed step is required. Their
   cost follows the tolerance and, on a coil field, they reach a given energy error about 4 times faster than a fixed step (4e-8 in 2.4 s against 9.4 s).
 * The fixed-step models need a step small enough for the field: on a coil field the energy error is 3e-2 at 100 steps
   per transit and 4e-8 at 400. A smooth VMEC field is converged from about 100.

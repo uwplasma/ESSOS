@@ -95,9 +95,9 @@ def test_flux_shape_gradients_match_analytic_and_finite_differences(close):
 
 
 def test_biot_savart_vector_potential_curl_matches_field():
-    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.coils import Coils, create_equally_spaced_curves
     from essos.fields import BiotSavart
-    curves = CreateEquallySpacedCurves(2, 2, 3., 1., n_segments=40, nfp=2, stellsym=True)
+    curves = create_equally_spaced_curves(2, 2, 3., 1., n_segments=40, nfp=2, stellsym=True)
     field = BiotSavart(Coils(curves, jnp.array([8e4, -12e4])))
     for xyz in (jnp.array([.6, .2, -.3]), jnp.array([2., .4, .1])):
         jacobian = jax.jacfwd(field.A)(xyz)

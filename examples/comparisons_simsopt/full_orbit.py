@@ -83,7 +83,7 @@ if method == 'Dopri5':
                       tmax=tmax, timestep=tmax/100, n_save=100,
                       atol=rtol_array[0], rtol=rtol_array[0])
 else:
-    compile_tracing = Tracing(field=field_essos, model='FullOrbit_Boris', particles=particles,
+    compile_tracing = Tracing(field=field_essos, model='FullOrbitBoris', particles=particles,
                       tmax=tmax, timestep=tmax/100, n_save=100)
 
 block_until_ready(compile_tracing.trajectories)
@@ -98,7 +98,7 @@ for tolerance_idx, rtol_ESSOS in enumerate(rtol_array):
                           atol=rtol_ESSOS, rtol=rtol_ESSOS)
     else:
         num_steps_essos = int(avg_steps_SIMSOPT_array[tolerance_idx]*3)
-        tracing = Tracing(field=field_essos, model='FullOrbit_Boris', particles=particles,
+        tracing = Tracing(field=field_essos, model='FullOrbitBoris', particles=particles,
                            tmax=tmax, timestep=tmax/num_steps_essos, n_save=num_steps_essos)
         
     block_until_ready(tracing.trajectories)

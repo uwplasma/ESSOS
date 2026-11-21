@@ -5,7 +5,7 @@ from functools import partial
 from jax import jit, jacfwd, grad, vmap, tree_util, lax
 
 
-class Electric_field_flux():
+class ElectricFieldFlux():
     """Radial electric field read from an HDF5 file and mapped to VMEC ``s``.
 
     The file needs datasets ``rho`` (normalized minor radius) and ``Er``.
@@ -33,17 +33,17 @@ class Electric_field_flux():
 
         return jnp.array([Er_interp,0.0,0.0])
     
-class Electric_field_zero():
+class ElectricFieldZero():
     """No electric field; ``E_covariant`` returns zeros."""
     def __init__(self):
         self.Er_filename = None
 
     # Stateless: every instance equals every other, so jit calls with it as a static argument share one compilation.
     def __eq__(self, other):
-        return type(other) is Electric_field_zero
+        return type(other) is ElectricFieldZero
 
     def __hash__(self):
-        return hash(Electric_field_zero)
+        return hash(ElectricFieldZero)
         
     @partial(jit, static_argnames=['self'])
     def E_covariant(self, points):

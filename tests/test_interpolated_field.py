@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax import vmap
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, create_equally_spaced_curves
 from essos.dynamics import Particles, Tracing
 from essos.fields import BiotSavart, InterpolatedField, MagneticField
 
@@ -12,7 +12,7 @@ BOX = dict(R=(1.35, 2.05), Z=(-0.3, 0.3), nfp=2)
 
 @pytest.fixture(scope="module")
 def field():
-    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    curves = create_equally_spaced_curves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
     return BiotSavart(Coils(curves=curves, currents=[1.1e6, 0.9e6]))
 
 
@@ -64,7 +64,7 @@ def test_pytree_grad_and_tracing(field):
     # births committed to one device while the orbits are split over several
     births = jax.device_put(jnp.array([[1.75, 0.0, 0.0], [1.8, 0.0, 0.0]]), jax.devices()[0])
     particles = Particles(initial_xyz=births, energy=3.5e6 * 1.602e-19 / 100)
-    runs = [Tracing(field=g, model="GuidingCenterAdaptative", particles=particles, tmax=2e-6, n_save=20,
+    runs = [Tracing(field=g, model="GuidingCenterAdaptive", particles=particles, tmax=2e-6, n_save=20,
                     atol=1e-9, rtol=1e-9, devices=jax.devices()[:2]) for g in (field, f)]
     np.testing.assert_allclose(runs[1].trajectories[..., :3], runs[0].trajectories[..., :3], atol=1e-4)
     assert jnp.abs(runs[1].energy() / particles.energy - 1).max() < 1e-6
