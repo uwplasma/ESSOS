@@ -1,7 +1,14 @@
 """Fixed-step K=0 Boozer guiding-centre tracing (White, 2014).
 
 Interpolate the |B| spectrum in sqrt(s), with m>=1 coefficients divided by
-sqrt(s) for axis regularity; interpolate iota, G and I in s. Explicit RK runs in
+sqrt(s) for axis regularity; interpolate iota, G and I in s. Inside the first
+surface r1 each harmonic is replaced by x^m (C0 + C1 x^2 + C2 x^4), x = r/r1,
+with value, slope and curvature of the spline at r1: the form of an analytic
+|B| at the axis (Landreman & Sengupta, 2019, eqs. 2.10-2.12). The patch is
+matched to the radial splines, but with the angle table r >= r1 uses the table;
+the patch is then tabulated as sum_p x^p T_p(theta, zeta) on the same grid, so
+the two agree at r1 to 3e-11 T (a mode-sum patch steps by up to 1.5e-7 T in
+the angular derivatives there, in the QA reactor field). Explicit RK runs in
 sqrt(s)*(cos(theta), sin(theta)). LCFS crossings are lost; nonfinite steps
 are failed. Optional Euler-Maruyama collisions apply pitch scattering,
 slowing down and energy diffusion (Boozer & Kuo-Petravic, 1981).
@@ -86,6 +93,9 @@ class BoozerField(eqx.Module):
     nfp: int = eqx.field(static=True)
     sine_coef: jax.Array | None = None
     table: jax.Array | None = None  # theta row 0: m=0; remaining rows: m>0
+    axis_coef: jax.Array | None = None  # (cosine[, sine], modes, 3): C_k of the patch inside r1
+    axis_table: jax.Array | None = None  # (powers of x, theta, zeta): B-spline coefficients of T_p
+    axis_degree: int = eqx.field(static=True, default=0)  # largest m
 
     @classmethod
     def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6, *, bmns=None,
@@ -131,6 +141,9 @@ class BoozerField(eqx.Module):
                       if np.ndim(angle_grid) == 0 else map(int, angle_grid))
             table = _angle_table(np.asarray(b_coef), None if sine_coef is None else np.asarray(sine_coef),
                                  xm, xn, int(nfp), nt, nz)
+        axis_coef = np.stack([_axis_patch_coef(float(r_knots[0]), np.asarray(c), xm)
+                              for c in (b_coef, sine_coef) if c is not None])
+        axis_table = None if table is None else _axis_angle_table(axis_coef, xm, xn, int(nfp), nt, nz)
         profiles = np.stack([iota, G, np.asarray(I, float)], axis=1)
         # Axis row: iota and G extrapolated linearly, I(0) = 0.
         axis = profiles[0] - s[0] * (profiles[1] - profiles[0]) / (s[1] - s[0])
@@ -139,7 +152,7 @@ class BoozerField(eqx.Module):
         profiles = np.vstack([axis, profiles])
         s_knots, profile_coef = _spline(s_prof, profiles)
         return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
-                   float(psi0), int(nfp), sine_coef, table)
+                   float(psi0), int(nfp), sine_coef, table, jnp.asarray(axis_coef), axis_table, int(xm.max()))
 
     @classmethod
     def from_arrays(cls, s, bmnc, xm, xn, iota, G, I, dpsi_ds, nfp, *, bmns=None):
@@ -196,6 +209,54 @@ class BoozerField(eqx.Module):
 
     def modB_derivatives(self, r, theta, zeta):
         """``|B|``, ``d|B|/dr``, ``(d|B|/dtheta)/r`` and ``d|B|/dzeta``."""
+        values = self._spline_derivatives(r, theta, zeta)
+        if self.axis_coef is None:
+            return values
+        patch = (self._axis_patch if self.axis_table is None else self._axis_table_patch)(r, theta, zeta)
+        return tuple(jnp.where(r < self.r_knots[0], p, v) for p, v in zip(patch, values))
+
+    def _axis_powers(self, r, count):
+        """``x**p`` for ``p < count``, ``x = r / r1``, as products: derivatives stay finite at ``r = 0``."""
+        powers = [jnp.ones_like(r)]
+        for _ in range(count - 1):
+            powers.append(powers[-1] * (r / self.r_knots[0]))
+        return jnp.stack(powers)
+
+    def _axis_table_patch(self, r, theta, zeta):
+        """The patch from ``axis_table``: ``sum_p x^p T_p`` and its derivatives."""
+        table, r1 = self.axis_table, self.r_knots[0]
+        n = jnp.array(table.shape[1:]) - DEGREE
+        h = jnp.array([2 * np.pi, 2 * np.pi / self.nfp]) / n
+        x = jnp.mod(jnp.stack([theta, zeta]), n * h) / h
+        i = jnp.minimum(jnp.floor(x), n - 1).astype(int)
+        (wt, dt), (wz, dz) = _bspline(x[0] - i[0]), _bspline(x[1] - i[1])
+        slab = jax.lax.dynamic_slice(table, (0, i[0], i[1]), (table.shape[0], DEGREE + 1, DEGREE + 1))
+        T, T_theta, T_zeta = (jnp.einsum('t,ptz,z->p', a, slab, b) for a, b in ((wt, wz), (dt, wz), (wt, dz)))
+        p = np.arange(table.shape[0])
+        powers = self._axis_powers(r, table.shape[0])
+        lower = powers[np.maximum(p - 1, 0)] / r1  # x^p / r for p > 0; T_0 does not depend on theta
+        return T @ powers, (p * T) @ lower, T_theta @ lower / h[0], T_zeta @ powers / h[1]
+
+    def _axis_patch(self, r, theta, zeta):
+        """``modB_derivatives`` inside the first surface, from ``axis_coef``.
+
+        Powers of ``x`` are products, so derivatives stay finite at ``r = 0``.
+        """
+        r1 = self.r_knots[0]
+        powers = self._axis_powers(r, self.axis_degree + 5)
+        exponent = self.xm[:, None] + 2 * jnp.arange(3)
+        f = jnp.sum(self.axis_coef * powers[exponent], -1)  # (kind, modes)
+        lower = jnp.sum(self.axis_coef * powers[jnp.maximum(exponent - 1, 0)], -1) / r1  # f / r for m > 0
+        df = jnp.sum(self.axis_coef * exponent * powers[jnp.maximum(exponent - 1, 0)], -1) / r1
+        phase = self.xm * theta - self.xn * zeta
+        c, s = jnp.cos(phase), jnp.sin(phase)
+        values = (jnp.sum(f[0] * c), jnp.sum(df[0] * c), -jnp.sum(self.xm * lower[0] * s), jnp.sum(self.xn * f[0] * s))
+        if self.axis_coef.shape[0] > 1:
+            values = tuple(x + y for x, y in zip(values, (
+                jnp.sum(f[1] * s), jnp.sum(df[1] * s), jnp.sum(self.xm * lower[1] * c), -jnp.sum(self.xn * f[1] * c))))
+        return values
+
+    def _spline_derivatives(self, r, theta, zeta):
         if self.table is not None:
             return _table_derivatives(self.r_knots, self.table, self.nfp, r, theta, zeta)
         a, da = _evaluate(self.r_knots, self.b_coef, r)
@@ -217,6 +278,37 @@ class BoozerField(eqx.Module):
 
     def modB(self, s, theta, zeta):
         return self.modB_derivatives(jnp.sqrt(s), theta, zeta)[0]
+
+
+def _axis_patch_coef(r1, coef, xm):
+    """C_k of x^m (C0 + C1 x^2 + C2 x^4) matched to the value, r1 d/dr and r1^2 d^2/dr^2 of a harmonic at r1.
+
+    ``coef`` is the radial spline of the harmonic (divided by r for m > 0); its first piece starts at r1.
+    """
+    a, da, d2a = coef[0, :, 3], coef[0, :, 2], 2 * coef[0, :, 1]
+    has_m = xm > 0
+    target = np.stack([np.where(has_m, r1 * a, a), r1 * np.where(has_m, a + r1 * da, da),
+                       r1**2 * np.where(has_m, 2 * da + r1 * d2a, d2a)], -1)
+    e = xm[:, None] + 2 * np.arange(3)  # exponents of x
+    system = np.stack([np.ones_like(e), e, e * (e - 1)], 1).astype(float)  # rows: value, first, second derivative
+    return np.linalg.solve(system, target[..., None])[..., 0]
+
+
+def _axis_angle_table(axis_coef, xm, xn, nfp, nt, nz):
+    """Periodic B-spline coefficients in the angles of T_p = sum of C_k cos (sin) of the modes with m + 2 k = p."""
+    from scipy.ndimage import spline_filter1d
+
+    phase = (xm[:, None, None] * np.linspace(0, 2 * np.pi, nt, endpoint=False)[:, None]
+             - xn[:, None, None] * np.linspace(0, 2 * np.pi / nfp, nz, endpoint=False))
+    weights = np.zeros((len(axis_coef), xm.max() + 5, xm.size))
+    for kind, coef in enumerate(axis_coef):
+        for k in range(3):
+            np.add.at(weights[kind], (xm + 2 * k, np.arange(xm.size)), coef[:, k])
+    table = sum(np.einsum('pm,mtz->ptz', w, f(phase)) for w, f in zip(weights, (np.cos, np.sin)))
+    for axis in (1, 2):
+        table = spline_filter1d(table, DEGREE, axis=axis, mode="grid-wrap")
+    pad = ((DEGREE - 1) // 2, (DEGREE + 1) // 2)
+    return jnp.asarray(np.pad(table, ((0, 0), pad, pad), mode="wrap"))
 
 
 DEGREE = 5  # angular B-spline degree: cubic (C2) breaks Dopri8's order at the cell edges
@@ -288,10 +380,12 @@ def _table_derivatives(knots, table, nfp, r, theta, zeta):
 def _chart(y):
     u, w = y[0], y[1]
     s = u * u + w * w
-    r = jnp.sqrt(s)
-    safe = jnp.where(r > 0, r, 1.0)
-    cos_t, sin_t = jnp.where(r > 0, u / safe, 1.0), jnp.where(r > 0, w / safe, 0.0)
-    return s, r, jnp.arctan2(w, u), cos_t, sin_t, safe
+    # sqrt and arctan2 have no derivative at the origin: their forward-mode tangents there were NaN.
+    off = s > 0
+    safe = jnp.sqrt(jnp.where(off, s, 1.0))
+    r = jnp.where(off, safe, 0.0)
+    cos_t, sin_t = jnp.where(off, u / safe, 1.0), jnp.where(off, w / safe, 0.0)
+    return s, r, jnp.arctan2(jnp.where(off, w, 0.0), jnp.where(off, u, 1.0)), cos_t, sin_t, safe
 
 
 def guiding_center_rhs(field, y, mu, mass, charge):
