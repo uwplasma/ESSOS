@@ -33,15 +33,41 @@ jax.config.update("jax_enable_x64", True)
 
 
 def psi0_from_vmec(phi_edge):
-    """Boozer guiding-centre psi0 from VMEC's edge toroidal flux [Wb]."""
-    return -float(phi_edge) / (2 * np.pi)
+    """Tracer coefficient ``psi0 = -Phi_edge / (2 pi)`` of a ``signgs = -1`` VMEC file (``from_arrays``)."""
+    return -phi_edge / (2 * np.pi)
 
 
-def _spline(x, y):
-    from scipy.interpolate import CubicSpline
+def _refuse_old_flux(old, dpsi_ds):
+    """Old calls passed ``psi0``; refuse them instead of flipping the sign of the flux."""
+    if "psi0" in old:
+        raise TypeError("the flux argument is now dpsi_ds = Phi_edge/2pi, keyword-only; for signgs = -1 it has "
+                        "the opposite sign of the old psi0")
+    if old:
+        raise TypeError(f"unexpected keyword arguments {sorted(old)}")
+    if dpsi_ds is None:
+        raise TypeError("missing keyword argument dpsi_ds = Phi_edge/2pi")
 
-    sp = CubicSpline(np.asarray(x, float), np.asarray(y, float), axis=0)
-    return jnp.asarray(sp.x), jnp.asarray(np.moveaxis(sp.c, 0, -1))  # (nint, ..., 4)
+
+def _spline_jax(x, y):
+    """Differentiable not-a-knot cubic, in the layout of ``_spline``."""
+    x, y = jnp.asarray(x, float), jnp.asarray(y, float)
+    n = x.size
+    h = jnp.diff(x)
+    expand = h.reshape((-1,) + (1,) * (y.ndim - 1))
+    sec = jnp.diff(y, axis=0) / expand
+    if n == 2:
+        second = jnp.zeros_like(y)
+    elif n == 3:
+        second = jnp.broadcast_to(2 * (sec[1] - sec[0]) / (x[2] - x[0]), y.shape)
+    else:
+        matrix = jnp.diag(jnp.concatenate((jnp.zeros(1), 2 * (h[:-1] + h[1:]), jnp.zeros(1))))
+        matrix = matrix + jnp.diag(h, 1) + jnp.diag(h, -1)
+        matrix = matrix.at[0, :3].set(jnp.array([-h[1], h[0] + h[1], -h[0]]))
+        matrix = matrix.at[-1, -3:].set(jnp.array([-h[-1], h[-2] + h[-1], -h[-2]]))
+        rhs = jnp.concatenate((jnp.zeros_like(y[:1]), 6 * jnp.diff(sec, axis=0), jnp.zeros_like(y[:1])))
+        second = jnp.linalg.solve(matrix, rhs)
+    return x, jnp.stack(((second[1:] - second[:-1]) / (6 * expand), second[:-1] / 2,
+                         sec - expand * (2 * second[:-1] + second[1:]) / 6, y[:-1]), axis=-1)
 
 
 def _evaluate(knots, coef, x):
@@ -76,26 +102,21 @@ class BoozerField(eqx.Module):
     axis_degree: int = eqx.field(static=True, default=0)  # largest m
 
     @classmethod
-    def from_booz(cls, s, bmnc, xm, xn, iota, G, I, psi0, nfp, mode_tolerance=1e-6, *, bmns=None,
-                  angle_grid=6):
-        """Build from half-mesh Boozer tables.
+    def from_booz(cls, s, bmnc, xm, xn, iota, G, I, *, dpsi_ds=None, nfp, mode_tolerance=1e-6, bmns=None,
+                  angle_grid=6, signgs=-1, **old):
+        """``from_arrays`` after dropping small modes, with an optional angle table.
 
-        ``bmnc`` and optional sine coefficients ``bmns`` are ``(modes, len(s))``;
-        ``xn``
-        includes the ``nfp`` factor; ``psi0`` uses the Boozer convention
-        (``-VMEC phi[-1]/(2 pi)``).  Modes whose amplitude never exceeds
-        ``mode_tolerance`` times the largest amplitude are dropped.
-
-        With ``angle_grid`` (default 6 points per shortest wavelength, or a
+        Modes whose amplitude never exceeds ``mode_tolerance`` times the largest
+        amplitude are dropped. With ``angle_grid`` (default 6 points per shortest wavelength, or a
         ``(ntheta, nzeta)`` pair) the spectrum is summed once on a uniform grid in
         ``theta`` and one field period of ``zeta``, and evaluated by periodic
         quintic B-splines in the angles with continuous radial splines. A step
         then costs the same for any number of modes; a scalar ``angle_grid`` is
         used only above ``TABLE_MODES`` modes, below which the sum is cheaper. ``angle_grid=None``, or a
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
-        every evaluation.
+        every evaluation. Mode selection and the table need host arrays.
         """
-        s = np.asarray(s, float)
+        _refuse_old_flux(old, dpsi_ds)
         bmnc = np.asarray(bmnc, float)
         xm = np.asarray(xm, int)
         sine = None if bmns is None else np.asarray(bmns, float)
@@ -103,43 +124,75 @@ class BoozerField(eqx.Module):
             raise ValueError("bmns must be finite and have the same shape as bmnc")
         amplitude = (np.abs(bmnc) if sine is None else np.hypot(bmnc, sine)).max(axis=1)
         keep = amplitude > mode_tolerance * amplitude.max()
-        bmnc, xm, xn = bmnc[keep], xm[keep], np.asarray(xn, int)[keep]
-        r = np.sqrt(s)
-        scaled = np.where(xm[:, None] > 0, bmnc / r, bmnc)
-        r_knots, b_coef = _spline(r, scaled.T)
-        sine_coef = None
-        if sine is not None and np.any(sine[keep]):
-            scaled_sine = np.where(xm[:, None] > 0, sine[keep] / r, sine[keep])
-            _, sine_coef = _spline(r, scaled_sine.T)
-        table = None
-        if (angle_grid is not None and np.all(xn % int(nfp) == 0)
-                and (np.ndim(angle_grid) or xm.size > TABLE_MODES)):
-            nt, nz = ((max(16, angle_grid * int(np.abs(xm).max())),
-                       max(16, angle_grid * int(np.abs(xn).max()) // int(nfp)))
-                      if np.ndim(angle_grid) == 0 else map(int, angle_grid))
-            table = _angle_table(np.asarray(b_coef), None if sine_coef is None else np.asarray(sine_coef),
-                                 xm, xn, int(nfp), nt, nz)
-        axis_coef = np.stack([_axis_patch_coef(float(r_knots[0]), np.asarray(c), xm)
-                              for c in (b_coef, sine_coef) if c is not None])
-        axis_table = None if table is None else _axis_angle_table(axis_coef, xm, xn, int(nfp), nt, nz)
-        profiles = np.stack([iota, G, np.asarray(I, float)], axis=1)
-        # Axis row: iota and G extrapolated linearly, I(0) = 0.
-        axis = profiles[0] - s[0] * (profiles[1] - profiles[0]) / (s[1] - s[0])
-        axis[2] = 0.0
-        s_prof = np.concatenate([[0.0], s])
-        profiles = np.vstack([axis, profiles])
-        s_knots, profile_coef = _spline(s_prof, profiles)
-        return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
-                   float(psi0), int(nfp), sine_coef, table, jnp.asarray(axis_coef), axis_table, int(xm.max()))
+        xm, xn = xm[keep], np.asarray(xn, int)[keep]
+        sine = sine[keep] if sine is not None and np.any(sine[keep]) else None
+        field = cls.from_arrays(s, bmnc[keep], xm, xn, iota, G, I, dpsi_ds, nfp, bmns=sine, signgs=signgs)
+        if (angle_grid is None or not np.all(xn % int(nfp) == 0)
+                or not (np.ndim(angle_grid) or xm.size > TABLE_MODES)):
+            return field
+        nt, nz = ((max(16, angle_grid * int(np.abs(xm).max())),
+                   max(16, angle_grid * int(np.abs(xn).max()) // int(nfp)))
+                  if np.ndim(angle_grid) == 0 else map(int, angle_grid))
+        table = _angle_table(np.asarray(field.b_coef), None if sine is None else np.asarray(field.sine_coef),
+                             xm, xn, int(nfp), nt, nz)
+        axis_table = _axis_angle_table(np.asarray(field.axis_coef), xm, xn, int(nfp), nt, nz)
+        return dataclasses.replace(field, table=table, axis_table=axis_table)
 
     @classmethod
-    def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6, angle_grid=6):
-        """Build from a ``Booz_xform`` that has read a wout.
+    def from_arrays(cls, s, bmnc, xm, xn, iota, G, I, dpsi_ds, nfp, *, bmns=None, signgs=-1):
+        """Build from half-mesh Boozer tables, differentiable in every array and in ``dpsi_ds``.
+
+        ``bmnc`` and optional ``bmns`` are ``(modes, len(s))``; ``xn`` includes the
+        ``nfp`` factor. ``dpsi_ds`` is the signed flux factor ``Phi_edge / (2 pi)``
+        in Wb/rad. With ``B = c (grad s x grad theta + iota grad zeta x grad s)``,
+        the flux through a ``zeta`` section is ``dPhi/ds = 2 pi B^zeta sqrt(g) =
+        2 pi c`` along ``e_s x e_theta = sqrt(g) grad zeta``; VMEC and
+        ``booz_xform`` orient it by the sign ``signgs`` of ``sqrt(g)`` (VMEC's
+        ``phips = signgs phi' / 2 pi``), so ``c = signgs * dpsi_ds``. The tracer's
+        ``psi0`` is ``c``: its radial drift at ``I = 0`` is
+        ``-mu (dB/dtheta) / (q c)``. ``signgs = -1`` (left-handed, every VMEC file
+        in use) gives ``psi0 = -dpsi_ds``.
+
+        No mode is dropped and no angle table is built, so ``|B|`` is the mode
+        sum: at 512 modes a right-hand side costs about 2.3 times that of the
+        tabulated ``from_booz_xform`` field. Use ``from_arrays`` to differentiate
+        through the tables, and ``from_booz`` or ``from_booz_xform`` to trace at
+        fixed geometry.
+        """
+        if signgs not in (-1, 1):
+            raise ValueError("signgs must be -1 or 1")
+        s, bmnc = jnp.asarray(s, float), jnp.asarray(bmnc, float)
+        xm, xn = np.asarray(xm, int), np.asarray(xn, int)
+        if s.ndim != 1 or s.size < 2 or bmnc.shape != (xm.size, s.size) or xn.shape != xm.shape:
+            raise ValueError("bmnc must have shape (modes, len(s)) with len(s) >= 2, and xn the shape of xm")
+        if any(jnp.shape(p) != s.shape for p in (iota, G, I)) or (bmns is not None and jnp.shape(bmns) != bmnc.shape):
+            raise ValueError("iota, G and I need the shape of s, and bmns the shape of bmnc")
+        s = eqx.error_if(s, ~jnp.all(jnp.isfinite(s)) | (s[0] <= 0) | jnp.any(jnp.diff(s) <= 0),
+                         "s must be finite, positive and strictly increasing")
+        r = jnp.sqrt(s)
+
+        def coefficients(table):
+            return _spline_jax(r, jnp.where(xm[:, None] > 0, jnp.asarray(table, float) / r, table).T)[1]
+
+        profiles = jnp.stack(jnp.broadcast_arrays(*(jnp.asarray(p, float) for p in (iota, G, I))), axis=1)
+        # Axis row: iota and G extrapolated linearly, I(0) = 0, as in ``from_booz``.
+        axis = (profiles[0] - s[0] * (profiles[1] - profiles[0]) / (s[1] - s[0])).at[2].set(0.0)
+        s_knots, profile_coef = _spline_jax(jnp.concatenate((jnp.zeros(1), s)), jnp.vstack((axis, profiles)))
+        b_coef = coefficients(bmnc)
+        sine_coef = None if bmns is None else coefficients(bmns)
+        axis_coef = jnp.stack([_axis_patch_coef(r[0], c, xm) for c in (b_coef, sine_coef) if c is not None])
+        return cls(r, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn), signgs * dpsi_ds,
+                   int(nfp), sine_coef, None, axis_coef, None, int(xm.max()))
+
+    @classmethod
+    def from_booz_xform(cls, booz, *, dpsi_ds=None, mode_tolerance=1e-6, angle_grid=6, signgs=-1, **old):
+        """Build from a ``Booz_xform`` that has read a wout; ``dpsi_ds`` and ``signgs`` as in ``from_arrays``.
 
         A transform that has not been run takes one jitted, batched pass over every
         surface (``magnetic_only`` when ``booz_xform_jax`` offers it), several times
         faster than ``booz.run()``; a run transform (``booz.run()``) is used as it is.
         """
+        _refuse_old_flux(old, dpsi_ds)
         if getattr(booz, "bmnc_b", None) is None:
             options = {"magnetic_only": True} if "magnetic_only" in inspect.signature(booz.run_jax).parameters else {}
             out = booz.run_jax(**options)
@@ -147,13 +200,14 @@ class BoozerField(eqx.Module):
             surfaces = slice(None) if booz.compute_surfs is None else list(booz.compute_surfs)
             return cls.from_booz(np.asarray(booz.s_in)[surfaces], np.asarray(out["bmnc_b"]).T,
                                  out["ixm_b"], out["ixn_b"], out["iota_b"], out["bvco_b"], out["buco_b"],
-                                 psi0, int(booz.nfp), mode_tolerance, bmns=sine, angle_grid=angle_grid)
+                                 dpsi_ds=dpsi_ds, nfp=int(booz.nfp), mode_tolerance=mode_tolerance, bmns=sine,
+                                 angle_grid=angle_grid, signgs=signgs)
         sine = getattr(booz, "bmns_b", None)
         if bool(getattr(booz, "asym", False)) and sine is None:
             raise ValueError("Asymmetric Boozer transform requires bmns_b")
         return cls.from_booz(booz.s_b, booz.bmnc_b, booz.xm_b, booz.xn_b, booz.iota,
-                             booz.Boozer_G, booz.Boozer_I, psi0, int(booz.nfp), mode_tolerance,
-                             bmns=sine, angle_grid=angle_grid)
+                             booz.Boozer_G, booz.Boozer_I, dpsi_ds=dpsi_ds, nfp=int(booz.nfp),
+                             mode_tolerance=mode_tolerance, bmns=sine, angle_grid=angle_grid, signgs=signgs)
 
     def profiles(self, s):
         """``(iota, G, I)`` and their ``s`` derivatives."""
@@ -239,11 +293,11 @@ def _axis_patch_coef(r1, coef, xm):
     """
     a, da, d2a = coef[0, :, 3], coef[0, :, 2], 2 * coef[0, :, 1]
     has_m = xm > 0
-    target = np.stack([np.where(has_m, r1 * a, a), r1 * np.where(has_m, a + r1 * da, da),
-                       r1**2 * np.where(has_m, 2 * da + r1 * d2a, d2a)], -1)
+    target = jnp.stack([jnp.where(has_m, r1 * a, a), r1 * jnp.where(has_m, a + r1 * da, da),
+                        r1**2 * jnp.where(has_m, 2 * da + r1 * d2a, d2a)], -1)
     e = xm[:, None] + 2 * np.arange(3)  # exponents of x
     system = np.stack([np.ones_like(e), e, e * (e - 1)], 1).astype(float)  # rows: value, first, second derivative
-    return np.linalg.solve(system, target[..., None])[..., 0]
+    return jnp.linalg.solve(system, target[..., None])[..., 0]
 
 
 def _axis_angle_table(axis_coef, xm, xn, nfp, nt, nz):

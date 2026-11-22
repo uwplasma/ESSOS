@@ -140,8 +140,8 @@ def run_essos(births, speed, tmax, consts):
     booz = Booz_xform(verbose=0, mboz=MBOOZ, nboz=MBOOZ)
     booz.read_wout(str(WOUT), flux=False)
     with Dataset(WOUT) as ds:
-        psi0 = -float(ds["phi"][-1]) / (2 * np.pi)
-    field = BoozerField.from_booz_xform(booz, psi0=psi0)
+        dpsi_ds = float(ds["phi"][-1]) / (2 * np.pi)
+    field = BoozerField.from_booz_xform(booz, dpsi_ds=dpsi_ds)
     mass, charge, _ = consts
     kw = dict(speed=speed, mass=mass, charge=charge, tmax=tmax, n_save=N_TIMES)
     trace_boozer(field, *births.T, **kw, progress=False)  # compile
