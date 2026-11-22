@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 from booz_xform_jax import Booz_xform
-from essos.boozer import BoozerField, psi0_from_vmec, trace_boozer
+from essos.boozer import BoozerField, trace_boozer
 from essos.fields import Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.dynamics import Tracing, Particles
@@ -36,7 +36,7 @@ vmec.nc.set_auto_mask(False)
 booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout(wout_file, flux=False)
 booz.run()
-boozer_field = BoozerField.from_booz_xform(booz, psi0=psi0_from_vmec(vmec.nc.variables["phi"][-1]), )
+boozer_field = BoozerField.from_booz_xform(booz, dpsi_ds=float(vmec.nc.variables["phi"][-1]) / (2 * np.pi))
 
 # Births: uniform Boozer angles and pitch on one surface, mapped to VMEC angles
 # with zeta_B = phi + nu and theta_B - iota nu = theta + lambda(theta, phi)

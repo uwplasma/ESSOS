@@ -26,7 +26,7 @@ def tokamak(nfp=1):
     s = np.linspace(0.005, 0.995, 50)
     bmnc = np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s)])
     return BoozerField.from_booz(s, bmnc, [0, 1], [0, 0], np.full_like(s, IOTA),
-                                 np.full_like(s, G), np.zeros_like(s), PSI0, nfp, angle_grid=None)
+                                 np.full_like(s, G), np.zeros_like(s), -PSI0, nfp, angle_grid=None)
 
 
 def test_field_reproduces_the_spectrum_and_is_regular_on_the_axis():
@@ -41,7 +41,7 @@ def test_angle_table_matches_the_mode_sum():
     s = np.linspace(0.005, 0.995, 50)
     bmnc = np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s), 0.1 * s, 0.05 * s])
     args = (s, bmnc, [0, 1, 0, 2], [0, 0, 4, -8], np.full_like(s, IOTA), np.full_like(s, G),
-            0.1 * s, PSI0, 4)
+            0.1 * s, -PSI0, 4)
     table = BoozerField.from_booz(*args, bmns=0.5 * bmnc, angle_grid=(16, 16))
     assert BoozerField.from_booz(*args).table is None  # four modes: summed directly
     exact = BoozerField.from_booz(*args, bmns=0.5 * bmnc, angle_grid=None)
@@ -59,7 +59,7 @@ def test_angle_table_preserves_radial_polynomial_across_knots():
     polynomial = lambda x: np.pi + .23*x - .31*x**2 + .071*x**3
     field = BoozerField.from_booz(
         s, polynomial(r)[None, :], [0], [0], np.full_like(s, .43),
-        np.ones_like(s), np.zeros_like(s), 1., 2, angle_grid=(16, 16))
+        np.ones_like(s), np.zeros_like(s), -1., 2, angle_grid=(16, 16))
     points = np.stack([r[1:-1]-1e-11, r[1:-1]+1e-11], axis=1)
 
     def evaluate(x):
@@ -87,7 +87,7 @@ def test_angle_table_orbit_conserves_analytic_energy_across_radial_knots():
     bmns = np.stack([np.zeros_like(r), .011*r, np.zeros_like(r), .003*r**2])
     field = BoozerField.from_booz(
         s, bmnc, [0, 1, 1, 2], [0, 0, nfp, nfp], np.full_like(s, .43),
-        np.ones_like(s), np.zeros_like(s), 1., nfp, bmns=bmns, angle_grid=(64, 64))
+        np.ones_like(s), np.zeros_like(s), -1., nfp, bmns=bmns, angle_grid=(64, 64))
     mu = .23
     initial = jnp.array([.55*np.cos(.7), .55*np.sin(.7), .13, .9])
     sol = diffeqsolve(
@@ -139,17 +139,50 @@ def test_psi0_from_vmec_keeps_a_traced_edge_flux():
     assert jax.grad(psi0_from_vmec)(2 * np.pi * PSI0) == pytest.approx(-1 / (2 * np.pi), rel=1e-15)
 
 
+@pytest.mark.parametrize("signgs", [-1, 1])
 @pytest.mark.parametrize("sign", [1, -1])
-def test_from_arrays_takes_the_signed_flux_factor(sign):
-    """psi' = Phi_edge / 2 pi of either sign: same |B|, G, I; the radial drift follows the sign."""
-    field = BoozerField.from_arrays(*_tokamak_arrays(sign * PSI0))
-    assert field.psi0 == pytest.approx(-sign * PSI0)
+def test_from_arrays_takes_the_signed_flux_factor(sign, signgs):
+    """psi' of either sign and either handedness: same |B|, G, I; ds/dt = -m mu dB/dtheta / (q signgs psi')."""
+    field = BoozerField.from_arrays(*_tokamak_arrays(sign * PSI0), signgs=signgs)
+    assert field.psi0 == pytest.approx(signgs * sign * PSI0)
     r = np.sqrt(0.3)
     point = (r, 0.7, 0.2)
     np.testing.assert_allclose(field.modB_derivatives(*point), tokamak().modB_derivatives(*point), rtol=1e-12)
     np.testing.assert_allclose(field.profiles(0.3), tokamak().profiles(0.3), rtol=1e-12, atol=1e-12)
     dy = guiding_center_rhs(field, jnp.array([0.0, r, 0.0, 0.0]), V0**2 / (2 * B0), M, Q)
-    assert 2 * r * float(dy[1]) == pytest.approx(sign * EPS * r * M * V0**2 / (2 * Q * PSI0), rel=1e-12)
+    expected = -M * V0**2 / (2 * B0) * B0 * EPS * r / (Q * signgs * sign * PSI0)
+    assert 2 * r * float(dy[1]) == pytest.approx(expected, rel=1e-12)
+
+
+def test_from_arrays_rejects_a_handedness_other_than_plus_or_minus_one():
+    with pytest.raises(ValueError, match="signgs"):
+        BoozerField.from_arrays(*_tokamak_arrays(), signgs=0)
+
+
+@pytest.mark.parametrize("s", [[0.1, 0.3, 0.3, 0.6, 0.9], [0.1, 0.6, 0.3, 0.8, 0.9], [0.0, 0.3, 0.6, 0.8, 0.9]])
+def test_from_arrays_rejects_repeated_unsorted_or_axis_knots(s):
+    s = jnp.array(s)
+    args = (s, jnp.ones((1, 5)), [0], [0], jnp.ones(5), jnp.ones(5), jnp.zeros(5), 1.0, 1)
+    with pytest.raises(Exception, match="strictly increasing"):
+        jax.block_until_ready(BoozerField.from_arrays(*args).b_coef)
+
+
+def test_fax_geometry_record_gives_the_first_principles_radial_drift():
+    """FAX ``circular_torus`` through ``from_arrays``; the record has no psi', so the test supplies it."""
+    pytest.importorskip("fax")
+    from fax.geometry import circular_torus
+    geo = circular_torus(epsilon_B=0.2)
+    k, theta, mu = 8, np.pi / 2, V0**2 / (2 * 2.7)
+    s, xm = float(geo.s[k]), np.asarray(geo.xm)
+    B = float(np.sum(geo.bmnc[k] * np.cos(xm * theta)))
+    dB_dtheta = float(-np.sum(xm * geo.bmnc[k] * np.sin(xm * theta)))
+    y = jnp.array([0.0, np.sqrt(s), 0.0, 0.0])
+    for dpsi_ds in (0.5, -0.5):
+        field = BoozerField.from_arrays(geo.s, geo.bmnc.T, geo.xm, geo.xn, geo.iota, geo.G, geo.I, dpsi_ds,
+                                        geo.nfp, bmns=geo.bmns.T)
+        assert float(field.modB(s, theta, 0.0)) == pytest.approx(B, rel=1e-13)
+        sdot = 2 * np.sqrt(s) * float(guiding_center_rhs(field, y, mu, M, Q)[1])
+        assert sdot == pytest.approx(-M * mu * dB_dtheta / (Q * -dpsi_ds), rel=1e-12)
 
 
 def test_from_arrays_derivatives_in_the_flux_and_a_harmonic_match_finite_differences():
@@ -171,10 +204,12 @@ def test_from_arrays_derivatives_in_the_flux_and_a_harmonic_match_finite_differe
 
 @pytest.mark.parametrize("surfaces", [2, 3, 8])
 def test_traced_spline_matches_the_host_spline(surfaces):
-    from essos.boozer import _spline, _spline_jax
+    from scipy.interpolate import CubicSpline
+    from essos.boozer import _spline_jax
     s = jnp.linspace(0.02, 0.98, surfaces)
     y = jnp.stack((jnp.exp(s), jnp.sin(3 * s), s**3), axis=1)
-    np.testing.assert_allclose(_spline_jax(s, y)[1], _spline(s, y)[1], atol=2e-12, rtol=2e-11)
+    expected = np.moveaxis(CubicSpline(np.asarray(s), np.asarray(y), axis=0).c, 0, -1)
+    np.testing.assert_allclose(_spline_jax(s, y)[1], expected, atol=2e-12, rtol=2e-11)
 
 
 @pytest.mark.parametrize("position", [1, 3, 4, 5, 6])
@@ -307,7 +342,7 @@ def test_repeated_traces_use_current_field_coefficients():
     stronger_ripple = BoozerField.from_booz(
         s, np.stack([np.full_like(s, B0), -2 * B0 * EPS * np.sqrt(s)]),
         [0, 1], [0, 0], np.full_like(s, IOTA), np.full_like(s, G),
-        np.zeros_like(s), PSI0, 1)
+        np.zeros_like(s), -PSI0, 1)
     args = (jnp.full(4, 0.3), jnp.linspace(0, 3, 4),
             jnp.zeros(4), jnp.linspace(-0.6, 0.6, 4))
     kwargs = dict(speed=V0, mass=M, charge=Q, tmax=1e-5, timestep=1e-7, n_save=3)
@@ -490,13 +525,13 @@ def test_sine_spectrum_derivatives_cutoff_and_axis():
     cos = np.stack([np.full_like(s, B0), np.zeros_like(s), np.zeros_like(s)])
     sine = np.stack([np.zeros_like(s), 0.2 * np.sqrt(s), np.full_like(s, 0.1)])
     args = (s, cos, [0, 1, 0], [0, 3, 2], np.full_like(s, IOTA),
-            np.full_like(s, G), np.zeros_like(s), PSI0, 3)
+            np.full_like(s, G), np.zeros_like(s), -PSI0, 3)
     field = BoozerField.from_booz(*args, bmns=sine, mode_tolerance=1e-4, angle_grid=None)
     assert field.xm.size == 3  # Retain sine-only modes.
     from types import SimpleNamespace
     booz = SimpleNamespace(s_b=s, bmnc_b=cos, bmns_b=sine, xm_b=args[2], xn_b=args[3],
                            iota=args[4], Boozer_G=args[5], Boozer_I=args[6], nfp=3, asym=True)
-    converted = BoozerField.from_booz_xform(booz, PSI0, angle_grid=None)
+    converted = BoozerField.from_booz_xform(booz, -PSI0, angle_grid=None)
     np.testing.assert_array_equal(converted.modB_derivatives(0.4, 0.7, 0.2),
                                   field.modB_derivatives(0.4, 0.7, 0.2))
     for r in (0.0, 0.4):
@@ -522,7 +557,7 @@ def test_sine_orbits_match_rotated_cosine_field():
     bmnc = np.stack([np.full_like(s, B0), -B0*EPS*np.sqrt(s)*np.cos(shift)])
     bmns = np.stack([np.zeros_like(s), -B0*EPS*np.sqrt(s)*np.sin(shift)])
     field = BoozerField.from_booz(s, bmnc, [0, 1], [0, 0], np.full_like(s, IOTA),
-                                 np.full_like(s, G), np.zeros_like(s), PSI0, 1, bmns=bmns, angle_grid=None)
+                                 np.full_like(s, G), np.zeros_like(s), -PSI0, 1, bmns=bmns, angle_grid=None)
     theta, pitch = np.linspace(0, 6, 8), np.linspace(-0.9, 0.9, 8)
     kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-5, timestep=2e-8, n_save=7)
     reference = trace_boozer(tokamak(), np.full(8, 0.3), theta, np.zeros(8), pitch, **kwargs)
@@ -575,7 +610,7 @@ def _bundled_wout_field():
     keep = (v["xm_nyq"] <= 6) & (np.abs(v["xn_nyq"]) <= 6 * v["nfp"])
     return BoozerField.from_booz(s, v["bmnc"][1:, keep].T, v["xm_nyq"][keep], v["xn_nyq"][keep],
                                  v["iotas"][1:], v["bvco"][1:], v["buco"][1:],
-                                 psi0_from_vmec(v["phi"][-1]), int(v["nfp"]))
+                                 float(v["phi"][-1]) / (2 * np.pi), int(v["nfp"]))
 
 
 def test_unrun_booz_xform_takes_the_batched_pass_and_matches_the_host_run():
@@ -590,7 +625,7 @@ def test_unrun_booz_xform_takes_the_batched_pass_and_matches_the_host_run():
         booz = Booz_xform(verbose=0, mboz=8, nboz=8)
         booz.read_wout(str(wout), flux=False)
         run(booz)
-        fields.append(BoozerField.from_booz_xform(booz, PSI0, angle_grid=None))
+        fields.append(BoozerField.from_booz_xform(booz, -PSI0, angle_grid=None))
     host, batched = fields
     assert batched.xm.shape == host.xm.shape and np.array_equal(batched.xn, host.xn)
     for point in ((0.3, 0.7, 0.2), (0.9, 2.0, 1.1)):
@@ -611,11 +646,12 @@ def test_from_arrays_equals_the_field_from_the_wout_file():
     booz = Booz_xform(verbose=0, mboz=8, nboz=8)
     booz.read_wout(str(wout), flux=False)
     booz.run()
-    host = BoozerField.from_booz_xform(booz, psi0_from_vmec(phi_edge), mode_tolerance=0.0, angle_grid=None)
+    host = BoozerField.from_booz_xform(booz, phi_edge / (2 * np.pi), mode_tolerance=0.0, angle_grid=None)
     live = BoozerField.from_arrays(booz.s_b, booz.bmnc_b, booz.xm_b, booz.xn_b, booz.iota, booz.Boozer_G,
                                    booz.Boozer_I, phi_edge / (2 * np.pi), int(booz.nfp))
     assert live.psi0 == host.psi0
-    for point in ((0.3, 0.7, 0.2), (0.9, 2.0, 1.1), (0.05, 4.0, 0.4)):
+    r1 = float(host.r_knots[0])
+    for point in ((0.3, 0.7, 0.2), (0.9, 2.0, 1.1), (0.05, 4.0, 0.4), (0.5 * r1, 1.0, 0.3), (0.0, 2.5, 0.7)):
         np.testing.assert_allclose(live.modB_derivatives(*point), host.modB_derivatives(*point),
                                    rtol=1e-11, atol=1e-11)
         y = jnp.array([point[0] * np.cos(point[1]), point[0] * np.sin(point[1]), point[2], V0 / 2])
@@ -680,7 +716,7 @@ def _analytic_axis_field(angle_grid=None):
     r = np.sqrt(s)
     bmnc = np.stack([5 + 0.02 * s, 0.3 * r, 0.1 * s, 0.05 * r**3])
     return BoozerField.from_booz(s, bmnc, [0, 1, 2, 3], [0, 0, 2, 0], np.full_like(s, IOTA), np.full_like(s, G),
-                                 np.zeros_like(s), PSI0, 1, angle_grid=angle_grid)
+                                 np.zeros_like(s), -PSI0, 1, angle_grid=angle_grid)
 
 
 def test_axis_patch_reproduces_an_analytic_field_inside_the_first_surface():
@@ -706,8 +742,8 @@ def _qa_boozer_field():
     booz = booz_xform_jax.Booz_xform(verbose=0, mboz=32, nboz=32)
     booz.read_wout(str(wout), flux=False)
     with Dataset(wout) as d:
-        psi0 = psi0_from_vmec(d.variables["phi"][-1])
-    return BoozerField.from_booz_xform(booz, psi0)
+        dpsi_ds = float(d.variables["phi"][-1]) / (2 * np.pi)
+    return BoozerField.from_booz_xform(booz, dpsi_ds)
 
 
 def _velocity_jump(field, r):

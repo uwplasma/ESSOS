@@ -185,7 +185,7 @@ booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout("wout.nc", flux=False)
 with Dataset("wout.nc") as wout:
     phi_edge = float(wout.variables["phi"][-1])  # boundary toroidal flux
-field = BoozerField.from_booz_xform(booz, psi0=-phi_edge / (2 * np.pi))
+field = BoozerField.from_booz_xform(booz, dpsi_ds=phi_edge / (2 * np.pi))
 
 n = 1000
 speed = np.sqrt(2 * 3.5e6 * ONE_EV / ALPHA_PARTICLE_MASS)
@@ -198,7 +198,7 @@ print(result.lost.mean(), result.loss_fractions())
 
 `BoozerField.from_booz_xform` runs the transform on all surfaces in one jitted pass; a `booz.run()` beforehand (the NumPy loop over surfaces) is accepted and takes about twice as long for the 100-surface ARIES-CS `wout`.
 
-`psi0` is minus VMEC's boundary toroidal flux over `2 pi`. A particle
+`dpsi_ds` is VMEC's signed boundary toroidal flux over `2 pi`; with `signgs=-1` (the default, VMEC's left-handed coordinates) the tracer uses `psi0 = -dpsi_ds`. A particle
 is lost at `s = 1`; `result.loss_times` and `result.states` hold when and where.
 
 Boozer tracing evaluates `|B| = sum [bc_mn(s) cos(m theta - n zeta) + bs_mn(s) sin(m theta - n zeta)]`
