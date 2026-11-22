@@ -1126,6 +1126,7 @@ STRIKING = ([[0.9732, 2.2941, 5.0876], [0.9821, 0.6628, 3.5216], [0.9554, 0.7221
             [-0.9872, 0.5453, 0.747, -0.8145])
 
 
+@pytest.mark.slow
 def test_wall_given_as_a_gap_or_a_surface():
     from essos.surfaces import SurfaceRZFourier
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
@@ -1150,6 +1151,7 @@ def test_vmec_lcfs_crossings_are_exact():
     assert jnp.all(tracing.region[crossed, -1] == -1)
 
 
+@pytest.mark.slow
 def test_vmec_orbits_continue_outside_and_strike_the_wall_exactly():
     tracing = _exterior_tracing(*STRIKING, maxtime=3e-6)
     struck = tracing.wall_hits
@@ -1164,6 +1166,7 @@ def test_vmec_orbits_continue_outside_and_strike_the_wall_exactly():
         assert jnp.isfinite(tracing.trajectories_xyz[i][region >= 0]).all()
 
 
+@pytest.mark.slow
 def test_vmec_orbits_that_come_back_inside_return_to_flux_coordinates():
     xyz, vpar = [[0.9037, 1.2536, 3.6827]], [0.9639]
     tracing = _exterior_tracing(xyz, vpar, maxtime=5e-6)
@@ -1216,6 +1219,7 @@ def _toroidal_source(xyz, params):
     return jnp.stack([-params[0] * xyz[:, 1] / R2, params[0] * xyz[:, 0] / R2, params[1] + 0 * R2], 1)
 
 
+@pytest.mark.slow
 def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and_field_parameters():
     """A strike, an orbit that re-enters twice and one that never leaves: jax.jvp, jax.grad and jit agree with finite differences."""
     import diffrax
@@ -1247,6 +1251,7 @@ def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and
     np.testing.assert_allclose(grad_s @ ds + grad_p @ dparams, forward, rtol=1e-5)
 
 
+@pytest.mark.slow
 def test_vmec_launch_derivative_of_the_exit_time_is_dual_in_both_modes_for_an_orbit_crossing_radial_nodes():
     """The orbit starts inside the last two half-grid nodes of the radial interpolation and crosses them on its way out: with
     a second derivative that jumps there, the forward and reverse programs take different steps and disagree at 1e-8."""
@@ -1268,6 +1273,7 @@ def test_vmec_launch_derivative_of_the_exit_time_is_dual_in_both_modes_for_an_or
     np.testing.assert_allclose(reverse, forward, rtol=1e-9)
 
 
+@pytest.mark.slow
 def test_vmec_non_finite_exterior_field_has_a_finite_masked_gradient_in_both_modes():
     """Orbits stopped by a non-finite exterior field contribute exactly zero to the gradient, as in forward mode."""
     import diffrax
@@ -1290,6 +1296,7 @@ def test_vmec_non_finite_exterior_field_has_a_finite_masked_gradient_in_both_mod
     np.testing.assert_allclose(reverse[1], forward, rtol=1e-5)
 
 
+@pytest.mark.slow
 def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_reverse_mode():
     """Saves of orbits that are not in a segment must not put NaN partials into the VMEC coefficient gradients."""
     import diffrax
@@ -1315,6 +1322,7 @@ def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_rever
     assert jnp.isfinite(jax.grad(objective)(1.0))
 
 
+@pytest.mark.slow
 def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
     """Trapped protons whose radial excursion just reaches the LCFS (pitch 0.0755940631) cross, graze or stay inside.
 

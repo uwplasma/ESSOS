@@ -17,9 +17,9 @@ permissions:
   contents: read
 
 env:
-  # Pull requests run the full suite on Python 3.12 and a short smoke subset on 3.10, 3.11 and 3.14;
-  # main, the nightly schedule and manual runs keep the full matrix.
-  SMOKE_TESTS: tests/test_constants.py tests/test_cpu_devices.py tests/test_surface_integrals.py tests/test_surface_cross_section.py tests/test_interpolated_field.py
+  # Tiers. Pull requests and pushes to main: Python 3.12 only, every test not marked `slow`, with coverage.
+  # The nightly schedule and manual runs: the full matrix and every test, `slow` included.
+  NIGHTLY: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
   JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0"
   JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES: "0"
 
@@ -59,8 +59,8 @@ jobs:
       JAX_COMPILATION_CACHE_DIR: ${{ github.workspace }}/.jax_cache
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'pull_request'
-        && '{"python-version":["3.11","3.12","3.14"],"jax":[""]}'
+      matrix: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'push')
+        && '{"python-version":["3.12"],"jax":[""]}'
         || '{"python-version":["3.11","3.12","3.13","3.14"],"jax":[""],"include":[{"python-version":"3.12","jax":"0.8.2","suffix":", JAX 0.8.2"}]}') }}
     name: Python ${{ matrix.python-version }} Test${{ matrix.suffix }}
 
@@ -85,11 +85,11 @@ jobs:
 
     - name: Run tests
       if: matrix.python-version != '3.12' || matrix.jax
-      run: uv run --no-sync pytest -n 3 ${{ github.event_name == 'pull_request' && format('-x {0}', env.SMOKE_TESTS) || '' }}
+      run: uv run --no-sync pytest -n 3
 
     - name: Run tests with coverage
       if: matrix.python-version == '3.12' && !matrix.jax
-      run: uv run --no-sync pytest -n 3 --cov-branch --cov-report=xml --cov=essos
+      run: uv run --no-sync pytest -n 3 ${{ env.NIGHTLY != 'true' && '-m "not slow"' || '' }} --cov-branch --cov-report=xml --cov=essos --cov-fail-under=73
 
     - name: Upload coverage reports to Codecov
       if: matrix.python-version == '3.12' && !matrix.jax
@@ -99,7 +99,8 @@ jobs:
         slug: uwplasma/ESSOS
 
   oldest:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    # nightly tier only
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ (github.event_name != 'pull_request') && fromJSON('["self-hosted","macOS","ARM64"]') || 'ubuntu-latest' }}
     name: Python 3.10, oldest supported JAX
     timeout-minutes: 120
@@ -122,4 +123,4 @@ jobs:
         key: xla-${{ runner.os }}-py3.10-jax0.6.2-${{ github.sha }}
         restore-keys: xla-${{ runner.os }}-py3.10-jax0.6.2-
     - name: Run tests
-      run: uv run --no-sync pytest -n 3 ${{ github.event_name == 'pull_request' && format('-x {0}', env.SMOKE_TESTS) || '' }}
+      run: uv run --no-sync pytest -n 3
