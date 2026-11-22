@@ -205,6 +205,18 @@ def test_vmec_abs_b_and_b_covariant_come_from_the_metric_and_b_contravariant(wou
     assert jnp.abs(AbsB / bmnc - 1).max() < 2.5e-4
 
 
+@pytest.mark.parametrize("wout", [WOUT_QA, WOUT_ARIES])
+def test_vmec_curvature_is_that_of_the_traced_field(wout):
+    """kappa_i = e_i.(b.grad b) with b = B/|B| from the Cartesian Vmec.B (differential geometry, by automatic
+    differentiation). With B_cov from the filtered bsub tables kappa differed from it by up to 8% at s = 0.9."""
+    vmec = Vmec(wout, ntheta=8, nphi=8)
+    b = lambda p: vmec.B(p) / jnp.linalg.norm(vmec.B(p))  # noqa: E731
+    for point in (jnp.array([0.1, 0.3, 0.2]), jnp.array([0.5, 2.0, 1.0]), jnp.array([0.9, 4.0, 0.4])):
+        b_dot_grad_b = jax.jacfwd(b)(point) @ (vmec.B_contravariant(point) / vmec.AbsB(point))
+        expected = jax.jacfwd(vmec.to_xyz)(point).T @ b_dot_grad_b
+        np.testing.assert_allclose(vmec.kappa(point), expected, rtol=1e-10, atol=1e-10 * jnp.abs(expected).max())
+
+
 def test_vmec_radial_interpolation_keeps_grid_values_and_m0_modes():
     from essos.fields import Vmec, _radial_interp
 
