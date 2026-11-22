@@ -316,16 +316,54 @@ def stix_rate(species, n_e=1e20, T_e=1.0e4 * ELEMENTARY_CHARGE):
     return chandrasekhar / (2 * x / (3 * np.sqrt(np.pi))) / tau
 
 
-def test_collisional_orbits_slow_down_at_the_drag_rate():
+@pytest.mark.parametrize("method", ["dopri8", "adaptive8"])
+def test_collisional_orbits_slow_down_at_the_drag_rate(method):
     """Drift plus collisions in one trace: the mean speed of confined alphas decays at the drag rate."""
     species = electron_background()
     rate = stix_rate(species)
     n, t = 64, 0.05 / rate
     out = trace_boozer(tokamak(), jnp.full(n, 0.3), jnp.linspace(0, 6, n), jnp.zeros(n),
                        jnp.linspace(-0.9, 0.9, n), speed=V0, mass=M, charge=Q, tmax=t,
-                       timestep=t / 20000, n_save=3, species=species, devices=jax.devices()[:1])
+                       timestep=t / 20000, n_save=3, species=species, devices=jax.devices()[:1],
+                       method=method)
     assert not out.lost.any() and not (out.thermalized_times >= 0).any()
     assert np.mean(out.states[:, -1, 4]) / V0 == pytest.approx(np.exp(-0.05), rel=2e-3)
+
+
+@pytest.mark.parametrize("method", ["dopri8", "adaptive8"])
+def test_collisional_marker_does_not_depend_on_its_batch(method):
+    """A marker's noise comes from fold_in(key, marker_id): its trace is the same in runs of N and 2N markers
+    and in any order."""
+    n = 4
+    births = (np.full(2 * n, 0.3), np.linspace(0, 6, 2 * n), np.zeros(2 * n), np.linspace(-0.9, 0.9, 2 * n))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-5, timestep=2e-8, n_save=3, seed=5, method=method,
+                  species=electron_background(), devices=jax.devices()[:1], progress=False, compact=False)
+    small = trace_boozer(tokamak(), *(b[:n] for b in births), **kwargs)
+    large = trace_boozer(tokamak(), *births, **kwargs)
+    # Batches of another size round in the last bit (as in the compaction tests).
+    np.testing.assert_allclose(large.states[:n], small.states, rtol=1e-13, atol=0)
+    order = np.arange(2 * n)[::-1]
+    reversed_ = trace_boozer(tokamak(), *(b[order] for b in births), marker_ids=order, **kwargs)
+    np.testing.assert_allclose(reversed_.states[::-1], large.states, rtol=1e-13, atol=0)
+
+
+def test_paired_runs_share_their_collisional_noise():
+    """With kicks on a fixed collision clock, a perturbed field (the wave switched on) changes the adaptive orbit
+    steps but not the noise: the variance of the paired difference in deposited energy is at least 10 times below
+    that with independent noise."""
+    n = 16
+    s = np.linspace(0.005, 0.995, 50)
+    wave = BoozerField.from_booz(s, np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s), 1e-3 * B0 * s]),
+                                 [0, 1, 1], [0, 0, 20], np.full_like(s, IOTA), np.full_like(s, G),
+                                 np.zeros_like(s), PSI0, 1, angle_grid=None)
+    births = (np.full(n, 0.3), np.linspace(0, 6, n), np.zeros(n), np.linspace(-0.9, 0.9, n))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-4, timestep=2e-7, n_save=3, method="adaptive8",
+                  species=electron_background(), devices=jax.devices()[:1], progress=False)
+    deposit = lambda out: V0**2 - out.states[:, -1, 4] ** 2
+    off = deposit(trace_boozer(tokamak(), *births, seed=1, **kwargs))
+    paired = deposit(trace_boozer(wave, *births, seed=1, **kwargs))
+    independent = deposit(trace_boozer(wave, *births, seed=2, **kwargs))
+    assert np.var(independent - off) >= 10 * np.var(paired - off)
 
 
 def test_slowing_down_on_electrons_follows_the_spitzer_time():

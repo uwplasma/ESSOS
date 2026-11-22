@@ -386,8 +386,8 @@ def _start(field, y0, mu0):
 def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
              carry, keys, first_interval, count, method="rk4", tolerance=1e-8):
     def one(carry, key):
-        def finish(carry, y1, h):
-            """Accept ``y1`` after a step of ``h``: energy, collisions, loss and failure."""
+        def finish(carry, y1, h, kick=True):
+            """Accept ``y1`` after a step of ``h``: energy, collisions (if ``kick``), loss and failure."""
             y, mu, t, alive, t_loss, t_therm, t_fail, err, e0, h_next, k, terminal, terminal_err = carry
             s1, r1, th1, *_ = _chart(y1)
             B1 = field.modB_derivatives(r1, th1, y1[2])[0]
@@ -398,13 +398,17 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             if species is not None:
                 v = jnp.sqrt(2 * e_orbit)
                 point = jnp.array([s1, th1, y1[2]])
-                v, lam = collision_kick(species, mass, charge, v, y1[3] / v, point, h,
-                                        jax.random.normal(jax.random.fold_in(key, k), (2,)))
-                y1 = y1.at[3].set(lam * v)
-                mu1 = v * v * (1 - lam * lam) / (2 * B1)
+                # Kicks sit on the collision clock t_j = j dt with noise from fold_in(key, j): the noise
+                # does not depend on the orbit steps.
+                tick = jnp.round((t + h) / dt).astype(jnp.int32) - 1
+                v_kick, lam = collision_kick(species, mass, charge, v, y1[3] / v, point, dt,
+                                             jax.random.normal(jax.random.fold_in(key, tick), (2,)))
+                y1 = jnp.where(kick, y1.at[3].set(lam * v_kick), y1)
+                mu1 = jnp.where(kick, v_kick * v_kick * (1 - lam * lam) / (2 * B1), mu)
+                v = jnp.where(kick, v_kick, v)
                 t_bulk = species.get_temperature(0, point) * JOULE_PER_EV
                 thermal = 0.5 * mass * v * v < thermal_cutoff * t_bulk
-                e0_new = 0.5 * v * v
+                e0_new = jnp.where(kick, 0.5 * v * v, e0)
             else:
                 mu1, e0_new = mu, e0
             finite = (jnp.isfinite(y1).all() & jnp.isfinite(mu1) &
@@ -442,14 +446,22 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
                 carry, attempts = state
                 y, t, h = carry[0], carry[2], carry[9]
                 h_try = jnp.minimum(h, t_end - t)
+                if species is not None:  # land on the next tick of the collision clock
+                    t_tick = (jnp.floor(t / dt * (1 + 1e-12)) + 1) * dt
+                    h_try = jnp.minimum(h_try, t_tick - t)
+                    on_tick = t + h_try >= t_tick * (1 - 1e-12)
+                else:
+                    on_tick = True
                 scale = tolerance * jnp.array([1.0, 1.0, 1.0, jnp.sqrt(2 * carry[8])])
                 y1, norm = _embedded_step(rhs_of(carry), y, h_try, scale, method)
                 ok = jnp.isfinite(norm) & (norm <= 1.0)
                 safe = jnp.where(jnp.isfinite(norm) & (norm > 0), norm, jnp.where(ok, 0.0, 1e10))
                 grow = jnp.clip(0.9 * safe ** (-1 / order), 0.1, 5.0)
-                stepped = finish(carry, y1, h_try)
+                stepped = finish(carry, y1, h_try, on_tick)
                 carry = jax.tree.map(lambda a, b: jnp.where(ok, a, b), stepped, carry)
                 h_next = h_try * grow
+                if species is not None:  # a step cut short by a tick does not shrink the next one
+                    h_next = jnp.where(ok & (h_try < h), jnp.maximum(h_next, h), h_next)
                 return carry[:9] + (h_next,) + carry[10:], attempts + 1
 
             def busy(state):
@@ -486,7 +498,7 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
 
 def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, timestep=None,
                  n_save=100, species=None, seed=0, thermal_cutoff=1.5, devices=None,
-                 progress=True, compact=True, method="dopri8", tolerance=1e-8):
+                 progress=True, compact=True, method="dopri8", tolerance=1e-8, marker_ids=None):
     """Trace guiding centres from Boozer ``(s, theta, zeta)`` with pitch ``v_par/v``.
 
     The default ``timestep`` is ``R0 / (2 nfp speed)``, with ``R0 = |G| / |B|`` on the
@@ -511,6 +523,11 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     ``"adaptive"`` (Dopri5) and ``"adaptive8"`` (Dopri8) control each particle's step so the embedded error
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.
+
+    With ``species``, collision kicks are applied on a fixed clock ``t_j = j dt`` (``dt`` the fixed step, which
+    adaptive steps land on) with noise from ``fold_in(fold_in(PRNGKey(seed), marker_id), j)``. A marker's trace
+    then does not depend on the other markers in the run, their order or the orbit steps, and runs with the same
+    ``seed`` share their noise. ``marker_ids`` (default ``0 .. n-1``) are distinct non-negative integers.
     """
     if method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
         raise ValueError("method must be 'rk4', 'dopri5', 'dopri8', 'adaptive' or 'adaptive8'")
@@ -550,7 +567,11 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
         raise ValueError("Boozer birth |B| must be positive and finite")
     y0 = jnp.stack([r * jnp.cos(theta), r * jnp.sin(theta), zeta, pitch * speed], axis=1)
     mu0 = speed**2 * (1 - pitch**2) / (2 * B0)
-    keys = jax.random.split(jax.random.PRNGKey(int(seed)), n)
+    marker_ids = np.arange(n) if marker_ids is None else np.asarray(marker_ids)
+    if (marker_ids.shape != (n,) or not np.issubdtype(marker_ids.dtype, np.integer) or np.any(marker_ids < 0)
+            or np.unique(marker_ids).size != n):
+        raise ValueError("marker_ids must be n distinct non-negative integers")
+    keys = jax.vmap(jax.random.fold_in, (None, 0))(jax.random.PRNGKey(int(seed)), jnp.asarray(marker_ids))
 
     devices = jax.devices() if devices is None else devices
     ndev = max(1, min(len(devices), n))
