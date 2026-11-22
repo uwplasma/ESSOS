@@ -101,7 +101,7 @@ jobs:
   oldest:
     # nightly tier only
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ${{ (github.event_name != 'pull_request') && fromJSON('["self-hosted","macOS","ARM64"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, macOS, ARM64]
     name: Python 3.10, oldest supported JAX
     timeout-minutes: 120
     env:

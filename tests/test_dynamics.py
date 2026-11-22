@@ -1151,7 +1151,6 @@ def test_vmec_lcfs_crossings_are_exact():
     assert jnp.all(tracing.region[crossed, -1] == -1)
 
 
-@pytest.mark.slow
 def test_vmec_orbits_continue_outside_and_strike_the_wall_exactly():
     tracing = _exterior_tracing(*STRIKING, maxtime=3e-6)
     struck = tracing.wall_hits
@@ -1219,7 +1218,6 @@ def _toroidal_source(xyz, params):
     return jnp.stack([-params[0] * xyz[:, 1] / R2, params[0] * xyz[:, 0] / R2, params[1] + 0 * R2], 1)
 
 
-@pytest.mark.slow
 def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and_field_parameters():
     """A strike, an orbit that re-enters twice and one that never leaves: jax.jvp, jax.grad and jit agree with finite differences."""
     import diffrax
