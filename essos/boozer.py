@@ -37,6 +37,17 @@ def psi0_from_vmec(phi_edge):
     return -phi_edge / (2 * np.pi)
 
 
+def _refuse_old_flux(old, dpsi_ds):
+    """Old calls passed ``psi0``; refuse them instead of flipping the sign of the flux."""
+    if "psi0" in old:
+        raise TypeError("the flux argument is now dpsi_ds = Phi_edge/2pi, keyword-only; for signgs = -1 it has "
+                        "the opposite sign of the old psi0")
+    if old:
+        raise TypeError(f"unexpected keyword arguments {sorted(old)}")
+    if dpsi_ds is None:
+        raise TypeError("missing keyword argument dpsi_ds = Phi_edge/2pi")
+
+
 def _spline_jax(x, y):
     """Differentiable not-a-knot cubic, in the layout of ``_spline``."""
     x, y = jnp.asarray(x, float), jnp.asarray(y, float)
@@ -91,8 +102,8 @@ class BoozerField(eqx.Module):
     axis_degree: int = eqx.field(static=True, default=0)  # largest m
 
     @classmethod
-    def from_booz(cls, s, bmnc, xm, xn, iota, G, I, dpsi_ds, nfp, mode_tolerance=1e-6, *, bmns=None,
-                  angle_grid=6, signgs=-1):
+    def from_booz(cls, s, bmnc, xm, xn, iota, G, I, *, dpsi_ds=None, nfp, mode_tolerance=1e-6, bmns=None,
+                  angle_grid=6, signgs=-1, **old):
         """``from_arrays`` after dropping small modes, with an optional angle table.
 
         Modes whose amplitude never exceeds ``mode_tolerance`` times the largest
@@ -105,6 +116,7 @@ class BoozerField(eqx.Module):
         toroidal mode number that is not a multiple of ``nfp``, sums the modes at
         every evaluation. Mode selection and the table need host arrays.
         """
+        _refuse_old_flux(old, dpsi_ds)
         bmnc = np.asarray(bmnc, float)
         xm = np.asarray(xm, int)
         sine = None if bmns is None else np.asarray(bmns, float)
@@ -173,13 +185,14 @@ class BoozerField(eqx.Module):
                    int(nfp), sine_coef, None, axis_coef, None, int(xm.max()))
 
     @classmethod
-    def from_booz_xform(cls, booz, dpsi_ds, mode_tolerance=1e-6, angle_grid=6, *, signgs=-1):
+    def from_booz_xform(cls, booz, *, dpsi_ds=None, mode_tolerance=1e-6, angle_grid=6, signgs=-1, **old):
         """Build from a ``Booz_xform`` that has read a wout; ``dpsi_ds`` and ``signgs`` as in ``from_arrays``.
 
         A transform that has not been run takes one jitted, batched pass over every
         surface (``magnetic_only`` when ``booz_xform_jax`` offers it), several times
         faster than ``booz.run()``; a run transform (``booz.run()``) is used as it is.
         """
+        _refuse_old_flux(old, dpsi_ds)
         if getattr(booz, "bmnc_b", None) is None:
             options = {"magnetic_only": True} if "magnetic_only" in inspect.signature(booz.run_jax).parameters else {}
             out = booz.run_jax(**options)
@@ -187,14 +200,14 @@ class BoozerField(eqx.Module):
             surfaces = slice(None) if booz.compute_surfs is None else list(booz.compute_surfs)
             return cls.from_booz(np.asarray(booz.s_in)[surfaces], np.asarray(out["bmnc_b"]).T,
                                  out["ixm_b"], out["ixn_b"], out["iota_b"], out["bvco_b"], out["buco_b"],
-                                 dpsi_ds, int(booz.nfp), mode_tolerance, bmns=sine, angle_grid=angle_grid,
-                                 signgs=signgs)
+                                 dpsi_ds=dpsi_ds, nfp=int(booz.nfp), mode_tolerance=mode_tolerance, bmns=sine,
+                                 angle_grid=angle_grid, signgs=signgs)
         sine = getattr(booz, "bmns_b", None)
         if bool(getattr(booz, "asym", False)) and sine is None:
             raise ValueError("Asymmetric Boozer transform requires bmns_b")
         return cls.from_booz(booz.s_b, booz.bmnc_b, booz.xm_b, booz.xn_b, booz.iota,
-                             booz.Boozer_G, booz.Boozer_I, dpsi_ds, int(booz.nfp), mode_tolerance,
-                             bmns=sine, angle_grid=angle_grid, signgs=signgs)
+                             booz.Boozer_G, booz.Boozer_I, dpsi_ds=dpsi_ds, nfp=int(booz.nfp),
+                             mode_tolerance=mode_tolerance, bmns=sine, angle_grid=angle_grid, signgs=signgs)
 
     def profiles(self, s):
         """``(iota, G, I)`` and their ``s`` derivatives."""
