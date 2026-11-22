@@ -553,11 +553,9 @@ def test_electric_field_flux_reads_er_and_maps_to_s():
 
 
 def test_vmec_guiding_center_energy_with_electric_potential():
-    """Regression. In the QA reactor VMEC field, 3.5 MeV alphas, Phi(s) = 100 kV s, 2e-5 s, rtol = atol = 1e-10, W
-    drifts by 4.4e-4 when the kinetic energy is held fixed; with mu carried, by 6.6e-6. The rest is not the potential:
-    Vmec takes |B| from bmnc but B_cov and B^contra from the bsub/bsup tables, and |B|^2 differs from B_cov.B^contra by
-    3e-5 to 3e-4, so W does not match the equations (7.1e-6 at Phi = 0, at any tolerance or step). The 1e-8 gate of
-    plan step E4 in a VMEC field waits on a consistent |B|."""
+    """In the QA reactor VMEC field, 3.5 MeV alphas, Phi(s) = 100 kV s, 2e-5 s, rtol = atol = 1e-10, W + q Phi is
+    conserved to the 1e-8 gate of plan step E4 (W drifted by 4.4e-4 with the kinetic energy held fixed). It needs
+    |B|^2 = B_cov.B^contra: with |B| from bmnc and B_cov from the filtered bsub tables it was 6.6e-6."""
     particles = _alphas_at_s03()
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), electric_field=_LinearPotential(),
                       model="GuidingCenterAdaptative", particles=particles, maxtime=2e-5, timestep=1e-8,
@@ -566,7 +564,26 @@ def test_vmec_guiding_center_energy_with_electric_potential():
     total = np.asarray(tracing.energy()) + particles.charge * _LinearPotential.PHI0 * s
     assert (tracing.status == 0).all()
     assert particles.charge * _LinearPotential.PHI0 * np.max(np.abs(s - s[:, :1])) > 1e-3 * particles.energy
-    assert np.max(np.abs(total / total[:, :1] - 1)) < 1e-5
+    assert np.max(np.abs(total / total[:, :1] - 1)) < 1e-8
+
+
+WOUT_ARIES = str(Path(WOUT_QA).parent / "wout_n3are_R7.75B5.7.nc")
+
+
+@pytest.mark.parametrize("wout", [WOUT_QA, WOUT_ARIES])
+@pytest.mark.parametrize("tol, bound", [(1e-10, 1e-8), (1e-12, 1e-10)])
+def test_vmec_guiding_center_energy_follows_the_tolerance(wout, tol, bound):
+    """With mu fixed the guiding-centre equations conserve W = m v_par^2/2 + mu |B| exactly (B.kappa = 0 and
+    |B|^2 = B_cov.B^contra), so the error is the integrator's and falls with rtol. Two passing (v_par/v = +-0.9) and two
+    trapped (0.1, -0.2) 3.5 MeV alphas at s = 0.3, 2e-5 s. With |B| from bmnc and B_cov from the bsub tables the error
+    was 1.2e-6 to 5.7e-6 at both tolerances in QA and ARIES-CS; with the consistent field the study measured 3.3e-10
+    and 2.9e-10 at rtol 1e-10, 7.4e-12 and 2.5e-12 at 1e-12."""
+    particles = Particles(initial_xyz=jnp.array([[0.3, 0.0, 0.0], [0.3, 1.0, 0.5], [0.3, 0.0, 0.0], [0.3, 2.0, 0.3]]),
+                          initial_vparallel_over_v=jnp.array([0.9, -0.9, 0.1, -0.2]))
+    tracing = Tracing(field=Vmec(wout, ntheta=8, nphi=8), model="GuidingCenterAdaptative", particles=particles,
+                      maxtime=2e-5, timestep=1e-9, times_to_trace=21, rtol=tol, atol=tol)
+    assert (tracing.status == 0).all()
+    assert np.max(np.abs(np.asarray(tracing.energy()) / particles.energy - 1)) < bound
 
 
 # (s, theta, phi, v_par [m/s]) at 1e-6 s of the two alphas of test_guiding_center_without_electric_field_is_unchanged

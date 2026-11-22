@@ -182,6 +182,28 @@ def test_vmec_fourier_modes_are_regular_on_the_axis():
     assert current[0] < 0.5 * current[1]
 
 
+WOUT_ARIES = str(Path(WOUT_QA).parent / "wout_n3are_R7.75B5.7.nc")
+
+
+@pytest.mark.parametrize("wout", [WOUT_QA, WOUT_ARIES])
+def test_vmec_abs_b_and_b_covariant_come_from_the_metric_and_b_contravariant(wout):
+    """The guiding-centre equations conserve W = m v_par^2/2 + mu |B| (mu fixed) only if |B|^2 = B_cov.B^contra.
+    VMEC2000 low-pass filters B_u, B_v to the geometry spectrum before writing the wout (jxbforce.f), so bmnc, bsub and
+    bsup disagree by up to 1.3e-3 at the edge. B_cov is therefore g_ij B^j, with g_ij = e_i.e_j from the R, Z series,
+    and |B| = sqrt(B_cov.B^contra): an identity to rounding, B_i = e_i.B with e_i the columns of d(xyz)/d(s, theta,
+    phi). |B| then differs from bmnc by VMEC's own discretization, at most 4.8e-5 (QA) and 2.1e-4 (ARIES-CS, s = 1)."""
+    vmec = Vmec(wout, ntheta=8, nphi=8)
+    k1, k2, k3 = random.split(random.key(0), 3)
+    points = jnp.stack([jnp.r_[1e-4, 1.0, random.uniform(k1, (62,))], random.uniform(k2, (64,), maxval=2 * jnp.pi),
+                        random.uniform(k3, (64,), maxval=2 * jnp.pi)], axis=1)
+    B_contra, B_cov, AbsB = vmap(vmec.B_contravariant)(points), vmap(vmec.B_covariant)(points), vmap(vmec.AbsB)(points)
+    assert jnp.abs(1 - jnp.sum(B_cov * B_contra, axis=1) / AbsB**2).max() < 1e-13
+    e_dot_B = jnp.einsum('nki,nk->ni', vmap(jax.jacfwd(vmec.to_xyz))(points), vmap(vmec.B)(points))
+    np.testing.assert_allclose(B_cov, e_dot_B, rtol=0, atol=1e-12 * jnp.abs(B_cov).max())
+    bmnc = vmap(lambda p: vmec._nyquist_series(p)['bmnc'][0])(points)
+    assert jnp.abs(AbsB / bmnc - 1).max() < 2.5e-4
+
+
 def test_vmec_radial_interpolation_keeps_grid_values_and_m0_modes():
     from essos.fields import Vmec, _radial_interp
 
