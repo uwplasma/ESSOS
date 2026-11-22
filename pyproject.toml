@@ -33,12 +33,13 @@ keywords = ["Plasma",
  
 # Floors matter when ESSOS is installed into an environment that already has
 # older packages: pip keeps anything that satisfies the requirement. equinox
-# 0.13.3 is the first release whose primitives trace under jax 0.10/0.11, and
-# diffrax 0.7.2 is required: under 0.7.0 every FullOrbitCollisions (SPaRK)
-# solve runs into max_steps. diffrax 0.7.2, lineax and optimistix 0.1 all
-# need Python 3.11. jaxtyping 0.2.33 is the oldest whose array types
-# equinox 0.13.3 can build. The floor stack (jax 0.6.2, equinox 0.13.3,
-# diffrax 0.7.2, optimistix 0.1.0, jaxtyping 0.2.33) passes the test suite.
+# 0.13.3 is the first release whose primitives trace under jax 0.10/0.11.
+# Python 3.10 resolves diffrax 0.7.0 (0.7.1 and later need Python 3.11):
+# everything runs on it except FullOrbitCollisions, whose SPaRK solve
+# returns inf there, so Tracing raises ImportError for it on diffrax < 0.7.1.
+# jaxtyping 0.2.33 is the oldest whose array types equinox 0.13.3 can build.
+# The floor stack (jax 0.6.2, equinox 0.13.3, diffrax 0.7.0, optimistix
+# 0.0.11, Python 3.10) passes the test suite.
 dependencies = [
     "jax>=0.6.2",
     "jaxlib>=0.6.2",

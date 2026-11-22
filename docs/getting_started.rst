@@ -15,6 +15,8 @@ You can simply clone the repository and install it using the following command:
     $ cd ESSOS
     $ pip install .
 
+ESSOS runs on Python 3.10 and later. The ``FullOrbitCollisions`` model needs diffrax 0.7.1 or later, which needs Python 3.11.
+
 Run an example
 --------------
 
