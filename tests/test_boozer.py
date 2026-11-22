@@ -330,21 +330,45 @@ def test_collisional_orbits_slow_down_at_the_drag_rate(method):
     assert np.mean(out.states[:, -1, 4]) / V0 == pytest.approx(np.exp(-0.05), rel=2e-3)
 
 
-@pytest.mark.parametrize("method", ["dopri8", "adaptive8"])
-def test_collisional_marker_does_not_depend_on_its_batch(method):
-    """A marker's noise comes from fold_in(key, marker_id): its trace is the same in runs of N and 2N markers
-    and in any order."""
+def _batch_case(method):
     n = 4
     births = (np.full(2 * n, 0.3), np.linspace(0, 6, 2 * n), np.zeros(2 * n), np.linspace(-0.9, 0.9, 2 * n))
     kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-5, timestep=2e-8, n_save=3, seed=5, method=method,
                   species=electron_background(), devices=jax.devices()[:1], progress=False, compact=False)
+    return n, births, kwargs
+
+
+@pytest.mark.parametrize("method", ["dopri8", "adaptive8"])
+def test_collisional_marker_does_not_depend_on_its_batch(method):
+    """A marker's trace is the same in runs of N and 2N markers. For dopri8 this is a guard: JAX's partitionable
+    threefry already made split(key, 2N)[:N] equal split(key, N). For adaptive8 the kick index counted accepted
+    steps, so roundoff from a batch of another size changed the steps and then the noise."""
+    n, births, kwargs = _batch_case(method)
     small = trace_boozer(tokamak(), *(b[:n] for b in births), **kwargs)
     large = trace_boozer(tokamak(), *births, **kwargs)
     # Batches of another size round in the last bit (as in the compaction tests).
     np.testing.assert_allclose(large.states[:n], small.states, rtol=1e-13, atol=0)
+
+
+@pytest.mark.parametrize("method", ["dopri8", "adaptive8"])
+def test_collisional_marker_does_not_depend_on_the_batch_order(method):
+    """With keys fold_in(key, marker_id), markers named by marker_ids keep their noise in any order."""
+    n, births, kwargs = _batch_case(method)
+    large = trace_boozer(tokamak(), *births, **kwargs)
     order = np.arange(2 * n)[::-1]
     reversed_ = trace_boozer(tokamak(), *(b[order] for b in births), marker_ids=order, **kwargs)
     np.testing.assert_allclose(reversed_.states[::-1], large.states, rtol=1e-13, atol=0)
+    np.testing.assert_array_equal(trace_boozer(tokamak(), *births, marker_ids=np.arange(2 * n), **kwargs).states,
+                                  large.states)
+
+
+@pytest.mark.parametrize("ids", [[0, 0], [-1, 1], [0, 2**32], [0.0, 1.0], [0]])
+def test_marker_ids_are_validated(ids):
+    """fold_in takes 32-bit data: ids 3 and 2**32 + 3 would share their noise."""
+    with pytest.raises(ValueError, match="marker_ids"):
+        trace_boozer(tokamak(), [0.3, 0.3], [0.0, 1.0], [0.0, 0.0], [0.2, 0.3], speed=V0, mass=M, charge=Q,
+                     tmax=1e-7, timestep=1e-7, n_save=2, species=electron_background(), marker_ids=ids,
+                     progress=False)
 
 
 def test_paired_runs_share_their_collisional_noise():
