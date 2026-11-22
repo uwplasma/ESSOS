@@ -296,18 +296,16 @@ class BiotSavart_from_gamma(MagneticField):
     def to_xyz(self, points):
         return points
 
-def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_m1=None):
+def _radial_interp(s, grid, table, xm, half_grid=False):
     """Interpolate every Fourier mode of a wout table at ``s``.
 
     ``table`` is on the full grid, or on the half grid with VMEC's unused
     first row (``half_grid=True``); both grids are uniform. Near the magnetic
-    axis the modes of a regular scalar vanish as ``s**(m/2)``, and those of
-    B_s (``covariant_s=True``) one power of ``sqrt(s)`` lower. Each mode is
+    axis the modes of a regular scalar vanish as ``s**(m/2)``. Each mode is
     therefore divided by ``s**p``, interpolated and multiplied back,
-    with ``p = min(m, 2 + m % 2) / 2`` (less 1 for B_s, at least -1/2; 0 for
-    m = 0). For m > 0 the axis row of a full-grid table is replaced by the
-    extrapolation of the next two rows, or, for m = 1, by ``axis_m1`` when it
-    is given. Interpolating the modes themselves leaves the m > 0 terms
+    with ``p = min(m, 2 + m % 2) / 2``. For m > 0 the axis row of a
+    full-grid table is replaced by the extrapolation of the next two rows.
+    Interpolating the modes themselves leaves the m > 0 terms
     finite on the axis, where |B| then depends on theta.
 
     The interpolation is a cubic spline (linear in the first interval, a
@@ -319,16 +317,12 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     """
     m = np.asarray(xm).astype(int)
     k = np.minimum(m, 2 + m % 2)  # 2 p
-    if covariant_s:
-        k = np.where(m > 0, np.maximum(k - 2, -1), 0)
     with jax.ensure_compile_time_eval():  # folded at trace time for a concrete table
         if half_grid:
             table = table[1:]
         scaled = table / jnp.where(grid > 0, grid, 1.0)[:, None]**(k / 2)
         if not half_grid:
             scaled = scaled.at[0].set(jnp.where(m > 0, 2 * scaled[1] - scaled[2], scaled[0]))
-            if axis_m1 is not None:
-                scaled = scaled.at[0].set(jnp.where(m == 1, axis_m1, scaled[0]))
         # Nodal slopes (per grid interval) of the C2 cubic spline: the first interval keeps the linear form that the
         # axis rows above are extrapolated with, the last one is a parabola.
         n, step = len(grid), jnp.diff(scaled, axis=0)
@@ -341,14 +335,14 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
     u = (s - grid[i]) / ds
     t = jnp.minimum(u, 1.0)
     q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
-    powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
+    powers = jnp.stack([jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = 0..3
     h = jnp.stack([(1 + 2 * t) * (1 - t)**2, t * (1 - t)**2, t * t * (3 - 2 * t), t * t * (t - 1)])
     # Past the last grid point (the half grid ends at s = 1 - ds/2) continue with a parabola that has the end
     # value, slope and curvature of the cubic, so the interpolant stays C2 up to the LCFS (a kink in the second
     # derivative gives the adaptive integrator an uncontrolled tangent error) instead of freezing there.
     over = jnp.maximum(u - 1.0, 0.0)
     beyond = over * slope[i + 1] + 0.5 * over**2 * (6 * (scaled[i] - scaled[i + 1]) + 2 * slope[i] + 4 * slope[i + 1])
-    return (powers @ (k == np.arange(-1, 4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
+    return (powers @ (k == np.arange(4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
                                                           + h[2] * scaled[i + 1] + h[3] * slope[i + 1] + beyond)
 
 VMEC_WOUT_ARRAYS = ('bmnc', 'xm', 'xn', 'rmnc', 'zmns', 'bsubsmns', 'bsubumnc', 'bsubvmnc',
@@ -493,26 +487,9 @@ class Vmec():
     def surface(self):
         return self._surface
 
-    def _bsubs_axis_m1(self, sine=False):
-        """Axis limit of sqrt(s) B_s for the m = 1 modes, from B_theta.
-
-        Near the axis the leading m = 1 parts of B_s and B_theta are the
-        gradient of sqrt(s) Psi(theta, phi), so sqrt(s) B_s tends to
-        B_theta / (2 sqrt(s)) and their contributions to the toroidal current
-        cancel. VMEC's B_s next to the axis misses that limit (by about 10% on
-        an HSX wout), and extrapolating it gave curl B a toroidal component
-        that grew as 1/sqrt(s) on the axis.
-        """
-        table = self.bsubumns if sine else self.bsubumnc
-        if table is None:
-            return None
-        b_theta = table[1:3] / jnp.sqrt(self.s_half_grid[:2])[:, None]
-        return (1.5 * b_theta[0] - 0.5 * b_theta[1]) * (-0.5 if sine else 0.5)
-        
     # Nyquist tables: (on the half grid, _radial_interp options, cosine series).
+    # The bsub tables are not summed: B_cov is built from the metric (see the class docstring).
     _NYQUIST = {'bmnc': (True, {}, True), 'gmnc': (True, {}, True),
-                'bsubsmns': (False, {'covariant_s': True}, False),
-                'bsubumnc': (True, {}, True), 'bsubvmnc': (True, {}, True),
                 'bsupumnc': (True, {}, True), 'bsupvmnc': (True, {}, True)}
 
     @partial(jit, static_argnames=['self'])
@@ -538,11 +515,8 @@ class Vmec():
                 table = getattr(self, partner)
                 if table is None:
                     continue
-                radial_options = options
-                if name == 'bsubsmns':
-                    radial_options = dict(options, axis_m1=self._bsubs_axis_m1(partner != name))
                 f, df = jax.jvp(lambda s: _radial_interp(s, grid, table, xm,
-                                                        half_grid=half_grid, **radial_options),
+                                                        half_grid=half_grid, **options),
                                (s,), (jnp.ones_like(s),))
                 if cosine:
                     value = (f @ cos, jnp.array([df @ cos, -(xm * f) @ sin, (xn * f) @ sin]))
@@ -619,6 +593,15 @@ class Vmec():
  
     @partial(jit, static_argnames=['self'])
     def curl_B(self, points):
+        """curl B = (d_theta B_phi - d_phi B_theta, ...) / sqrt(g), with B_cov = g B^contra and sqrt(g) from gmnc.
+
+        This is the curl of the metric-built field, not of VMEC's filtered bsub tables, so it does not hold
+        J.grad s = 0 or a regular poloidal current on the axis to the level of those tables: sqrt(g) (curl B)^s is
+        4.5e-2 at s = 0.5 in the QA reactor file (1.6e-6 from the tables), and sqrt(g) (curl B)^theta grows as about
+        s^-0.6 towards the axis (14.9 at s = 1e-6). The guiding-centre equations see it only through
+        B_cov.B* = |B|^2 + (m v_par / q) B_cov.curl b, whose second term is below 5e-5 of |B|^2 (QA) and 6e-3
+        (ARIES-CS) for 3.5 MeV alphas, as with the tables.
+        """
         grad_B_cov=self.grad_B_covariant(points)
         return jnp.array([grad_B_cov[2][1] -grad_B_cov[1][2],
                           grad_B_cov[0][2] -grad_B_cov[2][0],
