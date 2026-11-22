@@ -119,7 +119,8 @@ def test_vmec_from_arrays_is_differentiable_in_the_coefficients():
 
     def AbsB_of_scale(scale):
         traced.append(scale)
-        return Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **{**arrays, 'bmnc': arrays['bmnc']*scale}).AbsB(point)
+        return Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **{**arrays, 'bsupumnc': arrays['bsupumnc']*scale,
+                                                            'bsupvmnc': arrays['bsupvmnc']*scale}).AbsB(point)
 
     evaluate = jax.jit(jax.value_and_grad(AbsB_of_scale))
     for scale in (1.0, 1.1):
@@ -544,7 +545,7 @@ def test_asymmetric_vmec_partner_gradients_and_sine_only_cutoff():
     arrays['bmns'] = arrays['bmns'].at[1:, 1].set(0.75)
     field = Vmec.from_arrays(**arrays, ntheta=4, nphi=4, mode_tolerance=0.1)
     assert len(field.xm_nyq) == 2
-    assert float(field.AbsB(point)) > 5.0
+    assert float(field._nyquist_series(point)['bmnc'][0]) > 5.0
     with pytest.raises(ValueError, match='bmns must match'):
         Vmec.from_arrays(**{**arrays, 'bmns': jnp.zeros((2, 2))})
     with pytest.raises(TypeError, match='Unknown Fourier partner'):

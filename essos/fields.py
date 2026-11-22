@@ -362,6 +362,15 @@ class Vmec():
     in-memory wout object with the wout variable names (e.g. a VMEX ``WoutData``;
     no file is written and gradients flow) or live arrays (:meth:`from_arrays`).
 
+    The guiding-centre quantities come from one representation, the R, Z
+    series and the B^contra (bsup) tables: B_cov = g_ij B^j with g_ij = e_i.e_j
+    and |B| = sqrt(B_cov.B^contra), so that |B|^2 = B_cov.B^contra holds to
+    rounding and W = m v_par^2/2 + mu |B| is conserved by the equations of
+    motion. The wout's bmnc and bsub tables are not used for that: VMEC2000
+    low-pass filters B_u, B_v to the geometry spectrum before writing them
+    (``jxbforce.f``), and they disagree with bsup by up to 1e-3. |B| differs
+    from bmnc by about 5e-5 (2e-4 at the edge of a 4% beta equilibrium).
+
     ``mode_tolerance`` drops a Fourier mode when, in every table of its set,
     its largest amplitude over the radial grid is below that fraction of the
     table's largest: R and Z for the geometry modes, and |B|, sqrt(g) and the
@@ -546,10 +555,34 @@ class Vmec():
     def _geometry_series(self, points):
         return self._series(points, {'rmnc': (False, {}, True), 'zmns': (False, {}, False)}, self.xm, self.xn)
 
+    def _basis(self, points):
+        """Columns e_s, e_theta, e_phi: the Cartesian derivatives of :meth:`to_xyz`."""
+        geometry = self._geometry_series(points)
+        R, dR = geometry['rmnc']
+        _, dZ = geometry['zmns']
+        sin, cos = jnp.sin(points[2]), jnp.cos(points[2])
+        basis = jnp.stack([cos * dR, sin * dR, dZ])
+        return basis.at[:, 2].add(jnp.array([-R * sin, R * cos, 0]))
+
+    def _metric(self, points):
+        basis = self._basis(points)
+        return basis.T @ basis
+
+    @partial(jit, static_argnames=['self'])
+    def _covariant(self, points):
+        """B_cov = g B^contra, its gradient (component, derivative), |B| and grad |B|."""
+        series = self._nyquist_series(points)
+        B_contra = jnp.array([0.0, series['bsupumnc'][0], series['bsupvmnc'][0]])
+        grad_B_contra = jnp.stack([jnp.zeros(3), series['bsupumnc'][1], series['bsupvmnc'][1]])
+        metric, grad_metric = self._metric(points), jacfwd(self._metric)(points)  # grad_metric[i, j, k] = d_k g_ij
+        B_cov = metric @ B_contra
+        grad_B_cov = jnp.einsum('ijk,j->ik', grad_metric, B_contra) + metric @ grad_B_contra
+        AbsB = jnp.sqrt(B_cov @ B_contra)
+        return B_cov, grad_B_cov, AbsB, (grad_B_cov.T @ B_contra + grad_B_contra.T @ B_cov) / (2 * AbsB)
+
     @partial(jit, static_argnames=['self'])
     def B_covariant(self, points):
-        series = self._nyquist_series(points)
-        return jnp.array([series[name][0] for name in ('bsubsmns', 'bsubumnc', 'bsubvmnc')])
+        return self._covariant(points)[0]
 
     @partial(jit, static_argnames=['self'])
     def B_contravariant(self, points):
@@ -564,18 +597,11 @@ class Vmec():
     @partial(jit, static_argnames=['self'])
     def B(self, points):
         """Cartesian B = B^theta e_theta + B^phi e_phi, so that B.grad s = 0 exactly."""
-        geometry = self._geometry_series(points)
-        R, dR = geometry['rmnc']
-        _, dZ = geometry['zmns']
-        phi = points[2]
-        sin, cos = jnp.sin(phi), jnp.cos(phi)
-        basis = jnp.stack([cos * dR, sin * dR, dZ])
-        basis = basis.at[:, 2].add(jnp.array([-R * sin, R * cos, 0]))
-        return basis[:, 1:] @ self.B_contravariant(points)[1:]
+        return self._basis(points)[:, 1:] @ self.B_contravariant(points)[1:]
 
     @partial(jit, static_argnames=['self'])
     def AbsB(self, points):
-        return self._nyquist_series(points)['bmnc'][0]
+        return self._covariant(points)[2]
     
     @partial(jit, static_argnames=['self'])
     def dB_by_dX(self, points):
@@ -585,12 +611,11 @@ class Vmec():
     
     @partial(jit, static_argnames=['self'])
     def dAbsB_by_dX(self, points):
-        return self._nyquist_series(points)['bmnc'][1]
+        return self._covariant(points)[3]
     
     @partial(jit, static_argnames=['self'])
     def grad_B_covariant(self, points):
-        series = self._nyquist_series(points)
-        return jnp.stack([series[name][1] for name in ('bsubsmns', 'bsubumnc', 'bsubvmnc')])
+        return self._covariant(points)[1]
  
     @partial(jit, static_argnames=['self'])
     def curl_B(self, points):

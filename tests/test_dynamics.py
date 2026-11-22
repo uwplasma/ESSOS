@@ -586,14 +586,15 @@ def test_vmec_guiding_center_energy_follows_the_tolerance(wout, tol, bound):
     assert np.max(np.abs(np.asarray(tracing.energy()) / particles.energy - 1)) < bound
 
 
-# (s, theta, phi, v_par [m/s]) at 1e-6 s of the two alphas of test_guiding_center_without_electric_field_is_unchanged
-REFERENCE_AC3168B = np.array([[2.9676676366178395e-01, 5.9174635236016728e+00, -8.3959444991885968e-01, -1.0411758638556167e+07],
-                              [2.9537957345444688e-01, 3.4461755641930285e+00, 9.0888654548937942e-01, 1.0438725475527925e+07]])
+# (s, theta, phi, v_par [m/s]) at 1e-6 s of the two alphas of test_guiding_center_without_electric_field_is_unchanged,
+# with |B| and B_cov from the R, Z metric and the bsup tables (they moved by 5e-4 from ac3168b, which used bmnc and bsub)
+REFERENCE = np.array([[2.9661877452006663e-01, 5.9175596565161053e+00, -8.3959818501394701e-01, -1.0411716042920845e+07],
+                      [2.9540396060593832e-01, 3.4463446720162714e+00, 9.0889653987391072e-01, 1.0438723057837857e+07]])
 
 
 def test_guiding_center_without_electric_field_is_unchanged():
-    """Regression: with no electric field the traced state is (x, v_par), as before, and the values match those of
-    ac3168b (fixed 1e-8 s Dopri8 step, 1e-6 s) to 1e-11 relative, i.e. to rounding."""
+    """Regression: with no electric field the traced state is (x, v_par), as before, and the values match the pinned
+    REFERENCE (fixed 1e-8 s Dopri8 step, 1e-6 s) to 1e-11 relative, i.e. to rounding."""
     from essos.electric_field import Electric_field_zero
     kwargs = {"field": Vmec(WOUT_QA, ntheta=8, nphi=8), "model": "GuidingCenter", "particles": _alphas_at_s03(2),
               "maxtime": 1e-6, "timestep": 1e-8, "times_to_trace": 2}
@@ -601,7 +602,7 @@ def test_guiding_center_without_electric_field_is_unchanged():
     zero = Tracing(electric_field=Electric_field_zero(), **kwargs).trajectories
     assert default.shape == (2, 2, 4)
     np.testing.assert_array_equal(default, zero)
-    np.testing.assert_allclose(default[:, -1], REFERENCE_AC3168B, rtol=1e-11)
+    np.testing.assert_allclose(default[:, -1], REFERENCE, rtol=1e-11)
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
@@ -637,7 +638,8 @@ def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch):
     assert not tracing.axis_hits.any() and not tracing.boundary_hits.any()
     assert jnp.isfinite(tracing.trajectories).all()
     assert (s.min(axis=1) < 1e-3).all()
-    assert (s[:, -1] > 1.5 * s.min(axis=1)).all()
+    after = jnp.arange(s.shape[1]) >= jnp.argmin(s, axis=1)[:, None]  # each orbit moves away again after its closest pass
+    assert (jnp.where(after, s, 0).max(axis=1) > 1.5 * s.min(axis=1)).all()
     assert jnp.all((tracing.trajectories[:, :, 1] >= 0) & (tracing.trajectories[:, :, 1] < 2 * jnp.pi))
     assert jnp.abs(tracing.energy() / particles.energy - 1).max() < 1e-5
 
@@ -1436,13 +1438,13 @@ def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_rever
 
 
 def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
-    """Trapped protons whose radial excursion just reaches the LCFS (pitch 0.0755940631) cross, graze or stay inside.
+    """Trapped protons whose radial excursion just reaches the LCFS (pitch 0.0757233) cross, graze or stay inside.
 
     Every pitch from -1e-6 up crosses, at the time the orbit reaches the surface whatever the margin (a shallow excursion
     through the LCFS inside one step is not skipped); the gradients are finite."""
     from essos.constants import ELEMENTARY_CHARGE
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
-    pitch = jnp.concatenate([jnp.zeros(1), 0.0755940631 + jnp.array([-1e-6, 1e-12, 1e-9, 1e-7, 1e-5, 1e-3, 0.2])])
+    pitch = jnp.concatenate([jnp.zeros(1), 0.0757233 + jnp.array([-1e-6, 1e-12, 1e-9, 1e-7, 1e-5, 1e-3, 0.2])])
 
     def crossing_times(s):
         xyz = jnp.stack([s, jnp.full_like(s, 0.3), jnp.full_like(s, 0.2)], 1)
@@ -1455,7 +1457,7 @@ def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
     s = jnp.full(8, 0.9)
     times, gradient = crossing_times(s), jax.grad(objective)(s)
     assert jnp.isinf(times[0]) and jnp.isfinite(times[1:]).all() and jnp.isfinite(gradient).all()
-    np.testing.assert_allclose(times[2:4], 2.306765e-5, rtol=1e-5)
+    np.testing.assert_allclose(times[2:4], 2.310564e-5, rtol=1e-5)
     h = jnp.zeros(8).at[-1].set(1e-6)
     np.testing.assert_allclose(gradient[-1], (objective(s + h) - objective(s - h)) / 2e-6, rtol=1e-4)
 
@@ -1564,8 +1566,8 @@ def test_vmec_tracings_share_one_compiled_solve():
     from essos.fields import VMEC_WOUT_ARRAYS
 
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
-    scaled = Vmec.from_arrays(vmec.nfp, vmec.ns, *(getattr(vmec, n) * (1.1 if n == 'bmnc' else 1) for n in VMEC_WOUT_ARRAYS),
-                              ntheta=8, nphi=8)  # same shapes, 10% stronger |B|
+    scaled = Vmec.from_arrays(vmec.nfp, vmec.ns, *(getattr(vmec, n) * (1.1 if n in ('bsupumnc', 'bsupvmnc') else 1)
+                                                   for n in VMEC_WOUT_ARRAYS), ntheta=8, nphi=8)  # same shapes, 10% stronger |B|
     compiles = []
     jax.monitoring.register_event_duration_secs_listener(
         lambda event, duration, **kw: compiles.append(event) if event.endswith('backend_compile_duration') else None)
