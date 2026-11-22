@@ -34,14 +34,17 @@ for name in {DEPENDENCIES!r}:
         importlib.import_module(name)
     except ImportError:
         pass
+from jax._src import xla_bridge
+started = bool(xla_bridge._backends)  # diffrax 0.7.0 (Python 3.10) starts the CPU backend on import
 config, environ, filters = dict(jax.config.values), dict(os.environ), list(warnings.filters)
 importlib.import_module({module!r})
 changed = sorted(k for k, v in jax.config.values.items() if config.get(k, object()) != v)
 changed += sorted(set(os.environ.items()) ^ set(environ.items())) + (["warnings"] if warnings.filters != filters else [])
-try:  # refused once a backend has started
-    jax.config.update("jax_num_cpu_devices", 2)
-except RuntimeError:
-    changed.append("backend started")
+if not started:
+    try:  # refused once a backend has started
+        jax.config.update("jax_num_cpu_devices", 2)
+    except RuntimeError:
+        changed.append("backend started")
 print(changed)
 """)
     assert changed.strip().splitlines()[-1] == "[]", changed
@@ -81,15 +84,23 @@ print(jax.config.jax_enable_x64, len(jax.devices("cpu")))
     assert out.split() == ["True", "3"], out
 
 
+DIFFRAX_STARTS_BACKEND = sys.version_info < (3, 11)  # resolves diffrax 0.7.0, whose import starts JAX
+
+
 @pytest.mark.parametrize("module", ["essos.surfaces", "essos.fields", "essos.dynamics"])
 def test_configure_jax_after_import_sets_the_device_count(module):
+    """After importing essos.dynamics on diffrax 0.7.0 the count can no longer be set, and configure_jax says so."""
     out = run(f"""
 import importlib, essos, jax
 importlib.import_module({module!r})
-essos.configure_jax(cpu_devices=3)
-print(len(jax.devices("cpu")))
+try:
+    essos.configure_jax(cpu_devices=3)
+    print(len(jax.devices("cpu")))
+except RuntimeError as error:
+    print("refused" if "before the first JAX array" in str(error) else error)
 """)
-    assert out.split()[-1] == "3", out
+    expected = "refused" if DIFFRAX_STARTS_BACKEND and module == "essos.dynamics" else "3"
+    assert out.split()[-1] == expected, out
 
 
 def test_configure_jax_refuses_a_device_count_it_cannot_set():
@@ -130,13 +141,16 @@ print(out.states.dtype, int(out.lost.sum()), float(np.max(out.energy_error)))
     assert dtype == "float32" and lost == "0" and float(error) < 1e-5, out
 
 
-@pytest.mark.parametrize("jaxlib_version, cached", [("0.6.2", False), ("0.9.2", False), ("0.10.0", True)])
-def test_configure_jax_uses_the_compilation_cache_only_where_jaxlib_can_reload_it(tmp_path, jaxlib_version, cached):
+@pytest.mark.parametrize("jaxlib_version, explicit, cached", [
+    ("0.6.2", False, False), ("0.9.2", False, False), ("0.10.0rc1", False, True), ("0.11.1", False, True),
+    ("0.6.2", True, True), ("unknown", False, False)])
+def test_configure_jax_uses_the_compilation_cache_only_where_jaxlib_can_reload_it(tmp_path, jaxlib_version, explicit, cached):
     """jaxlib < 0.10 overflows a thread stack reloading a large cached XLA:CPU executable on a warm rerun."""
     out = run(f"""
-import jaxlib.version, essos, jax
+import os, jaxlib.version, essos, jax
 jaxlib.version.__version__ = {jaxlib_version!r}
-essos.configure_jax(cache_dir={str(tmp_path)!r})
+os.environ["ESSOS_XLA_CACHE"] = {str(tmp_path)!r}
+essos.configure_jax(cache_dir={str(tmp_path)!r} if {explicit} else None)
 print(jax.config.jax_compilation_cache_dir == {str(tmp_path)!r})
 """)
     assert out.split() == [str(cached)], out
