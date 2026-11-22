@@ -698,6 +698,15 @@ class Vmec():
         s = x[0]**2 + x[1]**2
         return jnp.array([s, jnp.mod(jnp.arctan2(x[1], x[0]), 2 * jnp.pi), phi]), residual
 
+class near_axis:
+    def __init__(self, *args, **kwargs):
+        raise ImportError(
+            "The 'near_axis' class has been migrated to the standalone 'pyQSC_JAX' repository. "
+            "Please run 'pip install git+https://github.com/uwplasma/pyQSC_JAX.git' "
+            "and import it via 'from pyqsc_jax.near_axis import near_axis'."
+        )
+
+
 class _VmecStatic:
     """Non-array state of a ``Vmec`` (mode counts, nfp, ...): equal when those are. The file handle and the
     boundary surface ride along but do not take part in the comparison."""

@@ -881,7 +881,25 @@ class SurfaceClassifier():
             distance = jnp.sum(
                 (xyz - gammas_flat[nearest]) * normals_flat[nearest], axis=1)
             return distance * sign_of_interior
+            #return signed_distance_from_surface_extras(xyz, surface) ####memory bounded
 
+        #rule = sopp.UniformInterpolationRule(p) 
+        #self.dist = RegularGridInterpolator((jnp.linspace(rmin,rmax,nr),
+        #            jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),
+        #            vmap(vmap(vmap(fbatch,in_axes=(0,None,None)),in_axes=(None,0,None)),in_axes=(None,None,0))(jnp.linspace(rmin,rmax,nr),
+        #            jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)))
+        #self.r_list=jnp.linspace(16.9,17.1,nr)
+        #self.phi_list=jnp.linspace(0., 0.01, nphi)
+        #self.z_list=jnp.linspace(-0.1, 0.1, nz)
+        #self.test= vmap(vmap(vmap(fbatch,in_axes=(0,None,None)),in_axes=(None,0,None)),in_axes=(None,None,0))(self.r_list,
+        #            self.phi_list, self.z_list)
+        #self.r_list=jnp.linspace(rmin,rmax,nr)
+        #self.phi_list=jnp.linspace(0., 2*jnp.pi, nphi)
+        #self.z_list=jnp.linspace(zmin, zmax, nz)
+        #self.test= vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(jnp.linspace(rmin,rmax,nr),
+        #            jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz))
+        #self.dist = RegularGridInterpolator((self.r_list,self.phi_list, self.z_list),
+        #            vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(self.r_list,self.phi_list, self.z_list),fill_value=-1.)        
         self.dist = RegularGridInterpolator((jnp.linspace(rmin,rmax,nr),
                     jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),
                     vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(jnp.linspace(rmin,rmax,nr),
@@ -928,6 +946,7 @@ def signed_distance_from_surface_jax(xyz, surface):
     signed_dists = mindist * sign_of_interiorpoint
     return signed_dists
 
+#@partial(jit, static_argnames=['surface'])
 def signed_distance_from_surface_extras(xyz, surface):
     """
     Compute the signed distances from points ``xyz`` to a surface.  The sign is
