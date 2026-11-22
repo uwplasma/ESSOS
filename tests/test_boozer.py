@@ -641,8 +641,9 @@ def _velocity_jump(field, r):
 
 
 def test_axis_patch_makes_the_qa_guiding_centre_velocity_continuous_on_the_axis():
-    """Without the patch the (u, w) velocity jumped by 9.5e-2 between theta = 0 and pi at r = 1e-6, independent of r; a
-    field that is C1 on the axis gives a jump linear in r (4.2e-5 at r = 1e-6 in the study of option (g))."""
+    """Without the patch the (u, w) velocity jumped by 0.35 between theta = 0 and pi at r = 1e-6 and at 1e-4 (worst case
+    zeta = 0.7 of this helper; the study of option (g) reported 9.5e-2 for other zeta); a field that is C1 on the axis
+    gives a jump linear in r (4.2e-5 at r = 1e-6 in that study)."""
     field = _qa_boozer_field()
     assert field.table is not None and field.axis_coef is not None
     small, large = _velocity_jump(field, 1e-6), _velocity_jump(field, 1e-4)
@@ -660,6 +661,21 @@ def test_axis_patch_leaves_the_qa_field_unchanged_outside_the_first_surface():
         np.testing.assert_array_equal(field.modB_derivatives(r, theta, zeta), plain.modB_derivatives(r, theta, zeta))
     inside = field.modB_derivatives(0.5 * r1, 1.0, 0.5)[0]
     assert inside != plain.modB_derivatives(0.5 * r1, 1.0, 0.5)[0]
+
+
+def test_tabulated_axis_patch_matches_the_mode_sum():
+    """With the angle table the patch is sum_p x^p T_p(theta, zeta) on the table's quintic B-splines; it equals the
+    direct sum over the 207 modes to the table's interpolation error (1e-8 T in the study of option (g))."""
+    field = _qa_boozer_field()
+    assert field.axis_table is not None
+    direct = dataclasses.replace(field, axis_table=None)
+    r1 = float(field.r_knots[0])
+    rng = np.random.default_rng(5)
+    for r in np.r_[0.0, 1e-6, rng.uniform(0, r1, 6)]:
+        theta, zeta = rng.uniform(0, 2 * np.pi, 2)
+        a, b = np.array(field.modB_derivatives(r, theta, zeta)), np.array(direct.modB_derivatives(r, theta, zeta))
+        np.testing.assert_allclose(a[0], b[0], rtol=0, atol=1e-8)
+        np.testing.assert_allclose(a[1:], b[1:], rtol=0, atol=1e-7)
 
 
 def test_axis_patch_qa_energy_near_the_axis():
