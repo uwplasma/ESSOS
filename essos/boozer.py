@@ -27,7 +27,7 @@ jax.config.update("jax_enable_x64", True)
 
 def psi0_from_vmec(phi_edge):
     """Boozer guiding-centre psi0 from VMEC's edge toroidal flux [Wb]."""
-    return -float(phi_edge) / (2 * np.pi)
+    return -(phi_edge if isinstance(phi_edge, jax.core.Tracer) else float(phi_edge)) / (2 * np.pi)
 
 
 def _spline(x, y):
@@ -35,6 +35,28 @@ def _spline(x, y):
 
     sp = CubicSpline(np.asarray(x, float), np.asarray(y, float), axis=0)
     return jnp.asarray(sp.x), jnp.asarray(np.moveaxis(sp.c, 0, -1))  # (nint, ..., 4)
+
+
+def _spline_jax(x, y):
+    """Differentiable not-a-knot cubic, in the layout of ``_spline``."""
+    x, y = jnp.asarray(x, float), jnp.asarray(y, float)
+    n = x.size
+    h = jnp.diff(x)
+    expand = h.reshape((-1,) + (1,) * (y.ndim - 1))
+    sec = jnp.diff(y, axis=0) / expand
+    if n == 2:
+        second = jnp.zeros_like(y)
+    elif n == 3:
+        second = jnp.broadcast_to(2 * (sec[1] - sec[0]) / (x[2] - x[0]), y.shape)
+    else:
+        matrix = jnp.diag(jnp.concatenate((jnp.zeros(1), 2 * (h[:-1] + h[1:]), jnp.zeros(1))))
+        matrix = matrix + jnp.diag(h, 1) + jnp.diag(h, -1)
+        matrix = matrix.at[0, :3].set(jnp.array([-h[1], h[0] + h[1], -h[0]]))
+        matrix = matrix.at[-1, -3:].set(jnp.array([-h[-1], h[-2] + h[-1], -h[-2]]))
+        rhs = jnp.concatenate((jnp.zeros_like(y[:1]), 6 * jnp.diff(sec, axis=0), jnp.zeros_like(y[:1])))
+        second = jnp.linalg.solve(matrix, rhs)
+    return x, jnp.stack(((second[1:] - second[:-1]) / (6 * expand), second[:-1] / 2,
+                         sec - expand * (2 * second[:-1] + second[1:]) / 6, y[:-1]), axis=-1)
 
 
 def _evaluate(knots, coef, x):
@@ -118,6 +140,32 @@ class BoozerField(eqx.Module):
         s_knots, profile_coef = _spline(s_prof, profiles)
         return cls(r_knots, b_coef, s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
                    float(psi0), int(nfp), sine_coef, table)
+
+    @classmethod
+    def from_arrays(cls, s, bmnc, xm, xn, iota, G, I, dpsi_ds, nfp, *, bmns=None):
+        """Build from live half-mesh tables, differentiable in every array and in ``dpsi_ds``.
+
+        ``dpsi_ds`` is the signed flux factor ``Phi_edge / (2 pi)`` in Wb/rad; it is
+        converted once to ``psi0 = -dpsi_ds``. The layout is that of ``from_booz``;
+        no mode is dropped and no angle table is built, so ``|B|`` is the mode sum.
+        """
+        s, bmnc = jnp.asarray(s, float), jnp.asarray(bmnc, float)
+        xm, xn = np.asarray(xm, int), np.asarray(xn, int)
+        if s.ndim != 1 or s.size < 2 or bmnc.shape != (xm.size, s.size) or xn.shape != xm.shape:
+            raise ValueError("bmnc must have shape (modes, len(s)) with len(s) >= 2, and xn the shape of xm")
+        if any(jnp.shape(p) != s.shape for p in (iota, G, I)) or (bmns is not None and jnp.shape(bmns) != bmnc.shape):
+            raise ValueError("iota, G and I need the shape of s, and bmns the shape of bmnc")
+        r = jnp.sqrt(s)
+
+        def coefficients(table):
+            return _spline_jax(r, jnp.where(xm[:, None] > 0, jnp.asarray(table, float) / r, table).T)[1]
+
+        profiles = jnp.stack(jnp.broadcast_arrays(*(jnp.asarray(p, float) for p in (iota, G, I))), axis=1)
+        # Axis row: iota and G extrapolated linearly, I(0) = 0, as in ``from_booz``.
+        axis = (profiles[0] - s[0] * (profiles[1] - profiles[0]) / (s[1] - s[0])).at[2].set(0.0)
+        s_knots, profile_coef = _spline_jax(jnp.concatenate((jnp.zeros(1), s)), jnp.vstack((axis, profiles)))
+        return cls(r, coefficients(bmnc), s_knots, profile_coef, jnp.asarray(xm), jnp.asarray(xn),
+                   -dpsi_ds, int(nfp), None if bmns is None else coefficients(bmns))
 
     @classmethod
     def from_booz_xform(cls, booz, psi0, mode_tolerance=1e-6, angle_grid=6):

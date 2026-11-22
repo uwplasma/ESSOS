@@ -126,6 +126,64 @@ def test_vmec_flux_sign_sets_the_analytic_radial_drift():
     assert sdot == pytest.approx(expected, rel=1e-12)
 
 
+def _tokamak_arrays(dpsi_ds=PSI0):
+    """The ``tokamak()`` tables as ``from_arrays`` arguments, with the signed psi' = Phi_edge / 2 pi."""
+    s = jnp.linspace(0.005, 0.995, 50)
+    bmnc = jnp.stack([jnp.full_like(s, B0), -B0 * EPS * jnp.sqrt(s)])
+    return (s, bmnc, jnp.array([0, 1]), jnp.array([0, 0]), jnp.full_like(s, IOTA),
+            jnp.full_like(s, G), jnp.zeros_like(s), dpsi_ds, 1)
+
+
+def test_psi0_from_vmec_keeps_a_traced_edge_flux():
+    assert jax.grad(psi0_from_vmec)(2 * np.pi * PSI0) == pytest.approx(-1 / (2 * np.pi), rel=1e-15)
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_from_arrays_takes_the_signed_flux_factor(sign):
+    """psi' = Phi_edge / 2 pi of either sign: same |B|, G, I; the radial drift follows the sign."""
+    field = BoozerField.from_arrays(*_tokamak_arrays(sign * PSI0))
+    assert field.psi0 == pytest.approx(-sign * PSI0)
+    r = np.sqrt(0.3)
+    point = (r, 0.7, 0.2)
+    np.testing.assert_allclose(field.modB_derivatives(*point), tokamak().modB_derivatives(*point), rtol=1e-12)
+    np.testing.assert_allclose(field.profiles(0.3), tokamak().profiles(0.3), rtol=1e-12, atol=1e-12)
+    dy = guiding_center_rhs(field, jnp.array([0.0, r, 0.0, 0.0]), V0**2 / (2 * B0), M, Q)
+    assert 2 * r * float(dy[1]) == pytest.approx(sign * EPS * r * M * V0**2 / (2 * Q * PSI0), rel=1e-12)
+
+
+def test_from_arrays_derivatives_in_the_flux_and_a_harmonic_match_finite_differences():
+    args = _tokamak_arrays()
+    y, w = jnp.array([0.3, 0.4, 0.7, V0 / 3]), jnp.array([1.0, 2.0, 3.0, 1e-7])
+
+    def quantity(dpsi_ds, amplitude):
+        bmnc = args[1].at[1].multiply(amplitude)
+        field = BoozerField.from_arrays(args[0], bmnc, *args[2:7], dpsi_ds, 1)
+        return jnp.vdot(guiding_center_rhs(field, y, V0**2 / (4 * B0), M, Q), w)
+
+    gradient = jax.jit(jax.grad(quantity, argnums=(0, 1)))(PSI0, 1.0)
+    for i, h in ((0, 1e-5 * PSI0), (1, 1e-5)):
+        step = np.eye(2)[i] * h
+        fd = (quantity(PSI0 + step[0], 1.0 + step[1]) - quantity(PSI0 - step[0], 1.0 - step[1])) / (2 * h)
+        assert abs(gradient[i]) > 0
+        np.testing.assert_allclose(gradient[i], fd, rtol=1e-7)
+
+
+@pytest.mark.parametrize("surfaces", [2, 3, 8])
+def test_traced_spline_matches_the_host_spline(surfaces):
+    from essos.boozer import _spline, _spline_jax
+    s = jnp.linspace(0.02, 0.98, surfaces)
+    y = jnp.stack((jnp.exp(s), jnp.sin(3 * s), s**3), axis=1)
+    np.testing.assert_allclose(_spline_jax(s, y)[1], _spline(s, y)[1], atol=2e-12, rtol=2e-11)
+
+
+@pytest.mark.parametrize("position", [1, 3, 4, 5, 6])
+def test_from_arrays_rejects_misaligned_tables(position):
+    args = list(_tokamak_arrays())
+    args[position] = jnp.ones(3)
+    with pytest.raises(ValueError, match="shape"):
+        BoozerField.from_arrays(*args)
+
+
 @pytest.mark.parametrize("method", ["rk4", "dopri8", "dopri5", "adaptive", "adaptive8"])
 def test_orbits_conserve_energy_and_toroidal_canonical_momentum(method):
     """Axisymmetry: E and P_zeta = m v_par G / B - q iota psi0 s are invariants (White 2014)."""
@@ -537,6 +595,32 @@ def test_unrun_booz_xform_takes_the_batched_pass_and_matches_the_host_run():
     for point in ((0.3, 0.7, 0.2), (0.9, 2.0, 1.1)):
         np.testing.assert_allclose(batched.modB_derivatives(*point), host.modB_derivatives(*point), rtol=1e-9, atol=1e-10)
     np.testing.assert_allclose(batched.profiles(0.5)[0], host.profiles(0.5)[0], rtol=1e-12)
+
+
+def test_from_arrays_equals_the_field_from_the_wout_file():
+    """The QA reactor wout through ``from_booz_xform`` and through ``from_arrays`` on the same tables."""
+    pytest.importorskip("booz_xform_jax")
+    from pathlib import Path
+    from booz_xform_jax import Booz_xform
+    from netCDF4 import Dataset
+
+    wout = Path(__file__).parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+    with Dataset(wout) as d:
+        phi_edge = float(d.variables["phi"][-1])
+    booz = Booz_xform(verbose=0, mboz=8, nboz=8)
+    booz.read_wout(str(wout), flux=False)
+    booz.run()
+    host = BoozerField.from_booz_xform(booz, psi0_from_vmec(phi_edge), mode_tolerance=0.0, angle_grid=None)
+    live = BoozerField.from_arrays(booz.s_b, booz.bmnc_b, booz.xm_b, booz.xn_b, booz.iota, booz.Boozer_G,
+                                   booz.Boozer_I, phi_edge / (2 * np.pi), int(booz.nfp))
+    assert live.psi0 == host.psi0
+    for point in ((0.3, 0.7, 0.2), (0.9, 2.0, 1.1), (0.05, 4.0, 0.4)):
+        np.testing.assert_allclose(live.modB_derivatives(*point), host.modB_derivatives(*point),
+                                   rtol=1e-11, atol=1e-11)
+        y = jnp.array([point[0] * np.cos(point[1]), point[0] * np.sin(point[1]), point[2], V0 / 2])
+        np.testing.assert_allclose(guiding_center_rhs(live, y, V0**2 / (4 * 5.0), M, Q),
+                                   guiding_center_rhs(host, y, V0**2 / (4 * 5.0), M, Q), rtol=1e-10)
+    np.testing.assert_allclose(live.profiles(0.5), host.profiles(0.5), rtol=1e-11, atol=1e-11)
 
 
 @pytest.mark.parametrize("compact", [True, False])
