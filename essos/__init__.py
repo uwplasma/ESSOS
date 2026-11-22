@@ -21,7 +21,7 @@ def configure_jax(x64=True, cpu_devices=None, cache_dir=None):
     chose one. The count can only be set before JAX starts its backends (the first array or
     ``jax.devices()`` call): a count asked for afterwards raises ``RuntimeError``, the default one is
     skipped with a warning. Compiled programs are cached in ``cache_dir`` (default ``ESSOS_XLA_CACHE``,
-    else ``~/.cache/essos/xla``; empty disables it).
+    else ``~/.cache/essos/xla``; empty disables it), with jaxlib 0.10 or later only.
     """
     import jax
     jax.config.update("jax_enable_x64", x64)
@@ -41,6 +41,10 @@ def configure_jax(x64=True, cpu_devices=None, cache_dir=None):
             warnings.warn(message, stacklevel=2)
     cache = _os.environ.get("ESSOS_XLA_CACHE", _os.path.join(_os.path.expanduser("~"), ".cache", "essos", "xla"))
     cache = cache if cache_dir is None else cache_dir
-    if cache and not jax.config.jax_compilation_cache_dir:
+    # jaxlib < 0.10 overflows a thread stack reloading a large cached XLA:CPU executable (a crash on the
+    # first warm rerun), so older jaxlib compiles every run instead.
+    import jaxlib.version
+    jaxlib_version = tuple(int("".join(c for c in part if c.isdigit()) or 0) for part in jaxlib.version.__version__.split(".")[:2])
+    if cache and jaxlib_version >= (0, 10) and not jax.config.jax_compilation_cache_dir:
         jax.config.update("jax_compilation_cache_dir", cache)
         jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)

@@ -128,3 +128,15 @@ print(out.states.dtype, int(out.lost.sum()), float(np.max(out.energy_error)))
 """)
     dtype, lost, error = out.split()[-3:]
     assert dtype == "float32" and lost == "0" and float(error) < 1e-5, out
+
+
+@pytest.mark.parametrize("jaxlib_version, cached", [("0.6.2", False), ("0.9.2", False), ("0.10.0", True)])
+def test_configure_jax_uses_the_compilation_cache_only_where_jaxlib_can_reload_it(tmp_path, jaxlib_version, cached):
+    """jaxlib < 0.10 overflows a thread stack reloading a large cached XLA:CPU executable on a warm rerun."""
+    out = run(f"""
+import jaxlib.version, essos, jax
+jaxlib.version.__version__ = {jaxlib_version!r}
+essos.configure_jax(cache_dir={str(tmp_path)!r})
+print(jax.config.jax_compilation_cache_dir == {str(tmp_path)!r})
+""")
+    assert out.split() == [str(cached)], out
