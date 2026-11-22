@@ -484,6 +484,13 @@ def _near_axis_particles():
     return Particles(initial_xyz=xyz, initial_vparallel_over_v=jnp.array([0.9, 0.9, 0.9, -0.9, 0.9]))
 
 
+@pytest.mark.skipif(sys.version_info >= (3, 11), reason="Python 3.11+ resolves diffrax>=0.7.1")
+def test_full_orbit_collisions_name_the_remedy_on_diffrax_0_7_0():
+    """diffrax 0.7.0, the last for Python 3.10, returns inf for the SPaRK solve."""
+    with pytest.raises(ImportError, match=r"diffrax>=0\.7\.1.*Python>=3\.11"):
+        Tracing(model="FullOrbitCollisions")
+
+
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
 def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature():
     """Without the noise-induced drift sigma_ik d_j sigma_jk / 2 a thermal
