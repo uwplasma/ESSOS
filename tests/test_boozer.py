@@ -659,6 +659,9 @@ def test_axis_patch_leaves_the_qa_field_unchanged_outside_the_first_surface():
     for r in np.r_[r1, r1 * (1 + 1e-9), rng.uniform(r1, 1, 6)]:
         theta, zeta = rng.uniform(0, 2 * np.pi, 2)
         np.testing.assert_array_equal(field.modB_derivatives(r, theta, zeta), plain.modB_derivatives(r, theta, zeta))
+    for theta, zeta in rng.uniform(0, 2 * np.pi, (4, 2)):  # the tabulated patch meets the table at r1
+        np.testing.assert_allclose(field.modB_derivatives(r1 * (1 - 1e-12), theta, zeta),
+                                   field.modB_derivatives(r1, theta, zeta), rtol=0, atol=1e-10)
     inside = field.modB_derivatives(0.5 * r1, 1.0, 0.5)[0]
     assert inside != plain.modB_derivatives(0.5 * r1, 1.0, 0.5)[0]
 

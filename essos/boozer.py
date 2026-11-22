@@ -4,11 +4,11 @@ Interpolate the |B| spectrum in sqrt(s), with m>=1 coefficients divided by
 sqrt(s) for axis regularity; interpolate iota, G and I in s. Inside the first
 surface r1 each harmonic is replaced by x^m (C0 + C1 x^2 + C2 x^4), x = r/r1,
 with value, slope and curvature of the spline at r1: the form of an analytic
-|B| at the axis (Landreman & Sengupta, 2019, eqs. 2.10-2.12). With the angle
-table, r >= r1 uses the table and the patch is tabulated as sum_p x^p T_p(theta,
-zeta) on the same grid; the patch is matched to the radial splines, so at r1 the
-angular derivatives step by the table's interpolation error (1e-8 to 7e-8 T in
-the QA reactor field). Explicit RK runs in
+|B| at the axis (Landreman & Sengupta, 2019, eqs. 2.10-2.12). The patch is
+matched to the radial splines, but with the angle table r >= r1 uses the table;
+the patch is then tabulated as sum_p x^p T_p(theta, zeta) on the same grid, so
+the two agree at r1 to 3e-11 T (a mode-sum patch steps by up to 1.5e-7 T in
+the angular derivatives there, in the QA reactor field). Explicit RK runs in
 sqrt(s)*(cos(theta), sin(theta)). LCFS crossings are lost; nonfinite steps
 are failed. Optional Euler-Maruyama collisions apply pitch scattering,
 slowing down and energy diffusion (Boozer & Kuo-Petravic, 1981).
