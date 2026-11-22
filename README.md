@@ -271,7 +271,7 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
   and read the per-line mask from `tracing.boundary_hits`.
 - **Step budget.** `max_steps` (default `1_000_000`) bounds every Diffrax solve,
   so a trace that cannot finish returns instead of running unbounded.
-- **Progress bars** are off by default; pass `progress=True` when interactive.
+- **Progress bars** are on by default; pass `progress=False` (or set `ESSOS_PROGRESS=0`) for batch runs.
   With `particle_batch_size=n` particles are traced `n` at a time and the bar
   counts completed particles (batches are bypassed under `jax.jit`/`grad`).
 - **Model choice.** `FieldLineArclength` traces a fixed physical length so

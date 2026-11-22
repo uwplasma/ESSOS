@@ -1,4 +1,3 @@
-from pyexpat import model
 import os
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -83,7 +82,6 @@ class Particles():
         self.particle_index=jnp.arange(self.nparticles)
         
         key=jax.random.key(42)
-        #self.random_keys=jax.random.split(key,32)[20:22]#self.nparticles)
         self.random_keys=jax.random.split(key,self.nparticles)        
         
         if initial_vparallel_over_v is not None:
@@ -117,186 +115,6 @@ class Particles():
         initial_vparallel_over_v = jnp.concatenate((self.initial_vparallel_over_v, other.initial_vparallel_over_v), axis=0)
 
         return Particles(initial_xyz=initial_xyz, initial_vparallel_over_v=initial_vparallel_over_v, charge=charge, mass=mass, energy=energy, field=field)
-
-
-    
-    @classmethod
-    def InitializeParticlesAroundSurfaceAxis(cls, surface, n_particles, 
-                                            distance_from_axis=0.0,
-                                            charge=ALPHA_PARTICLE_CHARGE,
-                                            mass=ALPHA_PARTICLE_MASS, 
-                                            energy=FUSION_ALPHA_PARTICLE_ENERGY,
-                                            min_vparallel_over_v=-1,
-                                            max_vparallel_over_v=1,
-                                            field=None,
-                                            random_seed=42,
-                                            n_arc_samples=1000,
-                                            boundary_surface=None,
-                                            distance_mode='absolute',
-                                            boundary_bisection_steps=32):
-        """Initialize particles randomly distributed around/along a magnetic axis extracted from a surface.
-        
-        Args:
-            surface: SurfaceRZFourier object to extract axis from
-            n_particles: Number of particles to initialize
-            distance_from_axis: Perpendicular distance (in Frenet frame) from the axis 
-                               (0.0 for particles on axis, >0 for particles around axis).
-                               If distance_mode='fraction_to_boundary', this is interpreted
-                               as a fraction in [0, 1] of the local axis-to-boundary distance.
-            charge: Particle charge (default: alpha particle charge)
-            mass: Particle mass (default: alpha particle mass)
-            energy: Particle kinetic energy
-            min_vparallel_over_v: Minimum parallel velocity fraction
-            max_vparallel_over_v: Maximum parallel velocity fraction
-            field: Magnetic field object (for converting to full orbit if needed)
-            random_seed: Seed for random number generation
-            n_arc_samples: Number of samples for arc-length parametrization
-            boundary_surface: Optional surface used as geometric boundary when
-                             distance_mode='fraction_to_boundary'.
-            distance_mode: 'absolute' or 'fraction_to_boundary'.
-            boundary_bisection_steps: Number of bisection iterations used to
-                                     find axis-to-boundary distance along each
-                                     particle direction.
-            
-        Returns:
-            Particles object with initial positions distributed around the axis
-        """
-        if distance_mode not in ('absolute', 'fraction_to_boundary'):
-            raise ValueError("distance_mode must be 'absolute' or 'fraction_to_boundary'.")
-
-        if distance_mode == 'fraction_to_boundary':
-            if boundary_surface is None:
-                raise ValueError("boundary_surface is required when distance_mode='fraction_to_boundary'.")
-            if distance_from_axis < 0.0 or distance_from_axis > 1.0:
-                raise ValueError("distance_from_axis must be in [0, 1] when distance_mode='fraction_to_boundary'.")
-
-            from essos.surfaces import signed_distance_from_surface_jax
-
-            # Global bound used to cap the ray search for boundary intersection.
-            boundary_points = boundary_surface.gamma.reshape((-1, 3))
-            boundary_extent = float(jnp.max(jnp.linalg.norm(boundary_points, axis=1)))
-            boundary_search_cap = max(1.0, 4.0 * boundary_extent)
-
-            def signed_distance_boundary(xyz):
-                return float(jnp.squeeze(signed_distance_from_surface_jax(xyz, boundary_surface)))
-
-            def axis_to_boundary_distance(axis_pos, direction):
-                # Find t such that axis_pos + t * direction lies on boundary (signed distance ~ 0).
-                # Assumes axis point is inside boundary and direction points outward in the local plane.
-                t_low = 0.0
-                t_high = 0.2
-                s_high = signed_distance_boundary(axis_pos + t_high * direction)
-                while s_high > 0.0 and t_high < boundary_search_cap:
-                    t_low = t_high
-                    t_high *= 2.0
-                    s_high = signed_distance_boundary(axis_pos + t_high * direction)
-
-                # If no crossing was found, return the current bound as a safe fallback.
-                if s_high > 0.0:
-                    return t_high
-
-                for _ in range(boundary_bisection_steps):
-                    t_mid = 0.5 * (t_low + t_high)
-                    s_mid = signed_distance_boundary(axis_pos + t_mid * direction)
-                    if s_mid > 0.0:
-                        t_low = t_mid
-                    else:
-                        t_high = t_mid
-                return t_high
-
-        # Extract m=0 modes (magnetic axis) from surface
-        m0_mask = surface.xm == 0
-        rc_axis = surface.rc[m0_mask]
-        zs_axis = surface.zs[m0_mask]
-        xn_axis = surface.xn[m0_mask]
-        
-        # Helper function: compute axis curve at given phi
-        def compute_axis_point(phi):
-            """Compute axis position at toroidal angle phi"""
-            angles = xn_axis * phi
-            R_val = jnp.sum(rc_axis * jnp.cos(angles))
-            Z = -jnp.sum(zs_axis * jnp.sin(angles))
-            x = R_val * jnp.cos(phi)
-            y = R_val * jnp.sin(phi)
-            return jnp.array([x, y, Z])
-        
-        # Compute arc-length parametrization along the axis
-        phi_arc = jnp.linspace(0, 2 * jnp.pi, n_arc_samples, endpoint=True)
-        axis_arc_pts = jnp.array([compute_axis_point(p) for p in phi_arc])
-        
-        # Compute arc-length
-        deltas = jnp.linalg.norm(jnp.diff(axis_arc_pts, axis=0), axis=1)
-        cumulative_arc = jnp.concatenate([jnp.array([0.0]), jnp.cumsum(deltas)])
-        total_arc = cumulative_arc[-1]
-        
-        # Generate random arc-length positions
-        key = jax.random.key(random_seed)
-        key_arcs, key_thetas, key_vparallel = jax.random.split(key, 3)
-        
-        random_arcs = jax.random.uniform(key_arcs, (n_particles,)) * total_arc
-        random_thetas = jax.random.uniform(key_thetas, (n_particles,)) * 2 * jnp.pi  # Poloidal angle
-        
-        # Map arc-length positions back to phi coordinates
-        particle_phis = jnp.interp(random_arcs, cumulative_arc, phi_arc)
-        
-        # Compute axis positions and Frenet frames at particle locations
-        def compute_particle_position(phi, theta, distance):
-            """Compute particle position on/around axis using Frenet frame"""
-            # Axis point at this phi
-            axis_pos = compute_axis_point(phi)
-            
-            # Compute Frenet frame (tangent, normal, binormal)
-            # Tangent: derivative along phi (using finite differences)
-            eps = 1e-8
-            axis_plus = compute_axis_point(phi + eps)
-            axis_minus = compute_axis_point(phi - eps)
-            tangent = (axis_plus - axis_minus) / (2 * eps)
-            tangent = tangent / jnp.maximum(jnp.linalg.norm(tangent), 1e-12)
-
-            # Build a robust orthonormal frame perpendicular to tangent.
-            # This avoids degeneracy when axis-only Fourier data has zero poloidal derivative.
-            ref = jnp.array([0.0, 0.0, 1.0])
-            use_x = jnp.abs(jnp.dot(ref, tangent)) > 0.9
-            ref = jnp.where(use_x, jnp.array([1.0, 0.0, 0.0]), ref)
-
-            dot_rt = jnp.dot(ref, tangent)
-            normal = ref - dot_rt * tangent
-            normal = normal / jnp.maximum(jnp.linalg.norm(normal), 1e-12)
-            
-            # Binormal: tangent × normal
-            binormal = jnp.cross(tangent, normal)
-            binormal = binormal / jnp.maximum(jnp.linalg.norm(binormal), 1e-12)
-
-            direction = jnp.cos(theta) * normal + jnp.sin(theta) * binormal
-            direction = direction / jnp.maximum(jnp.linalg.norm(direction), 1e-12)
-
-            if distance_mode == 'fraction_to_boundary':
-                max_distance = axis_to_boundary_distance(axis_pos, direction)
-                actual_distance = distance * max_distance
-            else:
-                actual_distance = distance
-            
-            # Position: axis + distance * direction in local normal-binormal plane
-            position = axis_pos + actual_distance * direction
-            
-            return position
-        
-        # Compute all particle positions
-        initial_xyz = jnp.array([compute_particle_position(phi, theta, distance_from_axis) 
-                                 for phi, theta in zip(particle_phis, random_thetas)])
-        
-        # Generate random parallel velocity fractions
-        initial_vparallel_over_v = jax.random.uniform(key_vparallel, (n_particles,), 
-                                                       minval=min_vparallel_over_v, 
-                                                       maxval=max_vparallel_over_v)
-        
-        # Create and return Particles object
-        return cls(initial_xyz=initial_xyz, 
-                  initial_vparallel_over_v=initial_vparallel_over_v,
-                  charge=charge, 
-                  mass=mass, 
-                  energy=energy,
-                  field=field)
 
 
 
@@ -342,7 +160,6 @@ def GuidingCenterCollisionsDiffusionMu(t,
     q = particles.charge
     m = particles.mass
     points = jnp.array([x, y, z])
-    #I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(B_contravariant,B_contravariant))/AbsB**2
     I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(field.B_contravariant(points),jnp.reshape(field.B_contravariant(points),(3,1))))/field.AbsB(points)**2
     sigma=_mu_collision_noise(vpar, mu, points, field, particles, species)
     Diffusion_x=0.0#((Diffusion_par-Diffusion_perp)*(1.-xi**2)/2.+Diffusion_perp)/(m*omega_mod)**2
@@ -361,8 +178,6 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
                   args) -> jnp.ndarray:
     x, y, z,vpar,mu = initial_condition
     field, particles,electric_field,species,tag_gc = args
-    #jax.debug.print("vpar  {x}", x=vpar)
-    #jax.debug.print("mu {x}", x=mu)  
     vpar=SPEED_OF_LIGHT*vpar
     mu=SPEED_OF_LIGHT**2*particles.mass*mu
     m = particles.mass
@@ -371,8 +186,6 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
     v=jnp.sqrt(2./m*(0.5*m*vpar**2+mu*field.AbsB(points)))
     p=m*v
     xi=vpar/v
-    #xi=jnp.select(condlist=[jnp.abs(xi)<=1,jnp.abs(xi)>1],choicelist=[jnp.sign(xi)*(2.-jnp.abs(xi)),xi])
-    #vpar=xi*v
     Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
@@ -389,9 +202,6 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
     Yvv=(Diffusion_par*xi**2+Diffusion_perp*(1.-xi**2))/p**2
     Yvmu=2.*xi*(1.-xi**2)*(Diffusion_par-Diffusion_perp)/p**2
     Ymumu=4.*(1.-xi**2)*(Diffusion_par*(1.-xi**2)+Diffusion_perp*xi**2)/p**2 
-    #Dmuv=2.*mu*vpar/p**2*(Diffusion_par-Diffusion_perp)
-    #Dmumu=2.*mu/(m*field.AbsB(points))*((1-xi**2)(Diffusion_par-Diffusion_perp)+Diffusion_perp)
-    #Dvv=Diffusion_perp/m**2*(1.-xi**2)+Diffusion_par/m**2*xi**2
 
     d_Dmuv_dvpar=2.*mu/p**2*((Diffusion_par-Diffusion_perp)+xi**2*p*(d_Diffusion_par_dp-d_Diffusion_perp_dp)-2.*xi**2*(Diffusion_par-Diffusion_perp))
     d_Dmuv_dmu=2.*vpar/p**2*((Diffusion_par-Diffusion_perp)+(1.-xi**2)*p/2.*(d_Diffusion_par_dp-d_Diffusion_perp_dp)-(1.-xi**2)*(Diffusion_par-Diffusion_perp))
@@ -484,7 +294,6 @@ def GuidingCenterCollisionsDiffusion(t,
     dxdt = jnp.sqrt(2.*Diffusion_x)*I_bb_tensor
     dvdt=jnp.sqrt(2.*Diffusion_par)/m   #equation format was in p=m*v so we divide by m)
     dxidt=jnp.sqrt((1.-xi**2)*2.*Diffusion_perp/p**2)
-    #jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[jnp.sqrt((1.-xi**2)*2.*Diffusion_perp/p**2),0.])
     #Off diagonals between position an dvelocity are zero at zeroth order
     Dxv=jnp.zeros((2,3))
     Dvx=jnp.zeros((3,2))
@@ -571,9 +380,6 @@ def GuidingCenterMu(t, initial_condition, args) -> jnp.ndarray:
     dxdt, dvdt = _guiding_center_velocity(field, electric_field, particles.charge, particles.mass,
                                           initial_condition[:3], initial_condition[3], mu=initial_condition[4])
     return jnp.concatenate([dxdt, jnp.array([dvdt, 0.0])])
-    # def zero_derivatives(_):
-    #     return jnp.zeros(4, dtype=float)
-    # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
 
 
 @partial(jit, static_argnums=(2))
@@ -584,9 +390,6 @@ def LorentzCollisionsDiffusion(t,
     field, particles,species = args
     q = particles.charge
     m = particles.mass
-    #E = m/2*v**2 
-    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-    # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
     v_vector=jnp.array([vx, vy, vz])
     v=jnp.sqrt(vx**2+vy**2+vz**2)
@@ -615,8 +418,6 @@ def LorentzCollisionsDrift(t,
     q = particles.charge
     m = particles.mass
     v=jnp.sqrt(vx**2+vy**2+vz**2)
-    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-    # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(points)
     indeces_species=species.species_indeces
@@ -631,9 +432,6 @@ def LorentzCollisionsDrift(t,
     noise_drift = 0.5*jnp.einsum('ik,jkj->i', sigma(dxdt), jax.jacfwd(sigma)(dxdt))
     dvdt =  q / m * jnp.cross(dxdt, B_contravariant)-nu_s*dxdt+noise_drift
     return jnp.append(dxdt, dvdt)
-    # def zero_derivatives(_):
-    #     return jnp.zeros(6, dtype=float)
-    # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
 
 
 
@@ -647,31 +445,21 @@ def Lorentz(t,
     field, particles = args
     q = particles.charge
     m = particles.mass
-    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-    # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(points)
     dxdt = jnp.array([vx, vy, vz])
     dvdt = q / m * jnp.cross(dxdt, B_contravariant)
     return jnp.append(dxdt, dvdt)
-    # def zero_derivatives(_):
-    #     return jnp.zeros(6, dtype=float)
-    # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
 
 @partial(jit, static_argnums=(2))
 def FieldLine(t,
               initial_condition,
               field) -> jnp.ndarray:
     x, y, z = initial_condition
-    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-    # def compute_derivatives(_):
     position = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(position)
     dxdt = B_contravariant
     return dxdt
-    # def zero_derivatives(_):
-    #     return jnp.zeros(3, dtype=float)
-    # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 
 @partial(jit, static_argnums=(2))
@@ -935,11 +723,6 @@ def _place_on_devices(x, target):
 
 
 
-## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
-## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
-## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
-## !!!!  Here particle_key was added to compute_trajectories (E. Neto collisions modifications)
-## This is important for correct sampling of Brownian motion
 def _never(t, y, args, **kwargs):
     return False
 
@@ -1172,26 +955,11 @@ class Tracing():
             self.args = (self.field, self.particles,self.electric_field)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
         elif model == 'GuidingCenterCollisions':
-            # Brownian motion
-            #t0=0.0
-            #t1=self.maxtime
-            #tol=self.maxtime / self.timesteps*0.5
-            #print('tol: ', tol)
-            #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)            
-            #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
             self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
             total_speed_temp=self.particles.total_speed*jnp.ones(self.particles.nparticles)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,total_speed_temp[:, None], self.particles.initial_vparallel_over_v[:, None]], axis=1)
         elif model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative':
-            # Brownian motion
-            #t0=0.0
-            #t1=self.maxtime
-            #tol=self.maxtime / self.timesteps*0.5   
-            #print('tol: ', tol)
-            #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)
-            #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))
             self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
-            #x,y,z=self.particles.initial_xyz[]
             B_particle=jax.vmap(self.field.AbsB,in_axes=0)(self.particles.initial_xyz)
             mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*self.particles.mass)          
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,self.particles.initial_vparallel[:, None]/SPEED_OF_LIGHT,mu[:, None]],axis=1)        
@@ -1808,11 +1576,9 @@ class Tracing():
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 18)
             plt.ylabel('Z',fontsize = 18)
-            # plt.title(r'$\phi$ = {:.2f} $\pi$'.format(shift/jnp.pi),fontsize = 20)
         elif orientation == 'z':
             plt.xlabel('X',fontsize = 18)
             plt.xlabel('Y',fontsize = 18)
-            # plt.title('Z = {:.2f}'.format(shift),fontsize = 20)
         plt.axis('equal')
         plt.grid()
         plt.tight_layout()

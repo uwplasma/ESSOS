@@ -341,7 +341,6 @@ def eq(fun,model_lagrangian='Standard', multiplier=0.0,penalty=1.,omega=1.0,eta=
     def init_fn(*args, **kwargs):
         out = fun(*args, **kwargs)
         return {'lambda': _multiplier_like(out, multiplier, penalty, omega, eta, sq_grad)}
-        #return {'lambda': LagrangeMultiplier(multiplier+jnp.zeros_like(fun(*args, **kwargs)),penalty+jnp.zeros_like(fun(*args, **kwargs)),sq_grad+jnp.maximum(jnp.square(fun(*args, **kwargs)),1.e-4))}
 
     if model_lagrangian=='Standard':
         def loss_fn(params, *args, **kwargs):
@@ -554,9 +553,6 @@ def combine(*args):
 ####These are auxilair functions to do operations on the lagrange multiplier parameters and on auxiliar loss information
 def total_infeasibility(tree):
     return jax.tree_util.tree_reduce(lambda x, y: x + jnp.sum(jnp.abs(y)), tree, jnp.array(0.))
-
-#def norm_constraints(tree):
-#    return jnp.sqrt(jax.tree_util.tree_reduce(lambda x, y: x + jnp.sum(y**2), tree, jnp.array(0.)))
 
 def norm_constraints(tree):
     flat=jax.flatten_util.ravel_pytree(tree)[0]
@@ -805,12 +801,10 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
 ):
 
 
-    #jax.debug.print('LFBGSB {m}',m={model_lagrangian})
     @jax.jit
     def init_fn(params,**kargs):
         main_params,lagrange_params=params
         grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
-        #lag_state=lagrange_update(model_lagrangian=model_lagrangian).init(lagrange_params)  
         lag_state=optax.EmptyState()                     
         return lag_state,grad,info        
 
@@ -820,7 +814,6 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
             mdmm_loss, inf = constraints.loss(lagrange_params, main_params)  
             return  main_loss+mdmm_loss, (main_loss,main_loss+mdmm_loss, inf)
     elif model_lagrangian=='Squared':
-        #jax.debug.print(' LFBGSB {m}',m={model_lagrangian})
         def lagrangian(main_params,lagrange_params,**kargs):
             main_loss = jnp.square(optax.safe_norm(loss(main_params,**kargs), 0.))
             #This uses ||f(x)||^2 in the lagrangian
@@ -868,10 +861,6 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
         lagrange_params = optax.apply_updates(lagrange_params, lag_updates) 
         params=main_params,lagrange_params
         grad,info = jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)              
-        #jax.debug.print('omega {omega}:', omega=omega)   
-        #jax.debug.print('grad {grad}:', grad=jnp.linalg.norm(grad[0]))           
-        #jax.debug.print('eta {omega}:', omega=eta)
-        #jax.debug.print('contraint {grad}:', grad=norm_constraints(info[2]))  
         return params,lag_state,grad,info           
      
 
