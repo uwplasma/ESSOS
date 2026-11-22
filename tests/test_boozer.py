@@ -1,6 +1,7 @@
 """Boozer-coordinate guiding-centre tracing and Monte Carlo collisions."""
 
 import dataclasses
+import functools
 
 import jax
 import jax.numpy as jnp
@@ -584,3 +585,111 @@ def test_adaptive_tolerance_is_validated():
         trace_boozer(tokamak(), [0.3], [0.0], [0.0], [0.2], speed=V0, mass=M, charge=Q,
                      tmax=1e-6, timestep=1e-8, method="adaptive", tolerance=0.0)
 
+
+
+# The axis patch: inside the first surface r1 each harmonic is x^m (C0 + C1 x^2 + C2 x^4), x = r / r1, the form an
+# analytic |B| has near the axis (Landreman and Sengupta 2019, J. Plasma Phys. 85, 815850601, eqs. 2.10 to 2.12).
+
+def _analytic_axis_field(angle_grid=None):
+    """|B| = 5 + 0.3 r cos(theta) + 0.1 r^2 cos(2 theta - 2 zeta) + 0.05 r^3 cos(3 theta) + 0.02 s on the half mesh."""
+    s = (np.arange(1, 50) - 0.5) / 49
+    r = np.sqrt(s)
+    bmnc = np.stack([5 + 0.02 * s, 0.3 * r, 0.1 * s, 0.05 * r**3])
+    return BoozerField.from_booz(s, bmnc, [0, 1, 2, 3], [0, 0, 2, 0], np.full_like(s, IOTA), np.full_like(s, G),
+                                 np.zeros_like(s), PSI0, 1, angle_grid=angle_grid)
+
+
+def test_axis_patch_reproduces_an_analytic_field_inside_the_first_surface():
+    field = _analytic_axis_field()
+    r1 = float(field.r_knots[0])
+    for r, theta, zeta in ((0.0, 0.4, 0.1), (1e-6, 2.0, 0.3), (0.3 * r1, 4.0, 1.0), (0.99 * r1, 1.0, 2.0)):
+        c = np.cos(np.array([theta, 2 * theta - 2 * zeta, 3 * theta]))
+        sn = np.sin(np.array([theta, 2 * theta - 2 * zeta, 3 * theta]))
+        expected = (5 + 0.02 * r**2 + 0.3 * r * c[0] + 0.1 * r**2 * c[1] + 0.05 * r**3 * c[2],
+                    0.04 * r + 0.3 * c[0] + 0.2 * r * c[1] + 0.15 * r**2 * c[2],
+                    -(0.3 * sn[0] + 0.2 * r * sn[1] + 0.15 * r**2 * sn[2]),
+                    0.2 * r**2 * sn[1])
+        np.testing.assert_allclose(field.modB_derivatives(r, theta, zeta), expected, rtol=0, atol=1e-10)
+
+
+@functools.lru_cache
+def _qa_boozer_field():
+    """QA reactor wout through booz_xform_jax (mboz = nboz = 32); 207 modes above 1e-6, so the angle table is used."""
+    from pathlib import Path
+    from netCDF4 import Dataset
+    booz_xform_jax = pytest.importorskip("booz_xform_jax")
+    wout = Path(__file__).parents[1] / "examples" / "input_files" / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+    booz = booz_xform_jax.Booz_xform(verbose=0, mboz=32, nboz=32)
+    booz.read_wout(str(wout), flux=False)
+    with Dataset(wout) as d:
+        psi0 = psi0_from_vmec(d.variables["phi"][-1])
+    return BoozerField.from_booz_xform(booz, psi0)
+
+
+def _velocity_jump(field, r):
+    """|v(theta = 0) - v(theta = pi)| of the (u, w) velocity over its mean size, worst of three zeta and two pitches."""
+    jumps = []
+    for zeta in (0.0, 0.7, 2.1):
+        for pitch in (0.3, -0.9):
+            v = []
+            for u in (r, -r):
+                B = field.modB_derivatives(r, 0.0 if u > 0 else np.pi, zeta)[0]
+                rhs = guiding_center_rhs(field, jnp.array([u, 0.0, zeta, pitch * V0]), V0**2 * (1 - pitch**2) / (2 * B), M, Q)
+                v.append(np.asarray(rhs[:2]))
+            jumps.append(np.linalg.norm(v[0] - v[1]) / (0.5 * (np.linalg.norm(v[0]) + np.linalg.norm(v[1]))))
+    return max(jumps)
+
+
+def test_axis_patch_makes_the_qa_guiding_centre_velocity_continuous_on_the_axis():
+    """Without the patch the (u, w) velocity jumped by 9.5e-2 between theta = 0 and pi at r = 1e-6, independent of r; a
+    field that is C1 on the axis gives a jump linear in r (4.2e-5 at r = 1e-6 in the study of option (g))."""
+    field = _qa_boozer_field()
+    assert field.table is not None and field.axis_coef is not None
+    small, large = _velocity_jump(field, 1e-6), _velocity_jump(field, 1e-4)
+    assert small < 1e-4
+    assert large / small == pytest.approx(100, rel=0.1)
+
+
+def test_axis_patch_leaves_the_qa_field_unchanged_outside_the_first_surface():
+    field = _qa_boozer_field()
+    plain = dataclasses.replace(field, axis_coef=None)
+    r1 = float(field.r_knots[0])
+    rng = np.random.default_rng(3)
+    for r in np.r_[r1, r1 * (1 + 1e-9), rng.uniform(r1, 1, 6)]:
+        theta, zeta = rng.uniform(0, 2 * np.pi, 2)
+        np.testing.assert_array_equal(field.modB_derivatives(r, theta, zeta), plain.modB_derivatives(r, theta, zeta))
+    inside = field.modB_derivatives(0.5 * r1, 1.0, 0.5)[0]
+    assert inside != plain.modB_derivatives(0.5 * r1, 1.0, 0.5)[0]
+
+
+def test_axis_patch_qa_energy_near_the_axis():
+    """Fixed-step Dopri8 at the default step, 3.5 MeV alphas born at s = 1e-10, 20 us: the energy error was 3.6e-5
+    (the right-hand side was discontinuous on the axis) and is 9.6e-11 with the patch (study of option (g))."""
+    field = _qa_boozer_field()
+    n = 6
+    out = trace_boozer(field, np.full(n, 1e-10), np.linspace(0, 2 * np.pi, n, endpoint=False), np.zeros(n),
+                       np.linspace(-0.9, 0.9, n), speed=V0, mass=M, charge=Q, tmax=2e-5, n_save=3,
+                       devices=jax.devices()[:1], progress=False)
+    assert not out.lost.any() and not out.failed.any()
+    assert np.max(out.energy_error) < 1e-8
+
+
+def test_trace_started_on_the_axis_differentiates_in_both_modes():
+    """d(final s)/d(scale of the m = 1 harmonic) through 40 Dopri8 steps from r = 0 is finite in forward and reverse
+    mode and equal to central differences; forward mode was NaN from the chart (u, w) -> (r, theta) at r = 0."""
+    field = _analytic_axis_field()
+    mu = V0**2 * 0.91 / (2 * B0)
+
+    def final_s(eps):
+        scale = jnp.ones(field.xm.size).at[1].add(eps)
+        scaled = eqx.tree_at(lambda f: (f.b_coef, f.axis_coef), field,
+                             (field.b_coef * scale[:, None], field.axis_coef * scale[:, None]))
+        y = jnp.array([0.0, 0.0, 0.0, 0.3 * V0])
+        for _ in range(40):
+            y = _rk_step(lambda y: guiding_center_rhs(scaled, y, mu, M, Q), y, 2e-8, "dopri8")
+        return y[0]**2 + y[1]**2
+
+    forward, reverse = jax.jacfwd(final_s)(0.0), jax.jacrev(final_s)(0.0)
+    central = (final_s(1e-5) - final_s(-1e-5)) / 2e-5
+    assert np.isfinite(forward) and np.isfinite(reverse)
+    np.testing.assert_allclose([forward, reverse], central, rtol=1e-4)
