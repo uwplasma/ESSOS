@@ -524,10 +524,13 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.
 
-    With ``species``, collision kicks are applied on a fixed clock ``t_j = j dt`` (``dt`` the fixed step, which
-    adaptive steps land on) with noise from ``fold_in(fold_in(PRNGKey(seed), marker_id), j)``. A marker's trace
-    then does not depend on the other markers in the run, their order or the orbit steps, and runs with the same
-    ``seed`` share their noise. ``marker_ids`` (default ``0 .. n-1``) are distinct non-negative integers.
+    With ``species``, collision kicks are applied on a fixed clock ``t_j = j dt`` with noise from
+    ``fold_in(fold_in(PRNGKey(seed), marker_id), j)``. The clock is ``dt = tmax / ((n_save - 1) n_sub)``, the
+    fixed step, not the ``timestep`` passed in: two runs share their noise only when ``tmax``, ``n_save`` and
+    ``timestep`` are all the same. A marker's trace then does not depend on the other markers in the run, their
+    order or the orbit steps. With ``species`` the adaptive methods take steps no longer than ``dt``, so
+    ``timestep`` sets both the cost and the collision accuracy: choose it from the collision time.
+    ``marker_ids`` (default ``0 .. n-1``) are distinct integers in ``[0, 2**32)``.
     """
     if method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
         raise ValueError("method must be 'rk4', 'dopri5', 'dopri8', 'adaptive' or 'adaptive8'")
@@ -569,8 +572,8 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     mu0 = speed**2 * (1 - pitch**2) / (2 * B0)
     marker_ids = np.arange(n) if marker_ids is None else np.asarray(marker_ids)
     if (marker_ids.shape != (n,) or not np.issubdtype(marker_ids.dtype, np.integer) or np.any(marker_ids < 0)
-            or np.unique(marker_ids).size != n):
-        raise ValueError("marker_ids must be n distinct non-negative integers")
+            or np.any(marker_ids >= 2**32) or np.unique(marker_ids).size != n):
+        raise ValueError("marker_ids must be n distinct integers in [0, 2**32)")
     keys = jax.vmap(jax.random.fold_in, (None, 0))(jax.random.PRNGKey(int(seed)), jnp.asarray(marker_ids))
 
     devices = jax.devices() if devices is None else devices
