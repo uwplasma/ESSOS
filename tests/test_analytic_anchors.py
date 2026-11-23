@@ -99,7 +99,8 @@ def test_guiding_centre_in_a_vacuum_toroidal_field_drifts_at_the_analytic_speed(
     y = np.asarray(tracing.trajectories)
     v = np.sqrt(2 * energy / PROTON_MASS)
     drift = PROTON_MASS * v**2 * (xi**2 + (1 - xi**2) / 2) / (ELEMENTARY_CHARGE * B0 * R0)
-    np.testing.assert_allclose(y[:, :, 2], drift[:, None] * np.asarray(tracing.times)[None], rtol=1e-8, atol=1e-8 * drift.max() * maxtime)
+    np.testing.assert_allclose(y[:, :, 2], drift[:, None] * np.asarray(tracing.times)[None], rtol=1e-8,
+                               atol=1e-8 * drift.max() * maxtime)
     np.testing.assert_allclose(np.hypot(y[:, :, 0], y[:, :, 1]), R0, rtol=1e-8)
     np.testing.assert_allclose(y[:, :, 3], np.broadcast_to(v * xi[:, None], y.shape[:2]), rtol=1e-12)
     energies = np.asarray(tracing.energy())
