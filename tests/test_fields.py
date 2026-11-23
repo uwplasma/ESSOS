@@ -153,7 +153,10 @@ def test_combined_field_requires_at_least_one_field():
 
 
 def _two_vmec_parts():
-    """A wout and a copy with every Nyquist mode of its B tables reweighted: the sum is proportional to neither."""
+    """A wout and a copy with every Nyquist mode of its B tables reweighted: the sum is proportional to neither.
+
+    The copy is an algebraic test object, not an equilibrium (its B_i, B^i and |B| no longer obey B_i = g_ij B^j).
+    """
     vmec = Vmec(WOUT_FILE)
     arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
     weight = 1 + 0.5 * np.cos(np.asarray(vmec.xm_nyq) + 0.3 * np.asarray(vmec.xn_nyq))
@@ -221,6 +224,22 @@ def test_combined_field_covariant_gradient_is_the_sum_of_its_parts():
 
     got, expected = jax.grad(through_sum)(parts[0]).bsubumnc, jax.grad(by_hand)(parts[0]).bsubumnc
     np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12 * np.abs(expected).max())
+
+
+def test_combined_vmec_field_runs_through_the_guiding_centre_quantities():
+    """The tracers call dynamics._gc_quantities; a Vmec-only combination must go through it.
+
+    Tolerance: CombinedField keeps |B| = |sum B| (Cartesian), Vmec uses its bmnc table; on this wout the two
+    differ so that the curvature differs by up to 2.5e-3 relative (median 2.2e-4) on a 9x12x6 grid. 1e-2 bounds that spectral
+    difference, far below the O(1) error of a Cartesian B_i.
+    """
+    from essos.dynamics import _gc_quantities
+    from essos.fields import CombinedField
+
+    vmec = Vmec(WOUT_FILE)
+    for x in COMBINED_POINTS:
+        kappa = _gc_quantities(CombinedField(vmec), x)[5]
+        np.testing.assert_allclose(kappa, vmec.kappa(x), rtol=1e-2, atol=1e-2 * jnp.linalg.norm(vmec.kappa(x)))
 
 
 def test_combined_field_refuses_fields_in_different_coordinates():
