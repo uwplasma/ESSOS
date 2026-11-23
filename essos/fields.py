@@ -14,6 +14,8 @@ from essos.plot import fix_matplotlib_3d
 from essos.util import newton
 
 class MagneticField():
+    coordinates = "cartesian"
+
     def __init__(self):
         pass
 
@@ -368,6 +370,8 @@ class Vmec():
     B components for the Nyquist modes. Evaluation cost scales with the
     number of modes kept.
     """
+    coordinates = "vmec"
+
     def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus', mode_tolerance=0.0):
         if not isinstance(wout_filename, (str, os.PathLike)):  # an in-memory wout, e.g. a VMEX WoutData
             w, kwargs = wout_filename, dict(ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,
@@ -796,9 +800,7 @@ tree_util.register_pytree_node(ExternalField,
 
 def _coordinates(field):
     """The coordinates in which a field takes points and gives components: "vmec" (s, theta, phi) or "cartesian"."""
-    if isinstance(field, CombinedField):
-        return _coordinates(field.fields[0])
-    return "vmec" if isinstance(field, Vmec) else "cartesian"
+    return getattr(field, "coordinates", "cartesian")
 
 
 class CombinedField(MagneticField):
@@ -809,8 +811,12 @@ class CombinedField(MagneticField):
     geometry helpers ``sqrtg`` and ``to_xyz`` come from the first field.
     Components add only in one basis, so every field must use the same
     coordinates: all Cartesian (coils, external, interpolated and mgrid fields)
-    or all VMEC flux coordinates (s, theta, phi) of ``Vmec`` fields. A mix raises
-    ``ValueError``.
+    or all ``Vmec`` fields on one and the same coordinate map (identical
+    R, Z(s, theta, phi), for example one equilibrium and a perturbation
+    tabulated on its surfaces); ``sqrtg`` and ``to_xyz`` come from the first
+    field. Two different equilibria are not checked and give meaningless sums.
+    A Cartesian/VMEC mix raises ``ValueError``. The coordinates of a field are
+    its ``coordinates`` attribute.
     """
 
     def __init__(self, *fields):
@@ -819,6 +825,7 @@ class CombinedField(MagneticField):
         if len({_coordinates(field) for field in fields}) > 1:
             raise ValueError("CombinedField needs fields in the same coordinates: all Cartesian or all VMEC (s, theta, phi)")
         self.fields = fields
+        self.coordinates = _coordinates(fields[0])
 
     @jit
     def B(self, points):
@@ -839,7 +846,8 @@ class CombinedField(MagneticField):
         Fused members are Cartesian (sqrtg = 1), so B and dB/dX of the sum come
         from one forward-mode pass and the quantities follow algebraically.
         """
-        if any(type(f).gc_quantities is MagneticField.gc_quantities for f in self.fields):
+        if any(getattr(type(f), "gc_quantities", MagneticField.gc_quantities) is MagneticField.gc_quantities
+               for f in self.fields):
             return MagneticField.gc_quantities(self, points)
         return _cartesian_gc_quantities(self, points)
 
