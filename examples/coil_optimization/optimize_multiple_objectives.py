@@ -1,4 +1,4 @@
-
+# Needs the multiobjective extra: pip install 'essos[multiobjective]'
 import os
 import jax.numpy as jnp
 from essos.fields import BiotSavart

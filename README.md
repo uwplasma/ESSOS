@@ -278,6 +278,19 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
   rescaling `B` does not change the run; `FieldLineToroidal` sets coverage
   directly in toroidal angle for flux-coordinate fields.
 
+## Optional extras
+
+`pip install essos` installs the core. Three features need an extra:
+
+```sh
+pip install 'essos[booz]'            # BOOZ_XFORM transform for essos.boozer
+pip install 'essos[multiobjective]'  # MultiObjectiveOptimizer (optuna, pandas, plotly)
+pip install 'essos[vmex]'            # examples that build VMEX equilibria
+```
+
+Importing `essos.multiobjectiveoptimizer` without its extra raises an
+`ImportError` with this command.
+
 ## Optional: near-axis fields
 
 Near-axis expansions need [pyQSC_JAX](https://github.com/uwplasma/pyQSC_JAX),
