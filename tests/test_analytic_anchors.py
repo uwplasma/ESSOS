@@ -141,7 +141,7 @@ def test_full_orbit_in_a_uniform_field_gyrates_at_the_cyclotron_frequency_and_la
 def test_root_finders_return_the_zeros_of_sine_and_the_square_root_of_two():
     """Zeros of sin are k pi. Newton on x^2 - 2 from 1 converges quadratically to sqrt(2) within its 25 fixed
     iterations (rounding). ``roots`` solves the piecewise-linear interpolant: on a cell of width h next to a zero
-    of sin, |f''| <= h, so the interpolation error and hence the root error is below h^3 / 8 = 1.4e-8. ``roots_scipy``
+    of sin, |f''| <= h, so the interpolation error and hence the root error is below h^3 / 8 = 1.3e-8. ``roots_scipy``
     uses a cubic spline, error 5 h^4 max|f''''| / 384 = 6.6e-12, tolerance 1e-11."""
     assert abs(float(newton(lambda x: x**2 - 2.0, 1.0)) - np.sqrt(2)) < 1e-15
     x = jnp.linspace(0.5, 10.0, 2000)
