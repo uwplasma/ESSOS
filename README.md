@@ -284,7 +284,7 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
 
 ```sh
 pip install 'essos[booz]'            # BOOZ_XFORM transform for essos.boozer
-pip install 'essos[multiobjective]'  # MultiObjectiveOptimizer (optuna, pandas, plotly)
+pip install 'essos[multiobjective]'  # MultiObjectiveOptimizer (optuna, plotly)
 pip install 'essos[vmex]'            # examples that build VMEX equilibria
 ```
 
