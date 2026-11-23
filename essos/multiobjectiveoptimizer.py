@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-import optuna
 import inspect
 import optax
 import matplotlib.pyplot as plt
@@ -9,8 +8,10 @@ from functools import partial
 from essos.coils import Coils, Curves, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 import numpy as np
-from pandas.plotting import parallel_coordinates
-import pandas as pd
+try:
+    import optuna
+except ImportError as err:
+    raise ImportError("essos.multiobjectiveoptimizer needs optuna: pip install 'essos[multiobjective]'") from err
 
 
 def _require_plotly():
