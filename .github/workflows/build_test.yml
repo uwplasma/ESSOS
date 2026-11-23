@@ -89,7 +89,7 @@ jobs:
 
     - name: Run tests with coverage
       if: matrix.python-version == '3.12' && !matrix.jax
-      run: uv run --no-sync pytest -n 3 ${{ env.NIGHTLY != 'true' && '-m "not slow"' || '' }} --cov-branch --cov-report=xml --cov=essos --cov-fail-under=73
+      run: uv run --no-sync pytest -n 3 ${{ env.NIGHTLY != 'true' && '-m "not slow"' || '' }} --cov-branch --cov-report=xml --cov=essos --cov-fail-under=75
 
     - name: Upload coverage reports to Codecov
       if: matrix.python-version == '3.12' && !matrix.jax
