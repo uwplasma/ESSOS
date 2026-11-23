@@ -794,23 +794,39 @@ tree_util.register_pytree_node(ExternalField,
                                lambda source, children: ExternalField(source, children[0]))
 
 
+def _coordinates(field):
+    """The coordinates in which a field takes points and gives components: "vmec" (s, theta, phi) or "cartesian"."""
+    if isinstance(field, CombinedField):
+        return _coordinates(field.fields[0])
+    return "vmec" if isinstance(field, Vmec) else "cartesian"
+
+
 class CombinedField(MagneticField):
     """Sum of several magnetic fields, traced as one.
 
-    The usual case is a coil field plus a plasma contribution: ``B`` and
-    ``B_contravariant`` add over the fields, while the geometry helpers
-    ``sqrtg`` and ``to_xyz`` come from the first field, which is the one that
-    carries the coordinate system.
+    The usual case is a coil field plus a plasma contribution: ``B``,
+    ``B_covariant`` and ``B_contravariant`` add over the fields, while the
+    geometry helpers ``sqrtg`` and ``to_xyz`` come from the first field.
+    Components add only in one basis, so every field must use the same
+    coordinates: all Cartesian (coils, external, interpolated and mgrid fields)
+    or all VMEC flux coordinates (s, theta, phi) of ``Vmec`` fields. A mix raises
+    ``ValueError``.
     """
 
     def __init__(self, *fields):
         if len(fields) < 1:
             raise ValueError("CombinedField needs at least one field")
+        if len({_coordinates(field) for field in fields}) > 1:
+            raise ValueError("CombinedField needs fields in the same coordinates: all Cartesian or all VMEC (s, theta, phi)")
         self.fields = fields
 
     @jit
     def B(self, points):
         return sum(field.B(points) for field in self.fields)
+
+    @jit
+    def B_covariant(self, points):
+        return sum(field.B_covariant(points) for field in self.fields)
 
     @jit
     def B_contravariant(self, points):
