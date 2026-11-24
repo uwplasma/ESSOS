@@ -15,7 +15,6 @@
    derivative with respect to the coil degrees of freedom against SIMSOPT on the
    same degrees of freedom. The numbers come from tests/references/simsopt_squared_flux.py.
 """
-import math
 from pathlib import Path
 
 import jax
@@ -89,12 +88,7 @@ SIMSOPT = {
               [-3.922300928810166e-08, -1.280132289116158e-08, 1.5622662526605715e-08, 3.6401669656417646e-08],
               [0.14040513999761287, 0.006853630040430432, -0.10711978406610913]),
 }
-# The two unnormalized definitions of ESSOS are (2 pi)^2 smaller than SIMSOPT's, exactly: ESSOS
-# takes the mean over the angles in radians without the d(theta) d(phi) measure, while SIMSOPT
-# integrates over [0, 1)^2. ESSOS's own area() and volume() do carry the (2 pi)^2, so the squared
-# flux is not the surface integral in the units of the rest of the code. The factor is applied
-# here so that the comparison is of the same quantity.
-ANGLE_FACTOR = {"quadratic flux": (2 * math.pi)**2, "normalized": 1.0, "local": (2 * math.pi)**2}
+# All three definitions are surface integrals in the units of area(), as in SIMSOPT, so no factor.
 
 
 @pytest.mark.parametrize("definition", list(SIMSOPT))
@@ -104,7 +98,7 @@ def test_squared_flux_matches_simsopt(definition):
                                                ntheta=32, nphi=32, close=False)
 
     def flux(dofs):
-        return ANGLE_FACTOR[definition] * SquaredFlux(surface, BiotSavart(coils.with_dofs(dofs)), definition)
+        return SquaredFlux(surface, BiotSavart(coils.with_dofs(dofs)), definition)
 
     value, grad = jax.value_and_grad(flux)(coils.dofs)
     n = coils.dofs_curves.size
