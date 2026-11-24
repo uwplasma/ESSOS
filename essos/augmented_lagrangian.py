@@ -758,8 +758,16 @@ class ALM(NamedTuple):
 
 
 
-def _bound_reparametrization(params, bounds):
-    """Finite intervals use tanh; one-sided bounds reflect at their finite endpoint."""
+def _bound_reparametrization(params, bounds, push=False):
+    """Finite intervals use tanh; one-sided bounds reflect at their finite endpoint.
+
+    With ``push`` (the start of a solve only) a point nearer a finite bound of a box than
+    min(1e-2 max(1, |bound|), 1e-2 (upper - lower)) is first moved to that distance, a push of
+    the kind IPOPT applies to its start (Waechter and Biegler 2006, Sec. 3.6; constants chosen here).
+    tanh has a slope 1 - tanh^2 that vanishes on a bound and is too small near it for the inner solve to leave (HS71 from
+    (1 + d, 5 - d, 5 - d, 1 + d) stalls for d <= 1e-8). Later outer iterations map the
+    current point without a push, so an iterate on an active bound stays there.
+    """
     lower, upper = (jnp.asarray(bound, dtype=params.dtype) for bound in bounds)
     has_lower, has_upper = jnp.isfinite(lower), jnp.isfinite(upper)
     both = has_lower & has_upper
@@ -769,16 +777,10 @@ def _bound_reparametrization(params, bounds):
     mid = (lo + hi) / 2
     half = jnp.where(both & ~fixed, (hi - lo) / 2, 1.0)
     margin = jnp.maximum(1e-12, jnp.finfo(params.dtype).eps)
-    # tanh has zero slope on a bound, so a start there would never move. As the bound_push of
-    # Waechter and Biegler, Math. Program. 106, 25 (2006), Sec. 3.6, such a start is moved inside by
-    # min(1e-2 max(1, |bound|), 1e-2 (upper - lower)). Only a start within eps of a bound is moved: pushing
-    # every start nearer than that distance would also push an iterate on an active bound at each outer
-    # iteration (on HS71 it then stops 1.4e-2 from the solution with the default tolerances).
     width = jnp.where(both & ~fixed, hi - lo, 1.0)
-    push_lo = jnp.minimum(1e-2 * jnp.maximum(1.0, jnp.abs(lo)), 1e-2 * width) / half
-    push_hi = jnp.minimum(1e-2 * jnp.maximum(1.0, jnp.abs(hi)), 1e-2 * width) / half
-    scaled = (params - mid) / half
-    scaled = jnp.where(scaled <= -1 + margin, -1 + push_lo, jnp.where(scaled >= 1 - margin, 1 - push_hi, scaled))
+    push_lo = jnp.where(push, jnp.minimum(1e-2 * jnp.maximum(1.0, jnp.abs(lo)), 1e-2 * width) / half, margin)
+    push_hi = jnp.where(push, jnp.minimum(1e-2 * jnp.maximum(1.0, jnp.abs(hi)), 1e-2 * width) / half, margin)
+    scaled = jnp.clip((params - mid) / half, -1 + push_lo, 1 - push_hi)
     box_initial = jnp.arctanh(scaled)
     distance = jnp.where(has_lower, params - lo, hi - params)
     initial = jnp.where(both, box_initial,
@@ -821,7 +823,8 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
         main_params,lagrange_params=params
         grad,info=jax.grad(lagrangian,has_aux=True,argnums=(0,1))(main_params,lagrange_params,**kargs)  
         #lag_state=lagrange_update(model_lagrangian=model_lagrangian).init(lagrange_params)  
-        lag_state=optax.EmptyState()                     
+        # With bounds the state flags the first update, the only one that pushes the start inside.
+        lag_state=optax.EmptyState() if bounds is None else jnp.asarray(True)
         return lag_state,grad,info        
 
     if model_lagrangian=='Standard':
@@ -850,7 +853,9 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
         if bounds is None:
             to_x, z0 = (lambda z: z), main_params
         else:
-            to_x, z0 = _bound_reparametrization(main_params, bounds)
+            first = lag_state if isinstance(lag_state, jax.Array) else False
+            to_x, z0 = _bound_reparametrization(main_params, bounds, push=first)
+            lag_state = jnp.asarray(False)
         solver = optimistix.LBFGS(rtol=omega_min, atol=omega_min, history_length=history_size)
         sol = optimistix.minimise(lambda z, lp: lagrangian(to_x(z), lp, **kargs), solver, z0, lagrange_params,
                                   has_aux=True, max_steps=inner_maxiter, throw=False)
