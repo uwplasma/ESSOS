@@ -89,8 +89,11 @@ SIMSOPT = {
               [-3.922300928810166e-08, -1.280132289116158e-08, 1.5622662526605715e-08, 3.6401669656417646e-08],
               [0.14040513999761287, 0.006853630040430432, -0.10711978406610913]),
 }
-# SIMSOPT differentiates the surface in quadrature points on [0, 1), ESSOS in radians, so its
-# normal is (2 pi)^2 larger; the unnormalized definitions differ by that factor, exactly.
+# The two unnormalized definitions of ESSOS are (2 pi)^2 smaller than SIMSOPT's, exactly: ESSOS
+# takes the mean over the angles in radians without the d(theta) d(phi) measure, while SIMSOPT
+# integrates over [0, 1)^2. ESSOS's own area() and volume() do carry the (2 pi)^2, so the squared
+# flux is not the surface integral in the units of the rest of the code. The factor is applied
+# here so that the comparison is of the same quantity.
 ANGLE_FACTOR = {"quadratic flux": (2 * math.pi)**2, "normalized": 1.0, "local": (2 * math.pi)**2}
 
 
