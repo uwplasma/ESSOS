@@ -19,6 +19,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from solvax import cubic_spline
 
 from essos.background_species import nu_D_ab, nu_par_ab, d_nu_par_ab, nu_s_ab, JOULE_PER_EV
 
@@ -31,10 +32,11 @@ def psi0_from_vmec(phi_edge):
 
 
 def _spline(x, y):
-    from scipy.interpolate import CubicSpline
-
-    sp = CubicSpline(np.asarray(x, float), np.asarray(y, float), axis=0)
-    return jnp.asarray(sp.x), jnp.asarray(np.moveaxis(sp.c, 0, -1))  # (nint, ..., 4)
+    x, y, s, _ = cubic_spline(jnp.asarray(x, float), jnp.asarray(y, float))
+    h = jnp.diff(x).reshape((-1,) + (1,) * (y.ndim - 1))
+    d = jnp.diff(y, axis=0) / h
+    pieces = ((s[:-1] + s[1:] - 2 * d) / h**2, (3 * d - 2 * s[:-1] - s[1:]) / h, s[:-1], y[:-1])
+    return x, jnp.stack(pieces, -1)  # (nint, ..., 4), cubic first
 
 
 def _evaluate(knots, coef, x):

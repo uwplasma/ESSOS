@@ -6,6 +6,7 @@ diffrax
 optax
 optimistix
 scipy
+solvax
 jaxkd
 netcdf4
 f90nml

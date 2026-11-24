@@ -51,6 +51,7 @@ dependencies = [
     "optimistix>=0.0.11",
     "lineax>=0.1.0",  # 0.0.8 raises TracerBoolConversionError in the Kvaerno5 Newton solve under jax 0.10
     "scipy",
+    "solvax>=0.37.0",  # cubic_spline; the first release with it
     "jaxkd",
     "netcdf4",
     # SurfaceRZFourier.from_input_file parses VMEC input namelists.
