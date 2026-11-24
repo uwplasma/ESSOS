@@ -11,6 +11,11 @@
    published x*). ESSOS writes the Lagrangian as
    f - l c + mu c^2 / 2 for c = 0 and for c >= 0, so its multipliers carry the
    same signs as l1, l2 above.
+   Problem 21: min 0.01 x1^2 + x2^2 - 100 subject to 10 x1 - x2 >= 10, 2 <= x1 <= 50,
+   -50 <= x2 <= 50, x* = (2, 0), f* = -99.96 (x1 on its lower bound). Problem 35:
+   min 9 - 8 x1 - 6 x2 - 4 x3 + 2 x1^2 + 2 x2^2 + x3^2 + 2 x1 x2 + 2 x1 x3 subject to
+   3 - x1 - x2 - 2 x3 >= 0, x >= 0, x* = (4/3, 7/9, 4/9), f* = 1/9. The driver minimises
+   |f|, so problem 21 is run as f + 100 > 0.
 2. The squared flux of the Landreman-Paul QA coils on the QA boundary and its
    derivative with respect to the coil degrees of freedom against SIMSOPT on the
    same degrees of freedom. The numbers come from tests/references/simsopt_squared_flux.py.
@@ -21,6 +26,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 
 from essos.augmented_lagrangian import ALM_model_lbfgs, combine, eq, ineq
@@ -68,12 +74,72 @@ def test_hs71_augmented_lagrangian_known_point(model_mu):
     np.testing.assert_allclose(multipliers, HS71_MULTIPLIERS, atol=1e-6)
 
 
-@pytest.mark.xfail(strict=False, reason="the tanh map of the box has zero slope on the bound: a start with "
-                   "x2 = x3 = 5 (the standard HS71 start (1, 5, 5, 1)) never moves")
 def test_hs71_from_the_standard_start_on_the_bound():
+    # x2 = x3 = 5 sit on the upper bound, where the tanh map of the box has zero slope.
     x, _ = _hs71_solve([1.0, 5.0, 5.0, 1.0], eta_tol=1e-10, omega_tol=1e-12)
     np.testing.assert_allclose(x, HS71_X, atol=1e-6)
+    assert abs(float(_hs71_objective(x)) - HS71_F) < 1e-6
 
+
+
+def _hs21_objective(x):
+    return 0.01 * x[0]**2 + x[1]**2
+
+
+def _hs35_objective(x):
+    return 9 - 8 * x[0] - 6 * x[1] - 4 * x[2] + 2 * x[0]**2 + 2 * x[1]**2 + x[2]**2 + 2 * x[0] * x[1] + 2 * x[0] * x[2]
+
+
+PROBLEMS = {
+    "hs71": (_hs71_objective, lambda x: (ineq(lambda x: x[0] * x[1] * x[2] * x[3] - 25.0),
+                                         eq(lambda x: jnp.sum(x**2) - 40.0)), (1.0, 5.0)),
+    "hs21": (_hs21_objective, lambda x: (ineq(lambda x: 10 * x[0] - x[1] - 10.0),),
+             (jnp.array([2.0, -50.0]), jnp.array([50.0, 50.0]))),
+    "hs35": (_hs35_objective, lambda x: (ineq(lambda x: 3 - x[0] - x[1] - 2 * x[2]),), (0.0, 5.0)),
+}
+
+
+def _trajectory(name, start, outer, first_state=True):
+    """Outer iterates; ``first_state=False`` passes an empty state, i.e. no push of the start."""
+    objective, make, bounds = PROBLEMS[name]
+    constraints = combine(*make(None))
+    x0 = jnp.asarray(start)
+    params = x0, constraints.init(x0)
+    alm = ALM_model_lbfgs(constraints, loss=objective, bounds=bounds, inner_maxiter=500,
+                          eta_tol=1e-10, omega_tol=1e-12)
+    state, grad, info = alm.init(params)
+    state = state if first_state else optax.EmptyState()
+    xs = []
+    for _ in range(outer):
+        params, state, grad, info = alm.update(params, state, grad, info)
+        xs.append(np.asarray(params[0]))
+    return np.array(xs)
+
+
+@pytest.mark.xfail(strict=True, reason="tanh reaches a bound only as z -> infinity: with the weak bound multiplier "
+                   "of HS21 (0.04) x1 creeps from 2.02 to 2.01998 in 400 outer iterations")
+@pytest.mark.parametrize("start", [[-1.0, -1.0], [10.0, 1.0]])
+def test_hs21_reaches_the_solution_on_its_active_bound(start):
+    x = _trajectory("hs21", start, 100)[-1]
+    np.testing.assert_allclose(x, [2.0, 0.0], atol=1e-6)
+
+
+@pytest.mark.parametrize("start", [[0.5, 0.5, 0.5]])
+def test_hs35_known_point(start):
+    x = _trajectory("hs35", start, 100)[-1]
+    np.testing.assert_allclose(x, [4 / 3, 7 / 9, 4 / 9], atol=1e-6)
+
+
+@pytest.mark.parametrize("d", [1e-6, 1e-4])
+def test_hs71_from_a_start_near_the_bound(d):
+    x = _trajectory("hs71", [1.0, 5.0 - d, 5.0 - d, 1.0], 100)[-1]
+    np.testing.assert_allclose(x, HS71_X, atol=1e-6)
+
+
+@pytest.mark.parametrize("name,start", [("hs71", [1.5, 4.5, 3.5, 1.5]), ("hs21", [10.0, 1.0]),
+                                        ("hs35", [0.5, 0.5, 0.5])])
+def test_interior_start_follows_the_unpushed_path_bit_for_bit(name, start):
+    np.testing.assert_array_equal(_trajectory(name, start, 30), _trajectory(name, start, 30, first_state=False))
 
 INPUTS = Path(__file__).resolve().parents[1] / "examples" / "input_files"
 # SIMSOPT 1.10.7.dev433+g24fa9b4b8: J, dJ.v for v_k = sin(1 + k) over the base-curve
