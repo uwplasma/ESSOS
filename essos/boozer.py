@@ -31,6 +31,7 @@ def psi0_from_vmec(phi_edge):
     return -float(phi_edge) / (2 * np.pi)
 
 
+@jax.jit  # compiled once per (knots, data) shape: an eager fit dispatches every operation
 def _spline(x, y):
     sp = cubic_spline(jnp.asarray(x, float), jnp.asarray(y, float))
     return sp.x, cubic_spline_coefficients(sp)  # (4, nint, ...), cubic first
