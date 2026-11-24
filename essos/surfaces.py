@@ -104,11 +104,11 @@ def _surface_mean(surface, values):
 @jit
 def _squared_flux_local(surface, field):
     return 0.5 * _surface_mean(surface, BdotN(surface, field)**2 / jnp.sum(B_on_surface(surface, field)**2, axis=2)
-                                       * surface.area_element)
+                                       * surface.area_element) * (2 * jnp.pi)**2
 
 @jit
 def _squared_flux_global(surface, field):
-    return 0.5 * _surface_mean(surface, BdotN(surface, field)**2 * surface.area_element)
+    return 0.5 * _surface_mean(surface, BdotN(surface, field)**2 * surface.area_element) * (2 * jnp.pi)**2
 
 @jit
 def _squared_flux_normalized(surface, field):
@@ -116,6 +116,17 @@ def _squared_flux_normalized(surface, field):
                  _surface_mean(surface, jnp.sum(B_on_surface(surface, field)**2, axis=2) * surface.area_element)
 
 def SquaredFlux(surface, field, definition='local'):
+    """Squared normal field on ``surface``, as SIMSOPT's ``SquaredFlux``.
+
+    ``'quadratic flux'``: (1/2) int (B.n)^2 dS, in T^2 m^2.
+    ``'local'``: (1/2) int (B.n)^2 / |B|^2 dS, in m^2.
+    ``'normalized'``: (1/2) int (B.n)^2 dS / int |B|^2 dS, dimensionless.
+    The integrals are over the whole torus in the units of ``area``.
+    On a half-period grid the field is assumed stellarator symmetric.
+    Breaking after v0.23.0: through v0.23.0 'quadratic flux' and 'local' omitted
+    the (2 pi)^2 of the d(theta) d(phi) measure and were (2 pi)^2 smaller; divide
+    a weight tuned for those values by (2 pi)^2 to keep the same optimum.
+    """
     if definition == 'local':
         return _squared_flux_local(surface, field)
     elif definition == 'quadratic flux':

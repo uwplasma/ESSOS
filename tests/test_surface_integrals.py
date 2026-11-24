@@ -41,6 +41,25 @@ def test_shaped_surface_integrals_do_not_depend_on_the_grid(range_torus, close):
     np.testing.assert_allclose(s.area, fine.area, rtol=1e-10)
 
 
+@pytest.mark.parametrize("close", [False, True])
+def test_squared_flux_of_a_uniform_field_through_a_circular_torus(close):
+    # B = B0 z on R = R0 + a cos(theta), Z = a sin(theta): B.n = B0 sin(theta), dS = a (R0 + a cos(theta))
+    # dtheta dphi, so (1/2) int (B.n)^2 dS = pi^2 R0 a B0^2 and (1/2) int (B.n)^2 / B^2 dS = pi^2 R0 a.
+    import equinox as eqx
+    from essos.surfaces import SquaredFlux
+
+    R0, a, B0 = 1.0, 0.3, 0.7
+
+    class Field(eqx.Module):
+        def B(self, x):
+            return jnp.array([0., 0., B0])
+
+    s = SurfaceRZFourier(jnp.array([R0, a]), jnp.array([0.0, a]), nfp=1, mpol=1, ntor=0,
+                         ntheta=32, nphi=32, close=close)
+    np.testing.assert_allclose(SquaredFlux(s, Field(), "quadratic flux"), np.pi**2 * R0 * a * B0**2, rtol=1e-12)
+    np.testing.assert_allclose(SquaredFlux(s, Field(), "local"), np.pi**2 * R0 * a, rtol=1e-12)
+    np.testing.assert_allclose(SquaredFlux(s, Field(), "normalized"), 0.25, rtol=1e-12)
+
 @pytest.mark.parametrize("definition", ["local", "quadratic flux", "normalized"])
 def test_squared_flux_does_not_count_duplicated_end_points(definition):
     import equinox as eqx
