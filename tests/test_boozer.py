@@ -9,7 +9,7 @@ import pytest
 import equinox as eqx
 
 from essos.background_species import BackgroundSpecies, coulomb_logarithm
-from essos.boozer import (BoozerField, BoozerTrace, _rk_step, collision_kick,
+from essos.boozer import (BoozerField, BoozerTrace, _evaluate, _rk_step, _spline, collision_kick,
                           guiding_center_rhs, psi0_from_vmec, trace_boozer)
 from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as M, ELECTRON_MASS,
                              ELEMENTARY_CHARGE, EPSILON_0, FUSION_ALPHA_PARTICLE_ENERGY, PROTON_MASS)
@@ -26,6 +26,26 @@ def tokamak(nfp=1):
     bmnc = np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s)])
     return BoozerField.from_booz(s, bmnc, [0, 1], [0, 0], np.full_like(s, IOTA),
                                  np.full_like(s, G), np.zeros_like(s), PSI0, nfp, angle_grid=None)
+
+
+def test_radial_spline_is_the_not_a_knot_cubic():
+    """Not-a-knot conditions (de Boor 2001, ch. IV): a cubic is reproduced exactly, and
+    on general data the pieces, values and slopes are those of SciPy's CubicSpline."""
+    from scipy.interpolate import CubicSpline
+
+    x = np.array([0.0, 0.1, 0.25, 0.3, 0.55, 0.8, 1.0])
+    y = np.stack([np.sin(3 * x) + x**2, np.exp(-x), 1 - 2 * x**3 + x], axis=1)
+    points = np.array([-0.05, 0.0, 0.07, 0.25, 0.42, 0.99, 1.0, 1.1])
+    knots, coef = _spline(x, y)
+    reference = CubicSpline(x, y, axis=0)
+    scale = np.abs(reference.c).max()
+    np.testing.assert_allclose(np.asarray(coef), np.moveaxis(reference.c, 0, -1), rtol=0, atol=1e-12 * scale)
+    value, slope = _evaluate(knots, coef, jnp.asarray(points))
+    np.testing.assert_allclose(value, reference(points), rtol=1e-12, atol=1e-14)
+    np.testing.assert_allclose(slope, reference(points, 1), rtol=1e-12, atol=1e-14)
+    cubic, dcubic = 1 - 2 * points**3 + points, 1 - 6 * points**2
+    np.testing.assert_allclose(value[:, 2], cubic, rtol=0, atol=1e-13)
+    np.testing.assert_allclose(slope[:, 2], dcubic, rtol=0, atol=1e-12)
 
 
 def test_field_reproduces_the_spectrum_and_is_regular_on_the_axis():
