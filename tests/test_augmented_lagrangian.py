@@ -251,5 +251,14 @@ def test_alm_lbfgs_supports_infinite_and_fixed_bounds(bounds, start, target):
     assert bool(jnp.allclose(params[0], target, rtol=1e-3, atol=1e-3))
 
 
+
+def test_box_start_on_a_bound_is_pushed_inside_and_other_starts_are_unchanged():
+    # Waechter and Biegler, Math. Program. 106, 25 (2006), Sec. 3.6: push min(1e-2 max(1, |b|), 1e-2 (u - l)).
+    from essos.augmented_lagrangian import _bound_reparametrization
+    x = jnp.array([1.0, 5.0, 1.5, 4.9])
+    to_x, z = _bound_reparametrization(x, (1.0, 5.0))
+    assert bool(jnp.allclose(to_x(z)[:2], jnp.array([1.01, 4.96]), rtol=1e-14, atol=0))
+    assert bool(jnp.all(z[2:] == jnp.arctanh((x[2:] - 3.0) / 2.0)))
+
 if __name__ == "__main__":
     pytest.main([__file__])

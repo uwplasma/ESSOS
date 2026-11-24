@@ -769,7 +769,17 @@ def _bound_reparametrization(params, bounds):
     mid = (lo + hi) / 2
     half = jnp.where(both & ~fixed, (hi - lo) / 2, 1.0)
     margin = jnp.maximum(1e-12, jnp.finfo(params.dtype).eps)
-    box_initial = jnp.arctanh(jnp.clip((params - mid) / half, -1 + margin, 1 - margin))
+    # tanh has zero slope on a bound, so a start there would never move. As the bound_push of
+    # Waechter and Biegler, Math. Program. 106, 25 (2006), Sec. 3.6, such a start is moved inside by
+    # min(1e-2 max(1, |bound|), 1e-2 (upper - lower)). Only a start within eps of a bound is moved: pushing
+    # every start nearer than that distance would also push an iterate on an active bound at each outer
+    # iteration (on HS71 it then stops 1.4e-2 from the solution with the default tolerances).
+    width = jnp.where(both & ~fixed, hi - lo, 1.0)
+    push_lo = jnp.minimum(1e-2 * jnp.maximum(1.0, jnp.abs(lo)), 1e-2 * width) / half
+    push_hi = jnp.minimum(1e-2 * jnp.maximum(1.0, jnp.abs(hi)), 1e-2 * width) / half
+    scaled = (params - mid) / half
+    scaled = jnp.where(scaled <= -1 + margin, -1 + push_lo, jnp.where(scaled >= 1 - margin, 1 - push_hi, scaled))
+    box_initial = jnp.arctanh(scaled)
     distance = jnp.where(has_lower, params - lo, hi - params)
     initial = jnp.where(both, box_initial,
                         jnp.where(has_lower | has_upper, distance, params))
@@ -796,8 +806,8 @@ def ALM_model_lbfgs(constraints: BaseConstraint,#List of constraints
     alpha=0.99,
     gamma=1.e-2,
     epsilon=1.e-8,
-    eta_tol=1.e-4,
-    omega_tol=1.e-6,
+    eta_tol=1.e-8,             #floor of the feasibility tolerance eta_k (eta_* of Nocedal-Wright Alg. 17.4)
+    omega_tol=1.e-10,          #floor of the inner L-BFGS rtol/atol omega_k (omega_* of Alg. 17.4)
     bounds=None,               #(lower, upper) box for main params; None = unbounded
     inner_maxiter=50,          #maximum iterations of each inner L-BFGS-B solve
     history_size=10,           #L-BFGS memory of the inner solve

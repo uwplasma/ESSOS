@@ -68,11 +68,11 @@ def test_hs71_augmented_lagrangian_known_point(model_mu):
     np.testing.assert_allclose(multipliers, HS71_MULTIPLIERS, atol=1e-6)
 
 
-@pytest.mark.xfail(strict=False, reason="the tanh map of the box has zero slope on the bound: a start with "
-                   "x2 = x3 = 5 (the standard HS71 start (1, 5, 5, 1)) never moves")
 def test_hs71_from_the_standard_start_on_the_bound():
+    # x2 = x3 = 5 sit on the upper bound, where the tanh map of the box has zero slope.
     x, _ = _hs71_solve([1.0, 5.0, 5.0, 1.0], eta_tol=1e-10, omega_tol=1e-12)
     np.testing.assert_allclose(x, HS71_X, atol=1e-6)
+    assert abs(float(_hs71_objective(x)) - HS71_F) < 1e-6
 
 
 INPUTS = Path(__file__).resolve().parents[1] / "examples" / "input_files"
