@@ -19,7 +19,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
-from solvax import cubic_spline
+from solvax import cubic_spline, cubic_spline_coefficients, piecewise_cubic_evaluate
 
 from essos.background_species import nu_D_ab, nu_par_ab, d_nu_par_ab, nu_s_ab, JOULE_PER_EV
 
@@ -32,22 +32,8 @@ def psi0_from_vmec(phi_edge):
 
 
 def _spline(x, y):
-    x, y, s, _ = cubic_spline(jnp.asarray(x, float), jnp.asarray(y, float))
-    h = jnp.diff(x).reshape((-1,) + (1,) * (y.ndim - 1))
-    d = jnp.diff(y, axis=0) / h
-    pieces = ((s[:-1] + s[1:] - 2 * d) / h**2, (3 * d - 2 * s[:-1] - s[1:]) / h, s[:-1], y[:-1])
-    return x, jnp.stack(pieces, -1)  # (nint, ..., 4), cubic first
-
-
-def _evaluate(knots, coef, x):
-    """Value and derivative of a piecewise cubic (end pieces extrapolate)."""
-    i = jnp.clip(jnp.searchsorted(knots, x, side="right", method="compare_all") - 1, 0, knots.size - 2)
-    c = coef[i]
-    d = x - knots[i]
-    d = jnp.reshape(d, d.shape + (1,) * (c.ndim - 1 - d.ndim))
-    value = ((c[..., 0] * d + c[..., 1]) * d + c[..., 2]) * d + c[..., 3]
-    slope = (3 * c[..., 0] * d + 2 * c[..., 1]) * d + c[..., 2]
-    return value, slope
+    sp = cubic_spline(jnp.asarray(x, float), jnp.asarray(y, float))
+    return sp.x, cubic_spline_coefficients(sp)  # (4, nint, ...), cubic first
 
 
 TABLE_MODES = 48  # below about 48 modes the direct sum is cheaper than the table
@@ -57,9 +43,9 @@ class BoozerField(eqx.Module):
     """``|B|`` spectrum and ``iota, G, I`` profiles in Boozer coordinates."""
 
     r_knots: jax.Array
-    b_coef: jax.Array  # (nint, modes, 4)
+    b_coef: jax.Array  # (4, nint, modes)
     s_knots: jax.Array
-    profile_coef: jax.Array  # (nint, 3, 4): iota, G, I
+    profile_coef: jax.Array  # (4, nint, 3): iota, G, I
     xm: jax.Array
     xn: jax.Array
     psi0: float
@@ -146,13 +132,13 @@ class BoozerField(eqx.Module):
 
     def profiles(self, s):
         """``(iota, G, I)`` and their ``s`` derivatives."""
-        return _evaluate(self.s_knots, self.profile_coef, s)
+        return piecewise_cubic_evaluate(self.s_knots, self.profile_coef, s, derivative=(0, 1))
 
     def modB_derivatives(self, r, theta, zeta):
         """``|B|``, ``d|B|/dr``, ``(d|B|/dtheta)/r`` and ``d|B|/dzeta``."""
         if self.table is not None:
             return _table_derivatives(self.r_knots, self.table, self.nfp, r, theta, zeta)
-        a, da = _evaluate(self.r_knots, self.b_coef, r)
+        a, da = piecewise_cubic_evaluate(self.r_knots, self.b_coef, r, derivative=(0, 1))
         phase = self.xm * theta - self.xn * zeta
         c, s = jnp.cos(phase), jnp.sin(phase)
         has_m = self.xm > 0
@@ -161,7 +147,7 @@ class BoozerField(eqx.Module):
         values = (jnp.sum(f * c), jnp.sum(df * c), -jnp.sum(self.xm * a * s),
                   jnp.sum(self.xn * f * s))
         if self.sine_coef is not None:
-            a, da = _evaluate(self.r_knots, self.sine_coef, r)
+            a, da = piecewise_cubic_evaluate(self.r_knots, self.sine_coef, r, derivative=(0, 1))
             f = jnp.where(has_m, r * a, a)
             df = jnp.where(has_m, a + r * da, da)
             values = tuple(x + y for x, y in zip(values, (
@@ -184,9 +170,10 @@ def _angle_table(b_coef, sine_coef, xm, xn, nfp, nt, nz):
     phase = (xm[:, None, None] * np.linspace(0, 2 * np.pi, nt, endpoint=False)[:, None]
              - xn[:, None, None] * np.linspace(0, 2 * np.pi / nfp, nz, endpoint=False))
     basis = np.cos(phase)
-    coef = b_coef
+    coef = np.moveaxis(b_coef, 0, -1)
     if sine_coef is not None:
-        basis, coef = np.concatenate([basis, np.sin(phase)]), np.concatenate([b_coef, sine_coef], axis=1)
+        basis = np.concatenate([basis, np.sin(phase)])
+        coef = np.concatenate([coef, np.moveaxis(sine_coef, 0, -1)], axis=1)
     m0 = np.concatenate([xm == 0] * (len(basis) // len(xm)))
     table = np.stack([np.moveaxis(np.moveaxis(coef[:, sel], 1, 2) @ basis[sel].reshape(sel.sum(), nt * nz), 1, 2)
                       .reshape(len(coef), nt, nz, 4) for sel in (m0, ~m0)], -2)

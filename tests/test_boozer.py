@@ -7,9 +7,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import equinox as eqx
+from solvax import piecewise_cubic_evaluate
 
 from essos.background_species import BackgroundSpecies, coulomb_logarithm
-from essos.boozer import (BoozerField, BoozerTrace, _evaluate, _rk_step, _spline, collision_kick,
+from essos.boozer import (BoozerField, BoozerTrace, _rk_step, _spline, collision_kick,
                           guiding_center_rhs, psi0_from_vmec, trace_boozer)
 from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as M, ELECTRON_MASS,
                              ELEMENTARY_CHARGE, EPSILON_0, FUSION_ALPHA_PARTICLE_ENERGY, PROTON_MASS)
@@ -39,8 +40,8 @@ def test_radial_spline_is_the_not_a_knot_cubic():
     knots, coef = _spline(x, y)
     reference = CubicSpline(x, y, axis=0)
     scale = np.abs(reference.c).max()
-    np.testing.assert_allclose(np.asarray(coef), np.moveaxis(reference.c, 0, -1), rtol=0, atol=1e-12 * scale)
-    value, slope = _evaluate(knots, coef, jnp.asarray(points))
+    np.testing.assert_allclose(np.asarray(coef), reference.c, rtol=0, atol=1e-12 * scale)
+    value, slope = piecewise_cubic_evaluate(knots, coef, jnp.asarray(points), derivative=(0, 1))
     np.testing.assert_allclose(value, reference(points), rtol=1e-12, atol=1e-14)
     np.testing.assert_allclose(slope, reference(points, 1), rtol=1e-12, atol=1e-14)
     cubic, dcubic = 1 - 2 * points**3 + points, 1 - 6 * points**2
