@@ -122,6 +122,7 @@ def SquaredFlux(surface, field, definition='local'):
     ``'local'``: (1/2) int (B.n)^2 / |B|^2 dS, in m^2.
     ``'normalized'``: (1/2) int (B.n)^2 dS / int |B|^2 dS, dimensionless.
     The integrals are over the whole torus in the units of ``area``.
+    On a half-period grid the field is assumed stellarator symmetric.
     Breaking after v0.23.0: through v0.23.0 'quadratic flux' and 'local' omitted
     the (2 pi)^2 of the d(theta) d(phi) measure and were (2 pi)^2 smaller; divide
     a weight tuned for those values by (2 pi)^2 to keep the same optimum.
