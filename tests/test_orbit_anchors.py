@@ -16,14 +16,14 @@ theorem gives the helical momentum J = k P_theta + m P_zeta.
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from numpy.polynomial import legendre
 from scipy.special import ellipk
 
 from essos.background_species import BackgroundSpecies
 from essos.boozer import BoozerField, _collision_rates, collision_kick, trace_boozer
-from essos.constants import (ALPHA_PARTICLE_CHARGE as Q, ALPHA_PARTICLE_MASS as M,
-                             FUSION_ALPHA_PARTICLE_ENERGY)
+from essos.constants import ALPHA_PARTICLE_CHARGE as Q
+from essos.constants import ALPHA_PARTICLE_MASS as M
+from essos.constants import FUSION_ALPHA_PARTICLE_ENERGY
 
 jax.config.update("jax_enable_x64", True)
 
