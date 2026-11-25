@@ -50,7 +50,7 @@ def loss_r0_near_axis(field_nearaxis, r0_target=1.0):
 
 
 ##############################Particle confinement losses ##############################
-def _orbit(field, particles, timestep=1.e-8, maxtime=1e-5, num_steps=300, trace_tolerance=1e-5,
+def _orbit(field, particles, timestep=None, maxtime=1e-5, num_steps=300, trace_tolerance=1e-7,
            model='GuidingCenterAdaptative', boundary=None):
     """Trace and return xyz, the cylindrical radius and the offsets (R, Z) from the axis."""
     xyz = Tracing(field=field, model=model, particles=particles, maxtime=maxtime, timestep=timestep,
