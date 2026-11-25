@@ -206,15 +206,23 @@ and its derivatives, together with the flux functions `G`, `I` and `iota`.
 
 ## Boundary optimization against alpha losses
 
-`Tracing.soft_loss_fraction(per_particle=True)` is differentiable through the tracer, and
-`Vmec.from_arrays` takes live VMEC tables, so the loss of fusion alphas can be differentiated down to the
-boundary of a [VMEX](https://github.com/uwplasma/vmex) equilibrium.
-[`optimize_alpha_loss_boundary.py`](examples/particle_tracing/optimize_alpha_loss_boundary.py) shapes a
-two-period boundary at fixed aspect ratio 6 with an iota floor, first for quasisymmetry and then with the soft loss of
-192 fixed alphas added (mode ladder 2, 3). On 1000 independent alphas born at s = 0.5, the loss within
-6e-5 s falls from 10.0% to 1.6% and within 1e-3 s from 23.7% to 3.5%. A matched run without the soft-loss term
-(same weights and floors) ends at 5.7% and 7.3%. The soft loss of a stopped orbit has no gradient in the mean, so the
-example uses the per-particle scores. The example needs `pip install vmex` and takes 1 h 40 min on 16 CPU cores.
+`objective_functions.loss_particle_frozen_drift` is a differentiable proxy for the loss of fusion alphas in a VMEC
+field. Guiding centres are traced for 5e-5 s without a gradient; the outward drift ds/dt is then re-evaluated at the
+saved states with the live field, so the gradient reaches the tables of `Vmec.from_arrays` and, through them, the
+boundary of a [VMEX](https://github.com/uwplasma/vmex) equilibrium. It is the gradient of the drift at frozen orbits,
+not the derivative of the retraced loss.
+[`optimize_alpha_loss_boundary.py`](examples/particle_tracing/optimize_alpha_loss_boundary.py) uses it in a staged
+recipe at fixed aspect ratio 6 and min iota >= 0.42, with no quasisymmetry term: minimise the log of the effective
+ripple eps_eff^(3/2) at s = 0.25, 0.5, 0.75, then the frozen-orbit drift on fresh alphas at every iteration, then keep
+the iterate with the lowest loss on an independent alpha sample. On six two- to four-period starts (2000 alphas born
+at s = 0.5, 3.5 MeV, ARIES-CS size, two independent samples) the loss within 1e-3 s falls from 25-39 % to 5.5-13.9 %,
+for example 37.2 / 38.5 % to 7.6 / 8.9 % for a rotating-ellipse start and 24.8 / 25.4 % to 9.3 / 10.7 % for a
+quasi-axisymmetric one. Each stage alone gives 12-25 %.
+
+Limits: the gain is smaller at 1e-2 s (10-22 % lost), because orbits that leave late are not seen by a 5e-5 s window;
+without the selection step one start ends at 20-22 % instead of 6.6-8.2 %; three of the six finals have a cross-section with
+elongation 5.7-6.5; the checks use one guiding-centre tracer, vacuum fields and one birth surface. The example needs
+`pip install vmex neo-jax` (neo-jax >= 1.2.0) and, at its default small sizes, runs in minutes on a laptop CPU.
 
 ## Comparison with other codes
 
