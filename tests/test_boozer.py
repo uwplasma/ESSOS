@@ -316,16 +316,168 @@ def stix_rate(species, n_e=1e20, T_e=1.0e4 * ELEMENTARY_CHARGE):
     return chandrasekhar / (2 * x / (3 * np.sqrt(np.pi))) / tau
 
 
-def test_collisional_orbits_slow_down_at_the_drag_rate():
+@pytest.mark.parametrize("method", ["dopri8", "adaptive8"])
+def test_collisional_orbits_slow_down_at_the_drag_rate(method):
     """Drift plus collisions in one trace: the mean speed of confined alphas decays at the drag rate."""
     species = electron_background()
     rate = stix_rate(species)
     n, t = 64, 0.05 / rate
     out = trace_boozer(tokamak(), jnp.full(n, 0.3), jnp.linspace(0, 6, n), jnp.zeros(n),
                        jnp.linspace(-0.9, 0.9, n), speed=V0, mass=M, charge=Q, tmax=t,
-                       timestep=t / 20000, n_save=3, species=species, devices=jax.devices()[:1])
+                       timestep=t / 20000, n_save=3, species=species, devices=jax.devices()[:1],
+                       method=method)
     assert not out.lost.any() and not (out.thermalized_times >= 0).any()
     assert np.mean(out.states[:, -1, 4]) / V0 == pytest.approx(np.exp(-0.05), rel=2e-3)
+
+
+def _batch_case(method):
+    n = 4
+    births = (np.full(2 * n, 0.3), np.linspace(0, 6, 2 * n), np.zeros(2 * n), np.linspace(-0.9, 0.9, 2 * n))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-5, timestep=2e-8, n_save=3, seed=5, method=method,
+                  species=electron_background(), devices=jax.devices()[:1], progress=False, compact=False)
+    return n, births, kwargs
+
+
+@pytest.mark.parametrize("method", ["dopri8", "adaptive8"])
+def test_collisional_marker_does_not_depend_on_its_batch(method):
+    """A marker's trace is the same in runs of N and 2N markers. For dopri8 this is a guard: JAX's partitionable
+    threefry already made split(key, 2N)[:N] equal split(key, N). For adaptive8 the kick index counted accepted
+    steps, so roundoff from a batch of another size changed the steps and then the noise."""
+    n, births, kwargs = _batch_case(method)
+    small = trace_boozer(tokamak(), *(b[:n] for b in births), **kwargs)
+    large = trace_boozer(tokamak(), *births, **kwargs)
+    # Batches of another size round in the last bit (as in the compaction tests).
+    np.testing.assert_allclose(large.states[:n], small.states, rtol=1e-13, atol=0)
+
+
+@pytest.mark.parametrize("method", ["dopri8", "adaptive8"])
+def test_collisional_marker_does_not_depend_on_the_batch_order(method):
+    """With keys fold_in(key, marker_id), markers named by marker_ids keep their noise in any order."""
+    n, births, kwargs = _batch_case(method)
+    large = trace_boozer(tokamak(), *births, **kwargs)
+    order = np.arange(2 * n)[::-1]
+    reversed_ = trace_boozer(tokamak(), *(b[order] for b in births), marker_ids=order, **kwargs)
+    np.testing.assert_allclose(reversed_.states[::-1], large.states, rtol=1e-13, atol=0)
+    np.testing.assert_array_equal(trace_boozer(tokamak(), *births, marker_ids=np.arange(2 * n), **kwargs).states,
+                                  large.states)
+
+
+@pytest.mark.parametrize("ids", [[0, 0], [-1, 1], [0, 2**32], [0.0, 1.0], [0]])
+def test_marker_ids_are_validated(ids):
+    """fold_in takes 32-bit data: ids 3 and 2**32 + 3 would share their noise."""
+    with pytest.raises(ValueError, match="marker_ids"):
+        trace_boozer(tokamak(), [0.3, 0.3], [0.0, 1.0], [0.0, 0.0], [0.2, 0.3], speed=V0, mass=M, charge=Q,
+                     tmax=1e-7, timestep=1e-7, n_save=2, species=electron_background(), marker_ids=ids,
+                     progress=False)
+
+
+def test_paired_runs_share_their_collisional_noise():
+    """With kicks on a fixed collision clock, a perturbed field (the wave switched on) changes the adaptive orbit
+    steps but not the noise: the variance of the paired difference in deposited energy is at least 10 times below
+    that with independent noise."""
+    n = 16
+    s = np.linspace(0.005, 0.995, 50)
+    wave = BoozerField.from_booz(s, np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s), 1e-3 * B0 * s]),
+                                 [0, 1, 1], [0, 0, 20], np.full_like(s, IOTA), np.full_like(s, G),
+                                 np.zeros_like(s), PSI0, 1, angle_grid=None)
+    births = (np.full(n, 0.3), np.linspace(0, 6, n), np.zeros(n), np.linspace(-0.9, 0.9, n))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-4, timestep=2e-7, n_save=3, method="adaptive8",
+                  species=electron_background(), devices=jax.devices()[:1], progress=False)
+    deposit = lambda out: V0**2 - out.states[:, -1, 4] ** 2
+    off = deposit(trace_boozer(tokamak(), *births, seed=1, **kwargs))
+    paired = deposit(trace_boozer(wave, *births, seed=1, **kwargs))
+    independent = deposit(trace_boozer(wave, *births, seed=2, **kwargs))
+    assert np.var(independent - off) >= 10 * np.var(paired - off)
+
+
+def uniform_field():
+    """|B| = B0 everywhere: no drift and no mirror force, so the pitch changes only by collisions."""
+    s = np.linspace(0.005, 0.995, 50)
+    return BoozerField.from_booz(s, np.full((1, s.size), B0), [0], [0], np.full_like(s, IOTA), np.full_like(s, G),
+                                 np.zeros_like(s), PSI0, 1, angle_grid=None)
+
+
+@pytest.mark.parametrize("method", ["rk4", "adaptive8"])
+def test_traced_pitch_scattering_decays_the_legendre_moments(method):
+    """Lorentz scattering on cold heavy ions: <P_l(xi)> = P_l(xi0) exp(-l (l + 1) nu_D t / 2) for l = 1, 2, in a
+    trace whose adaptive steps cross many clock ticks (each kick then spans the ticks its step crossed)."""
+    species = BackgroundSpecies(1, jnp.array([1e4]), jnp.array([1.0]), jnp.array([1e26]), jnp.array([1.0e4]))
+    ln = float(coulomb_logarithm(M, Q, 0, V0, jnp.zeros(3), species))
+    nu = 1e26 * Q**2 * ELEMENTARY_CHARGE**2 * ln / (4 * np.pi * EPSILON_0**2 * M**2 * V0**3)
+    n, t = 4000, 0.5 / nu
+    out = trace_boozer(uniform_field(), np.full(n, 0.3), np.zeros(n), np.zeros(n), np.full(n, 0.6), speed=V0,
+                       mass=M, charge=Q, tmax=t, timestep=t / 400, n_save=21, species=species,
+                       devices=jax.devices()[:1], progress=False, method=method)
+    xi = out.states[:, -1, 3] / out.states[:, -1, 4]
+    assert np.mean(xi) == pytest.approx(0.6 * np.exp(-0.5), abs=4 * np.std(xi) / np.sqrt(n) + 5e-3)
+    p2, p2_0 = 1.5 * xi**2 - 0.5, 1.5 * 0.36 - 0.5
+    assert np.mean(p2) == pytest.approx(p2_0 * np.exp(-1.5), abs=4 * np.std(p2) / np.sqrt(n) + 5e-3)
+
+
+def test_long_adaptive_steps_keep_the_collision_operator_accurate():
+    """One save interval of 1 / nu_D: free Dopri8 steps in a uniform field would span ~nu_D^-1 and bias the
+    Euler-Maruyama kick; steps are held to nu dt <= MAX_COLLISIONAL_STEP, so <P1> = 0.6 exp(-nu_D t) holds."""
+    species = BackgroundSpecies(1, jnp.array([1e4]), jnp.array([1.0]), jnp.array([1e26]), jnp.array([1.0e4]))
+    ln = float(coulomb_logarithm(M, Q, 0, V0, jnp.zeros(3), species))
+    nu = 1e26 * Q**2 * ELEMENTARY_CHARGE**2 * ln / (4 * np.pi * EPSILON_0**2 * M**2 * V0**3)
+    n, t = 16000, 1 / nu
+    out = trace_boozer(uniform_field(), np.full(n, 0.3), np.zeros(n), np.zeros(n), np.full(n, 0.6), speed=V0,
+                       mass=M, charge=Q, tmax=t, timestep=t / 400, n_save=2, species=species,
+                       devices=jax.devices()[:1], progress=False, method="adaptive8")
+    xi = out.states[:, -1, 3] / out.states[:, -1, 4]
+    assert np.mean(xi) == pytest.approx(0.6 * np.exp(-1), abs=4 * np.std(xi) / np.sqrt(n))
+
+
+def test_fixed_steps_keep_the_clock_tick_after_many_steps():
+    """After ~1e6 fixed steps the summed time is off its tick by ~1e-11 of it; the kick still draws the tick's
+    noise, so a trace started a roundoff below the tick equals one started on it."""
+    from essos.boozer import _advance, _start
+    field, species, n, dt = tokamak(), electron_background(), 2, 1e-9
+    keys = jax.vmap(jax.random.fold_in, (None, 0))(jax.random.PRNGKey(3), jnp.arange(n))
+    r, theta, pitch = jnp.sqrt(0.3), jnp.array([0.0, 2.0]), jnp.array([0.3, -0.4])
+    y0 = jnp.stack([r * jnp.cos(theta), r * jnp.sin(theta), jnp.zeros(n), pitch * V0], axis=1)
+    B = jax.vmap(field.modB)(jnp.full(n, 0.3), theta, jnp.zeros(n))
+    carry, _ = _start(field, y0, V0**2 * (1 - pitch**2) / (2 * B))
+    ends = [_advance(field, dt, 1, M, Q, species, 1.5, carry[:2] + (jnp.full(n, t),) + carry[3:], keys, 0, 1,
+                     "rk4")[1][:, -1] for t in (1e6 * dt, 1e6 * dt * (1 - 1e-11))]
+    np.testing.assert_allclose(ends[0], ends[1], rtol=1e-12)
+
+
+def test_adaptive_and_fixed_steps_follow_one_brownian_path():
+    """The noise is a Brownian path on the clock: adaptive8 and fine rk4 steps driven by it end close together
+    (strong agreement), far closer than two independent paths do."""
+    species = electron_background()
+    n = 16
+    births = (np.full(n, 0.3), np.linspace(0, 6, n), np.zeros(n), np.linspace(-0.9, 0.9, n))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-4, timestep=2e-8, n_save=3, species=species,
+                  devices=jax.devices()[:1], progress=False)
+    a = trace_boozer(tokamak(), *births, method="adaptive8", seed=1, **kwargs).states[:, -1]
+    b = trace_boozer(tokamak(), *births, method="rk4", seed=1, **kwargs).states[:, -1]
+    c = trace_boozer(tokamak(), *births, method="rk4", seed=2, **kwargs).states[:, -1]
+    assert np.var(a[:, 4] - b[:, 4]) * 100 <= np.var(c[:, 4] - b[:, 4])
+
+
+@pytest.mark.parametrize("method", ["rk4", "adaptive8"])
+def test_collisional_trace_has_finite_difference_tangents(method):
+    """Under jit and vmap, the forward tangent of the end parallel velocity with respect to the birth pitch matches a central
+    difference with the same noise."""
+    from essos.boozer import _advance, _start
+    field, species, n, dt, n_sub = tokamak(), electron_background(), 4, 2e-8, 500
+    keys = jax.vmap(jax.random.fold_in, (None, 0))(jax.random.PRNGKey(3), jnp.arange(n))
+
+    def end_speed(pitch):
+        r, theta = jnp.sqrt(0.3), jnp.linspace(0, 6, n)
+        y0 = jnp.stack([r * jnp.cos(theta), r * jnp.sin(theta), jnp.zeros(n), pitch * V0], axis=1)
+        B = jax.vmap(field.modB)(jnp.full(n, 0.3), theta, jnp.zeros(n))
+        carry, _ = _start(field, y0, V0**2 * (1 - pitch**2) / (2 * B))
+        _, states = _advance(field, dt, n_sub, M, Q, species, 1.5, carry, keys, 0, 1, method, 1e-10)
+        return states[:, -1, 3] / V0
+
+    # Adaptive: a step decision that flips inside the difference stencil jumps the trace, so the stencil is narrow.
+    pitch, eps = jnp.linspace(-0.5, 0.5, n), 1e-5 if method == "rk4" else 1e-8
+    tangent = jax.jvp(end_speed, (pitch,), (jnp.ones(n),))[1]
+    difference = (end_speed(pitch + eps) - end_speed(pitch - eps)) / (2 * eps)
+    np.testing.assert_allclose(tangent, difference, rtol=1e-3, atol=1e-6)
 
 
 def test_slowing_down_on_electrons_follows_the_spitzer_time():
