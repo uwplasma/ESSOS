@@ -390,6 +390,67 @@ def test_paired_runs_share_their_collisional_noise():
     assert np.var(independent - off) >= 10 * np.var(paired - off)
 
 
+def uniform_field():
+    """|B| = B0 everywhere: no drift and no mirror force, so the pitch changes only by collisions."""
+    s = np.linspace(0.005, 0.995, 50)
+    return BoozerField.from_booz(s, np.full((1, s.size), B0), [0], [0], np.full_like(s, IOTA), np.full_like(s, G),
+                                 np.zeros_like(s), PSI0, 1, angle_grid=None)
+
+
+@pytest.mark.parametrize("method", ["rk4", "adaptive8"])
+def test_traced_pitch_scattering_decays_the_legendre_moments(method):
+    """Lorentz scattering on cold heavy ions: <P_l(xi)> = P_l(xi0) exp(-l (l + 1) nu_D t / 2) for l = 1, 2, in a
+    trace whose adaptive steps cross many clock ticks (each kick then spans the ticks its step crossed)."""
+    species = BackgroundSpecies(1, jnp.array([1e4]), jnp.array([1.0]), jnp.array([1e26]), jnp.array([1.0e4]))
+    ln = float(coulomb_logarithm(M, Q, 0, V0, jnp.zeros(3), species))
+    nu = 1e26 * Q**2 * ELEMENTARY_CHARGE**2 * ln / (4 * np.pi * EPSILON_0**2 * M**2 * V0**3)
+    n, t = 4000, 0.5 / nu
+    out = trace_boozer(uniform_field(), np.full(n, 0.3), np.zeros(n), np.zeros(n), np.full(n, 0.6), speed=V0,
+                       mass=M, charge=Q, tmax=t, timestep=t / 400, n_save=21, species=species,
+                       devices=jax.devices()[:1], progress=False, method=method)
+    xi = out.states[:, -1, 3] / out.states[:, -1, 4]
+    assert np.mean(xi) == pytest.approx(0.6 * np.exp(-0.5), abs=4 * np.std(xi) / np.sqrt(n) + 5e-3)
+    p2, p2_0 = 1.5 * xi**2 - 0.5, 1.5 * 0.36 - 0.5
+    assert np.mean(p2) == pytest.approx(p2_0 * np.exp(-1.5), abs=4 * np.std(p2) / np.sqrt(n) + 5e-3)
+
+
+def test_adaptive_and_fixed_steps_follow_one_brownian_path():
+    """The noise is a Brownian path on the clock: adaptive8 and fine rk4 steps driven by it end close together
+    (strong agreement), far closer than two independent paths do."""
+    species = electron_background()
+    n = 16
+    births = (np.full(n, 0.3), np.linspace(0, 6, n), np.zeros(n), np.linspace(-0.9, 0.9, n))
+    kwargs = dict(speed=V0, mass=M, charge=Q, tmax=2e-4, timestep=2e-8, n_save=3, species=species,
+                  devices=jax.devices()[:1], progress=False)
+    a = trace_boozer(tokamak(), *births, method="adaptive8", seed=1, **kwargs).states[:, -1]
+    b = trace_boozer(tokamak(), *births, method="rk4", seed=1, **kwargs).states[:, -1]
+    c = trace_boozer(tokamak(), *births, method="rk4", seed=2, **kwargs).states[:, -1]
+    assert np.var(a[:, 4] - b[:, 4]) * 100 <= np.var(c[:, 4] - b[:, 4])
+
+
+@pytest.mark.parametrize("method", ["rk4", "adaptive8"])
+def test_collisional_trace_has_finite_difference_tangents(method):
+    """Under jit and vmap, the forward tangent of the end parallel velocity with respect to the birth pitch matches a central
+    difference with the same noise."""
+    from essos.boozer import _advance, _start
+    field, species, n, dt, n_sub = tokamak(), electron_background(), 4, 2e-8, 500
+    keys = jax.vmap(jax.random.fold_in, (None, 0))(jax.random.PRNGKey(3), jnp.arange(n))
+
+    def end_speed(pitch):
+        r, theta = jnp.sqrt(0.3), jnp.linspace(0, 6, n)
+        y0 = jnp.stack([r * jnp.cos(theta), r * jnp.sin(theta), jnp.zeros(n), pitch * V0], axis=1)
+        B = jax.vmap(field.modB)(jnp.full(n, 0.3), theta, jnp.zeros(n))
+        carry, _ = _start(field, y0, V0**2 * (1 - pitch**2) / (2 * B))
+        _, states = _advance(field, dt, n_sub, M, Q, species, 1.5, carry, keys, 0, 1, method, 1e-10)
+        return states[:, -1, 3] / V0
+
+    # Adaptive: a step decision that flips inside the difference stencil jumps the trace, so the stencil is narrow.
+    pitch, eps = jnp.linspace(-0.5, 0.5, n), 1e-5 if method == "rk4" else 1e-8
+    tangent = jax.jvp(end_speed, (pitch,), (jnp.ones(n),))[1]
+    difference = (end_speed(pitch + eps) - end_speed(pitch - eps)) / (2 * eps)
+    np.testing.assert_allclose(tangent, difference, rtol=1e-3, atol=1e-6)
+
+
 def test_slowing_down_on_electrons_follows_the_spitzer_time():
     """<v>(t) = v0 exp(-t / tau_se), tau_se = 3 (2 pi)^1.5 eps0^2 m_a T_e^1.5 / (n_e Z^2 e^4 m_e^0.5 lnL)
     (Stix 1972), the x = v / v_te -> 0 limit; at x = 0.22 the exact G(x) lowers the rate by 3 %."""

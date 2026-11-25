@@ -398,11 +398,16 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             if species is not None:
                 v = jnp.sqrt(2 * e_orbit)
                 point = jnp.array([s1, th1, y1[2]])
-                # Kicks sit on the collision clock t_j = j dt with noise from fold_in(key, j): the noise
-                # does not depend on the orbit steps.
-                tick = jnp.round((t + h) / dt).astype(jnp.int32) - 1
-                v_kick, lam = collision_kick(species, mass, charge, v, y1[3] / v, point, dt,
-                                             jax.random.normal(jax.random.fold_in(key, tick), (2,)))
+                # The noise is a Brownian path on the clock t_j = j dt, increment j from fold_in(key, j). A step
+                # that crosses ticks j0 .. j1 - 1 gets one kick of length (j1 - j0) dt with their summed noise, so
+                # the noise does not depend on the orbit steps.
+                j0, j1 = (jnp.floor(x / dt * (1 + 1e-12)).astype(jnp.int32) for x in (t, t + h))
+                ticks = jnp.maximum(j1 - j0, 1)
+                noise = jax.lax.fori_loop(j0, j1, lambda j, w: w + jax.random.normal(jax.random.fold_in(key, j), (2,)),
+                                          jnp.zeros(2))
+                kick = kick & (j1 > j0)
+                v_kick, lam = collision_kick(species, mass, charge, v, y1[3] / v, point, ticks * dt,
+                                             noise / jnp.sqrt(ticks))
                 y1 = jnp.where(kick, y1.at[3].set(lam * v_kick), y1)
                 mu1 = jnp.where(kick, v_kick * v_kick * (1 - lam * lam) / (2 * B1), mu)
                 v = jnp.where(kick, v_kick, v)
@@ -446,21 +451,18 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
                 carry, attempts = state
                 y, t, h = carry[0], carry[2], carry[9]
                 h_try = jnp.minimum(h, t_end - t)
-                if species is not None:  # land on the next tick of the collision clock
-                    t_tick = (jnp.floor(t / dt * (1 + 1e-12)) + 1) * dt
-                    h_try = jnp.minimum(h_try, t_tick - t)
-                    on_tick = t + h_try >= t_tick * (1 - 1e-12)
-                else:
-                    on_tick = True
+                if species is not None:  # a step that crosses ticks of the collision clock ends on the last one
+                    tick = jnp.floor((t + h_try) / dt * (1 + 1e-12))
+                    h_try = jnp.where(tick > jnp.floor(t / dt * (1 + 1e-12)), tick * dt - t, h_try)
                 scale = tolerance * jnp.array([1.0, 1.0, 1.0, jnp.sqrt(2 * carry[8])])
                 y1, norm = _embedded_step(rhs_of(carry), y, h_try, scale, method)
                 ok = jnp.isfinite(norm) & (norm <= 1.0)
                 safe = jnp.where(jnp.isfinite(norm) & (norm > 0), norm, jnp.where(ok, 0.0, 1e10))
                 grow = jnp.clip(0.9 * safe ** (-1 / order), 0.1, 5.0)
-                stepped = finish(carry, y1, h_try, on_tick)
+                stepped = finish(carry, y1, h_try)
                 carry = jax.tree.map(lambda a, b: jnp.where(ok, a, b), stepped, carry)
                 h_next = h_try * grow
-                if species is not None:  # a step cut short by a tick does not shrink the next one
+                if species is not None:  # a step cut back to a tick does not shrink the next one
                     h_next = jnp.where(ok & (h_try < h), jnp.maximum(h_next, h), h_next)
                 return carry[:9] + (h_next,) + carry[10:], attempts + 1
 
@@ -524,12 +526,13 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.
 
-    With ``species``, collision kicks are applied on a fixed clock ``t_j = j dt`` with noise from
-    ``fold_in(fold_in(PRNGKey(seed), marker_id), j)``. The clock is ``dt = tmax / ((n_save - 1) n_sub)``, the
-    fixed step, not the ``timestep`` passed in: two runs share their noise only when ``tmax``, ``n_save`` and
-    ``timestep`` are all the same. A marker's trace then does not depend on the other markers in the run, their
-    order or the orbit steps. With ``species`` the adaptive methods take steps no longer than ``dt``, so
-    ``timestep`` sets both the cost and the collision accuracy: choose it from the collision time.
+    With ``species``, the collision noise is a Brownian path on a fixed clock ``t_j = j dt`` whose increment
+    ``j`` is drawn from ``fold_in(fold_in(PRNGKey(seed), marker_id), j)``. The clock is
+    ``dt = tmax / ((n_save - 1) n_sub)``, the fixed step, not the ``timestep`` passed in: two runs share their
+    noise only when ``tmax``, ``n_save`` and ``timestep`` are all the same. A marker's trace then does not depend
+    on the other markers in the run or their order. An adaptive step that crosses ticks is cut back to the last
+    tick it crosses and ends with one kick for those ticks, driven by the sum of their increments; a step shorter
+    than a tick takes no kick. Kicks are as long as the orbit steps: keep the collision time long compared with them.
     ``marker_ids`` (default ``0 .. n-1``) are distinct integers in ``[0, 2**32)``.
     """
     if method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
