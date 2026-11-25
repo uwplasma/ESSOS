@@ -506,8 +506,12 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     whenever that shrinks the batch (sizes rounded up to 3 significant bits). ``compact=False`` skips the host
     synchronizations and extra compiled batch sizes.
     Fixed explicit methods are ``"dopri8"`` (default), ``"dopri5"`` and
-    ``"rk4"``; ``"dopri8"`` matches RK4 in cost and energy error at 3x its
-    step and is far more accurate at smaller steps. Refine timestep and modes to check loss labels and bounce phase.
+    ``"rk4"``. For an energy error near 1e-6 the lower orders are cheaper: 3.5 MeV alphas over 1 ms
+    reach it with ``"dopri5"`` at 0.4-0.5x the CPU time of ``"dopri8"`` (QA at the default step: 5.7e-7 against
+    3.6e-7; ARIES-CS at half of it: 8.8e-7 against 1.8e-7), and ``"rk4"`` at half the default step is
+    between the two. In W7-X (standard configuration) the default step leaves 3.4e-4 with ``"dopri8"``, ``"dopri5"`` at
+    half the step costs the same for 3.6e-4, and ``"adaptive"`` reaches 3.3e-7 at 5.4x the time of ``"dopri8"``.
+    Refine timestep and modes to check loss labels and bounce phase.
     ``"adaptive"`` (Dopri5) and ``"adaptive8"`` (Dopri8) control each particle's step so the embedded error
     stays below ``tolerance`` (in ``sqrt(s)`` and ``zeta`` units and relative to the
     speed for ``v_par``); ``timestep`` is then only the first trial step.

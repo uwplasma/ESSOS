@@ -168,9 +168,12 @@ the figure comes from `python docs/make_readme_figures.py wall`.
 
 Transform a VMEC equilibrium with [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax),
 then trace guiding centres in an axis-regular chart with optional Monte Carlo
-collisions. `method="rk4"` (default), `"dopri5"` or `"dopri8"` take fixed
+collisions. `method="dopri8"` (default), `"dopri5"` or `"rk4"` take fixed
 steps; `"adaptive"` (Dopri5) and `"adaptive8"` (Dopri8) control each
-particle's step to `tolerance`. This tracer provides forward diagnostics.
+particle's step to `tolerance`. For an energy error near 1e-6, `"dopri5"`
+costs 0.4-0.5x the CPU time of `"dopri8"` in QA and ARIES-CS. In W7-X the
+default step gives 3e-4 with either method at equal cost; use `"adaptive"` there.
+This tracer provides forward diagnostics.
 
 Install the transform extra with `pip install 'essos[booz]'`.
 
