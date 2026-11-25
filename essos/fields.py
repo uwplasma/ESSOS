@@ -711,6 +711,14 @@ class near_axis:
         )
 
 
+def _static_key(value):
+    """A hashable stand-in for a static item: sequences and arrays (NumPy or JAX, which must be concrete) by shape and values."""
+    if isinstance(value, (np.ndarray, jax.Array, list, tuple)):
+        value = np.asarray(value)
+        return value.shape, tuple(value.ravel().tolist())
+    return value.item() if isinstance(value, np.generic) else value
+
+
 class _VmecStatic:
     """Non-array state of a ``Vmec`` (mode counts, nfp, ...): equal when those are. The file handle and the
     boundary surface ride along but do not take part in the comparison."""
@@ -718,7 +726,7 @@ class _VmecStatic:
 
     def __init__(self, items, extra):
         self.items, self.extra = items, extra
-        self.key = tuple((k, tuple(np.asarray(v).tolist()) if isinstance(v, jax.Array) else v) for k, v in items)
+        self.key = tuple((k, _static_key(v)) for k, v in items)
 
     def __eq__(self, other):
         return isinstance(other, _VmecStatic) and self.key == other.key

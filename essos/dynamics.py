@@ -1372,7 +1372,10 @@ class Tracing():
                 return solve(_place_on_devices(y0, place), None if keys is None else _place_on_devices(keys, place))
 
         if batch == n:
-            return run(y0, keys)
+            result = run(y0, keys)
+            # Sharded results meet the field's leaves afterwards; leaves committed to one device (a VMEX solve's)
+            # cannot be combined with them, so gather on the first device, as for a single device.
+            return tree_util.tree_map(lambda x: device_put(x, self.devices[0]), result) if count > 1 else result
         # Every batch has `batch` particles, the last one padded by repeating
         # its final particle, so the solve compiles once. Batches are gathered
         # on the host, so the result combines with arrays on any device.

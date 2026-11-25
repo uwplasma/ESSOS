@@ -99,6 +99,29 @@ def test_vmec_from_arrays_matches_wout_file():
     assert jnp.array_equal(vmap(rebuilt.AbsB)(points), vmap(vmec.AbsB)(points))
     assert jnp.array_equal(rebuilt.surface.gamma, vmec.surface.gamma)
 
+def test_vmec_static_key_compares_numpy_jax_and_list_mode_numbers_by_value():
+    from essos.fields import _VmecStatic
+    mode = [0, 1, 1]
+    keys = [_VmecStatic((("nfp", 2), ("xm", kind(mode))), ()) for kind in (np.asarray, jnp.asarray, list, tuple)]
+    assert all(key == keys[0] and hash(key) == hash(keys[0]) for key in keys)
+    assert keys[0] != _VmecStatic((("nfp", 2), ("xm", np.asarray([0, 1, 2]))), ())
+    assert keys[0] != _VmecStatic((("nfp", 2), ("xm", np.asarray([[0, 1, 1]]))), ())
+    assert _VmecStatic((("nfp", np.int64(2)),), ()) == _VmecStatic((("nfp", 2),), ())
+
+
+def test_vmec_with_numpy_mode_numbers_traces_twice_through_the_same_jit():
+    vmec = Vmec(WOUT_FILE, ntheta=8, nphi=8)
+
+    def build(scale):
+        arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+        arrays.update({name: np.asarray(arrays[name]) for name in ("xm", "xn", "xm_nyq", "xn_nyq")}, bmnc=vmec.bmnc * scale)
+        return Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, ntheta=8, nphi=8, **arrays)
+
+    absb = jax.jit(lambda field: field.AbsB(jnp.array([0.5, 0.3, 0.2])))
+    first, second = absb(build(1.0)), absb(build(1.1))
+    np.testing.assert_allclose(second, 1.1 * first, rtol=1e-10)
+
+
 def test_vmec_from_an_in_memory_wout_matches_the_file():
     from types import SimpleNamespace
     vmec = Vmec(WOUT_FILE)
