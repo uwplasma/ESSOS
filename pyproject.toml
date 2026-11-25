@@ -83,4 +83,8 @@ multiobjective = ["optuna", "pandas", "plotly"]
 vmex = ["vmex[freeb]>=0.11.3"]
 
 [tool.pytest.ini_options]
-markers = ["gpu: small jitted checks run on the GPU runner (pytest -m gpu)"]
+addopts = "--strict-markers"
+markers = [
+    "gpu: small jitted checks run on the GPU runner (pytest -m gpu); skipped there without a GPU",
+    "slow: above 5 s each on a laptop; left out of the pull-request tier, run nightly (pytest -m slow)",
+]
