@@ -271,6 +271,12 @@ the `wout` directly and DESC fits it. ± is the binomial standard error.
   and read the per-line mask from `tracing.boundary_hits`.
 - **Step budget.** `max_steps` (default `1_000_000`) bounds every Diffrax solve,
   so a trace that cannot finish returns instead of running unbounded.
+  With `step_budget=k` particles advance at most `k` steps per round and the
+  ones that finished or were lost leave the batch, instead of every particle
+  running to the step count of the slowest; this pays for large batches with
+  many early losses on few threads (1.9x less CPU for 64 edge-born alphas on
+  one thread, 1.6x for 256 in a VMEC field) and costs time on small batches.
+  It is ignored on a GPU, where the rounds were 3-4x slower than one solve.
 - **Progress bars** are off by default; pass `progress=True` when interactive.
   With `particle_batch_size=n` particles are traced `n` at a time and the bar
   counts completed particles (batches are bypassed under `jax.jit`/`grad`).
