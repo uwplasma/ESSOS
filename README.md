@@ -42,6 +42,16 @@ pip install essos
   cylindrical grid and evaluates `B`, `dB/dX` and guiding-centre terms from a
   tricubic spline; it saves to `.npz` or MGRID and works under `jit` and
   `grad`. See [`trace_particles_interpolated_dipoles.py`](examples/particle_tracing/trace_particles_interpolated_dipoles.py).
+  On a CPU, use it for long traces from coils: for 3.5 MeV alphas in a reactor-size QA
+  (16 coils of 75 segments) a 32^3 table takes 2.4 CPU-s to build and tracing
+  costs 66 ms per particle against 498 ms with Biot-Savart. The energy error
+  stays near 1e-7 to 1e-6 on every grid and does not measure the interpolation
+  error; trace again on a 1.5x finer grid and compare orbits instead (end
+  points 1.1e-2, 1.3e-3, 1.3e-4 m apart from Biot-Savart at 24^3, 32^3, 48^3).
+  Stop lost orbits with `stopping_criteria=LevelsetStoppingCriterion(...)`;
+  `boundary=` applies to Biot-Savart fields only. On a GPU (A4000) direct
+  Biot-Savart was faster: 3.2 s against 5.7 s for 32 alphas. See
+  [`trace_particles_coils_guidingcenter.py`](examples/particle_tracing/trace_particles_coils_guidingcenter.py).
 - **VMEC MGRID.** Export coil fields and load MGRID files as JAX-compatible
   three-dimensional magnetic fields.
 - **Surfaces.** Fourier-represented toroidal surfaces, from a VMEC `wout` or
