@@ -414,6 +414,20 @@ def test_traced_pitch_scattering_decays_the_legendre_moments(method):
     assert np.mean(p2) == pytest.approx(p2_0 * np.exp(-1.5), abs=4 * np.std(p2) / np.sqrt(n) + 5e-3)
 
 
+def test_long_adaptive_steps_keep_the_collision_operator_accurate():
+    """One save interval of 1 / nu_D: free Dopri8 steps in a uniform field would span ~nu_D^-1 and bias the
+    Euler-Maruyama kick; steps are held to nu dt <= MAX_COLLISIONAL_STEP, so <P1> = 0.6 exp(-nu_D t) holds."""
+    species = BackgroundSpecies(1, jnp.array([1e4]), jnp.array([1.0]), jnp.array([1e26]), jnp.array([1.0e4]))
+    ln = float(coulomb_logarithm(M, Q, 0, V0, jnp.zeros(3), species))
+    nu = 1e26 * Q**2 * ELEMENTARY_CHARGE**2 * ln / (4 * np.pi * EPSILON_0**2 * M**2 * V0**3)
+    n, t = 16000, 1 / nu
+    out = trace_boozer(uniform_field(), np.full(n, 0.3), np.zeros(n), np.zeros(n), np.full(n, 0.6), speed=V0,
+                       mass=M, charge=Q, tmax=t, timestep=t / 400, n_save=2, species=species,
+                       devices=jax.devices()[:1], progress=False, method="adaptive8")
+    xi = out.states[:, -1, 3] / out.states[:, -1, 4]
+    assert np.mean(xi) == pytest.approx(0.6 * np.exp(-1), abs=4 * np.std(xi) / np.sqrt(n))
+
+
 def test_adaptive_and_fixed_steps_follow_one_brownian_path():
     """The noise is a Brownian path on the clock: adaptive8 and fine rk4 steps driven by it end close together
     (strong agreement), far closer than two independent paths do."""

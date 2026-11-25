@@ -356,6 +356,8 @@ def _rk_step(rhs, y, dt, method):
 
 # attempted adaptive steps allowed per saved interval before a particle is failed
 MAX_ATTEMPTS = 1_000_000
+# Largest nu h of an adaptive collisional step: the Euler-Maruyama kick has a weak error of order nu h.
+MAX_COLLISIONAL_STEP = 0.02
 
 
 def _embedded_step(rhs, y, dt, scale, method):
@@ -452,6 +454,10 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
                 y, t, h = carry[0], carry[2], carry[9]
                 h_try = jnp.minimum(h, t_end - t)
                 if species is not None:  # a step that crosses ticks of the collision clock ends on the last one
+                    s0, _, th0, *_ = _chart(y)
+                    nu = jnp.max(jnp.abs(jnp.array(_collision_rates(species, mass, charge, jnp.sqrt(2 * carry[8]),
+                                                                    jnp.array([s0, th0, y[2]])))[:3]))
+                    h_try = jnp.minimum(h_try, jnp.maximum(MAX_COLLISIONAL_STEP / nu, dt))
                     tick = jnp.floor((t + h_try) / dt * (1 + 1e-12))
                     h_try = jnp.where(tick > jnp.floor(t / dt * (1 + 1e-12)), tick * dt - t, h_try)
                 scale = tolerance * jnp.array([1.0, 1.0, 1.0, jnp.sqrt(2 * carry[8])])
@@ -532,7 +538,8 @@ def trace_boozer(field, s, theta, zeta, pitch, *, speed, mass, charge, tmax, tim
     noise only when ``tmax``, ``n_save`` and ``timestep`` are all the same. A marker's trace then does not depend
     on the other markers in the run or their order. An adaptive step that crosses ticks is cut back to the last
     tick it crosses and ends with one kick for those ticks, driven by the sum of their increments; a step shorter
-    than a tick takes no kick. Kicks are as long as the orbit steps: keep the collision time long compared with them.
+    than a tick takes no kick. Adaptive steps are also held to ``nu h <= MAX_COLLISIONAL_STEP`` (0.02), with ``nu`` the largest collision
+    rate at the step start, and never below one tick.
     ``marker_ids`` (default ``0 .. n-1``) are distinct integers in ``[0, 2**32)``.
     """
     if method not in ("rk4", "dopri5", "dopri8", "adaptive", "adaptive8"):
