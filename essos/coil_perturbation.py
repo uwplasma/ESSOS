@@ -7,45 +7,6 @@ from essos.coils import Curves, Coils, DiscretizedCoils, fit_dofs_from_coils
 from functools import partial
 
 
-#def ldl_decomposition(A):
-#    """
-#    Performs LDLᵀ decomposition on a symmetric positive-definite matrix A.
-#    A = L D Lᵀ where:
-#      - L is lower triangular with unit diagonal
-#      - D is diagonal
-#
-#    Args:
-#        A: (n, n) symmetric matrix
-#
-#    Returns:
-#        L: (n, n) lower-triangular matrix with unit diagonal
-#        D: (n,) diagonal elements of D
-#    """
-#    n = A.shape[0]
-#    L = jnp.eye(n)
-#    D = jnp.zeros(n)
-
-#    def body_fun(k, val):
-#        L, D = val
-
-        # Compute D[k]
-#        D_k = A[k, k] - jnp.sum((L[k, :k] ** 2) * D[:k])
-#        D = D.at[k].set(D_k)
-
-#        def inner_body(i, L):
-#            L_ik = (A[i, k] - jnp.sum(L[i, :k] * L[k, :k] * D[:k])) / D_k
-#            return L.at[i, k].set(L_ik)
-
-        # Update column k of L below diagonal
-#        L = jax.lax.fori_loop(k + 1, n, inner_body, L)
-
-#        return (L, D)
-
-#    L, D = jax.lax.fori_loop(0, n, body_fun, (L, D))
-
-#    return L, D
-
-
 @jit
 def matrix_sqrt_via_spectral(A):
     """Compute matrix square root of SPD matrix A via spectral decomposition."""

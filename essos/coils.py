@@ -608,8 +608,6 @@ class Coils:
             currents_scale: fixed normalization used for ``dofs_currents``.
                 If ``None``, it is computed once from ``currents`` and then kept fixed.
         """
-        # if hasattr(curves, 'n_base_curves') and hasattr(currents, 'size'):
-        #     assert curves.n_base_curves == currents.size, "Number of base curves and number of currents must be the same"
 
         currents_array = _currents_as_array(currents)
         if currents_array is not None:

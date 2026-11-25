@@ -83,7 +83,6 @@ class Particles():
         self.particle_index=jnp.arange(self.nparticles)
         
         key=jax.random.key(42)
-        #self.random_keys=jax.random.split(key,32)[20:22]#self.nparticles)
         self.random_keys=jax.random.split(key,self.nparticles)        
         
         if initial_vparallel_over_v is not None:
@@ -342,7 +341,6 @@ def GuidingCenterCollisionsDiffusionMu(t,
     q = particles.charge
     m = particles.mass
     points = jnp.array([x, y, z])
-    #I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(B_contravariant,B_contravariant))/AbsB**2
     I_bb_tensor=jnp.identity(3)-jnp.diag(jnp.multiply(field.B_contravariant(points),jnp.reshape(field.B_contravariant(points),(3,1))))/field.AbsB(points)**2
     sigma=_mu_collision_noise(vpar, mu, points, field, particles, species)
     Diffusion_x=0.0#((Diffusion_par-Diffusion_perp)*(1.-xi**2)/2.+Diffusion_perp)/(m*omega_mod)**2
@@ -361,8 +359,6 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
                   args) -> jnp.ndarray:
     x, y, z,vpar,mu = initial_condition
     field, particles,electric_field,species,tag_gc = args
-    #jax.debug.print("vpar  {x}", x=vpar)
-    #jax.debug.print("mu {x}", x=mu)  
     vpar=SPEED_OF_LIGHT*vpar
     mu=SPEED_OF_LIGHT**2*particles.mass*mu
     m = particles.mass
@@ -371,8 +367,6 @@ def GuidingCenterCollisionsDriftMuStratonovich(t,
     v=jnp.sqrt(2./m*(0.5*m*vpar**2+mu*field.AbsB(points)))
     p=m*v
     xi=vpar/v
-    #xi=jnp.select(condlist=[jnp.abs(xi)<=1,jnp.abs(xi)>1],choicelist=[jnp.sign(xi)*(2.-jnp.abs(xi)),xi])
-    #vpar=xi*v
     Bstar=field.B_contravariant(points)+vpar*m/q*field.curl_b(points)#+m/q*flow.curl_U0(points)
     Ustar=vpar*field.B_contravariant(points)/field.AbsB(points)#+flow.U0(points) 
     F_gc=mu*field.dAbsB_by_dX(points)+m*vpar**2*field.kappa(points)-q*electric_field.E_covariant(points)#+vpar*flow.coriolis(points)+flow.centrifugal(points)        
@@ -484,7 +478,6 @@ def GuidingCenterCollisionsDiffusion(t,
     dxdt = jnp.sqrt(2.*Diffusion_x)*I_bb_tensor
     dvdt=jnp.sqrt(2.*Diffusion_par)/m   #equation format was in p=m*v so we divide by m)
     dxidt=jnp.sqrt((1.-xi**2)*2.*Diffusion_perp/p**2)
-    #jnp.select(condlist=[jnp.abs(xi)<1,jnp.abs(xi)==1],choicelist=[jnp.sqrt((1.-xi**2)*2.*Diffusion_perp/p**2),0.])
     #Off diagonals between position an dvelocity are zero at zeroth order
     Dxv=jnp.zeros((2,3))
     Dvx=jnp.zeros((3,2))
@@ -578,9 +571,6 @@ def GuidingCenterMu(t, initial_condition, args) -> jnp.ndarray:
     dxdt, dvdt = _guiding_center_velocity(field, electric_field, particles.charge, particles.mass,
                                           initial_condition[:3], initial_condition[3], mu=initial_condition[4])
     return jnp.concatenate([dxdt, jnp.array([dvdt, 0.0])])
-    # def zero_derivatives(_):
-    #     return jnp.zeros(4, dtype=float)
-    # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
 
 
 @partial(jit, static_argnums=(2))
@@ -591,9 +581,6 @@ def LorentzCollisionsDiffusion(t,
     field, particles,species = args
     q = particles.charge
     m = particles.mass
-    #E = m/2*v**2 
-    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-    # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
     v_vector=jnp.array([vx, vy, vz])
     v=jnp.sqrt(vx**2+vy**2+vz**2)
@@ -622,8 +609,6 @@ def LorentzCollisionsDrift(t,
     q = particles.charge
     m = particles.mass
     v=jnp.sqrt(vx**2+vy**2+vz**2)
-    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-    # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(points)
     indeces_species=species.species_indeces
@@ -638,9 +623,6 @@ def LorentzCollisionsDrift(t,
     noise_drift = 0.5*jnp.einsum('ik,jkj->i', sigma(dxdt), jax.jacfwd(sigma)(dxdt))
     dvdt =  q / m * jnp.cross(dxdt, B_contravariant)-nu_s*dxdt+noise_drift
     return jnp.append(dxdt, dvdt)
-    # def zero_derivatives(_):
-    #     return jnp.zeros(6, dtype=float)
-    # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
 
 
 
@@ -654,31 +636,21 @@ def Lorentz(t,
     field, particles = args
     q = particles.charge
     m = particles.mass
-    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-    # def dxdt_dvdt(_):
     points = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(points)
     dxdt = jnp.array([vx, vy, vz])
     dvdt = q / m * jnp.cross(dxdt, B_contravariant)
     return jnp.append(dxdt, dvdt)
-    # def zero_derivatives(_):
-    #     return jnp.zeros(6, dtype=float)
-    # return lax.cond(condition, zero_derivatives, dxdt_dvdt, operand=None)
 
 @partial(jit, static_argnums=(2))
 def FieldLine(t,
               initial_condition,
               field) -> jnp.ndarray:
     x, y, z = initial_condition
-    # condition = (jnp.sqrt(x**2 + y**2) > 10) | (jnp.abs(z) > 10)
-    # def compute_derivatives(_):
     position = jnp.array([x, y, z])
     B_contravariant = field.B_contravariant(position)
     dxdt = B_contravariant
     return dxdt
-    # def zero_derivatives(_):
-    #     return jnp.zeros(3, dtype=float)
-    # return lax.cond(condition, zero_derivatives, compute_derivatives, operand=None)
 
 
 @partial(jit, static_argnums=(2))
@@ -942,11 +914,6 @@ def _place_on_devices(x, target):
 
 
 
-## !!!!  Here species and tag_gc were added  (E. Neto collisions modifications)
-## species is a class for collision frquencies + possible temperature + density profiles in file species_background.py
-## tag_gc is a tag to turn off 0, or on 1 the GC part of the equations for testing collision statistics independently of GC phsyics
-## !!!!  Here particle_key was added to compute_trajectories (E. Neto collisions modifications)
-## This is important for correct sampling of Brownian motion
 def _never(t, y, args, **kwargs):
     return False
 
@@ -1196,26 +1163,11 @@ class Tracing():
                 mu = (self.particles.energy - 0.5 * self.particles.mass * self.particles.initial_vparallel**2) / B
                 self.initial_conditions = jnp.concatenate([self.initial_conditions, mu[:, None]], axis=1)
         elif model == 'GuidingCenterCollisions':
-            # Brownian motion
-            #t0=0.0
-            #t1=self.maxtime
-            #tol=self.maxtime / self.timesteps*0.5
-            #print('tol: ', tol)
-            #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)            
-            #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDrift),ControlTerm(GuidingCenterCollisionsDiffusion, bm))
             self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
             total_speed_temp=self.particles.total_speed*jnp.ones(self.particles.nparticles)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,total_speed_temp[:, None], self.particles.initial_vparallel_over_v[:, None]], axis=1)
         elif model == 'GuidingCenterCollisionsMuIto' or model == 'GuidingCenterCollisionsMuFixed' or model == 'GuidingCenterCollisionsMuAdaptative':
-            # Brownian motion
-            #t0=0.0
-            #t1=self.maxtime
-            #tol=self.maxtime / self.timesteps*0.5   
-            #print('tol: ', tol)
-            #bm = diffrax.VirtualBrownianTree(t0, t1, tol=tol, shape=(5,), key=jax.random.key(0), levy_area=diffrax.SpaceTimeTimeLevyArea)
-            #self.ODE_term = MultiTerm(ODETerm(GuidingCenterCollisionsDriftMu),ControlTerm(GuidingCenterCollisionsDiffusionMu, bm))
             self.args = (self.field, self.particles,self.electric_field,self.species,self.tag_gc)
-            #x,y,z=self.particles.initial_xyz[]
             B_particle=jax.vmap(self.field.AbsB,in_axes=0)(self.particles.initial_xyz)
             mu=self.particles.initial_vperpendicular**2*self.particles.mass*0.5/B_particle/(SPEED_OF_LIGHT**2*self.particles.mass)          
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz,self.particles.initial_vparallel[:, None]/SPEED_OF_LIGHT,mu[:, None]],axis=1)        
@@ -1836,11 +1788,9 @@ class Tracing():
         if orientation == 'toroidal':
             plt.xlabel('R',fontsize = 18)
             plt.ylabel('Z',fontsize = 18)
-            # plt.title(r'$\phi$ = {:.2f} $\pi$'.format(shift/jnp.pi),fontsize = 20)
         elif orientation == 'z':
             plt.xlabel('X',fontsize = 18)
             plt.xlabel('Y',fontsize = 18)
-            # plt.title('Z = {:.2f}'.format(shift),fontsize = 20)
         plt.axis('equal')
         plt.grid()
         plt.tight_layout()

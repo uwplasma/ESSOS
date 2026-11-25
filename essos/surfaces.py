@@ -697,75 +697,6 @@ class SurfaceRZFourier:
         """Surface area, ``integral of |n| dtheta dphi``."""
         return _surface_mean(self, jnp.linalg.norm(self.normal, axis=2)) * (2 * jnp.pi)**2
 
-    # def change_resolution(self, mpol: int, ntor: int, ntheta=None, nphi=None,close=True):
-    #     """
-    #     Change the values of `mpol` and `ntor`.
-    #     New Fourier coefficients are zero by default.
-    #     Old coefficients outside the new range are discarded.
-    #     """
-    #     rc_old, zs_old = self.rc, self.zs
-    #     mpol_old, ntor_old = self.mpol, self.ntor
-    #     if ntheta is not None:
-    #         self.ntheta = ntheta
-    #     else:
-    #         ntheta = self.ntheta
-
-    #     if nphi is not None:
-    #         self.nphi = nphi
-    #     else:
-    #         nphi = self.nphi
-
-    #     #rc_new = jnp.zeros((mpol, 2 * ntor + 1))
-    #     #zs_new = jnp.zeros((mpol, 2 * ntor + 1))
-    #     rc_new = jnp.zeros(((mpol+1)*( 2 * ntor + 1)-ntor))
-    #     zs_new = jnp.zeros(((mpol+1)*( 2 * ntor + 1)-ntor))
-    #     m_keep = min(mpol_old, mpol)
-    #     n_keep = min(ntor_old, ntor)
-
-    #     xm_old=self.xm
-    #     xn_old=self.xn
-    #     self.xm =  jnp.repeat(jnp.arange(mpol+1), 2*ntor+1)[ntor:]
-    #     self.xn = self.nfp*jnp.tile(jnp.arange(-ntor, ntor + 1), mpol+1)[ntor:]
-    #     # Copy overlapping region
-    #     for l in range(len(self.xm)):
-    #         if self.xm[l]<=m_keep and jnp.abs(self.xn[l]/self.nfp)<=n_keep:
-    #             index=self.xm[l]*(ntor_old*2+1)-self.xn[l]//self.nfp
-    #             rc_new=rc_new.at[l].set(self.rc[index])
-    #             zs_new=zs_new.at[l].set(self.zs[index])
-
-
-    #     # Update attributes
-    #     self.mpol, self.ntor = mpol, ntor
-    #     self.rc, self.zs = rc_new, zs_new
-
-    #     self.rmnc_interp = self.rc
-    #     self.zmns_interp = self.zs
-
-    #     # Update degrees of freedom
-    #     self.num_dofs_rc = len(jnp.ravel(self.rc))
-    #     self.num_dofs_zs = len(jnp.ravel(self.zs))
-    #     self._dofs = jnp.concatenate((self.rescaling_function(jnp.ravel(self.rc)), self.rescaling_function(jnp.ravel(self.zs))))
-
-    #     # Recompute angles and geometry
-    #     if self.range_torus == 'full torus': div = 1
-    #     else: div = self.nfp
-    #     if self.range_torus == 'half period': end_val = 0.5
-    #     else: end_val = 1.0        
-    #     self.quadpoints_theta = jnp.linspace(0, 2 * jnp.pi, num=ntheta, endpoint=True if close else False)
-    #     self.quadpoints_phi   = jnp.linspace(0, 2 * jnp.pi * end_val / div, num=nphi, endpoint=True if close else False)
-    #     self.theta_2d, self.phi_2d = jnp.meshgrid(self.quadpoints_theta, self.quadpoints_phi)
-
-    #     self.angles = (jnp.einsum('i,jk->ijk', self.xm, self.theta_2d)- jnp.einsum('i,jk->ijk', self.xn, self.phi_2d))
-    #     (self._gamma, self._gammadash_theta, self._gammadash_phi,
-    #     self._normal, self._unitnormal) = self._set_gamma(self.rmnc_interp, self.zmns_interp)
-
-
-    #     # Recompute AbsB if available
-    #     if hasattr(self, 'bmnc'):
-    #         self._AbsB = self._set_AbsB()
-
-    #     return self
-
     def plot(self, ax=None, show=True, close=False, axis_equal=True, **kwargs):
         if close: raise NotImplementedError("Call close=True when instantiating the VMEC/SurfaceRZFourier object.")
         
@@ -785,7 +716,6 @@ class SurfaceRZFourier:
             ax.plot_surface(boundary[:, :, 0], boundary[:, :, 1], boundary[:, :, 2], facecolors=cm.jet(B_rescaled), linewidth=0, antialiased=True, **kwargs)
         else:
             ax.plot_surface(boundary[:, :, 0], boundary[:, :, 1], boundary[:, :, 2], linewidth=0, antialiased=True, **kwargs)
-        # ax.set_axis_off()
         ax.grid(False)
 
         if axis_equal:
@@ -974,7 +904,6 @@ class SurfaceClassifier():
                     jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),
                     vmap(vmap(vmap(fbatch,in_axes=(None,None,0)),in_axes=(None,0,None)),in_axes=(0,None,None))(jnp.linspace(rmin,rmax,nr),
                     jnp.linspace(0., 2*jnp.pi, nphi), jnp.linspace(zmin, zmax, nz)),fill_value=-1.)
-        #self.dist.interpolate_batch(fbatch)    
 
     @partial(jit, static_argnames=['self'])
     def evaluate_xyz(self, xyz):
@@ -1002,7 +931,6 @@ def signed_distance_from_surface_jax(xyz, surface):
     positive for points inside the volume surrounded by the surface.
     """
     gammas = surface.gamma.reshape((-1, 3))
-    #from scipy.spatial import KDTree ##better for cpu?
     tree = jaxkd.build_tree(gammas)
     mins, _ = jaxkd.query_neighbors(tree, xyz, k=1)    
     n = surface.unitnormal.reshape((-1, 3))
