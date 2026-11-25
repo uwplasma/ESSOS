@@ -1319,6 +1319,20 @@ def _toroidal_source(xyz, params):
     return jnp.stack([-params[0] * xyz[:, 1] / R2, params[0] * xyz[:, 0] / R2, params[1] + 0 * R2], 1)
 
 
+def test_eager_traces_run_the_bounded_loop_and_transformed_ones_the_checkpointed_loop():
+    import diffrax
+    kw = dict(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative", maxtime=1e-7, timestep=1e-9,
+              times_to_trace=3, progress=False)
+    eager = Tracing(particles=_near_axis_particles(), **kw)
+    checkpointed = Tracing(particles=_near_axis_particles(), adjoint=diffrax.RecursiveCheckpointAdjoint(), **kw)
+    assert isinstance(eager.adjoint, diffrax.DirectAdjoint)
+    np.testing.assert_allclose(eager.trajectories, checkpointed.trajectories, rtol=1e-9)
+    seen = []
+    jax.eval_shape(lambda v: seen.append(Tracing(particles=Particles(initial_xyz=_near_axis_particles().initial_xyz,
+                                                                     initial_vparallel_over_v=v), **kw).adjoint) or v, jnp.full(5, 0.9))
+    assert isinstance(seen[0], diffrax.RecursiveCheckpointAdjoint)
+
+
 def test_vmec_wall_trace_differentiates_in_both_modes_with_respect_to_launch_and_field_parameters():
     """A strike, an orbit that re-enters twice and one that never leaves: jax.jvp, jax.grad and jit agree with finite differences."""
     import diffrax
