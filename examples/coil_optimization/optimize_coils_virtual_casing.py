@@ -1,8 +1,11 @@
-#  Coils for a finite-beta VMEC/VMEX equilibrium, using virtual casing for the field the coils must produce.
-#  The plasma carries current, so the coils must reproduce B_total - B_plasma on the boundary, not just
-#  B.n = 0. virtual_casing_jax gives that field (all three components) from the wout boundary and total field.
-#  Matching the full vector fixes the coil currents and the pressure balance a free-boundary solve needs.
-#  Requires the optional packages vmex (wout reader) and virtual-casing-jax >= 0.0.10.
+"""Coils for a finite-beta VMEC/VMEX equilibrium, using virtual casing for the field the coils must produce.
+The plasma carries current, so the coils must reproduce B_total - B_plasma on the boundary, not just
+B.n = 0. virtual_casing_jax gives that field (all three components) from the wout boundary and total field.
+Matching the full vector fixes the coil currents and the pressure balance a free-boundary solve needs.
+Requires the optional packages vmex (wout reader) and virtual-casing-jax >= 0.0.10.
+
+Runtime: about 1-2 minutes on a CPU (estimate; not run, needs vmex and virtual-casing-jax).
+"""
 import os
 from time import time
 import jax

@@ -1,3 +1,10 @@
+"""Statistics of the Monte Carlo collision operator for a guiding centre.
+
+Teaches how to check the pitch-angle and energy scattering against the analytic distributions on a
+background species, with fixed or adaptive steps (the 'model' parameter).
+
+Runtime: about 3 minutes on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp
@@ -17,6 +24,7 @@ config.update("jax_enable_x64", True)
 # Input parameters
 tmax = 1.e-4
 dt=1.e-8
+model = 'GuidingCenterCollisionsMuFixed'  # or 'GuidingCenterCollisionsMuAdaptative' with dt=1e-14 as first step
 times_to_trace=1000
 nparticles_per_core=10
 nparticles = nparticles_per_core
@@ -73,7 +81,7 @@ pitch_sigma=jnp.sqrt(2.**2/12)
 
 
 time0 = time()
-tracing = Tracing(field=vmec, model='GuidingCenterCollisionsMuFixed', particles=particles,
+tracing = Tracing(field=vmec, model=model, particles=particles,
                   maxtime=tmax, timestep=dt,times_to_trace=times_to_trace,species=species,tag_gc=0.)
 print(f"ESSOS tracing took {time()-time0:.2f} seconds")
 trajectories = tracing.trajectories

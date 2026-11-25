@@ -1,3 +1,9 @@
+"""Create a stellarator coil set.
+
+Teaches CreateEquallySpacedCurves and Coils: the smallest ESSOS example.
+
+Runtime: about 10 seconds.
+"""
 from essos.coils import Coils, CreateEquallySpacedCurves
 
 # Initialize coils

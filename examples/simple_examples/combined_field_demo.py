@@ -1,3 +1,10 @@
+"""Check CombinedField against its parts.
+
+Teaches that CombinedField sums fields (B, contravariant components, |B|, to_xyz) by comparing with the single
+BiotSavart field and with twice its value.
+
+Runtime: under 15 seconds.
+"""
 import jax.numpy as jnp
 from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import CombinedField, BiotSavart

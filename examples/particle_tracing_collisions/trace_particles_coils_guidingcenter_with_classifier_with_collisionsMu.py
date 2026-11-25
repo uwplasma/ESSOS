@@ -1,3 +1,10 @@
+"""Collisional guiding-centre losses in a coil field.
+
+Teaches how to combine BackgroundSpecies collisions with a surface classifier and read the energy and
+position of each loss.
+
+Runtime: a few minutes on a CPU (estimate; not run, needs simsopt to read the coil file).
+"""
 import os
 from time import time
 from jax import block_until_ready

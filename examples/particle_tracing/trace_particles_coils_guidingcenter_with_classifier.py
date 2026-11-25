@@ -1,3 +1,10 @@
+"""Guiding-centre losses in a coil field with a surface classifier.
+
+Teaches how to define the loss boundary with a SurfaceClassifier (the plasma boundary of a VMEC wout)
+and read the loss fraction of the coil orbits.
+
+Runtime: about 1-2 minutes on a CPU (estimate; not run, needs simsopt to read the coil file).
+"""
 import os
 import jax
 print(jax.devices())

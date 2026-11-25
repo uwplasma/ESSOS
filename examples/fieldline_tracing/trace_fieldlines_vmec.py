@@ -1,3 +1,9 @@
+"""Trace magnetic field lines in a VMEC equilibrium.
+
+Teaches the Vmec field object and model='FieldLine' tracing in flux coordinates.
+
+Runtime: about 1 minute on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp

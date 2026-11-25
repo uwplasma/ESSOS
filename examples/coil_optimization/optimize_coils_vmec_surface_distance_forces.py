@@ -1,3 +1,10 @@
+"""Optimize coils with distance, force and linking-number objectives.
+
+Teaches how to add coil-coil and coil-surface distance, Lorentz force and linking-number terms to the
+B.n objective with their weights.
+
+Runtime: about 10 minutes on a CPU.
+"""
 import os
 from time import time
 import jax.numpy as jnp
