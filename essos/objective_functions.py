@@ -3,6 +3,7 @@ import jax
 # from build.lib.essos import coils
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
+import numpy as np
 from jax import jit, vmap
 from functools import partial
 from essos.dynamics import Tracing
@@ -178,6 +179,22 @@ def loss_coil_curvature(coils, max_coil_curvature=0):
     pointwise_curvature_loss = jnp.square(jnp.maximum(coils.curvature-max_coil_curvature, 0))
     return jnp.mean(pointwise_curvature_loss*jnp.linalg.norm(coils.gamma_dash, axis=-1), axis=1)
 
+def _n_base(coils):
+    """Number of base coils: the others are their images under the nfp rotations and the stellarator flip."""
+    return max(1, len(coils.gamma) // (getattr(coils, "nfp", 1) * (1 + getattr(coils, "stellsym", False))))
+
+def _symmetry_pairs(coils):
+    """Pairs (i, j != i) with i a base coil, and the factor that turns their sum into the sum over all pairs i < j.
+
+    The coils are the images of the base coils under the nfp rotations and the stellarator flip, which act
+    freely on the coils and preserve distances, so every pair term of a base coil repeats 2 nfp times."""
+    n, n_base = len(coils.gamma), _n_base(coils)
+    if 2 * n_base >= n:  # nfp (1 + stellsym) <= 2: (base, any) would be as many pairs as i < j, or more
+        return jnp.triu_indices(n, k=1), 1.0
+    i, j = np.repeat(np.arange(n_base), n), np.tile(np.arange(n), n_base)
+    keep = i != j
+    return (i[keep], j[keep]), 0.5 * n / n_base
+
 def compute_candidates(coils, min_separation):
     centers = coils.curves.curves[:, :, 0]
     a_n = coils.curves.curves[:, :, 2 : 2*coils.order+1 : 2]
@@ -204,8 +221,9 @@ def loss_coil_separation(coils, min_separation, candidates=None, block_size=None
     Returns:
         Scalar loss (sum over all coil pairs)
     """
+    weight = 1.0
     if candidates is None:
-        candidates = jnp.triu_indices(len(coils), k=1)
+        candidates, weight = _symmetry_pairs(coils)
 
     def pair_loss(i, j):
         gamma_i = coils.gamma[i]
@@ -240,7 +258,7 @@ def loss_coil_separation(coils, min_separation, candidates=None, block_size=None
         return total / norm
 
     losses = jax.vmap(pair_loss)(*candidates)
-    return jnp.sum(losses)
+    return weight * jnp.sum(losses)
 
 # Blockwise, memory-efficient coil-surface distance loss
 @partial(jit, static_argnames=["min_distance", "block_size"])
@@ -302,8 +320,9 @@ def loss_coil_surface_distance(coils, surface, min_distance, block_size=None):
 # Blockwise vmap linking number loss (memory efficient, fully differentiable)
 @partial(jit, static_argnames=["block_size"])
 def loss_linkingnumber(coils, candidates=None, block_size=None):
+    weight = 1.0
     if candidates is None:
-        candidates = jnp.triu_indices(len(coils), k=1)
+        candidates, weight = _symmetry_pairs(coils)
     dphi = coils.curves.quadpoints[1] - coils.curves.quadpoints[0]
 
     def pair_linking(i, j):
@@ -338,7 +357,7 @@ def loss_linkingnumber(coils, candidates=None, block_size=None):
         return jnp.abs(linking)
 
     losses = jax.vmap(pair_linking)(*candidates)
-    return jnp.sum(losses)
+    return weight * jnp.sum(losses)
 
 
 
@@ -371,10 +390,11 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None, condu
     if conductor_radius is None:
         raise ValueError("loss_lorentz_force_coils needs conductor_radius (the coil cross-section radius in m)")
     n_coils = coils.gamma.shape[0]
-    indices = jnp.arange(n_coils)
+    n_base = _n_base(coils)  # every other coil carries a copy of a base coil's force
+    indices = jnp.arange(n_base)
     other_indices = jnp.array([
         [j for j in range(n_coils) if j != i]
-        for i in range(n_coils)
+        for i in range(n_base)
     ], dtype=jnp.int32)
 
     def single_coil_loss(idx):
@@ -417,7 +437,7 @@ def loss_lorentz_force_coils(coils, p=1, threshold=0.5e6, block_size=None, condu
         return integral / jnp.mean(block_gammadash_norm) / p
 
     penalties = jax.vmap(single_coil_loss)(indices)
-    return jnp.sum(penalties)
+    return n_coils / n_base * jnp.sum(penalties)
 
 
 
