@@ -550,6 +550,11 @@ def test_electric_field_flux_reads_er_and_maps_to_s():
     rho, Er = np.asarray(efield.rho), np.asarray(efield.Er)
     E_s = [float(efield.E_covariant(jnp.array([r**2, 0.3, 0.1]))[0]) for r in rho[[0, 10, 40]]]
     np.testing.assert_allclose(E_s, [0.0, *(Er[[10, 40]] * vmec.Aminor_p / (2 * rho[[10, 40]]))], rtol=1e-12)
+    # left='extrapolate' is JAX's extension of np.interp: linear below the first sample; above the last, the edge value.
+    s_grid, E_grid = np.asarray(efield.rho) ** 2, np.asarray(efield.Es)
+    below = E_grid[0] - 0.01 * (E_grid[1] - E_grid[0]) / (s_grid[1] - s_grid[0])
+    got = [float(efield.E_covariant(jnp.array([s, 0.3, 0.1]))[0]) for s in (-0.01, 1.2)]
+    np.testing.assert_allclose(got, [below, E_grid[-1]], rtol=1e-12)
 
 
 def test_vmec_guiding_center_energy_with_electric_potential():
