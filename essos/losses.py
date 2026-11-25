@@ -210,11 +210,9 @@ class composite_loss(base_loss):
 
     @partial(jit, static_argnames=['self'])
     def grad(self, dofs: jnp.ndarray) -> jnp.ndarray:
-        dependencies = self.dofs_to_pytree(dofs)
-        
-        grads_each_loss = [loss.grad_pytree(tuple(dependencies[arg] for arg in loss.args_names))\
-                           for loss in self.losses]
-        
-        grad = tree_util.tree_map(lambda *dofs: jnp.sum(jnp.stack(dofs), axis=0), *grads_each_loss)
-        dofs_grad = ravel_pytree(grad)[0]
-        return dofs_grad
+        return jax_grad(self.__call__)(dofs)
+
+    @partial(jit, static_argnames=['self'])
+    def value_and_grad(self, dofs: jnp.ndarray):
+        """Value and gradient from one forward and one reverse pass, for ``minimize(..., jac=True)``."""
+        return jax_value_and_grad(self.__call__)(dofs)

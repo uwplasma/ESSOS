@@ -11,9 +11,8 @@ from essos.losses import custom_loss, base_loss
 
 import essos.augmented_lagrangian as alm
 from functools import partial
-#  In this exmple, `scipy.optimize.least_squares` is used for the normal optimization, but any other optimizer, e.g. from
-#  `scipy.optimize.minimize`, can be used as well and may even be preferable.
-from scipy.optimize import least_squares
+#  The penalty optimization uses L-BFGS-B, which takes the value and gradient of the scalar loss from one call.
+from scipy.optimize import minimize
 
 # Optimization parameters
 maximum_function_evaluations=100
@@ -170,7 +169,7 @@ L_total.dependencies = {"field": init_field}
 
 """ Optimizing the total loss """
 t_start = time()
-res = least_squares(L_total, L_total.starting_dofs, L_total.grad, verbose=2, ftol=1e-5, gtol=1e-5, xtol=1e-14, max_nfev=maximum_function_evaluations)
+res = minimize(L_total.value_and_grad, L_total.starting_dofs, jac=True, method="L-BFGS-B", options=dict(maxiter=maximum_function_evaluations, disp=True))
 t_end = time()
 
 print(f"\nOptimization took {t_end - t_start:.2f} seconds")
