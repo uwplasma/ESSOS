@@ -119,7 +119,8 @@ def test_vmec_from_arrays_is_differentiable_in_the_coefficients():
 
     def AbsB_of_scale(scale):
         traced.append(scale)
-        return Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **{**arrays, 'bmnc': arrays['bmnc']*scale}).AbsB(point)
+        return Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **{**arrays, 'bsupumnc': arrays['bsupumnc']*scale,
+                                                            'bsupvmnc': arrays['bsupvmnc']*scale}).AbsB(point)
 
     evaluate = jax.jit(jax.value_and_grad(AbsB_of_scale))
     for scale in (1.0, 1.1):
@@ -283,6 +284,40 @@ def test_vmec_fourier_modes_are_regular_on_the_axis():
     # tending to a constant (linear interpolation) or growing as 1/sqrt(s) (inconsistent B_s).
     current = [jnp.abs(on_circle(lambda p: vmec.sqrtg(p) * vmec.curl_B(p)[2], s)).max() for s in (1e-8, 1e-4)]
     assert current[0] < 0.5 * current[1]
+
+
+WOUT_ARIES = str(Path(WOUT_QA).parent / "wout_n3are_R7.75B5.7.nc")
+
+
+@pytest.mark.parametrize("wout", [WOUT_QA, WOUT_ARIES])
+def test_vmec_abs_b_and_b_covariant_come_from_the_metric_and_b_contravariant(wout):
+    """The guiding-centre equations conserve W = m v_par^2/2 + mu |B| (mu fixed) only if |B|^2 = B_cov.B^contra.
+    VMEC2000 low-pass filters B_u, B_v to the geometry spectrum before writing the wout (jxbforce.f), so bmnc, bsub and
+    bsup disagree by up to 1.3e-3 at the edge. B_cov is therefore g_ij B^j, with g_ij = e_i.e_j from the R, Z series,
+    and |B| = sqrt(B_cov.B^contra): an identity to rounding, B_i = e_i.B with e_i the columns of d(xyz)/d(s, theta,
+    phi). |B| then differs from bmnc by VMEC's own discretization, at most 4.8e-5 (QA) and 2.1e-4 (ARIES-CS, s = 1)."""
+    vmec = Vmec(wout, ntheta=8, nphi=8)
+    k1, k2, k3 = random.split(random.key(0), 3)
+    points = jnp.stack([jnp.r_[1e-4, 1.0, random.uniform(k1, (62,))], random.uniform(k2, (64,), maxval=2 * jnp.pi),
+                        random.uniform(k3, (64,), maxval=2 * jnp.pi)], axis=1)
+    B_contra, B_cov, AbsB = vmap(vmec.B_contravariant)(points), vmap(vmec.B_covariant)(points), vmap(vmec.AbsB)(points)
+    assert jnp.abs(1 - jnp.sum(B_cov * B_contra, axis=1) / AbsB**2).max() < 1e-13
+    e_dot_B = jnp.einsum('nki,nk->ni', vmap(jax.jacfwd(vmec.to_xyz))(points), vmap(vmec.B)(points))
+    np.testing.assert_allclose(B_cov, e_dot_B, rtol=0, atol=1e-12 * jnp.abs(B_cov).max())
+    bmnc = vmap(lambda p: vmec._nyquist_series(p)['bmnc'][0])(points)
+    assert jnp.abs(AbsB / bmnc - 1).max() < 2.5e-4
+
+
+@pytest.mark.parametrize("wout", [WOUT_QA, WOUT_ARIES])
+def test_vmec_curvature_is_that_of_the_traced_field(wout):
+    """kappa_i = e_i.(b.grad b) with b = B/|B| from the Cartesian Vmec.B (differential geometry, by automatic
+    differentiation). With B_cov from the filtered bsub tables kappa differed from it by up to 8% at s = 0.9."""
+    vmec = Vmec(wout, ntheta=8, nphi=8)
+    b = lambda p: vmec.B(p) / jnp.linalg.norm(vmec.B(p))  # noqa: E731
+    for point in (jnp.array([0.1, 0.3, 0.2]), jnp.array([0.5, 2.0, 1.0]), jnp.array([0.9, 4.0, 0.4])):
+        b_dot_grad_b = jax.jacfwd(b)(point) @ (vmec.B_contravariant(point) / vmec.AbsB(point))
+        expected = jax.jacfwd(vmec.to_xyz)(point).T @ b_dot_grad_b
+        np.testing.assert_allclose(vmec.kappa(point), expected, rtol=1e-10, atol=1e-10 * jnp.abs(expected).max())
 
 
 def test_vmec_radial_interpolation_keeps_grid_values_and_m0_modes():
@@ -560,6 +595,9 @@ def test_biot_savart_circular_loop_current_and_radius_sensitivities():
         radius_tangent, expected_radius, rtol=2e-11, atol=radius_atol)
 
 
+NYQUIST_TABLES = ('bmnc', 'gmnc', 'bsubsmns', 'bsubumnc', 'bsubvmnc', 'bsupumnc', 'bsupvmnc')  # mode cutoff
+
+
 def _asymmetric_vmec_arrays(phase=0.0, ntor=0):
     """Circular surfaces and a covariant field equal to e_phi + 0.06 e_Z."""
     s = jnp.linspace(0, 1, 5)
@@ -620,12 +658,12 @@ def test_asymmetric_vmec_partner_gradients_and_sine_only_cutoff():
     assert all(getattr(plain, k) is None for k in VMEC_WOUT_PARTNERS.values())
     assert len(jax.tree_util.tree_leaves(plain.surface)) == 2 and plain.surface.dofs.size == 4
     np.testing.assert_allclose(plain.B(point), evaluate(0.0)[:3], atol=2e-14)
-    for name in (*Vmec._NYQUIST, *[VMEC_WOUT_PARTNERS[name] for name in Vmec._NYQUIST]):
+    for name in (*NYQUIST_TABLES, *[VMEC_WOUT_PARTNERS[name] for name in NYQUIST_TABLES]):
         arrays[name] = arrays[name].at[:, 1].set(0.0)
     arrays['bmns'] = arrays['bmns'].at[1:, 1].set(0.75)
     field = Vmec.from_arrays(**arrays, ntheta=4, nphi=4, mode_tolerance=0.1)
     assert len(field.xm_nyq) == 2
-    assert float(field.AbsB(point)) > 5.0
+    assert float(field._nyquist_series(point)['bmnc'][0]) > 5.0
     with pytest.raises(ValueError, match='bmns must match'):
         Vmec.from_arrays(**{**arrays, 'bmns': jnp.zeros((2, 2))})
     with pytest.raises(TypeError, match='Unknown Fourier partner'):
@@ -814,7 +852,7 @@ def test_surface_vmec_export_preserves_multimode_geometry(tmp_path, asymmetric):
 def test_vmec_partner_cutoff_is_phase_invariant():
     from essos.fields import VMEC_WOUT_PARTNERS
     arrays = _asymmetric_vmec_arrays(.37)
-    for name in Vmec._NYQUIST:
+    for name in NYQUIST_TABLES:
         arrays[name] = arrays[name].at[:, 1].set(0.)
         arrays[VMEC_WOUT_PARTNERS[name]] = jnp.zeros_like(arrays[name])
     arrays['bmnc'] = arrays['bmnc'].at[:, 0].set(5.).at[:, 1].set(.005)

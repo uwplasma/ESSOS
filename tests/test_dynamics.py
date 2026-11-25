@@ -553,11 +553,9 @@ def test_electric_field_flux_reads_er_and_maps_to_s():
 
 
 def test_vmec_guiding_center_energy_with_electric_potential():
-    """Regression. In the QA reactor VMEC field, 3.5 MeV alphas, Phi(s) = 100 kV s, 2e-5 s, rtol = atol = 1e-10, W
-    drifts by 4.4e-4 when the kinetic energy is held fixed; with mu carried, by 6.6e-6. The rest is not the potential:
-    Vmec takes |B| from bmnc but B_cov and B^contra from the bsub/bsup tables, and |B|^2 differs from B_cov.B^contra by
-    3e-5 to 3e-4, so W does not match the equations (7.1e-6 at Phi = 0, at any tolerance or step). The 1e-8 gate of
-    plan step E4 in a VMEC field waits on a consistent |B|."""
+    """In the QA reactor VMEC field, 3.5 MeV alphas, Phi(s) = 100 kV s, 2e-5 s, rtol = atol = 1e-10, W + q Phi is
+    conserved to the 1e-8 gate of plan step E4 (W drifted by 4.4e-4 with the kinetic energy held fixed). It needs
+    |B|^2 = B_cov.B^contra: with |B| from bmnc and B_cov from the filtered bsub tables it was 6.6e-6."""
     particles = _alphas_at_s03()
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), electric_field=_LinearPotential(),
                       model="GuidingCenterAdaptative", particles=particles, maxtime=2e-5, timestep=1e-8,
@@ -566,17 +564,37 @@ def test_vmec_guiding_center_energy_with_electric_potential():
     total = np.asarray(tracing.energy()) + particles.charge * _LinearPotential.PHI0 * s
     assert (tracing.status == 0).all()
     assert particles.charge * _LinearPotential.PHI0 * np.max(np.abs(s - s[:, :1])) > 1e-3 * particles.energy
-    assert np.max(np.abs(total / total[:, :1] - 1)) < 1e-5
+    assert np.max(np.abs(total / total[:, :1] - 1)) < 1e-8
 
 
-# (s, theta, phi, v_par [m/s]) at 1e-6 s of the two alphas of test_guiding_center_without_electric_field_is_unchanged
-REFERENCE_AC3168B = np.array([[2.9676676366178395e-01, 5.9174635236016728e+00, -8.3959444991885968e-01, -1.0411758638556167e+07],
-                              [2.9537957345444688e-01, 3.4461755641930285e+00, 9.0888654548937942e-01, 1.0438725475527925e+07]])
+WOUT_ARIES = str(Path(WOUT_QA).parent / "wout_n3are_R7.75B5.7.nc")
+
+
+@pytest.mark.parametrize("wout", [WOUT_QA, WOUT_ARIES])
+@pytest.mark.parametrize("tol, bound", [(1e-10, 1e-8), (1e-12, 1e-10)])
+def test_vmec_guiding_center_energy_follows_the_tolerance(wout, tol, bound):
+    """With mu fixed the guiding-centre equations conserve W = m v_par^2/2 + mu |B| exactly (B.kappa = 0 and
+    |B|^2 = B_cov.B^contra), so the error is the integrator's and falls with rtol. Two passing (v_par/v = +-0.9) and two
+    trapped (0.1, -0.2) 3.5 MeV alphas at s = 0.3, 2e-5 s. With |B| from bmnc and B_cov from the bsub tables the error
+    was 1.2e-6 to 5.7e-6 at both tolerances in QA and ARIES-CS; with the consistent field the study measured 3.3e-10
+    and 2.9e-10 at rtol 1e-10, 7.4e-12 and 2.5e-12 at 1e-12."""
+    particles = Particles(initial_xyz=jnp.array([[0.3, 0.0, 0.0], [0.3, 1.0, 0.5], [0.3, 0.0, 0.0], [0.3, 2.0, 0.3]]),
+                          initial_vparallel_over_v=jnp.array([0.9, -0.9, 0.1, -0.2]))
+    tracing = Tracing(field=Vmec(wout, ntheta=8, nphi=8), model="GuidingCenterAdaptative", particles=particles,
+                      maxtime=2e-5, timestep=1e-9, times_to_trace=21, rtol=tol, atol=tol)
+    assert (tracing.status == 0).all()
+    assert np.max(np.abs(np.asarray(tracing.energy()) / particles.energy - 1)) < bound
+
+
+# (s, theta, phi, v_par [m/s]) at 1e-6 s of the two alphas of test_guiding_center_without_electric_field_is_unchanged,
+# with |B| and B_cov from the R, Z metric and the bsup tables (they moved by 5e-4 from ac3168b, which used bmnc and bsub)
+REFERENCE = np.array([[2.9661877452006663e-01, 5.9175596565161053e+00, -8.3959818501394701e-01, -1.0411716042920845e+07],
+                      [2.9540396060593832e-01, 3.4463446720162714e+00, 9.0889653987391072e-01, 1.0438723057837857e+07]])
 
 
 def test_guiding_center_without_electric_field_is_unchanged():
-    """Regression: with no electric field the traced state is (x, v_par), as before, and the values match those of
-    ac3168b (fixed 1e-8 s Dopri8 step, 1e-6 s) to 1e-11 relative, i.e. to rounding."""
+    """Regression: with no electric field the traced state is (x, v_par), as before, and the values match the pinned
+    REFERENCE (fixed 1e-8 s Dopri8 step, 1e-6 s) to 1e-11 relative, i.e. to rounding."""
     from essos.electric_field import Electric_field_zero
     kwargs = {"field": Vmec(WOUT_QA, ntheta=8, nphi=8), "model": "GuidingCenter", "particles": _alphas_at_s03(2),
               "maxtime": 1e-6, "timestep": 1e-8, "times_to_trace": 2}
@@ -584,7 +602,7 @@ def test_guiding_center_without_electric_field_is_unchanged():
     zero = Tracing(electric_field=Electric_field_zero(), **kwargs).trajectories
     assert default.shape == (2, 2, 4)
     np.testing.assert_array_equal(default, zero)
-    np.testing.assert_allclose(default[:, -1], REFERENCE_AC3168B, rtol=1e-11)
+    np.testing.assert_allclose(default[:, -1], REFERENCE, rtol=1e-11)
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="needs diffrax>=0.7.1 (Python>=3.11)")
@@ -610,11 +628,12 @@ def test_full_orbit_collisions_keep_a_maxwellian_at_the_background_temperature()
 
 
 def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch):
-    """The orbit born at s = 1e-7 used to stop at once, at s <= axis_threshold = 1e-6."""
+    """The orbit born at s = 1e-7 used to stop at once, at s <= axis_threshold = 1e-6. Over 4e-5 s every orbit ends at
+    least 8 times above its closest pass (measured 12.6 to 739); energy 4.9e-9 with |B|^2 = B_cov.B^contra."""
     monkeypatch.delenv("ESSOS_PROGRESS")  # default progress must not break the vmapped segment loop
     particles = _near_axis_particles()
     tracing = Tracing(field=Vmec(WOUT_QA, ntheta=8, nphi=8), model="GuidingCenterAdaptative",
-                      particles=particles, maxtime=2e-5, timestep=1e-9, times_to_trace=200,
+                      particles=particles, maxtime=4e-5, timestep=1e-9, times_to_trace=400,
                       atol=1e-9, rtol=1e-9)
     s = tracing.trajectories[:, :, 0]
     assert not tracing.axis_hits.any() and not tracing.boundary_hits.any()
@@ -622,7 +641,7 @@ def test_vmec_guiding_centers_cross_the_magnetic_axis(monkeypatch):
     assert (s.min(axis=1) < 1e-3).all()
     assert (s[:, -1] > 1.5 * s.min(axis=1)).all()
     assert jnp.all((tracing.trajectories[:, :, 1] >= 0) & (tracing.trajectories[:, :, 1] < 2 * jnp.pi))
-    assert jnp.abs(tracing.energy() / particles.energy - 1).max() < 1e-5
+    assert jnp.abs(tracing.energy() / particles.energy - 1).max() < 1e-7
 
 
 def test_vmec_guiding_center_condition_sees_flux_coordinates():
@@ -1419,13 +1438,15 @@ def test_vmec_wall_trace_gradient_with_respect_to_the_surface_is_finite_in_rever
 
 
 def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
-    """Trapped protons whose radial excursion just reaches the LCFS (pitch 0.0755940631) cross, graze or stay inside.
+    """Trapped protons whose radial excursion just reaches the LCFS (pitch 0.0757233) cross, graze or stay inside.
+    Regression values: the pitch is 1.3e-4 above the critical pitch found by bisection, 0.0756919 (the same offset
+    as before the field became consistent), and 2.310564e-5 s is the crossing time traced with it.
 
     Every pitch from -1e-6 up crosses, at the time the orbit reaches the surface whatever the margin (a shallow excursion
     through the LCFS inside one step is not skipped); the gradients are finite."""
     from essos.constants import ELEMENTARY_CHARGE
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
-    pitch = jnp.concatenate([jnp.zeros(1), 0.0755940631 + jnp.array([-1e-6, 1e-12, 1e-9, 1e-7, 1e-5, 1e-3, 0.2])])
+    pitch = jnp.concatenate([jnp.zeros(1), 0.0757233 + jnp.array([-1e-6, 1e-12, 1e-9, 1e-7, 1e-5, 1e-3, 0.2])])
 
     def crossing_times(s):
         xyz = jnp.stack([s, jnp.full_like(s, 0.3), jnp.full_like(s, 0.2)], 1)
@@ -1438,7 +1459,7 @@ def test_vmec_lcfs_crossing_time_gradient_stays_finite_near_a_grazing_orbit():
     s = jnp.full(8, 0.9)
     times, gradient = crossing_times(s), jax.grad(objective)(s)
     assert jnp.isinf(times[0]) and jnp.isfinite(times[1:]).all() and jnp.isfinite(gradient).all()
-    np.testing.assert_allclose(times[2:4], 2.306765e-5, rtol=1e-5)
+    np.testing.assert_allclose(times[2:4], 2.310564e-5, rtol=1e-5)
     h = jnp.zeros(8).at[-1].set(1e-6)
     np.testing.assert_allclose(gradient[-1], (objective(s + h) - objective(s - h)) / 2e-6, rtol=1e-4)
 
@@ -1547,8 +1568,8 @@ def test_vmec_tracings_share_one_compiled_solve():
     from essos.fields import VMEC_WOUT_ARRAYS
 
     vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
-    scaled = Vmec.from_arrays(vmec.nfp, vmec.ns, *(getattr(vmec, n) * (1.1 if n == 'bmnc' else 1) for n in VMEC_WOUT_ARRAYS),
-                              ntheta=8, nphi=8)  # same shapes, 10% stronger |B|
+    scaled = Vmec.from_arrays(vmec.nfp, vmec.ns, *(getattr(vmec, n) * (1.1 if n in ('bsupumnc', 'bsupvmnc') else 1)
+                                                   for n in VMEC_WOUT_ARRAYS), ntheta=8, nphi=8)  # same shapes, 10% stronger |B|
     compiles = []
     jax.monitoring.register_event_duration_secs_listener(
         lambda event, duration, **kw: compiles.append(event) if event.endswith('backend_compile_duration') else None)
