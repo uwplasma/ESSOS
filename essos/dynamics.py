@@ -557,6 +557,10 @@ def _guiding_center_velocity(field, electric_field, q, m, points, vpar, mu=None,
 def GuidingCenter(t,
                   initial_condition,
                   args) -> jnp.ndarray:
+    """Collisionless guiding center with state (x, y, z, v_par) at the fixed kinetic energy ``particles.energy``.
+
+    Only valid without an electric field; ``Tracing`` uses ``GuidingCenterMu`` whenever one is given.
+    """
     x, y, z, vpar = initial_condition
     field, particles,electric_field = args
     dxdt, dvdt = _guiding_center_velocity(field, electric_field, particles.charge, particles.mass,
@@ -566,7 +570,10 @@ def GuidingCenter(t,
 
 @partial(jit, static_argnums=(2))
 def GuidingCenterMu(t, initial_condition, args) -> jnp.ndarray:
-    """Collisionless guiding center with state (x, y, z, v_par, mu); mu is constant."""
+    """Collisionless guiding center with state (x, y, z, v_par, mu), mu in J/T and constant.
+
+    Conserves m v_par^2 / 2 + mu |B| + q Phi, so the kinetic energy changes in an electric potential Phi.
+    """
     field, particles, electric_field = args
     dxdt, dvdt = _guiding_center_velocity(field, electric_field, particles.charge, particles.mass,
                                           initial_condition[:3], initial_condition[3], mu=initial_condition[4])
@@ -1048,6 +1055,15 @@ def _batch_solver(tracing, place):
 
 
 class Tracing():
+    """Trace particles or field lines in ``field`` with ``model``; the states at ``times`` are ``trajectories``.
+
+    State layout of the collisionless guiding-center models ``GuidingCenter`` and ``GuidingCenterAdaptative``:
+    without an electric field (``electric_field=None`` or ``Electric_field_zero()``) each state is
+    (x, y, z, v_par) at the fixed kinetic energy ``particles.energy``. With any other electric-field object, also
+    one whose field is zero, each state is (x, y, z, v_par, mu), with mu in J/T, constant, so that
+    m v_par^2 / 2 + mu |B| + q Phi is conserved. Positions are (s, theta, phi) for a ``Vmec`` field, else Cartesian
+    in m; v_par is in m/s.
+    """
     def __init__(self, trajectories_input=None, initial_conditions=None, times_to_trace=None,
                  field=None, electric_field=None,model=None, maxtime: float = 1e-7, timestep: int = 1.e-8,
                  rtol= 1.e-7, atol = 1e-7, particles=None, condition=None,species=None,tag_gc=1.,boundary=None,rejected_steps=None,
@@ -1158,7 +1174,7 @@ class Tracing():
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.                      
                 else:
                     def condition_BioSavart(t, y, args, **kwargs):                      
-                        xx, yy, zz, _ = y
+                        xx, yy, zz = y[:3]
                         return boundary.evaluate_xyz(jnp.array([xx,yy,zz]))#<0.        
                 self.condition = condition_BioSavart                
         elif self._axis_regular:
@@ -1167,10 +1183,18 @@ class Tracing():
                 condition)
         else:
             self.condition = condition
+        # An electric field changes the kinetic energy, so mu (J/T) is carried in the state, which
+        # conserves m v_par^2 / 2 + mu |B| + q Phi; without one the state stays (x, v_par) at fixed energy.
+        self._mu_state = model in ('GuidingCenter', 'GuidingCenterAdaptative') and not isinstance(
+            self.electric_field, Electric_field_zero)
         if model == 'GuidingCenter' or model=='GuidingCenterAdaptative':
-            self.ODE_term = ODETerm(self._vector_field(GuidingCenter))
+            self.ODE_term = ODETerm(self._vector_field(GuidingCenterMu if self._mu_state else GuidingCenter))
             self.args = (self.field, self.particles,self.electric_field)
             self.initial_conditions = jnp.concatenate([self.particles.initial_xyz, self.particles.initial_vparallel[:, None]], axis=1)
+            if self._mu_state:
+                B = vmap(self.field.AbsB)(self.particles.initial_xyz)
+                mu = (self.particles.energy - 0.5 * self.particles.mass * self.particles.initial_vparallel**2) / B
+                self.initial_conditions = jnp.concatenate([self.initial_conditions, mu[:, None]], axis=1)
         elif model == 'GuidingCenterCollisions':
             # Brownian motion
             #t0=0.0
@@ -1530,7 +1554,8 @@ class Tracing():
         B = self.field.AbsB(point)
         if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
             vpar, E = y[3], self.particles.energy
-            mu = (E - 0.5 * m * vpar**2) / B
+            mu = y[4] if self._mu_state else (E - 0.5 * m * vpar**2) / B
+            E = 0.5 * m * vpar**2 + mu * B if self._mu_state else E
         elif self.model == 'GuidingCenterCollisions':
             vpar, E = y[3] * y[4], 0.5 * m * y[3]**2
             mu = 0.5 * m * y[3]**2 * (1 - y[4]**2) / B
@@ -1550,7 +1575,7 @@ class Tracing():
         point = self.field.flux_coordinates(y[:3])[0]
         vpar, mu = _keep_energy(y[3], y[4], E, self.field.AbsB(point), m)
         if self.model in ('GuidingCenter', 'GuidingCenterAdaptative'):
-            return jnp.append(point, vpar)
+            return jnp.concatenate([point, jnp.array([vpar, mu][:1 + self._mu_state])])
         if self.model == 'GuidingCenterCollisions':
             v = jnp.sqrt(2 * E / m)
             return jnp.concatenate([point, jnp.array([v, vpar / v])])
@@ -1604,6 +1629,7 @@ class Tracing():
         self._trajectories = value
     
     def energy(self):
+        """Kinetic energy in J at each saved time, per particle; it does not include the potential energy q Phi."""
         assert 'GuidingCenter' in self.model or 'FullOrbit' in self.model or 'FullOrbit_Boris' in self.model, "Energy calculation is only available for GuidingCenter and FullOrbit models"
         mass = self.particles.mass
 
@@ -1612,6 +1638,7 @@ class Tracing():
             initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
+            mu_array = self.trajectories[:, 0, 4] if self._mu_state else mu_array
             def compute_energy(trajectory, mu):
                 xyz = trajectory[:, :3]
                 vpar = trajectory[:, 3]
@@ -1650,6 +1677,7 @@ class Tracing():
             initial_vparallel = self.trajectories[:, 0, 3]
             initial_B = vmap(self.field.AbsB)(initial_xyz)
             mu_array = (self.particles.energy - 0.5 * mass * jnp.square(initial_vparallel)) / initial_B
+            mu_array = self.trajectories[:, 0, 4] if self._mu_state else mu_array
             def compute_vperp(trajectory, mu):
                 xyz = trajectory[:, :3]
                 AbsB = vmap(self.field.AbsB)(xyz)                
