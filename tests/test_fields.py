@@ -152,6 +152,109 @@ def test_combined_field_requires_at_least_one_field():
         CombinedField()
 
 
+def _two_vmec_parts():
+    """A wout and a copy with every Nyquist mode of its B tables reweighted: the sum is proportional to neither.
+
+    The copy is an algebraic test object, not an equilibrium (its B_i, B^i and |B| no longer obey B_i = g_ij B^j).
+    """
+    vmec = Vmec(WOUT_FILE)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    weight = 1 + 0.5 * np.cos(np.asarray(vmec.xm_nyq) + 0.3 * np.asarray(vmec.xn_nyq))
+    for name in ("bsubsmns", "bsubumnc", "bsubvmnc", "bsupumnc", "bsupvmnc", "bmnc"):
+        arrays[name] = arrays[name] * weight
+    return vmec, Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **arrays)
+
+
+COMBINED_POINTS = jnp.array([[0.5, 0.3, 0.2], [0.2, 1.0, 0.4], [0.8, 2.5, 1.1]])
+
+
+def test_combined_field_covariant_components_are_the_sum_of_its_parts():
+    """B_i is linear in the field, so B_i of a sum in one coordinate system is the sum over its parts."""
+    from essos.fields import CombinedField
+
+    parts = _two_vmec_parts()
+    combined = CombinedField(*parts)
+    for x in COMBINED_POINTS:
+        for name in ("B_covariant", "B_contravariant", "B"):
+            expected = sum(getattr(f, name)(x) for f in parts)
+            np.testing.assert_allclose(getattr(combined, name)(x), expected, rtol=1e-13, atol=1e-13 * jnp.linalg.norm(expected))
+
+
+def test_combined_field_curvature_is_that_of_the_sum_of_its_parts():
+    """kappa_i = b^j (d_j b_i - d_i b_j) with b_i = B_i/|B|, b^j = B^j/|B| (b . grad b = -b x curl b for b^2 = 1).
+
+    The reference sums the parts' B_i, B^i and Cartesian B (|B| = |sum B|, the norm CombinedField uses) and
+    differentiates by forward mode; it calls neither CombinedField nor curl b. Both sides are one expression
+    in a different order over sums of Nyquist modes in double precision: 1e-12 relative is rounding. The
+    approach follows pull request 129.
+    """
+    from essos.fields import CombinedField
+
+    parts = _two_vmec_parts()
+    combined = CombinedField(*parts)
+
+    def b(x, components):
+        B = (sum(f.B_covariant(x) for f in parts), sum(f.B_contravariant(x) for f in parts))[components]
+        return B / jnp.linalg.norm(sum(f.B(x) for f in parts))
+
+    def reference(x):
+        db_cov = jax.jacfwd(b)(x, 0)  # [i, j] = d_j b_i
+        return (db_cov - db_cov.T) @ b(x, 1)
+
+    compiled = jax.jit(lambda field, x: field.kappa(x))
+    for x in COMBINED_POINTS:
+        kappa = reference(x)
+        np.testing.assert_allclose(combined.kappa(x), kappa, rtol=1e-12, atol=1e-12 * jnp.linalg.norm(kappa))
+        np.testing.assert_allclose(compiled(combined, x), kappa, rtol=1e-12, atol=1e-12 * jnp.linalg.norm(kappa))
+
+
+def test_combined_field_covariant_gradient_is_the_sum_of_its_parts():
+    """d/d(bsubumnc of the first part) of a functional of B_i of the sum equals that through the first part alone."""
+    from essos.fields import CombinedField
+
+    parts = _two_vmec_parts()
+    x = COMBINED_POINTS[0]
+    other = parts[1].B_covariant(x)
+
+    def through_sum(first):
+        return jnp.sum(CombinedField(first, parts[1]).B_covariant(x) ** 2)
+
+    def by_hand(first):
+        return jnp.sum((first.B_covariant(x) + other) ** 2)
+
+    got, expected = jax.grad(through_sum)(parts[0]).bsubumnc, jax.grad(by_hand)(parts[0]).bsubumnc
+    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12 * np.abs(expected).max())
+
+
+def test_combined_vmec_field_runs_through_the_guiding_centre_quantities():
+    """The tracers call dynamics._gc_quantities; a Vmec-only combination must go through it.
+
+    Tolerance: CombinedField keeps |B| = |sum B| (Cartesian), Vmec uses its bmnc table; on this wout the two
+    differ so that the curvature differs by up to 2.5e-3 relative (median 2.2e-4) on a 9x12x6 grid. 1e-2 bounds that spectral
+    difference, far below the O(1) error of a Cartesian B_i.
+    """
+    from essos.dynamics import _gc_quantities
+    from essos.fields import CombinedField
+
+    vmec = Vmec(WOUT_FILE)
+    for x in COMBINED_POINTS:
+        kappa = _gc_quantities(CombinedField(vmec), x)[5]
+        np.testing.assert_allclose(kappa, vmec.kappa(x), rtol=1e-2, atol=1e-2 * jnp.linalg.norm(vmec.kappa(x)))
+
+
+def test_combined_field_refuses_fields_in_different_coordinates():
+    """Coils live in Cartesian x, y, z and VMEC in (s, theta, phi): a sum of their components means nothing."""
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import CombinedField
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.3, n_segments=20, nfp=2, stellsym=True)
+    coils = BiotSavart(Coils(curves=curves, currents=[1e5] * 2))
+    with pytest.raises(ValueError, match="coordinates"):
+        CombinedField(coils, Vmec(WOUT_FILE))
+    with pytest.raises(ValueError, match="coordinates"):
+        CombinedField(CombinedField(Vmec(WOUT_FILE)), coils)
+
+
 
 WOUT_QA = str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
               / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")

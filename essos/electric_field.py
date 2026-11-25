@@ -11,13 +11,16 @@ class Electric_field_flux():
     The file needs datasets ``rho`` (normalized minor radius) and ``Er``.
     ``E_covariant`` returns ``(E_s, 0, 0)``, with ``E_s = Er / (2 rho) * a``
     and ``a`` the VMEC ``Aminor_p``; ``E_s`` is set to zero on the axis.
+    ``Er`` must be in V/m: the guiding-center force adds ``-q E_s`` in J to ``mu dB/ds``.
+    The bundled ``examples/input_files/Er.h5`` carries no unit, so its unit is not established.
+    Needs ``h5py`` (``pip install 'essos[efield]'``).
     """
     def __init__(self, Er_filename,vmec):
         self.Er_filename = Er_filename
         from h5py import File
-        self.h5 = File(self.Er_filename,'r')
-        self.rho=jnp.array(self.h5['rho'][()])
-        self.Er=jnp.array(self.h5['Er'][()])
+        with File(self.Er_filename,'r') as h5:
+            self.rho=jnp.array(h5['rho'][()])
+            self.Er=jnp.array(h5['Er'][()])
         self.E_theta=0.0*self.Er
         self.E_phi=0.0*self.Er
         self.Aminor_p=vmec.Aminor_p
