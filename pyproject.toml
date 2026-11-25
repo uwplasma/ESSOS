@@ -77,7 +77,7 @@ booz = ["booz_xform_jax>=0.4.3"]
 # Electric_field_flux reads E_r(rho) from HDF5.
 efield = ["h5py"]
 # MultiObjectiveOptimizer; plotly only for its interactive plot_* figures.
-multiobjective = ["optuna", "pandas", "plotly"]
+multiobjective = ["optuna", "plotly"]
 # Examples that build VMEX equilibria, mgrid fields or free-boundary
 # (virtual-casing) fields. 0.11.3 is the first VMEX with MgridField(order=...).
 vmex = ["vmex[freeb]>=0.11.3"]

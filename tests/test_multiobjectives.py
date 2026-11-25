@@ -3,6 +3,8 @@ import numpy as np
 from unittest.mock import MagicMock, patch
 import essos.objective_functions as objf
 from essos.losses import custom_loss
+
+pytest.importorskip("optuna", reason="needs essos[multiobjective]")
 from essos.multiobjectiveoptimizer import MultiObjectiveOptimizer
 from essos.coils import Coils,Curves
 from essos.fields import BiotSavart
@@ -189,3 +191,14 @@ def test_composite_first_jit_access_preserves_dofs_and_dependency_gradients(firs
     np.testing.assert_allclose(total(dofs), 23.)
     np.testing.assert_allclose(total.grad(dofs), jnp.array([0., 7., 8., 1.]))
     np.testing.assert_allclose(jax.grad(total)(dofs), total.grad(dofs))
+
+
+def test_import_without_optuna_names_the_extra(monkeypatch):
+    import importlib
+    import sys
+    import essos.multiobjectiveoptimizer as module
+    monkeypatch.setitem(sys.modules, "optuna", None)
+    with pytest.raises(ImportError, match="essos\\[multiobjective\\]"):
+        importlib.reload(module)
+    monkeypatch.undo()
+    importlib.reload(module)
