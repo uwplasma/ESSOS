@@ -147,7 +147,7 @@ def radial_drift_rate(field, particles, window=5e-5, num_points=101, tolerance=1
     return jnp.where(jnp.sum(kept, axis=1) > 0.3 * jnp.sum(weights), rate, 0.)
 
 def loss_particle_frozen_drift(field, particles, delta=0.1, unit=1.e-4, **drift):
-    """Mean Huber loss of the outward drift rate in units of ``unit`` per second (default s per 1e-4 s).
+    """Mean Huber loss of the radial drift accumulated over ``unit`` seconds (change of s per 1e-4 s by default).
 
     Rates below ``delta`` count quadratically and larger ones linearly, so a few fast orbits do not
     dominate. ``drift`` is passed to :func:`radial_drift_rate`. The gradient is that of the rate at
