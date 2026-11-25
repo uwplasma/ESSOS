@@ -18,6 +18,8 @@ from essos.objective_functions import (
 #  `scipy.optimize.minimize`, can be used as well and may even be preferable.
 from scipy.optimize import least_squares
 
+import essos
+essos.configure_jax()
 input_filepath = os.path.join(os.path.dirname(__file__), "..", "input_files")
 vmec_input = os.path.join(input_filepath, "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
 

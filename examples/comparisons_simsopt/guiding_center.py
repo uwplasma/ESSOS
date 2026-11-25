@@ -10,6 +10,8 @@ from essos.dynamics import Tracing, Particles
 from essos.fields import BiotSavart as BiotSavart_essos
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+import essos
+essos.configure_jax()
 plt.rcParams.update({'font.size': 18})
 
 tmax_gc = 5e-4

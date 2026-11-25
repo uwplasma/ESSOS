@@ -7,6 +7,8 @@ from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 
+import essos
+essos.configure_jax()
 # Input parameters
 tmax = 3e-4
 nparticles_per_core=6

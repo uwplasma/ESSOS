@@ -1,6 +1,5 @@
 import os
 import jax
-jax.config.update("jax_enable_x64", True)
 from jax import vmap
 from essos.coils import Curves
 import jax.numpy as jnp
@@ -12,6 +11,7 @@ from jax.custom_batching import custom_vmap
 from essos.surfaces import SurfaceRZFourier, BdotN_over_B, SurfaceClassifier
 from essos.plot import fix_matplotlib_3d
 from essos.util import newton
+from essos import _require_x64
 
 class MagneticField():
     coordinates = "cartesian"
@@ -236,6 +236,7 @@ def gamma_dashdash_from_gamma(gamma):
 
 class BiotSavart_from_gamma(MagneticField):
     def __init__(self, gamma, gamma_dash=None, gamma_dashdash=None, currents=None):
+        _require_x64("BiotSavart_from_gamma")
         self.currents = currents
         self.gamma = gamma
         self._gamma_dash = gamma_dash
@@ -373,6 +374,7 @@ class Vmec():
     coordinates = "vmec"
 
     def __init__(self, wout_filename, ntheta=50, nphi=50, close=True, range_torus='full torus', mode_tolerance=0.0):
+        _require_x64("Vmec")
         if not isinstance(wout_filename, (str, os.PathLike)):  # an in-memory wout, e.g. a VMEX WoutData
             w, kwargs = wout_filename, dict(ntheta=ntheta, nphi=nphi, close=close, range_torus=range_torus,
                                             mode_tolerance=mode_tolerance)

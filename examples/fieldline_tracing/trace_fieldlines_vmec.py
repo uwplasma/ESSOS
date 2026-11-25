@@ -6,6 +6,8 @@ from jax import block_until_ready, vmap
 from essos.fields import Vmec
 from essos.dynamics import Tracing
 
+import essos
+essos.configure_jax()
 # Input parameters
 tmax = 1500
 nfieldlines_per_core=6

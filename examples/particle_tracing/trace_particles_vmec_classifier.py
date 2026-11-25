@@ -8,6 +8,8 @@ from essos.dynamics import Tracing, Particles
 from essos.surfaces import SurfaceClassifier
 import numpy as np
 
+import essos
+essos.configure_jax()
 # Input parameters
 tmax = 1e-4
 timestep = 1.e-8

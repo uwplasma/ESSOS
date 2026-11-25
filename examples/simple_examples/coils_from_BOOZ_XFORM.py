@@ -13,6 +13,8 @@ import jax.numpy as jnp
 from essos.coils import fit_dofs_from_coils, Curves, Coils
 import matplotlib.pyplot as plt
 
+import essos
+essos.configure_jax()
 file_to_use = 'LandremanPaul2021_QA_reactorScale_lowres'
 
 ntheta = 41

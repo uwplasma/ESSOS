@@ -1,15 +1,6 @@
 from pyexpat import model
 import os
 import jax
-jax.config.update("jax_enable_x64", True)
-# Tracings that differ only in array values (particles, coil currents, field coefficients) share one compiled solve
-# within a process; maxtime and the save times are constants of it, so a new one compiles: about 4 s on a CPU and
-# 20 s on a GPU. XLA's persistent cache, keyed by the compiled program, serves it from disk in a rerun.
-# ESSOS_XLA_CACHE names the directory; an empty value disables it.
-_XLA_CACHE = os.environ.get("ESSOS_XLA_CACHE", os.path.join(os.path.expanduser("~"), ".cache", "essos", "xla"))
-if _XLA_CACHE and not jax.config.jax_compilation_cache_dir:
-    jax.config.update("jax_compilation_cache_dir", _XLA_CACHE)
-    jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from matplotlib.colors import is_color_like
@@ -26,6 +17,7 @@ import optimistix as optx
 import equinox as eqx
 import equinox.internal as eqxi
 from essos.coils import Coils
+from essos import _require_x64
 from essos.fields import BiotSavart, ExternalField, MagneticField, Vmec
 from essos.surfaces import SurfaceClassifier, SurfaceRZFourier
 from essos.electric_field import Electric_field_flux, Electric_field_zero
@@ -72,6 +64,7 @@ class Particles():
     def __init__(self, initial_xyz=None, initial_vparallel_over_v=None, charge=ALPHA_PARTICLE_CHARGE,
                  mass=ALPHA_PARTICLE_MASS, energy=FUSION_ALPHA_PARTICLE_ENERGY, min_vparallel_over_v=-1,
                  max_vparallel_over_v=1, field=None, initial_vxvyvz=None, initial_xyz_fullorbit=None, phase_angle_full_orbit = 0):
+        _require_x64("Particles")
         self.charge = charge
         self.mass = mass
         self.energy = energy
@@ -1070,6 +1063,7 @@ class Tracing():
                  solver=None, stopping_criteria=None, progress=True, devices=None,
                  max_steps=1_000_000, exterior_field=None, wall=None, max_returns=16, reentry_depth=None,
                  particle_batch_size=None, adjoint=None):
+        _require_x64("Tracing")
 
         if condition is not None and stopping_criteria is not None:
             raise ValueError("Pass condition or stopping_criteria, not both")

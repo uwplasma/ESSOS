@@ -30,6 +30,8 @@ SHAPE_SCALE, CURRENT_SCALE = 0.02, 0.5
 # sub-percent peak B.n/B; [-1, 1] stalls at 1.7% for the same objective.
 PARAMETER_BOUND = 3.0
 
+import essos
+essos.configure_jax()
 ci_smoke = os.environ.get("ESSOS_EXAMPLES_CI") == "1"
 if ci_smoke:
     NPHI, NTHETA, VC_DIGITS, MAXITER = 8, 8, 3, 1

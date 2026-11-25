@@ -7,6 +7,8 @@ from essos.coils import Coils
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, ONE_EV
 from essos.dynamics import Tracing, Particles
 
+import essos
+essos.configure_jax()
 # Input parameters
 tmax = 1.e-4
 timestep=1.e-8

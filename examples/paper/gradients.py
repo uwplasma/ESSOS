@@ -3,6 +3,8 @@ import jax.numpy as jnp
 from jax import block_until_ready
 from time import perf_counter as timer
 import matplotlib.pyplot as plt
+import essos
+essos.configure_jax()
 plt.rcParams.update({'font.size': 18})
 
 from essos.coils import Coils, CreateEquallySpacedCurves

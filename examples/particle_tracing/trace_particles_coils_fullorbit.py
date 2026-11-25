@@ -8,6 +8,8 @@ from essos.coils import Coils
 from essos.constants import PROTON_MASS, ONE_EV
 from essos.dynamics import Tracing, Particles
 
+import essos
+essos.configure_jax()
 # Input parameters
 tmax = 1e-4
 dt=1.e-8

@@ -1,10 +1,10 @@
 import jax
 import numpy as np
-jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import tree_util, jit, vmap
 from functools import partial
 from .plot import fix_matplotlib_3d
+from essos import _require_x64
 
 class Curves:
     """ Class to store the curves
@@ -50,6 +50,7 @@ class Curves:
             here the norm is applied to a 1D mode-order measure, so ``L1``,
             ``L2``, and ``Linfty`` currently give the same numerical scaling.
         """
+        _require_x64("Curves")
         if hasattr(dofs, 'shape'):
             assert len(dofs.shape) == 3, "dofs must be a 3D array with shape (n_curves, 3, 2*order+1)"
             assert dofs.shape[1] == 3, "dofs must have shape (n_curves, 3, 2*order+1)"

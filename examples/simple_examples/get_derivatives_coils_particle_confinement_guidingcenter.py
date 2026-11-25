@@ -6,6 +6,8 @@ from essos.coils import Coils, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 from essos.losses import custom_loss
 
+import essos
+essos.configure_jax()
 # Optimization parameters
 order_Fourier_series_coils = 2
 number_coil_points = 80

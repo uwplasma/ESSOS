@@ -15,6 +15,8 @@ from pathlib import Path
 import jax.numpy as jnp
 import matplotlib
 
+import essos
+essos.configure_jax()
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 

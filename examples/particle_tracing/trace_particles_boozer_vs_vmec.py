@@ -11,6 +11,8 @@ from essos.fields import Vmec
 from essos.constants import ALPHA_PARTICLE_MASS, ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
 from essos.dynamics import Tracing, Particles
 
+import essos
+essos.configure_jax()
 # Same alphas traced in Boozer coordinates (essos.boozer, from booz_xform_jax)
 # and in VMEC coordinates (essos.fields.Vmec) through the ARIES-CS equilibrium.
 # Needs booz_xform_jax (pip install booz_xform_jax).

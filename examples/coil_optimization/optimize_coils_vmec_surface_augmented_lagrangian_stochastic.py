@@ -17,6 +17,8 @@ from essos.losses import custom_loss
 from essos.surfaces import BdotN_over_B
 
 
+import essos
+essos.configure_jax()
 """ Creating stochastic field losses """
 def copy_coils_from_field(field):
     return field.coils.copy()

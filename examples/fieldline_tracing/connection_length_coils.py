@@ -7,6 +7,8 @@ from essos.fields import BiotSavart
 from essos.surfaces import SurfaceRZFourier, SurfaceClassifier
 from essos.dynamics import connection_length, trace_field_lines
 
+import essos
+essos.configure_jax()
 # Connection length in the scrape-off layer of the Landreman-Paul QA coils.
 # The wall is the plasma boundary offset outwards by a uniform clearance;
 # seeds span the outboard midplane gap between boundary and wall at phi=0.

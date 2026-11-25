@@ -46,10 +46,11 @@ pip install essos
   three-dimensional magnetic fields.
 - **Surfaces.** Fourier-represented toroidal surfaces, from a VMEC `wout` or
   built directly.
-- **Parallel by default.** ESSOS asks JAX for one device per CPU core and
-  shards particles over every CPU core or GPU (`ESSOS_CPU_DEVICES` overrides
-  the count; `devices=` picks). Compiled traces are cached on disk
-  (`ESSOS_XLA_CACHE`, default `~/.cache/essos/xla`).
+- **Parallel.** `essos.configure_jax()`, called before any JAX computation,
+  enables float64, asks JAX for one device per CPU core, and caches compiled
+  traces on disk (`ESSOS_CPU_DEVICES` overrides the count, `ESSOS_XLA_CACHE`
+  the directory, default `~/.cache/essos/xla`); importing ESSOS changes no JAX
+  setting. Particles are sharded over every CPU core or GPU (`devices=` picks).
 - **Checked against SIMSOPT.** [`examples/comparisons_simsopt`](examples/comparisons_simsopt)
   compares coils, surfaces, VMEC import, field lines, guiding-centre and
   full-orbit tracing, and losses with SIMSOPT on the same inputs. Alpha
@@ -69,6 +70,9 @@ from essos.fields import BiotSavart
 from essos.losses import custom_loss
 from essos.surfaces import BdotN_over_B, SurfaceRZFourier
 from scipy.optimize import least_squares
+import essos
+
+essos.configure_jax()
 
 surface = SurfaceRZFourier.from_wout_file("wout.nc", s=1, ntheta=30, nphi=30,
                                           range_torus="half period")
@@ -97,6 +101,9 @@ import jax.numpy as jnp
 from essos.coils import Coils
 from essos.dynamics import Tracing
 from essos.fields import BiotSavart
+import essos
+
+essos.configure_jax()
 
 field = BiotSavart(Coils.from_json("coils.json"))
 R0 = jnp.linspace(1.21, 1.40, 8)
@@ -180,6 +187,9 @@ from netCDF4 import Dataset
 from booz_xform_jax import Booz_xform
 from essos.boozer import BoozerField, trace_boozer
 from essos.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS, ONE_EV
+import essos
+
+essos.configure_jax()
 
 booz = Booz_xform(verbose=0, mboz=32, nboz=32)
 booz.read_wout("wout.nc", flux=False)
