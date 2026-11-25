@@ -5,7 +5,7 @@ from jax import config
 # to use higher precision
 config.update("jax_enable_x64", True)
 from jax import jit
-from essos.constants import ELEMENTARY_CHARGE, EPSILON_0, PROTON_MASS, SPEED_OF_LIGHT
+from essos.constants import ELEMENTARY_CHARGE, EPSILON_0, PROTON_MASS, SPEED_OF_LIGHT, HBAR
 
 
 
@@ -21,8 +21,23 @@ class BackgroundSpecies():
     first coordinate of the traced points (``s`` for a VMEC field), shape
     ``(number_species, len(radial_grid))``. Profiles are interpolated
     linearly and held constant beyond the ends of the grid.
+
+    ``coulomb_log_model="nrl"`` preserves the original pairwise NRL formulas.
+    ``"impact"`` selects smooth Landau--Spitzer cutoffs at the RMS relative
+    speed, with static Debye screening (see :func:`impact_coulomb_logarithm`). Screening
+    uses these background species unless ``screening_species`` supplies a
+    separate BackgroundSpecies, e.g. electrons which screen without adding
+    electron collisions. No screening electron population is inferred for
+    the impact model. Both tracers and both time solvers use this selection.
     """
-    def __init__(self, number_species, mass_array, charge_array, n_array, T_array, radial_grid=None):
+    def __init__(self, number_species, mass_array, charge_array, n_array, T_array, radial_grid=None,
+                 *, coulomb_log_model="nrl", screening_species=None):
+        if coulomb_log_model not in ("nrl", "impact"):
+            raise ValueError("coulomb_log_model must be 'nrl' or 'impact'")
+        if screening_species is not None and coulomb_log_model != "impact":
+            raise ValueError("screening_species is only used by the impact Coulomb-log model")
+        self.coulomb_log_model = coulomb_log_model
+        self.screening_species = screening_species
         self.number_species = number_species
         self.species_indeces = jnp.arange(number_species)
         self.temperature = T_array
@@ -61,7 +76,8 @@ def gamma_ab(ma: float, ea: float, species_b: int,v: float, points, species: Bac
 def dlog_coulomb_dv(ma, ea, species_b, v, points, species):
     """d(ln lnLambda)/dv: the Coulomb logarithm depends on the test-particle speed."""
     ln, slope = jax.jvp(lambda u: coulomb_logarithm(ma, ea, species_b, u, points, species), (v,), (jnp.ones_like(v),))
-    return slope/ln
+    # The impact model returns zero in a vacuum, where all rates vanish.
+    return slope/jnp.where(ln == 0, 1., ln)
 
 
 @partial(jit, static_argnames=['species'])
@@ -115,8 +131,72 @@ def nu_s_ab(ma: float, ea: float,species_b: int,v:float, points,species: Backgro
         gamma_ab(ma,ea, species_b, v, points,species)* nb * (ma+mb)/Tb * chandrasekhar(v / vtb) /v 
     )*(ma/(ma+mb))
 
+
+# Smooth Landau-Spitzer GMS-1 (ls_min_interp) impact cutoffs.
+# RMS relative speed squared v**2+3*T_b/m_b approximates a Maxwellian average.
+# Screening uses the supplied species; dynamic screening is excluded.
+# Temperatures are in eV; masses, charges, densities and speeds use SI.
+# https://docs.plasmapy.org/en/stable/api/plasmapy.formulary.collisions.coulomb.Coulomb_logarithm.html
+
+def debye_inverse_squared(density, temperature, charge):
+    """Sum n_s q_s**2/(epsilon_0 T_s) over explicitly supplied screeners.
+
+    Absent species contribute zero, including an absent species with T=0.
+    Invalid occupied temperatures or negative densities propagate NaN.
+    """
+    density, temperature, charge = map(jnp.asarray, (density, temperature, charge))
+    active = (density != 0) & (charge != 0)
+    energy = jnp.where(active, temperature, 1.)*ELEMENTARY_CHARGE
+    terms = jnp.where(active, density*charge**2/(EPSILON_0*energy), 0.)
+    valid = (density >= 0) & (~active | (temperature > 0))
+    return jnp.sum(jnp.where(valid, terms, jnp.nan))
+
+
+def impact_parameters(mass_a, charge_a, mass_b, charge_b, speed, temperature_b,
+                      screening_length):
+    """Return (b_min, b_max), using reduced mass and smooth quantum crossover.
+
+    ``screening_length`` is specified independently of test-particle speed.
+    The charge product is |q_a q_b|, including unlike charge magnitudes.
+    """
+    reduced_mass = mass_a*(mass_b/(mass_a+mass_b))
+    relative_speed_squared = speed**2+3*temperature_b*ELEMENTARY_CHARGE/mass_b
+    b90 = jnp.abs(charge_a*charge_b)/(4*jnp.pi*EPSILON_0*reduced_mass*relative_speed_squared)
+    quantum = HBAR/(2*reduced_mass*jnp.sqrt(relative_speed_squared))
+    return jnp.hypot(b90, quantum), screening_length
+
+
+def impact_coulomb_logarithm(mass_a, charge_a, mass_b, charge_b, speed,
+                             temperature_b, density, temperature, charge):
+    """Smooth effective-speed Landau--Spitzer log for a specified background.
+
+    A vacuum has zero collision contribution and returns zero. A nonpositive
+    occupied-background log returns NaN rather than silently clipping an
+    invalid weak-coupling model into a positive collision frequency.
+    """
+    inverse_squared = debye_inverse_squared(density, temperature, charge)
+    # Use a finite inactive value so vacuum derivatives do not contain 0*inf.
+    length = 1/jnp.sqrt(jnp.where(inverse_squared == 0, 1., inverse_squared))
+    bmin, bmax = impact_parameters(mass_a, charge_a, mass_b, charge_b, speed,
+                                  temperature_b, length)
+    logarithm = jnp.log(bmax)-jnp.log(bmin)
+    occupied = jnp.where(logarithm > 0, logarithm, jnp.nan)
+    return jnp.where(inverse_squared == 0, 0., occupied)
+
+
 @partial(jit, static_argnames=['species'])
 def coulomb_logarithm(ma:float, ea: float, species_b: int, v: float, points, species: BackgroundSpecies) -> float:
+    """Selected pairwise Coulomb logarithm; NRL remains the default."""
+    if species.coulomb_log_model == "impact":
+        screening = species if species.screening_species is None else species.screening_species
+        n = jnp.stack([screening.get_density(i, points) for i in range(screening.number_species)])
+        T = jnp.stack([screening.get_temperature(i, points) for i in range(screening.number_species)])
+        return impact_coulomb_logarithm(ma, ea, species.mass[species_b], species.charge[species_b],
+            v, species.get_temperature(species_b, points), n, T, screening.charge)
+    return nrl_coulomb_logarithm(ma, ea, species_b, v, points, species)
+
+
+def nrl_coulomb_logarithm(ma:float, ea: float, species_b: int, v: float, points, species: BackgroundSpecies) -> float:
     """NRL Plasma Formulary (2019, p. 34) Coulomb logarithm of a test particle
     (mass ``ma``, charge ``ea``, speed ``v``) on background species ``species_b``.
 

@@ -298,6 +298,25 @@ class BiotSavart_from_gamma(MagneticField):
     def to_xyz(self, points):
         return points
 
+def _vmec_radial_slopes(scaled):
+    """Nodal slopes with a linear first interval and a parabolic last one."""
+    n, step = len(scaled), jnp.diff(scaled, axis=0)
+    interior = np.r_[0, 0, np.ones(n - 3), 1.0]
+    return lax.linalg.tridiagonal_solve(
+        interior, np.r_[1, 1, 4 * np.ones(n - 3), 1], np.r_[interior[:-1], 0],
+        jnp.concatenate([step[:1], step[:1], 3 * (scaled[3:] - scaled[1:-2]), 2 * step[-1:]]),
+    )
+
+
+def _vmec_radial_segment(u, a, b, da, db):
+    """Evaluate a cubic segment with matching value, slope and curvature past its end."""
+    t = jnp.minimum(u, 1.0)
+    over = jnp.maximum(u - 1.0, 0.0)
+    beyond = over * db + 0.5 * over**2 * (6 * (a - b) + 2 * da + 4 * db)
+    return ((1 + 2 * t) * (1 - t)**2 * a + t * (1 - t)**2 * da
+            + t * t * (3 - 2 * t) * b + t * t * (t - 1) * db + beyond)
+
+
 def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_m1=None):
     """Interpolate every Fourier mode of a wout table at ``s``.
 
@@ -331,27 +350,15 @@ def _radial_interp(s, grid, table, xm, covariant_s=False, half_grid=False, axis_
             scaled = scaled.at[0].set(jnp.where(m > 0, 2 * scaled[1] - scaled[2], scaled[0]))
             if axis_m1 is not None:
                 scaled = scaled.at[0].set(jnp.where(m == 1, axis_m1, scaled[0]))
-        # Nodal slopes (per grid interval) of the C2 cubic spline: the first interval keeps the linear form that the
-        # axis rows above are extrapolated with, the last one is a parabola.
-        n, step = len(grid), jnp.diff(scaled, axis=0)
-        interior = np.r_[0, 0, np.ones(n - 3), 1.0]
-        slope = lax.linalg.tridiagonal_solve(
-            interior, np.r_[1, 1, 4 * np.ones(n - 3), 1], np.r_[interior[:-1], 0],
-            jnp.concatenate([step[:1], step[:1], 3 * (scaled[3:] - scaled[1:-2]), 2 * step[-1:]]))
+        slope = _vmec_radial_slopes(scaled)
     ds = grid[1] - grid[0]
     i = jnp.clip(jnp.floor((s - grid[0]) / ds).astype(int), 0, len(grid) - 2)
     u = (s - grid[i]) / ds
-    t = jnp.minimum(u, 1.0)
     q = jnp.sqrt(jnp.maximum(s, jnp.finfo(jnp.result_type(s, float)).tiny))
     powers = jnp.stack([1 / q, jnp.ones_like(q), q, q * q, q * q * q])  # q**(2 p) for 2 p = -1..3
-    h = jnp.stack([(1 + 2 * t) * (1 - t)**2, t * (1 - t)**2, t * t * (3 - 2 * t), t * t * (t - 1)])
-    # Past the last grid point (the half grid ends at s = 1 - ds/2) continue with a parabola that has the end
-    # value, slope and curvature of the cubic, so the interpolant stays C2 up to the LCFS (a kink in the second
-    # derivative gives the adaptive integrator an uncontrolled tangent error) instead of freezing there.
-    over = jnp.maximum(u - 1.0, 0.0)
-    beyond = over * slope[i + 1] + 0.5 * over**2 * (6 * (scaled[i] - scaled[i + 1]) + 2 * slope[i] + 4 * slope[i + 1])
-    return (powers @ (k == np.arange(-1, 4)[:, None])) * (h[0] * scaled[i] + h[1] * slope[i]
-                                                          + h[2] * scaled[i + 1] + h[3] * slope[i + 1] + beyond)
+    return (powers @ (k == np.arange(-1, 4)[:, None])) * _vmec_radial_segment(
+        u, scaled[i], scaled[i + 1], slope[i], slope[i + 1],
+    )
 
 VMEC_WOUT_ARRAYS = ('bmnc', 'xm', 'xn', 'rmnc', 'zmns', 'bsubsmns', 'bsubumnc', 'bsubvmnc',
                     'bsupumnc', 'bsupvmnc', 'gmnc', 'xm_nyq', 'xn_nyq', 'Aminor_p')
