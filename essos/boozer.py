@@ -443,6 +443,8 @@ def _advance(field, dt, n_sub, mass, charge, species, thermal_cutoff,
             return lambda state: guiding_center_rhs(field, state, mu, mass, charge)
 
         def fixed(carry):
+            # fixed steps start on a tick: snap the summed time so its roundoff never shifts the tick index
+            carry = carry[:2] + (jnp.round(carry[2] / dt) * dt,) + carry[3:]
             return finish(carry, _rk_step(rhs_of(carry), carry[0], dt, method), dt)
 
         order = 8 if method == "adaptive8" else 5

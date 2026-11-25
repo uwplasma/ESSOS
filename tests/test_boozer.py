@@ -428,6 +428,21 @@ def test_long_adaptive_steps_keep_the_collision_operator_accurate():
     assert np.mean(xi) == pytest.approx(0.6 * np.exp(-1), abs=4 * np.std(xi) / np.sqrt(n))
 
 
+def test_fixed_steps_keep_the_clock_tick_after_many_steps():
+    """After ~1e6 fixed steps the summed time is off its tick by ~1e-11 of it; the kick still draws the tick's
+    noise, so a trace started a roundoff below the tick equals one started on it."""
+    from essos.boozer import _advance, _start
+    field, species, n, dt = tokamak(), electron_background(), 2, 1e-9
+    keys = jax.vmap(jax.random.fold_in, (None, 0))(jax.random.PRNGKey(3), jnp.arange(n))
+    r, theta, pitch = jnp.sqrt(0.3), jnp.array([0.0, 2.0]), jnp.array([0.3, -0.4])
+    y0 = jnp.stack([r * jnp.cos(theta), r * jnp.sin(theta), jnp.zeros(n), pitch * V0], axis=1)
+    B = jax.vmap(field.modB)(jnp.full(n, 0.3), theta, jnp.zeros(n))
+    carry, _ = _start(field, y0, V0**2 * (1 - pitch**2) / (2 * B))
+    ends = [_advance(field, dt, 1, M, Q, species, 1.5, carry[:2] + (jnp.full(n, t),) + carry[3:], keys, 0, 1,
+                     "rk4")[1][:, -1] for t in (1e6 * dt, 1e6 * dt * (1 - 1e-11))]
+    np.testing.assert_allclose(ends[0], ends[1], rtol=1e-12)
+
+
 def test_adaptive_and_fixed_steps_follow_one_brownian_path():
     """The noise is a Brownian path on the clock: adaptive8 and fine rk4 steps driven by it end close together
     (strong agreement), far closer than two independent paths do."""
