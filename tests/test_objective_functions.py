@@ -9,8 +9,9 @@ import pytest
 import jax.numpy as jnp
 
 import essos.objective_functions as objf
-from essos.dynamics import Tracing
-from essos.fields import Vmec
+from essos.constants import ALPHA_PARTICLE_CHARGE, FUSION_ALPHA_PARTICLE_ENERGY
+from essos.dynamics import Particles, Tracing
+from essos.fields import Vmec, VMEC_WOUT_ARRAYS
 
 
 class DummyCoils:
@@ -90,11 +91,6 @@ class DummyTracing:
         self.loss_fractions = jnp.array([0.1, 0.2, 1.0])
         self.times_to_trace = 4
         self.maxtime = 1e-5
-        self.model = kwargs.get("model", "GuidingCenterAdaptative")
-        self.boundary_hits = jnp.zeros(2, dtype=bool)
-
-    def soft_loss_fraction(self, r_max=0.99, width=0.02):
-        return Tracing.soft_loss_fraction(self, r_max=r_max, width=width)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -226,8 +222,6 @@ class TestObjectiveFunctions(unittest.TestCase):
         self.assertTrue(jnp.isfinite(objf.loss_particle_rcross_final(self.field, self.particles)))
         self.assertTrue(jnp.isfinite(objf.loss_particle_Br(self.field, self.particles)))
         self.assertTrue(jnp.isfinite(objf.loss_particle_iota(self.field, self.particles)))
-        soft_lost_fraction = objf.loss_soft_lost_fraction(Vmec.__new__(Vmec), self.particles, r_max=1.2, width=0.05)
-        self.assertTrue(0.0 <= soft_lost_fraction <= 1.0)
 
     @patch("essos.objective_functions.BdotN_over_B", return_value=jnp.ones((2, 3), dtype=jnp.float64))
     def test_surface_losses(self, bdotn):
@@ -421,3 +415,104 @@ def test_bdotn_constraint_gradient_is_zero_not_nan_when_satisfied(monkeypatch):
     g = jax.grad(lambda b: of.loss_BdotN_constraint(b, None, target_tol=1e-6))(jnp.array([1e-2, 2e-4]))
     assert jnp.isfinite(g).all() and g[0] > 0
 
+
+
+# Frozen-orbit drift measure.
+
+R0, A, B0 = 5.0, 1.0, 5.0
+LOW_RES_QA = "examples/input_files/wout_LandremanPaul2021_QA_reactorScale_lowres.nc"
+B_TABLES = ("bmnc", "bsubsmns", "bsubumnc", "bsubvmnc", "bsupumnc", "bsupvmnc")
+
+
+def circular_tokamak(ns=21, modes=8):
+    """Vacuum toroidal field B = B0 R0 / R in a circular torus, as live VMEC tables (sqrt(g) < 0, as in a wout)."""
+    s = np.linspace(0, 1, ns)
+    half = np.r_[0.0, 0.5 * (s[1:] + s[:-1])]
+    theta = np.linspace(0, 2 * np.pi, 64, endpoint=False)
+
+    def cosine_modes(f, grid):
+        r = A * np.sqrt(grid)[:, None]
+        c = np.fft.rfft(f(R0 + r * np.cos(theta)), axis=1).real[:, :modes + 1] / 32
+        c[:, 0] /= 2
+        return jnp.asarray(c)
+
+    zero = jnp.zeros((ns, modes + 1))
+    root = jnp.asarray(A * np.sqrt(s))
+    return Vmec.from_arrays(
+        nfp=1, ns=ns, bmnc=cosine_modes(lambda R: B0 * R0 / R, half), xm=jnp.array([0., 1.]), xn=jnp.zeros(2),
+        rmnc=jnp.stack([R0 * jnp.ones(ns), root], 1), zmns=jnp.stack([jnp.zeros(ns), root], 1),
+        bsubsmns=zero, bsubumnc=zero, bsubvmnc=zero + B0 * R0 * (jnp.arange(modes + 1) == 0),
+        bsupumnc=zero, bsupvmnc=cosine_modes(lambda R: B0 * R0 / R**2, half),
+        gmnc=cosine_modes(lambda R: -R * A**2 / 2, half), xm_nyq=jnp.arange(modes + 1.), xn_nyq=jnp.zeros(modes + 1),
+        Aminor_p=A, ntheta=8, nphi=8)
+
+
+def alphas(s, theta, phi, pitch):
+    return Particles(initial_xyz=jnp.stack([jnp.asarray(s), jnp.asarray(theta), jnp.asarray(phi)], axis=1),
+                     initial_vparallel_over_v=jnp.asarray(pitch))
+
+
+def scaled_field(field, scale):
+    """The same VMEC field with |B| and its components multiplied by ``scale``."""
+    arrays = {name: getattr(field, name) for name in VMEC_WOUT_ARRAYS}
+    return Vmec.from_arrays(nfp=field.nfp, ns=field.ns, **{**arrays, **{n: arrays[n] * scale for n in B_TABLES}})
+
+
+@pytest.mark.parametrize("theta0", [0.0, np.pi / 2, np.pi, 3 * np.pi / 2])
+def test_radial_drift_rate_matches_vertical_grad_b_drift_in_a_toroidal_field(theta0):
+    # In B = B0 R0 / R the guiding centre drifts upward at v_d = E (1 + xi^2) / (q B0 R0), independent of R. From z0 = r sin(theta0)
+    # at fixed R, s(t) = s0 + (2 z0 v_d t + v_d^2 t^2) / a^2, whose least-squares slope over [0, W] is (2 z0 v_d + v_d^2 W) / a^2.
+    pitch, window, s0 = np.array([0.2, 0.5, -0.5, 0.8]), 2e-6, 0.3
+    rate = objf.radial_drift_rate(circular_tokamak(), alphas(np.full(4, s0), np.full(4, theta0), np.zeros(4), pitch),
+                                  window=window, num_points=41)
+    v_d = FUSION_ALPHA_PARTICLE_ENERGY * (1 + pitch**2) / (ALPHA_PARTICLE_CHARGE * B0 * R0)
+    expected = (2 * A * np.sqrt(s0) * np.sin(theta0) * v_d + v_d**2 * window) / A**2
+    np.testing.assert_allclose(rate, expected, rtol=1e-5)
+
+
+def test_radial_drift_rate_is_the_least_squares_slope_of_the_traced_s():
+    field = Vmec(LOW_RES_QA)
+    rng = np.random.default_rng(1)
+    particles = alphas(rng.uniform(0.3, 0.7, 12), rng.uniform(0, 2 * np.pi, 12), rng.uniform(0, np.pi, 12), rng.uniform(-1, 1, 12))
+    window, num_points = 2e-5, 41
+    rate = objf.radial_drift_rate(field, particles, window=window, num_points=num_points)
+    traced = Tracing(field=field, model="GuidingCenterAdaptative", particles=particles, maxtime=window, timestep=1e-8,
+                     times_to_trace=num_points, atol=1e-6, rtol=1e-6, stopping_criteria=objf.inside_lcfs,
+                     max_steps=256, progress=False).trajectories
+    kept = np.asarray(traced[..., 0] < 0.95).all(axis=1)
+    slope = np.polyfit(np.linspace(0, window, num_points), np.asarray(traced[..., 0]).T, 1)[0]
+    # Quadrature of ds/dt against the kernel versus the fit of the saved samples (orbits that stay inside s < 0.95).
+    assert kept.sum() >= 8
+    assert np.sqrt(np.mean((rate - slope)[kept]**2) / np.mean(slope[kept]**2)) < 0.05
+
+
+def test_radial_drift_rate_drops_states_near_the_edge_and_rejects_even_samples():
+    field = circular_tokamak()
+    outside = alphas([0.97, 0.99], [0.0, 1.0], [0.0, 0.0], [0.3, -0.3])
+    np.testing.assert_array_equal(objf.radial_drift_rate(field, outside, window=2e-6, num_points=11), 0.0)
+    with pytest.raises(ValueError, match="odd"):
+        objf.radial_drift_rate(field, outside, num_points=10)
+
+
+def test_radial_drift_rate_gradient_flows_through_the_field_at_frozen_orbits():
+    # With the orbits frozen, scaling every |B| table by c scales the drift by 1/c exactly in the toroidal field (grad-B and
+    # curvature forces are unchanged while q B grows), so d rate / dc = -rate at c = 1.
+    field = circular_tokamak()
+    particles = alphas(np.full(3, 0.3), [0.0, 2.0, 4.0], np.zeros(3), [0.2, 0.5, -0.5])
+    options = dict(window=2e-6, num_points=21, orbit_field=field)
+    rate = objf.radial_drift_rate(field, particles, **options)
+    gradient = jax.jacfwd(lambda c: objf.radial_drift_rate(scaled_field(field, c), particles, **options))(1.0)
+    np.testing.assert_allclose(gradient, -rate, rtol=1e-6)
+
+
+def test_frozen_drift_loss_gradient_matches_finite_differences_of_the_same_measure():
+    field = Vmec(LOW_RES_QA)
+    rng = np.random.default_rng(2)
+    particles = alphas(rng.uniform(0.3, 0.7, 8), rng.uniform(0, 2 * np.pi, 8), rng.uniform(0, np.pi, 8), rng.uniform(-1, 1, 8))
+    loss = jax.jit(lambda c: objf.loss_particle_frozen_drift(scaled_field(field, c), particles, window=2e-5, num_points=41,
+                                                            orbit_field=field))
+    value, gradient = jax.value_and_grad(loss)(1.0)
+    step = 1e-4
+    difference = (loss(1 + step) - loss(1 - step)) / (2 * step)
+    assert value > 0 and abs(gradient) > 1e-3
+    np.testing.assert_allclose(gradient, difference, rtol=1e-6)

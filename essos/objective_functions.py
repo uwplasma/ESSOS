@@ -5,7 +5,9 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import jit, vmap
 from functools import partial
-from essos.dynamics import Tracing
+import diffrax
+from essos.dynamics import Tracing, _guiding_center_velocity
+from essos.electric_field import Electric_field_zero
 from essos.fields import BiotSavart,BiotSavart_from_gamma
 from essos.surfaces import BdotN_over_B
 from essos.coils import Curves, Coils
@@ -107,17 +109,52 @@ def inside_lcfs(t, y, args, **kwargs):
     """Stopping criterion on a VMEC flux-coordinate state: positive while s < 1."""
     return 1.0 - y[0]
 
-def loss_soft_lost_fraction(field, particles, r_max=0.99, width=0.02, timestep=1.e-8, maxtime=1e-5, num_steps=300,
-                            trace_tolerance=1e-5, model='GuidingCenterAdaptative', boundary=None):
-    """Differentiable flux-peak crossing score for VMEC guiding centres.
+def radial_drift_rate(field, particles, window=5e-5, num_points=101, tolerance=1e-6, max_steps=256, edge=0.95, chunk=32,
+                      orbit_field=None):
+    """Outward drift rate ds/dt [1/s] of VMEC guiding centres, differentiable with respect to the field.
 
-    Orbits stop on the LCFS through a stopping criterion on s, which keeps the
-    trace differentiable. Report ``Tracing.loss_fraction`` for hard losses.
+    Each orbit is traced for ``window`` seconds without a gradient and saved at ``num_points`` (odd) times.
+    The guiding-centre velocity ds/dt is then evaluated at the saved states with the live ``field`` and
+    integrated against the least-squares-slope kernel ``3/(2 window) - 6 (t - window/2)**2 / window**3``,
+    so the result is the slope of the least-squares line through s(t), and the gradient flows through the
+    field only, not through the orbit. Saved states with ``s >= edge`` (where the field spline is
+    inaccurate) or that are not finite are dropped; the rate is renormalised over the rest, and is
+    zero when less than 30 % of the window remains. The orbits are traced in ``orbit_field`` (default
+    ``field``). ``chunk`` orbits are evaluated at a time, rematerialised in reverse mode to bound memory.
     """
-    tracing = Tracing(field=field, model=model, particles=particles, maxtime=maxtime, timestep=timestep,
-                      times_to_trace=num_steps, atol=trace_tolerance, rtol=trace_tolerance, boundary=boundary,
-                      stopping_criteria=inside_lcfs)
-    return tracing.soft_loss_fraction(r_max=r_max, width=width)
+    if num_points % 2 == 0:
+        raise ValueError("num_points must be odd (Simpson quadrature)")
+    frozen = jax.lax.stop_gradient(field if orbit_field is None else orbit_field)
+    tracing = Tracing(field=frozen, model='GuidingCenterAdaptative', particles=particles,
+                      maxtime=window, timestep=1.e-8, times_to_trace=num_points, atol=tolerance, rtol=tolerance,
+                      solver=diffrax.Tsit5(), stopping_criteria=inside_lcfs, max_steps=max_steps, progress=False)
+    states = jax.lax.stop_gradient(tracing.trajectories)
+    valid = jnp.all(jnp.isfinite(states), axis=-1) & (states[..., 0] < edge)
+    states = jnp.where(valid[..., None], states, states[:, :1])
+    dt = window / (num_points - 1)
+    simpson = jnp.ones(num_points).at[1:-1:2].set(4.).at[2:-1:2].set(2.) * dt / 3
+    t_centred = jnp.linspace(-window / 2, window / 2, num_points)
+    weights = simpson * (1.5 / window - 6 * t_centred**2 / window**3)
+
+    def drift(state):
+        velocity, _ = _guiding_center_velocity(field, Electric_field_zero(), particles.charge, particles.mass,
+                                               state[:3], state[3], energy=particles.energy)
+        return velocity[0]
+
+    drifts = jax.lax.map(jax.checkpoint(jax.vmap(drift)), states, batch_size=chunk)
+    kept = weights * valid
+    rate = jnp.sum(kept * drifts, axis=1) / jnp.maximum(jnp.sum(kept, axis=1), 1.e-30) * jnp.sum(weights)
+    return jnp.where(jnp.sum(kept, axis=1) > 0.3 * jnp.sum(weights), rate, 0.)
+
+def loss_particle_frozen_drift(field, particles, delta=0.1, unit=1.e-4, **drift):
+    """Mean Huber loss of the outward drift rate in units of ``unit`` per second (default s per 1e-4 s).
+
+    Rates below ``delta`` count quadratically and larger ones linearly, so a few fast orbits do not
+    dominate. ``drift`` is passed to :func:`radial_drift_rate`. The gradient is that of the rate at
+    frozen orbits, not the derivative of the retraced loss.
+    """
+    rate = jnp.abs(radial_drift_rate(field, particles, **drift)) * unit
+    return jnp.mean(jnp.where(rate < delta, rate**2, delta * (2 * rate - delta)))
 
 ###################  B ON SURAFCE LOSSES ##########################
 @partial(jit, static_argnames=['npoints'])

@@ -1735,32 +1735,6 @@ class Tracing():
         return out + (jnp.where(lost, self.energy()[rows, safe], 0.),
                       jnp.where(lost[:, None], xyz[rows, safe], 0.))
 
-    def soft_loss_fraction(self, r_max=0.99, width=0.02, per_particle=False):
-        """Soft peak-flux crossing score for VMEC guiding centres.
-
-        Boundary stops (``boundary_hits``) count as exits; unrelated failures
-        return NaN. ``per_particle=True`` returns one score per particle and
-        keeps a stopped orbit at the peak of its saved path, which is where its
-        gradient lives: the mean clamps stopped orbits to 1, a constant, so only
-        orbits that have not yet left carry a gradient. A smaller positive width sharpens the score. Hard losses
-        remain the diagnostic. To differentiate it, trace with a stopping
-        criterion on s rather than the default LCFS crossing, whose outputs
-        are host arrays.
-        """
-        if not isinstance(self.field, Vmec) or self.model not in _VMEC_GUIDING_CENTER_MODELS:
-            raise ValueError("soft_loss_fraction requires VMEC guiding centres")
-        if not np.isfinite(width) or width <= 0:
-            raise ValueError("width must be finite and positive")
-        radial = self.trajectories[:, :, 0]
-        finite = jnp.all(jnp.isfinite(self.trajectories), axis=-1)
-        stopped = jnp.asarray(self.boundary_hits)[:, None]
-        radial = jnp.where(finite, radial, jnp.where(stopped, 1.0, jnp.nan))
-        peak = jnp.sum(radial * jax.nn.softmax(radial / width, axis=1), axis=1)
-        if per_particle:
-            return jax.nn.sigmoid((peak - r_max) / width)
-        peak = jnp.where(stopped[:, 0], jnp.maximum(peak, 1.0), peak)
-        return jnp.mean(jax.nn.sigmoid((peak - r_max) / width))
-
 
     def poincare_plot(self, shifts = [jnp.pi/2], orientation = 'toroidal', length = 1, ax=None, show=True, color=None, **kwargs):
         """
