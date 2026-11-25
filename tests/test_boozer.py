@@ -49,6 +49,28 @@ def test_radial_spline_is_the_not_a_knot_cubic():
     np.testing.assert_allclose(slope[:, 2], dcubic, rtol=0, atol=1e-12)
 
 
+def test_field_is_differentiable_in_the_tabulated_spectrum():
+    """d|B|/d bmnc at a point, through the radial fit, equals central differences of fresh fits.
+
+    |B| is linear in the table, so the difference quotient is exact up to rounding."""
+    s = np.linspace(0.005, 0.995, 20)
+    table = np.stack([np.full_like(s, B0), -B0 * EPS * np.sqrt(s) * (1 + s)])
+    base = tokamak()
+    r, theta, zeta = 0.47, 0.8, 0.0
+
+    def modB(t):
+        knots, coef = _spline(np.sqrt(s), jnp.stack([t[0], t[1] / np.sqrt(s)], axis=1))
+        return eqx.tree_at(lambda f: (f.r_knots, f.b_coef), base, (knots, coef)).modB_derivatives(r, theta, zeta)[0]
+
+    grad = np.asarray(jax.grad(modB)(jnp.asarray(table)))
+    k, h = (1, 9), 1e-3
+    step = np.zeros_like(table)
+    step[k] = h
+    fd = (float(modB(jnp.asarray(table + step))) - float(modB(jnp.asarray(table - step)))) / (2 * h)
+    assert abs(grad[k] - fd) <= 1e-9 * abs(fd)
+    assert grad[k] != 0.0
+
+
 def test_field_reproduces_the_spectrum_and_is_regular_on_the_axis():
     field = tokamak()
     for s, theta in ((0.3, 0.7), (0.9, 2.5), (1e-12, 1.0)):
