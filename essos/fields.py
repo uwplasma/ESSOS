@@ -909,6 +909,21 @@ def _inside(surface, nfp, nphi, z, r):
     return out
 
 
+def _stellarator_symmetric(batched, R, Z, nfp, inside=None, n=8):
+    """Whether B(x, -y, -z) = (-B_x, B_y, B_z)(x, y, z) to 1e-9 of |B| at ``n`` random points of the box (outside ``inside``)."""
+    rng = np.random.default_rng(0)
+    r, z, phi = rng.uniform(*R, 4 * n), rng.uniform(*Z, 4 * n), rng.uniform(0, np.pi / nfp, 4 * n)
+    if inside is not None:  # the nearest node must lie outside the excluded region (same rule as the table)
+        k = np.rint(phi / (2 * np.pi / (nfp * inside.shape[0]))).astype(int) % inside.shape[0]
+        i = np.rint((z - Z[0]) / (Z[1] - Z[0]) * (inside.shape[1] - 1)).astype(int)
+        j = np.rint((r - R[0]) / (R[1] - R[0]) * (inside.shape[2] - 1)).astype(int)
+        r, z, phi = (a[~inside[k, i, j]][:n] for a in (r, z, phi))
+    p = np.stack((r * np.cos(phi), r * np.sin(phi), z), -1)[:n]
+    B = np.asarray(batched(jnp.asarray(np.concatenate((p, p * np.array([1., -1., -1.]))))))
+    B, mirror = B[:len(p)], B[len(p):]
+    return len(p) > 0 and bool(np.all(np.abs(mirror - B * np.array([-1., 1., 1.])) <= 1e-9 * np.abs(B).max()))
+
+
 class InterpolatedField(MagneticField):
     """Any Cartesian field tabulated on a cylindrical grid and evaluated by tricubic B-splines.
 
@@ -916,7 +931,9 @@ class InterpolatedField(MagneticField):
     dipole field, ...) is sampled once with ``field.B`` on ``nphi`` toroidal
     planes of one field period (``nfp``), ``nr`` radii in ``R=(rmin, rmax)``
     and ``nz`` heights in ``Z=(zmin, zmax)``; with ``stellsym`` only half a
-    period is evaluated (Z must then be symmetric), in batches of ``chunk_size``
+    period is evaluated (Z must then be symmetric). By default (``None``) this
+    is chosen when nphi is even, Z is symmetric and the source is stellarator
+    symmetric at a few of the nodes. Points are evaluated in batches of ``chunk_size``
     points (by default sized to the source). The cylindrical components
     are interpolated by a C2 tricubic spline (periodic in phi, not-a-knot in R
     and Z) that is exact at the nodes, so B converges as h^4 and dB/dX as h^3.
@@ -937,22 +954,25 @@ class InterpolatedField(MagneticField):
     """
 
     def __init__(self, field=None, R=(1.0, 2.0), Z=(-0.5, 0.5), nr=32, nz=32, nphi=32, nfp=1,
-                 stellsym=False, chunk_size=None, table=None, exclude=None, guard=3):
+                 stellsym=None, chunk_size=None, table=None, exclude=None, guard=3):
         (self.rmin, self.rmax), (self.zmin, self.zmax), self.nfp = map(float, R), map(float, Z), int(nfp)
         if field is not None and not isinstance(field, MagneticField):
             field = ExternalField(field)  # a batched source, e.g. a VMEX VmecExtender or MgridField
         dims = (nphi, nz, nr) if table is None else table.shape[:3]
         inside = None if exclude is None else _inside(exclude, nfp, dims[0], np.linspace(*Z, dims[1]), np.linspace(*R, dims[2]))
         if table is None:
-            if stellsym and (nphi % 2 or not np.isclose(self.zmin, -self.zmax)):
+            symmetric_grid = nphi % 2 == 0 and np.isclose(self.zmin, -self.zmax)
+            if stellsym and not symmetric_grid:
                 raise ValueError("stellsym needs an even nphi and Z = (-zmax, zmax)")
+            source = field.source if isinstance(field, ExternalField) and field.params is None and not hasattr(field.source, "b_cyl") else None
+            batched = getattr(source, "B", source) if source is not None else vmap(field.B)  # one batched call is far cheaper than a vmap of single-point calls
+            if stellsym is None:  # B(x, -y, -z) = (-B_x, B_y, B_z)(x, y, z) at a few nodes of the half period
+                stellsym = bool(symmetric_grid) and _stellarator_symmetric(batched, R, Z, nfp, inside)
             nph = nphi // 2 + 1 if stellsym else nphi
             phi, z, r = np.meshgrid(np.arange(nph) * 2 * np.pi / (nfp * nphi), np.linspace(*Z, nz),
                                     np.linspace(*R, nr), indexing="ij")
             xyz = jnp.stack((r * np.cos(phi), r * np.sin(phi), z), -1).reshape(-1, 3)
             keep = np.arange(len(xyz)) if exclude is None else np.flatnonzero(~inside[:nph].ravel())
-            source = field.source if isinstance(field, ExternalField) and field.params is None and not hasattr(field.source, "b_cyl") else None
-            batched = getattr(source, "B", source) if source is not None else vmap(field.B)  # one batched call is far cheaper than a vmap of single-point calls
             if chunk_size is None and source is not None:
                 chunk_size = 256  # a batched source bounds its own temporaries; 64 to 256 points per call are equally fast
             elif chunk_size is None:  # as many points per batch as fit in ~64 MiB of the source's compiled temporaries
