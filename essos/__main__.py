@@ -5,12 +5,23 @@ import sys
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from essos.coils import Coils, CreateEquallySpacedCurves
+from essos.coils import Coils, Curves, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
 
 from essos.dynamics import Tracing
 from essos.optimization import optimize_loss_function
-from essos.objective_functions import loss_coils_for_nearaxis
+from essos.objective_functions import loss_B_difference_coils_near_axis, loss_coil_curvature, loss_coil_length
+
+
+def loss_coils_for_nearaxis(x, dofs_curves, currents_scale, nfp, n_segments, stellsym,
+                            field_nearaxis, max_coil_length, max_coil_curvature):
+    """Residuals: field mismatch on the near-axis curve, then coil length and curvature penalties."""
+    n = dofs_curves.size
+    curves = Curves(jnp.reshape(x[:n], dofs_curves.shape), n_segments, nfp, stellsym)
+    coils = Coils(curves=curves, currents=x[n:] * currents_scale, currents_scale=currents_scale)
+    return jnp.concatenate([jnp.atleast_1d(loss_B_difference_coils_near_axis(BiotSavart(coils), field_nearaxis)),
+                            loss_coil_length(coils, max_coil_length=max_coil_length),
+                            loss_coil_curvature(coils, max_coil_curvature=max_coil_curvature)])
 
 
 def main(cl_args=sys.argv[1:]):
@@ -81,9 +92,9 @@ def main(cl_args=sys.argv[1:]):
 
     time0 = time()
     tracing_initial = Tracing(field=BiotSavart(coils_initial), model='FieldLine', initial_conditions=initial_xyz,
-                    maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+                    maxtime=tmax, times_to_trace=num_steps, rtol=trace_tolerance)
     tracing_optimized = Tracing(field=BiotSavart(coils_optimized), model='FieldLine', initial_conditions=initial_xyz,
-                    maxtime=tmax, timesteps=num_steps, tol_step_size=trace_tolerance)
+                    maxtime=tmax, times_to_trace=num_steps, rtol=trace_tolerance)
     print(f"Tracing took {time()-time0:.2f} seconds")
 
     # Plot coils, before and after optimization
