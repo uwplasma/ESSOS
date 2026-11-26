@@ -30,9 +30,9 @@ def _unpack(binary_array: Any) -> str:
     return "".join(np.char.decode(binary_array)).strip("\x00 ")
 
 
-def _interpolate_component(fields, weights, r, phi, z, *, rmin, rmax, zmin, zmax, nfp):
-    """Trilinearly interpolate coil-group tables, periodically in phi."""
-    _, nphi, nz, nr = fields.shape
+def _interpolate_cylindrical(br_arr, bp_arr, bz_arr, weights, r, phi, z, *, rmin, rmax, zmin, zmax, nfp):
+    """Trilinearly interpolate cylindrical coil-group tables, periodically in phi."""
+    _, nphi, nz, nr = br_arr.shape
     r, phi, z = jnp.broadcast_arrays(jnp.asarray(r), jnp.asarray(phi), jnp.asarray(z))
     out_shape = r.shape
     rf = jnp.clip(r.reshape((-1,)), rmin, rmax)
@@ -50,25 +50,24 @@ def _interpolate_component(fields, weights, r, phi, z, *, rmin, rmax, zmin, zmax
     ip1 = (ip0 + 1) % nphi
     wp = fp - ip0_float
 
-    def sample(field):
-        v000 = field[:, ip0, iz0, ir0]
-        v001 = field[:, ip0, iz0, ir0 + 1]
-        v010 = field[:, ip0, iz0 + 1, ir0]
-        v011 = field[:, ip0, iz0 + 1, ir0 + 1]
-        v100 = field[:, ip1, iz0, ir0]
-        v101 = field[:, ip1, iz0, ir0 + 1]
-        v110 = field[:, ip1, iz0 + 1, ir0]
-        v111 = field[:, ip1, iz0 + 1, ir0 + 1]
-        c00 = v000 * (1.0 - wr) + v001 * wr
-        c01 = v010 * (1.0 - wr) + v011 * wr
-        c10 = v100 * (1.0 - wr) + v101 * wr
-        c11 = v110 * (1.0 - wr) + v111 * wr
-        c0 = c00 * (1.0 - wz) + c01 * wz
-        c1 = c10 * (1.0 - wz) + c11 * wz
-        values = c0 * (1.0 - wp) + c1 * wp
-        return jnp.sum(weights[:, None] * values, axis=0).reshape(out_shape)
+    ir1, iz1 = ir0 + 1, iz0 + 1
+    w00, w01 = (1.0 - wz) * (1.0 - wr), (1.0 - wz) * wr
+    w10, w11 = wz * (1.0 - wr), wz * wr
+    p0, p1 = 1.0 - wp, wp
+    w000, w001, w010, w011 = p0 * w00, p0 * w01, p0 * w10, p0 * w11
+    w100, w101, w110, w111 = p1 * w00, p1 * w01, p1 * w10, p1 * w11
 
-    return sample(fields)
+    def sample(arr):
+        arr = jnp.asarray(arr)
+        table = arr[0] * weights[0] if arr.shape[0] == 1 else jnp.einsum("g,gpzr->pzr", weights, arr)
+        return (
+            table[ip0, iz0, ir0] * w000 + table[ip0, iz0, ir1] * w001
+            + table[ip0, iz1, ir0] * w010 + table[ip0, iz1, ir1] * w011
+            + table[ip1, iz0, ir0] * w100 + table[ip1, iz0, ir1] * w101
+            + table[ip1, iz1, ir0] * w110 + table[ip1, iz1, ir1] * w111
+        ).reshape(out_shape)
+
+    return sample(br_arr), sample(bp_arr), sample(bz_arr)
 
 
 @dataclass(eq=False)
@@ -155,13 +154,9 @@ class MGrid(MagneticField):
     @jax.jit
     def b_cyl(self, r, phi, z):
         """Return ``(B_R, B_phi, B_Z)`` at broadcastable cylindrical points."""
-        weights = self._field_weights
-        kwargs = dict(rmin=self.rmin, rmax=self.rmax, zmin=self.zmin,
-                      zmax=self.zmax, nfp=self.nfp)
-        return (
-            _interpolate_component(jnp.asarray(self.br_arr), weights, r, phi, z, **kwargs),
-            _interpolate_component(jnp.asarray(self.bp_arr), weights, r, phi, z, **kwargs),
-            _interpolate_component(jnp.asarray(self.bz_arr), weights, r, phi, z, **kwargs),
+        return _interpolate_cylindrical(
+            self.br_arr, self.bp_arr, self.bz_arr, self._field_weights, r, phi, z,
+            rmin=self.rmin, rmax=self.rmax, zmin=self.zmin, zmax=self.zmax, nfp=self.nfp,
         )
 
     @jax.jit
@@ -171,11 +166,13 @@ class MGrid(MagneticField):
         if points.ndim == 0 or points.shape[-1] != 3:
             raise ValueError("points must have a trailing dimension of 3")
         x, y, z = points[..., 0], points[..., 1], points[..., 2]
-        r = jnp.hypot(x, y)
-        phi = jnp.arctan2(y, x)
+        r2 = x * x + y * y
+        off_axis = r2 > 0.0
+        r = jnp.where(off_axis, jnp.sqrt(jnp.where(off_axis, r2, 1.0)), 0.0)
+        phi = jnp.arctan2(jnp.where(off_axis, y, 0.0), jnp.where(off_axis, x, 1.0))
         br, bp, bz = self.b_cyl(r, phi, z)
-        return jnp.stack((br * jnp.cos(phi) - bp * jnp.sin(phi),
-                          br * jnp.sin(phi) + bp * jnp.cos(phi), bz), axis=-1)
+        cos_phi, sin_phi = jnp.cos(phi), jnp.sin(phi)
+        return jnp.stack((br * cos_phi - bp * sin_phi, br * sin_phi + bp * cos_phi, bz), axis=-1)
 
     @jax.jit
     def AbsB(self, points):
@@ -338,23 +335,17 @@ def coils_to_mgrid(
     cos_phi, sin_phi = np.cos(phi_flat), np.sin(phi_flat)
     xyz = np.column_stack((R.ravel() * cos_phi, R.ravel() * sin_phi, Z.ravel()))
 
-    n_segments = max(1, coils.gamma.size // 3)
-    chunk_size = max(1, _BIOT_SAVART_PAIR_BUDGET // n_segments)
-    n_chunks = (len(xyz) + chunk_size - 1) // chunk_size
-    batched_field = jax.vmap(BiotSavart(coils).B)
+    n_total = len(xyz)
+    chunk_size = min(n_total, max(1, _BIOT_SAVART_PAIR_BUDGET // max(1, coils.gamma.size // 3)))
+    batched_field = jax.jit(jax.vmap(BiotSavart(coils).B))
     b_xyz = np.concatenate([
-        np.asarray(batched_field(jnp.asarray(points)), dtype=float)
-        for points in np.array_split(xyz, n_chunks)
-    ])
+        np.asarray(batched_field(jnp.pad(jnp.asarray(sub), ((0, chunk_size - len(sub)), (0, 0)), mode="edge")),
+                   dtype=float)[: len(sub)]
+        for i in range(0, n_total, chunk_size) if len(sub := xyz[i : i + chunk_size])
+    ], axis=0)
     bx, by, bz = b_xyz.T
-    br = bx * cos_phi + by * sin_phi
-    bp = -bx * sin_phi + by * cos_phi
-
-    mgrid.add_field_cylindrical(
-        br.reshape((nphi, nz, nr)),
-        bp.reshape((nphi, nz, nr)),
-        bz.reshape((nphi, nz, nr)),
-        name=name,
-    )
+    br, bp = bx * cos_phi + by * sin_phi, -bx * sin_phi + by * cos_phi
+    shape = (nphi, nz, nr)
+    mgrid.add_field_cylindrical(br.reshape(shape), bp.reshape(shape), bz.reshape(shape), name=name)
     mgrid.write(filename)
     return mgrid
