@@ -124,6 +124,7 @@ def test_mgrid_field_is_periodic_batched_jittable_and_differentiable(tmp_path):
     np.testing.assert_allclose(values, expected, atol=1e-14)
     np.testing.assert_allclose(field.AbsB(points), np.linalg.norm(expected, axis=-1))
     assert np.all(np.isfinite(jax.grad(lambda x: field.AbsB(x))(points[0])))
+    assert np.all(np.isfinite(jax.jacfwd(field.B)(jnp.array([0.0, 0.0, z]))))
     with pytest.raises(ValueError, match="trailing dimension of 3"):
         field.B(np.ones((2, 2)))
 
