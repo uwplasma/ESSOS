@@ -1,11 +1,11 @@
-"""Signed toroidal flux for VMEC export and its coil vector potential."""
+"""Flux line integrals use surface tangents and periodic angular quadrature."""
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from essos.surfaces import SurfaceRZFourier, toroidal_flux
+from essos.surfaces import SurfaceRZFourier, poloidal_flux, toroidal_flux
 
 
 class ToroidalField(eqx.Module):
@@ -14,6 +14,13 @@ class ToroidalField(eqx.Module):
     def A(self, xyz):
         # curl(-B R e_z) = B e_phi.
         return jnp.array([0., 0., -self.strength * jnp.hypot(xyz[0], xyz[1])])
+
+
+class VerticalField(eqx.Module):
+    strength: float = 2.0
+
+    def A(self, xyz):
+        return self.strength / 2 * jnp.array([-xyz[1], xyz[0], 0.])
 
 
 def ellipse(a=.7, b=.4, count=12, close=False, range_torus='full torus'):
@@ -27,25 +34,64 @@ def ellipse(a=.7, b=.4, count=12, close=False, range_torus='full torus'):
 @pytest.mark.parametrize('range_torus', ['full torus', 'half period'])
 def test_toroidal_flux_analytic_area_and_sign(close, count, range_torus):
     surface = ellipse(count=count, close=close, range_torus=range_torus)
+    field = ToroidalField()
     for idx in (0, 2):
-        np.testing.assert_allclose(toroidal_flux(surface, ToroidalField(), idx),
-                                   -2 * np.pi * .7 * .4, atol=2e-14)
-
-
-@pytest.mark.parametrize('close,count', [(False, 1), (True, 2)])
-def test_toroidal_flux_requires_distinct_points(close, count):
-    with pytest.raises(ValueError, match='distinct theta'):
-        toroidal_flux(ellipse(count=count, close=close), ToroidalField())
+        np.testing.assert_allclose(toroidal_flux(surface, field, idx),
+                                   -field.strength * np.pi * .7 * .4, atol=2e-14)
+    # Vertical field is tangent to this poloidal plane and contributes no flux.
+    np.testing.assert_allclose(toroidal_flux(surface, VerticalField()), 0., atol=2e-14)
 
 
 @pytest.mark.parametrize('close', [False, True])
-def test_toroidal_flux_shape_gradient(close):
-    def flux(a):
+@pytest.mark.parametrize('count', [5, 9, 17])
+def test_poloidal_flux_uniform_vertical_field(close, count):
+    surface = ellipse(count=count, close=close)
+    field = VerticalField()
+    for idx in (0, 2):
+        radius = 3 + .7 * np.cos(float(surface.theta2d[0, idx]))
+        np.testing.assert_allclose(poloidal_flux(surface, field, idx),
+                                   field.strength * np.pi * radius**2, atol=5e-14)
+    np.testing.assert_allclose(poloidal_flux(surface, ToroidalField()), 0., atol=2e-14)
+
+
+@pytest.mark.parametrize('close', [False, True])
+def test_poloidal_flux_nonaxisymmetric_full_loop(close):
+    # R = 3 + delta cos(3 phi) + a cos(theta), Z = b sin(theta).
+    # The flux is B pi <R**2>_phi, including the delta**2 / 2 term.
+    surface = SurfaceRZFourier(jnp.array([3., .2, 0., .7, 0.]),
+                               jnp.array([0., 0., 0., .4, 0.]),
+                               nfp=3, mpol=1, ntor=1, ntheta=12, nphi=18, close=close)
+    np.testing.assert_allclose(poloidal_flux(surface, VerticalField()),
+                               2 * np.pi * ((3 + .7)**2 + .2**2 / 2), atol=5e-14)
+
+
+def test_poloidal_flux_rejects_open_arc():
+    with pytest.raises(ValueError, match='full torus'):
+        poloidal_flux(ellipse(range_torus='half period'), VerticalField())
+
+
+@pytest.mark.parametrize('close,count', [(False, 1), (True, 2)])
+def test_flux_rejects_insufficient_quadrature(close, count):
+    surface = ellipse(count=count, close=close)
+    with pytest.raises(ValueError, match='distinct theta'):
+        toroidal_flux(surface, ToroidalField())
+    with pytest.raises(ValueError, match='distinct phi'):
+        poloidal_flux(surface, VerticalField())
+
+
+@pytest.mark.parametrize('close', [False, True])
+def test_flux_shape_gradients_match_analytic_and_finite_differences(close):
+    def toroidal(a):
         return toroidal_flux(ellipse(a=a, close=close), ToroidalField())
-    derivative = jax.jit(jax.grad(flux))(.7)
-    finite_difference = (flux(.7 + 1e-5) - flux(.7 - 1e-5)) / 2e-5
-    np.testing.assert_allclose(derivative, -2 * np.pi * .4, rtol=1e-12)
-    np.testing.assert_allclose(derivative, finite_difference, rtol=1e-9)
+
+    def poloidal(a):
+        return poloidal_flux(ellipse(a=a, close=close), VerticalField())
+
+    for flux, expected in ((toroidal, -2 * np.pi * .4), (poloidal, 4 * np.pi * (3 + .7))):
+        derivative = jax.jit(jax.grad(flux))(.7)
+        finite_difference = (flux(.7 + 1e-5) - flux(.7 - 1e-5)) / 2e-5
+        np.testing.assert_allclose(derivative, expected, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(derivative, finite_difference, rtol=1e-9, atol=1e-9)
 
 
 def test_biot_savart_vector_potential_curl_matches_field():
@@ -61,20 +107,27 @@ def test_biot_savart_vector_potential_curl_matches_field():
         np.testing.assert_allclose(curl, field.B(xyz), rtol=2e-13, atol=2e-15)
 
 
-def test_coil_toroidal_flux_matches_independent_disk_integral():
+@pytest.mark.parametrize('close', [False, True])
+def test_coil_flux_matches_coaxial_loop_mutual_inductance_and_current_gradient(close):
+    from scipy.special import ellipk, ellipe
     from essos.coils import Coils, Curves
     from essos.fields import BiotSavart
-    # A vertical circular coil surrounds the small elliptical poloidal loop.
-    coefficients = jnp.zeros((1, 3, 3)).at[0, 0, 0].set(3.)
-    coefficients = coefficients.at[0, 0, 2].set(1.).at[0, 2, 1].set(1.)
-    field = BiotSavart(Coils(Curves(coefficients, n_segments=64, stellsym=False), jnp.array([1e5])))
-    surface = ellipse(a=.3, b=.2, count=32)
-    nodes, weights = np.polynomial.legendre.leggauss(20)
-    rho = jnp.asarray((nodes + 1) / 2)[:, None]
-    theta = jnp.linspace(0, 2 * jnp.pi, 48, endpoint=False)[None, :]
-    x, z = 3 + .3 * rho * jnp.cos(theta), .2 * rho * jnp.sin(theta)
-    points = jnp.stack((x, jnp.zeros_like(x), z), axis=-1)
-    by = jax.vmap(field.B)(points.reshape(-1, 3))[:, 1].reshape(x.shape)
-    # Increasing theta gives a disk normal of -e_phi at phi=0.
-    disk_flux = jnp.sum(-by * (.3 * .2 * rho) * jnp.asarray(weights / 2)[:, None]) * (2 * jnp.pi / 48)
-    np.testing.assert_allclose(toroidal_flux(surface, field), disk_flux, rtol=1e-12, atol=1e-14)
+    # Circular horizontal coil of radius 2.5 m; the surface loop at theta=0 has radius 1.0 m in the same plane.
+    coefficients = jnp.zeros((1, 3, 3)).at[0, 0, 2].set(2.5).at[0, 1, 1].set(2.5)
+    curves = Curves(coefficients, n_segments=64, stellsym=False)
+    field = BiotSavart(Coils(curves, jnp.array([1e5]), currents_scale=1e5))
+    surface = SurfaceRZFourier(jnp.array([.8, .2]), jnp.array([0., .1]),
+                               nfp=1, mpol=1, ntor=0, ntheta=20, nphi=20, close=close)
+    # Neumann's coaxial-loop mutual inductance (Jackson, Classical Electrodynamics, problem 5.33),
+    # M = mu0 sqrt(ab) [(2/k - k) K(k) - (2/k) E(k)], k^2 = 4ab / (a + b)^2 for coplanar loops.
+    a, b = 2.5, 1.0
+    m = 4 * a * b / (a + b)**2
+    mutual = 4e-7 * np.pi * np.sqrt(a * b) * ((2 / np.sqrt(m) - np.sqrt(m)) * ellipk(m) - 2 / np.sqrt(m) * ellipe(m))
+    line_flux = poloidal_flux(surface, field)
+    np.testing.assert_allclose(line_flux, mutual * 1e5, rtol=1e-10)
+
+    def flux(current):
+        return poloidal_flux(surface, BiotSavart(Coils(curves, jnp.atleast_1d(current), currents_scale=1e5)))
+
+    derivative = jax.jit(jax.grad(flux))(1e5)
+    np.testing.assert_allclose(derivative, mutual, rtol=1e-10)

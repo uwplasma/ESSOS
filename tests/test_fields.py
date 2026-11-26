@@ -152,6 +152,109 @@ def test_combined_field_requires_at_least_one_field():
         CombinedField()
 
 
+def _two_vmec_parts():
+    """A wout and a copy with every Nyquist mode of its B tables reweighted: the sum is proportional to neither.
+
+    The copy is an algebraic test object, not an equilibrium (its B_i, B^i and |B| no longer obey B_i = g_ij B^j).
+    """
+    vmec = Vmec(WOUT_FILE)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    weight = 1 + 0.5 * np.cos(np.asarray(vmec.xm_nyq) + 0.3 * np.asarray(vmec.xn_nyq))
+    for name in ("bsubsmns", "bsubumnc", "bsubvmnc", "bsupumnc", "bsupvmnc", "bmnc"):
+        arrays[name] = arrays[name] * weight
+    return vmec, Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, **arrays)
+
+
+COMBINED_POINTS = jnp.array([[0.5, 0.3, 0.2], [0.2, 1.0, 0.4], [0.8, 2.5, 1.1]])
+
+
+def test_combined_field_covariant_components_are_the_sum_of_its_parts():
+    """B_i is linear in the field, so B_i of a sum in one coordinate system is the sum over its parts."""
+    from essos.fields import CombinedField
+
+    parts = _two_vmec_parts()
+    combined = CombinedField(*parts)
+    for x in COMBINED_POINTS:
+        for name in ("B_covariant", "B_contravariant", "B"):
+            expected = sum(getattr(f, name)(x) for f in parts)
+            np.testing.assert_allclose(getattr(combined, name)(x), expected, rtol=1e-13, atol=1e-13 * jnp.linalg.norm(expected))
+
+
+def test_combined_field_curvature_is_that_of_the_sum_of_its_parts():
+    """kappa_i = b^j (d_j b_i - d_i b_j) with b_i = B_i/|B|, b^j = B^j/|B| (b . grad b = -b x curl b for b^2 = 1).
+
+    The reference sums the parts' B_i, B^i and Cartesian B (|B| = |sum B|, the norm CombinedField uses) and
+    differentiates by forward mode; it calls neither CombinedField nor curl b. Both sides are one expression
+    in a different order over sums of Nyquist modes in double precision: 1e-12 relative is rounding. The
+    approach follows pull request 129.
+    """
+    from essos.fields import CombinedField
+
+    parts = _two_vmec_parts()
+    combined = CombinedField(*parts)
+
+    def b(x, components):
+        B = (sum(f.B_covariant(x) for f in parts), sum(f.B_contravariant(x) for f in parts))[components]
+        return B / jnp.linalg.norm(sum(f.B(x) for f in parts))
+
+    def reference(x):
+        db_cov = jax.jacfwd(b)(x, 0)  # [i, j] = d_j b_i
+        return (db_cov - db_cov.T) @ b(x, 1)
+
+    compiled = jax.jit(lambda field, x: field.kappa(x))
+    for x in COMBINED_POINTS:
+        kappa = reference(x)
+        np.testing.assert_allclose(combined.kappa(x), kappa, rtol=1e-12, atol=1e-12 * jnp.linalg.norm(kappa))
+        np.testing.assert_allclose(compiled(combined, x), kappa, rtol=1e-12, atol=1e-12 * jnp.linalg.norm(kappa))
+
+
+def test_combined_field_covariant_gradient_is_the_sum_of_its_parts():
+    """d/d(bsubumnc of the first part) of a functional of B_i of the sum equals that through the first part alone."""
+    from essos.fields import CombinedField
+
+    parts = _two_vmec_parts()
+    x = COMBINED_POINTS[0]
+    other = parts[1].B_covariant(x)
+
+    def through_sum(first):
+        return jnp.sum(CombinedField(first, parts[1]).B_covariant(x) ** 2)
+
+    def by_hand(first):
+        return jnp.sum((first.B_covariant(x) + other) ** 2)
+
+    got, expected = jax.grad(through_sum)(parts[0]).bsubumnc, jax.grad(by_hand)(parts[0]).bsubumnc
+    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12 * np.abs(expected).max())
+
+
+def test_combined_vmec_field_runs_through_the_guiding_centre_quantities():
+    """The tracers call dynamics._gc_quantities; a Vmec-only combination must go through it.
+
+    Tolerance: CombinedField keeps |B| = |sum B| (Cartesian), Vmec uses its bmnc table; on this wout the two
+    differ so that the curvature differs by up to 2.5e-3 relative (median 2.2e-4) on a 9x12x6 grid. 1e-2 bounds that spectral
+    difference, far below the O(1) error of a Cartesian B_i.
+    """
+    from essos.dynamics import _gc_quantities
+    from essos.fields import CombinedField
+
+    vmec = Vmec(WOUT_FILE)
+    for x in COMBINED_POINTS:
+        kappa = _gc_quantities(CombinedField(vmec), x)[5]
+        np.testing.assert_allclose(kappa, vmec.kappa(x), rtol=1e-2, atol=1e-2 * jnp.linalg.norm(vmec.kappa(x)))
+
+
+def test_combined_field_refuses_fields_in_different_coordinates():
+    """Coils live in Cartesian x, y, z and VMEC in (s, theta, phi): a sum of their components means nothing."""
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import CombinedField
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=1, R=1.0, r=0.3, n_segments=20, nfp=2, stellsym=True)
+    coils = BiotSavart(Coils(curves=curves, currents=[1e5] * 2))
+    with pytest.raises(ValueError, match="coordinates"):
+        CombinedField(coils, Vmec(WOUT_FILE))
+    with pytest.raises(ValueError, match="coordinates"):
+        CombinedField(CombinedField(Vmec(WOUT_FILE)), coils)
+
+
 
 WOUT_QA = str(Path(__file__).resolve().parents[1] / "examples" / "input_files"
               / "wout_LandremanPaul2021_QA_reactorScale_lowres.nc")
@@ -199,6 +302,21 @@ def test_vmec_radial_interpolation_keeps_grid_values_and_m0_modes():
     d = jax.jacfwd(lambda s: _radial_interp(s, vmec.s_full_grid, vmec.rmnc, vmec.xm))
     node = vmec.s_full_grid[k]
     assert jnp.allclose(d(node - 1e-9), d(node + 1e-9), rtol=1e-6, atol=1e-9)
+    # So is the second one: a jump there gives the adaptive integrator an uncontrolled tangent error.
+    d2 = jax.jacfwd(d)
+    assert jnp.abs(d2(node - 1e-12) - d2(node + 1e-12)).max() < 1e-8 * jnp.abs(d2(node)).max()
+
+
+def test_vmec_radial_interpolation_is_c2_across_the_last_half_grid_point_and_beyond():
+    """A kink in the second derivative at the end of the half grid gives the adaptive integrator an uncontrolled tangent error."""
+    from essos.fields import Vmec, _radial_interp
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    d2 = jax.jacfwd(jax.jacfwd(lambda s: _radial_interp(s, vmec.s_half_grid, vmec.bmnc, vmec.xm_nyq, half_grid=True)))
+    node = vmec.s_half_grid[-1]
+    scale = jnp.abs(d2(node - 1e-9)).max()
+    assert jnp.abs(d2(node - 1e-9) - d2(node + 1e-9)).max() < 1e-5 * scale
+    assert jnp.isfinite(d2(1.0)).all()
 
 
 def test_vmec_analytic_derivatives_match_automatic_differentiation():
@@ -238,6 +356,28 @@ def test_vmec_mode_tolerance_keeps_the_field():
                                **{name: getattr(full, name) for name in VMEC_WOUT_ARRAYS})
     assert jnp.array_equal(rebuilt.xm_nyq, truncated.xm_nyq) and jnp.array_equal(rebuilt.xm, truncated.xm)
     assert jnp.array_equal(jax.vmap(rebuilt.AbsB)(points), jax.vmap(truncated.AbsB)(points))
+
+
+def test_vmec_flux_coordinates_gradient_in_the_surface_is_finite_in_reverse_mode():
+    """Reverse mode used to give NaN at points where the Newton inversion converges exactly: its iterations were differentiated."""
+    from essos.fields import Vmec
+
+    vmec = Vmec(WOUT_QA, ntheta=8, nphi=8)
+    arrays = {name: getattr(vmec, name) for name in VMEC_WOUT_ARRAYS}
+    xyz = jnp.array([[10.547857968497258, -4.418389073898554, 0.15706857515147074],
+                     [11.444576424285373, 0.0011546032999600522, 1.9023593019105387]])
+
+    def flux(scale):
+        rows = jnp.ones(vmec.ns).at[-1].set(scale)[:, None]
+        field = Vmec.from_arrays(nfp=vmec.nfp, ns=vmec.ns, ntheta=8, nphi=8,
+                                 **{**arrays, 'rmnc': arrays['rmnc'] * rows, 'zmns': arrays['zmns'] * rows})
+        return jax.vmap(lambda x: field.flux_coordinates(x)[0])(xyz)
+
+    reverse, forward = jax.jacrev(flux)(1.0), jax.jacfwd(flux)(1.0)
+    finite_difference = (flux(1.0 + 1e-6) - flux(1.0 - 1e-6)) / 2e-6
+    assert jnp.isfinite(reverse).all()
+    np.testing.assert_allclose(reverse, forward, atol=1e-8)
+    np.testing.assert_allclose(reverse, finite_difference, rtol=1e-4, atol=1e-6)
 
 
 def test_vmec_flux_coordinates_invert_to_xyz_and_boundary_distance_is_signed():
@@ -702,3 +842,40 @@ def test_half_grid_interpolation_keeps_its_slope_up_to_the_lcfs():
         return _radial_interp(s, grid, table, jnp.array([0]), half_grid=True)[0]
     for s in (0.994, 0.996, 0.999, 1.0):
         assert jnp.isclose(f(s), 1 + s, rtol=1e-12) and jnp.isclose(jax.grad(f)(s), 1.0, rtol=1e-9)
+
+
+def test_external_field_params_are_differentiable_and_share_one_compile():
+    import jax
+    import jax.numpy as jnp
+    from essos.fields import ExternalField
+
+    source = lambda xyz, p: p[0] * jnp.stack([-xyz[:, 1], xyz[:, 0], p[1] * xyz[:, 2]], axis=-1) ** 2  # noqa: E731
+    x = jnp.array([1.1, 0.2, 0.05])
+    loss = lambda p: jnp.sum(ExternalField(source, p).dAbsB_by_dX(x) ** 2) + ExternalField(source, p).AbsB(x)  # noqa: E731
+    p = jnp.array([1.3, 0.7])
+    g = jax.grad(loss)(p)
+    fd = jnp.array([(loss(p + 1e-6 * e) - loss(p - 1e-6 * e)) / 2e-6 for e in jnp.eye(2)])
+    assert jnp.all(g != 0) and jnp.allclose(g, fd, rtol=1e-6)
+    traces = []
+    f = jax.jit(lambda fld: traces.append(1) or fld.AbsB(x))
+    f(ExternalField(source, p)); f(ExternalField(source, 2 * p))
+    assert len(traces) == 1
+
+
+def test_combined_field_fused_gc_quantities_match_generic_path():
+    import jax
+    import jax.numpy as jnp
+    from essos.coils import Coils, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart, CombinedField, ExternalField, MagneticField
+
+    curves = CreateEquallySpacedCurves(n_curves=2, order=2, R=1.7, r=0.6, nfp=2, stellsym=True)
+    bs = BiotSavart(Coils(curves=curves, currents=[1.1e6, 0.9e6]))
+    ext = ExternalField(lambda xyz: 0.01 * jnp.stack([-xyz[:, 1], xyz[:, 0], xyz[:, 2] ** 2], axis=-1))
+    x = jnp.array([1.7, 0.1, 0.05])
+    combined = CombinedField(bs, ext)
+    assert type(ext).gc_quantities is not MagneticField.gc_quantities  # every member is fused
+    generic = MagneticField.gc_quantities(combined, x)
+    for a, b in zip(CombinedField(bs, bs).gc_quantities(x), MagneticField.gc_quantities(CombinedField(bs, bs), x)):
+        assert jnp.allclose(a, b, rtol=1e-9, atol=1e-12)
+    assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(combined.gc_quantities(x), generic))
+    assert all(jnp.allclose(a, b, rtol=1e-9, atol=1e-12) for a, b in zip(ext.gc_quantities(x), MagneticField.gc_quantities(ext, x)))

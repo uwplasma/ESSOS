@@ -1,5 +1,4 @@
 import os
-number_of_processors_to_use = 1 # Parallelization, this should divide nparticles
 from time import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -20,7 +19,7 @@ tmax = 1e-4
 dt=1.e-14
 times_to_trace=1000
 nparticles_per_core=10
-nparticles = number_of_processors_to_use*nparticles_per_core
+nparticles = nparticles_per_core
 s=0.25
 num_steps = jnp.round(tmax/dt)
 mass=PROTON_MASS
